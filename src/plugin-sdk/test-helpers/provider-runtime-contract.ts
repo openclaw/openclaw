@@ -65,17 +65,10 @@ function createManifestModelFactory(providerId: string, catalog: unknown) {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
-  return value as Record<string, unknown>;
-}
-
 function expectFields(value: unknown, fields: Record<string, unknown>) {
-  const record = requireRecord(value, "record");
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(record[key]).toEqual(expected);
-  }
+  expect(value, "record").toBeTypeOf("object");
+  expect(value, "record").not.toBeNull();
+  expect(value).toEqual(expect.objectContaining(fields));
 }
 
 export type ProviderRuntimeContractPluginLoader = () => Promise<{
@@ -448,28 +441,6 @@ export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContr
         ...(providerId === "google" ? { api, baseUrl } : {}),
       });
     });
-
-    it("keeps retired usage telemetry hooks absent", () => {
-      const provider = getProvider("google-gemini-cli");
-
-      expect(provider.resolveUsageAuth).toBeUndefined();
-      expect(provider.fetchUsageSnapshot).toBeUndefined();
-    });
-
-    it("owns OAuth auth-profile formatting", () => {
-      const provider = getProvider("google-gemini-cli");
-
-      expect(
-        provider.formatApiKey?.({
-          type: "oauth",
-          provider: "google-gemini-cli",
-          access: "google-oauth-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
-          projectId: "proj-123",
-        }),
-      ).toBe('{"token":"google-oauth-token","projectId":"proj-123"}');
-    });
   });
 }
 
@@ -542,7 +513,7 @@ export function describeOpenAIProviderRuntimeContract(
       );
     });
 
-    it("owns refresh fallback for accountId extraction failures", async () => {
+    it("propagates accountId refresh failures to the credential owner", async () => {
       const provider = getProvider("openai");
       const credential = {
         type: "oauth" as const,
@@ -552,11 +523,10 @@ export function describeOpenAIProviderRuntimeContract(
         expires: Date.now() - 60_000,
       };
 
-      refreshOpenAICodexTokenMock.mockRejectedValueOnce(
-        new Error("Failed to extract accountId from token"),
-      );
+      const failure = new Error("Failed to extract accountId from token");
+      refreshOpenAICodexTokenMock.mockRejectedValueOnce(failure);
 
-      await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
+      await expect(provider.refreshOAuth?.(credential)).rejects.toBe(failure);
     });
 
     it("uses the subscription budget with a manifest-backed startup registry", async () => {
@@ -580,13 +550,16 @@ export function describeOpenAIProviderRuntimeContract(
         contextTokens: 272_000,
       });
       const provider = getProvider("openai");
-      const model = provider.resolveDynamicModel?.({
+      const selection = {
         provider: "openai",
         modelId: "gpt-6.1-sol",
         agentRuntimeId: "openclaw",
+        modelRegistry: registry,
+      };
+      const model = provider.resolveDynamicModel?.({
+        ...selection,
         authProfileMode: "oauth",
         providerConfig: codexProviderConfig,
-        modelRegistry: registry,
       });
       expect(model).toMatchObject({
         api: "openai-chatgpt-responses",
@@ -594,40 +567,10 @@ export function describeOpenAIProviderRuntimeContract(
       });
       expect(
         provider.resolveDynamicModel?.({
-          provider: "openai",
-          modelId: "gpt-6.1-sol",
-          agentRuntimeId: "openclaw",
+          ...selection,
           authProfileMode: "api_key",
-          modelRegistry: registry,
         }),
       ).toMatchObject({ api: "openai-responses", contextTokens: 272_000 });
-    });
-
-    it("owns forward-compat codex models", () => {
-      const provider = getProvider("openai");
-      // Codex gpt-5.4 has no OpenAI manifest row; this keeps its transport mapping independent.
-      const model = resolveFromTemplate(
-        provider,
-        "gpt-5.4",
-        createModel({
-          id: "gpt-5.2-codex",
-          api: "openai-chatgpt-responses",
-          provider: "openai",
-          baseUrl: "https://chatgpt.com/backend-api",
-        }),
-        {
-          authProfileMode: "oauth",
-          providerConfig: codexProviderConfig,
-        },
-      );
-
-      expectFields(model, {
-        id: "gpt-5.4",
-        provider: "openai",
-        api: "openai-chatgpt-responses",
-        contextWindow: 1_050_000,
-        maxTokens: 128_000,
-      });
     });
 
     it("keeps OpenClaw cost metadata but applies Codex context metadata for gpt-5.5 models", () => {
@@ -647,31 +590,6 @@ export function describeOpenAIProviderRuntimeContract(
         api: "openai-chatgpt-responses",
         baseUrl: codexProviderConfig.baseUrl,
         contextWindow: 400_000,
-      });
-    });
-
-    it("claims codex mini models through the Codex OAuth route", () => {
-      const provider = getProvider("openai");
-      const manifestTemplate = createManifestModel("gpt-5.5", {
-        id: "gpt-5.4",
-        name: "gpt-5.4",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-        contextWindow: 272_000,
-      });
-      const model = resolveFromTemplate(provider, "gpt-5.4-mini", manifestTemplate, {
-        authProfileMode: "oauth",
-        providerConfig: codexProviderConfig,
-      });
-
-      expectFields(model, {
-        id: "gpt-5.4-mini",
-        provider: "openai",
-        api: "openai-chatgpt-responses",
-        contextWindow: 400_000,
-        contextTokens: 272_000,
-        maxTokens: 128_000,
-        cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
       });
     });
 
@@ -741,32 +659,6 @@ export function describeOpenRouterProviderRuntimeContract(
         api: "openai-completions",
         baseUrl: "https://openrouter.ai/api/v1",
         maxTokens: 8192,
-      });
-    });
-  });
-}
-
-export function describeVeniceProviderRuntimeContract(
-  load: ProviderRuntimeContractPluginLoader,
-  manifestCatalog: unknown,
-) {
-  describe("venice provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
-    const createManifestModel = createManifestModelFactory("venice", manifestCatalog);
-    const getProvider = installRuntimeHooks(load, "venice", "Venice");
-
-    it("owns xai downstream compat flags for grok-backed Venice models", () => {
-      const provider = getProvider("venice");
-      const manifestModel = createManifestModel("grok-4-5");
-      const model = provider.normalizeResolvedModel?.({
-        provider: "venice",
-        modelId: manifestModel.id,
-        model: manifestModel,
-      });
-      const { compat: _manifestCompat, ...manifestFields } = manifestModel;
-      expectFields(model, manifestFields);
-      expect(requireRecord(model?.compat, "compat")).toMatchObject({
-        toolSchemaProfile: "xai",
-        toolCallArgumentsEncoding: "html-entities",
       });
     });
   });

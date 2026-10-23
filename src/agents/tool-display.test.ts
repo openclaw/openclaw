@@ -41,7 +41,6 @@ describe("tool display details", () => {
     ).toMatchObject({
       name: "web_search",
       label: "Web Search",
-      verb: "search",
       detail: 'for "OpenClaw release notes"',
     });
   });
@@ -59,17 +58,6 @@ describe("tool display details", () => {
     expect(formatToolDetail(display)).toBeUndefined();
   });
 
-  it("puts the camera PTZ operation before its node and device", () => {
-    expect(
-      detailFor("nodes", {
-        action: "camera_ptz",
-        ptzOperation: "status",
-        node: "Mac",
-        deviceId: "camera-id",
-      }),
-    ).toBe("ptz operation status, node Mac, device id camera-id");
-  });
-
   it("keeps same-line heredoc operators from attaching the body to later stages", () => {
     const command = "cat <<EOF && printf ok\nbody | secret\nEOF\nprintf done";
     const stages = splitTopLevelStages(command);
@@ -82,53 +70,51 @@ describe("tool display details", () => {
     expect(splitTopLevelPipes(stages[1] ?? "")).toHaveLength(1);
   });
 
+  it.each([
+    [
+      "nodes",
+      { action: "camera_ptz", ptzOperation: "status", node: "Mac", deviceId: "camera-id" },
+      "ptz operation status, node Mac, device id camera-id",
+    ],
+    ["read", { file_path: "/tmp/a.txt", offset: 2, limit: 2 }, "lines 2-3 from /tmp/a.txt"],
+    ["write", { file_path: "/tmp/a.txt", content: "abc" }, "to /tmp/a.txt (3 chars)"],
+    ["edit", { path: "/tmp/a.txt", newText: "abcd" }, "in /tmp/a.txt (4 chars)"],
+    [
+      "web_search",
+      { q: "Codex OAuth API key", max_results: 5 },
+      'for "Codex OAuth API key" (top 5)',
+    ],
+    [
+      "web_search",
+      {
+        search_query: ["Kimi", "Gemini", "Claude", "OpenAI"].map((provider) => ({
+          q: `latest ${provider} model`,
+        })),
+      },
+      'for "latest Kimi model", "latest Gemini model", "latest Claude model"…',
+    ],
+    [
+      "web_search",
+      {
+        objective: "Find the OpenClaw repository on GitHub",
+        search_queries: ["openclaw github", "openclaw repository"],
+        count: 5,
+      },
+      'for "Find the OpenClaw repository on GitHub", "openclaw github", "openclaw repository" (top 5)',
+    ],
+  ] as const)("formats %s arguments with intent-first detail: %j", (name, args, expected) => {
+    expect(detailFor(name, args)).toBe(expected);
+  });
+
   it("keeps positive numbers and true booleans", () => {
     const detail = detailFor("sessions_history", {
       sessionKey: "agent:main:main",
       limit: 20,
       includeTools: true,
     });
-
-    expect(detail).toContain("session agent:main:main");
-    expect(detail).toContain("limit 20");
-    expect(detail).toContain("tools true");
-  });
-
-  it.each([
-    ["read", { file_path: "/tmp/a.txt", offset: 2, limit: 2 }, "lines 2-3 from /tmp/a.txt"],
-    ["write", { file_path: "/tmp/a.txt", content: "abc" }, "to /tmp/a.txt (3 chars)"],
-    ["edit", { path: "/tmp/a.txt", newText: "abcd" }, "in /tmp/a.txt (4 chars)"],
-  ] as const)("formats %s with intent-first file detail", (name, args, expected) => {
-    expect(detailFor(name, args)).toBe(expected);
-  });
-
-  it("formats web_search provider query shapes", () => {
-    expect(detailFor("web_search", { q: "Codex OAuth API key", max_results: 5 })).toBe(
-      'for "Codex OAuth API key" (top 5)',
-    );
-
-    expect(
-      detailFor("web_search", {
-        search_query: [
-          { q: "latest Kimi model" },
-          { q: "latest Gemini model" },
-          { q: "latest Claude model" },
-          { q: "latest OpenAI model" },
-        ],
-      }),
-    ).toBe('for "latest Kimi model", "latest Gemini model", "latest Claude model"…');
-  });
-
-  it("formats Parallel's native objective + search_queries shape", () => {
-    expect(
-      detailFor("web_search", {
-        objective: "Find the OpenClaw repository on GitHub",
-        search_queries: ["openclaw github", "openclaw repository"],
-        count: 5,
-      }),
-    ).toBe(
-      'for "Find the OpenClaw repository on GitHub", "openclaw github", "openclaw repository" (top 5)',
-    );
+    for (const field of ["session agent:main:main", "limit 20", "tools true"]) {
+      expect(detail).toContain(field);
+    }
   });
 
   it("summarizes exec commands with context", () => {

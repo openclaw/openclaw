@@ -21,10 +21,6 @@ export type WikiFreshness = {
 
 export type WikiClaimHealth = ReturnType<typeof buildWikiClaimHealth>;
 
-export type WikiClaimContradictionCluster = ReturnType<
-  typeof buildClaimContradictionClusters
->[number];
-
 export type WikiPageContradictionCluster = {
   key: string;
   label: string;

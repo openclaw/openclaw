@@ -33,13 +33,6 @@ describe("confirmed message-tool turn completion", () => {
         sourceReplyDeliveryMode: "automatic",
         agentSessionKey: "agent:main:webchat:dm:steered-source-reply",
         runId: "steered-source-reply",
-        getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-        resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
-          resolvedConfig,
-          diagnostics: [],
-          targetStatesByPath: {},
-          hadUnresolvedTargets: false,
-        }),
       });
       const run = terminalMessageAgent(
         [

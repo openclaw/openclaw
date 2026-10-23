@@ -12,7 +12,7 @@ export function createChatAbortOps(
     Pick<GatewayRequestContext, "cancelRunBoundApprovals">,
 ): ChatAbortOps {
   return {
-    chatAbortControllers: context.chatAbortControllers,
+    resolveGatewayContext: context.resolveGatewayContext,
     chatRunState: context.chatRunState,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,

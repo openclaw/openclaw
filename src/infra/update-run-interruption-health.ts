@@ -3,15 +3,12 @@ import {
   type GatewayRestartCleanup,
   type GatewayRestartDeadline,
 } from "../cli/daemon-cli/restart-health-deadline.js";
+import { getGatewayChannelWarnings } from "../cli/daemon-cli/restart-health-diagnostics.js";
 import {
   resolveGatewayRestartProbeContext,
   waitForGatewayHttpReadiness,
 } from "../cli/daemon-cli/restart-health-probe.js";
-import {
-  inspectGatewayRestart,
-  isSameGatewayRestartGeneration,
-  waitForGatewayHealthyRestart,
-} from "../cli/daemon-cli/restart-health.js";
+import { waitForGatewayHealthyRestart } from "../cli/daemon-cli/restart-health.js";
 import type { GatewayRestartWaitOutcome } from "../cli/daemon-cli/restart-health.types.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
@@ -28,11 +25,12 @@ export type InterruptedUpdateGatewayObservation = {
   phase: string;
   waitOutcome?: GatewayRestartWaitOutcome;
   verification?: UpdateRunRecord["verification"];
+  channelWarnings?: string[];
   cleanup?: GatewayRestartCleanup;
   timeout?: { elapsedMs: number; phase: string };
 };
 
-/** Read-only settlement shares one deadline, including setup and final identity checks. */
+/** Read-only settlement shares one deadline for setup and serving readiness. */
 export async function observeInterruptedUpdateGateway(
   candidate: InstalledUpdateCandidate,
   input: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; deadline: GatewayRestartDeadline },
@@ -76,10 +74,9 @@ export async function observeInterruptedUpdateGateway(
       expectedVersion: candidate.version,
       expectedBuildId: candidate.buildId,
       requirePluginHealth: true,
+      requireChannelHealth: false,
     };
-    const inspect = (phase: string) =>
-      deadline.read(phase, () => inspectGatewayRestart({ ...probe, phase }));
-    const servingMatches = (health: Awaited<ReturnType<typeof inspect>>) =>
+    const servingMatches = (health: Awaited<ReturnType<typeof waitForGatewayHealthyRestart>>) =>
       health.healthy &&
       health.runtime.status === "running" &&
       health.gatewayVersion === candidate.version &&
@@ -97,6 +94,7 @@ export async function observeInterruptedUpdateGateway(
     }
     const http = await deadline.read("reconciliation:http", () =>
       waitForGatewayHttpReadiness({
+        requireChannelHealth: false,
         config: context.config,
         port,
         attempts: 1,
@@ -106,34 +104,27 @@ export async function observeInterruptedUpdateGateway(
         signal: deadline.signal,
       }),
     );
-    const inspected = await inspect("reconciliation:inspect-before");
-    const after = await inspect("reconciliation:inspect-after");
-    if (
-      http.healthz !== 200 ||
-      http.readyz !== 200 ||
-      !servingMatches(after) ||
-      !servingMatches(inspected) ||
-      !isSameGatewayRestartGeneration(before, inspected) ||
-      !isSameGatewayRestartGeneration(inspected, after) ||
-      !(await installedMatches("reconciliation:installed-identity"))
-    ) {
+    if (!(http.coreReady ?? (http.healthz === 200 && http.readyz === 200))) {
       return result("unverified");
     }
     deadline.signal.throwIfAborted();
+    // Another restart during observation is best effort; the writer still checks run ownership.
     return {
       ...result("settled"),
+      channelWarnings: getGatewayChannelWarnings(before, http).map(({ id }) => id),
       verification: {
         booted: true,
         serviceRunning: true,
-        pid: after.runtime.pid,
+        pid: before.runtime.pid,
         port,
         runningVersion: candidate.version,
         runningBuildId: candidate.buildId,
         versionMatch: true,
-        readyz: true,
+        readyz: http.readyz === 200,
+        ...(http.coreReady !== undefined ? { coreReady: http.coreReady } : {}),
         settled: true,
-        channelsReady: true,
-        pluginErrors: after.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? [],
+        channelsReady: http.readyz === 200 && getGatewayChannelWarnings(before, http).length === 0,
+        pluginErrors: before.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? [],
       },
     };
   } catch (error) {

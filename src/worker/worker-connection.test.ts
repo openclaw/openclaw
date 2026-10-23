@@ -330,10 +330,15 @@ describe("worker connection endpoint failures", () => {
     });
   });
 
-  it.each(["no hello", "redacted connect failure"] as const)(
-    "retains the last %s diagnosis at the admission deadline",
-    async (scenario) => {
-      vi.useFakeTimers();
+  it.each([
+    ["no hello", 0],
+    ["redacted connect failure", 0],
+    ["no hello", -60_000],
+    ["no hello", 60_000],
+  ] as const)(
+    "retains the last %s diagnosis at the admission deadline (wall-clock shift: %dms)",
+    async (scenario, wallClockShiftMs) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
       const sockets: EventEmitter[] = [];
       const diagnostics: Array<Error | undefined> = [];
       const endpointUrl =
@@ -377,7 +382,9 @@ describe("worker connection endpoint failures", () => {
           ? "connect failed: Opening handshake has timed out"
           : "no hello within deadline";
       const starting = connection.start().catch((error: unknown) => error);
+      vi.setSystemTime(Date.now() + wallClockShiftMs);
       await vi.advanceTimersByTimeAsync(1_000);
+      expect(connection.state.kind).toBe("failed");
       const error = await starting;
       expect(error).toBeInstanceOf(WorkerAdmissionDeadlineExceededError);
       for (const part of [expected, "gateway.example:8443", `after ${sockets.length} attempts`]) {
@@ -648,7 +655,7 @@ it("isolates listener failures and binds terminal errors during nested transitio
   expect(observed).toEqual(["fenced", "stopped"]);
 });
 
-describe("WorkerConnection inference listener isolation", () => {
+describe("WorkerConnection inference callback isolation", () => {
   it.each([
     ["invalid payload", { ...inferenceEventFrame(1), payload: {} }],
     [
@@ -665,11 +672,10 @@ describe("WorkerConnection inference listener isolation", () => {
         payload: { ...inferenceTerminalFrame(1).payload, runEpoch: 2 },
       },
     ],
-  ])("rejects %s before notifying inference listeners", (_label, frame) => {
+  ])("rejects %s before notifying the inference callback", (_label, frame) => {
     const dispatcher = createFrameDispatcher();
     const listener = vi.fn();
-    dispatcher.onInferenceEvent(listener);
-    dispatcher.onInferenceTerminal(listener);
+    dispatcher.onInferenceFrame = listener;
     const close = vi.fn();
     const socket = { readyState: WebSocket.OPEN, close };
 
@@ -683,20 +689,18 @@ describe("WorkerConnection inference listener isolation", () => {
     "continues %s delivery after observer failures",
     (kind) => {
       const dispatcher = createFrameDispatcher();
-      const subscribe =
-        kind === "event"
-          ? dispatcher.onInferenceEvent.bind(dispatcher)
-          : dispatcher.onInferenceTerminal.bind(dispatcher);
       const makeFrame = kind === "event" ? inferenceEventFrame : inferenceTerminalFrame;
       const observed: number[] = [];
-      subscribe(() => {
+      const socket = { readyState: WebSocket.OPEN, close: vi.fn() };
+      dispatcher.onInferenceFrame = () => {
         throw new Error("induced observer failure");
-      });
-      subscribe((frame: WorkerInferenceEventFrame | WorkerInferenceTerminalFrame) => {
+      };
+      expect(() => dispatcher.dispatchReadyFrame(makeFrame(1), socket)).not.toThrow();
+      dispatcher.onInferenceFrame = (frame) => {
         observed.push(frame.payload.seq);
-      });
+      };
       for (const seq of [1, 2]) {
-        expect(() => dispatcher.dispatchReadyFrame(makeFrame(seq), {} as WebSocket)).not.toThrow();
+        expect(() => dispatcher.dispatchReadyFrame(makeFrame(seq), socket)).not.toThrow();
       }
       expect(observed).toEqual([1, 2]);
     },

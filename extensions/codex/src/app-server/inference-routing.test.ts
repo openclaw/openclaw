@@ -16,6 +16,7 @@ import {
 import type { CodexConfigReadResponse, JsonObject } from "./protocol.js";
 import type { CodexBindingAuthority } from "./session-binding.js";
 import { createClientHarness, stubCodexInferenceTransportEnv } from "./test-support.js";
+import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
 
 const clients: ReturnType<typeof createClientHarness>[] = [];
 const openaiUrl = "https://api.openai.com/v1";
@@ -155,6 +156,23 @@ async function prepare(
   }
   return prepared.route;
 }
+
+it("keeps proxy restarts equivalent without losing inference policy identity", async () => {
+  const fingerprint = async (modelPolicyEnforced: boolean) => {
+    const h = owned(accountHarness());
+    const prepared = required(await prepareThread(h.client, snapshot(), { modelPolicyEnforced }));
+    return fingerprintCodexThreadConfig(
+      { config: prepared.config },
+      undefined,
+      undefined,
+      undefined,
+      { inferenceRoute: prepared.route, inferenceProviderRoutes: prepared.providers },
+    );
+  };
+  const enforced = await fingerprint(true);
+  expect(await fingerprint(true)).toBe(enforced);
+  expect(await fingerprint(false)).not.toBe(enforced);
+});
 
 it.each(["thread/closed", "thread/archived", "thread/deleted"] as const)(
   "releases bounded provenance on %s, preserving peers",

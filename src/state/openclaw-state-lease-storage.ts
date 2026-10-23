@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { computeBackoff } from "../infra/backoff.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { isStateDatabaseMaintenanceContention } from "../infra/gateway-state-owner-record.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
@@ -73,6 +73,7 @@ export function withLeaseWriteTransaction<T>(
   operationLabel: string,
   operation: (db: EngineConnection) => T,
   busyTimeoutMs = 0,
+  singleStatement?: true,
 ): T {
   const transactionOptions = {
     operationLabel,
@@ -90,7 +91,11 @@ export function withLeaseWriteTransaction<T>(
   return runOpenClawStateWriteTransaction(
     ({ db }) => operation(db),
     { ...database.options, database: stateDatabase },
-    transactionOptions,
+    {
+      ...transactionOptions,
+      singleStatement:
+        singleStatement && !isPostgresSqlConnection(stateDatabase.db) ? true : undefined,
+    },
   );
 }
 
@@ -172,6 +177,8 @@ export function releaseOpenClawStateLease(
     params.database,
     params.operationLabel === "state.lease" ? "state.lease.release" : params.operationLabel,
     (db) => releaseOpenClawStateLeaseInTransaction(db, params),
+    0,
+    true,
   );
 }
 

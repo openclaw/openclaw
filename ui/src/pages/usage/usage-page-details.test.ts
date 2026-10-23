@@ -20,6 +20,11 @@ import {
   createPendingUsageRouteData,
   focusDocument,
   refreshButton,
+  showRecentSessions,
+  queryUsagePage,
+  selectUsageSession,
+  settleUsagePage,
+  usageButton,
 } from "./usage-page.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
@@ -40,6 +45,70 @@ function detailCalls<T extends readonly unknown[]>(request: { mock: { calls: T[]
 }
 
 describe("UsagePage detail requests", () => {
+  it("retains accepted details while refreshes wait, fail, and retry", async () => {
+    const snapshot = cacheSnapshot("fresh");
+    const session = {
+      key: "agent:main:retained-details",
+      label: "Retained details",
+      agentId: "main",
+      usage: snapshot.result.totals,
+      contextWeight: contextWeight("accepted"),
+    };
+    const result = { ...snapshot.result, sessions: [session] };
+    const pending = {
+      context: deferred<unknown>(),
+      timeline: deferred<unknown>(),
+      logs: deferred<unknown>(),
+    };
+    let hold = false;
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "sessions.usage") {
+        return hold && params?.key ? pending.context.promise : result;
+      }
+      if (method === "sessions.usage.timeseries") {
+        return hold ? pending.timeline.promise : { points: usagePoints(Date.now(), 2, 0.1) };
+      }
+      if (method === "sessions.usage.logs") {
+        return hold
+          ? pending.logs.promise
+          : {
+              logs: [{ timestamp: 1, role: "user", content: "Accepted conversation" }],
+            };
+      }
+      return { providers: [] };
+    });
+    const { page } = await loadUsagePage(request);
+    selectUsageSession(page);
+    await waitForFast(() => expect(page.textContent).toContain("Accepted conversation"));
+    const chart = page.querySelector(".timeseries-svg");
+    const log = page.querySelector(".session-log-content");
+    expect(chart).not.toBeNull();
+
+    hold = true;
+    refreshButton(page).click();
+    await waitForFast(() => expect(usageCalls(request, "sessions.usage.logs")).toHaveLength(2));
+    await page.updateComplete;
+    expect(page.querySelector(".timeseries-svg")).toBe(chart);
+    expect(page.querySelector(".session-log-content")).toBe(log);
+    expect(page.textContent).toContain("accepted");
+
+    for (const read of Object.values(pending)) {
+      read.reject(new Error("Refresh unavailable"));
+    }
+    await waitForFast(() => {
+      for (const kind of ["timeline", "conversation", "context"]) {
+        expect(textOf(page, `.usage-detail-error--${kind}`)).toContain("Refresh unavailable");
+      }
+    });
+    expect(page.querySelector(".timeseries-svg")).toBe(chart);
+    expect(page.querySelector(".session-log-content")).toBe(log);
+
+    hold = false;
+    refreshButton(page).click();
+    await waitForFast(() => expect(page.querySelector(".usage-detail-error")).toBeNull());
+    expect(page.textContent).toContain("Accepted conversation");
+  });
+
   it("keeps selected comparisons across pages and refreshes them with their overview", async () => {
     const snapshot = cacheSnapshot("fresh");
     let revision = snapshot.result.updatedAt;
@@ -63,14 +132,10 @@ describe("UsagePage detail requests", () => {
         : { providers: [], points: [], logs: [] },
     );
     const { page } = await loadUsagePage(request);
-    const settle = async () => {
-      await waitForFast(() => expect(page.usageLoading).toBe(false));
-      await page.updateComplete;
-    };
+    await showRecentSessions(page);
+    const settle = () => settleUsagePage(page);
     const changePage = async (label: string) => {
-      [...page.querySelectorAll<HTMLButtonElement>(".data-table-pagination button")]
-        .find((button) => button.textContent?.trim() === label)!
-        .click();
+      usageButton(page, label, ".data-table-pagination button").click();
       await settle();
     };
     const compare = (label: string, shiftKey = false) =>
@@ -118,17 +183,9 @@ describe("UsagePage detail requests", () => {
     await settle();
     expect(textOf(page, ".session-detail-title")).toContain("Comparison 53");
 
-    const input = page.querySelector<HTMLInputElement>(".usage-query-input")!;
-    input.value = "label:missing";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await settle();
+    await queryUsagePage(page, "label:missing");
     expect(page.querySelector(".session-bar-row, .sessions-selected-group")).toBeNull();
-    const clearSelection = [
-      ...page.querySelectorAll<HTMLButtonElement>(".sessions-card button"),
-    ].find((button) => button.textContent?.trim() === "Clear Selection");
-    expect(clearSelection).toBeDefined();
-    clearSelection!.click();
+    usageButton(page, "Clear Selection", ".sessions-card button").click();
     await settle();
     expect(page.usageSelectedSessions).toEqual([]);
   });
@@ -162,7 +219,7 @@ describe("UsagePage detail requests", () => {
         return { providers: [], points: [] };
       });
       const { page } = await loadUsagePage(request);
-      page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
+      selectUsageSession(page);
       await waitForFast(() => expect(page.textContent).toContain(`${agentId} turn`));
 
       for (const method of ["sessions.usage", "sessions.usage.timeseries", "sessions.usage.logs"]) {
@@ -253,7 +310,7 @@ describe("UsagePage detail requests", () => {
     });
     const { context, page } = await loadUsagePage(request);
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
-    page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
+    selectUsageSession(page);
     await waitForFast(() =>
       expect(page.read().detail).toMatchObject({
         timeSeriesStatus: { awaitingGateway: true },
@@ -358,7 +415,7 @@ describe("UsagePage detail requests", () => {
         "agent:main:second",
       ]);
     second.reject(new Error("Selected timeline unavailable"));
-    await waitForFast(() => expect(page.read().detail.timeSeriesLoading).toBe(false));
+    await page.read().detail.timeSeriesRead;
     first.reject(new Error("Retired timeline unavailable"));
     await first.promise.catch(() => {});
     expect(usageCalls(request, "sessions.usage.timeseries")).toHaveLength(2);
@@ -406,9 +463,7 @@ describe("UsagePage detail requests", () => {
     expect(initial[1]).toMatchObject({ includeContextWeight: false });
     expect(request.mock.calls.filter(([, params]) => params?.key)).toHaveLength(0);
 
-    const selectSession = (index: number) => {
-      page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[index]!.click();
-    };
+    const selectSession = (index: number) => selectUsageSession(page, index);
     selectSession(0);
     await waitForFast(() => expect(textOf(page, ".context-details-panel")).toContain("Loading"));
     const firstContext = request.mock.calls.find(
@@ -508,7 +563,7 @@ describe("UsagePage detail requests", () => {
       return { providers: [] };
     });
     const { page } = await loadUsagePage(request);
-    page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
+    selectUsageSession(page);
     await waitForFast(() => expect(textOf(page, ".context-details-panel")).toContain(report));
     expect(textOf(page, ".timeseries-summary")).toContain("200");
     expect(textOf(page, ".session-log-content")).toBe("2 completed turns");
@@ -554,11 +609,7 @@ describe("UsagePage detail requests", () => {
     });
     const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
     const { page } = await loadUsagePage(request);
-    const query = page.querySelector<HTMLInputElement>(".usage-query-input")!;
-    query.value = "label:Included";
-    query.dispatchEvent(new Event("input", { bubbles: true }));
-    query.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await page.updateComplete;
+    await queryUsagePage(page, "label:Included");
     const exportJson = () => selectUsageExport(page.querySelector(".usage-export-menu")!, "json");
     await exportJson();
     await page.updateComplete;
@@ -591,10 +642,7 @@ describe("UsagePage detail requests", () => {
     pending = deferred<SessionsUsageResult>();
     await exportJson();
     await page.updateComplete;
-    const scope = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Current instance",
-    )!;
-    scope.click();
+    usageButton(page, "Current instance").click();
     await page.updateComplete;
     pending.resolve(full);
     await waitForFast(() => expect(refreshButton(page).disabled).toBe(false));
@@ -618,13 +666,6 @@ describe("UsagePage detail requests", () => {
     const gateway = page.context.gateway;
     page.routeData = {
       ...createPendingUsageRouteData(gateway, "2026-05-14"),
-      providerUsage: {
-        state: "settled",
-        result: {
-          ok: true,
-          value: { updatedAt: 1, providers: [], refreshing: true },
-        },
-      },
       loadedAtMs: 1,
     } satisfies UsageRouteData;
     await page.updateComplete;
@@ -633,8 +674,14 @@ describe("UsagePage detail requests", () => {
       await vi.advanceTimersByTimeAsync(5_000 * 2 ** attempt);
     }
 
-    expect(usageCalls(request, "usage.status")).toHaveLength(3);
+    // Route data carries only session usage, so the page makes the first provider read
+    // itself when it applies; that read plus the three-attempt retry budget makes four.
+    expect(usageCalls(request, "usage.status")).toHaveLength(4);
     expect(page.read().data.providerUsageStalled).toBe(true);
+    // Retries for incomplete provider plans never re-read session usage.
+    expect(usageCalls(request, "sessions.usage")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(usageCalls(request, "usage.status")).toHaveLength(4);
 
     rejectProviderUsage = false;
     await page.refresh();

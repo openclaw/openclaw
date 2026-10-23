@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import {
   getLatestWebSocket,
   MockWebSocket,
@@ -83,7 +84,7 @@ async function connect(client: GatewayBrowserClient, recoveryScope = "account-a"
   return ws;
 }
 async function heartbeatUntilDeadline(ws: MockWebSocket) {
-  for (let seq = 1; seq < 30; seq += 1) {
+  for (let seq = 1; seq < GATEWAY_STARTUP_ADMISSION_WAIT_MS / 1_000; seq += 1) {
     await vi.advanceTimersByTimeAsync(1_000);
     for (const socket of wsInstances) {
       socket.emitMessage({ type: "event", event: "tick", seq, payload: {} });
@@ -151,7 +152,7 @@ it.each(["unchanged", "newer input", "navigation", "account"] as const)(
     await expect(result.value).rejects.toBeInstanceOf(GatewayProtocolRequestTimeoutError);
     await expect(result.value).rejects.toMatchObject({
       requestSent: true,
-      timeoutMs: 30_000,
+      timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
       method: "chat.send",
     });
     const expectedError =

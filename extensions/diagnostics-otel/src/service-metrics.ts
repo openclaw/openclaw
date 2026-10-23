@@ -81,6 +81,15 @@ export function createDiagnosticsMetrics(
       "Encoded outbound Gateway WebSocket event bytes before framing or compression per socket",
       "By",
     ),
+    gatewayWsEventWireBytesCounter: createCounter(
+      "gateway.ws.event_wire_bytes",
+      "Outbound Gateway WebSocket payload bytes after compression per socket, excluding framing",
+      "By",
+    ),
+    gatewayWsEventFrameBytesCounter: createCounter(
+      "gateway.ws.event_frame_bytes",
+      "Cumulative counts of accepted raw Gateway event frames by byte-size upper bound",
+    ),
     gatewayWsOperatorConnectionsGauge: meter.createGauge(
       `${metricNamePrefix}gateway.ws.operator_connections`,
       { unit: "1", description: "Connected authenticated Gateway operator WebSockets" },

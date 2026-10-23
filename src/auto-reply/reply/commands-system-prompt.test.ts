@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import type { resolveRuntimeChannelPromptContext } from "../../agents/runtime-capabilities.js";
-import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
+import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
@@ -70,25 +70,19 @@ vi.mock("../../agents/bootstrap-files.js", () => ({
 }));
 
 // mock-isolation: Keep real runtime classification while preventing sandbox workspace startup.
-vi.mock("../../agents/sandbox.js", async () => {
-  const { resolveSandboxRuntimeStatusAsync } = await vi.importActual<
-    typeof import("../../agents/sandbox/runtime-status.js")
-  >("../../agents/sandbox/runtime-status.js");
-  return {
-    ensureSandboxWorkspaceForSession: vi.fn(async () => null),
-    resolveSandboxRuntimeStatusAsync,
-  };
-});
+vi.mock("../../agents/sandbox/context.js", () => ({
+  ensureSandboxWorkspaceForSession: vi.fn(async () => null),
+}));
 
 vi.mock("../../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => false),
 }));
 
-vi.mock("../../skills/runtime/session-snapshot.js", () => ({
+vi.mock("../../skills/runtime/session-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/runtime/session-snapshot.js")>()),
   resolveReusableWorkspaceSkillSnapshot: vi.fn(() => ({
     snapshot: { prompt: "", skills: [], resolvedSkills: [] },
     shouldRefresh: false,
-    snapshotVersion: "test-snapshot",
   })),
 }));
 
@@ -175,7 +169,6 @@ describe("resolveCommandsSystemPromptBundle", () => {
     vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockReturnValue({
       snapshot: { prompt: "", skills: [], resolvedSkills: [] },
       shouldRefresh: false,
-      snapshotVersion: "test-snapshot",
     } as never);
   });
 
@@ -375,7 +368,6 @@ describe("resolveCommandsSystemPromptBundle", () => {
       vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockReturnValue({
         snapshot: hostSnapshot,
         shouldRefresh: false,
-        snapshotVersion: "host-snapshot",
       } as never);
 
       const result = await resolveCommandsSystemPromptBundle(params);

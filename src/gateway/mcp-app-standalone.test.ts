@@ -1,5 +1,5 @@
 import { setImmediate as settle } from "node:timers/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createMcpAppStandaloneTicket,
@@ -14,6 +14,12 @@ import {
   startStandaloneHttp,
   view,
 } from "./mcp-app-standalone.http.test-support.js";
+import {
+  getTailscalePublishedOrigin,
+  prepareTailscalePublishedOrigin,
+} from "./tailscale-published-origin.js";
+
+const { materializeMcpAppChannelPresentation } = await import("./mcp-app-channel-action.js");
 
 type Host = Awaited<ReturnType<typeof createSerializedHost>>;
 function call(host: Host, id: string | number) {
@@ -511,26 +517,38 @@ describe("MCP App standalone host", () => {
     expect(runtime.callTool).not.toHaveBeenCalled();
   });
 
-  it.each(["read-only", "unbound"])("denies server operations for a %s view", async (mode) => {
-    Object.assign(
-      view,
-      mode === "read-only" ? { readOnly: true } : { allowedAppToolNames: undefined },
-    );
-    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
-    const invoke = operations(issued.ticket);
-    if (mode === "read-only") {
-      const payload = await appRequest(issued.ticket);
-      expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toMatchObject({
-        serverResources: false,
-      });
-    } else {
-      expect(await invoke({ method: "tools/list", params: {} })).toBe(403);
-    }
-    expect(await invoke(appCall())).toBe(403);
-    expect(await invoke(resourceRead)).toBe(403);
-    expect(runtime.callTool).not.toHaveBeenCalled();
-    expect(runtime.readResource).not.toHaveBeenCalled();
-  });
+  it.each(["read-only", "unbound", "rejected-authority"])(
+    "denies server operations for a %s view",
+    async (mode) => {
+      Object.assign(
+        view,
+        mode === "read-only"
+          ? { readOnly: true }
+          : mode === "unbound"
+            ? { allowedAppToolNames: undefined }
+            : {
+                authorizeAppInteraction: async () => {
+                  throw new Error("App interaction authority unavailable");
+                },
+              },
+      );
+      const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+      const invoke = operations(issued.ticket);
+      if (mode !== "unbound") {
+        const payload = await appRequest(issued.ticket);
+        expect(payload.res.statusCode).toBe(200);
+        expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toMatchObject({
+          serverResources: false,
+        });
+      } else {
+        expect(await invoke({ method: "tools/list", params: {} })).toBe(403);
+      }
+      expect(await invoke(appCall())).toBe(403);
+      expect(await invoke(resourceRead)).toBe(403);
+      expect(runtime.callTool).not.toHaveBeenCalled();
+      expect(runtime.readResource).not.toHaveBeenCalled();
+    },
+  );
 
   it("revalidates expiry and enforces request concurrency through the ticket boundary", async () => {
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
@@ -573,5 +591,89 @@ describe("MCP App standalone host", () => {
         body: { method: "gateway.call", params: {} },
       }),
     ).toBe(400);
+  });
+});
+
+describe("standalone channel launch", () => {
+  const publish = (origin = "https://node.tailnet.ts.net", mode: "serve" | "funnel" = "serve") =>
+    prepareTailscalePublishedOrigin({ origin, mode });
+  const clear = () => publish("https://reset.test")();
+  const materialize = () =>
+    materializeMcpAppChannelPresentation({
+      sessionKey: "agent:main:main",
+      view: { viewId: view.viewId },
+    });
+  beforeEach(() => {
+    resetStandaloneMcpAppTestState();
+    clear();
+  });
+  afterEach(clear);
+
+  it("stores one lifecycle-owned Serve or Funnel snapshot", () => {
+    const clearServe = publish();
+    const clearFunnel = publish("https://public.example.ts.net/", "funnel");
+    expect(getTailscalePublishedOrigin()).toMatchObject({
+      origin: "https://public.example.ts.net",
+      mode: "funnel",
+    });
+    clearServe();
+    expect(getTailscalePublishedOrigin()).toBeDefined();
+    clearFunnel();
+    expect(getTailscalePublishedOrigin()).toBeUndefined();
+  });
+
+  it.each(["http://node.test", "https://%75@node.test", "https://node.test/path"])(
+    "rejects unsafe origin %s",
+    (origin) => expect(() => publish(origin)).toThrow("absolute HTTPS origin"),
+  );
+
+  it("emits only a typed launch action with a usable tool-authorized opaque ticket", async () => {
+    publish();
+    const presentation = materialize();
+    expect(presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Open app",
+              action: {
+                type: "web-app",
+                url: expect.stringMatching(
+                  /^https:\/\/node\.tailnet\.ts\.net\/__openclaw__\/mcp-app#v1\.[A-Za-z0-9_-]+\.\d+\.[A-Za-z0-9_-]+$/u,
+                ),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const action = presentation?.blocks.find((block) => block.type === "buttons")?.buttons[0]
+      ?.action;
+    if (action?.type !== "web-app" || !action.url) {
+      throw new Error("missing app launch action");
+    }
+    expect(await operations(new URL(action.url).hash.slice(1))(appCall())).toBe(200);
+  });
+
+  it.each([
+    ["missing origin", clear],
+    ["missing view", () => mocks.getMcpAppViewLease.mockReturnValue(undefined)],
+    [
+      "expired view",
+      () => mocks.getMcpAppViewLease.mockReturnValue({ ...view, expiresAtMs: nowMs }),
+    ],
+    [
+      "ticket capacity",
+      () => {
+        for (let index = 0; index < 256; index++) {
+          expect(mintTicket(`capacity:${index}`, { viewId: `capacity:${index}` })).toBeDefined();
+        }
+      },
+    ],
+  ])("omits the action for %s", (_name, arrange) => {
+    publish();
+    arrange();
+    expect(materialize()).toBeUndefined();
   });
 });

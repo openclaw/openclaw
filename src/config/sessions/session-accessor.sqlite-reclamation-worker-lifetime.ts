@@ -3,7 +3,7 @@ import { addAbortListener } from "node:events";
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import { resolveAgentDatabaseIdleHandleTtlMs } from "../../infra/sqlite-handle-lifecycle.js";
 import { publishSqliteWalCheckpointObservation } from "../../infra/sqlite-wal-checkpoint.js";
 import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -39,11 +39,7 @@ import type {
   SqliteArchiveReclamationPlan,
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
-import {
-  logSqliteReclamationWorkerOutcome,
-  logSqliteReclamationWorkerRetirement,
-  type SqliteReclamationWorkerRetirementReason,
-} from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
+import { logSqliteReclamationWorkerOutcome } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import type {
   SqliteReclamationClaim,
   SqliteCanonicalValidationWorkerRequest,
@@ -80,6 +76,7 @@ type MutationRunParams<Result> = {
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
 };
 const log = createSubsystemLogger("session-sqlite");
+const memoryPressure = channel("openclaw.memory.critical");
 
 /** Retains only the admitted connection; each caller owns its plan, claim and commit gate. */
 export class SqliteReclamationWorker {
@@ -96,10 +93,6 @@ export class SqliteReclamationWorker {
   private idle?: NodeJS.Timeout;
   private idleDrainListener?: Disposable;
   private operationId = 0;
-  private readonly createdAt = performance.now();
-  private opsServed = 0;
-  private kind = "unused";
-  private retirementReason?: SqliteReclamationWorkerRetirementReason;
   private readonly unregisterAgent: () => void;
   private readonly unregisterState: () => void;
   private readonly stateContext;
@@ -107,7 +100,7 @@ export class SqliteReclamationWorker {
     void this.close().catch((error: unknown) => log.error(String(error)));
   };
   private readonly onIdle = () => {
-    void this.close("idle-ttl").catch((error: unknown) => log.error(String(error)));
+    void this.close().catch((error: unknown) => log.error(String(error)));
   };
   private readonly onMemoryPressure = () => this.retireIfIdle();
 
@@ -127,14 +120,8 @@ export class SqliteReclamationWorker {
     });
     try {
       this.unregisterState = registerOpenClawStateDatabaseAsyncResource({
-        close: async (closingIdentity) => {
-          if (
-            !closingIdentity ||
-            closingIdentity.key === this.stateContext.admission.identity.key
-          ) {
-            await this.close();
-          }
-        },
+        admission: this.stateContext.admission,
+        close: () => this.close(),
       });
     } catch (error) {
       this.unregisterAgent();
@@ -186,16 +173,15 @@ export class SqliteReclamationWorker {
       this.active = undefined;
       if (!this.revoked) {
         this.transport?.channel.unref();
-        this.idle = setTimeout(this.onIdle, SQLITE_IDLE_HANDLE_TTL_MS);
+        // The Worker pins its agent database and lease until it retires.
+        this.idle = setTimeout(this.onIdle, resolveAgentDatabaseIdleHandleTtlMs());
         this.idle.unref();
         if (this.onRetired) {
           const drainSignal = getGatewayRestartDrainSignal();
           if (drainSignal.aborted) {
-            this.retireIfIdle("revoked");
+            this.retireIfIdle();
           } else {
-            this.idleDrainListener = addAbortListener(drainSignal, () =>
-              this.retireIfIdle("revoked"),
-            );
+            this.idleDrainListener = addAbortListener(drainSignal, () => this.retireIfIdle());
           }
         }
       }
@@ -208,9 +194,9 @@ export class SqliteReclamationWorker {
     clearTimeout(this.idle);
   }
 
-  retireIfIdle(reason: SqliteReclamationWorkerRetirementReason = "pressure"): void {
+  retireIfIdle(): void {
     if (this.transport && this.idle && !this.active && !this.revoked) {
-      void this.close(reason).catch((error: unknown) => log.error(String(error)));
+      void this.close().catch((error: unknown) => log.error(String(error)));
     }
   }
 
@@ -324,7 +310,6 @@ export class SqliteReclamationWorker {
     },
   ): Promise<Result> {
     const startedAt = performance.now();
-    this.kind = params.kind;
     params.assertCurrent();
     const transport = (this.transport ??= await this.start());
     params.assertCurrent();
@@ -332,7 +317,6 @@ export class SqliteReclamationWorker {
       params.diagnostics.workerThreadId = this.workerThreadId;
     }
     const operationId = ++this.operationId;
-    this.opsServed += 1;
     let exitCode: number | undefined;
     const operation = withSqliteMutationWorkerCoordination(
       this.stateContext,
@@ -478,7 +462,7 @@ export class SqliteReclamationWorker {
     });
     // Only ordinary retained Workers use pressure retirement; validation scopes own their close.
     if (this.onRetired) {
-      channel("openclaw.memory.critical").subscribe(this.onMemoryPressure);
+      memoryPressure.subscribe(this.onMemoryPressure);
     }
     return transport;
   }
@@ -494,13 +478,11 @@ export class SqliteReclamationWorker {
   }
 
   revoke(): void {
-    this.retirementReason ??= "revoked";
     this.revoked = true;
     this.clearIdleTimer();
   }
 
-  async close(reason: SqliteReclamationWorkerRetirementReason = "revoked"): Promise<void> {
-    this.retirementReason ??= reason;
+  async close(): Promise<void> {
     this.revoke();
     if (this.retired) {
       return;
@@ -581,7 +563,7 @@ export class SqliteReclamationWorker {
         });
       }
       this.retired = true;
-      channel("openclaw.memory.critical").unsubscribe(this.onMemoryPressure);
+      memoryPressure.unsubscribe(this.onMemoryPressure);
       this.unregisterAgent();
       this.unregisterState();
       process.off("beforeExit", this.beforeExit);
@@ -590,13 +572,6 @@ export class SqliteReclamationWorker {
         this.transport.channel.close();
       }
       this.onRetired?.(this);
-      logSqliteReclamationWorkerRetirement({
-        reason: this.retirementReason ?? reason,
-        kind: this.kind,
-        startedAt: this.createdAt,
-        opsServed: this.opsServed,
-        workerThreadId: this.workerThreadId,
-      });
     })().finally(() => {
       this.closing = undefined;
     }));

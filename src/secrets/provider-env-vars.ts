@@ -11,7 +11,7 @@ import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createInstalledPluginEnabledPredicate } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { getPluginCache, retainPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
   isWorkspacePluginAllowedByConfig,
   normalizePluginConfigId,
@@ -377,30 +377,22 @@ export function listKnownProviderAuthEnvVarNamesCore(
 
 /** Prepare machine-owned discovery facts before deriving the same provider env-name policy. */
 export async function listKnownProviderAuthEnvVarNamesAsync(
-  params?: ProviderEnvVarLookupParams,
+  params?: Omit<ProviderEnvVarLookupParams, "metadataSnapshot">,
 ): Promise<string[]> {
-  if (params?.metadataSnapshot) {
-    return listKnownProviderAuthEnvVarNamesCore(params);
-  }
   const env = cloneEnvWithPlatformSemantics(params?.env ?? process.env);
   const lookup = { ...params, env };
   const cache = getPluginCache();
-  const release = retainPluginCache(cache);
-  try {
-    return await withPluginCache(cache, async () => {
-      let metadataSnapshot = findProviderMetadataSnapshot(lookup, {
-        allowSynchronousPolicyRead: false,
-      });
-      if (!metadataSnapshot) {
-        const activate = await prepareBundledDiscoveryMode(env);
-        activate();
-        metadataSnapshot = resolveProviderMetadataSnapshot(lookup);
-      }
-      return listKnownProviderAuthEnvVarNamesCore({ ...lookup, metadataSnapshot });
+  return withPluginCache(cache, async () => {
+    let metadataSnapshot = findProviderMetadataSnapshot(lookup, {
+      allowSynchronousPolicyRead: false,
     });
-  } finally {
-    release();
-  }
+    if (!metadataSnapshot) {
+      const activate = await prepareBundledDiscoveryMode(env);
+      activate();
+      metadataSnapshot = resolveProviderMetadataSnapshot(lookup);
+    }
+    return listKnownProviderAuthEnvVarNamesCore({ ...lookup, metadataSnapshot });
+  });
 }
 
 /** Lists secret env vars for auditing and cleanup, independently of provider activation. */

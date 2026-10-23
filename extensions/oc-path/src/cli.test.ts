@@ -15,199 +15,43 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import { Command, CommanderError } from "commander";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { registerOcPathCli } from "../cli-registration.js";
-import { registerPathCli } from "./cli.js";
+import plugin from "../index.js";
+import {
+  createTestRuntime,
+  pathEmitCommand,
+  pathFindCommand,
+  pathResolveCommand,
+  pathSetCommand,
+  pathValidateCommand,
+  stderrText,
+  stdoutText,
+  type TestRuntime,
+} from "./cli.test-support.js";
 
 const JSONC_INPUT_LIMIT_BYTES = 16 * 1024 * 1024;
-type RegisterCli = Parameters<typeof registerOcPathCli>[0]["registerCli"];
-type CliRegistrar = Parameters<RegisterCli>[0];
-type CliRegistrationOptions = Parameters<RegisterCli>[1];
 
-function resolvePathMachineOutput() {
+const isPathMachineOutput = (() => {
   let resolver:
     | ((params: { argv: readonly string[]; stdoutIsTTY: boolean }) => boolean)
     | undefined;
-  registerOcPathCli({
-    registerCli(_registrar: CliRegistrar, options?: CliRegistrationOptions) {
-      const descriptor = options?.descriptors?.[0];
-      resolver = descriptor && "machineOutput" in descriptor ? descriptor.machineOutput : undefined;
-    },
-  } as unknown as Parameters<typeof registerOcPathCli>[0]);
+  plugin.register(
+    createTestPluginApi({
+      registerCli(_registrar, options) {
+        const descriptor = options?.descriptors?.[0];
+        resolver =
+          descriptor && "machineOutput" in descriptor ? descriptor.machineOutput : undefined;
+      },
+    }),
+  );
   if (!resolver) {
     throw new Error("oc-path CLI descriptor is missing its machine-output resolver");
   }
   return resolver;
-}
-
-const isPathMachineOutput = resolvePathMachineOutput();
-
-type PathCommandOptions = {
-  readonly json?: boolean;
-  readonly human?: boolean;
-  readonly valueJson?: boolean;
-  readonly cwd?: string;
-  readonly file?: string;
-  readonly dryRun?: boolean;
-  readonly diff?: boolean;
-};
-
-interface TestRuntime {
-  readonly stdout: string[];
-  readonly stderr: string[];
-  exitCode: number;
-  error(value: string): void;
-  writeStdout(value: string): void;
-  exit(code: number): void;
-}
-
-function createTestRuntime(): TestRuntime {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const runtime: TestRuntime = {
-    stdout,
-    stderr,
-    exitCode: 0,
-    error: (value) => {
-      stderr.push(value);
-    },
-    writeStdout: (value) => {
-      stdout.push(value);
-    },
-    exit: (code) => {
-      runtime.exitCode = code;
-    },
-  };
-  return runtime;
-}
-
-const stdoutText = (rt: TestRuntime): string => rt.stdout.join("");
-const stderrText = (rt: TestRuntime): string => rt.stderr.join("");
-
-function optionArgs(options: PathCommandOptions): string[] {
-  const args: string[] = [];
-  if (options.json === true) {
-    args.push("--json");
-  }
-  if (options.human === true) {
-    args.push("--human");
-  }
-  if (options.valueJson === true) {
-    args.push("--value-json");
-  }
-  if (options.cwd !== undefined) {
-    args.push("--cwd", options.cwd);
-  }
-  if (options.file !== undefined) {
-    args.push("--file", options.file);
-  }
-  if (options.dryRun === true) {
-    args.push("--dry-run");
-  }
-  if (options.diff === true) {
-    args.push("--diff");
-  }
-  return args;
-}
-
-async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void> {
-  const previousExitCode = process.exitCode;
-  process.exitCode = 0;
-  const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
-    runtime.writeStdout(String(chunk));
-    return true;
-  }) as typeof process.stdout.write);
-  const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
-    runtime.error(String(chunk));
-    return true;
-  }) as typeof process.stderr.write);
-  try {
-    const program = new Command();
-    program.exitOverride();
-    program.configureOutput({
-      writeOut: (value) => runtime.writeStdout(value),
-      writeErr: (value) => runtime.error(value),
-    });
-    registerPathCli(program);
-    await program.parseAsync(["node", "openclaw", "path", ...args]);
-    runtime.exitCode = process.exitCode ?? 0;
-  } catch (error) {
-    if (!(error instanceof CommanderError)) {
-      throw error;
-    }
-    runtime.exitCode = error.exitCode;
-  } finally {
-    stdoutWrite.mockRestore();
-    stderrWrite.mockRestore();
-    // oxlint-disable-next-line no-warning-comments -- replace the pending link after Bun ships the fix.
-    // TODO(bun#42607): Assign undefined once Bun clears a nonzero process.exitCode.
-    process.exitCode = previousExitCode ?? 0;
-  }
-}
-
-async function pathResolveCommand(
-  path: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["resolve", ...(path === undefined ? [] : [path]), ...optionArgs(options)],
-    runtime,
-  );
-}
-
-async function pathSetCommand(
-  path: string | undefined,
-  value: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    [
-      "set",
-      ...(path === undefined ? [] : [path]),
-      ...(value === undefined ? [] : [value]),
-      ...optionArgs(options),
-    ],
-    runtime,
-  );
-}
-
-async function pathFindCommand(
-  path: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["find", ...(path === undefined ? [] : [path]), ...optionArgs(options)],
-    runtime,
-  );
-}
-
-async function pathValidateCommand(
-  path: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["validate", ...(path === undefined ? [] : [path]), ...optionArgs(options)],
-    runtime,
-  );
-}
-
-async function pathEmitCommand(
-  file: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["emit", ...(file === undefined ? [] : [file]), ...optionArgs(options)],
-    runtime,
-  );
-}
+})();
 
 describe("openclaw path CLI", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -460,9 +304,9 @@ describe("openclaw path CLI", () => {
           const rt = createTestRuntime();
           await testCase.run(rt);
           expect(rt.exitCode).toBe(2);
-          expect(stdoutText(rt)).toBe("");
-          expect(JSON.parse(stderrText(rt))).toMatchObject({
-            error: { code: testCase.code },
+          expect(JSON.parse(stdoutText(rt))).toMatchObject({
+            ok: false,
+            error: { type: "cli_error", code: testCase.code },
           });
           expect(opens).toBeGreaterThan(0);
           expect(bytesRead).toBeLessThanOrEqual(JSONC_INPUT_LIMIT_BYTES + 1);
@@ -494,7 +338,7 @@ describe("openclaw path CLI", () => {
         }
 
         expect(rt.exitCode).toBe(2);
-        expect(JSON.parse(stderrText(rt))).toMatchObject({
+        expect(JSON.parse(stdoutText(rt))).toMatchObject({
           error: { code: "OC_PATH_FILE_NOT_REGULAR" },
         });
       },
@@ -902,8 +746,8 @@ describe("openclaw path CLI", () => {
       );
 
       expect(rt.exitCode).toBe(2);
-      expect(stderrText(rt)).toContain("OC_PATH_INPUT_NOT_UTF8");
-      expect(stderrText(rt)).toContain("the file was left unchanged");
+      expect(stdoutText(rt)).toContain("OC_PATH_INPUT_NOT_UTF8");
+      expect(stdoutText(rt)).toContain("the file was left unchanged");
       expect(readFileSync(filePath)).toEqual(before);
     });
 
@@ -1106,8 +950,8 @@ describe("openclaw path CLI", () => {
         );
 
         expect(rt.exitCode).toBe(1);
-        expect(stderrText(rt)).toContain("OC_EMIT_SENTINEL");
-        expect(stderrText(rt)).toContain("oc://AGENTS.md/[frontmatter]/+note");
+        expect(stdoutText(rt)).toContain("OC_EMIT_SENTINEL");
+        expect(stdoutText(rt)).toContain("oc://AGENTS.md/[frontmatter]/+note");
         expect(readFileSync(filePath, "utf-8")).toBe(before);
       },
     );
@@ -1126,9 +970,9 @@ describe("openclaw path CLI", () => {
         rt,
       );
       expect(rt.exitCode).toBe(1);
-      expect(stderrText(rt)).toContain("OC_EMIT_SENTINEL");
+      expect(stdoutText(rt)).toContain("OC_EMIT_SENTINEL");
       // Include the actual file in the sentinel error so operators can locate it.
-      expect(stderrText(rt)).toContain("gateway.jsonc");
+      expect(stdoutText(rt)).toContain("gateway.jsonc");
     });
 
     it("CLI-S05 malformed yaml returns structured parse-error", async () => {
@@ -1177,8 +1021,8 @@ describe("openclaw path CLI", () => {
       const rt = createTestRuntime();
       await pathFindCommand("oc://*.jsonc/items", { cwd: workspaceDir, json: true }, rt);
       expect(rt.exitCode).toBe(2);
-      expect(stderrText(rt)).toContain("OC_PATH_FILE_WILDCARD_UNSUPPORTED");
-      expect(stderrText(rt)).toContain("file-slot wildcards are not supported");
+      expect(stdoutText(rt)).toContain("OC_PATH_FILE_WILDCARD_UNSUPPORTED");
+      expect(stdoutText(rt)).toContain("file-slot wildcards are not supported");
     });
   });
 

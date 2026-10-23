@@ -27,6 +27,17 @@ export type ImageBlock = {
   height?: number;
 } & ({ url: string; artifactId?: string } | { url?: undefined; artifactId: string });
 
+/** Native admission and open actions shared with non-preview catalog rows. */
+export type MessageMediaAction = {
+  onOpen?: () => void;
+  onRetry?: () => void;
+  onAllow?: () => void;
+  onFocus?: () => void;
+  observeElement?: (element: Element | undefined) => void;
+  pending: boolean;
+  reason?: string;
+};
+
 export type ArtifactDownloadResolver = (
   params: {
     sessionKey: string;
@@ -472,11 +483,8 @@ export function resolveAttachmentImageKind(
     : "raster";
 }
 
-export function projectMessageMedia(
-  message: unknown,
-  content: readonly MessageContentItem[],
-  nowMs = Date.now(),
-) {
+export function projectMessageMedia(message: unknown, content: readonly MessageContentItem[]) {
+  const nowMs = Date.now();
   const record = asNonArrayRecord(message);
   const images: ImageBlock[] = [];
   const attachments: AssistantAttachmentItem[] = [];

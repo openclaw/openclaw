@@ -36,7 +36,6 @@ import {
   closeWireServer,
   connectWireClient,
   createPairedNodeWorkerHost,
-  createWireWorkspaceSettlementWaiter,
   startPairedNodeWorkerGateway,
   wireMessageText,
   type PairedNodeWorkerHost,
@@ -122,7 +121,6 @@ it.skipIf(process.platform === "win32")(
   async (context) => {
     const { signal } = context;
     const gatewayOwner = createQaGatewayChild();
-    const settlement = createWireWorkspaceSettlementWaiter();
     const requests: string[] = [];
     const providerErrors: unknown[] = [];
     const observationFailure = createDeferred<never>();
@@ -142,7 +140,7 @@ it.skipIf(process.platform === "win32")(
       async ({ createTempDir }) => {
         const root = await realpath(createTempDir("required-native-same-session-"));
         const identity = loadOrCreateDeviceIdentity({
-          path: path.join(root, "node-identity.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "node-state") },
         });
         await mkdir(path.join(root, "node-state", "node-host"), { recursive: true, mode: 0o700 });
         const remoteAgentWorkspace = path.join(root, "remote-agent-workspace");
@@ -273,7 +271,6 @@ it.skipIf(process.platform === "win32")(
           role: "operator",
           identity: null,
           onEvent: (event) => {
-            settlement.onEvent(event);
             if (event.event === "sessions.changed") {
               try {
                 onChanged?.(event.payload as Changed);
@@ -309,7 +306,6 @@ it.skipIf(process.platform === "win32")(
           operator,
           root,
           capacity: 1,
-          capacityWaitMs: 0,
           nodeConfig: {
             ...nodeConfig.config,
             models: { providers: { [providerId!]: nativeProvider } },
@@ -374,6 +370,7 @@ it.skipIf(process.platform === "win32")(
             const continueResume = createDeferred();
             const changedClear = createDeferred();
             const bEntered = createDeferred();
+            const bWorkspaceSettled = createDeferred();
             barriers.push(continueQuiesce, continueResume);
             let aClaim: string | undefined;
             let aRun: string | undefined;
@@ -388,7 +385,19 @@ it.skipIf(process.platform === "win32")(
               const placement = event.session?.placement;
               if (event.phase === "error" || event.reason === "chat.dispatch-error") {
                 // Queued follow-up execution IDs are not known until native HTTP entry.
-                throw new Error(`${creation} ${timing} run failed before settlement`);
+                throw new Error(
+                  `${creation} ${timing} run failed before settlement: ${JSON.stringify({
+                    phase: event.phase,
+                    reason: event.reason,
+                  })}\n${gateway.logs().slice(-12_000)}`,
+                );
+              }
+              if (bRun && placement?.state === "active" && !placement.workspaceResultReconciling) {
+                // A delayed snapshot from A cannot prove that B released its workspace.
+                const current = readSettlement(gateway, key);
+                if (!current.pending && current.placement?.turn_claim_id === null) {
+                  bWorkspaceSettled.resolve();
+                }
               }
               if (
                 !placement?.workspaceResultReconciling &&
@@ -466,13 +475,32 @@ it.skipIf(process.platform === "win32")(
             const aWait = wait(markers.A);
             await checkpoint(atQuiesce.promise);
             expect(await aWait).toMatchObject({ status: "ok" });
-            const current = await describe(key);
-            expect(current.placement).toMatchObject({
-              state: "active",
-              workspaceResultReconciling: true,
+            const settlement = readSettlement(gateway, key);
+            const placed = settlement.placement!;
+            // The display is advisory; the matching durable worker claim and result
+            // prove reconciliation is in progress while quiescence is held.
+            expect(settlement).toMatchObject({
+              placement: {
+                state: "active",
+                execution_mode: "worker-turn",
+                turn_claim_owner: "worker",
+                turn_claim_owner_epoch: placed.active_owner_epoch,
+                turn_claim_id: aClaim,
+                turn_claim_run_id: aRun,
+              },
+              pending: {
+                session_id: placed.session_id,
+                environment_id: placed.environment_id,
+                owner_epoch: placed.active_owner_epoch,
+                placement_generation: placed.turn_claim_generation,
+                claim_id: aClaim,
+                run_id: aRun,
+                staged_result_ref: null,
+                workspace_accepted_at_ms: null,
+              },
             });
+            const current = await describe(key);
             expect((await history(key)).messages.map(wireMessageText)).toContain(markers.A);
-            const placed = readSettlement(gateway, key).placement!;
             if (retained) {
               expect(placed).toMatchObject({
                 session_id: retained.session_id,
@@ -516,7 +544,7 @@ it.skipIf(process.platform === "win32")(
             await checkpoint(bEntered.promise);
             // Wait on the adopted execution claim, not chat.send's queue-cancellation ID.
             expect(await wait(bRun!)).toMatchObject({ status: "ok" });
-            await settlement.wait(operator, key, signal);
+            await checkpoint(bWorkspaceSettled.promise);
             const final = readSettlement(gateway, key);
             expect(final.pending).toBeUndefined();
             expect(final.placement).toMatchObject({

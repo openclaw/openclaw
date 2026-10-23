@@ -20,15 +20,6 @@ import { isParentDefaultHelpAction } from "./parent-default-help.js";
 
 const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-V", "--version"]);
 
-// Every CLI invocation presents as `openclaw` in process listings instead of `node`; only the
-// long-running Gateway takes a distinct title (see gateway-cli/run-loop.ts), so lock readers and
-// operators can tell it apart from ordinary commands.
-function setProcessTitleForCommand() {
-  if (process.title !== CLI_NAME) {
-    process.title = CLI_NAME;
-  }
-}
-
 function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
   if (actionCommand.getOptionValueSourceWithGlobals("logLevel") !== "cli") {
     return undefined;
@@ -89,7 +80,12 @@ async function runStateStoreGuard(commandPath: string[]): Promise<void> {
 /** Register global pre-action bootstrap hooks for every non-help command invocation. */
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
-    setProcessTitleForCommand();
+    // Every CLI invocation presents as `openclaw` in process listings instead of `node`; only the
+    // long-running Gateway takes a distinct title (see gateway-cli/run-loop.ts), so lock readers and
+    // operators can tell it apart from ordinary commands.
+    if (process.title !== CLI_NAME) {
+      process.title = CLI_NAME;
+    }
     const argv = process.argv;
     const helpOrVersionWasOptionValue = hasCommanderOptionToken(
       actionCommand,
@@ -149,7 +145,6 @@ export function registerPreActionHooks(program: Command, programVersion: string)
         runtime: defaultRuntime,
         commandPath,
         startupPolicy,
-        skipConfigGuard: true,
       });
       return;
     }
@@ -162,7 +157,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     let allowInvalid =
       commandPath[0] === "update" ||
       resolvePluginInstallInvalidConfigPolicy(
-        resolvePluginInstallPreactionRequest({ actionCommand, commandPath, argv: process.argv }),
+        resolvePluginInstallPreactionRequest({ actionCommand, commandPath }),
       ) === "allow-plugin-recovery";
     const isGatewayRun =
       commandPath[0] === "gateway" &&

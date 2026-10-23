@@ -1682,7 +1682,7 @@ extension GatewayConnection {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
         runTimeoutMs: Int? = nil,
-        requestTimeoutMs: Int = 30000,
+        requestTimeoutMs: Int? = nil,
         ifCurrentRoute route: Route? = nil,
         distinguishPreDispatchRouteChange: Bool = false) async throws -> OpenClawChatSendResponse
     {

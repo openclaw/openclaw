@@ -3,7 +3,6 @@ import { hasIrcControlChars, stripIrcControlChars } from "./control-chars.js";
 const IRC_TARGET_PATTERN = /^[^\s:]+$/u;
 
 type ParsedIrcLine = {
-  raw: string;
   prefix?: string;
   command: string;
   params: string[];
@@ -14,7 +13,6 @@ type ParsedIrcPrefix = {
   nick?: string;
   user?: string;
   host?: string;
-  server?: string;
 };
 
 export function parseIrcLine(line: string): ParsedIrcLine | null {
@@ -63,7 +61,6 @@ export function parseIrcLine(line: string): ParsedIrcLine | null {
   }
 
   return {
-    raw,
     prefix,
     command: command.toUpperCase(),
     params,
@@ -94,10 +91,7 @@ export function parseIrcPrefix(prefix?: string): ParsedIrcPrefix {
     const [nick, user] = prefix.split("!", 2);
     return { nick, user };
   }
-  if (prefix.includes(".")) {
-    return { server: prefix };
-  }
-  return { nick: prefix };
+  return prefix.includes(".") ? {} : { nick: prefix };
 }
 
 // Only real CR/LF and control characters can break out of an IRC line. Literal

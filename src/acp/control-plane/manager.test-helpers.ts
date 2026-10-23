@@ -66,24 +66,26 @@ async function mockAcpSessionMetaUpsert(params: AcpMetaUpsertInput) {
   return result;
 }
 
+// mock-isolation: ACP manager cases own metadata mutations in memory and must not acquire session database actors.
 vi.mock("../runtime/session-meta.js", () => ({
   listAcpSessionEntries: (params: unknown) => hoistedMocks.listAcpSessionEntriesMock(params),
   readAcpSessionEntry: (params: unknown) => hoistedMocks.readAcpSessionEntryMock(params),
   readAcpSessionEntryAsync: (params: unknown) => hoistedMocks.readAcpSessionEntryAsyncMock(params),
   prepareAcpSessionControlRead: async (
     params: Parameters<typeof import("../runtime/session-meta.js").prepareAcpSessionControlRead>[0],
-  ) => ({
-    readCurrent: async () => {
+  ) => {
+    const readCurrent = async () => {
       params.assertCurrent?.();
       const stored = await hoistedMocks.readAcpSessionEntryAsyncMock(params);
-      return {
-        session: stored,
-        entry: stored?.entry,
-      };
-    },
-    assertCurrent: () => params.assertCurrent?.(),
-    release: () => {},
-  }),
+      return { session: stored, entry: stored?.entry };
+    };
+    return {
+      initialRead: await readCurrent(),
+      readCurrent,
+      assertCurrent: () => params.assertCurrent?.(),
+      release: () => {},
+    };
+  },
   upsertAcpSessionMeta: mockAcpSessionMetaUpsert,
   upsertAcpSessionMetaForControl: mockAcpSessionMetaUpsert,
 }));

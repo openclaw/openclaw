@@ -17,6 +17,7 @@ import { resolveControlUiPaths } from "./browser.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 
 const RELOAD_GUARD_STORAGE_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
+const RENDER_RELOAD_STORAGE_KEY = "openclaw.controlUi.renderErrorReloadAttempted";
 // Bounds document probes across rapid re-renders of the same error state.
 const ATTEMPT_COOLDOWN_MS = 5_000;
 // Allow slow links to answer; callers share the in-flight probe.
@@ -242,6 +243,42 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   }
   recovery.buildId = null;
   reload();
+  return true;
+}
+
+/** Render bugs get one automatic reload per tab, not the stale-asset retry loop. */
+export async function reloadAfterRenderErrorOnce(
+  deps: Omit<StaleChunkReloadDeps, "buildId"> = {},
+): Promise<boolean> {
+  const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
+  if (!storage || deps.canReload?.() === false || !canReloadControlUiDocument()) {
+    return false;
+  }
+  try {
+    if (storage.getItem(RENDER_RELOAD_STORAGE_KEY) !== null) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  // Do not replace a recoverable error with a browser network-error document.
+  if (!(await waitForReachableControlUiDocument({ timeoutMs: 0 }, () => true))) {
+    return false;
+  }
+  if (deps.canReload?.() === false || !canReloadControlUiDocument()) {
+    return false;
+  }
+  try {
+    // Recheck after the shared probe: another failing surface may have claimed it.
+    if (storage.getItem(RENDER_RELOAD_STORAGE_KEY) !== null) {
+      return false;
+    }
+    // Never clear on mount, Retry, or a timer: a persistent bug must stay stopped.
+    storage.setItem(RENDER_RELOAD_STORAGE_KEY, "1");
+  } catch {
+    return false;
+  }
+  (deps.reload ?? reloadControlUiDocument)();
   return true;
 }
 

@@ -79,6 +79,7 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
     eventLog: [],
     eventLogRevision: 0,
     connect() {},
+    defer: () => false,
     setSessionKey() {},
     start() {},
     stop() {},
@@ -95,10 +96,12 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
   let settled = false;
   let captured = model;
   const capture = vi.fn(() => captured);
+  const foreground = { foregroundReady: true };
   const host: Parameters<typeof createSidebarSnapshot>[0] = {
     sidebarSnapshot: null,
     sessionDataContext: {
       gateway,
+      connectionBootstrap: foreground,
       agentSelection: {
         get state() {
           return { scopeId: pageScopeId };
@@ -127,6 +130,7 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
   });
   return {
     gateway,
+    foreground,
     capture,
     host,
     snapshotOwner,
@@ -399,6 +403,79 @@ describe("sidebar snapshot lifecycle", () => {
     ).toEqual(live);
   });
 
+  it("keeps admitted rows through unresolved hello and saves only after identity resolves", async () => {
+    const test = await warmFixture();
+    test.publish({ selfUser: undefined });
+    expect(test.host.sidebarSnapshot).toEqual(model);
+    const saved = test.settle();
+    test.snapshotOwner.synchronize();
+    expect(test.host.sidebarSnapshot).toBeNull();
+    await capture(test.snapshotOwner);
+    expect(test.capture).not.toHaveBeenCalled();
+    test.publish();
+    await capture(test.snapshotOwner);
+    await saved;
+    expect(test.capture).toHaveBeenCalledOnce();
+  });
+
+  it("hands off the complete roster at idle after the current transcript is ready", async () => {
+    const idle = vi.fn<(callback: IdleRequestCallback) => number>().mockReturnValue(1);
+    vi.stubGlobal("requestIdleCallback", idle);
+    const cancelIdle = vi.fn();
+    vi.stubGlobal("cancelIdleCallback", cancelIdle);
+    const test = await warmFixture();
+    test.foreground.foregroundReady = false;
+    test.publish();
+    void test.settle();
+    test.snapshotOwner.synchronize();
+    expect(test.host.sidebarSnapshot).toEqual(model);
+    expect(idle).not.toHaveBeenCalled();
+    test.foreground.foregroundReady = true;
+    document.dispatchEvent(new Event("openclaw-chat-transcript-loading-changed"));
+    await Promise.resolve();
+    expect(test.host.sidebarSnapshot).toEqual(model);
+    expect(idle).toHaveBeenCalledOnce();
+    idle.mock.calls[0]![0]({ didTimeout: false, timeRemaining: () => 10 });
+    expect(test.host.sidebarSnapshot).toBeNull();
+    expect(cancelIdle).toHaveBeenCalledWith(1);
+  });
+
+  it.each(["incomplete-roster", "transcript", "scope-change"] as const)(
+    "bounds a stalled handoff and retires it on %s",
+    async (boundary) => {
+      const test = await warmFixture();
+      test.foreground.foregroundReady = false;
+      test.publish();
+      if (boundary !== "incomplete-roster") {
+        void test.settle();
+      }
+      test.snapshotOwner.synchronize();
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(test.host.sidebarSnapshot).toEqual(model);
+      if (boundary === "scope-change") {
+        test.publish({ selfUser: { id: "profile-b" } });
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      expect(test.host.sidebarSnapshot).toBeNull();
+      expect(test.capture).not.toHaveBeenCalled();
+    },
+  );
+
+  it("starts a new handoff deadline after reconnecting", async () => {
+    const test = await warmFixture();
+    test.publish();
+    await vi.advanceTimersByTimeAsync(2999);
+    test.publish({ phase: "reconnecting" });
+    await vi.advanceTimersByTimeAsync(3001);
+    test.publish();
+    expect(test.host.sidebarSnapshot).toEqual(model);
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(test.host.sidebarSnapshot).toEqual(model);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(test.host.sidebarSnapshot).toBeNull();
+    expect(test.capture).not.toHaveBeenCalled();
+  });
+
   it.each(["idle", "pagehide", "hidden"] as const)(
     "coalesces a burst and persists its latest shape on %s for the next reload",
     async (boundary) => {
@@ -512,14 +589,20 @@ describe("sidebar snapshot lifecycle", () => {
     await saved;
   });
 
-  it.each(["profile", "connection"] as const)(
+  it.each(["profile", "profileless", "connection"] as const)(
     "clears cached display when the %s changes even with the same recovery scope",
     async (change) => {
       const test = await warmFixture();
       if (change === "connection") {
         test.gateway.connectionRevision += 1;
       }
-      test.publish(change === "profile" ? { selfUser: { id: "profile-b" } } : {});
+      test.publish(
+        change === "profile"
+          ? { selfUser: { id: "profile-b" } }
+          : change === "profileless"
+            ? { selfUser: null }
+            : {},
+      );
       expect(test.host.sidebarSnapshot).toBeNull();
       expect(test.snapshotOwner.read().saved).toBe(false);
     },

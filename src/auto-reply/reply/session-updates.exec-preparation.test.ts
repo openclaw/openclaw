@@ -54,7 +54,6 @@ vi.mock("../../skills/runtime/session-snapshot.js", () => ({
   resolveReusableWorkspaceSkillSnapshot: vi.fn(async () => ({
     snapshot: { prompt: "", skills: [] },
     shouldRefresh: false,
-    snapshotVersion: 0,
   })),
 }));
 
@@ -124,7 +123,7 @@ function preparationGate(phase: "approvals" | "skills") {
   } else {
     vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockImplementationOnce(async () => {
       await wait();
-      return { snapshot: { prompt: "", skills: [] }, shouldRefresh: false, snapshotVersion: 0 };
+      return { snapshot: { prompt: "", skills: [] }, shouldRefresh: false };
     });
   }
   return { entered, resume };
@@ -242,7 +241,7 @@ it("prepares current sandbox and approval skill eligibility without caller-threa
   }
 });
 
-it("refreshes skills without overwriting other session fields", async () => {
+it.each([true, false])("refreshes only owned skill fields (first turn: %s)", async (firstTurn) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot({});
     const scope = {
@@ -255,6 +254,8 @@ it("refreshes skills without overwriting other session fields", async () => {
       lifecycleRevision: "original",
       updatedAt: 1,
       pinnedAt: 1,
+      modelOverride: "gpt-5.5",
+      label: "Before rename",
       skillsSnapshot: { prompt: "prepared skills", skills: [] },
     };
     await replaceSessionEntry(scope, entry);
@@ -274,13 +275,13 @@ it("refreshes skills without overwriting other session fields", async () => {
     vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockImplementationOnce(async () => {
       entered.resolve();
       await resume.promise;
-      return { snapshot: skillsSnapshot, shouldRefresh: true, snapshotVersion: 0 };
+      return { snapshot: skillsSnapshot, shouldRefresh: true };
     });
     const pending = ensureSkillSnapshot({
       ...scope,
       cfg: {},
       workspaceDir: state.statePath("workspace"),
-      isFirstTurnInSession: false,
+      isFirstTurnInSession: firstTurn,
       sessionEntry: entry,
       sessionEntryHandle: handle,
       reader,
@@ -291,14 +292,25 @@ it("refreshes skills without overwriting other session fields", async () => {
         ...entry,
         pinnedAt: undefined,
         updatedAt: 2,
-        systemSent: true,
+        systemSent: !firstTurn,
+        modelOverride: "sonnet-4.6",
+        label: "After rename",
+        sendPolicy: "deny",
       });
       resume.resolve();
       const result = await pending;
       expect(result).toMatchObject({
         systemSent: true,
         skillsSnapshot,
-        sessionEntry: { updatedAt: expect.any(Number), systemSent: true, skillsSnapshot },
+        sessionEntry: {
+          sessionId: entry.sessionId,
+          updatedAt: expect.any(Number),
+          systemSent: true,
+          skillsSnapshot,
+          modelOverride: "sonnet-4.6",
+          label: "After rename",
+          sendPolicy: "deny",
+        },
       });
       expect(result.sessionEntry).not.toHaveProperty("pinnedAt");
       expect(handle.getCurrent()).toEqual(result.sessionEntry);

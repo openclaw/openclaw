@@ -5,14 +5,12 @@ import type { QaLabServerHandle } from "./lab-server.types.js";
 import { remapModelRefForForcedRuntime } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
-import { artifactPaths, createTestLab } from "./suite-runtime-parity.test-support.js";
+import { createTestLab } from "./suite-runtime-parity.test-support.js";
 import {
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
-  buildQaIsolatedScenarioWorkerParams,
   mergeQaRuntimeEnvPatches,
 } from "./suite-support.js";
-import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-helpers.js";
-import type { QaSuiteResult } from "./suite-types.js";
+import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import {
   buildQaSuiteRuntimeMetrics,
   buildQaSuiteSummaryJson,
@@ -73,23 +71,6 @@ function cleanupErrorForTest(params: Parameters<typeof throwQaSuiteCleanupErrors
     throw error;
   }
   throw new Error("Expected cleanup to fail");
-}
-
-function isolatedWorkerParams(
-  overrides: Partial<Parameters<typeof buildQaIsolatedScenarioWorkerParams>[0]>,
-) {
-  return buildQaIsolatedScenarioWorkerParams({
-    repoRoot: "/repo",
-    outputDir: "/repo/.artifacts/qa-e2e/scenarios/patched-control-ui",
-    providerMode: "mock-openai",
-    transportId: "qa-channel",
-    primaryModel: "mock-openai/gpt-5.6-luna",
-    alternateModel: "mock-openai/gpt-5.6-luna-alt",
-    fastMode: true,
-    scenario: makeQaSuiteTestScenario("isolated-control-ui-ownership", { surface: "control-ui" }),
-    startLab: vi.fn(),
-    ...overrides,
-  });
 }
 
 function readiness(stop: QaLabServerHandle["stop"], ownsLab: boolean, timeoutMs?: number) {
@@ -166,24 +147,12 @@ describe("qa suite", () => {
     expect(thrown.message).toContain("failed cleanup phases: transport stop: cleanup failed");
   });
 
-  it("reports completed counts, labeled failures, and only written artifact paths", () => {
+  it("reports completed counts and labeled failures", () => {
     const scenarios = (["pass", "fail", "skip"] as const).map((status) => ({
       name: status,
       status,
       steps: [],
     }));
-    const result = {
-      outputDir: "/qa-output\nretained",
-      ...artifactPaths,
-      ...recordQaSuiteTestResults(
-        undefined,
-        scenarios.map(({ name }) => makeQaSuiteTestScenario(name)),
-        scenarios,
-      ),
-      startedScenarioIds: ["pass", "fail", "skip"],
-      watchUrl: "http://127.0.0.1:43123",
-    } satisfies QaSuiteResult;
-
     const thrown = cleanupErrorForTest({
       cleanupFailures: [
         { phase: "agent\nharnesses", error: new Error("dispose failed") },
@@ -191,8 +160,7 @@ describe("qa suite", () => {
       ],
       runFailed: false,
       runError: undefined,
-      result,
-      evidenceWritten: false,
+      scenarios,
     });
 
     expect(thrown.message).toBe(
@@ -200,11 +168,9 @@ describe("qa suite", () => {
         "QA scenarios completed, but cleanup failed",
         "scenario counts: passed=1 failed=1 skipped=1 total=3",
         "failed cleanup phases: agent harnesses: dispose failed; lab stop: stop failed",
-        "retained artifacts: output=/qa-output retained report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json",
       ].join("\n"),
     );
     expect("cause" in thrown).toBe(false);
-    expect(thrown.message).not.toContain("evidence=");
   });
 
   it.each(["never-spawned", "unconfirmed"] as const)(
@@ -416,48 +382,6 @@ describe("qa suite", () => {
     });
   });
 
-  it("forwards run options into isolated scenario worker params", () => {
-    const startLab = vi.fn();
-    const adapterFactory = {
-      id: "telegram",
-      matches: vi.fn(() => true),
-      create: vi.fn(),
-    };
-    const scenario = makeQaSuiteTestScenario("patched-control-ui", {
-      surface: "control-ui",
-      gatewayConfigPatch: messageToolConfig(),
-    });
-    const makeInput = () => ({
-      adapterFactories: [adapterFactory],
-      channelId: "telegram",
-      adapterOptions: { repoRoot: "/repo" },
-      sutOpenClawCommand: {
-        executablePath: "/usr/local/bin/openclaw-telegram-sut-launcher",
-        usePackagedPlugins: true,
-      },
-      thinkingDefault: "minimal" as const,
-      claudeCliAuthMode: "subscription" as const,
-      enabledPluginIds: ["acpx"],
-      transportReadyTimeoutMs: 180_000,
-      forcedRuntime: "codex" as const,
-      writeEvidenceFile: false,
-    });
-
-    const params = isolatedWorkerParams({ scenario, startLab, input: makeInput() });
-    expect(params).toMatchObject({
-      scenarioIds: ["patched-control-ui"],
-      ...makeInput(),
-      concurrency: 1,
-      startLab,
-      controlUiEnabled: true,
-    });
-  });
-
-  it("preserves an explicit Control UI override for isolated scenarios", () => {
-    const params = isolatedWorkerParams({ input: { controlUiEnabled: false } });
-    expect(params.controlUiEnabled).toBe(false);
-  });
-
   it("keeps caller-owned serial labs on shared workers without a launcher", () => {
     const scenarios = [
       makeQaSuiteTestScenario("baseline"),
@@ -567,29 +491,19 @@ describe("buildQaSuiteSummaryJson", () => {
 });
 
 describe("Gateway heap snapshot checkpoints", () => {
-  async function createWriterFixture(outcome?: "failed" | "replaced-before" | "replaced-during") {
+  async function createWriterFixture(outcome?: "failed") {
     const tempRoot = await tempDirs.makeTempDir("qa-heap-checkpoint-");
     const outputDir = path.join(tempRoot, "output");
     const snapshotPath = path.join(tempRoot, "Heap.snapshot.heapsnapshot");
-    let pid = 123;
     const gateway = {
       tempRoot,
-      get pid() {
-        return pid;
-      },
       async signalProcess(signal: NodeJS.Signals) {
         expect(signal).toBe("SIGQUIT");
         await fs.writeFile(snapshotPath, '{"snapshot":');
-        if (outcome === "replaced-before") {
-          pid += 1;
-        }
       },
       async call() {
         if (outcome === "failed") {
           throw new Error("Gateway exited during snapshot serialization");
-        }
-        if (outcome === "replaced-during") {
-          pid += 1;
         }
         // Node's signal handler closes the snapshot before its JS thread can answer an RPC.
         await fs.appendFile(snapshotPath, '{"complete":true}}');
@@ -608,14 +522,9 @@ describe("Gateway heap snapshot checkpoints", () => {
     expect(checkpoint!.bytes).toBe(artifact.length);
   });
 
-  it.each(["failed", "replaced-before", "replaced-during"] as const)(
-    "does not publish a snapshot after the Gateway is %s",
-    async (outcome) => {
-      const params = await createWriterFixture(outcome);
-      await expect(captureGatewayHeapSnapshotCheckpoint(params)).rejects.toThrow(
-        outcome === "failed" ? "Gateway exited" : "Gateway changed",
-      );
-      await expect(fs.access(params.outputDir)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
+  it("does not publish a snapshot after the Gateway exits", async () => {
+    const params = await createWriterFixture("failed");
+    await expect(captureGatewayHeapSnapshotCheckpoint(params)).rejects.toThrow("Gateway exited");
+    await expect(fs.access(params.outputDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });

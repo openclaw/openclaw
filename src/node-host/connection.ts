@@ -109,10 +109,8 @@ export function startNodeHostConnection({
     gatewayHelloReceived = false;
     connectedGatewayProtocol = 0;
     gatewayCapabilities = new Set();
-    if (hostStatsTimer) {
-      clearInterval(hostStatsTimer);
-      hostStatsTimer = undefined;
-    }
+    clearInterval(hostStatsTimer);
+    hostStatsTimer = undefined;
     for (const state of optionalPublicationStates.values()) {
       if (state.retryTimer) {
         clearTimeout(state.retryTimer);
@@ -407,6 +405,22 @@ export function startNodeHostConnection({
     onRunnerCapacityChanged: (capacity) => {
       workerCapacity = capacity;
       publishRunnerInventory();
+    },
+    onProcessesChanged: (binding) => {
+      if (!gatewayHelloReceived) {
+        return;
+      }
+      // Retained processes outlive invocation routes; the current connection owns publication.
+      const generation = gatewayConnectionGeneration;
+      void publicationClient
+        .request("node.event", buildNodeEventParams("worker.processes.changed", binding))
+        .catch((error: unknown) => {
+          if (generation === gatewayConnectionGeneration) {
+            writeStderrLine(
+              `worker process notification failed: ${redactSensitiveText(String(error))}`,
+            );
+          }
+        });
     },
     onWorkerHostingDisabled,
     onManifestChanged: (manifest) => {

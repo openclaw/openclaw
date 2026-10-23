@@ -7,12 +7,17 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import {
+  createUsageCheckpoint,
+  createUsageTranscriptEntry,
+} from "./session-cost-usage-fixtures.test-support.js";
 import { partitionUsageCostRollup } from "./session-cost-usage-partitions.js";
 import {
   decodeUsageCostRollupEnvelope,
   encodeUsageCostRollup,
   USAGE_COST_ROLLUP_SCOPE,
   USAGE_COST_ROLLUP_VERSION,
+  type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
 import {
   appendSessionUsageRollupContribution,
@@ -28,7 +33,6 @@ import type { UsageCostWorkerInput } from "./session-cost-usage-worker.types.js"
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 const fixture = vi.hoisted(() => ({
-  open: vi.fn(),
   withRead: vi.fn(),
   inventory: vi.fn<() => Promise<UsageCostTranscriptFile[]>>(),
   selectedFiles: vi.fn<() => Promise<UsageCostTranscriptFile[]>>(),
@@ -36,14 +40,11 @@ const fixture = vi.hoisted(() => ({
 
 // mock-isolation: Use only the borrowed native connection, without opening real agent stores.
 vi.mock("../state/openclaw-agent-db-readonly.js", () => ({
-  openOpenClawAgentDatabaseReadOnly: fixture.open,
   withOpenClawAgentDatabaseReadOnly: fixture.withRead,
 }));
 // mock-isolation: Pause transcript discovery without loading the worker's retained refresh state.
 vi.mock("./session-cost-usage-refresh-inputs.worker.js", () => ({
-  createUsageCostCollectionAccess: () => ({
-    inventory: fixture.inventory,
-  }),
+  createUsageCostCollectionAccess: () => ({ inventory: fixture.inventory }),
   usageRefreshInputs: vi.fn(),
 }));
 // mock-isolation: Supply captured aliases without opening a second native store in this worker test.
@@ -55,6 +56,75 @@ vi.mock("./session-cost-usage-collection.js", async (importOriginal) => ({
 afterEach(() => vi.resetAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+const timestamp = Date.UTC(2026, 8, 18);
+const pricingFingerprint = "synthetic-pricing";
+function cacheDatabase() {
+  const db = new (requireNodeSqlite().DatabaseSync)(":memory:");
+  db.exec(`CREATE TABLE cache_entries (
+    scope TEXT NOT NULL, key TEXT NOT NULL, value_json TEXT, blob BLOB,
+    expires_at INTEGER, updated_at INTEGER NOT NULL, PRIMARY KEY (scope, key)
+  )`);
+  return db;
+}
+function reportFile(filePath: string, inode: number): UsageCostTranscriptFile {
+  return {
+    filePath,
+    sourcePath: filePath,
+    kind: "jsonl",
+    size: 100,
+    mtimeMs: timestamp,
+    device: 1,
+    inode,
+  };
+}
+function reportEntry(file: UsageCostTranscriptFile, tokens: number): UsageCostRollupEntry {
+  const rollup = createSessionUsageRollupData();
+  appendSessionUsageRollupContribution(rollup, {
+    timestamp,
+    role: "assistant",
+    toolNames: [],
+    toolResultCounts: { total: 0, errors: 0 },
+    usageTotals: {
+      ...createEmptyCostUsageTotals(),
+      input: tokens,
+      totalTokens: tokens,
+      inputCost: tokens / 10,
+      totalCost: tokens / 10,
+    },
+  });
+  return {
+    version: USAGE_COST_ROLLUP_VERSION,
+    pricingFingerprint,
+    checkpoint: {
+      ...createUsageCheckpoint(file.size, file.mtimeMs, file.inode ?? 0),
+      anchorHash: "synthetic-anchor",
+    },
+    scannedAt: timestamp,
+    parsedRecords: 1,
+    countedRecords: 1,
+    rollup,
+  };
+}
+
+function execute(
+  operation: UsageCostWorkerInput["operation"],
+  request: Parameters<typeof executeUsageCostWorker>[1]["request"] = vi.fn(),
+) {
+  return executeUsageCostWorker(
+    {
+      kind: "usage-cost",
+      location: { agentId: "main", databasePath: ":memory:", storePath: ":memory:", env: {} },
+      databases: [{ agentId: "main", path: ":memory:" }],
+      stores: [],
+      archiveStorePaths: [],
+      operation,
+    },
+    { consumeInput() {}, notify() {}, request },
+    { runNativeSection: async (run) => run(), throwIfCancelled() {} },
+    async (_database, read) => read(),
+  );
+}
+
 it.for([
   { selected: false, scanMs: 11_000 },
   { selected: true, scanMs: 11_000 },
@@ -63,17 +133,9 @@ it.for([
   "batches whole transcripts and retains pending selectors ($selected, $scanMs ms)",
   async ({ selected, scanMs }) => {
     const root = tempDirs.make("usage-batch-quantum-");
-    const text =
-      JSON.stringify({
-        type: "message",
-        id: "usage",
-        parentId: null,
-        timestamp: "2026-09-18T00:00:00Z",
-        message: {
-          role: "assistant",
-          usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
-        },
-      }) + "\n";
+    const entry = createUsageTranscriptEntry(7, { cost: 1 });
+    Object.assign(entry.message.usage, { output: 3, totalTokens: 10 });
+    const text = JSON.stringify({ ...entry, id: "usage", parentId: null }) + "\n";
     const files: UsageCostTranscriptFile[] = ["a", "b"].map((name) => {
       const filePath = path.join(root, `${name}.jsonl`);
       fs.writeFileSync(filePath, text);
@@ -95,11 +157,7 @@ it.for([
       files[1]!,
     ];
     fixture.selectedFiles.mockResolvedValue(requested);
-    const db = new (requireNodeSqlite().DatabaseSync)(":memory:");
-    db.exec(`CREATE TABLE cache_entries (
-    scope TEXT NOT NULL, key TEXT NOT NULL, value_json TEXT, blob BLOB,
-    expires_at INTEGER, updated_at INTEGER NOT NULL, PRIMARY KEY (scope, key)
-  )`);
+    const db = cacheDatabase();
     fixture.withRead.mockImplementation((read: (opened: { db: DatabaseSync }) => unknown) => ({
       found: true,
       value: read({ db }),
@@ -109,43 +167,30 @@ it.for([
     const written: string[] = [];
     const batches: number[] = [];
     try {
-      const result = await executeUsageCostWorker(
+      const result = await execute(
         {
-          kind: "usage-cost",
-          location: { agentId: "main", databasePath: ":memory:", storePath: ":memory:", env: {} },
-          databases: [{ agentId: "main", path: ":memory:" }],
-          stores: [],
-          archiveStorePaths: [],
-          operation: {
-            kind: "refresh",
-            pricingFingerprint: "synthetic-pricing",
-            maxFiles: 50,
-            sessionFiles: selected ? requested.map((file) => file.sourcePath) : undefined,
-          },
+          kind: "refresh",
+          pricingFingerprint,
+          maxFiles: 50,
+          sessionFiles: selected ? requested.map((file) => file.sourcePath) : undefined,
         },
-        {
-          consumeInput() {},
-          notify() {},
-          async request(value) {
-            let output: unknown;
-            if (isRecord(value) && value.kind === "write" && Array.isArray(value.input)) {
-              batches.push(value.input.length);
-              for (const row of value.input) {
-                if (isRecord(row) && typeof row.key === "string") {
-                  written.push(row.key);
-                }
+        async (value) => {
+          let output: unknown;
+          if (isRecord(value) && value.kind === "write" && Array.isArray(value.input)) {
+            batches.push(value.input.length);
+            for (const row of value.input) {
+              if (isRecord(row) && typeof row.key === "string") {
+                written.push(row.key);
               }
-              output = true;
-            } else if (isRecord(value) && value.kind === "refresh-session") {
-              now += scanMs;
-            } else if (isRecord(value) && value.kind === "pricing" && Array.isArray(value.input)) {
-              output = value.input.map(() => undefined);
             }
-            return { input: { ok: true, value: output }, consumed() {} };
-          },
+            output = true;
+          } else if (isRecord(value) && value.kind === "refresh-session") {
+            now += scanMs;
+          } else if (isRecord(value) && value.kind === "pricing" && Array.isArray(value.input)) {
+            output = value.input.map(() => undefined);
+          }
+          return { input: output, consumed() {} };
         },
-        { runNativeSection: async (operation) => operation(), throwIfCancelled() {} },
-        async (_database, read) => read(),
       );
       clock.mockRestore();
       expect(batches).toEqual(scanMs ? [1] : [2]);
@@ -170,54 +215,15 @@ it.for([
 );
 
 it("spends the shared decoded budget on complete reports after preparing the snapshot", async () => {
-  const timestamp = Date.UTC(2026, 8, 18);
-  const pricingFingerprint = "synthetic-pricing";
   const entries = [17, 23].map((tokens) => {
-    const rollup = createSessionUsageRollupData();
-    appendSessionUsageRollupContribution(rollup, {
-      timestamp,
-      role: "assistant",
-      toolNames: [],
-      toolResultCounts: { total: 0, errors: 0 },
-      usageTotals: {
-        ...createEmptyCostUsageTotals(),
-        input: tokens,
-        totalTokens: tokens,
-        inputCost: tokens / 10,
-        totalCost: tokens / 10,
-      },
-    });
+    const file = reportFile(`/synthetic/report-${tokens}.jsonl`, tokens);
+    const entry = reportEntry(file, tokens);
     // Untimestamped tool counts remain in the body, not its dated partitions.
-    appendSessionUsageRollupContribution(rollup, {
+    appendSessionUsageRollupContribution(entry.rollup, {
       toolNames: Array.from({ length: 32 }, (_, index) => `synthetic-unattributed-tool-${index}`),
       toolResultCounts: { total: 0, errors: 0 },
     });
-    const file: UsageCostTranscriptFile = {
-      filePath: `/synthetic/report-${tokens}.jsonl`,
-      sourcePath: `/synthetic/report-${tokens}.jsonl`,
-      kind: "jsonl",
-      size: 100,
-      mtimeMs: timestamp,
-      device: 1,
-      inode: tokens,
-    };
-    const encoded = partitionUsageCostRollup({
-      version: USAGE_COST_ROLLUP_VERSION,
-      pricingFingerprint,
-      checkpoint: {
-        kind: "jsonl",
-        parsedOffset: file.size,
-        observedSize: file.size,
-        observedMtimeMs: file.mtimeMs,
-        device: file.device ?? 0,
-        inode: file.inode ?? 0,
-        anchorHash: "synthetic-anchor",
-      },
-      scannedAt: timestamp,
-      parsedRecords: 1,
-      countedRecords: 1,
-      rollup,
-    });
+    const encoded = partitionUsageCostRollup(entry);
     const envelope = decodeUsageCostRollupEnvelope(encoded.valueJson, pricingFingerprint);
     if (!envelope) {
       throw new Error("Encoded fixture must have a valid rollup envelope");
@@ -261,9 +267,7 @@ it("spends the shared decoded budget on complete reports after preparing the sna
       cacheBudget,
     });
   expect(await read(first)).toMatchObject({
-    rollup: {
-      buckets: { [String(timestamp)]: { totals: { totalTokens: 17, totalCost: 1.7 } } },
-    },
+    rollup: { buckets: { [String(timestamp)]: { totals: { totalTokens: 17, totalCost: 1.7 } } } },
   });
   expect(await read(second)).toBeNull();
 });
@@ -271,54 +275,10 @@ it("spends the shared decoded budget on complete reports after preparing the sna
 it("ends the cache snapshot before projection awaits and preserves a concurrent write", async ({
   signal,
 }) => {
-  const db = new (requireNodeSqlite().DatabaseSync)(":memory:");
-  db.exec(`CREATE TABLE cache_entries (
-    scope TEXT NOT NULL, key TEXT NOT NULL, value_json TEXT, blob BLOB,
-    expires_at INTEGER, updated_at INTEGER NOT NULL, PRIMARY KEY (scope, key)
-  )`);
-  const timestamp = Date.UTC(2026, 8, 18);
-  const pricingFingerprint = "synthetic-pricing";
-  const file: UsageCostTranscriptFile = {
-    filePath: "/synthetic/report.jsonl",
-    sourcePath: "/synthetic/report.jsonl",
-    kind: "jsonl",
-    size: 100,
-    mtimeMs: timestamp,
-    device: 1,
-    inode: 2,
-  };
+  const db = cacheDatabase();
+  const file = reportFile("/synthetic/report.jsonl", 2);
   const write = (connection: DatabaseSync, tokens: number) => {
-    const rollup = createSessionUsageRollupData();
-    appendSessionUsageRollupContribution(rollup, {
-      timestamp,
-      role: "assistant",
-      toolNames: [],
-      toolResultCounts: { total: 0, errors: 0 },
-      usageTotals: {
-        ...createEmptyCostUsageTotals(),
-        input: tokens,
-        totalTokens: tokens,
-        inputCost: tokens / 10,
-        totalCost: tokens / 10,
-      },
-    });
-    const encoded = encodeUsageCostRollup({
-      version: USAGE_COST_ROLLUP_VERSION,
-      pricingFingerprint,
-      checkpoint: {
-        kind: "jsonl",
-        parsedOffset: file.size,
-        observedSize: file.size,
-        observedMtimeMs: file.mtimeMs,
-        device: file.device ?? 0,
-        inode: file.inode ?? 0,
-        anchorHash: "synthetic-anchor",
-      },
-      scannedAt: timestamp,
-      parsedRecords: 1,
-      countedRecords: 1,
-      rollup,
-    });
+    const encoded = encodeUsageCostRollup(reportEntry(file, tokens));
     connection
       .prepare(`INSERT INTO cache_entries (scope, key, value_json, blob, updated_at)
         VALUES (?, ?, ?, ?, ?)
@@ -328,7 +288,10 @@ it("ends the cache snapshot before projection awaits and preserves a concurrent 
   };
   write(db, 3);
   // Borrow one native connection so an independent job can use it while projection waits.
-  fixture.open.mockReturnValue({ found: true, database: { db, close() {} } });
+  fixture.withRead.mockImplementation((read: (opened: { db: DatabaseSync }) => unknown) => ({
+    found: true,
+    value: read({ db }),
+  }));
   const projecting = createDeferredCore();
   const resume = createDeferredCore();
   fixture.inventory.mockImplementationOnce(async () => {
@@ -337,27 +300,14 @@ it("ends the cache snapshot before projection awaits and preserves a concurrent 
     return [file];
   });
   fixture.inventory.mockResolvedValue([file]);
-  const input: UsageCostWorkerInput = {
-    kind: "usage-cost",
-    location: { agentId: "main", databasePath: ":memory:", storePath: ":memory:", env: {} },
-    databases: [{ agentId: "main", path: ":memory:" }],
-    archiveStorePaths: [],
-    stores: [],
-    operation: {
+  const report = () =>
+    execute({
       kind: "summary",
       pricingFingerprint,
       startMs: timestamp,
       endMs: timestamp,
       dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-    },
-  };
-  const report = () =>
-    executeUsageCostWorker(
-      input,
-      { consumeInput() {}, notify() {}, request: vi.fn() },
-      { runNativeSection: async (operation) => operation(), throwIfCancelled() {} },
-      async (_database, read) => read(),
-    );
+    });
   const pending = report();
   try {
     await withinTest(

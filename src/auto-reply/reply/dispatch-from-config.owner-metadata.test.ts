@@ -8,6 +8,11 @@ import * as entryReadRuntime from "../../config/sessions/session-entry-read-runt
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  createReplyOperation,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.target.js";
+import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
@@ -219,3 +224,113 @@ it("does not turn revoked dispatch authority into a missing-entry fallback", asy
     }),
   ).rejects.toBe(refusal);
 });
+
+it.each([false, true])(
+  "keeps dispatch on its physical owner (selected active=%s)",
+  async (selectedActive) => {
+    state = await createOpenClawTestState({ label: "dispatch-physical-owner" });
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, work: {} },
+        defaults: { workspace: state.workspaceDir },
+      },
+      plugins: { enabled: false },
+      session: { scope: "global" },
+    };
+    await state.writeConfig(cfg);
+    const sessionKey = "global";
+    const sessionId = "same-incarnation";
+    const storePath = resolveSessionStorePathCore(undefined, { agentId: "work" });
+    replaceSessionEntrySync(
+      { agentId: "work", sessionKey, storePath },
+      { sessionId, updatedAt: 1 },
+    );
+    const selectedTarget = captureSessionTarget({
+      storeScope: storePath,
+      sessionKey,
+      agentId: "work",
+    });
+    const foreignTarget = captureSessionTarget({
+      storeScope: `${storePath}.foreign`,
+      sessionKey,
+      agentId: "work",
+    });
+    const create = (target: typeof selectedTarget) => {
+      const operation = createReplyOperation({
+        sessionKey,
+        sessionId,
+        resetTriggered: false,
+        target,
+      });
+      operation.setPhase("running");
+      operation.attachBackend({ kind: "embedded", cancel: vi.fn() });
+      return operation;
+    };
+    const foreign = create(foreignTarget);
+    const selected = selectedActive ? create(selectedTarget) : undefined;
+    using resources = new DisposableStack();
+    const dispatcher = createReplyDispatcher({ deliver: async () => undefined });
+    let prepared:
+      | Extract<Awaited<ReturnType<typeof gatherDispatchRequest>>, { status: "ready" }>
+      | undefined;
+    try {
+      const gathered = await gatherDispatchRequest(
+        {
+          cfg,
+          ctx: {
+            AgentId: "work",
+            SessionKey: sessionKey,
+            Body: "hello",
+            Provider: "webchat",
+            Surface: "webchat",
+            ChatType: "direct",
+            CommandAuthorized: false,
+          },
+          dispatcher,
+        },
+        undefined,
+        false,
+        undefined,
+        (dispose) => resources.defer(dispose),
+      );
+
+      expect(gathered.status).toBe("ready");
+      if (gathered.status !== "ready") {
+        throw new Error("selected physical store was skipped");
+      }
+      prepared = gathered;
+      await expect(gathered.state.ensureDispatchReplyOperation("pre_dispatch")).resolves.toEqual({
+        status: "ready",
+      });
+      if (selected) {
+        const preparationSignal = gathered.state.getPreDispatchAbortSignal();
+        expect(preparationSignal?.aborted).toBe(false);
+        selected.abortByUser();
+        expect(preparationSignal?.aborted).toBe(true);
+        expect(gathered.state.getDispatchReplyOperation()).toBeUndefined();
+      } else {
+        const owned = gathered.state.getDispatchReplyOperation();
+        expect(owned).toBeDefined();
+        expect(owned).toBe(getSessionControllerOperation(sessionKey, selectedTarget));
+        expect(owned).not.toBe(foreign);
+      }
+
+      expect(getSessionControllerOperation(sessionKey, foreignTarget)).toBe(foreign);
+      expect(foreign.abortSignal.aborted).toBe(false);
+    } finally {
+      const owned = prepared?.state.getDispatchReplyOperation();
+      prepared?.state.completeDispatchReplyOperation();
+      await prepared?.state.releasePreDispatchLifecycleAdmission();
+      selected?.complete();
+      foreign.complete();
+      await Promise.all([
+        owned?.ownerSettlement,
+        selected?.ownerSettlement,
+        foreign.ownerSettlement,
+      ]);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+    }
+  },
+);

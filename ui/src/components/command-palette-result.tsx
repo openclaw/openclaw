@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import MarkdownIt, { type Token } from "markdown-it";
-import { createEffect, createMemo, Match, Show, Switch } from "solid-js";
+import { createMemo, Match, Show, Switch } from "solid-js";
 import { escapeRegExp } from "../../../src/shared/regexp.ts";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
@@ -112,7 +112,7 @@ export function CommandPaletteResult(props: {
   identity?: AgentIdentityResult | null;
   pluginIconUrls?: Readonly<Record<string, string>>;
   onPluginIconError?: (pluginId: string) => void;
-  onPluginIconVisible?: (pluginId: string) => void;
+  registerPluginIcon?: (readId: () => string) => () => void;
 }) {
   const session = () => props.item.session;
   const owner = () => session()?.owner?.actor;
@@ -160,26 +160,16 @@ export function CommandPaletteResult(props: {
           )}
         </Match>
         <Match when={props.item.pluginId} keyed>
-          {(pluginId) => {
-            // Visible rows admit image requests; a reset map reloads retained rows.
-            createEffect(
-              () => [props.item.hasPluginIcon, props.pluginIconUrls],
-              ([hasIcon]) => {
-                if (hasIcon) {
-                  props.onPluginIconVisible?.(pluginId);
-                }
-              },
-            );
-            return (
-              <PluginArtTile
-                slug={pluginId}
-                name={props.item.label}
-                iconUrl={props.pluginIconUrls?.[pluginId]}
-                onIconError={() => props.onPluginIconError?.(pluginId)}
-                class="cmd-palette__plugin-icon"
-              />
-            );
-          }}
+          {(pluginId) => (
+            <PluginArtTile
+              registerIcon={props.registerPluginIcon}
+              slug={pluginId}
+              name={props.item.label}
+              iconUrl={props.pluginIconUrls?.[pluginId]}
+              onIconError={() => props.onPluginIconError?.(pluginId)}
+              class="cmd-palette__plugin-icon"
+            />
+          )}
         </Match>
       </Switch>
       <span class="cmd-palette__item-copy">

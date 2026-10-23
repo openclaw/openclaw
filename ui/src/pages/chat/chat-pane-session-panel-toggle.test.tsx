@@ -12,6 +12,8 @@ import {
 import {
   LINK_READER_PANEL_TOGGLE_EVENT,
   PLUGIN_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
 } from "../../components/panel-toggle-contract.ts";
 import {
   rememberSessionPanelToggle,
@@ -32,7 +34,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { isSidebarSlotVisible } from "./sidebar-layout.ts";
+import { isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
 
 const reader: ControlUiLinkReaderDescriptor = {
   pluginId: "forge",
@@ -65,7 +67,7 @@ function fixture() {
   state.sessionKey = "session-a";
   state.sidebarLayout = { columns: [] };
   const owner = {
-    renderRoot: root,
+    sidebarRegion: region,
     state,
     linkReaders: [reader],
     pluginPanels: ["review/document"] as const,
@@ -99,6 +101,7 @@ function fixture() {
     deliverPanelEvent,
     event,
     owner,
+    region,
     root,
     pending,
     state,
@@ -110,6 +113,29 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
+
+it("opens the terminal while the sidebar region bridge awaits upgrade", () => {
+  const f = fixture();
+  // The pane creates the host before the lazy sidebar renderer registers its bridge.
+  Object.defineProperty(f.region, "activateTerminalHost", { value: undefined });
+  window.dispatchEvent(new Event(TERMINAL_PANEL_TOGGLE_EVENT));
+  expect(isSidebarSlotVisible(f.state.sidebarLayout, "terminal")).toBe(true);
+});
+
+it.each([
+  ["desktop", true],
+  ["mobile", false],
+] as const)(
+  "preserves the %s panel state when moving its last terminal to the bottom",
+  (presentation, open) => {
+    const f = fixture();
+    f.region.presentation = presentation;
+    f.state.sidebarLayout = openSlot(f.state.sidebarLayout, "terminal");
+    window.dispatchEvent(new Event(TERMINAL_PANEL_DOCK_BOTTOM_EVENT));
+    expect(isSidebarSlotVisible(f.state.sidebarLayout, "terminal")).toBe(false);
+    expect(f.state.sidebarLayout.open).toBe(open);
+  },
+);
 
 describe("plugin panel intent delivery", () => {
   it.each(["buffered", "direct"] as const)(
@@ -160,6 +186,7 @@ describe("session link-reader intent delivery", () => {
       const recipient = document.createElement("openclaw-link-reader-panel");
       Object.defineProperty(recipient, "updateComplete", { value: recipientCommit.promise });
       f.root.append(recipient);
+      f.region.readPanelHost = () => recipient;
       const event = f.event();
       window.dispatchEvent(event);
       f.definitions.resolve(HTMLElement);
@@ -293,6 +320,8 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   const commit = createDeferred();
   const pane = document.createElement("div");
   let pendingUpdate: Promise<void> | undefined;
+  let sidebarRegion: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null = null;
+  let browserPanel: HTMLElement | undefined;
   const state = createPageState(
     createInitializationContext(),
     { afterCommit: () => () => {} },
@@ -304,7 +333,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   const dispose = createRoot((stop) => {
     createChatPaneSessionPanelToggles({
       current: () => ({
-        renderRoot: pane,
+        sidebarRegion,
         state,
         linkReaders: [],
         pluginPanels: [],
@@ -323,6 +352,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   function BrowserCard(props: { sessionKey: string; presented: boolean; refresh: boolean }) {
     return (
       <openclaw-browser-panel
+        ref={(element) => (browserPanel = element)}
         data-sidebar-panel-host
         prop:embedded={true}
         prop:available={true}
@@ -349,28 +379,36 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
     });
     view ??= mountSolid(
       () => {
-        const definitions = sidebarPanelDefinitions().map((definition) =>
-          Object.assign(definition, {
-            available: definition.slot === "browser",
-            content:
-              definition.slot === "browser"
-                ? () => (
-                    <BrowserCard
-                      sessionKey={snapshot().sessionKey}
-                      presented={isSidebarSlotVisible(snapshot().layout, "browser")}
-                      refresh={snapshot().refresh}
-                    />
-                  )
-                : null,
-          }),
-        );
+        const definitions = sidebarPanelDefinitions();
+        for (const definition of definitions) {
+          definition.available = definition.slot === "browser";
+          if (definition.available) {
+            Object.defineProperty(definition, "panelHost", { get: () => browserPanel });
+            definition.content = (
+              <BrowserCard
+                sessionKey={snapshot().sessionKey}
+                presented={isSidebarSlotVisible(snapshot().layout, "browser")}
+                refresh={snapshot().refresh}
+              />
+            );
+          }
+        }
         const region = createMemo(() =>
           renderSidebarRegion({
             presentationId: "delayed-browser-card",
+            onRegionViewRef: (element) => {
+              sidebarRegion = element;
+              return () => {
+                if (sidebarRegion === element) {
+                  sidebarRegion = null;
+                }
+              };
+            },
             availableWidth: 1400,
             callbacks: {
               activatePanel: () => undefined,
               togglePanelExpanded: () => undefined,
+              setDock: () => undefined,
               closeSlot: () => undefined,
               openSlot: () => undefined,
               reorderPanel: () => undefined,

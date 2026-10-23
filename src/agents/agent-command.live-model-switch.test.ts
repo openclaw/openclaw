@@ -5,7 +5,11 @@ import path from "node:path";
 import { expectDefined, toStringifiedError } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
@@ -18,7 +22,9 @@ import {
 import { reduceSessionEntryPatch } from "../config/sessions/session-entry-patch-operation.js";
 import { withInstallationTarget } from "../infra/installation-target-context.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { startSessionControllerInterruption } from "../sessions/session-controller.lifecycle.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -50,6 +56,7 @@ import {
   withStoredAgentCommandRecoverySession,
 } from "./agent-command.restart-recovery.test-harness.js";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
+import type { AgentAttemptParams } from "./command/attempt-execution.types.js";
 import { FailoverError } from "./failover/error.js";
 import type { FailoverReason } from "./failover/signal.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
@@ -155,7 +162,7 @@ const state = vi.hoisted(() => ({
     entries: [],
     routeVariants: [],
   })),
-  buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): unknown => ({
+  buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): SkillSnapshot => ({
     prompt: "",
     skills: [],
     resolvedSkills: [],
@@ -255,43 +262,6 @@ vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
     params.sessionEntry,
   runMemoryFlushIfNeeded: (params: { sessionEntry?: SessionEntry }) =>
     state.runMemoryFlushIfNeededMock(params),
-}));
-
-vi.mock("./command/run-context.js", () => ({
-  resolveAgentRunContext: (opts: {
-    accountId?: string;
-    channel?: string;
-    groupChannel?: string | null;
-    groupId?: string | null;
-    groupSpace?: string | null;
-    messageChannel?: string;
-    replyChannel?: string;
-    runContext?: {
-      accountId?: string;
-      currentChannelId?: string;
-      currentThreadTs?: string;
-      groupChannel?: string | null;
-      groupId?: string | null;
-      groupSpace?: string | null;
-      messageChannel?: string;
-      replyToMode?: "off" | "first" | "all" | "batched";
-    };
-    threadId?: string | number;
-    to?: string;
-  }) => ({
-    messageChannel:
-      opts.runContext?.messageChannel ?? opts.messageChannel ?? opts.replyChannel ?? opts.channel,
-    accountId: opts.runContext?.accountId ?? opts.accountId ?? "acct",
-    groupId: opts.runContext?.groupId ?? opts.groupId,
-    groupChannel: opts.runContext?.groupChannel ?? opts.groupChannel,
-    groupSpace: opts.runContext?.groupSpace ?? opts.groupSpace,
-    currentChannelId: undefined,
-    currentThreadTs:
-      opts.runContext?.currentThreadTs ??
-      (opts.threadId == null ? undefined : String(opts.threadId)),
-    replyToMode: opts.runContext?.replyToMode,
-    hasRepliedRef: { current: false },
-  }),
 }));
 
 // mock-isolation: Model-switch fixtures own session reads and run-end writes without opening storage.
@@ -494,20 +464,17 @@ vi.mock("../infra/skills-remote.js", () => ({
   getRemoteSkillEligibility: () => ({ eligible: false }),
 }));
 
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: (subsystem: string) => {
-    const logger = {
-      info: vi.fn(),
-      warn: subsystem === "agents/agent-command" ? state.commandWarnMock : vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-      trace: vi.fn(),
-      raw: vi.fn(),
-      child: vi.fn(() => logger),
-    };
-    return logger;
-  },
-}));
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) =>
+      createMockSubsystemLogger(subsystem, {
+        warn: subsystem === "agents/agent-command" ? state.commandWarnMock : vi.fn(),
+      }),
+  };
+});
 
 afterAll(() => {
   // This suite runs in a shared worker; do not leak its module-level logger
@@ -535,10 +502,6 @@ vi.mock("../runtime.js", () => ({
     error: vi.fn(),
     log: vi.fn(),
   },
-}));
-
-vi.mock("../sessions/level-overrides.js", () => ({
-  applyVerboseOverride: vi.fn(),
 }));
 
 vi.mock("../sessions/model-overrides.js", () => ({
@@ -692,7 +655,8 @@ vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: () => ({ eligible: false }),
 }));
 
-vi.mock("../skills/runtime/session-snapshot.js", () => ({
+vi.mock("../skills/runtime/session-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../skills/runtime/session-snapshot.js")>()),
   resolveReusableWorkspaceSkillSnapshot: (params: {
     workspaceDir: string;
     existingSnapshot?: { resolvedSkills?: unknown };
@@ -708,25 +672,20 @@ vi.mock("../skills/runtime/session-snapshot.js", () => ({
           version: 0,
         },
         shouldRefresh: !params.existingSnapshot,
-        snapshotVersion: 0,
       };
     }
     if (params.existingSnapshot?.resolvedSkills !== undefined) {
       return {
         snapshot: params.existingSnapshot,
         shouldRefresh: false,
-        snapshotVersion: 0,
       };
     }
-    const rebuilt = state.buildWorkspaceSkillSnapshotMock(params.workspaceDir, params) as {
-      resolvedSkills?: unknown;
-    };
+    const rebuilt = state.buildWorkspaceSkillSnapshotMock(params.workspaceDir, params);
     return {
       snapshot: params.existingSnapshot
-        ? { ...params.existingSnapshot, resolvedSkills: rebuilt?.resolvedSkills }
+        ? { ...params.existingSnapshot, resolvedSkills: rebuilt.resolvedSkills }
         : rebuilt,
       shouldRefresh: !params.existingSnapshot,
-      snapshotVersion: 0,
     };
   },
 }));
@@ -1667,15 +1626,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   it.each(["live-switch", "flushed", "blocked", "internal"] as const)(
     "preserves %s user-turn persistence across retries",
     async (mode) => {
-      type AttemptCall = {
-        onUserMessagePersisted?: () => void;
-        suppressPromptPersistenceOnRetry?: boolean;
-        userTurnTranscriptRecorder?: {
-          markBlocked: () => void;
-          markRuntimePersisted: (message: { role: "user"; content: string }) => void;
-        };
-      };
+      type AttemptCall = Pick<
+        AgentAttemptParams,
+        "suppressPromptPersistenceOnRetry" | "userTurnTranscriptRecorder"
+      >;
       const attempts: AttemptCall[] = [];
+      const persistedUserMessage = { role: "user", content: "hello", timestamp: 0 } as const;
       if (mode === "live-switch") {
         setupModelSwitchRetry({ provider: "openai", model: "gpt-5.4" }, true);
       } else {
@@ -1684,15 +1640,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       state.runAgentAttemptMock.mockImplementation(async (attempt: AttemptCall) => {
         attempts.push(attempt);
         if (mode === "flushed") {
-          expectDefined(attempt.onUserMessagePersisted, "retry persistence callback")();
+          expectDefined(
+            attempt.userTurnTranscriptRecorder,
+            "retry transcript recorder",
+          ).markRuntimePersisted(persistedUserMessage);
         } else if (attempts.length === 1) {
           if (mode === "blocked") {
             attempt.userTurnTranscriptRecorder?.markBlocked();
           } else if (mode === "live-switch") {
-            attempt.userTurnTranscriptRecorder?.markRuntimePersisted({
-              role: "user",
-              content: "hello",
-            });
+            attempt.userTurnTranscriptRecorder?.markRuntimePersisted(persistedUserMessage);
           }
         }
         return mode === "internal"
@@ -1707,7 +1663,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       expect(attempts).toHaveLength(2);
       expect(attempts[0]?.suppressPromptPersistenceOnRetry).toBe(mode === "internal");
       expect(attempts[1]?.suppressPromptPersistenceOnRetry).toBe(true);
-      if (mode === "live-switch" || mode === "blocked") {
+      if (mode !== "internal") {
         expect(attempts[1]?.userTurnTranscriptRecorder).toBe(
           attempts[0]?.userTurnTranscriptRecorder,
         );
@@ -3523,6 +3479,70 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           }),
         }),
       );
+    },
+  );
+
+  it.for([
+    ["Stop", () => new Error("QA stopped the run")],
+    ["restart", createAgentRunRestartAbortError],
+  ] as const)(
+    "preserves the controller %s reason through command interruption",
+    async ([_source, createReason], { signal: testSignal }) => {
+      setupStoredSession();
+      setupAcpSession();
+      const cleanup = new AbortController();
+      const entered = createDeferred();
+      let commandSignal: AbortSignal | undefined;
+      state.acpRunTurnMock.mockImplementation(async (params: unknown) => {
+        const signal = expectDefined(
+          (params as { signal?: AbortSignal }).signal,
+          "agent command abort signal",
+        );
+        commandSignal = signal;
+        entered.resolve();
+        signal.throwIfAborted();
+        return await new Promise((_, reject) => {
+          signal.addEventListener(
+            "abort",
+            () =>
+              reject(
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new Error("Agent command aborted without an Error reason"),
+              ),
+            { once: true },
+          );
+        });
+      });
+      const reason = createReason();
+      const command = agentCommand({
+        message: "hello",
+        sessionKey: "agent:main:main",
+        abortSignal: cleanup.signal,
+      });
+      const rejection = command.catch((error: unknown) => error);
+      let interruption: ReturnType<typeof startSessionControllerInterruption> | undefined;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            command,
+            "ACP command never reached its runtime",
+          ),
+          testSignal,
+        );
+        interruption = startSessionControllerInterruption({
+          scope: commandPaths.sessions,
+          agentId: "default",
+          identities: ["agent:main:main", "session-1"],
+          reason,
+        });
+        expect(commandSignal?.reason).toBe(reason);
+        expect(await withinTest(rejection, testSignal)).toBe(reason);
+      } finally {
+        cleanup.abort(new Error("Command interruption fixture cleanup"));
+        await Promise.allSettled([command, interruption?.released]);
+      }
     },
   );
 

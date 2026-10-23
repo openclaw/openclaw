@@ -5,9 +5,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import type { BrowserAnnotationDraft } from "../../components/browser/browser-annotation.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import "../../lib/toast-host.tsx";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
-import "../../lib/toast-host.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentDataUrl,
@@ -16,6 +17,7 @@ import {
 } from "./attachment-payload-store.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
+  createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
   createPaneTestHost,
   getPaneTestRuntime,
@@ -23,7 +25,6 @@ import {
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
-import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 
 type AnnotationPane = TestChatPane & {
   receiveBrowserAnnotation: (event: Event) => void;
@@ -46,7 +47,7 @@ function annotationPane(
 }
 
 function annotatedPane(sessions = createSessionCapabilityFixture(), noClient = false) {
-  const owner = {} as GatewayBrowserClient;
+  const owner = createGatewayBrowserClientFixture();
   const result = annotationPane(owner, sessions);
   if (noClient) {
     result.pane.connectedClient = null;
@@ -253,6 +254,8 @@ it.each(["first-client", "replacement"] as const)(
 
 it("preserves the package on same-client reconnect and clears it on replacement", () => {
   const { pane, state, owner, annotation: current, ordinary } = annotatedPane();
+  state.loadAssistantIdentity = vi.fn(async () => undefined);
+  const connected = pane.context.gateway.snapshot;
   pane.active = false;
   const fallback = storedAttachment("replacement-fallback", true);
   state.chatComposerFallbackByScope = { fallback: composerFallback([fallback, ordinary]) };
@@ -261,22 +264,11 @@ it("preserves the package on same-client reconnect and clears it on replacement"
   expect(state.chatAttachments).toEqual([current, ordinary]);
   expect(getChatAttachmentDataUrl(current)).not.toBeNull();
 
-  const stopAfterAnnotationOwner = new Error("stop after annotation owner");
-  const cancelHeaderRename = vi.spyOn(pane, "cancelHeaderRename").mockImplementation(() => {
-    throw stopAfterAnnotationOwner;
-  });
-  expect(() =>
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      client: owner,
-      phase: "connected",
-    }),
-  ).toThrow(stopAfterAnnotationOwner);
-  cancelHeaderRename.mockRestore();
+  pane.applyGatewaySnapshot(connected);
   expect(state.chatAttachments).toEqual([current, ordinary]);
   expect(getChatAttachmentDataUrl(current)).not.toBeNull();
 
-  reconnect(pane, {} as GatewayBrowserClient);
+  reconnect(pane, createGatewayBrowserClientFixture());
   expect(state.chatAttachments).toEqual([ordinary]);
   expect(state.chatComposerFallbackByScope.fallback?.attachments).toEqual([ordinary]);
   expectPayloads([ordinary], [current, fallback]);

@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { pluginFallbackGradient, pluginMonogram } from "../../pages/plugins/presentation.ts";
 import "../../styles/channels.css";
 
@@ -12,7 +12,7 @@ export function ChannelIcon(props: {
   // A failed image retries only when its source changes.
   const [art, setArt] = createSignal(source);
   let active = true;
-  onCleanup(() => {
+  onSettled(() => () => {
     active = false;
   });
   const appearance = createMemo(() => {

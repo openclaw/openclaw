@@ -16,8 +16,12 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
-import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
+import { createControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
+import {
+  spyOnSessionPrLoader,
+  type SessionPrLoader,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
@@ -50,9 +54,7 @@ export const readerChanges = [
   "grant",
   "replacement grant",
 ] as const;
-export type Load = NonNullable<
-  Parameters<typeof createControlUiSessionPullRequestSubscriptions>[0]["load"]
->;
+export type Load = SessionPrLoader;
 
 function authority(access = new AbortController()) {
   return { signal: access.signal, assertCurrent: () => access.signal.throwIfAborted() };
@@ -122,6 +124,9 @@ export async function createFixture(
     return { client, socket, access };
   };
   const load = vi.fn<Load>(async () => snapshot);
+  if (!useDefaultLoader) {
+    spyOnSessionPrLoader(load);
+  }
   const subscriptions = createControlUiSessionPullRequestSubscriptions({
     scheduler,
     getSessionRowProjection: () => getSessionRowProjection(context),
@@ -130,7 +135,8 @@ export async function createFixture(
     prepareRead: async (connId, session) => {
       const client = connections.clients.getByConnectionId(connId);
       return client
-        ? await prepareControlUiSessionPrRead({
+        ? createControlUiSessionPrRead({
+            allowOwnImportedPullRequest: true,
             client,
             ...session,
             getRuntimeConfig,
@@ -139,7 +145,6 @@ export async function createFixture(
           })
         : undefined;
     },
-    ...(useDefaultLoader ? {} : { load }),
   });
   const context = createGatewayRequestContext(makeContextParams(connections));
   context.getRuntimeConfig = getRuntimeConfig;
@@ -156,6 +161,7 @@ export async function createFixture(
     clock,
     addReader,
     profile,
+    readerEmail,
     other,
     sessionId,
     cfg,

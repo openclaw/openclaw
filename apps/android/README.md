@@ -592,7 +592,10 @@ pnpm android:release:validate -- \
 The harness builds the Play Debug phone app, Debug Wear app, and their
 instrumentation APKs once, then uses fresh
 API 36 phone and API 34 round Wear emulators. It owns their temporary state,
-processes, and cleanup.
+processes, and cleanup. Both emulators boot with a 16 KiB VSOCK packet limit to
+avoid large contiguous kernel allocations that can disconnect ADB during
+transfers. The harness verifies each guest's limit before installing its app and
+records it in the qualification proof.
 
 The **Android Release E2E** workflow runs this command directly, during eligible
 full manual CI at the workflow's exact source SHA, and before a manual Android
@@ -696,4 +699,4 @@ Common failure quick-fixes:
 
 ## Contributions
 
-Maintainer: @obviyus. For issues/questions/contributions, please open an issue or reach out on Discord.
+Maintainer: @obviyus. For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/). For reproducible bugs, use the [issue chooser](https://github.com/openclaw/openclaw/issues/new/choose). For contribution coordination, reach out on Discord.

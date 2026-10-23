@@ -1,6 +1,6 @@
 import { retireInitialChatSubmission } from "../../app/chat-submissions.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentParamsForSession,
   visibleSessionMatches,
@@ -16,13 +16,13 @@ import { loadChatHistory } from "./chat-history.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
 import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
-import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
   captureChatComposerReplacement,
   loadChatComposerState,
   persistChatComposerState,
-} from "./composer-persistence.ts";
-import { chatAttachmentDraftSignature } from "./durable-composer-persistence.ts";
+} from "./composer-draft-storage.ts";
+import { chatAttachmentDraftSignature } from "./composer-draft.ts";
+import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
@@ -86,7 +86,7 @@ function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
   }
   return Boolean(
     state.sessionsResult?.sessions.some(
-      (session) => session.key === state.sessionKey && isSessionRunActive(session),
+      (session) => session.key === state.sessionKey && isSessionRunStateActive(session),
     ),
   );
 }

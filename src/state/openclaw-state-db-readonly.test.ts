@@ -6,6 +6,7 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { mapRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -150,16 +151,16 @@ it("preserves query authorization denial and recovers the cached reader", async 
   await withOpenClawTestState({ label: "state-readonly-authorizer" }, async ({ env }) => {
     const options = { env };
     const opened = openOpenClawStateDatabase(options);
-    const operation = vi.fn(({ db }: { db: typeof opened.db }) =>
-      db.prepare("SELECT role FROM schema_meta").get(),
-    );
     let denied = false;
-    requireNativeSqliteDatabase(opened.db).setAuthorizer((action) => {
-      if (action === constants.SQLITE_SELECT && !denied) {
-        denied = true;
-        return constants.SQLITE_DENY;
-      }
-      return constants.SQLITE_OK;
+    const operation = vi.fn(({ db }: { db: typeof opened.db }) => {
+      requireNativeSqliteDatabase(db).setAuthorizer((action) => {
+        if (action === constants.SQLITE_SELECT && !denied) {
+          denied = true;
+          return constants.SQLITE_DENY;
+        }
+        return constants.SQLITE_OK;
+      });
+      return db.prepare("SELECT role FROM schema_meta").get();
     });
     try {
       expect(() => withExistingOpenClawStateDatabaseReadOnly(operation, options)).toThrow(
@@ -356,14 +357,28 @@ it.each([
     await withTempDir("openclaw-state-readonly-admission-", async (stateDir) => {
       const options = createClosedState(stateDir);
       const refused = new Error("synthetic readonly verification failure");
-      const prepare = sqliteReadOnly.prepareSqliteReadOnlyLocation;
       let preparedLocation: string | undefined;
       let failurePublished = false;
-      vi.spyOn(sqliteReadOnly, "prepareSqliteReadOnlyLocation").mockImplementationOnce(
-        async (...args) => {
-          const prepared = await prepare(...args);
-          preparedLocation = prepared.location;
-          if (failure === "quarantine") {
+      if (composite) {
+        const start = sqliteReadOnly.startSqliteReadOnlyLocationAsync;
+        vi.spyOn(sqliteReadOnly, "startSqliteReadOnlyLocationAsync").mockImplementationOnce(
+          (...args) => {
+            const preparation = start(...args);
+            return {
+              ...preparation,
+              ...mapRetainedOperation(preparation, (prepared) => {
+                preparedLocation = prepared.location;
+                return prepared;
+              }),
+            };
+          },
+        );
+      } else {
+        const prepare = sqliteReadOnly.prepareSqliteReadOnlyLocation;
+        vi.spyOn(sqliteReadOnly, "prepareSqliteReadOnlyLocation").mockImplementationOnce(
+          async (...args) => {
+            const prepared = await prepare(...args);
+            preparedLocation = prepared.location;
             seedOpenClawDatabaseQuarantine({
               env: options.env,
               kind: "state",
@@ -371,10 +386,10 @@ it.each([
               reason: "synthetic readonly quarantine",
             });
             failurePublished = true;
-          }
-          return prepared;
-        },
-      );
+            return prepared;
+          },
+        );
+      }
       const operation = vi.fn(() => {
         throw refused;
       });

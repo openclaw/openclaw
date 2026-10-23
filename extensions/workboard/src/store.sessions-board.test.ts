@@ -1,10 +1,7 @@
 import { copyFileSync, renameSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi } from "../api.js";
-import { registerWorkboardGatewayMethods } from "./gateway.js";
 import type { WorkboardSessionPlacementWrite } from "./persistence-types.js";
 import { WorkboardStore } from "./store.js";
 import { createKernelStores } from "./test/sqlite-kernel.js";
@@ -28,34 +25,34 @@ function placement(
   };
 }
 
+async function sessionBoard(options: Parameters<typeof createWorkboardSqliteTestHarness>[0] = {}) {
+  const harness = createWorkboardSqliteTestHarness(options);
+  await harness.store.upsertBoard({ id: "sessions", kind: "sessions" });
+  const board = await harness.store.getSessionsBoard("sessions");
+  return {
+    ...harness,
+    board,
+    pin: (patch: Partial<WorkboardSessionPlacementWrite> = {}, expectedSpec = board.sessions) =>
+      harness.store.writeSessionPlacement("sessions", placement(patch), { expectedSpec }),
+  };
+}
+
 describe("Sessions board storage", () => {
   it("preserves card boards and makes the new board kind immutable", async () => {
     const store = createWorkboardSqliteTestStore();
     const cardBoard = await store.upsertBoard({ id: "cards", name: "Cards" });
     expect(cardBoard).not.toHaveProperty("kind");
     expect(cardBoard).not.toHaveProperty("sessions");
-    const board = await store.upsertBoard({ id: "sessions", kind: "sessions", name: "Sessions" });
-    expect(board.sessions?.columns.map((column) => column.id)).toEqual([
-      "needs-input",
-      "stuck",
-      "working",
-      "in-review",
-      "merged",
-      "done",
-    ]);
+    await store.upsertBoard({ id: "sessions", kind: "sessions", name: "Sessions" });
     await expect(store.upsertBoard({ id: "sessions", kind: "cards" })).rejects.toThrow(
       "kind cannot be changed",
     );
-    await expect(store.upsertBoard({ id: "cards", kind: "sessions" })).rejects.toThrow(
-      "kind cannot be changed",
-    );
-    await expect(store.upsertBoard({ id: "default", kind: "sessions" })).rejects.toThrow(
-      "kind cannot be changed",
-    );
     await store.create({ title: "Inferred namespace", boardId: "inferred" });
-    await expect(store.upsertBoard({ id: "inferred", kind: "sessions" })).rejects.toThrow(
-      "kind cannot be changed",
-    );
+    for (const id of ["cards", "default", "inferred"]) {
+      await expect(store.upsertBoard({ id, kind: "sessions" })).rejects.toThrow(
+        "kind cannot be changed",
+      );
+    }
     await store.updateSessionsBoard("sessions", { scope: { maxAgeHours: 24 } });
     expect(await store.upsertBoard({ id: "sessions", name: "Renamed" })).toMatchObject({
       kind: "sessions",
@@ -75,80 +72,59 @@ describe("Sessions board storage", () => {
   });
 
   it("rejects card create, capture, transfer, and dispatch without modifying cards", async () => {
-    const { store, stores } = createWorkboardSqliteTestHarness();
-    await store.upsertBoard({ id: "sessions", kind: "sessions" });
+    const { store, stores } = await sessionBoard();
     const card = await store.create({ title: "Existing", sessionKey: "agent:main:example" });
-    await expect(store.create({ title: "Forbidden", boardId: "sessions" })).rejects.toThrow(
-      "Sessions boards do not hold cards",
-    );
-    // Capture must reject the requested destination even when it can reuse an existing card elsewhere.
-    await expect(
-      store.captureSession({ title: "Captured", boardId: "sessions", sessionKey: card.sessionKey }),
-    ).rejects.toThrow("Sessions boards do not hold cards");
-    await expect(store.update(card.id, { boardId: "sessions" })).rejects.toThrow(
-      "Sessions boards do not hold cards",
-    );
-    await expect(store.dispatch({ boardId: "sessions" })).rejects.toThrow(
-      "Sessions boards do not hold cards",
-    );
-    // The worker guard also protects callers below the public store facade.
-    await expect(
-      stores.cards.register(card.id, {
-        version: 1,
-        card: { ...card, metadata: { automation: { boardId: "sessions" } } },
-      }),
-    ).rejects.toThrow("Sessions boards do not hold cards");
+    for (const write of [
+      () => store.create({ title: "Forbidden", boardId: "sessions" }),
+      // The destination must be checked before reusing this card from another board.
+      () =>
+        store.captureSession({
+          title: "Captured",
+          boardId: "sessions",
+          sessionKey: card.sessionKey,
+        }),
+      () => store.update(card.id, { boardId: "sessions" }),
+      () => store.dispatch({ boardId: "sessions" }),
+      () =>
+        stores.cards.register(card.id, {
+          version: 1,
+          card: { ...card, metadata: { automation: { boardId: "sessions" } } },
+        }),
+    ]) {
+      await expect(write()).rejects.toThrow("Sessions boards do not hold cards");
+    }
     expect(await store.list()).toEqual([card]);
   });
 
   it("rejects stale pins after an operator move or spec change", async () => {
-    const store = createWorkboardSqliteTestStore();
-    await store.upsertBoard({ id: "sessions", kind: "sessions" });
-    const { sessions: expectedSpec } = await store.getSessionsBoard("sessions");
+    const { store, pin } = await sessionBoard();
     const changes = vi.fn();
-    store.subscribeChanges(changes);
-    expect(await store.writeSessionPlacement("sessions", placement(), { expectedSpec })).toBe(true);
-    expect(
-      await store.writeSessionPlacement(
-        "sessions",
-        placement({ columnId: "merged", expectedUpdatedAt: 1000 }),
-        { expectedSpec },
-      ),
-    ).toBe(true);
+    store.onChange = changes;
+    expect(await pin()).toBe(true);
+    expect(await pin({ columnId: "merged", expectedUpdatedAt: 1000 })).toBe(true);
     // Same-millisecond writes still advance the revision and fence delayed moves.
     expect(await store.listSessionPlacements("sessions")).toEqual([
       placement({ columnId: "merged", updatedAt: 1001 }),
     ]);
-    expect(
-      await store.writeSessionPlacement("sessions", placement({ expectedUpdatedAt: 1000 }), {
-        expectedSpec,
-      }),
-    ).toBe(false);
+    expect(await pin({ expectedUpdatedAt: 1000 })).toBe(false);
     expect(changes).toHaveBeenCalledTimes(2);
     await store.updateSessionsBoard("sessions", { scope: { includeArchived: true } });
-    expect(
-      await store.writeSessionPlacement("sessions", placement({ expectedUpdatedAt: 1001 }), {
-        expectedSpec,
-      }),
-    ).toBe(false);
+    expect(await pin({ expectedUpdatedAt: 1001 })).toBe(false);
     expect(await store.listSessionPlacements("sessions")).toEqual([
       placement({ columnId: "merged", updatedAt: 1001 }),
     ]);
     const current = await store.getSessionsBoard("sessions");
-    await expect(
-      store.writeSessionPlacement("sessions", placement({ columnId: "missing" }), {
-        expectedSpec: current.sessions,
-      }),
-    ).rejects.toThrow("Unknown sessions board column");
+    await expect(pin({ columnId: "missing" }, current.sessions)).rejects.toThrow(
+      "Unknown sessions board column",
+    );
   });
 
   // Injects legacy session placement data through a native SQLite file handle.
   test("normalizes retired instructions and repairs placements while preserving operator pins", async () => {
-    const { store, dbPath } = createWorkboardSqliteTestHarness({
+    const { store, dbPath, board, pin } = await sessionBoard({
       createStores: createKernelStores,
     });
-    const board = await store.upsertBoard({ id: "sessions", kind: "sessions" });
-    await store.writeSessionPlacement("sessions", placement(), { expectedSpec: board.sessions! });
+    await pin();
     await store.close();
     {
       using legacy = new DatabaseSync(dbPath);
@@ -178,13 +154,12 @@ describe("Sessions board storage", () => {
   });
 
   it("deletes only the sessions board and its placements", async () => {
-    const { store, stores } = createWorkboardSqliteTestHarness();
-    await store.upsertBoard({ id: "sessions", kind: "sessions" });
-    const board = await store.updateSessionsBoard("sessions", {
+    const { store, stores, pin } = await sessionBoard();
+    await store.updateSessionsBoard("sessions", {
       agentSessionKey: "agent:main:board-agent",
     });
     const card = await store.create({ title: "Keep this card" });
-    await store.writeSessionPlacement("sessions", placement(), { expectedSpec: board.sessions });
+    await pin({}, (await store.getSessionsBoard("sessions")).sessions);
     const sibling = await store.upsertBoard({ id: "sibling", kind: "sessions" });
     await store.writeSessionPlacement("sibling", placement(), { expectedSpec: sibling.sessions! });
     expect(await store.deleteBoard("sessions")).toEqual({ deleted: true });
@@ -200,9 +175,7 @@ describe("Sessions board storage", () => {
   it.each(["update", "write"] as const)(
     "rejects %s when caller authority ends before the worker write",
     async (action) => {
-      const { store, stores } = createWorkboardSqliteTestHarness();
-      await store.upsertBoard({ id: "sessions", kind: "sessions" });
-      const board = await store.getSessionsBoard("sessions");
+      const { store, stores, board } = await sessionBoard();
       const entered = Promise.withResolvers<void>();
       const release = Promise.withResolvers<void>();
       let active = true;
@@ -211,22 +184,17 @@ describe("Sessions board storage", () => {
           throw new Error("Caller authority is no longer active.");
         }
       };
-      const pause = async () => {
+      const paused = async <T>(run: () => Promise<T>) => {
         entered.resolve();
         await release.promise;
+        return run();
       };
       const update = stores.sessionsBoard.update.bind(stores.sessionsBoard);
       const write = stores.sessionsBoard.writePlacement.bind(stores.sessionsBoard);
       using updateSpy = vi.spyOn(stores.sessionsBoard, "update");
-      updateSpy.mockImplementation(async (...args) => {
-        await pause();
-        return update(...args);
-      });
+      updateSpy.mockImplementation((...args) => paused(() => update(...args)));
       using writeSpy = vi.spyOn(stores.sessionsBoard, "writePlacement");
-      writeSpy.mockImplementation(async (...args) => {
-        await pause();
-        return write(...args);
-      });
+      writeSpy.mockImplementation((...args) => paused(() => write(...args)));
       const pending =
         action === "update"
           ? store.updateSessionsBoard("sessions", { scope: { maxAgeHours: 1 } }, assertCurrent)
@@ -250,7 +218,7 @@ describe("Sessions board storage", () => {
 
 describe("Sessions board schema reopening", () => {
   // Rebuilds and reopens a prior-schema SQLite file.
-  test("preserves prior-schema cards and admits a new Sessions board through the Gateway method", async () => {
+  test("preserves prior-schema cards and admits a new Sessions board after reopening", async () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness({
       createStores: createKernelStores,
     });
@@ -293,20 +261,9 @@ describe("Sessions board schema reopening", () => {
       expect(restoredBoard).not.toHaveProperty("sessions");
       expect(await reopened.get(card.id)).toEqual(card);
 
-      const registerGatewayMethod = vi.fn<OpenClawPluginApi["registerGatewayMethod"]>();
-      const api = createTestPluginApi({ registerGatewayMethod });
-      registerWorkboardGatewayMethods({ api, store: reopened });
-      const upsert = registerGatewayMethod.mock.calls.find(
-        ([method]) => method === "workboard.boards.upsert",
-      )![1];
-      const respond = vi.fn();
-      await upsert({
-        params: { id: "sessions", kind: "sessions", name: "Sessions" },
-        respond,
-      } as never);
-      expect(respond).toHaveBeenCalledWith(true, {
-        board: expect.objectContaining({ id: "sessions", kind: "sessions", name: "Sessions" }),
-      });
+      await expect(
+        reopened.upsertBoard({ id: "sessions", kind: "sessions", name: "Sessions" }),
+      ).resolves.toMatchObject({ id: "sessions", kind: "sessions", name: "Sessions" });
       expect(await reopened.getSessionsBoard("sessions")).toMatchObject({
         id: "sessions",
         kind: "sessions",

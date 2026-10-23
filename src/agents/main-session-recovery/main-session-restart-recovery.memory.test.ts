@@ -143,8 +143,9 @@ describe("memory restart recovery adapters", () => {
       entry: { ...entry, restartRecoveryHarnessCompletion: completion },
       observation: { sessionId: entry.sessionId, cycleId: "cycle", revision: 1 },
       recoveryAttempt: 1,
+      lane: CommandLane.Main,
       gatewayRuntime,
-    };
+    } satisfies Parameters<typeof resumeMainSession>[0];
     expect(await resumeMainSession(params)).toBe("skipped");
     expect(memorySessionActorOwners.read(location)).toBeUndefined();
     await upsertSessionEntryCore(scope, params.entry);
@@ -152,17 +153,7 @@ describe("memory restart recovery adapters", () => {
       ...entry,
       restartRecoveryHarnessCompletion: undefined,
     });
-    expect(
-      await resumeMainSession({
-        ...params,
-        recoveryAdmission: {
-          handoffId: "synthetic-admission",
-          lane: CommandLane.RestartRecovery,
-          shouldContinue: () => true,
-          beginDispatch: () => true,
-        },
-      }),
-    ).toBe("skipped");
+    expect(await resumeMainSession(params)).toBe("skipped");
     expect(gatewayRuntime.dispatchAgent).not.toHaveBeenCalled();
   });
 });

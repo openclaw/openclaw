@@ -1,132 +1,45 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ControlUiLinkReaderDocument,
   ControlUiLinkReaderDescriptor,
 } from "../../../src/shared/control-ui-link-reader.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
-import { createStorageMock } from "../test-helpers/storage.ts";
+import {
+  item,
+  itemUrl,
+  reader,
+  requestedItem,
+  mount,
+  open,
+  button,
+  expectTitle,
+  storageKey,
+  setupLinkReaderPanelTests,
+} from "./link-reader-panel.test-support.ts";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import "./link-reader-panel.tsx";
-
-type Panel = HTMLElementTagNameMap["openclaw-link-reader-panel"];
-const storageKey = "openclaw.link-reader.panel.v1";
-const itemUrl = (number: number) => "https://forge.example/items/" + number;
-const reader: ControlUiLinkReaderDescriptor = {
-  pluginId: "forge",
-  id: "items",
-  label: "Forge",
-  icon: "externalLink",
-  linkReader: {
-    hosts: ["forge.example"],
-    pathPattern: "^/items/[1-9][0-9]*$",
-    detailMethod: "forge.item",
-  },
-};
-function item(number = 1): ControlUiLinkReaderDocument {
-  return {
-    url: itemUrl(number),
-    title: "Item " + number,
-    author: "reporter",
-    badge: { label: "Open", tone: "positive" },
-    createdAt: "2026-09-01T12:00:00Z",
-    updatedAt: "2026-09-02T12:00:00Z",
-    body: "**Description**",
-    comments: [
-      {
-        id: "comment-4",
-        url: itemUrl(number) + "#comment-4",
-        author: "reviewer",
-        createdAt: "2026-09-02T12:00:00Z",
-        body: "Comment text",
-      },
-    ],
-    commentsTotal: 1,
-  };
-}
-function requestedItem(params: unknown): ControlUiLinkReaderDocument {
-  return item(Number(new URL((params as { url: string }).url).pathname.split("/").at(-1)));
-}
-
-function deferredDetail() {
-  let resolve!: (value: ControlUiLinkReaderDocument) => void;
-  const promise = new Promise<ControlUiLinkReaderDocument>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
-async function mount(
-  request: (
-    method: string,
-    params?: unknown,
-    options?: { signal?: AbortSignal },
-  ) => Promise<unknown>,
-  options: Partial<
-    Pick<Panel, "embedded" | "presented" | "sessionKey" | "tabsInHeader" | "onClose">
-  > = {},
-) {
-  const panel = document.createElement("openclaw-link-reader-panel");
-  panel.client = { request } as unknown as GatewayBrowserClient;
-  panel.available = true;
-  panel.readers = [reader];
-  Object.assign(panel, options);
-  mountSolid(() => panel);
-  await panel.updateComplete;
-  return panel;
-}
-
-function open(panel: Panel, url = itemUrl(1), trigger?: HTMLElement, newTab = false) {
-  panel.handleToggleRequest(
-    new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
-      detail: { url, open: true, trigger, newTab },
-      cancelable: true,
-    }),
-  );
-}
-
-function button(panel: Panel, label: string) {
-  const result = panel.querySelector<HTMLButtonElement>('button[aria-label="' + label + '"]');
-  if (!result) {
-    throw new Error("Missing button: " + label);
-  }
-  return result;
-}
-
-async function expectTitle(panel: Panel, title: string) {
-  await waitForFast(() =>
-    expect(panel.querySelector(".lr-content:not([hidden]) h1")?.textContent).toBe(title),
-  );
-}
 
 describe("Plugin link reader panel", () => {
-  beforeEach(() => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    // Section selection owns these requests; no viewport preload is admitted here.
-    vi.stubGlobal(
-      "IntersectionObserver",
-      class extends IntersectionObserver {
-        override observe() {}
-      },
-    );
-  });
-  afterEach(() => {
-    document.body.replaceChildren();
-    vi.unstubAllGlobals();
-  });
+  setupLinkReaderPanelTests();
 
   it("shows the overview while independent sections wait and loads files on selection", async () => {
-    const overview = deferredDetail();
-    const checks = deferredDetail();
-    const discussion = deferredDetail();
-    const files = deferredDetail();
+    const overview = createDeferred<ControlUiLinkReaderDocument>();
+    const checks = createDeferred<ControlUiLinkReaderDocument>();
+    const discussion = createDeferred<ControlUiLinkReaderDocument>();
+    const files = createDeferred<ControlUiLinkReaderDocument>();
     const request = vi.fn((_method: string, params?: unknown) => {
       const section = (params as { section: string }).section;
       return ({ overview, checks, discussion, files }[section] ?? overview).promise;
     });
     const panel = await mount(request);
+    const scrollPorts = new Set<HTMLElement>();
+    panel.onScrollPortRef = (element) => {
+      scrollPorts.add(element);
+      return () => {
+        scrollPorts.delete(element);
+      };
+    };
     panel.readers = [{ ...reader, linkReader: { ...reader.linkReader, progressive: true } }];
     await panel.updateComplete;
     open(panel);
@@ -163,6 +76,8 @@ describe("Plugin link reader panel", () => {
       expect(panel.querySelector(".lr-file")?.textContent).toContain("index.ts"),
     );
     const loadedFiles = panel.querySelector(".lr-files");
+    expect(scrollPorts.has(panel.querySelector(".lr-content")!)).toBe(true);
+    expect(scrollPorts.has(panel.querySelector(".lr-diff")!)).toBe(true);
     expect(deferredFiles?.isConnected).toBe(false);
     filesButton.click();
     expect(document.activeElement).toBe(loadedFiles);
@@ -178,6 +93,8 @@ describe("Plugin link reader panel", () => {
     });
     await waitForFast(() => expect(panel.textContent).toContain("This item changed"));
     expect(panel.textContent).not.toContain("Wrong head passed");
+    panel.remove();
+    await waitForFast(() => expect(scrollPorts.size).toBe(0));
   });
 
   it.each(["checks", "files", "discussion"] as const)(
@@ -298,131 +215,13 @@ describe("Plugin link reader panel", () => {
     expect(panel.querySelector(".lr-state")?.textContent?.trim()).toBe(label);
   });
 
-  it("resolves document images through the reader, deduplicates attachments, and preserves source links", async () => {
-    const url = "https://images.example/attachment.png";
-    const dataUrl = "data:image/png;base64,aW1hZ2U=";
-    const request = vi.fn(async (method: string) =>
-      method === "forge.image"
-        ? { url, dataUrl }
-        : {
-            ...item(),
-            body: `![Screenshot](${url})`,
-            comments: [
-              { id: "comment", url: itemUrl(1), author: "reviewer", body: `![Repeated](${url})` },
-            ],
-          },
-    );
-    const panel = await mount(request);
-    panel.readers = [
-      { ...reader, linkReader: { ...reader.linkReader, imageMethod: "forge.image" } },
-    ];
-    await panel.updateComplete;
-    open(panel);
-    await waitForFast(() =>
-      expect([...panel.querySelectorAll("img")].map((image) => image.src)).toEqual([
-        dataUrl,
-        dataUrl,
-      ]),
-    );
-    expect(request.mock.calls.filter(([method]) => method === "forge.image")).toHaveLength(1);
-    expect(panel.querySelector<HTMLAnchorElement>(".lr-image a")?.href).toBe(url);
-  });
-
-  it("cancels retired document image requests and ignores late results after a connection replacement", async () => {
-    const url = "https://images.example/pending.png";
-    let finish!: (value: unknown) => void;
-    let imageSignal: AbortSignal | undefined;
-    const request = vi.fn(
-      async (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
-        if (method === "forge.image") {
-          imageSignal = options?.signal;
-          return new Promise((resolve) => {
-            finish = resolve;
-          });
-        }
-        return { ...item(), body: `![Pending](${url})` };
-      },
-    );
-    const panel = await mount(request);
-    panel.readers = [
-      { ...reader, linkReader: { ...reader.linkReader, imageMethod: "forge.image" } },
-    ];
-    await panel.updateComplete;
-    open(panel);
-    await waitForFast(() => expect(imageSignal).toBeDefined());
-    const oldImage = panel.querySelector("img")!;
-    expect(oldImage.hasAttribute("src")).toBe(false);
-    panel.client = {
-      request: vi.fn().mockResolvedValue(item()),
-    } as unknown as GatewayBrowserClient;
-    await panel.updateComplete;
-    expect(imageSignal?.aborted).toBe(true);
-    finish({ url, dataUrl: "data:image/png;base64,aW1hZ2U=" });
-    await expectTitle(panel, "Item 1");
-    expect(oldImage.hasAttribute("src")).toBe(false);
-    expect(panel.querySelector("img")).toBeNull();
-  });
-
-  it("bounds image fanout and cancels queued work when its tab is removed", async () => {
-    const signals: AbortSignal[] = [];
-    const panel = await mount(async (method, _params, options) => {
-      if (method !== "forge.image") {
-        return {
-          ...item(),
-          body: Array.from(
-            { length: 40 },
-            (_, i) => `![Image ${i}](https://images.example/${i}.png)`,
-          ).join("\n\n"),
-        };
-      }
-      const signal = options!.signal!;
-      signals.push(signal);
-      return new Promise((_resolve, reject) => {
-        signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-      });
-    });
-    panel.readers = [
-      { ...reader, linkReader: { ...reader.linkReader, imageMethod: "forge.image" } },
-    ];
-    await panel.updateComplete;
-    open(panel);
-    await waitForFast(() => expect(signals).toHaveLength(4));
-    await panel.closeHostedTab(panel.activeHostedTabId!);
-    await waitForFast(() => expect(signals.every((signal) => signal.aborted)).toBe(true));
-    expect(signals).toHaveLength(4);
-  });
-
-  it.each([
-    { url: "https://images.example/wrong.png", dataUrl: "data:image/png;base64,aW1hZ2U=" },
-    { url: "https://images.example/image.png", dataUrl: "data:image/svg+xml;base64,PHN2Zz4=" },
-    { url: "https://images.example/image.png", dataUrl: "https://images.example/credentialed.png" },
-  ])(
-    "falls back only to the original anonymous image URL after an invalid response: $dataUrl",
-    async (response) => {
-      const url = "https://images.example/image.png";
-      const panel = await mount(
-        vi.fn(async (method) =>
-          method === "forge.image" ? response : { ...item(), body: `![Screenshot](${url})` },
-        ),
-      );
-      panel.readers = [
-        { ...reader, linkReader: { ...reader.linkReader, imageMethod: "forge.image" } },
-      ];
-      await panel.updateComplete;
-      open(panel);
-      await waitForFast(() => expect(panel.querySelector("img")?.src).toBe(url));
-      expect(panel.querySelector("img")?.crossOrigin).toBe("anonymous");
-      expect(panel.querySelector<HTMLAnchorElement>(".lr-image a")?.href).toBe(url);
-    },
-  );
-
   it.each([false, true])(
     "preserves typing focus while opening and settling a reader (embedded: %s)",
     async (embedded) => {
       const composer = document.createElement("textarea");
       document.body.append(composer);
       composer.focus();
-      const pending = deferredDetail();
+      const pending = createDeferred<ControlUiLinkReaderDocument>();
       const request = vi
         .fn()
         .mockReturnValueOnce(pending.promise)
@@ -513,7 +312,7 @@ describe("Plugin link reader panel", () => {
   });
 
   it("retains embedded tab history while hidden, and fences work from a previous session", async () => {
-    const stale = deferredDetail();
+    const stale = createDeferred<ControlUiLinkReaderDocument>();
     const request = vi.fn(async (_method: string, params?: unknown) => requestedItem(params));
     const panel = await mount(request, {
       embedded: true,
@@ -544,7 +343,8 @@ describe("Plugin link reader panel", () => {
     await stale.promise;
     await panel.updateComplete;
     expect(panel.querySelector("h1")).toBeNull();
-    expect(button(panel, "Back").disabled).toBe(true);
+    expect(panel.querySelector(".lr-initial-form")).not.toBeNull();
+    expect(panel.querySelector(".lr-toolbar")).toBeNull();
     expect(panel.querySelector<HTMLInputElement>(".lr-url")?.value).toBe("");
     expect(localStorage.getItem(storageKey)).toBeNull();
   });
@@ -565,23 +365,28 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 1");
     expect(panel.querySelector(".lr-tab-header")).toBeNull();
     expect(panel.hostedTabs).toMatchObject([{ label: "Item 1", url: itemUrl(1) }]);
-    const actions = panel.hostedActions!;
-    const header = document.body.appendChild(document.createElement("header"));
-    header.append(actions);
-    const newTab = actions.querySelector<HTMLButtonElement>("button")!;
+    expect(panel.hostedActions).toBeUndefined();
+    const originalTabId = panel.activeHostedTabId;
+    const newTab = button(panel, "New reader tab");
+    expect(newTab.closest(".lr-toolbar")).not.toBeNull();
     newTab.focus();
     panel.available = false;
     await panel.updateComplete;
     expect(newTab.disabled).toBe(true);
     panel.available = true;
     await panel.updateComplete;
-    expect(panel.hostedActions).toBe(actions);
-    expect(actions.querySelector("button")).toBe(newTab);
+    expect(panel.hostedActions).toBeUndefined();
+    expect(button(panel, "New reader tab")).toBe(newTab);
     expect(newTab.disabled).toBe(false);
     newTab.click();
     await panel.updateComplete;
     expect(panel.hostedTabs).toHaveLength(2);
+    expect(panel.activeHostedTabId).not.toBe(originalTabId);
+    expect(panel.querySelector(".lr-initial-form")).not.toBeNull();
+    expect(panel.querySelector<HTMLInputElement>(".lr-url")?.value).toBe("");
     await panel.closeHostedTab(panel.activeHostedTabId!);
+    expect(panel.activeHostedTabId).toBe(originalTabId);
+    await expectTitle(panel, "Item 1");
     panel.tabsInHeader = false;
     await panel.updateComplete;
     expect(panel.querySelector(".lr-tab-header")).not.toBeNull();
@@ -592,7 +397,8 @@ describe("Plugin link reader panel", () => {
     expect(localStorage.getItem(storageKey)).toBeNull();
     panel.remove();
     await Promise.resolve();
-    expect(header.childElementCount).toBe(0);
+    expect(panel.isConnected).toBe(false);
+    expect(newTab.isConnected).toBe(false);
   });
 
   it("carries only the current session into a session-scoped detail reader", async () => {
@@ -728,6 +534,7 @@ describe("Plugin link reader panel", () => {
     await panel.updateComplete;
     expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(10);
     await expectTitle(panel, "Item 10");
+    expect(button(panel, "New reader tab").disabled).toBe(true);
     expect(request).toHaveBeenCalledTimes(calls);
     expect(panel.querySelector<HTMLAnchorElement>('.lr-note[role="alert"] a')?.href).toBe(
       itemUrl(11),
@@ -739,22 +546,75 @@ describe("Plugin link reader panel", () => {
     const panel = await mount(request);
     open(panel);
     await expectTitle(panel, "Item 1");
-    panel.querySelector<HTMLButtonElement>(".tabstrip-new")?.click();
+    button(panel, "New reader tab").click();
+    panel.mobile = true;
     await panel.updateComplete;
     const input = panel.querySelector<HTMLInputElement>(".lr-url")!;
     expect(document.activeElement).toBe(input);
-    const form = panel.querySelector("form")!;
+    const form = panel.querySelector<HTMLFormElement>(".lr-initial-form")!;
     input.value = "https://example.com/not-supported";
     input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.setSelectionRange(8, 15);
+    await panel.updateComplete;
+    expect(panel.querySelector(".lr-url")).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect([input.selectionStart, input.selectionEnd]).toEqual([8, 15]);
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await panel.updateComplete;
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(request).toHaveBeenCalledTimes(1);
     input.value = itemUrl(7);
     input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.setSelectionRange(8, 15);
+    await panel.updateComplete;
+    expect(panel.querySelector(".lr-url")).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect([input.selectionStart, input.selectionEnd]).toEqual([8, 15]);
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await expectTitle(panel, "Item 7");
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("copies and opens the current original from the mobile action menu without replacing the reader", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const previous = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    onTestFinished(() => {
+      if (previous) {
+        Object.defineProperty(navigator, "clipboard", previous);
+      } else {
+        Reflect.deleteProperty(navigator, "clipboard");
+      }
+    });
+    const panel = await mount(
+      vi.fn(async (_method, params) => requestedItem(params)),
+      {
+        embedded: true,
+        presented: true,
+        mobile: true,
+      },
+    );
+    open(panel);
+    await expectTitle(panel, "Item 1");
+    const content = panel.querySelector(".lr-content:not([hidden])");
+    const address = panel.querySelector<HTMLInputElement>(".lr-url")!;
+    address.focus();
+    address.value = itemUrl(2);
+    address.dispatchEvent(new Event("input", { bubbles: true }));
+    await panel.updateComplete;
+    const trigger = button(panel, "Link reader actions");
+    trigger.click();
+    await panel.updateComplete;
+    const menu = document.getElementById(trigger.getAttribute("aria-controls")!)!;
+    const original = menu.querySelector<HTMLAnchorElement>('a[aria-label="Open in browser"]')!;
+    expect(original.href).toBe(itemUrl(1));
+    expect(original.target).toBe("_blank");
+    expect(original.hasAttribute("data-link-reader-external")).toBe(true);
+    menu.querySelector<HTMLElement>('[aria-label="Copy link"]')!.click();
+    await waitForFast(() => expect(writeText).toHaveBeenCalledExactlyOnceWith(itemUrl(1)));
+    expect(panel.querySelector(".lr-content:not([hidden])")).toBe(content);
+    expect(panel.querySelector(".lr-url")).toBe(address);
+    expect(address.value).toBe(itemUrl(2));
   });
 
   it("keeps at most 30 history entries in this mounted panel", async () => {
@@ -773,39 +633,8 @@ describe("Plugin link reader panel", () => {
     expect(button(panel, "Forward").disabled).toBe(false);
   });
 
-  it("aborts superseded requests and ignores old navigation and client responses", async () => {
-    const first = deferredDetail();
-    const second = deferredDetail();
-    const request = vi
-      .fn<
-        (
-          _method: string,
-          _params?: unknown,
-          options?: { signal?: AbortSignal },
-        ) => Promise<ControlUiLinkReaderDocument>
-      >()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    const panel = await mount(request);
-    open(panel);
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
-    open(panel, itemUrl(2));
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    expect(request.mock.calls[0]?.[2]?.signal?.aborted).toBe(true);
-    first.resolve(item(1));
-    await panel.updateComplete;
-    expect(panel.querySelector("h1")).toBeNull();
-    const replacement = vi.fn(async () => ({ ...item(2), title: "New gateway" }));
-    panel.client = { request: replacement } as unknown as GatewayBrowserClient;
-    await expectTitle(panel, "New gateway");
-    expect(request.mock.calls[1]?.[2]?.signal?.aborted).toBe(true);
-    second.resolve(item(2));
-    await panel.updateComplete;
-    expect(panel.querySelector("h1")?.textContent).toBe("New gateway");
-  });
-
   it("clears reservations and cancels work on close, restores focus, and stays idle while hidden", async () => {
-    const pending = deferredDetail();
+    const pending = createDeferred<ControlUiLinkReaderDocument>();
     const request = vi.fn(
       (_method: string, _params?: unknown, _options?: { signal?: AbortSignal }) => pending.promise,
     );
@@ -837,7 +666,7 @@ describe("Plugin link reader panel", () => {
   });
 
   it("suspends hidden work and resumes once, then cleans up on removal", async () => {
-    const pending = deferredDetail();
+    const pending = createDeferred<ControlUiLinkReaderDocument>();
     const request = vi
       .fn<
         (
@@ -916,7 +745,7 @@ describe("Plugin link reader panel", () => {
     expect(request).toHaveBeenCalledTimes(3);
   });
   it("retains the loaded document, selected tab, and address draft through a transport blip", async () => {
-    const refreshed = deferredDetail();
+    const refreshed = createDeferred<ControlUiLinkReaderDocument>();
     const request = vi.fn().mockResolvedValueOnce(item()).mockReturnValueOnce(refreshed.promise);
     const panel = await mount(request);
     open(panel);
@@ -942,7 +771,7 @@ describe("Plugin link reader panel", () => {
     refreshed.resolve({ ...item(), title: "Refreshed item" });
     await expectTitle(panel, "Refreshed item");
 
-    const replacement = deferredDetail();
+    const replacement = createDeferred<ControlUiLinkReaderDocument>();
     panel.client = {
       request: vi.fn().mockReturnValue(replacement.promise),
     } as unknown as GatewayBrowserClient;
@@ -955,7 +784,7 @@ describe("Plugin link reader panel", () => {
     const imageUrl = "https://images.example/document.png";
     const oldImage = "data:image/png;base64,b2xk";
     const freshImage = "data:image/png;base64,bmV3";
-    const interrupted = deferredDetail();
+    const interrupted = createDeferred<ControlUiLinkReaderDocument>();
     let refreshed = false;
     let delayFirstRefresh = true;
     let generation = 1;
@@ -1076,7 +905,7 @@ describe("Plugin link reader panel", () => {
   });
 
   it("drops disabled plugin tabs and fences a response that resolves after removal", async () => {
-    const pending = deferredDetail();
+    const pending = createDeferred<ControlUiLinkReaderDocument>();
     const request = vi.fn(
       (_method: string, _params?: unknown, _options?: { signal?: AbortSignal }) => pending.promise,
     );

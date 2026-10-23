@@ -134,12 +134,11 @@ it.each(["all", 0, 1] as const)(
   },
 );
 
-it("joins orphan cleanup before the tracked producer settles", async () => {
+it("joins orphan cleanup before cancellation settles", async () => {
   const admitted = createDeferred();
   const produced = createDeferred();
   const cleanupStarted = createDeferred();
   const cleanupFinished = createDeferred();
-  const tracked: Promise<unknown>[] = [];
   const controller = new AbortController();
   const pending = prepareSingleFlightSqliteSnapshot(
     "orphan-drain.sqlite",
@@ -158,14 +157,12 @@ it("joins orphan cleanup before the tracked producer settles", async () => {
       );
     },
     controller.signal,
-    { trackProducer: (producer) => tracked.push(producer) },
   );
   await admitted.promise;
   controller.abort(new Error("caller cancelled"));
-  await expect(pending).rejects.toThrow("caller cancelled");
-  expect(tracked).toHaveLength(1);
+  const rejected = expect(pending).rejects.toThrow("caller cancelled");
   let settled = false;
-  void tracked[0]?.then(() => {
+  void pending.catch(() => {
     settled = true;
   });
   await Promise.resolve();
@@ -176,7 +173,7 @@ it("joins orphan cleanup before the tracked producer settles", async () => {
   await Promise.resolve();
   const settledBeforeCleanup = settled;
   cleanupFinished.resolve();
-  await expect(tracked[0]).resolves.toMatchObject({ location: "orphan-snapshot.sqlite" });
+  await rejected;
   expect(settledBeforeCleanup).toBe(false);
 });
 
@@ -184,13 +181,17 @@ it("retains the snapshot until a signalled joined waiter acquires its lease", as
   const produced = createDeferred();
   let exists = true;
   let copies = 0;
+  const family = { root: "/retained", main: "1:2:3:4:5:6", wal: "1:7:8:9:10:11" };
   const producer = async () => {
     copies += 1;
     await produced.promise;
-    return createSnapshot("joined-snapshot.sqlite", () => {
-      exists = false;
-      return true;
-    });
+    return {
+      ...createSnapshot("joined-snapshot.sqlite", () => {
+        exists = false;
+        return true;
+      }),
+      privateFamily: family,
+    };
   };
   const first = prepareSingleFlightSqliteSnapshot("joined-source.sqlite", "test", producer);
   await Promise.resolve();
@@ -201,12 +202,16 @@ it("retains the snapshot until a signalled joined waiter acquires its lease", as
     producer,
     new AbortController().signal,
   );
-  const firstCleanup = first.then((snapshot) => snapshot.cleanup());
+  const firstCleanup = first.then((snapshot) => {
+    expect(snapshot.privateFamily).toBe(family);
+    return snapshot.cleanup();
+  });
   produced.resolve();
   const snapshot = await second;
   try {
     expect(await firstCleanup).toBe(true);
     expect({ copies, exists }).toEqual({ copies: 1, exists: true });
+    expect(snapshot.privateFamily).toBe(family);
   } finally {
     await snapshot.cleanupAsync();
   }

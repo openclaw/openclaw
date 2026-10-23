@@ -8,6 +8,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import * as persistence from "./subagent-registry-persistence.js";
 import { withQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
 
 function storedPayload(runId: string): string | undefined {
@@ -33,16 +34,39 @@ it.each(["live", "closing"] as const)(
       const original = f.current();
       const before = structuredClone(original);
       const persisted = storedPayload(original.runId);
-      expect(original.cleanupHandled).toBe(true);
       expect(persisted).toBeTypeOf("string");
+      const write = f.holdNextWrite("before");
+      const writesBefore = f.writes;
+      const recoveryQueued = createDeferred();
+      const mutate = persistence.mutateSubagentRuns;
+      let recovering = false;
+      let predecessor: Promise<void> | undefined;
+      const mutation = vi.spyOn(persistence, "mutateSubagentRuns").mockImplementation((...args) => {
+        const pending = mutate(...args);
+        if (recovering) {
+          recoveryQueued.resolve();
+        }
+        return pending;
+      });
       const timing = vi
         .spyOn(f.options, "resolveSubagentSessionStartedAt")
-        .mockRejectedValue(new Error("synthetic timing read failed"));
-      const write = f.holdNextWrite("before");
+        .mockImplementation(async () => {
+          // cleanupHandled is runtime-only; queue recovery behind an actual durable change.
+          predecessor = f.change((draft) => {
+            draft.label = "queued before recovery";
+          });
+          await awaitGateBeforeSettlement(write.entered, predecessor, "Predecessor did not write");
+          recovering = true;
+          throw new Error("synthetic timing read failed");
+        });
       const waiting = f.track(f.manager.waitForSubagentCompletion(original.runId, original));
       let closing: Promise<void> | undefined;
       try {
-        await awaitGateBeforeSettlement(write.entered, waiting, "Recovery did not reach its write");
+        await awaitGateBeforeSettlement(
+          recoveryQueued.promise,
+          waiting,
+          "Recovery did not reserve its mutation",
+        );
         if (lifecycle === "closing") {
           closing = closeOpenClawStateDatabaseAsync();
           expect(() => captureOpenClawStateWorkerContext()).toThrow("read admission is closed");
@@ -50,8 +74,14 @@ it.each(["live", "closing"] as const)(
         write.release();
         await expect(waiting).resolves.toBeUndefined();
         await closing;
+        expect(f.writes).toBe(writesBefore + 1);
         if (lifecycle === "live") {
-          expect(f.current().cleanupHandled).toBe(false);
+          await predecessor;
+          expect(f.current()).toMatchObject({
+            cleanupHandled: false,
+            label: "queued before recovery",
+          });
+          expect(f.stored()?.cleanupHandled).toBe(false);
           expect(f.options.resumeSubagentRun).toHaveBeenCalledExactlyOnceWith(original.runId);
         } else {
           expect(storedPayload(original.runId)).toBe(persisted);
@@ -61,8 +91,9 @@ it.each(["live", "closing"] as const)(
         }
       } finally {
         write.release();
-        await Promise.allSettled([waiting, ...(closing ? [closing] : [])]);
+        await Promise.allSettled([waiting, predecessor, closing]);
         timing.mockRestore();
+        mutation.mockRestore();
       }
     });
   },
@@ -86,7 +117,6 @@ it.each([false, true])(
           if (unknown) {
             throw fault;
           }
-          return undefined;
         });
       const waiting = f.track(f.manager.waitForSubagentCompletion(original.runId, original));
       try {

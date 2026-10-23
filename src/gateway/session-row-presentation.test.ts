@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import {
   addSessionMember,
@@ -13,6 +14,12 @@ import {
   getAgentRunLifecycleGeneration,
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { rpcSourcesByRunId } from "../sessions/session-controller.storage.js";
+import {
+  rpcSourceTesting,
+  setRpcSourceIdentityForTest,
+  setRpcSourceTerminalProjectionForTest,
+} from "../sessions/session-lifecycle-admission.test-support.js";
 import {
   readResidentUserProfileIdentity,
   prepareUserProfileCatalog,
@@ -35,6 +42,7 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
 import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 import { listProjectedSessions } from "./session-utils-list.js";
+import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -276,10 +284,7 @@ it.each(["running", "queued", "capacity-wait"] as const)(
           projection,
           undefined,
           Date.now(),
-          createVisibleActiveSessionRunProjector(
-            connection,
-            projection.state.rowContext.projectedAgentRuns,
-          ),
+          createVisibleActiveSessionRunProjector(projection.state.rowContext.projectedAgentRuns),
         );
         expect(presentation.snapshot({ key: child, agentId: "main" }).row).toMatchObject({
           hasActiveSubagentRun: true,
@@ -382,34 +387,65 @@ it("presents current recipient roles without SQLite while rejecting source overr
     for (const client of clients) {
       connection.clients.add(client);
     }
+    const presentation = (client?: GatewayWsClient) =>
+      prepareProjectedSessionPresentation(projection, client);
+    const clearSends = () => clients.forEach((client) => vi.mocked(client.socket).send.mockClear());
+    const broadcast = () =>
+      connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
+    const expectActive = (runIds: string[], states = [true]) => {
+      for (const client of clients.slice(0, 2)) {
+        const sends = vi.mocked(client.socket).send.mock.calls;
+        expect(sends).toHaveLength(states.length);
+        for (const [index, hasActiveRun] of states.entries()) {
+          expect(JSON.parse(String(sends[index]?.[0])).payload.session).toMatchObject({
+            hasActiveRun,
+            activeRunIds: hasActiveRun ? runIds : [],
+          });
+        }
+      }
+      expect(vi.mocked(clients[2]!.socket).send.mock.calls).toHaveLength(0);
+    };
+    const sourceAdapter = {};
+    const registerSource = (
+      runId: string,
+      sessionKey: string,
+      sessionId: string,
+      agentId?: string,
+    ) => {
+      const source = createRpcSourceForTest(sourceAdapter, {
+        runId,
+        sessionKey,
+        sessionId,
+        ...(agentId ? { agentId } : {}),
+        accepted: true,
+        storeScope: resolveSessionStorePathCore(undefined, { agentId: query.agentId }),
+      });
+      rpcSourceTesting.set(runId, source);
+      return source;
+    };
     try {
       const captured = projection.describe(query)!;
       const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
       const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-      expect(
-        prepareProjectedSessionPresentation(projection).present(captured)?.sharingRole,
-      ).toBeUndefined();
-      expect(
-        prepareProjectedSessionPresentation(projection).present(captured)?.sendDisabledReason,
-      ).toBeUndefined();
+      const anonymous = presentation().present(captured);
+      expect(anonymous?.sharingRole).toBeUndefined();
+      expect(anonymous?.sendDisabledReason).toBeUndefined();
       for (const [index, expectedRole, visible] of [
         [0, "owner", true],
         [1, "member", true],
         [2, "viewer", false],
       ] as const) {
         const client = clients[index]!;
-        const presentation = prepareProjectedSessionPresentation(projection, client);
-        expect(
-          presentation.present(captured, { excludedChildKeys: new Set(["agent:main:child"]) }),
-        ).toMatchObject({
+        const recipient = presentation(client);
+        const presented = recipient.present(captured, {
+          excludedChildKeys: new Set(["agent:main:child"]),
+        });
+        expect(presented).toMatchObject({
           sharingRole: expectedRole,
           sendDisabledReason:
             expectedRole === "viewer" ? `Session "${query.key}" was not found.` : null,
         });
-        expect(
-          presentation.present(captured, { excludedChildKeys: new Set(["agent:main:child"]) })
-            ?.childSessions,
-        ).toBeUndefined();
+        expect(presented?.childSessions).toBeUndefined();
         expect(
           canReceiveSessionEvent({
             cfg,
@@ -417,12 +453,12 @@ it("presents current recipient roles without SQLite while rejecting source overr
             sessionKeys: [query.key],
             agentId: "main",
             prepared: {
-              sharing: presentation.sharing,
-              target: (key) => presentation.target({ ...query, key }),
+              sharing: recipient.sharing,
+              target: (key) => recipient.target({ ...query, key }),
             },
           }),
         ).toBe(visible);
-        expect(presentation.authorizeDescription(query)).toBeNull();
+        expect(recipient.authorizeDescription(query)).toBeNull();
         connection.broadcastToConnIds(
           "sessions.changed",
           {
@@ -450,7 +486,6 @@ it("presents current recipient roles without SQLite while rejecting source overr
               client,
               Date.now(),
               createVisibleActiveSessionRunProjector(
-                connection,
                 projection.state.rowContext.projectedAgentRuns,
               ),
             ).present(captured, {
@@ -466,131 +501,92 @@ it("presents current recipient roles without SQLite while rejecting source overr
         }
       }
       expect(
-        prepareProjectedSessionPresentation(projection, clients[0]!).authorizeDescription({
+        presentation(clients[0]!).authorizeDescription({
           agentId: "main",
           key: "agent:main:dashboard:incognito-private",
         }),
       ).toMatchObject({ code: "INVALID_REQUEST" });
-      const activeRun = {
-        controller: new AbortController(),
-        sessionKey: query.key,
-        sessionId: entry.sessionId,
-        agentId: query.agentId,
-        startedAtMs: Date.now(),
-        expiresAtMs: Date.now() + 60_000,
-      };
-      connection.chatAbortControllers.set("old-run", activeRun);
+      registerSource("old-run", query.key, entry.sessionId, query.agentId);
       for (let index = 0; index < 49; index++) {
-        connection.chatAbortControllers.set(`unrelated-${index}`, {
-          ...activeRun,
-          sessionKey: `agent:main:unrelated-${index}`,
-          sessionId: `unrelated-session-${index}`,
-        });
+        const runId = `unrelated-${index}`;
+        registerSource(runId, `agent:main:unrelated-${index}`, `unrelated-session-${index}`);
       }
-      const controllerScans = vi.spyOn(connection.chatAbortControllers, Symbol.iterator);
-      connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
+      using controllerScans = vi.spyOn(rpcSourcesByRunId, Symbol.iterator);
+      broadcast();
       expect(controllerScans).toHaveBeenCalledTimes(1);
-      controllerScans.mockRestore();
+      controllerScans.mockClear();
+      // Earlier source-override checks already sent one frame to each visible client.
       for (const client of clients.slice(0, 2)) {
         expect(
           JSON.parse(String(vi.mocked(client.socket).send.mock.lastCall?.[0])).payload.session,
         ).toMatchObject({ hasActiveRun: true, activeRunIds: ["old-run"] });
       }
-      for (const client of clients) {
-        vi.mocked(client.socket).send.mockClear();
-      }
-      connection.chatAbortControllers.delete("old-run");
-      connection.chatAbortControllers.set("replacement-run", {
-        ...activeRun,
-        sessionKey: "agent:main:adopted-source",
-        sessionId: ` ${entry.sessionId} `,
-      });
+      clearSends();
+      rpcSourceTesting.delete("old-run");
+      registerSource(
+        "replacement-run",
+        "agent:main:adopted-source",
+        ` ${entry.sessionId} `,
+        query.agentId,
+      );
       connection.broadcastToConnIds(
         "sessions.changed",
         { sessionKey: query.key, agentId: query.agentId },
         new Set(clients.map((client) => client.connId)),
       );
-      for (const client of clients.slice(0, 2)) {
-        const sends = vi.mocked(client.socket).send.mock.calls;
-        expect(sends).toHaveLength(1);
-        expect(JSON.parse(String(sends[0]?.[0])).payload.session).toMatchObject({
-          hasActiveRun: true,
-          activeRunIds: ["replacement-run"],
+      expect(controllerScans).toHaveBeenCalledTimes(1);
+      controllerScans.mockClear();
+      expectActive(["replacement-run"]);
+      const replacement = rpcSourceTesting.get("replacement-run")!;
+      for (const change of ["session-id", "session-key", "terminal", "agent"] as const) {
+        setRpcSourceIdentityForTest(replacement, {
+          sessionKey: change === "session-key" ? query.key : "agent:main:adopted-source",
+          sessionId: change === "session-key" ? "adopted-session" : entry.sessionId,
+          agentId: query.agentId,
         });
-      }
-      expect(vi.mocked(clients[2]!.socket).send.mock.calls).toHaveLength(0);
-      const replacement = connection.chatAbortControllers.get("replacement-run")!;
-      for (const change of [
-        "session-id",
-        "session-key",
-        "terminal",
-        "visibility",
-        "agent",
-      ] as const) {
-        replacement.sessionKey = change === "session-key" ? query.key : "agent:main:adopted-source";
-        replacement.sessionId = change === "session-key" ? "adopted-session" : entry.sessionId;
-        replacement.agentId = query.agentId;
-        replacement.projectSessionActive = true;
-        replacement.controlUiVisible = true;
-        for (const client of clients) {
-          vi.mocked(client.socket).send.mockClear();
-        }
-        connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
+        setRpcSourceTerminalProjectionForTest(replacement, false);
+        clearSends();
+        broadcast();
         if (change === "session-id") {
-          replacement.sessionId = "adopted-session";
+          setRpcSourceIdentityForTest(replacement, { sessionId: "adopted-session" });
         } else if (change === "session-key") {
-          replacement.sessionKey = "agent:main:adopted-source";
+          setRpcSourceIdentityForTest(replacement, {
+            sessionKey: "agent:main:adopted-source",
+          });
         } else if (change === "terminal") {
-          replacement.projectSessionActive = false;
-        } else if (change === "visibility") {
-          replacement.controlUiVisible = false;
+          setRpcSourceTerminalProjectionForTest(replacement, true);
         } else {
-          replacement.agentId = "other";
+          setRpcSourceIdentityForTest(replacement, { agentId: "other" });
         }
-        connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
-        for (const client of clients.slice(0, 2)) {
-          const sends = vi.mocked(client.socket).send.mock.calls;
-          expect(sends).toHaveLength(2);
-          for (const [index, hasActiveRun] of [true, false].entries()) {
-            expect(JSON.parse(String(sends[index]?.[0])).payload.session).toMatchObject({
-              hasActiveRun,
-              activeRunIds: hasActiveRun ? ["replacement-run"] : [],
-            });
-          }
-        }
-        expect(vi.mocked(clients[2]!.socket).send.mock.calls).toHaveLength(0);
+        broadcast();
+        expect(controllerScans).toHaveBeenCalledTimes(2);
+        controllerScans.mockClear();
+        expectActive(["replacement-run"], [true, false]);
       }
-      Object.assign(replacement, activeRun);
-      const joining = connection.chatAbortControllers.get("unrelated-0")!;
-      for (const client of clients) {
-        vi.mocked(client.socket).send.mockClear();
-      }
-      joining.sessionKey = query.key;
-      connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
-      for (const client of clients.slice(0, 2)) {
-        const sends = vi.mocked(client.socket).send.mock.calls;
-        expect(sends).toHaveLength(1);
-        expect(JSON.parse(String(sends[0]?.[0])).payload.session).toMatchObject({
-          hasActiveRun: true,
-          activeRunIds: ["replacement-run", "unrelated-0"],
-        });
-      }
-      connection.chatAbortControllers.clear();
+      setRpcSourceIdentityForTest(replacement, {
+        sessionKey: query.key,
+        sessionId: entry.sessionId,
+        agentId: query.agentId,
+      });
+      setRpcSourceTerminalProjectionForTest(replacement, false);
+      const joining = rpcSourceTesting.get("unrelated-0")!;
+      clearSends();
+      setRpcSourceIdentityForTest(joining, { sessionKey: query.key });
+      broadcast();
+      expect(controllerScans).toHaveBeenCalledTimes(1);
+      controllerScans.mockRestore();
+      expectActive(["replacement-run", "unrelated-0"]);
+      rpcSourceTesting.clear();
       expect(prepares).not.toHaveBeenCalled();
       expect(exec).not.toHaveBeenCalled();
       prepares.mockRestore();
       exec.mockRestore();
       removeSessionMember(scope, member.id);
       await projection.ensureMaterialized();
-      expect(
-        prepareProjectedSessionPresentation(projection, clients[1]!).snapshot(query).row
-          ?.sharingRole,
-      ).toBe("viewer");
+      expect(presentation(clients[1]!).snapshot(query).row?.sharingRole).toBe("viewer");
       replaceSessionEntrySync(scope, { ...entry, sessionId: "replacement-session" });
       await projection.ensureMaterialized();
-      expect(
-        prepareProjectedSessionPresentation(projection, clients[0]!).present(captured),
-      ).toBeNull();
+      expect(presentation(clients[0]!).present(captured)).toBeNull();
       const socket = vi.mocked(clients[0]!.socket);
       socket.send.mockClear();
       for (const payload of [

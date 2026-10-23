@@ -7,7 +7,7 @@ import { controlUiFaviconBaseSvg } from "../../app/control-ui-environment-presen
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import type { LobsterPetPalette } from "../../components/lobster-pet-contract.ts";
-import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-look.ts";
+import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
 import { lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { SettingsRow, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -46,11 +46,9 @@ export function TabIconSection(props: TabIconViewProps) {
   const defaultSource = createMemo(
     () => controlUiFaviconBaseSvg() ?? inferControlUiPublicAssetPath("favicon.svg"),
   );
-  const lobsterdexEnabled = createMemo(() => props.lobsterdexEnabled !== false);
+  const lobsterdexEnabled = () => props.lobsterdexEnabled !== false;
   const lobsters = createMemo(() => (lobsterdexEnabled() ? (props.tabIconLobsters ?? []) : []));
-  const lobsterMode = createMemo(
-    () => lobsterdexEnabled() && (props.tabIcon?.startsWith("lobster:") ?? false),
-  );
+  const lobsterMode = () => lobsterdexEnabled() && (props.tabIcon?.startsWith("lobster:") ?? false);
   const selectedShape = createMemo(() => agentTabIconShape(props.tabIcon));
   const selected = createMemo(() =>
     lobsters().find((palette) => props.tabIcon === `lobster:${palette.id}`),

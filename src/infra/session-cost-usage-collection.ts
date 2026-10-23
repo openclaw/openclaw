@@ -15,7 +15,7 @@ import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "../config/sessions/transcript-file-
 import { normalizeAgentId } from "../routing/session-key.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveRealpathOrAbsolute } from "./boundary-path.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
@@ -91,10 +91,7 @@ async function listUsageCountedTranscriptFileSources(
   try {
     entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? [];
   }
   const transcripts = entries.filter(
     (entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name),
@@ -132,10 +129,7 @@ async function listUsageCountedTranscriptFileSources(
           stats,
         };
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return undefined;
-        }
-        throw error;
+        return ignoreMissingPath(error);
       }
     });
   const { firstError, hasError, results } = await runTasksWithConcurrency({
@@ -226,10 +220,7 @@ export async function listUsageCountedTranscriptStats(
       try {
         return await materializeUsageCostTranscriptSource(source, params);
       } catch (error) {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
+        return ignoreMissingPath(error);
       }
     }),
     limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,

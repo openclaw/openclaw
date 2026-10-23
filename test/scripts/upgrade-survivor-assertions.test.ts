@@ -1558,7 +1558,7 @@ process.stdout.write(sessionDir + "\\n");
     }
   });
 
-  it("requires every seeded legacy cron specimen before update", () => {
+  it("requires every baseline cron SQLite specimen before update", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-cron-"));
     try {
       const stateDir = join(root, "state");
@@ -1572,17 +1572,24 @@ process.stdout.write(sessionDir + "\\n");
       };
       const run = (command: string) =>
         spawnSync(testNodeExecPath, [ASSERTIONS_PATH, command], { env, encoding: "utf8" });
-      const seeded = run("seed");
+      const seeded = spawnSync(testNodeExecPath, [ASSERTIONS_PATH, "seed"], {
+        env: { ...env, OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base" },
+        encoding: "utf8",
+      });
       expect(seeded.status, seeded.stderr).toBe(0);
-      const cronStore = join(stateDir, "cron", "jobs.json");
+      mkdirSync(join(stateDir, "state"), { recursive: true });
+      const db = new DatabaseSync(join(stateDir, "state", "openclaw.sqlite"));
+      db.exec("CREATE TABLE cron_jobs(job_id TEXT PRIMARY KEY, job_json TEXT NOT NULL)");
+      for (let index = 0; index < 5; index++) {
+        db.prepare("INSERT INTO cron_jobs VALUES (?, ?)").run(`cron-${index}`, "{}");
+      }
       const baseline = run("assert-state");
       expect(baseline.status, baseline.stderr).toBe(0);
-      const store = JSON.parse(readFileSync(cronStore, "utf8"));
-      store.jobs.pop();
-      writeJson(cronStore, store);
+      db.prepare("DELETE FROM cron_jobs WHERE job_id = ?").run("cron-4");
+      db.close();
       const missingRow = run("assert-state");
       expect(missingRow.status).not.toBe(0);
-      expect(missingRow.stderr).toContain("legacy cron authority fixture row count changed");
+      expect(missingRow.stderr).toContain("baseline cron authority fixture row count changed");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -1885,6 +1892,30 @@ process.stdout.write(sessionDir + "\\n");
         return env;
       });
     expect(verify).not.toThrow();
+  });
+
+  it.each([false, true])("preserves frozen inline ACP metadata (shared database: %s)", (shared) => {
+    runSessionStateAssertion(
+      (stateDir) => {
+        const env = seedSessionSourceFixture(stateDir, "acpx-openclaw-tools-bridge");
+        const storePath = join(stateDir, "agents", "main", "sessions", "sessions.json");
+        const legacy = JSON.parse(readFileSync(storePath, "utf8"));
+        const store = createMigratedSessionFileStore();
+        store["agent:main:slack:channel:cupgrade"] = {
+          ...store["agent:main:slack:channel:cupgrade"],
+          acp: legacy["agent:main:slack:channel:cupgrade"].acp,
+        };
+        writeMigratedSessionFiles(stateDir);
+        writeJson(storePath, store);
+        if (shared) {
+          mkdirSync(join(stateDir, "state"), { recursive: true });
+          const db = new DatabaseSync(join(stateDir, "state", "openclaw.sqlite"));
+          db.close();
+        }
+        return env;
+      },
+      { scenario: "acpx-openclaw-tools-bridge" },
+    );
   });
 
   it.each<{

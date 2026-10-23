@@ -26,7 +26,6 @@ type NodePendingWorkState = {
 
 type DrainOptions = {
   maxItems?: number;
-  includeDefaultStatus?: boolean;
   nowMs?: number;
   pairingGeneration?: string;
 };
@@ -89,14 +88,6 @@ function sortedItems(state: NodePendingWorkState): NodePendingWorkItem[] {
   );
 }
 
-function resolvePendingWorkExpiresAtMs(expiresInMs: unknown, nowMs: number): number {
-  const ttlMs =
-    typeof expiresInMs === "number" && Number.isFinite(expiresInMs)
-      ? Math.max(1_000, Math.trunc(expiresInMs))
-      : DEFAULT_PENDING_WORK_TTL_MS;
-  return resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs }) ?? 0;
-}
-
 export function enqueueNodePendingWork(params: {
   nodeId: string;
   type: NodePendingWorkType;
@@ -124,7 +115,10 @@ export function enqueueNodePendingWork(params: {
     type: params.type,
     priority: params.priority ?? "normal",
     createdAtMs: nowMs,
-    expiresAtMs: resolvePendingWorkExpiresAtMs(params.expiresInMs, rawNowMs),
+    expiresAtMs:
+      resolveExpiresAtMsFromDurationMs(params.expiresInMs ?? DEFAULT_PENDING_WORK_TTL_MS, {
+        nowMs: rawNowMs,
+      }) ?? 0,
     ...(params.payload ? { payload: params.payload } : {}),
   };
   state.itemsById.set(item.id, item);
@@ -167,7 +161,7 @@ export function removeNodePendingWorkItem(params: {
   return true;
 }
 
-/** Drains pending work for a node, including a baseline status request unless disabled. */
+/** Drains pending work for a node, including a baseline status request. */
 export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): DrainResult {
   const normalizedNodeId = nodeId.trim();
   if (!normalizedNodeId) {
@@ -186,7 +180,7 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   const items = explicitItems.slice(0, maxItems);
   const explicitReturnedCount = items.length;
   const hasExplicitStatus = explicitItems.some((item) => item.type === "status.request");
-  const includeBaseline = opts.includeDefaultStatus !== false && !hasExplicitStatus;
+  const includeBaseline = !hasExplicitStatus;
   if (state && explicitReturnedCount > 0) {
     for (const item of items) {
       state.itemsById.delete(item.id);

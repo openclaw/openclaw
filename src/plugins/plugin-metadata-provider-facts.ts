@@ -1,11 +1,9 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginManifestProviderEndpoint } from "./manifest.js";
 import { listOfficialExternalProviderEndpointManifests } from "./official-external-provider-endpoints.js";
@@ -13,8 +11,8 @@ import type {
   PluginProviderAuthAliasCandidate,
   PluginProviderAuthContribution,
 } from "./plugin-metadata-snapshot.types.js";
-import type { PluginOrigin } from "./plugin-origin.types.js";
 import { collectPluginProviderRequestOwners } from "./plugin-provider-request-policy.js";
+import { PLUGIN_ORIGIN_PRIORITIES } from "./record-groups.js";
 import { listSetupProviderIds } from "./setup-descriptors.js";
 
 const PROVIDER_ENDPOINT_CLASSES = new Set(
@@ -23,8 +21,8 @@ const PROVIDER_ENDPOINT_CLASSES = new Set(
   ),
 );
 
-function normalizeProviderHosts(value: unknown): string[] {
-  return normalizeTrimmedStringList(value).map((entry) => entry.toLowerCase());
+export function isPluginProviderEndpointClass(endpointClass: string): boolean {
+  return PROVIDER_ENDPOINT_CLASSES.has(endpointClass);
 }
 
 export function normalizePluginProviderBaseUrl(value: string): string | undefined {
@@ -63,43 +61,26 @@ export function matchesPluginProviderEndpoint(
   );
 }
 
-export function prepareProviderEndpoints(value: unknown): PluginManifestProviderEndpoint[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
+export function prepareProviderEndpoints(
+  value: readonly PluginManifestProviderEndpoint[] | undefined,
+): PluginManifestProviderEndpoint[] {
   const endpoints: PluginManifestProviderEndpoint[] = [];
-  for (const endpoint of value) {
-    if (!isRecord(endpoint)) {
-      continue;
-    }
-    const endpointClass = normalizeOptionalString(endpoint.endpointClass);
-    if (!endpointClass) {
-      continue;
-    }
-    const googleVertexRegion = normalizeOptionalString(endpoint.googleVertexRegion);
-    const googleVertexRegionHostSuffix = normalizeOptionalString(
-      endpoint.googleVertexRegionHostSuffix,
-    )?.toLowerCase();
+  for (const endpoint of value ?? []) {
     endpoints.push({
-      endpointClass,
-      hosts: normalizeProviderHosts(endpoint.hosts),
-      hostSuffixes: normalizeProviderHosts(endpoint.hostSuffixes),
-      baseUrls: normalizeProviderHosts(endpoint.baseUrls)
-        .map(normalizePluginProviderBaseUrl)
+      endpointClass: endpoint.endpointClass,
+      hosts: endpoint.hosts ?? [],
+      hostSuffixes: endpoint.hostSuffixes ?? [],
+      baseUrls: (endpoint.baseUrls ?? [])
+        .map((baseUrl) => normalizePluginProviderBaseUrl(baseUrl.toLowerCase()))
         .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
-      ...(googleVertexRegion ? { googleVertexRegion } : {}),
-      ...(googleVertexRegionHostSuffix ? { googleVertexRegionHostSuffix } : {}),
+      ...(endpoint.googleVertexRegion ? { googleVertexRegion: endpoint.googleVertexRegion } : {}),
+      ...(endpoint.googleVertexRegionHostSuffix
+        ? { googleVertexRegionHostSuffix: endpoint.googleVertexRegionHostSuffix }
+        : {}),
     });
   }
   return endpoints;
 }
-
-const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
-  config: 0,
-  bundled: 1,
-  global: 2,
-  workspace: 3,
-};
 
 /** Prepares package alias candidates without capturing current workspace trust. */
 export function buildPluginMetadataProviderAuthAliases(plugins: readonly PluginManifestRecord[]) {
@@ -135,8 +116,8 @@ export function buildPluginMetadataProviderAuthAliases(plugins: readonly PluginM
   for (const candidates of aliases.values()) {
     candidates.sort(
       (left, right) =>
-        (PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY[left.plugin.origin] ?? Number.MAX_SAFE_INTEGER) -
-        (PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY[right.plugin.origin] ?? Number.MAX_SAFE_INTEGER),
+        (PLUGIN_ORIGIN_PRIORITIES[left.plugin.origin]?.provider ?? Number.MAX_SAFE_INTEGER) -
+        (PLUGIN_ORIGIN_PRIORITIES[right.plugin.origin]?.provider ?? Number.MAX_SAFE_INTEGER),
     );
   }
   return aliases;
@@ -148,7 +129,7 @@ export function buildPluginMetadataProviderFacts(
 ) {
   const providerEndpoints = [...plugins, ...listOfficialExternalProviderEndpointManifests()]
     .flatMap((plugin) => prepareProviderEndpoints(plugin.providerEndpoints))
-    .filter((endpoint) => PROVIDER_ENDPOINT_CLASSES.has(endpoint.endpointClass));
+    .filter((endpoint) => isPluginProviderEndpointClass(endpoint.endpointClass));
   const providerRequests = new Map(
     [...collectPluginProviderRequestOwners(plugins)].map(([provider, { policy }]) => [
       provider,

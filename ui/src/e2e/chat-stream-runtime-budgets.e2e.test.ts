@@ -21,7 +21,7 @@ import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.t
 // Durable runtime budgets for the chat streaming surface. Byte budgets
 // (scripts/check-control-ui-performance.mts) cannot see rendering work, so
 // these tests protect the landed streaming optimizations at the DOM boundary:
-// the animation-frame render queue (ui/src/pages/chat/chat-state-render.ts),
+// the animation-frame render queue (ui/src/pages/chat/chat-run-presentation.ts),
 // the bounded live tool stream (ui/src/pages/chat/tool-stream.ts), and the
 // transcript/heap cost of long sessions. Structural counts are exact and
 // machine-speed independent; wall-clock/heap ceilings carry several-fold
@@ -197,7 +197,7 @@ async function installRenderProbe(page: ChatFlowPage) {
       "index",
     ];
     const sourceNames = new Set([
-      "chat-state-render",
+      "chat-run-presentation",
       "chat-state-controller",
       "chat-state-events",
       "chat-state-refresh",
@@ -690,7 +690,9 @@ suite.define(() => {
         invalidationsInsideFrame: probe.invalidationsInsideFrame,
       });
 
-      expect(probe.commits).toBeGreaterThan(0);
+      // Text updates reach the transcript without re-preparing its page or pane.
+      // The visible tail and mutation batches above prove the stream rendered.
+      expect(probe.commits).toBe(0);
       expect(probe.mutationBatches).toBeGreaterThanOrEqual(MIN_BURST_MUTATION_BATCHES);
       expect(probe.mutationBatches).toBeLessThanOrEqual(MAX_BURST_MUTATION_BATCHES);
     });
@@ -807,26 +809,35 @@ suite.define(() => {
       // The first saved draft notifies presence subscribers. Drain that transition
       // before measuring edits to an already-present draft.
       await waitForCommittedComposerDraft(page, scopeKey, "seed", 0);
-      const scrollDuringWait = scrollAwayAndBack
-        ? page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate(async (element) => {
-            const thread = element as HTMLElement;
-            const originalTop = thread.scrollTop;
-            // Move during the stability sample, then restore its original geometry.
-            await new Promise<void>((resolve) => {
-              globalThis.setTimeout(resolve, 100);
-            });
-            thread.scrollTo({ top: originalTop - 8, behavior: "instant" });
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => resolve());
-            });
-            const awayTop = thread.scrollTop;
-            thread.scrollTo({ top: originalTop, behavior: "instant" });
-            return { originalTop, awayTop, restoredTop: thread.scrollTop };
-          })
-        : Promise.resolve(null);
+      const scroll = scrollAwayAndBack
+        ? await (async () => {
+            const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+            await thread.hover();
+            // Keep the saved offset inside the range when virtualizer measurements shrink it.
+            await page.mouse.wheel(0, -200);
+            await waitForChatScrollIdle(page);
+            const originalTop = await thread.evaluate((element) => element.scrollTop);
+            // Real reader input retires end-follow; an 8 px offset is still at the end.
+            await page.mouse.wheel(0, -100);
+            await expect
+              .poll(() => thread.evaluate((element) => element.scrollTop))
+              .toBeLessThan(originalTop - 8);
+            // Virtualizer measurements can adjust the wheel's final offset.
+            await waitForChatScrollIdle(page);
+            const awayTop = await thread.evaluate((element) => element.scrollTop);
+            await page.mouse.wheel(0, originalTop - awayTop);
+            await expect
+              .poll(() => thread.evaluate((element) => element.scrollTop))
+              .toBe(originalTop);
+            return {
+              originalTop,
+              awayTop,
+              restoredTop: await thread.evaluate((element) => element.scrollTop),
+            };
+          })()
+        : null;
       // Finish startup scrolling before measuring steady-state composer invalidations.
       await waitForChatScrollIdle(page);
-      const scroll = await scrollDuringWait;
       if (scroll) {
         expect(scroll.awayTop).toBeLessThan(scroll.originalTop);
         expect(scroll.restoredTop).toBe(scroll.originalTop);

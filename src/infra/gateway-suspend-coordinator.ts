@@ -30,27 +30,18 @@ const GATEWAY_SUSPEND_DRAIN_POLL_MS = 5_000;
 
 type GatewaySuspendTerminalPolicy = NonNullable<GatewaySuspendPrepareParams["terminalPolicy"]>;
 
-type GatewaySchedulerRecoveryResult = {
-  status: "recovering";
-  reason: "scheduler-resume-failed";
-  retryAfterMs: number;
-};
-
 type GatewaySuspendPrepareResult =
   | GatewaySuspendPrepareWireResult
-  | { status: "conflict"; expiresAtMs: number }
-  | GatewaySchedulerRecoveryResult;
+  | { status: "conflict"; expiresAtMs: number };
 
 type GatewaySuspendStatusResult =
   | GatewaySuspendStatusWireResult
-  | { status: "conflict"; expiresAtMs: number }
-  | GatewaySchedulerRecoveryResult;
+  | { status: "conflict"; expiresAtMs: number };
 
 type GatewaySuspendResumeResult =
   | GatewaySuspendResumeWireResult
   | { ok: false; reason: "suspension-mismatch" }
-  | { ok: false; reason: "gateway-restarting" }
-  | { ok: false; reason: "scheduler-resume-failed"; retryAfterMs: number };
+  | { ok: false; reason: "gateway-restarting" };
 
 type HeldGatewaySuspension = {
   owner: object;

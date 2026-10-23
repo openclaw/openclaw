@@ -59,7 +59,7 @@ import { isMissingPathError } from "../../infra/errors.js";
 import { withAgentExecApprovalsRemoved } from "../../infra/exec-approvals.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { AgentDeletionPendingError } from "../../sessions/session-agent-work-admission.js";
-import { closeAgentWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import { closeAgentWorkAdmissions } from "../../sessions/session-controller.lifecycle.js";
 import {
   readAgentDeletionJournalAsync,
   type AgentDeletionJournalCleanupPath,
@@ -275,7 +275,6 @@ export async function deleteGatewayAgent(
                   committed = await deleteAgentConfigEntry({
                     agentId,
                     allowMissing: !configured,
-                    allowConfigSizeDrop: true,
                     assertCurrent: deletion.assertCurrentFinal,
                     assertCurrentAsync: deletion.assertCurrentAsync,
                     writeOptions,

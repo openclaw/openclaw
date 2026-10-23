@@ -463,6 +463,13 @@ async function prepareGatewayServerBootstrapSelected(input: {
     ),
     preserveExistingOwnership: true,
   });
+  if (!minimalTestGateway && !opts.updateCanary) {
+    const { recoverConfiguredMcpDockerServers } = await import("../agents/mcp-docker-recovery.js");
+    await recoverConfiguredMcpDockerServers(
+      cfgAtStart,
+      startupConfigLoad.pluginMetadataSnapshot?.manifestRegistry,
+    );
+  }
   const preparations = [
     minimalTestGateway || opts.updateCanary
       ? Promise.resolve(undefined)

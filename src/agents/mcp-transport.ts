@@ -4,8 +4,7 @@
  * This module turns normalized MCP server config into stdio, SSE, or
  * streamable-HTTP SDK transports with OpenClaw auth, redirect, and logging rules.
  */
-import type { SSEClientTransportOptions } from "@modelcontextprotocol/sdk/client/sse.js";
-import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { SSEClientTransportOptions, FetchLike, Transport } from "@modelcontextprotocol/client";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug } from "../logger.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
@@ -37,9 +36,6 @@ type ResolvedMcpTransport = {
 
 function attachStderrLogging(serverName: string, transport: OpenClawStdioClientTransport) {
   const stderr = transport.stderr;
-  if (!stderr) {
-    return undefined;
-  }
   let reported = false;
   const onData = () => {
     if (!reported) {
@@ -114,7 +110,6 @@ export function resolveMcpTransport(
       env: resolved.env,
       cwd: resolved.cwd,
       prepareDataDir: options?.prepareDataDir,
-      stderr: "pipe",
     });
     return {
       transport,
@@ -131,7 +126,7 @@ export function resolveMcpTransport(
     }
     oauthIdentity = requesterMcpOAuthIdentity(serverName, resolved.url, requesterScope);
   } else {
-    oauthIdentity = operatorMcpOAuthIdentity(serverName, resolved.url);
+    oauthIdentity = operatorMcpOAuthIdentity(serverName, resolved.url, options?.cfg);
   }
   // The SDK reuses one fetch for OAuth and long-lived SSE/streamable bodies.
   // Per-RPC deadlines belong to client calls, not this transport fetch.

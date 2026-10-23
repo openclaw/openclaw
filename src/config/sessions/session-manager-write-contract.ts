@@ -5,6 +5,7 @@ import type {
   PreparedCompactionAppend,
 } from "../../agents/sessions/session-compaction-persistence.js";
 import type {
+  ModelChangeEntry,
   SessionEntry,
   SessionLeafControl,
   SessionMessageEntry,
@@ -167,6 +168,7 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
       input: {
         scope: MetadataTarget;
         event: Omit<SessionMessageEntry, "message"> | string;
+        initialModel?: ModelChangeEntry;
         cliWriter?: CliHistoryWriterFacts;
         message?: {
           messageJson: string;
@@ -193,6 +195,7 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
         >;
         projectionNeedsReconcile: boolean;
         pendingInputReceipt?: SessionPendingInputWorkerReceipt;
+        initialModelParentId?: string | null;
         reload?: Result<
           PreparedSessionTranscriptReload,
           OpenClawStateWorkerErrorPayload | undefined

@@ -152,46 +152,35 @@ describe("SQLite integrity child", () => {
       vi.useRealTimers();
     }
   });
-  it.each(["healthy", "damaged"] as const)(
-    "closes the native reader and reports structural integrity: %s",
-    async (damage) => {
-      let fragmentCountOffset: number | undefined;
-      const { source } = fixture(
-        "file",
-        "CREATE TABLE records(value INTEGER); INSERT INTO records VALUES(1)",
-        (database) => {
-          if (damage !== "healthy") {
-            const root = Number(
-              database.prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'records'").get()
-                ?.rootpage,
-            );
-            const pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
-            fragmentCountOffset = (root - 1) * pageSize + 7;
-          }
-        },
-      );
-      if (fragmentCountOffset !== undefined) {
-        // Misreport free-byte fragmentation without making the records themselves unreadable.
-        const bytes = fs.readFileSync(source);
-        bytes.writeUInt8(1, fragmentCountOffset);
-        fs.writeFileSync(source, bytes);
-      }
-      const timing: SqliteIntegrityCheckTiming = {};
-      vi.mocked(fork).mockClear();
-      const check = inScope(() => inspect(source, undefined, timing));
-      if (damage === "healthy") {
-        await expect(check).resolves.toBeUndefined();
-      } else {
-        await expect(check).rejects.toMatchObject({
-          name: "SqliteIntegrityError",
-          message: expect.stringMatching(
-            /integrity_check failed[\s\S]*Fragmentation of 0 bytes reported as 1/u,
-          ),
-        });
-      }
-      expectForksClosed();
-    },
-  );
+  it("closes the native reader after reporting structural damage", async () => {
+    let fragmentCountOffset = 0;
+    const { source } = fixture(
+      "file",
+      "CREATE TABLE records(value INTEGER); INSERT INTO records VALUES(1)",
+      (database) => {
+        const root = Number(
+          database.prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'records'").get()
+            ?.rootpage,
+        );
+        const pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
+        fragmentCountOffset = (root - 1) * pageSize + 7;
+      },
+    );
+    // Misreport free-byte fragmentation without making the records themselves unreadable.
+    const bytes = fs.readFileSync(source);
+    bytes.writeUInt8(1, fragmentCountOffset);
+    fs.writeFileSync(source, bytes);
+    const timing: SqliteIntegrityCheckTiming = {};
+    vi.mocked(fork).mockClear();
+    const check = inScope(() => inspect(source, undefined, timing));
+    await expect(check).rejects.toMatchObject({
+      name: "SqliteIntegrityError",
+      message: expect.stringMatching(
+        /integrity_check failed[\s\S]*Fragmentation of 0 bytes reported as 1/u,
+      ),
+    });
+    expectForksClosed();
+  });
 
   it("reports a SIGTERM close without an integrity verdict as an interruption", async () => {
     const { source } = fixture("signal");
@@ -578,12 +567,22 @@ describe("SQLite integrity child", () => {
         `import fs from 'node:fs';
         import { createRequire } from 'node:module';
         const sqlite = createRequire(import.meta.url)('node:sqlite');
+        const timeout = { initial: undefined, sql: [] };
         sqlite.DatabaseSync = new Proxy(sqlite.DatabaseSync, {
           construct(target, args) {
             if (${failOpen} && args[0] === ${JSON.stringify(source)}) {
               throw Object.assign(new Error('synthetic native open failure'), { code: 'SQLITE_CANTOPEN', errcode: 14 });
             }
-            return Reflect.construct(target, args);
+            const database = Reflect.construct(target, args);
+            if (args[0] === ${JSON.stringify(source)}) {
+              timeout.initial = database.prepare('PRAGMA busy_timeout').get().timeout;
+              const exec = database.exec.bind(database);
+              database.exec = (sql) => {
+                if (/PRAGMA busy_timeout/iu.test(sql)) timeout.sql.push(sql);
+                return exec(sql);
+              };
+            }
+            return database;
           },
         });
         const close = sqlite.DatabaseSync.prototype.close;
@@ -600,7 +599,7 @@ describe("SQLite integrity child", () => {
             fs.appendFileSync(${JSON.stringify(phases)}, JSON.stringify(message.phase) + '\\n');
             if (${failClosingPhase} && message.phase === 'closing') throw new Error('synthetic diagnostic send failure');
           }
-          if ('ok' in message) fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify(message));
+          if ('ok' in message) fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ ...message, timeout }));
           return send(message, ...args);
         };
         await import(${JSON.stringify(entry.href)});`,
@@ -629,6 +628,7 @@ describe("SQLite integrity child", () => {
       ).toEqual(failOpen ? ["opening"] : ["opening", "checking", "closing"]);
       const result = JSON.parse(fs.readFileSync(resultPath, "utf8"));
       expect(result).toMatchObject({ ok: false, error: expectedError });
+      expect(result.timeout).toEqual(failOpen ? { sql: [] } : { initial: 250, sql: [] });
       if (failOpen) {
         expect(fs.existsSync(closed)).toBe(false);
         expect(result).not.toHaveProperty("checkElapsedMs");

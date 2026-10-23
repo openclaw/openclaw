@@ -1,17 +1,14 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createBackgroundWorkOwner, getBackgroundWorkSnapshot } from "./background-work.js";
+import { getSkillWorkshopReviewLane, getBackgroundWorkSnapshot } from "./background-work.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
-  markGatewayDraining,
   publishLaneConfiguration,
   resetAllLanes,
-  resetCommandLane,
 } from "./command-queue.js";
 import { getQueueState } from "./command-queue.state.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
-import { getGatewayRestartDrainSignal } from "./gateway-work-admission.js";
 import { CommandLane } from "./lanes.js";
 
 const state = getQueueState();
@@ -86,8 +83,21 @@ function configureBackground(members: string[], lanes?: Capacities, reservations
   });
 }
 
+function expectWorkshopWidth(width: number) {
+  if (width === 1) {
+    expect(getSkillWorkshopReviewLane()).toBe("background:core:skill-workshop");
+  } else {
+    expect(() => getSkillWorkshopReviewLane()).toThrow(
+      "already registered with different concurrency",
+    );
+  }
+}
+
+const recordOrder = (lane: string, order: number[], value: number) =>
+  enqueueCommandInLane(lane, async () => void order.push(value), { priority: "background" });
+
 function park(
-  lane: string | ReturnType<typeof createBackgroundWorkOwner>,
+  lane: string,
   onStart?: () => void,
   options?: Parameters<typeof enqueueCommandInLane>[2],
 ) {
@@ -96,10 +106,7 @@ function park(
     onStart?.();
     await gate.promise;
   };
-  const run =
-    typeof lane === "string"
-      ? enqueueCommandInLane(lane, task, options)
-      : lane.enqueue(task, options);
+  const run = enqueueCommandInLane(lane, task, options);
   return { run, resolve: gate.resolve };
 }
 
@@ -107,21 +114,19 @@ beforeEach(resetCommandQueueStateForTest);
 afterEach(resetCommandQueueStateForTest);
 
 it("does not scan sibling lanes while reading registered owner widths", () => {
-  const owners = Array.from({ length: 32 }, (_, index) =>
-    createBackgroundWorkOwner({ owner: `core:stable-${index}`, maxConcurrent: (index % 3) + 1 }),
-  );
-  const members = owners.map((owner) => owner.lane);
+  const siblings = Array.from({ length: 32 }, (_, index) => `background:core:stable-${index}`);
+  configureBackground(siblings, Object.fromEntries(siblings.map((lane) => [lane, 1])));
+  const lane = getSkillWorkshopReviewLane();
+  const members = [...siblings, lane];
   expect(state.lanes.size).toBe(members.length);
-  for (const lane of state.lanes.values()) {
-    expect(lane).toMatchObject({ draining: false, queue: { length: 0 } });
+  for (const registeredLane of state.lanes.values()) {
+    expect(registeredLane).toMatchObject({ draining: false, queue: { length: 0 } });
   }
   const unchanged = preserveQueueState();
   const { result: observed, reads } = countLaneReads(() =>
-    Array.from({ length: 1_000 }, (_, index) => owners[index % owners.length]!.lane),
+    Array.from({ length: 1_000 }, () => getSkillWorkshopReviewLane()),
   );
-  expect(observed).toEqual(
-    Array.from({ length: 1_000 }, (_, index) => members[index % members.length]),
-  );
+  expect(observed).toEqual(Array.from({ length: 1_000 }, () => lane));
   unchanged();
   expect(reads).toBeLessThanOrEqual(1_000);
 });
@@ -131,38 +136,29 @@ it.each([
   [true, 1],
   [true, 2],
 ] as const)("registers lazily (group-only=%s, width=%i)", (groupOnly, maxConcurrent) => {
-  const lane = "background:core:width";
+  const lane = "background:core:skill-workshop";
   if (groupOnly) {
-    configureBackground([lane]);
+    configureBackground([lane], maxConcurrent === 1 ? undefined : { [lane]: maxConcurrent });
   }
-  const owner = createBackgroundWorkOwner({ owner: "  core:width  ", maxConcurrent });
-  expect(state.lanes.size).toBe(0);
+  expect(state.lanes.size).toBe(groupOnly && maxConcurrent !== 1 ? 1 : 0);
   if (groupOnly) {
     const group = state.laneGroups.get("background-work");
-    if (maxConcurrent === 1) {
-      expect(owner.lane).toBe(lane);
-    } else {
-      expect(() => owner.lane).toThrow("already registered with different concurrency");
-    }
-    expect(state.lanes.size).toBe(0);
+    expectWorkshopWidth(maxConcurrent);
+    expect(state.lanes.size).toBe(maxConcurrent === 1 ? 0 : 1);
     expect(state.laneGroups.get("background-work")).toBe(group);
     expect([...group!.members]).toEqual([lane]);
     return;
   }
   expect(state.laneGroups.size).toBe(0);
-  expect(owner.lane).toBe(lane);
+  expect(getSkillWorkshopReviewLane()).toBe(lane);
   const registered = state.lanes.get(lane);
   const group = state.laneGroups.get("background-work");
   expect(registered?.maxConcurrent).toBe(1);
   expect([...group!.members]).toEqual([lane]);
-  expect(createBackgroundWorkOwner({ owner: "core:width", maxConcurrent: 1 }).lane).toBe(lane);
-  for (const width of [0, 2, 1]) {
+  expect(getSkillWorkshopReviewLane()).toBe(lane);
+  for (const width of [0, 2, 3, 1]) {
     publishLaneConfiguration({ lanes: { [lane]: width } });
-    if (width === 1) {
-      expect(owner.lane).toBe(lane);
-    } else {
-      expect(() => owner.lane).toThrow("already registered with different concurrency");
-    }
+    expectWorkshopWidth(width);
     expect(state.lanes.get(lane)).toBe(registered);
     expect(registered?.maxConcurrent).toBe(width);
     expect(state.laneGroups.get("background-work")).toBe(group);
@@ -227,13 +223,13 @@ it.each(["paused", "reserved"] as const)(
   },
 );
 
-it("preserves admission draining and the newest generation across real lane resets", async () => {
+it("preserves admission draining and the newest generation across Gateway restarts", async () => {
   const lane = "background:reset";
   const sibling = "background:reset-sibling";
-  configureBackground([lane, sibling], { [lane]: 1, [sibling]: 1 });
-  resetCommandLane(lane);
-  resetCommandLane(sibling);
-  resetCommandLane(sibling);
+  configureBackground([lane, sibling], { [sibling]: 1 });
+  resetAllLanes();
+  publishLaneConfiguration({ lanes: { [lane]: 1 } });
+  resetAllLanes();
   const started = createDeferred();
   let duringAdmission: ReturnType<typeof getBackgroundWorkSnapshot> | undefined;
   const old = park(lane, started.resolve, {
@@ -265,13 +261,16 @@ it("preserves admission draining and the newest generation across real lane rese
 });
 
 it("shares three slots, preserves owner widths and FIFO, and leaves foreground capacity free", async () => {
-  const parallel = createBackgroundWorkOwner({ owner: "plugin:parallel", maxConcurrent: 3 });
-  const serial = createBackgroundWorkOwner({ owner: "core:serial", maxConcurrent: 1 });
-  const gates = Array.from({ length: 3 }, () => park(parallel));
+  const parallel = "background:plugin:parallel";
+  const serial = getSkillWorkshopReviewLane();
+  configureBackground([parallel, serial], { [parallel]: 3 });
+  const gates = Array.from({ length: 3 }, () =>
+    park(parallel, undefined, { priority: "background" }),
+  );
   const parallelRuns = gates.map(({ run }) => run);
   const order: number[] = [];
-  const first = park(serial, () => void order.push(1));
-  const second = serial.enqueue(async () => void order.push(2));
+  const first = park(serial, () => void order.push(1), { priority: "background" });
+  const second = recordOrder(serial, order, 2);
   try {
     expect(getBackgroundWorkSnapshot()).toMatchObject({ activeCount: 3, queuedCount: 2 });
     await expect(enqueueCommandInLane(CommandLane.Main, async () => "foreground")).resolves.toBe(
@@ -283,7 +282,7 @@ it("shares three slots, preserves owner widths and FIFO, and leaves foreground c
     expect(getBackgroundWorkSnapshot()).toMatchObject({ activeCount: 3, queuedCount: 1 });
     gates.slice(1).forEach((gate) => gate.resolve());
     await Promise.all(parallelRuns);
-    expect(getCommandLaneSnapshot(serial.lane)).toMatchObject({ activeCount: 1, queuedCount: 1 });
+    expect(getCommandLaneSnapshot(serial)).toMatchObject({ activeCount: 1, queuedCount: 1 });
     first.resolve();
     await Promise.all([first.run, second]);
     expect(order).toEqual([1, 2]);
@@ -295,14 +294,17 @@ it("shares three slots, preserves owner widths and FIFO, and leaves foreground c
 });
 
 it("removes cancelled work immediately without invoking it or reordering its successors", async () => {
-  const owner = createBackgroundWorkOwner({ owner: "core:cancel", maxConcurrent: 1 });
-  const active = park(owner);
+  const owner = getSkillWorkshopReviewLane();
+  const active = park(owner, undefined, { priority: "background" });
   const controller = new AbortController();
   const cancelledTask = vi.fn(async () => undefined);
   const order: number[] = [];
-  const first = owner.enqueue(async () => void order.push(1));
-  const cancelled = owner.enqueue(cancelledTask, { abortSignal: controller.signal });
-  const last = owner.enqueue(async () => void order.push(2));
+  const first = recordOrder(owner, order, 1);
+  const cancelled = enqueueCommandInLane(owner, cancelledTask, {
+    priority: "background",
+    abortSignal: controller.signal,
+  });
+  const last = recordOrder(owner, order, 2);
   const rejection = expect(cancelled).rejects.toThrow("cancel background work");
   controller.abort(new Error("cancel background work"));
   await rejection;
@@ -311,32 +313,4 @@ it("removes cancelled work immediately without invoking it or reordering its suc
   await Promise.all([active.run, first, last]);
   expect(cancelledTask).not.toHaveBeenCalled();
   expect(order).toEqual([1, 2]);
-});
-
-it.each([
-  ["drain", "Gateway is restarting. Please try again shortly."],
-  ["reset", "gateway runtime reset"],
-])("cancels old work on restart %s and admits fresh work", async (restart, message) => {
-  const owner = createBackgroundWorkOwner({ owner: "core:restart", maxConcurrent: 1 });
-  const started = createDeferred();
-  const active = owner.enqueue(async (signal) => {
-    started.resolve();
-    await new Promise<void>((resolve) => {
-      signal.addEventListener("abort", () => resolve(), { once: true });
-    });
-    signal.throwIfAborted();
-  });
-  await started.promise;
-  const staleTask = vi.fn(async () => undefined);
-  const stale = owner.enqueue(staleTask);
-  const oldSignal = getGatewayRestartDrainSignal();
-  const rejected = [active, stale].map((run) => expect(run).rejects.toThrow(message));
-  (restart === "drain" ? markGatewayDraining : resetAllLanes)();
-  await Promise.all(rejected);
-  resetAllLanes();
-  expect(oldSignal.aborted).toBe(true);
-  expect(getGatewayRestartDrainSignal().aborted).toBe(false);
-  await expect(owner.enqueue(async () => "fresh")).resolves.toBe("fresh");
-  expect(staleTask).not.toHaveBeenCalled();
-  expect(getBackgroundWorkSnapshot()).toMatchObject({ activeCount: 0, queuedCount: 0 });
 });

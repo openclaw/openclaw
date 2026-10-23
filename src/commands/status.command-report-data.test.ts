@@ -4,7 +4,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as backupRunRecords from "../state/backup-run-records.js";
 import { createSqliteWalHealth } from "./sqlite-wal-health.test-support.js";
 import { buildStatusCommandReportLines } from "./status.command-report.js";
-import { createStatusCommandReportDataParams } from "./status.test-support.js";
+import { createStatusCommandReportDataParams, createStatusHealth } from "./status.test-support.js";
 
 // mock-isolation: Keep database inspection in its own owner proof; these tests exercise report data.
 vi.mock("./status-database-engines.js", async (importOriginal) => ({
@@ -21,31 +21,27 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+async function report(overrides: Parameters<typeof createStatusCommandReportDataParams>[0] = {}) {
+  const lines = await buildStatusCommandReportLines(createStatusCommandReportDataParams(overrides));
+  return stripAnsi(lines.join("\n"));
+}
+
 it.each([
-  {
-    channel: "quietchat",
-    accountId: "acct",
-    expected: "ok-token · 5m ago · quietchat · account acct",
-  },
-  { channel: undefined, accountId: undefined, expected: "ok-token · 5m ago" },
-])(
-  "formats heartbeat age and optional metadata: $expected",
-  async ({ channel, accountId, expected }) => {
-    const now = Date.parse("2026-09-01T12:00:00.000Z");
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    const lines = await buildStatusCommandReportLines(
-      createStatusCommandReportDataParams({
-        lastHeartbeat: { ts: now - 300_000, status: "ok-token", channel, accountId },
-      }),
-    );
-    expect(stripAnsi(lines.join("\n"))).toContain(expected);
-  },
-);
+  ["quietchat", "acct", "ok-token · 5m ago · quietchat · account acct"],
+  [undefined, undefined, "ok-token · 5m ago"],
+])("formats heartbeat age with channel %s and account %s", async (channel, accountId, expected) => {
+  const now = Date.parse("2026-09-01T12:00:00.000Z");
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const output = await report({
+    lastHeartbeat: { ts: now - 300_000, status: "ok-token", channel, accountId },
+  });
+  expect(output).toContain(expected);
+});
 
 it("awaits backup freshness before assembling the overview", async () => {
   const freshness = createDeferred<backupRunRecords.BackupRunFreshness>();
   vi.spyOn(backupRunRecords, "readBackupRunFreshness").mockReturnValueOnce(freshness.promise);
-  const pending = buildStatusCommandReportLines(createStatusCommandReportDataParams());
+  const pending = report();
   freshness.resolve({
     latest: {
       id: "failed-backup",
@@ -55,7 +51,7 @@ it("awaits backup freshness before assembling the overview", async () => {
       kind: "archive",
     },
   });
-  expect(stripAnsi((await pending).join("\n"))).toContain("last attempt failed just now (archive)");
+  expect(await pending).toContain("last attempt failed just now (archive)");
 });
 
 it("keeps pending startup guidance distinct from reachability failure", async () => {
@@ -78,32 +74,56 @@ it("keeps pending startup guidance distinct from reachability failure", async ()
 });
 
 it("shows skipped audit text when fast status omits the security audit", async () => {
-  const lines = await buildStatusCommandReportLines(
-    createStatusCommandReportDataParams({ securityAudit: undefined }),
-  );
-  expect(stripAnsi(lines.join("\n"))).toContain(
+  expect(await report({ securityAudit: undefined })).toContain(
     "Skipped in fast status. Full report: openclaw security audit\nDeep check: openclaw status --deep",
   );
 });
 
+it.each([false, true])(
+  "reports auxiliary health warnings only when degraded=%s",
+  async (degraded) => {
+    const output = await report({
+      health: createStatusHealth({
+        contextEngines: {
+          quarantined: degraded
+            ? [
+                {
+                  engineId: "synthetic-context",
+                  operation: "ingest",
+                  reason: "provider failed",
+                  failedAt: 1,
+                },
+              ]
+            : [],
+        },
+        configReload: { hotReloadStatus: degraded ? "disabled" : "active" },
+      }),
+      tableWidth: 240,
+    });
+    if (degraded) {
+      expect(output).toMatch(/Context engine[^\n]*WARN/);
+      expect(output).toContain("1 quarantined; downgraded to legacy: synthetic-context");
+      expect(output).toMatch(/Config hot reload[^\n]*WARN/);
+      expect(output).toContain("watcher retries exhausted; restart the gateway to restore it");
+    } else {
+      expect(output).not.toContain("Context engine");
+      expect(output).not.toContain("Config hot reload");
+    }
+  },
+);
+
 it("renders the recorded SQLite checkpoint warning in deep status", async () => {
   const params = createStatusCommandReportDataParams();
   const sqliteWal = createSqliteWalHealth({
-    state: "blocked",
-    warning: true,
-    consecutiveBlocked: 2,
     observedAtMs: Date.parse("2026-09-13T12:00:00.000Z"),
-    walBytes: 128 * 1024 * 1024,
-    checkpointedFrames: 100,
     lastCompletedAtMs: Date.parse("2026-09-13T11:00:00.000Z"),
   });
-  const lines = await buildStatusCommandReportLines({
+  const output = await report({
     ...params,
     summary: { ...params.summary, sqliteWal },
     opts: { deep: true },
     tableWidth: 500,
   });
-  const output = stripAnsi(lines.join("\n"));
   expect(output).toMatch(/SQLite WAL[^\n]*WARN/);
   expect(output).toContain("checkpoint blocked");
   expect(output).toContain("WAL 128.0 MiB");

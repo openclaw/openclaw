@@ -1,12 +1,15 @@
-import { createEffect, createStore, For, onSettled, Show } from "solid-js";
+import { createStore, For, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import "../../../components/modal-dialog.ts";
 import { registerChatCameraEnglish } from "../../../i18n/locales/en-chat-camera.ts";
+import "../../../components/modal-dialog.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { useNativeAttachmentCapture } from "./chat-attachment-picker-policy.ts";
 import "./chat-camera-capture.css";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 registerEnglishCatalog(registerChatCameraEnglish);
 type CameraStage = "closed" | "requesting" | "live" | "capturing" | "review" | "error";
@@ -18,10 +21,10 @@ type CameraProps = {
   onNativeCapture?: (source: HTMLElement) => void;
 };
 export type OpenClawChatCameraCapture = SolidBridgeElement<CameraProps, { show(): void }>;
-const openCameras = new WeakMap<OpenClawChatCameraCapture, () => void>();
+const openCameras = new WeakMap<OpenClawChatCameraCapture, { show(): void; syncInputs(): void }>();
 
 /** One composer owns the camera, its pending permission request, and the chosen still. */
-function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCapture) {
+function CameraCaptureContent(_props: CameraProps, host: OpenClawChatCameraCapture) {
   const [state, setState] = createStore<{
     nativeFallback: boolean;
     stage: CameraStage;
@@ -46,6 +49,7 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
   // This synchronous scope retires permission/encoding work before Solid commits the view.
   let scope: { signal?: AbortSignal; release: () => void } | undefined;
   let video: HTMLVideoElement | undefined;
+  let cancelButton!: HTMLButtonElement;
   let releaseTrack: (() => void) | undefined;
   let captureDestination: CameraProps["onCapture"];
   let uploadDestination: CameraProps["onUpload"];
@@ -196,18 +200,18 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
     }
   };
   const show = () => {
-    if (!host.isConnected || props.disabled || props.readSignal?.aborted || scope !== undefined) {
+    if (!host.isConnected || host.disabled || host.readSignal?.aborted || scope !== undefined) {
       return;
     }
-    if (props.onNativeCapture && useNativeAttachmentCapture()) {
-      props.onNativeCapture(host);
+    if (host.onNativeCapture && useNativeAttachmentCapture()) {
+      host.onNativeCapture(host);
       return;
     }
-    const signal = props.readSignal;
+    const signal = host.readSignal;
     scope = { signal, release: signal ? listen(signal, "abort", close, { once: true }) : () => {} };
-    captureDestination = props.onCapture;
-    uploadDestination = props.onUpload;
-    nativeCaptureDestination = props.onNativeCapture;
+    captureDestination = host.onCapture;
+    uploadDestination = host.onUpload;
+    nativeCaptureDestination = host.onNativeCapture;
     setState((draft) => {
       draft.cameras = [];
     });
@@ -278,17 +282,15 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
     close();
     destination?.(host);
   };
-  // Changing draft authority must release the external camera and pending permission request.
-  createEffect(
-    () => [props.disabled, props.readSignal] as const,
-    ([disabled, readSignal]) => {
-      if (scope && (disabled || readSignal !== scope.signal)) {
-        close();
-      }
-    },
-  );
   onSettled(() => {
-    openCameras.set(host, show);
+    openCameras.set(host, {
+      show,
+      syncInputs: () => {
+        if (scope && (host.disabled || host.readSignal !== scope.signal)) {
+          close();
+        }
+      },
+    });
     const releasePage = listen(window, "pagehide", close);
     return () => {
       releaseCamera();
@@ -302,7 +304,11 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
     failed() && state.nativeFallback && Boolean(nativeCaptureDestination);
   return (
     <Show when={state.stage !== "closed"}>
-      <openclaw-modal-dialog label={t("chat.camera.title")} onModal-cancel={close}>
+      <openclaw-modal-dialog
+        prop:initialFocus={() => cancelButton}
+        label={t("chat.camera.title")}
+        onModal-cancel={close}
+      >
         <section class="camera">
           <header>
             <div>
@@ -416,6 +422,9 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
             <button
               type="button"
               autofocus
+              ref={(element) => {
+                cancelButton = element;
+              }}
               onClick={() => (reviewing() ? void startCamera() : close())}
             >
               {reviewing() ? t("chat.camera.retake") : t("common.cancel")}
@@ -453,6 +462,12 @@ export const ChatCameraCapture = defineSolidBridge<CameraProps, { show(): void }
   "openclaw-chat-camera-capture",
   CameraCaptureContent,
   {
+    propertyChanged: (host, key) => {
+      if (key === "disabled" || key === "readSignal") {
+        // Native inputs can arrive during a parent render; retire the scope after that commit.
+        queueMicrotask(() => openCameras.get(host)?.syncInputs());
+      }
+    },
     properties: {
       disabled: { default: false },
       readSignal: { default: undefined, attribute: false },
@@ -460,7 +475,7 @@ export const ChatCameraCapture = defineSolidBridge<CameraProps, { show(): void }
       onUpload: { default: undefined, attribute: false },
       onNativeCapture: { default: undefined, attribute: false },
     },
-    methods: { show: (host) => openCameras.get(host)?.() },
+    methods: { show: (host) => openCameras.get(host)?.show() },
   },
 );
 

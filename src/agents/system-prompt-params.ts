@@ -8,7 +8,8 @@ import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ChatType } from "../channels/chat-type.js";
-import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
+import { resolveControlUiPublicSessionUrl } from "../config/control-ui-link-base.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   formatActiveNodeContextLabel,
@@ -22,7 +23,6 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 import type { SystemPromptRuntimeInfo } from "./system-prompt.types.js";
 
 const MAX_RUNTIME_AGENT_NAME_CHARS = 128;
-const MAX_RUNTIME_SESSION_URL_CHARS = 512;
 
 type RuntimeInfoInput = Omit<SystemPromptRuntimeInfo, "chatType"> &
   Required<Pick<SystemPromptRuntimeInfo, "host" | "os" | "arch" | "node" | "model">> & {
@@ -41,6 +41,7 @@ export function buildSystemPromptParams(params: {
   cwd?: string;
   preparedRepoRoot?: string | null;
   preparedGitCoauthorPrompt?: string | null;
+  preparedSessionEntry?: InternalSessionEntry;
   requesterProfileId?: string;
 }): SystemPromptRuntimeParams {
   const repoRoot = Object.hasOwn(params, "preparedRepoRoot")
@@ -51,10 +52,11 @@ export function buildSystemPromptParams(params: {
   // defeating byte-identical prompt-prefix reuse across runs of the same job.
   const sessionUrl =
     runId === undefined
-      ? resolveControlUiSessionUrl(params.config, {
+      ? resolveControlUiPublicSessionUrl(params.config, {
           sessionKey: params.runtime.sessionKey,
-          fallbackAgentId: params.agentId,
-          exactKey: true,
+          agentId: params.agentId,
+          sessionId: params.runtime.sessionId,
+          entry: params.preparedSessionEntry,
         })
       : undefined;
   return {
@@ -66,11 +68,7 @@ export function buildSystemPromptParams(params: {
           : undefined,
       ...params.runtime,
       gitCoauthorPrompt: params.preparedGitCoauthorPrompt ?? undefined,
-      // Published links must be externally usable and bounded before entering model context.
-      sessionUrl:
-        sessionUrl?.startsWith("https://") && sessionUrl.length <= MAX_RUNTIME_SESSION_URL_CHARS
-          ? sessionUrl
-          : undefined,
+      sessionUrl,
       activeNode: formatActiveNodeContextLabel(
         getCurrentActiveNodeContext(params.requesterProfileId),
       ),

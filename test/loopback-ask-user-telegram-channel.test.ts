@@ -1,7 +1,5 @@
 // Keep plugin transport proof outside core gateway tests.
-import { once } from "node:events";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { text } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core";
 import * as registries from "openclaw/plugin-sdk/channel-test-helpers";
@@ -17,7 +15,6 @@ import { prepareCliRunContext } from "../src/agents/cli-runner/prepare.js";
 import * as prepareDeps from "../src/agents/cli-runner/prepare.test-support.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../src/agents/harness/gateway-question.js";
 import { withQuestionGateway } from "../src/agents/harness/gateway-question.test-support.js";
-import { resetPendingAskUserQuestionsForTest } from "../src/agents/tools/ask-user-tool.test-support.js";
 import * as runtimeConfig from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { resolveMcpLoopbackClientGrant } from "../src/gateway/mcp-grant-store.js";
@@ -25,6 +22,11 @@ import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../src/gateway/
 import * as toolResolution from "../src/gateway/tool-resolution.js";
 import { createDeferredCore } from "../src/shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
 import { awaitGateBeforeSettlement } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
@@ -58,9 +60,8 @@ async function startTelegramAskUserLoopback() {
       .then((body) => {
         const entry = { body, url: request.url ?? "" };
         requests.push(entry);
-        response.writeHead(200, { "content-type": "application/json" });
         const result = { message_id: requests.length, chat: { id: 1, type: "private" } };
-        response.end(JSON.stringify({ ok: true, result }));
+        respondJson(response, { ok: true, result });
         if (entry.url.includes("sendMessage")) {
           promptRequest.resolve(entry);
         }
@@ -69,21 +70,16 @@ async function startTelegramAskUserLoopback() {
         response.destroy(error instanceof Error ? error : new Error(String(error)));
       });
   });
-  await once(server.listen(0, "127.0.0.1"), "listening");
-  const { port } = server.address() as AddressInfo;
+  const apiRoot = await listenLoopback(server);
   return {
-    apiRoot: `http://127.0.0.1:${port}`,
+    apiRoot,
     requests,
     promptRequest: promptRequest.promise,
-    close: async () => {
-      server.closeAllConnections();
-      await server[Symbol.asyncDispose]();
-    },
+    close: () => closeHttpServer(server),
   };
 }
 
 afterEach(() => {
-  resetPendingAskUserQuestionsForTest();
   prepareDeps.resetCliRunnerPrepareTestDeps();
   cliBackendsTesting.resetDepsForTest();
   registries.resetPluginRuntimeStateForTest();
@@ -198,6 +194,7 @@ it("publishes the prompt through Bot API and completes after the answer", async 
             timeoutMs: 60_000,
             abortSignal: new AbortController().signal,
             messageProvider: "telegram",
+            senderId: "1",
             currentChannelId: "1",
             agentAccountId: "default",
             senderIsOwner: true,
@@ -239,6 +236,7 @@ it("publishes the prompt through Bot API and completes after the answer", async 
               text: "Staging",
               caller: {
                 messageProvider: "telegram",
+                senderId: "1",
                 senderIsOwner: true,
                 toolsAllow: ["ask_user"],
                 disableTools: false,

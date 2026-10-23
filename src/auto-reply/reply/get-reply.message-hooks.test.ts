@@ -79,6 +79,11 @@ const model = { provider: "anthropic", model: "claude-opus-4-6" };
 const sessionAndDirectives = [mocks.initSessionState, mocks.resolveReplyDirectives];
 const hooks = [mocks.createInternalHookEvent, mocks.triggerInternalHook];
 const emptyAliasIndex = () => ({ byAlias: new Map(), byKey: new Map() });
+const defaultModelFacts = () => ({
+  defaultProvider: "openai",
+  defaultModel: "gpt-4o-mini",
+  aliasIndex: emptyAliasIndex(),
+});
 const bodyFields = (body: string) => ({
   Body: body,
   BodyForAgent: body,
@@ -172,11 +177,7 @@ async function resetMocks() {
     };
   });
   mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
-  vi.mocked(defaultModel).mockReturnValue({
-    defaultProvider: "openai",
-    defaultModel: "gpt-4o-mini",
-    aliasIndex: emptyAliasIndex(),
-  });
+  vi.mocked(defaultModel).mockReturnValue(defaultModelFacts());
   vi.mocked(runReply).mockResolvedValue({ text: "ok" });
   vi.mocked(stageMedia).mockResolvedValue({ staged: new Map() });
   mocks.resolveReplySessionPreprocessingState.mockReturnValue({
@@ -520,6 +521,48 @@ describe("getReplyFromConfig message hooks", () => {
     },
   );
 
+  it("stops a canceled status reply while thinking catalog discovery is pending", async () => {
+    const catalog = createDeferred<[]>();
+    const entered = createDeferred();
+    const controller = new AbortController();
+    const directives = continueReply(buildTextCtx("/status"), {
+      body: "/status",
+      abortKey: "agent:main:telegram:-100123",
+      from: "telegram:user:42",
+      to: "telegram:-100123",
+      senderId: "42",
+      senderIsOwner: true,
+    });
+    directives.result.inlineStatusRequested = true;
+    directives.result.modelState.resolveThinkingCatalog = async () => {
+      entered.resolve();
+      return catalog.promise;
+    };
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(directives);
+
+    const pending = reply(buildTextCtx("/status"), {}, { abortSignal: controller.signal });
+    await entered.promise;
+    const outcome = pending.then(
+      () => "completed",
+      (error: unknown) => (error instanceof Error ? error.name : "unknown"),
+    );
+    controller.abort();
+    try {
+      expect(
+        await Promise.race([
+          outcome,
+          new Promise<string>((resolve) => {
+            setImmediate(() => resolve("pending"));
+          }),
+        ]),
+      ).toBe("AbortError");
+      expect(mocks.handleInlineActions).not.toHaveBeenCalled();
+    } finally {
+      catalog.resolve([]);
+      await Promise.allSettled([pending]);
+    }
+  });
+
   it("keeps literal URL input after link failure", async () => {
     const ctx = buildTextCtx("read https://example.test/page", {
       CommandInterpretationSuppressed: true,
@@ -541,11 +584,7 @@ describe("getReplyFromConfig media staging", () => {
     vi.mocked(scope.resolveSessionAgentId).mockImplementation(() => "main");
     const globals = await vi.importActual<typeof import("../../globals.js")>("../../globals.js");
     vi.mocked(logVerbose).mockImplementation(globals.logVerbose);
-    vi.mocked(defaultModel).mockReturnValue({
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
-      aliasIndex: emptyAliasIndex(),
-    });
+    vi.mocked(defaultModel).mockReturnValue(defaultModelFacts());
   });
 
   function prepareMediaReply(

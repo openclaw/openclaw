@@ -163,6 +163,13 @@ cap across counters, gauges, and histograms; a fully observed method uses up to
 five samples. Watch `openclaw_prometheus_series_dropped_total` for incomplete
 coverage. See [Prometheus metrics](/gateway/prometheus) for timing semantics.
 
+Requester completion warnings include the underlying error name and message.
+`requester settle wake failed`, `failed to persist requester settle wake rejection`,
+and `failed to publish requester settle dispatch` report failures at the lifecycle
+owner on each failed attempt. These replace the former sustained requester-wake
+commit warning; retained settlement receipts retry through the existing sweep
+without redelivering a completed result.
+
 The existing diagnostic heartbeat debug log includes `nextWakeAtMs`, the earliest
 pending wake time in the Gateway scheduler as a Unix timestamp in milliseconds
 (or `none` when no wake is pending). Overdue diagnostic heartbeats run once after sleep;
@@ -194,8 +201,14 @@ The Gateway also emits an always-on `main-thread stall` warning after a synchron
 callback blocks for at least 250 milliseconds. Each line names the longest-running
 known task segment from RPC handlers, scheduled jobs, diagnostic phases, timeline spans, or
 worker message handling, with elapsed and task milliseconds. Time awaiting I/O
-does not count as task execution. Labels cover the synchronous portion of explicit
-task scopes. Asynchronous continuations and unknown callbacks use best-effort unattributed
+does not count as task execution. Prepared session-row reads carry the enclosing
+operation across waits and append `session-rows:select`, `session-rows:prepare`, or
+`session-rows:consume`; agent roster batches append `agent-roster`. For example,
+`gateway:rpc:sessions.list:session-rows:select` identifies list selection, and
+scheduled work retains its `scheduler:<lane>:<task>` prefix. Labels contain only
+code-owned operation names, never session keys or request content. Labels cover
+the synchronous portion of explicit task scopes. Other asynchronous continuations
+and unknown callbacks use best-effort unattributed
 delay warnings from the event-loop sampler; the Gateway does not install
 process-wide async hooks to time every promise continuation. During healthy idle
 windows, the native histogram is disabled: an unscoped stall that finishes before
@@ -313,9 +326,10 @@ node scripts/diagnostic-writer-occupancy.mts gateway.log --json \
 
 The report splits observed reservation and queue-wait intervals into UTC minutes,
 ranks operation categories, and lists the longest observed reservations. Native
-transaction phases appear separately: `hostAdmissionWaitMs` measures time awaiting
-the host, while `sqlMs` is the remaining execution time, including JavaScript
-processing. Do not add transaction time to enclosing reservation time.
+transaction phases appear separately. `hostAdmissionWaitMs` measures waits for
+transaction authority, while `databaseAdmissionWaitMs` measures database metadata
+exchanges with the host. `sqlMs` is the remaining execution time, including
+JavaScript processing. Do not add transaction time to enclosing reservation time.
 
 This is a warning census, not complete writer utilization. Fast operations are
 absent, `direct` reservations do not identify their underlying command, and logs
@@ -332,6 +346,10 @@ Stalled embedded-run diagnostics mark `terminalProgressStale=true`
 when the last bridge progress looked terminal (for example a raw response
 item or response-completion event) but the Gateway still considers the
 embedded run active.
+
+A stalled-session warning is an observation, not permission to stop a run.
+Recovery events follow the captured session controller's decision; diagnostic
+thresholds cannot shorten its provider, tool, retry, backend, or cleanup allowances.
 
 Inspect the live recorder:
 
@@ -575,6 +593,15 @@ collect more samples at greater CPU and memory cost. Choose a CLI timeout longer
 than the requested capture. The critical-memory warning points to this RPC;
 pressure never starts a capture automatically.
 
+The response reports `requestedDurationMs`, `effectiveDurationMs` (the clamped
+sampling window), and `actualDurationMs`. `durationLimitReason` is
+`"collected-samples"` when the 30-second cap shortened the request,
+`"maximum-duration"` when the 15-minute cap shortened it, and `null` otherwise.
+The collected-sample cap limits profiler memory growth; sampled allocation bytes
+do not end a capture early. Actual duration includes native start and stop work
+and can exceed the effective window when the event loop is busy. Setup, cleanup,
+and sanitization can add further RPC latency.
+
 `includeCollected: true` enables both collected-object flags. Explicit per-GC
 flags override the shorthand. The optional booleans `includeObjectsCollectedByMajorGC` and
 `includeObjectsCollectedByMinorGC` both default to `false`. Enable both to retain
@@ -595,7 +622,7 @@ allows 30 seconds beyond the requested window for setup and cleanup; event-loop
 stalls can require more time. Disconnection, authority revocation, or Gateway
 shutdown cancels sampling and discards the partial profile after cleanup.
 
-The result includes actual elapsed `durationMs`, `samplingIntervalBytes`,
+The result includes actual elapsed `durationMs` (an alias of `actualDurationMs`), `samplingIntervalBytes`,
 `includeObjectsCollectedByMajorGC`, `includeObjectsCollectedByMinorGC`,
 `heapUsedBefore`, `heapUsedAfter`, `rssBefore`, `rssAfter` (all memory values in
 bytes), `redactedNodeCount`, `unattributedSampleCount`, `unattributedSampleBytes`,
@@ -754,6 +781,10 @@ refresh its heap and external counters; ArrayBuffer coverage remains unavailable
 until the worker responds. Memory pressure warnings include these counters and the external-memory
 limit caveat; Node does not provide a worker limit for external/native allocations.
 
+Linux samples add anonymous-page counters asynchronously. Worker sample ages
+include that delay; coverage and heap counters describe acquisition. These fields
+are not an atomic process snapshot.
+
 Critical memory pressure retires idle workers through their existing cleanup owners,
 including when diagnostic event collection is disabled. Warnings do not retire
 workers. Retirement requests are asynchronous, skip active work, and keep native
@@ -832,16 +863,28 @@ The [Prometheus exporter](/gateway/prometheus) records
 by the WebSocket sender. Each receiving socket contributes one frame and its full
 encoded JSON size, so fan-out is visible. Bytes are UTF-8 payload bytes before
 WebSocket framing or compression; acceptance does not prove delivery to the client.
+`openclaw_gateway_ws_event_wire_bytes_total{event}` records payload bytes handed
+to the socket after the codec: deflated bytes when compressed, raw bytes otherwise.
+It excludes WebSocket, TLS, and TCP headers. Compression completion can report
+these bytes after the corresponding raw-frame observation. Direct local delivery
+contributes its raw payload size.
+`openclaw_gateway_ws_event_frame_bytes{event,le}` counts accepted raw frames in
+cumulative byte-size buckets: `256`, `512`, `1024`, `2048`, `4096`, `8192`,
+`16384`, `65536`, and `+Inf`. Each frame contributes to every matching upper
+bound, so the buckets support p50/p90 estimates with `histogram_quantile`.
 The event label contains only known protocol names, with `other` for unknown
 names. Payload content and session, user, and connection identifiers are excluded.
 The sender batches observations by event name within one event-loop turn,
 preserving the per-socket frame and byte totals without exporting every send
-as a separate diagnostic event.
+as a separate diagnostic event. Counters are reused across turns; diagnostic
+snapshots and cumulative bucket objects are created only at flush. Disabled
+diagnostics or no interested internal listener skips all per-frame accounting.
 `openclaw_gateway_ws_operator_connections` reports the current authenticated
 operator socket count without labels, updating on connect/disconnect and every
 30 seconds to refresh late-starting exporters or recover dropped snapshots.
 OpenTelemetry exports the corresponding
-`openclaw.gateway.ws.events`, `openclaw.gateway.ws.event_bytes`, and
+`openclaw.gateway.ws.events`, `openclaw.gateway.ws.event_bytes`,
+`openclaw.gateway.ws.event_wire_bytes`, `openclaw.gateway.ws.event_frame_bytes`, and
 `openclaw.gateway.ws.operator_connections` metrics.
 
 `openclaw_gateway_ws_presence_frames_total{mode}` and
@@ -901,15 +944,17 @@ at least 200 KiB. `openclaw_sessions_list_requests_total` counts requests by
 `client_kind`, `source`, `caller_source`, `row_mode`, and `filter`;
 `openclaw_sessions_list_response_bytes_total` attributes successful response
 bytes to the same dimensions plus `rows_outcome` (`unchanged`, `delta`,
-`full-no-base`, `full-with-base`, or `not-sidebar`). Full sidebar replies use
-`full-no-base` when the request omits `ifRowsRevision`; `full-with-base` covers
+`full-no-base`, `full-with-base`, or `not-sidebar`). Sidebar replies and other
+row modes that opt into conditional replies use `full-no-base` when the request
+omits `ifRowsRevision` or sends an empty initial token; `full-with-base` covers
 stale or evicted bases and the rare case where every row changed. Attribution
 uses the request and existing response fields without changing the protocol payload.
+`not-sidebar` covers non-sidebar calls that omit the conditional parameter.
 
 `openclaw_sessions_list_baseline_retirements_total{cause}` counts one event per
-view-cache clear or eviction that retires sidebar rows or history, not rows or
-views removed. Selection-only and non-sidebar views do not count; an empty
-sidebar row list is still a baseline. Its bounded
+view-cache clear or eviction that retires conditional rows or history, not rows or
+views removed. Selection-only views and non-sidebar views without conditional
+reads do not count; an empty conditional row list is still a baseline. Its bounded
 causes are `projection-revision`, `config`, `identity`, `selection-reset`,
 `view-evicted`, and `history-evicted`. Views are evicted in least-recently-used
 order at 512 cache slots or 32 MiB estimated retention per projection; each view
@@ -918,7 +963,7 @@ For invalidations observed together on a read, config wins over identity, then
 projection revision; selection resets count where they clear the cache.
 
 `openclaw_sessions_list_base_misses_total{reason}` separates successful
-`full-with-base` sidebar replies into `unknown-base` (no eligible base in history)
+`full-with-base` conditional replies into `unknown-base` (no eligible base in history)
 and `all-rows-changed` (base found, delta not smaller, including an empty list).
 Unknown bases can follow a restart, eviction, or a non-delta revision token;
 correlate them with retirement counters and `openclaw_gateway_build_info` rather

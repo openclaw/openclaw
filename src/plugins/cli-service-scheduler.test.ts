@@ -11,9 +11,9 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { LegacyPluginSdkResourceHost } from "./legacy-sdk-resource-host.js";
-import { createPluginRecord } from "./loader-records.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { createOwnershipRecord } from "./registry-ownership.test-support.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { resolvePluginServiceScheduler } from "./service-scheduler-binding.js";
@@ -25,23 +25,19 @@ it("retains the registered CLI owner's scheduler and joins its work before retir
   const host = new LegacyPluginSdkResourceHost();
   host.bindScheduler(root);
   const builder = createTestPluginRegistry();
-  const record = createPluginRecord({
-    id: "scheduled-cli",
-    source: "test",
-    origin: "global",
-    enabled: true,
-    configSchema: true,
-  });
+  const record = createOwnershipRecord("scheduled-cli", { source: "test", configSchema: true });
   builder.registry.plugins.push(record);
   const api = builder.createApi(record, { config: {} });
   const instance = getPluginInstance(record)!;
   const program = new Command();
+  const registration = { program, parentPath: [], config: {}, logger: api.logger };
   const entered = createDeferredCore();
   const finish = createDeferredCore();
   const events: string[] = [];
   const observations: unknown[] = [];
   let scheduler: PluginServiceSchedulerV1 | undefined;
   let lateResolver: (() => PluginServiceSchedulerV1) | undefined;
+  const parentPath: string[] = [];
   api.registerCli(
     ({ program: cliProgram }) => {
       cliProgram.command("scheduled").action(() => {
@@ -70,17 +66,14 @@ it("retains the registered CLI owner's scheduler and joins its work before retir
         });
       });
     },
-    { commands: ["scheduled"] },
+    {
+      parentPath,
+      commands: ["scheduled"],
+      descriptors: [{ name: "scheduled", description: "Scheduled work", hasSubcommands: false }],
+    },
   );
   try {
-    await host.run(() =>
-      builder.registry.cliRegistrars[0]!.register({
-        program,
-        parentPath: [],
-        config: {},
-        logger: api.logger,
-      }),
-    );
+    await host.run(() => builder.registry.cliRegistrars[0]!.register(registration));
     expect(() => resolvePluginServiceScheduler()).toThrow("requires a bound");
     const operator = new AbortController();
     await runWithOperatorToolGatewayAuthority(

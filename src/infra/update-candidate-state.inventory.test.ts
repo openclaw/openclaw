@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, expect, it, beforeEach, describe } from "vitest";
+import { afterEach, expect, it, beforeEach, describe, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
@@ -12,6 +12,7 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { LegacyMigrationSourceClaim } from "./state-migrations.source-snapshot.js";
 import {
   UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
   resolveUpdateCandidateStatePath,
@@ -254,14 +255,16 @@ describe("snapshot inventory", () => {
       }),
     );
     expect((await fs.readFile(shared)).equals(sourceDatabase)).toBe(true);
-    if (change === "added file") {
+    if (change === "added file" || change === "locator symlink") {
       expect(snapshot.code, snapshot.stderr.toString("utf8")).toBe(0);
     } else {
       expect(snapshot.code, "snapshot must refuse uninventoried bytes").not.toBe(0);
       expect(snapshot.stderr.toString("utf8")).toContain(
         change === "enlarged file"
           ? "file exceeds limit of 4096 bytes (got 16777216)"
-          : "changed after snapshot inventory",
+          : change === "install record"
+            ? "Plugin record locator was not inventoried"
+            : "changed after snapshot inventory",
       );
       expectFailurePhase(
         snapshot,
@@ -276,6 +279,7 @@ describe("snapshot inventory", () => {
 describe("snapshot execution approvals", () => {
   const dirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
+      vi.restoreAllMocks();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     });
@@ -354,17 +358,15 @@ describe("snapshot execution approvals", () => {
           : { version: 1, defaults: { security: "full" }, agents: {} },
       );
       await fs.writeFile(sourcePath, raw);
+      if (interrupted) {
+        vi.spyOn(LegacyMigrationSourceClaim.prototype, "remove").mockRejectedValueOnce(
+          new Error("synthetic interrupted cleanup"),
+        );
+      }
       const imported = await migrateLegacyExecApprovals({
         stateDir: source,
         env,
         detected: detectLegacyExecApprovals({ stateDir: source, doctorOnlyStateMigrations: true }),
-        ...(interrupted
-          ? {
-              removeSource: () => {
-                throw new Error("synthetic interrupted cleanup");
-              },
-            }
-          : {}),
       });
       if (interrupted) {
         expect(imported.warnings.join(" ")).toContain("cleanup failed");

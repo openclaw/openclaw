@@ -61,7 +61,21 @@ returns them.
 
 `providerOptions.deepgram` merges extra query params directly into the
 Deepgram `/listen` request, so any Deepgram-supported param name works
-(for example `detect_language`, `punctuate`, `smart_format`):
+(for example `detect_language`, `punctuate`, `smart_format`).
+
+Array values are sent as repeated query parameters in both batch and Flux
+requests. For example, set `providerOptions` on the audio config or a model entry
+to send each `keyterm` separately instead of a comma-separated list:
+
+```json validate=false
+{
+  "providerOptions": {
+    "deepgram": {
+      "keyterm": ["OpenClaw", "Deepgram"]
+    }
+  }
+}
+```
 
 <Tabs>
   <Tab title="With language hint">

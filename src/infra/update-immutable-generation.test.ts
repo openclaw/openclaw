@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  recordImmutableOperatorBuild,
   sealImmutableGeneration,
   verifyImmutableGeneration,
 } from "./update-immutable-generation.js";
@@ -102,6 +103,32 @@ async function generation() {
 }
 
 describe("sealed immutable generation", () => {
+  it("seals recorded operator-build provenance and detects its later modification", async () => {
+    const { root, sha } = await generation();
+    await recordImmutableOperatorBuild(root, { account: "fixture", uid: 1002, gid: 1002 });
+    await sealImmutableGeneration(root);
+    const original = await verifyImmutableGeneration(root, sha, runGit);
+    expect(JSON.parse(await fs.readFile(path.join(root, "dist/build-info.json"), "utf8"))).toEqual({
+      commit: sha,
+      buildId: sha,
+      immutableBuild: {
+        builtBy: "operator",
+        isolation: "none",
+        account: "fixture",
+        uid: 1002,
+        gid: 1002,
+      },
+    });
+    await unseal(root);
+    await fs.writeFile(
+      path.join(root, "dist/build-info.json"),
+      JSON.stringify({ commit: sha, buildId: sha }),
+    );
+    await sealImmutableGeneration(root);
+    const modified = await verifyImmutableGeneration(root, sha, runGit);
+    expect(modified.buildDigest).not.toBe(original.buildDigest);
+  });
+
   it.each(["config", "commondir"])(
     "refuses build-authored Git helpers through %s before privileged Git verification",
     async (kind) => {

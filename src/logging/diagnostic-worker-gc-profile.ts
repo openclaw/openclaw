@@ -18,7 +18,6 @@ export type WorkerGcProfiles = { heap: string; cpu: string };
 /** Runs only in the storming isolate; no inspector listener or guest values are captured. */
 export function captureWorkerGcProfiles() {
   return captureDiagnosticProfile({
-    signal: new AbortController().signal,
     hasAuthority: () => true,
     durationMs: DURATION_MS,
     workerTracingInactive: true,
@@ -47,11 +46,15 @@ export function captureWorkerGcProfiles() {
         disable: (session) =>
           Promise.all([session.post("HeapProfiler.disable"), session.post("Profiler.disable")]),
       }),
-    sanitize: ({ heap, cpu }, packageRoot, measurement): WorkerGcProfiles => ({
+    sanitize: async ({ heap, cpu }, packageRoot, measurement): Promise<WorkerGcProfiles> => ({
       heap: JSON.stringify(
         // SAFETY: V8 supplies IDs and samples omitted by Node's inspector declarations.
-        sanitizeDiagnosticHeapProfile(heap as SamplingProfile, packageRoot, {
+        await sanitizeDiagnosticHeapProfile(heap as SamplingProfile, packageRoot, {
           durationMs: measurement.durationMs,
+          requestedDurationMs: DURATION_MS,
+          effectiveDurationMs: DURATION_MS,
+          actualDurationMs: measurement.durationMs,
+          durationLimitReason: null,
           samplingIntervalBytes: SAMPLING_INTERVAL_BYTES,
           includeObjectsCollectedByMajorGC: true,
           includeObjectsCollectedByMinorGC: true,

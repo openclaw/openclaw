@@ -442,7 +442,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
   // the new process to answer; never reuse the pre-activation runtime identity.
   runLedger?.recordUpdateRunVerification(params.runId, {
     serviceRunning, pid: servicePid, runningVersion: undefined, runningBuildId: undefined, versionMatch: undefined,
-    readyz: undefined, settled: undefined, channelsReady: undefined, pluginErrors: undefined,
+    readyz: undefined, coreReady: undefined, settled: undefined, channelsReady: undefined, pluginErrors: undefined,
   });
   if (restored) {
     try {
@@ -647,7 +647,7 @@ async function collectUpdateFailureTriage() {
     const recovery = typeof triageFailure.restored === "boolean"
       ? "Service recovery " + (triageFailure.restored ? "succeeded." : "failed.")
       : "Service recovery outcome was not recorded; inspect the handoff log before restarting.";
-    failure.error = [failure.error, recovery].filter(Boolean).join("\n");
+    failure.error = [failure.error, recovery, triageFailure.recoveryReason].filter(Boolean).join("\n");
     // Keep the canonical export intact even when installed triage cannot start.
     // Only this private annotated input is removed with the helper's other files.
     fs.writeFileSync(params.triageInputPath, JSON.stringify(failure), { mode: 0o600, flag: "wx" });
@@ -713,12 +713,8 @@ async function collectUpdateFailureTriage() {
   let outcome = params.triageTransition ? "triage" : undefined;
   let wake;
   wakeTermination = () => wake?.();
-  let deadlineExpired = false;
-  const parentExitDeadline = setTimeout(() => {
-    deadlineExpired = true;
-    if (outcome !== "update" && outcome !== "triage") outcome = "restore";
-    wake?.();
-  }, params.parentExitTimeoutMs);
+  let controlDeadlinePending = true;
+  const controlDeadlineAt = performance.now() + params.parentExitTimeoutMs;
   try {
     if (params.action === "update" && params.runId) {
       // Admission and stop recording use the serving runtime. Terminal writes after
@@ -793,9 +789,10 @@ async function collectUpdateFailureTriage() {
         await new Promise((resolve) => setImmediate(resolve));
         if (!commands.length) break;
       }
-      if (deadlineExpired) {
+      if (controlDeadlinePending && performance.now() >= controlDeadlineAt) {
+        controlDeadlinePending = false;
+        if (outcome !== "update" && outcome !== "triage") outcome = "restore";
         if (params.action === "triage") throw new Error("automatic triage admission expired");
-        deadlineExpired = false;
         if (!parked) {
           await recordManagedUpdateOutcome("managed-service-handoff-cancelled");
           return;
@@ -864,7 +861,6 @@ async function collectUpdateFailureTriage() {
         }),
       ]);
     }
-    clearTimeout(parentExitDeadline);
     if (outcome !== "update" && outcome !== "triage") {
       if (restorationArmed) await restoreGatewayService("managed-service-handoff-cancelled");
       else if (params.action === "update")
@@ -926,6 +922,7 @@ async function collectUpdateFailureTriage() {
     const childStatus = !exit.signal && resultRoot === params.updateLeaseKey && ["error", "skipped"].includes(result?.status) ? result.status : undefined;
     if (childStatus) closedUpdateResult = result;
     const recovery = childStatus ? result.recovery : null;
+    if (triageFailure && recovery?.service) triageFailure.restored = recovery.service === "healthy";
     const safe = !exit.signal && recovery?.serviceRestartSafe === true &&
       typeof recovery.version === "string" && recovery.version.trim() &&
       (recovery.buildId === undefined ? result.mode !== "git" :
@@ -966,7 +963,6 @@ async function collectUpdateFailureTriage() {
       if (restorationArmed && safe && recovery.service === undefined) {
         restored = await restoreGatewayService(previousGeneration ? result.reason : "managed-service-handoff-failed", recovery, childStatus, previousGeneration);
       } else {
-        if (restorationArmed && restored && triageFailure) triageFailure.restored = true;
         appendLog("managed update recovery not attempted: " +
           (recovery?.serviceRestartSafe === false ? "updater explicitly rejected activation" :
             recovery?.service === "healthy" ? "updater already verified recovery" :
@@ -994,7 +990,6 @@ async function collectUpdateFailureTriage() {
     }
     finalExitCode = 1;
   } finally {
-    clearTimeout(parentExitDeadline);
     try { await finishManagedUpdateRun(); }
     catch (error) {
       appendLog("failed to finalize update run: " + String(error));

@@ -1,6 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   chatSessionListResponse,
@@ -281,6 +281,7 @@ suite.define(() => {
       },
     );
 
+    await main.locator(".agent-chat__composer-combobox textarea").click();
     await control(main, "model-select").click();
     const menu = main.locator(".chat-controls__model-menu");
     await expect.poll(() => menu.isVisible()).toBe(true);

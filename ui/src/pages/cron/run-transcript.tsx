@@ -1,5 +1,5 @@
 import type { CronHistoryResult } from "@openclaw/gateway-protocol";
-import { flush } from "solid-js";
+import { onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronRunLogEntry } from "../../api/types.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
@@ -55,15 +55,13 @@ export function createCronRunTranscript(notify: () => void, capture: () => Scope
     trigger = button;
     scope = captured;
     await load();
-    if (state.entry !== entry || scope !== captured || !captured.isCurrent()) {
-      return;
-    }
-    flush();
-    if (state.entry !== entry || scope !== captured || !captured.isCurrent()) {
-      return;
-    }
-    region?.focus({ preventScroll: true });
-    region?.scrollIntoView({ block: "start", behavior: "instant" });
+    onSettled(() => {
+      if (state.entry !== entry || scope !== captured || !captured.isCurrent()) {
+        return;
+      }
+      region?.focus({ preventScroll: true });
+      region?.scrollIntoView({ block: "start", behavior: "instant" });
+    });
   }
 
   async function load(cursor?: string) {
@@ -95,9 +93,7 @@ export function createCronRunTranscript(notify: () => void, capture: () => Scope
       if (cursor) {
         cursors.add(cursor);
       }
-      state.messages = cursor
-        ? mergeChatTranscriptPages(messages, state.messages).messages
-        : messages;
+      state.messages = cursor ? mergeChatTranscriptPages(messages, state.messages) : messages;
       state.nextCursor =
         result.nextCursor && !cursors.has(result.nextCursor) ? result.nextCursor : undefined;
       state.failedCursor = undefined;
@@ -116,6 +112,15 @@ export function createCronRunTranscript(notify: () => void, capture: () => Scope
     close,
     open,
     load,
+    reconnect() {
+      const interrupted = state.loading;
+      attempt += 1;
+      scope = capture();
+      state.loading = false;
+      if (state.entry && scope && (interrupted || state.messages.length === 0)) {
+        void load(state.failedCursor);
+      }
+    },
     ref: (element: HTMLElement) => {
       region = element;
     },

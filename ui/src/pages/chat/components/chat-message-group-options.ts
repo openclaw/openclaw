@@ -20,14 +20,12 @@ export type RenderMessageGroupOptions = Omit<
   | "assistantMessageDisclosure"
   | "messageActions"
   | "entryId"
-  | "entryRef"
   | "replyLine"
 > &
   ChatSendStatusActions &
   ForwardedAvatarOptions & {
     /** A run frame's line, from its final answer; other groups resolve their own. */
     frameReplyLine?: ReplyLine;
-    entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
     latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     /** Configured main-session key; an agent's main source labels as the agent. */
     mainKey?: string;
@@ -38,7 +36,6 @@ export type RenderMessageGroupOptions = Omit<
       messageId: string,
     ) => AssistantMessageExpansionState | undefined;
     onToggleAssistantMessageExpanded?: (messageId: string) => void;
-    userId?: string | null;
     userName?: string | null;
     showOwnSenderName?: boolean;
     /** Routing for peer sender names; absent leaves them plain text. */

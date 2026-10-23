@@ -231,8 +231,16 @@ function prepareBlockedSubagentCompletion(
   } else {
     subagent.suppressCompletionDelivery = true;
   }
+  // A recovered requester already exhausted its turn. A system event would start
+  // another model turn just to report that failure; retain it on delivery instead.
+  const requesterRecoveryFailed =
+    (requesterOutcome?.reason === "visible_reply_missing" &&
+      requesterOutcome.disposition === "permanent_failure") ||
+    (subagent.delivery?.lastDropReason === "visible_reply_missing" &&
+      isCompletedRequesterDeliveryBlocked(subagent));
   const text =
     successful &&
+    !requesterRecoveryFailed &&
     !params.storeReplaced &&
     !params.operatorAuthorityUnavailable &&
     requesterOutcome?.reason !== "operator_authority_unavailable"
@@ -389,17 +397,15 @@ function mutateRequesterBatch(
       }
       const changedOwner = () =>
         new Error("subagent completion owner changed before settlement: " + expected.runId);
-      // An exact requester receipt can arrive after expiry transferred this result to its wake.
-      const acknowledgeExpiredDelivery =
-        params.outcome.delivered &&
-        subagent.delivery?.status === "suspended" &&
-        subagent.delivery.suspendedReason === "expiry";
+      // Expiry transfers settlement to the wake, including its terminal failure outcome.
+      const settleExpiredDelivery =
+        subagent.delivery?.status === "suspended" && subagent.delivery.suspendedReason === "expiry";
       let mutation: CompletionMutation = { subagent };
       if (
         subagent.pauseReason !== "sessions_yield" &&
         subagent.expectsCompletionMessage === true &&
         (["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending") ||
-          acknowledgeExpiredDelivery)
+          settleExpiredDelivery)
       ) {
         if (params.outcome.delivered) {
           const delivery = ensureDeliveryState(subagent);

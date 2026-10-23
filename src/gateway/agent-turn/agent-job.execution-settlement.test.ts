@@ -94,7 +94,6 @@ describe("waitForAgentJob settled execution", () => {
         startedAt: 100,
         abortSignal: controller.signal,
         state: {
-          currentTurnUserMessagePersisted: true,
           lifecycleFinishing: false,
           lifecycleEnded: false,
         },

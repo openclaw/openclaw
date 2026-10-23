@@ -1,16 +1,70 @@
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { levenshteinDistance } from "../../shared/levenshtein-distance.js";
 import { getCommandPathWithRootOptions } from "../argv.js";
 import { formatCliCommand } from "../command-format.js";
 import { ExpectedCliError } from "../failure-output.js";
-import { formatCliCommandSuggestions } from "./command-suggestions.js";
+import { getCoreCliCommandNamesCore } from "./core-command-descriptors.js";
+import { getSubCliCommandMetadata } from "./subcli-command-metadata.js";
+
+const MAX_SUGGESTIONS = 3;
 
 type FormatCliParseErrorOptions = {
   argv?: string[];
   commandPath?: string[];
   commandNames?: readonly string[];
 };
+
+function formatCliCommandSuggestions(
+  input: string,
+  commandPath: readonly string[] = [],
+  candidates?: Iterable<string>,
+): string | undefined {
+  const normalizedInput = input.trim().toLowerCase();
+  if (!normalizedInput) {
+    return undefined;
+  }
+
+  const candidateNames =
+    candidates ??
+    (commandPath.length === 0
+      ? [...getCoreCliCommandNamesCore(), ...getSubCliCommandMetadata().map((entry) => entry.name)]
+      : []);
+  const knownCommands = [...new Set([...candidateNames].filter(Boolean))].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+  if (
+    (normalizedInput === "upgrade" || normalizedInput === "udpate") &&
+    knownCommands.includes("update")
+  ) {
+    return formatCliSuggestionLines(["update"], commandPath);
+  }
+  const maxDistance = Math.max(1, Math.floor(normalizedInput.length * 0.4));
+  const suggestions = knownCommands
+    .map((command) => ({ command, distance: levenshteinDistance(normalizedInput, command) }))
+    .filter(({ command, distance }) => command !== normalizedInput && distance <= maxDistance)
+    .toSorted(
+      (left, right) => left.distance - right.distance || left.command.localeCompare(right.command),
+    )
+    .slice(0, MAX_SUGGESTIONS)
+    .map(({ command }) => command);
+  if (suggestions.length === 0) {
+    return undefined;
+  }
+  return formatCliSuggestionLines(suggestions, commandPath);
+}
+
+function formatCliSuggestionLines(
+  suggestions: readonly string[],
+  commandPath: readonly string[],
+): string {
+  const commandPrefix = ["openclaw", ...commandPath].join(" ");
+  const commandLines = suggestions
+    .map((command) => `  ${formatCliCommand(`${commandPrefix} ${command}`)}`)
+    .join("\n");
+  return `Did you mean this?\n${commandLines}`;
+}
 
 function stripCommanderErrorPrefix(raw: string): string {
   return raw
@@ -27,10 +81,6 @@ function formatHelpHint(argv: string[] | undefined, options?: { commandPath?: st
   const commandPath = options?.commandPath ?? (argv ? getCommandPathWithRootOptions(argv, 2) : []);
   const command = formatCliCommand(["openclaw", ...commandPath, "--help"].join(" "));
   return `${theme.muted("Try:")} ${theme.command(command)}`;
-}
-
-function formatDocsHint(): string {
-  return `${theme.muted("Docs:")} ${formatDocsLink("/cli", "docs.openclaw.ai/cli")}`;
 }
 
 function formatCliMachineOutput(humanOutput: string): string {
@@ -57,7 +107,7 @@ function formatCliUnknownCommandOutput(
     hasParentCommand
       ? undefined
       : `${theme.muted("Plugin command?")} ${theme.command(formatCliCommand("openclaw plugins list"))}`,
-    formatDocsHint(),
+    `${theme.muted("Docs:")} ${formatDocsLink("/cli", "docs.openclaw.ai/cli")}`,
   );
 }
 

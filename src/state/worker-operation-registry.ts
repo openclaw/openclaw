@@ -17,17 +17,30 @@ export type WorkerWriteOperationContext = WorkerOperationContext & {
     transactionOptions?: Pick<
       SqliteTransactionOptions,
       "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
-    >,
+    > & { singleStatement?: true },
   ) => T;
   writeAdmitted: <T>(
     operation: (database: OpenClawStateDatabase) => T,
     options?: Parameters<WorkerWriteOperationContext["write"]>[1] & {
+      singleStatement?: never;
       receipt?: "result";
       /** Preserve worker-process ownership checks for native-default callers. */
       transactionEnvironment?: "process";
     },
   ) => T;
 };
+
+export function createCommittedWorkerMutation<Input, Result extends boolean | number>(
+  type: string,
+  apply: (db: OpenClawStateDatabase["db"], input: Input) => Result,
+) {
+  return (input: Input, { writeAdmitted }: WorkerWriteOperationContext) =>
+    writeAdmitted(({ db }) => ({ type, result: apply(db, input) }), {
+      operationLabel: type,
+      receipt: "result",
+      transactionEnvironment: "process",
+    }).result;
+}
 
 export type WorkerOperationHandlers<Context = WorkerOperationContext> = Record<
   string,

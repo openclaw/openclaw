@@ -1,8 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, createSignal, Show, untrack } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
+import { copyWithPathPatch } from "../lib/config-form-utils.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
 import type { ConfigFormStructuredDraftProps } from "./config-form-structured-draft.ts";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { configFieldId, schemaType } from "./config-form.shared.ts";
@@ -10,14 +10,20 @@ import { configFieldId, schemaType } from "./config-form.shared.ts";
 export function ConfigStructuredDraft(
   props: ConfigFormStructuredDraftProps & { class?: string },
 ): SolidJSX.Element {
-  const scope = createMemo(() => [props.identity, props.sourceIdentity] as const, {
-    equals: (previous, next) => previous[0] === next[0] && Object.is(previous[1], next[1]),
-  });
-  const [draft, setDraft] = createSignal(() => {
-    scope();
-    // The initial value is a snapshot for this identity; edits own it until the scope changes.
-    return { value: untrack(() => props.initialValue), error: "" };
-  });
+  const scope = createMemo(
+    () => ({
+      identity: props.identity,
+      sourceIdentity: props.sourceIdentity,
+      initialValue: props.initialValue,
+    }),
+    {
+      equals: (previous, next) =>
+        previous.identity === next.identity &&
+        Object.is(previous.sourceIdentity, next.sourceIdentity),
+    },
+  );
+  // Edits own this value until the identity changes, regardless of refreshed defaults.
+  const [draft, setDraft] = createSignal(() => ({ value: scope().initialValue, error: "" }));
   const patchDraft = (path: Array<string | number>, value: unknown): boolean => {
     const current = draft().value;
     const rootPath = props.params.path;

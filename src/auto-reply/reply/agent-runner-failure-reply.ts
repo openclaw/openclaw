@@ -32,13 +32,11 @@ import { resolveExecutionApprovalFailureMessage } from "../../agents/failover/me
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
   renderAuthProfileFailoverCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
   renderCodexAppServerFailureCopy,
   renderFailoverCodeUserCopy,
-  renderHeartbeatRunFailureCopy,
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
@@ -222,9 +220,6 @@ export function buildExternalRunFailureReply(
   options?: {
     includeAuthProfileId?: boolean;
     includeDetails?: boolean;
-    isHeartbeat?: boolean;
-    /** Wording only; heartbeat visibility/suppression semantics stay on isHeartbeat. */
-    useHeartbeatFailureCopy?: boolean;
     replayPrevented?: boolean;
     failoverFacts?: ReplyFailoverFacts;
   },
@@ -232,18 +227,13 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
-  const useHeartbeatFailureCopy = options?.useHeartbeatFailureCopy ?? options?.isHeartbeat === true;
-  const buildUnclassifiedReply = (includeHeartbeatDetails: boolean): ExternalRunFailureReply => {
+  const buildUnclassifiedReply = (): ExternalRunFailureReply => {
     const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     return {
-      text: useHeartbeatFailureCopy
-        ? renderHeartbeatRunFailureCopy(
-            includeHeartbeatDetails ? resolveExternalRunFailureDetail(sanitizedMessage) : undefined,
-          )
-        : options?.includeDetails
-          ? formatForwardedExternalRunFailureText(sanitizedMessage)
-          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      isGenericRunnerFailure: !options?.isHeartbeat,
+      text: options?.includeDetails
+        ? formatForwardedExternalRunFailureText(sanitizedMessage)
+        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: true,
     };
   };
   const approvalMessage = resolveExecutionApprovalFailureMessage(normalizedMessage);
@@ -260,9 +250,8 @@ export function buildExternalRunFailureReply(
       isGenericRunnerFailure: false,
     };
   }
-  // A preflight refusal is host-authored and names the next step. Heartbeats run
-  // unattended in the owner's session, so they disclose it without the verbose
-  // opt-in; raw thrown detail further below stays verbose-gated.
+  // A preflight refusal is host-authored and names the next step;
+  // raw thrown detail further below stays verbose-gated.
   if (isAgentHarnessPreflightError(error)) {
     const userMessage = renderAgentHarnessPreflightUserMessage(error);
     if (userMessage !== undefined) {
@@ -271,7 +260,7 @@ export function buildExternalRunFailureReply(
         isGenericRunnerFailure: false,
       };
     }
-    return buildUnclassifiedReply(true);
+    return buildUnclassifiedReply();
   }
   const localTimeout = findLocalWorkerTaskTimeout(error);
   if (localTimeout) {
@@ -384,10 +373,6 @@ export function buildExternalRunFailureReply(
   if (missingApiKeyFailure) {
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
-  if (options?.isHeartbeat) {
-    // Heartbeat-backed event turns remain visible even with generic wording.
-    return buildUnclassifiedReply(options.includeDetails === true);
-  }
   const codexAppServerFailure = renderCodexAppServerFailureCopy(normalizedMessage);
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
@@ -452,20 +437,14 @@ export function resolveAgentRunFailureText(params: {
 }
 
 export function buildTerminalAgentRunFailureReplyPayload(params: {
-  isHeartbeat?: boolean;
-  useHeartbeatFailureCopy?: boolean;
   replyExpectation: ReplyExpectation;
   visibleReplyDelivered: boolean;
 }): ReplyPayload {
-  const useHeartbeatFailureCopy = params.useHeartbeatFailureCopy ?? params.isHeartbeat === true;
   return markAgentRunFailureReplyPayload({
     text: resolveAgentRunFailureText({
       ...params,
-      text: useHeartbeatFailureCopy
-        ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      // Visibility follows the execution surface, not which sentence we render.
-      isGenericRunnerFailure: !params.isHeartbeat,
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: true,
     }),
   });
 }
@@ -474,14 +453,12 @@ export function buildTerminalAgentRunFailureReplyPayload(params: {
 export async function resolveTerminalAgentRunFailurePayload(params: {
   result: EmbeddedAgentRunResult;
   run: Parameters<typeof shouldDeliverMissingReplyNotice>[0];
-  useHeartbeatFailureCopy?: boolean;
   visibleReplyDelivered: () => Promise<boolean>;
 }): Promise<ReplyPayload | undefined> {
   const terminalError = params.result.meta?.error;
   const missingReplyNotice =
     terminalError?.kind === "incomplete_turn" &&
-    terminalError.message.startsWith(MISSING_REPLY_NOTICE_TEXT) &&
-    params.useHeartbeatFailureCopy !== true;
+    terminalError.message.startsWith(MISSING_REPLY_NOTICE_TEXT);
   const suppressMissingReplyNotice =
     missingReplyNotice && !shouldDeliverMissingReplyNotice(params.run);
   const ownedFailureNotice = params.result.payloads?.find(
@@ -506,8 +483,6 @@ export async function resolveTerminalAgentRunFailurePayload(params: {
   }
   const replyExpectation = resolveReplyExpectation(params.run);
   return buildTerminalAgentRunFailureReplyPayload({
-    isHeartbeat: params.run.isHeartbeat,
-    useHeartbeatFailureCopy: params.useHeartbeatFailureCopy,
     replyExpectation,
     visibleReplyDelivered:
       replyExpectation === "optional" ? await params.visibleReplyDelivered() : false,

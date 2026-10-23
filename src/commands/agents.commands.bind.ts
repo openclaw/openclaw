@@ -5,9 +5,8 @@ import { throwExpectedCliError } from "../cli/failure-output.js";
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
-import type { AgentRouteBinding } from "../config/types.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { describeBinding, describeBindingConflict } from "./agents.binding-format.js";
 import { requireValidConfig, requireValidConfigForWrite } from "./config-validation.js";
 
@@ -45,29 +44,7 @@ function resolveTargetAgentId(params: {
   return agentId;
 }
 
-async function resolveParsedBindings(params: {
-  cfg: AgentConfig;
-  agentId: string;
-  bindValues: string[] | undefined;
-  emptyMessage: string;
-}): Promise<AgentRouteBinding[]> {
-  const specs = normalizeStringEntries(params.bindValues);
-  if (specs.length === 0) {
-    throwExpectedCliError(params.emptyMessage);
-  }
-
-  const { parseBindingSpecs } = await import("./agents.bindings.js");
-  const parsed = parseBindingSpecs({ agentId: params.agentId, specs, config: params.cfg });
-  if (parsed.errors.length > 0) {
-    throwExpectedCliError(parsed.errors.join("\n"));
-  }
-  return parsed.bindings;
-}
-
-export async function agentsBindingsCommand(
-  opts: AgentsBindingsListOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
+export async function agentsBindingsCommand(opts: AgentsBindingsListOptions) {
   const cfg = await requireValidConfig(runtime, { skipPluginValidation: true });
   if (!cfg) {
     return;
@@ -80,8 +57,7 @@ export async function agentsBindingsCommand(
     (binding) => !filterAgentId || normalizeAgentId(binding.agentId) === filterAgentId,
   );
   if (opts.json) {
-    writeRuntimeJson(
-      runtime,
+    runtime.writeJson(
       filtered.map((binding) => ({
         agentId: normalizeAgentId(binding.agentId),
         match: binding.match,
@@ -111,7 +87,6 @@ export async function agentsBindingsCommand(
 export async function agentsUpdateBindingsCommand(
   operation: "bind" | "unbind",
   opts: AgentsBindingsUpdateOptions,
-  runtime: RuntimeEnv = defaultRuntime,
 ) {
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {
@@ -143,14 +118,21 @@ export async function agentsUpdateBindingsCommand(
       conflicts: [],
     };
   } else {
-    const bindings = await resolveParsedBindings({
-      cfg,
-      agentId,
-      bindValues: opts.bind,
-      emptyMessage: binding
-        ? "Provide at least one --bind <channel[:accountId]>."
-        : "Provide at least one --bind <channel[:accountId]> or use --all.",
-    });
+    const specs = normalizeStringEntries(opts.bind);
+    if (specs.length === 0) {
+      throwExpectedCliError(
+        binding
+          ? "Provide at least one --bind <channel[:accountId]>."
+          : "Provide at least one --bind <channel[:accountId]> or use --all.",
+      );
+    }
+
+    const { parseBindingSpecs } = await import("./agents.bindings.js");
+    const parsed = parseBindingSpecs({ agentId, specs, config: cfg });
+    if (parsed.errors.length > 0) {
+      throwExpectedCliError(parsed.errors.join("\n"));
+    }
+    const bindings = parsed.bindings;
     const { applyAgentBindings, removeAgentBindings } = await import("./agents.bindings.js");
     result = binding ? applyAgentBindings(cfg, bindings) : removeAgentBindings(cfg, bindings);
   }

@@ -128,7 +128,7 @@ const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
   anthropic: "Anthropic",
   "claude-cli": "Claude CLI",
   google: "Google",
-  "github-copilot": "GitHub",
+  "github-copilot": "GitHub Copilot",
   "llama-cpp": "llama.cpp",
   lmstudio: "LM Studio",
   longcat: "LongCat",

@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
@@ -66,7 +67,7 @@ export async function listFallbacksCommand(
   }
   if (opts.plain) {
     for (const entry of fallbacks) {
-      writeRuntimeStdout(runtime, entry);
+      writeRuntimeStdout(runtime, sanitizeTerminalText(entry));
     }
     return;
   }
@@ -77,7 +78,7 @@ export async function listFallbacksCommand(
     return;
   }
   for (const entry of fallbacks) {
-    runtime.log(`- ${entry}`);
+    runtime.log(`- ${sanitizeTerminalText(entry)}`);
   }
 }
 

@@ -1,4 +1,5 @@
-// Legacy OAuth sidecar reader for migrating encrypted auth-profile secret material.
+// Temporary #174343 OAuth upgrade dead-end repair; remove after 2026-11-29 with
+// Doctor compat record doctor-pre-july-retired-state.
 import * as childProcess from "node:child_process";
 import { createDecipheriv, hash } from "node:crypto";
 import fs from "node:fs";
@@ -18,6 +19,7 @@ import {
 } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import { resolveOAuthDir, resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { decodeUtf8Input } from "../../../infra/utf8-input.js";
 import { shortenHomePath } from "../../../utils.js";
 import { listReferencedLegacyOAuthSidecarPaths } from "../../doctor-auth-legacy-paths.js";
 import {
@@ -87,20 +89,6 @@ function coerceLegacyOAuthEncryptedPayload(raw: unknown): LegacyOAuthEncryptedPa
     : null;
 }
 
-function buildLegacyOAuthSecretAad(params: {
-  ref: LegacyOAuthRef;
-  profileId: string;
-  provider: string;
-}): Buffer {
-  return Buffer.from(`${params.ref.id}\0${params.profileId}\0${params.provider}`, "utf8");
-}
-
-function buildLegacyOAuthSecretKey(seed: string): Buffer {
-  // Legacy #79006 compatibility: existing sidecars were encrypted with this
-  // SHA-256 key derivation, so changing it would strand affected users.
-  return hash("sha256", `openclaw:auth-profile-oauth:${seed}`, "buffer");
-}
-
 function uniquePaths(paths: Array<string | undefined>): string[] {
   return uniqueStrings(paths.filter((entry): entry is string => Boolean(entry)));
 }
@@ -135,11 +123,13 @@ export function resolveLegacyOAuthSecretKeyFiles(env: NodeJS.ProcessEnv): string
 function readLegacyOAuthSecretKeyFiles(env: NodeJS.ProcessEnv): string[] {
   return normalizeUniqueTrimmedStringList(
     resolveLegacyOAuthSecretKeyFiles(env).flatMap((keyPath) => {
+      let bytes: Buffer;
       try {
-        return [fs.readFileSync(keyPath, "utf8")];
+        bytes = fs.readFileSync(keyPath);
       } catch {
         return [];
       }
+      return [decodeUtf8Input(bytes, `Legacy OAuth key ${keyPath}`)];
     }),
   );
 }
@@ -180,64 +170,6 @@ function readLegacyMacOAuthSecretKeychainKey(params: {
   }
 }
 
-function decryptLegacyOAuthSecretMaterialWithSeed(
-  params: {
-    ref: LegacyOAuthRef;
-    profileId: string;
-    provider: string;
-    encrypted: LegacyOAuthEncryptedPayload;
-  },
-  seed: string,
-): LegacyOAuthSecretMaterial | null {
-  try {
-    const decipher = createDecipheriv(
-      LEGACY_OAUTH_SECRET_ALGORITHM,
-      buildLegacyOAuthSecretKey(seed),
-      Buffer.from(params.encrypted.iv, "base64url"),
-    );
-    decipher.setAAD(
-      buildLegacyOAuthSecretAad({
-        ref: params.ref,
-        profileId: params.profileId,
-        provider: params.provider,
-      }),
-    );
-    decipher.setAuthTag(Buffer.from(params.encrypted.tag, "base64url"));
-    const plaintext = Buffer.concat([
-      decipher.update(Buffer.from(params.encrypted.ciphertext, "base64url")),
-      decipher.final(),
-    ]).toString("utf8");
-    return normalizeLegacyOAuthSecretMaterial(JSON.parse(plaintext) as unknown);
-  } catch {
-    return null;
-  }
-}
-
-function decryptLegacyOAuthSecretMaterial(params: {
-  ref: LegacyOAuthRef;
-  profileId: string;
-  provider: string;
-  encrypted: LegacyOAuthEncryptedPayload;
-  env: NodeJS.ProcessEnv;
-  allowKeychainPrompt?: boolean;
-}): LegacyOAuthSecretMaterial | null {
-  const seeds = readLegacyOAuthSecretKeyFiles(params.env);
-  for (const seed of seeds) {
-    const material = decryptLegacyOAuthSecretMaterialWithSeed(params, seed);
-    if (material) {
-      return material;
-    }
-  }
-  const keychainSeed = readLegacyMacOAuthSecretKeychainKey({
-    allowKeychainPrompt: params.allowKeychainPrompt,
-    env: params.env,
-  });
-  if (keychainSeed && !seeds.includes(keychainSeed)) {
-    return decryptLegacyOAuthSecretMaterialWithSeed(params, keychainSeed);
-  }
-  return null;
-}
-
 function loadLegacyOAuthSidecarMaterial(params: {
   ref: LegacyOAuthRef;
   profileId: string;
@@ -260,14 +192,51 @@ function loadLegacyOAuthSidecarMaterial(params: {
   }
   const encrypted = coerceLegacyOAuthEncryptedPayload(raw.encrypted);
   if (encrypted) {
-    return decryptLegacyOAuthSecretMaterial({
-      ref: params.ref,
-      profileId: params.profileId,
-      provider: params.provider,
-      encrypted,
-      env,
+    const decryptLegacyOAuthSecretMaterialWithSeed = (
+      seed: string,
+    ): LegacyOAuthSecretMaterial | null => {
+      let plaintext: Buffer;
+      try {
+        // Legacy #79006 compatibility: existing sidecars were encrypted with this
+        // SHA-256 key derivation, so changing it would strand affected users.
+        const decipher = createDecipheriv(
+          LEGACY_OAUTH_SECRET_ALGORITHM,
+          hash("sha256", `openclaw:auth-profile-oauth:${seed}`, "buffer"),
+          Buffer.from(encrypted.iv, "base64url"),
+        );
+        decipher.setAAD(
+          Buffer.from(`${params.ref.id}\0${params.profileId}\0${params.provider}`, "utf8"),
+        );
+        decipher.setAuthTag(Buffer.from(encrypted.tag, "base64url"));
+        plaintext = Buffer.concat([
+          decipher.update(Buffer.from(encrypted.ciphertext, "base64url")),
+          decipher.final(),
+        ]);
+      } catch {
+        return null;
+      }
+      const text = decodeUtf8Input(plaintext, "Decrypted legacy OAuth sidecar");
+      try {
+        return normalizeLegacyOAuthSecretMaterial(JSON.parse(text) as unknown);
+      } catch {
+        return null;
+      }
+    };
+    const seeds = readLegacyOAuthSecretKeyFiles(env);
+    for (const seed of seeds) {
+      const material = decryptLegacyOAuthSecretMaterialWithSeed(seed);
+      if (material) {
+        return material;
+      }
+    }
+    const keychainSeed = readLegacyMacOAuthSecretKeychainKey({
       allowKeychainPrompt: params.allowKeychainPrompt,
+      env,
     });
+    if (keychainSeed && !seeds.includes(keychainSeed)) {
+      return decryptLegacyOAuthSecretMaterialWithSeed(keychainSeed);
+    }
+    return null;
   }
   return normalizeLegacyOAuthSecretMaterial(raw);
 }

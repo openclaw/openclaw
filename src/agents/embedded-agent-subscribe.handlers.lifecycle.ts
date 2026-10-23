@@ -1,6 +1,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { projectChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { extractErrorHttpStatus } from "../shared/assistant-error-format.js";
 import {
   hasAcceptedSessionSpawn,
   hasCompletionMessageSessionSpawn,
@@ -107,8 +108,7 @@ export function handleAgentEnd(
   // Classification must key on the same fact, otherwise a delivered reply is
   // recorded here as an abandoned, replay-invalid turn. Error and abort stop
   // reasons keep the streamed-only view because their raw text can describe an
-  // interrupted generation rather than a reply (mirrors
-  // resolveTerminalAssistantTexts).
+  // interrupted generation rather than a reply (mirrors attempt finalization).
   const hasStreamedAssistantVisibleText = ctx.state.assistantTexts.some((text) =>
     hasAssistantVisibleReply({ text }),
   );
@@ -132,7 +132,6 @@ export function handleAgentEnd(
   const hasTerminalOutput = hasAttemptTerminalState({
     yieldDetected: ctx.state.yielded,
     didSendDeterministicApprovalPrompt: ctx.state.deterministicApprovalPromptSent,
-    heartbeatToolResponse: ctx.state.heartbeatToolResponse,
     lastToolError: ctx.state.lastToolError,
     toolMediaUrls: [...ctx.state.pendingToolMediaUrls, ...deferredMediaUrls],
     toolAudioAsVoice:
@@ -189,6 +188,7 @@ export function handleAgentEnd(
     const observedError = buildApiErrorObservationFields(rawError, {
       provider: lastAssistant.provider,
       providerOwner: ctx.params.providerOwner,
+      code: lastAssistant.errorCode,
     });
     const safeErrorText =
       buildTextObservationFields(errorText, {
@@ -201,7 +201,7 @@ export function handleAgentEnd(
       model: lastAssistant.model,
       failoverReason,
       ...observedError,
-      httpStatus: observedError.httpCode ? Number(observedError.httpCode) : undefined,
+      httpStatus: extractErrorHttpStatus(rawError ?? "")?.code,
     });
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";

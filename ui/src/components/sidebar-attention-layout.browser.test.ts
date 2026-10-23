@@ -3,7 +3,9 @@ import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../app/context.ts";
+import type { MentionsCapability } from "../app/mentions.ts";
 import { client, createGatewayHarness } from "../app/overlays-access.test-support.ts";
+import { createApplicationOverlays } from "../app/overlays.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
@@ -68,17 +70,40 @@ function inboxEntries(attention: SidebarAttentionItem[], mentions: MentionInboxI
     update: null,
   });
 }
-function mountPanel(params: SidebarAttentionPanelParams) {
+type PanelFixtureParams = SidebarAttentionPanelParams & {
+  context: ApplicationContext;
+  mentions: MentionsCapability;
+};
+function renderPanel(params: PanelFixtureParams) {
+  return createComponent(
+    (props: SidebarAttentionPanelParams) =>
+      SidebarAttentionPanel(props, params.context, params.mentions),
+    params,
+  );
+}
+function mountPanel(params: PanelFixtureParams) {
   const shell = document.body.appendChild(document.createElement("div"));
-  render(() => createComponent(SidebarAttentionPanel, params), shell);
+  render(() => renderPanel(params), shell);
   return shell;
 }
-function panelParams(entries: readonly SidebarInboxEntry[]): SidebarAttentionPanelParams {
+function panelParams(entries: readonly SidebarInboxEntry[]): PanelFixtureParams {
+  const harness = createGatewayHarness(client(vi.fn(async () => ({}))));
+  const { gateway } = harness;
+  harness.update({
+    hello: {
+      ...gateway.snapshot.hello!,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["mentions.dismiss"] },
+    },
+  });
+  const overlays = createApplicationOverlays(gateway);
+  onTestFinished(() => overlays.dispose());
   return {
     context: {
       basePath: "",
       navigate: vi.fn(),
-      gateway: createGatewayHarness(client(vi.fn(async () => ({})))).gateway,
+      gateway,
+      overlays,
     } as unknown as ApplicationContext,
     mentions: {
       snapshot: {
@@ -99,7 +124,6 @@ function panelParams(entries: readonly SidebarInboxEntry[]): SidebarAttentionPan
     onKeydown: () => {},
     onNavigate: () => {},
     onOpen: () => {},
-    onScroll: () => {},
     onSelectTab: () => {},
     overflowAbove: false,
     overflowBelow: false,
@@ -128,7 +152,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       const [selectedTab, setSelectedTab] = createSignal<"all" | "approvals">("all");
       render(
         () =>
-          createComponent(SidebarAttentionPanel, {
+          renderPanel({
             ...params,
             get selectedTab() {
               return selectedTab();

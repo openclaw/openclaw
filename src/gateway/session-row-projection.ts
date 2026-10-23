@@ -42,6 +42,7 @@ import {
 } from "./session-row-projection-topology.js";
 import { createSessionRowProjectionTranscriptUpdates } from "./session-row-projection-transcript.js";
 import * as rowScope from "./session-row-scope.js";
+import { replaceSessionRowFacts } from "./session-utils-row.js";
 
 /** Committed publications own invalidation; each admitted physical store is hydrated once. */
 export async function createSessionRowProjection(params: records.ProjectionOptions) {
@@ -537,7 +538,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     materializePrivate: (row, repository) =>
       materialize(row, undefined, undefined, undefined, repository),
     preparePresentation(row) {
-      row.materialized.source.cfg = cfg;
+      if (row.materialized.source.cfg !== cfg) {
+        row.materialized = replaceSessionRowFacts(row.materialized, undefined, { cfg });
+      }
       metadata.preparePresentation(row, readChildLinks);
     },
   });
@@ -628,6 +631,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     }),
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
+    get physicalPaths() {
+      return scope.physicalPaths;
+    },
     readPreparedRowContext: () =>
       disposed ? undefined : inOwnerContext(() => metadata.readPrepared(epoch)),
     readPreparedSpawnedBy,

@@ -1,7 +1,7 @@
 import { hash } from "node:crypto";
 
 export type SessionRowDeltaFields = {
-  readonly hashes: ReadonlyMap<string, bigint>;
+  readonly fingerprints: ReadonlyMap<string, number | boolean | null | bigint>;
   readonly fieldCount: number;
 };
 
@@ -20,21 +20,29 @@ function canonicalJson(value: unknown): string | undefined {
   );
 }
 
-/** Presented row identity is immutable; its vector never retains row contents. */
+/** Presented row identity is immutable; fingerprints retain no row objects or text. */
 export function prepareSessionRowDeltaFields(row: Record<string, unknown>): SessionRowDeltaFields {
   const cached = preparedRows.get(row);
   if (cached) {
     return cached;
   }
-  const hashes = new Map<string, bigint>();
-  for (const [field, value] of Object.entries(row)) {
-    const encoded = canonicalJson(value);
-    if (encoded !== undefined) {
-      // Accepted: a 64-bit collision can omit a changed field, ~2^-64 per comparison.
-      hashes.set(field, hash("sha256", encoded, "buffer").readBigUInt64BE());
+  const fingerprints = new Map<string, number | boolean | null | bigint>();
+  for (const field of Object.keys(row)) {
+    const value = row[field];
+    if (value === null || typeof value === "boolean") {
+      fingerprints.set(field, value);
+    } else if (typeof value === "number") {
+      // JSON treats nonfinite numbers as null and both zero signs identically.
+      fingerprints.set(field, Number.isFinite(value) ? value : null);
+    } else {
+      const encoded = typeof value === "object" ? canonicalJson(value) : JSON.stringify(value);
+      if (encoded !== undefined) {
+        // Accepted: a 64-bit collision can omit a changed field, ~2^-64 per comparison.
+        fingerprints.set(field, hash("sha256", encoded, "buffer").readBigUInt64BE());
+      }
     }
   }
-  const prepared = { hashes, fieldCount: hashes.size };
+  const prepared = { fingerprints, fieldCount: fingerprints.size };
   preparedRows.set(row, prepared);
   return prepared;
 }
@@ -56,8 +64,8 @@ export function createSessionRowDeltaDiffer() {
       return cached;
     }
     const set: Record<string, unknown> = {};
-    for (const [field, valueHash] of current.hashes) {
-      if (previous.hashes.get(field) !== valueHash) {
+    for (const [field, fingerprint] of current.fingerprints) {
+      if (previous.fingerprints.get(field) !== fingerprint) {
         Object.defineProperty(set, field, {
           value: row[field],
           enumerable: true,
@@ -67,8 +75,8 @@ export function createSessionRowDeltaDiffer() {
       }
     }
     const remove: string[] = [];
-    for (const field of previous.hashes.keys()) {
-      if (!current.hashes.has(field)) {
+    for (const field of previous.fingerprints.keys()) {
+      if (!current.fingerprints.has(field)) {
         remove.push(field);
       }
     }

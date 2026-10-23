@@ -19,7 +19,6 @@ import {
   toRelayTabInfo,
 } from "./modules/relay-core.js";
 import { createRelayDebugger } from "./modules/relay-debugger.js";
-import { isTabSelected } from "./modules/relay-tab-groups.js";
 import { createSerialQueue } from "./modules/serial-queue.js";
 import { registerTabAccessEvents } from "./modules/tab-access-events.js";
 import { createTabAccessPolicy } from "./modules/tab-access.js";
@@ -54,9 +53,8 @@ let nativeBootstrap = null;
 let retiredCopilotCustodyBlocked = true;
 let tabsSyncTimer = null;
 const runAccessMutation = createSerialQueue();
-const pairingConfigStore = createPairingConfigStore(chrome.storage.local);
+const pairingConfigStore = createPairingConfigStore();
 const tabAccessPolicy = createTabAccessPolicy({
-  isSelectedTab: isTabSelected,
   getGroupColor: async () => (await getConfig()).groupColor,
 });
 const relayDebugger = createRelayDebugger({ policy: tabAccessPolicy, requireAutomationAllowed });
@@ -292,10 +290,8 @@ function send(message, socket = relayWs) {
 
 function clearRelayOpeningDeadline() {
   relayOpeningDeadlineAt = 0;
-  if (relayOpeningDeadlineTimer) {
-    clearTimeout(relayOpeningDeadlineTimer);
-    relayOpeningDeadlineTimer = null;
-  }
+  clearTimeout(relayOpeningDeadlineTimer);
+  relayOpeningDeadlineTimer = null;
   void chrome.alarms.clear(RELAY_OPENING_DEADLINE_ALARM);
 }
 
@@ -505,7 +501,7 @@ async function maybeEnsureRelayDaemon(relayUrl, connectionIsCurrent) {
     return;
   }
   lastRelayEnsureAtMs = now;
-  await requestRelayEnsure(relayPort, chrome);
+  await requestRelayEnsure(relayPort);
 }
 
 function scheduleReconnect() {

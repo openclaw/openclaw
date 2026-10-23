@@ -1,6 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
-import { validateCronForm } from "../../lib/cron/index.ts";
+import { validateCronForm } from "../../lib/cron/form.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";

@@ -73,6 +73,21 @@ describe("sessionProgressHoverTargetFromEvent", () => {
 });
 
 describe("session progress hovercard ownership", () => {
+  it("reads row facts through its shell callback without a descendant sidebar", async () => {
+    vi.useFakeTimers();
+    const harness = createHovercard({
+      sessionKey: "agent:research:main",
+      triggerKind: "markdown",
+      rowDetails: { label: "Referenced session facts" },
+    });
+    harness.provider.querySelector("openclaw-app-sidebar")!.remove();
+    document.body.append(harness.provider);
+    flush();
+    await harness.focus();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(portalText()).toContain("Referenced session facts");
+  });
+
   it.each([
     [
       "rate-limited",

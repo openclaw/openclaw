@@ -5,9 +5,11 @@ import { beforeEach, expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI automation condition-trigger authoring",
@@ -24,19 +26,13 @@ beforeEach(() => {
 });
 const proofStage = process.env.OPENCLAW_TRIGGER_UI_PROOF_STAGE ?? "after";
 
-const scriptJob: CronJob = {
-  id: "existing-script-automation",
+const scriptJob = cronJob("existing-script-automation", "Script health check", {
   configRevision: "existing-script-revision",
-  name: "Script health check",
-  enabled: true,
   createdAtMs: Date.parse("2026-05-29T08:00:00.000Z"),
   updatedAtMs: Date.parse("2026-05-29T08:05:00.000Z"),
-  schedule: { kind: "every", everyMs: 60_000 },
   sessionTarget: "isolated",
-  wakeMode: "next-heartbeat",
   payload: { kind: "script", script: "return { ready: true };" },
-  state: {},
-};
+});
 
 const pageOptions = {
   locale: "en-US",
@@ -54,17 +50,7 @@ async function newTask(page: Page, name: string, message: string) {
 }
 const advanced = (page: Page) => page.locator("details.cron-advanced > summary").click();
 
-function listResponse(jobs: CronJob[]) {
-  return {
-    jobs,
-    snapshotRevision: "trigger-authoring-fixture",
-    total: jobs.length,
-    offset: 0,
-    limit: 50,
-    hasMore: false,
-    nextOffset: null,
-  };
-}
+const listResponse = (jobs: CronJob[]) => cronList(jobs, "trigger-authoring-fixture");
 
 function cronMethodResponses(jobs: CronJob[]) {
   return {
@@ -205,7 +191,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await page.locator('[data-test-id="cron-new-task"]').click();
+      await newTask(page, "Retained trigger draft", "Keep this unsaved automation");
       await advanced(page);
       const toggle = triggerToggle(page);
       await expect.poll(() => toggle.count()).toBe(1);
@@ -256,12 +242,19 @@ suite.define(() => {
         jobs: 0,
         nextWakeAtMs: null,
       });
-      await gateway.closeLatest(1012, "refresh effective trigger capability");
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      expect(await page.locator("#cron-name").inputValue()).toBe("Retained trigger draft");
+      expect(await page.locator('[data-test-id="cron-submit"]').isDisabled()).toBe(true);
+      await gateway.setOnline(true);
       await expect
         .poll(async () => (await gateway.getRequests("cron.status")).length)
         .toBeGreaterThan(previousStatuses);
-      await page.locator('[data-test-id="cron-new-task"]').click();
-      await advanced(page);
+      expect(await page.locator("#cron-name").inputValue()).toBe("Retained trigger draft");
+      expect(await page.locator("#cron-payload-text").inputValue()).toBe(
+        "Keep this unsaved automation",
+      );
+      expect(await page.locator("details.cron-advanced").getAttribute("open")).not.toBeNull();
       await expect.poll(() => toggle.count()).toBe(0);
       await page.getByText("Condition triggers are disabled by cron.triggers.enabled.").waitFor();
       await captureTriggerCapabilityProof(page, "07-reconnect-refreshes-disabled-trigger");

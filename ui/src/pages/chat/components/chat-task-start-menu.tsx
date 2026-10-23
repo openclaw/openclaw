@@ -2,7 +2,10 @@ import { createUniqueId } from "solid-js";
 import type { TaskSuggestionsAcceptParams } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export function ChatTaskStartMenu(props: {
   busy: boolean;

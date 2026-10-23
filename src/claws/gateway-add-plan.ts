@@ -138,7 +138,6 @@ export async function planClawAddForGateway(
     ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
     ...(input.token ? { token: input.token } : {}),
     ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
-    ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
     run: async (source, trust) => {
       const plan = await buildGatewayClawAddPlan(source, input);
       return projectGatewayClawAddPlan(plan, source, trust, input.config);

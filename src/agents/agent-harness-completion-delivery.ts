@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   getRestartRecoveryTerminalDeliveryEvidence,
   hasRestartRecoveryTerminalRun,
@@ -20,6 +19,14 @@ import {
 } from "../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+  getRpcSourceLifecycleGeneration,
+  getRpcSourceProjectSessionActive,
+  isRpcSourceQueued,
+} from "../sessions/session-controller.rpc-sources.js";
+import { isCurrentSessionControllerOperation } from "../sessions/session-controller.state.js";
 import { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
 import {
   getOwedHarnessCompletionTask,
@@ -46,17 +53,35 @@ async function readCurrent(target: CompletionTarget): Promise<SessionEntry | und
 function hasLiveCompletionOwner(claim: HarnessCompletionRecovery, runId: string): boolean {
   const scope = getPluginRuntimeGatewayRequestScope();
   const gateway = scope?.resolveGatewayContext ? scope.resolveGatewayContext() : scope?.context;
-  const admission = gateway?.chatAbortControllers.get(runId);
+  const admission = gateway
+    ? getRpcSourceForGateway(runId, scope?.resolveGatewayContext)
+    : undefined;
+  const input = admission?.input;
+  const sourceClaim = input?.claim;
+  const operation = sourceClaim?.operation;
+  const claimed =
+    input &&
+    sourceClaim &&
+    input.mailbox.claim === sourceClaim &&
+    !sourceClaim.released &&
+    !sourceClaim.releaseRequested &&
+    !sourceClaim.abortController.signal.aborted &&
+    (!operation ||
+      (isCurrentSessionControllerOperation(operation) &&
+        !operation.result &&
+        !operation.abortSignal.aborted));
   if (
     admission &&
-    admission.sessionKey === claim.requesterSessionKey &&
-    admission.sessionId === claim.sessionId &&
-    admission.agentId === claim.requesterAgentId &&
-    admission.lifecycleGeneration === getAgentRunLifecycleGeneration() &&
-    admission.projectSessionActive === true &&
-    !admission.registrationCleanupRequested &&
-    !admission.controller.signal.aborted &&
-    isFutureDateTimestampMs(admission.expiresAtMs)
+    getRpcSourceIdentity(admission).sessionKey === claim.requesterSessionKey &&
+    getRpcSourceIdentity(admission).sessionId === claim.sessionId &&
+    getRpcSourceIdentity(admission).agentId === claim.requesterAgentId &&
+    getRpcSourceLifecycleGeneration(admission) === getAgentRunLifecycleGeneration() &&
+    admission.adapter.controlUiVisible !== false &&
+    getRpcSourceProjectSessionActive(admission) !== false &&
+    !admission.input.retirementRequested &&
+    !admission.input.abortSignal.aborted &&
+    !admission.input.custody.cancellationRetired &&
+    (isRpcSourceQueued(admission) || claimed)
   ) {
     return true;
   }

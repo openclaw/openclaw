@@ -190,6 +190,7 @@ suite.define(() => {
           const selected = modelOption(composer, "codex/gpt-5.5");
 
           await expectText(trigger, selectedModel.name);
+          await composer.locator("textarea").click();
           await trigger.click();
           await expect.poll(() => selected.getAttribute("aria-selected")).toBe("true");
           await trigger.click();
@@ -239,7 +240,6 @@ suite.define(() => {
               ...buildGatewaySessionSnapshot({
                 sessionRow: running,
                 agentId: "main",
-                includeSession: true,
                 activeRunState: { active: true },
               }),
             });
@@ -254,6 +254,7 @@ suite.define(() => {
           await page.reload();
           await gateway.waitForRequest("chat.startup");
           await expectText(trigger, selectedModel.name);
+          await composer.locator("textarea").click();
           await trigger.click();
           expect(await selected.getAttribute("aria-selected")).toBe("true");
           await trigger.click();
@@ -329,7 +330,6 @@ suite.define(() => {
               ...buildGatewaySessionSnapshot({
                 sessionRow: recovered,
                 agentId: "main",
-                includeSession: true,
                 activeRunState: { active: false, runIds: [] },
               }),
             });

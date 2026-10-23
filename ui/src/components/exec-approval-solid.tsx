@@ -1,5 +1,5 @@
 // Control UI modal presents approvals after an explicit operator action.
-import { For, createSignal, onCleanup } from "solid-js";
+import { For, createSignal, onSettled } from "solid-js";
 import { compactApprovalCommand } from "../app/approval-presentation.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import {
@@ -8,18 +8,18 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { ApprovalCountdown, approvalRemainingLabel } from "./approval-countdown.tsx";
 import {
-  ApprovalCountdown,
-  approvalRemainingLabel,
   approvalTitle,
   ExecApprovalCard,
   resolveApprovalDecisions,
 } from "./exec-approval-card-solid.tsx";
-import "./modal-dialog.ts";
+import "./modal-dialog.tsx";
 
 export type ExecApprovalProps = {
   queue: readonly ExecApprovalRequest[];
   busy: boolean;
+  connected: boolean;
   canGrant: boolean;
   errors: ReadonlyMap<string, string>;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
@@ -110,6 +110,8 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
       (previous) => queue().length > 0 && (previous ?? false),
     );
     const active = () => queue().find((entry) => entry.id === selectedApprovalId()) ?? queue()[0];
+    let decide: ExecApprovalProps["onDecision"] | undefined;
+    let deciding = () => false;
     controls.set(host, {
       show() {
         if (!queue().length) {
@@ -122,11 +124,19 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
       configurable: true,
       get: () => explicitlyOpen() && queue().length > 0,
     });
-    onCleanup(() => controls.delete(host));
+    onSettled(() => () => controls.delete(host));
     const handleKeydown = (event: KeyboardEvent) => {
       const props = bridgeProps.props;
       const request = active();
-      if (!request || event.defaultPrevented || event.repeat || props?.busy || !props?.canGrant) {
+      if (
+        !request ||
+        event.defaultPrevented ||
+        event.repeat ||
+        props?.busy ||
+        deciding() ||
+        !props?.connected ||
+        !props?.canGrant
+      ) {
         return;
       }
       const decision = shortcutDecision(event);
@@ -134,10 +144,10 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
         return;
       }
       event.preventDefault();
-      void props.onDecision(request.id, decision);
+      void decide?.(request.id, decision);
     };
     const handleCancel = (event: Event) => {
-      if (bridgeProps.props?.busy) {
+      if (deciding() || bridgeProps.props?.busy) {
         event.preventDefault();
       } else {
         // Dismissal closes the view; it never denies the pending request.
@@ -158,6 +168,7 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
                 props={{
                   approval: active()!,
                   busy: bridgeProps.props!.busy,
+                  connected: bridgeProps.props!.connected,
                   canGrant: bridgeProps.props!.canGrant,
                   error: bridgeProps.props!.errors.get(active()!.id) ?? null,
                   variant: "modal",
@@ -169,6 +180,10 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
                       onSelect: selectApproval,
                     }),
                   onDecision: bridgeProps.props!.onDecision,
+                  onDecisionReady: (handler, busy) => {
+                    decide = handler;
+                    deciding = busy;
+                  },
                 }}
               />
             </div>

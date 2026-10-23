@@ -33,6 +33,7 @@ import {
 import { DefaultResourceLoader } from "../../sessions/resource-loader.js";
 import { createAgentSession } from "../../sessions/sdk.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import { isOutOfTurnHistoryEntry } from "../../sessions/session-manager-codec.js";
 import { sessionManagerOpenTranscriptCohort } from "../../sessions/session-manager-core.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { resolveToolSearchCatalogTool } from "../../tool-search.js";
@@ -242,6 +243,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   installMessageToolTerminalHook({
     agent: activeSession.agent,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
+    messageToolFinalByDefault: attempt.messageToolFinalByDefault,
     onDeliveredSourceReply: markSourceReplyDelivered,
     config: attempt.config,
     currentProvider: attempt.messageChannel ?? attempt.messageProvider,
@@ -370,6 +372,11 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         const orphanProvenance = normalizeInputProvenance(
           candidate?.messageEntry.message.provenance,
         );
+        // Talk speech is mirrored before its distinct hidden consult input is persisted.
+        // Keep the speech durable; the merged prompt already carries it for this attempt.
+        if (candidate && isOutOfTurnHistoryEntry(candidate.messageEntry)) {
+          candidate.removeLeaf = false;
+        }
         // Keep unanswered user input in history through failed internal continuations.
         const preserveUnansweredUser =
           shouldPreserveUserFacingSessionStateForInputProvenance(attempt.inputProvenance) &&

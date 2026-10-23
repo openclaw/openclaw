@@ -1,5 +1,5 @@
 import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
+import { copyWithPathPatch } from "../lib/config-form-utils.ts";
 import {
   canApplyObjectCandidate,
   isObjectPropertyNameValid,

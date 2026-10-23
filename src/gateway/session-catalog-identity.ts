@@ -3,6 +3,7 @@ import type { SessionParticipant } from "../../packages/gateway-protocol/src/sch
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { TranscriptSenderIdentity } from "../chat/sender-identity.js";
 import {
+  resolveSessionCreatorActor,
   sessionCreatorProfileId,
   type SessionCreatedActor as StoredSessionActor,
 } from "../config/sessions/session-entry-provenance.js";
@@ -32,9 +33,6 @@ async function prepareIdentityFacts(input: UserProfileCatalogIdentityInput) {
     { context, current: true },
   );
   context.admission.assertCurrent();
-  if (reply && (!reply.ok || reply.type !== "userProfiles.catalogIdentity")) {
-    throw new Error("Session catalog identity reader returned an unexpected result");
-  }
   const result: UserProfileCatalogIdentityRead = reply?.result ?? {
     profiles: new Map(),
     accounts: new Map(),
@@ -126,7 +124,7 @@ function projectSourceActor(
   params: CatalogSourceIdentity & { actor: StoredSessionActor | undefined },
   resolveProfile: typeof readSourceProfileFacts,
 ): SessionCreatedActor | undefined {
-  const { actor } = params;
+  const actor = resolveSessionCreatorActor(params.actor);
   if (!actor) {
     return undefined;
   }

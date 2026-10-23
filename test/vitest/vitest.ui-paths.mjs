@@ -89,7 +89,6 @@ export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/styles/corner-shape.browser.test.ts",
   "ui/src/styles/cursor-policy.browser.test.ts",
   "ui/src/styles/chat-file-link-presentation.browser.test.ts",
-  "ui/src/styles/chat-github-link-presentation.browser.test.ts",
   "ui/src/styles/shimmer.browser.test.ts",
   "ui/src/styles/forced-colors-indicators.browser.test.ts",
   "ui/src/styles/sr-only.browser.test.ts",
@@ -139,6 +138,7 @@ export function isUiTestTarget(relative) {
 
 export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
+  "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",
   "ui/src/pages/workboard/workboard-distribution.e2e.test.ts",
   "ui/src/e2e/chat-wait-clock.real-gateway.e2e.test.ts",
@@ -157,6 +157,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-html-publication.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
@@ -178,6 +179,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/profile-page.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
+  "ui/src/e2e/task-pull-requests.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts",
   "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",

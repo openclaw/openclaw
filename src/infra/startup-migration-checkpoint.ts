@@ -19,6 +19,7 @@ import {
 import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
 import { VERSION } from "../version.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
+import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -165,6 +166,7 @@ function acquireStartupMigrationLease(
         pid: ownerPid,
         host: hostname(),
         startedAt: getFileLockProcessStartTime(ownerPid),
+        processNamespace: readGatewayLockProcessNamespace(),
       };
       const expiresAt = nowMs + STARTUP_MIGRATION_LEASE_TTL_MS;
       const identity = { ...STARTUP_MIGRATION_LEASE, owner };

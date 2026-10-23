@@ -22,7 +22,6 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/session-row-reconcile.ts";
 import { ChatPaneReactions } from "./chat-pane-reactions.ts";
-import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   typingActorIdForSessionMessage,
@@ -31,7 +30,8 @@ import {
   type ChatTypingActorView,
   type ChatTypingOverflow,
 } from "./chat-typing-presence.ts";
-import { canManageChatSessionSharing } from "./components/chat-session-sharing.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
+import { canManageChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
 
 const TYPING_ACTIVE_MS = 2_500;
 const TYPING_DRAFT_ACTIVE_MS = 10_000;
@@ -347,7 +347,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       scope.state.handleChatDraftChange(suggestion.text, []);
       // The native pane hands focus to the composer renderer after publishing the draft.
       queueMicrotask(() =>
-        this.element.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
+        getChatComposerState(this.presentationId).composerTextarea?.focus({
           preventScroll: true,
         }),
       );
@@ -609,10 +609,6 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     }
     this.collaboration.typingViews = views;
     this.collaboration.typingOverflow = overflow;
-  }
-
-  protected typingActorViews(): ChatTypingActorView[] {
-    return this.collaboration.typingViews;
   }
 
   protected sendTypingState(typing: boolean, preview?: string, cursor?: number): void {

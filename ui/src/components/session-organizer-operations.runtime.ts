@@ -20,7 +20,7 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import { requestCloudWorkerStop } from "./cloud-worker-stop.runtime.ts";
 import { showConfirmDialog, type ConfirmDialogSkipPreference } from "./confirm-dialog.ts";
-import { showInputDialog } from "./input-dialog.ts";
+import { showInputDialog } from "./input-dialog.tsx";
 import type { SessionMenuAction } from "./session-menu-solid.tsx";
 import { archiveSessionsWithUndo } from "./session-organizer-archive.runtime.ts";
 import {
@@ -280,13 +280,33 @@ export async function runBatchSessionAction(
   }
 }
 
+export type SessionRenameHost = SessionActionHost & {
+  readonly sessionData: SessionActionHost["sessionData"] &
+    Pick<
+      SessionOrganizerDependencies["sessionData"],
+      "beginSessionMutation" | "sessionDraftSignal" | "sessionMutationError"
+    >;
+};
+
 export async function renameSession(
-  deps: SessionOrganizerDependencies,
-  session: SidebarRecentSession,
+  deps: SessionRenameHost,
+  session: SessionActionRow & Pick<SidebarRecentSession, "renameValue" | "userLabel">,
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
+    return;
+  }
   await showInputDialog({
-    signal: scope.signal,
+    signal: deps.sessionData.sessionDraftSignal,
+    gateway: scope.gateway,
+    canSubmit: () =>
+      readSessionMethodAccess(scope.gateway.snapshot, {
+        method: "sessions.patch",
+        params: { key: session.key, label: null },
+        sessionScope: true,
+        session,
+        allowDeferred: true,
+      }).allowed,
     title: t("sessionsView.renameSessionPrompt"),
     defaultValue: session.renameValue,
     submit: async (value) => {
@@ -294,18 +314,29 @@ export async function renameSession(
       if (!patch) {
         return null;
       }
+      const currentScope = deps.sessionData.beginSessionMutation(true);
+      if (!currentScope) {
+        return t("sessionsView.actionRequiresConnection");
+      }
       let failure: string | null = null;
-      await patchSession(deps, session, patch, scope, {
+      const result = await patchSession(deps, session, patch, currentScope, {
         sessionScope: true,
         handleError: (error) => {
-          if (!/^label already in use:/iu.test(formatUiError(error))) {
-            return false;
-          }
-          failure = t("sessionsView.sessionNameInUse");
-          return true;
+          const message = formatUiError(error);
+          const duplicateName = /^label already in use:/iu.test(message);
+          failure = duplicateName ? t("sessionsView.sessionNameInUse") : message;
+          return duplicateName;
         },
       });
-      return failure;
+      return result === "completed"
+        ? null
+        : (failure ??
+            deps.sessionData.sessionMutationError ??
+            t(
+              result === "stale"
+                ? "sessionsView.renameSessionStale"
+                : "sessionsView.renameSessionFailed",
+            ));
     },
   });
 }
@@ -325,15 +356,14 @@ export async function assignSessionOwner(
   ) {
     return;
   }
-  const assigned = await scope.sessions.assignOwner(session.key, owner, {
-    agentId: resolveUiSessionRowAgentId(session, scope.selectedAgentId),
-  });
-  if (
-    deps.sessionData.isSessionMutationScopeCurrent(scope) &&
-    !assigned &&
-    scope.sessions.state.error
-  ) {
-    deps.sessionData.publishSessionMutationError(scope, scope.sessions.state.error);
+  try {
+    await scope.sessions.assignOwner(session.key, owner, {
+      agentId: resolveUiSessionRowAgentId(session, scope.selectedAgentId),
+    });
+  } catch (error) {
+    if (deps.sessionData.isSessionMutationScopeCurrent(scope)) {
+      deps.sessionData.publishSessionMutationError(scope, error);
+    }
   }
 }
 
@@ -381,29 +411,32 @@ export async function assignSessionCategory(
   scope: SidebarSessionMutationScope,
   patch: { pinned?: boolean } = {},
   options: { resolveSession?: () => SessionActionRow | null } = {},
-): Promise<void> {
+): Promise<SidebarSessionMutationResult> {
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return;
+    return "stale";
   }
   const catalogChanged = Boolean(category && !deps.knownSessionGroups().includes(category));
-  if (category && (await rememberSessionGroup(deps, category, scope)) !== "completed") {
-    return;
+  if (category) {
+    const result = await rememberSessionGroup(deps, category, scope);
+    if (result !== "completed") {
+      return result;
+    }
   }
   const currentSession = options.resolveSession ? options.resolveSession() : session;
   if (!currentSession) {
     showToast({
       message: t(catalogChanged ? "sessionsView.newGroupMoveSkipped" : "common.refresh"),
     });
-    return;
+    return "failed";
   }
   if (
     (currentSession.category ?? null) === category &&
     patch.pinned === undefined &&
     !needsGroupPromotion(currentSession)
   ) {
-    return;
+    return "completed";
   }
-  await patchSession(
+  return patchSession(
     deps,
     currentSession,
     { category, ...patch, ...(needsGroupPromotion(currentSession) ? { sidebarRoot: true } : {}) },
@@ -434,7 +467,7 @@ export async function forkSession(
     return;
   }
   try {
-    const key = await scope.sessions.create(createParams);
+    const key = await scope.sessions.create(createParams, { signal: scope.signal });
     if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }

@@ -4,6 +4,7 @@ import {
   toSanitizedMarkdownHtml,
   toStreamingMarkdownParts,
 } from "../../../components/markdown.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 
 export type DuplicateSuffix = {
   count: number;
@@ -14,6 +15,7 @@ export type MessageTextOptions = {
   role: string;
   isStreaming: boolean;
   isForwarded?: boolean;
+  fetchLinkFavicon?: LinkFaviconFetcher;
   isUserMessageExpanded?: (messageId: string) => boolean;
   onToggleUserMessageExpanded?: (messageId: string) => void;
   assistantMessageDisclosure?: AssistantMessageDisclosure;

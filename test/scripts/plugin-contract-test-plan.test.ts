@@ -1,5 +1,4 @@
 // Plugin Contract Test Plan tests cover plugin contract test plan script behavior.
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createPluginContractTestShards } from "../../scripts/lib/plugin-contract-test-plan.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
@@ -13,23 +12,6 @@ function listContractTests(rootDir = "src/plugins/contracts"): string[] {
 }
 
 describe("scripts/lib/plugin-contract-test-plan.mts", () => {
-  it("keeps manual CI compatible with legacy target refs", () => {
-    const manifestSource = readFileSync("scripts/ci-build-manifest.mjs", "utf8");
-
-    // The manifest imports the plan through the importTargetPlan fallback helper since
-    // 7ae5996bb3c so historical target refs without the module keep working.
-    expect(manifestSource).toContain("const pluginContractPlan = await importTargetPlan(");
-    expect(manifestSource).toContain('? "./scripts/lib/plugin-contract-test-plan.mts"');
-    expect(manifestSource).toContain(': "./scripts/lib/plugin-contract-test-plan.mjs",');
-    expect(manifestSource).toContain(
-      'typeof pluginContractPlan.createPluginContractTestShards === "function"',
-    );
-    expect(manifestSource).toContain("checks-fast-contracts-plugins-legacy");
-    expect(manifestSource).not.toMatch(
-      /createPluginContractTestShards: \(\) => \[\s+createPluginContractTestShards/u,
-    );
-  });
-
   it("splits plugin contracts into focused shards", () => {
     const suffixes = ["a", "b"];
 

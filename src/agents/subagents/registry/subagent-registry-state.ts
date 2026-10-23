@@ -198,9 +198,8 @@ export type SubagentSessionListReadView = {
 /** A long-lived projection retains its source; registry publications still own the facts. */
 export function createSubagentSessionListReadView(options: {
   env: NodeJS.ProcessEnv;
-  path?: string;
 }): SubagentSessionListReadView {
-  const path = options.path ?? resolveOpenClawStateSqlitePath(options.env);
+  const path = resolveOpenClawStateSqlitePath(options.env);
   const source = prepareOpenClawStateReadSource({ path, env: options.env });
   const cache = persistedSubagentSessionListRunsReadCache;
   const readPersisted = shouldReadPersistedSubagentRuns();
@@ -391,17 +390,20 @@ export async function withSubagentRunReadSnapshot<S extends SubagentRunReadSelec
 export function prepareSubagentRunsSnapshotForSessions(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   sessionKeys: readonly string[],
+  context?: OpenClawStateWorkerContext,
 ) {
   return prepareSubagentSessionRunReadSnapshot({
     inMemoryRuns,
     sessionKeys,
     fullCache: persistedSubagentRunsReadCache,
+    context,
   });
 }
 
 export async function prepareSubagentRunsSnapshotForRunIds(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   runIds: readonly string[],
+  options: { yieldedChildren?: boolean } = {},
 ): Promise<PreparedSubagentRunsRead> {
   const requested = new Set(runIds.map((runId) => runId.trim()));
   const matches = (entry: SubagentRunReadRecord) =>
@@ -410,11 +412,18 @@ export async function prepareSubagentRunsSnapshotForRunIds(
     inMemoryRuns,
     fullCache: persistedSubagentRunsReadCache,
     compactCache: persistedSubagentSessionListRunsReadCache,
-    readScope: { runIds: requested },
-    select: (snapshot) => ({
-      runIds: [...snapshot.values()].filter(matches).map((entry) => entry.runId),
-      sessionKeys: [],
-    }),
+    readScope: { runIds: requested, yieldedChildren: options.yieldedChildren },
+    select: (snapshot) => {
+      const rows = [...snapshot.values()].filter(matches);
+      return {
+        runIds: rows.map((entry) => entry.runId),
+        sessionKeys: options.yieldedChildren
+          ? rows
+              .filter((entry) => entry.pauseReason === "sessions_yield")
+              .map((entry) => entry.childSessionKey)
+          : [],
+      };
+    },
   });
   return {
     consume(consume) {
@@ -423,6 +432,13 @@ export async function prepareSubagentRunsSnapshotForRunIds(
         for (const runId of selection.runIds) {
           const entry = runs.get(runId);
           if (entry) {
+            selected.set(runId, entry);
+          }
+        }
+        // Announced children of selected yielded runs ride along for observation only.
+        const owners = new Set(selection.sessionKeys);
+        for (const [runId, entry] of runs) {
+          if (owners.has(entry.requesterSessionKey) && !selected.has(runId)) {
             selected.set(runId, entry);
           }
         }

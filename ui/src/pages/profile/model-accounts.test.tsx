@@ -19,6 +19,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import type { ModelAccountsTargetSource } from "./model-accounts-state.ts";
 import { ModelAccounts } from "./model-accounts.tsx";
 
 const connectedResult: UsersAuthConnectStatusResult = {
@@ -151,16 +152,12 @@ async function mountAccounts(
     hello: { auth: { role: "operator", scopes } },
     selfUser: { id: "profile-1", name: "Ada" },
   } as ApplicationGatewaySnapshot;
-  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const listeners = new Set<() => void>();
   const eventListeners = new Set<(event: GatewayEventFrame) => void>();
   const context = {
     gateway: {
       get snapshot() {
         return snapshot;
-      },
-      subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
       },
       subscribeEvents(listener: (event: GatewayEventFrame) => void) {
         eventListeners.add(listener);
@@ -169,7 +166,15 @@ async function mountAccounts(
     },
   } as unknown as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
-  const view = mountSolid(() => <ModelAccounts identityId="profile-1" profileId="profile-1" />, {
+  let profileId = "profile-1";
+  const target: ModelAccountsTargetSource = {
+    read: () => ({ gateway: snapshot, identityId: "profile-1", profileId }),
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  const view = mountSolid(() => <ModelAccounts target={target} />, {
     wrapper: provider.wrapper,
   });
   const accounts = view.container;
@@ -179,6 +184,12 @@ async function mountAccounts(
   return {
     accounts,
     unmount: view.unmount,
+    setProfileId(value: string) {
+      profileId = value;
+      for (const listener of listeners) {
+        listener();
+      }
+    },
     request,
     async start(providerId = "openai") {
       button(accounts, ".profile-auth-add-account").click();
@@ -212,7 +223,7 @@ async function mountAccounts(
           : {}),
       };
       for (const listener of listeners) {
-        listener(snapshot);
+        listener();
       }
     },
     emitEvent(event: GatewayEventFrame) {
@@ -223,7 +234,7 @@ async function mountAccounts(
     emitSnapshot(next: Partial<ApplicationGatewaySnapshot>) {
       snapshot = { ...snapshot, ...next };
       for (const listener of listeners) {
-        listener(snapshot);
+        listener();
       }
     },
   };
@@ -345,6 +356,80 @@ it("lets a writer choose a retained account for new chats and clear the default 
   ).toBe(false);
 });
 
+it("shows a pending default selection and restores the accepted account after rejection", async () => {
+  const pending = createDeferred<UsersListAuthLinksResult>();
+  const work = {
+    ...connectedAccount,
+    authProfileId: "openai:work",
+    label: "Ada · Work",
+    selected: false,
+  };
+  const harness = await mountAccounts(async () => pending.promise, {
+    accounts: [connectedAccount, work],
+  });
+  button(harness.accounts, '[data-auth-profile-id="openai:work"]').click();
+  await waitForSolid(() => {
+    expect(
+      harness.accounts.querySelector("openclaw-model-accounts")?.getAttribute("aria-busy"),
+    ).toBe("true");
+    expect(
+      button(harness.accounts, ".profile-auth-link-unlink").getAttribute("aria-label"),
+    ).toContain(work.label);
+  });
+  pending.reject(new Error("Default selection rejected"));
+  await waitForSolid(() => {
+    expect(
+      harness.accounts.querySelector("openclaw-model-accounts")?.getAttribute("aria-busy"),
+    ).toBe("false");
+    expect(
+      button(harness.accounts, ".profile-auth-link-unlink").getAttribute("aria-label"),
+    ).toContain(connectedAccount.label);
+    expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
+      "Default selection rejected",
+    );
+  });
+  expect(
+    harness.request.mock.calls.filter(([method]) => method === "users.selectModelAccount"),
+  ).toHaveLength(1);
+});
+
+it("releases an old selection presentation when the connection is replaced", async () => {
+  const pending = createDeferred<UsersListAuthLinksResult>();
+  const work = {
+    ...connectedAccount,
+    authProfileId: "openai:work",
+    label: "Ada · Work",
+    selected: false,
+  };
+  const harness = await mountAccounts(async () => pending.promise, {
+    accounts: [connectedAccount, work],
+  });
+  button(harness.accounts, '[data-auth-profile-id="openai:work"]').click();
+  await waitForSolid(() =>
+    expect(
+      harness.accounts.querySelector("openclaw-model-accounts")?.getAttribute("aria-busy"),
+    ).toBe("true"),
+  );
+  harness.emit("connected", true);
+  await waitForSolid(() => {
+    expect(
+      harness.accounts.querySelector("openclaw-model-accounts")?.getAttribute("aria-busy"),
+    ).toBe("false");
+    expect(
+      button(harness.accounts, ".profile-auth-link-unlink").getAttribute("aria-label"),
+    ).toContain(connectedAccount.label);
+    expect(button(harness.accounts, '[data-auth-profile-id="openai:work"]').disabled).toBe(false);
+  });
+  pending.resolve({
+    links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 2 }],
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(
+    button(harness.accounts, ".profile-auth-link-unlink").getAttribute("aria-label"),
+  ).toContain(connectedAccount.label);
+});
+
 it("loads retained accounts one page at a time without dropping earlier choices", async () => {
   const first = { ...connectedAccount, selected: false };
   const second = { ...first, authProfileId: "openai:work" };
@@ -373,26 +458,74 @@ it("loads retained accounts one page at a time without dropping earlier choices"
   });
 });
 
-it("discards an inventory reply from the previous connection", async () => {
-  const harness = await mountAccounts(async () => {
-    throw new Error("Unexpected account mutation");
-  });
-  const old = createDeferred<UsersListModelAccountsResult>();
-  harness.request.mockImplementationOnce(async () => old.promise);
+it.each(["connection", "profile"] as const)(
+  "discards an inventory reply from the previous %s",
+  async (scope) => {
+    const harness = await mountAccounts(async () => {
+      throw new Error("Unexpected account mutation");
+    });
+    const old = createDeferred<UsersListModelAccountsResult>();
+    harness.request.mockImplementationOnce(async () => old.promise);
+    button(harness.accounts, ".profile-auth-accounts-refresh").click();
+    if (scope === "connection") {
+      harness.emit("reconnecting");
+      harness.emit("connected");
+    } else {
+      harness.setProfileId("profile-2");
+    }
+    expect(harness.request).toHaveBeenLastCalledWith("users.listModelAccounts", {
+      profileId: scope === "connection" ? "profile-1" : "profile-2",
+    });
+    await waitForSolid(() =>
+      expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
+    );
+    old.resolve({
+      profileId: "profile-1",
+      accounts: [connectedAccount],
+      links: connectedResult.links,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
+    await waitForSolid(() =>
+      expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
+    );
+  },
+);
+
+it("retains the account draft through a failed inventory refresh and recovers on retry", async () => {
+  const harness = await mountAccounts(
+    async () => {
+      throw new Error("Unexpected account mutation");
+    },
+    {
+      accounts: [connectedAccount],
+      scopes: ["operator.write", "operator.admin"],
+    },
+  );
+  const draft = await input(harness.accounts, ".profile-auth-link-input", "openai:work");
+  const pending = createDeferred<UsersListModelAccountsResult>();
+  harness.request.mockImplementationOnce(async () => pending.promise);
   button(harness.accounts, ".profile-auth-accounts-refresh").click();
-  harness.emit("reconnecting");
-  harness.emit("connected");
-  old.resolve({
+  await waitForSolid(() => expect(draft.disabled).toBe(true));
+  expect(harness.accounts.textContent).toContain(connectedAccount.label);
+  pending.reject(new Error("Inventory unavailable"));
+  await waitForSolid(() =>
+    expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
+      "Inventory unavailable",
+    ),
+  );
+  expect(harness.accounts.querySelector(".profile-auth-link-input")).toBe(draft);
+  expect(draft.value).toBe("openai:work");
+  harness.request.mockImplementationOnce(async () => ({
     profileId: "profile-1",
     accounts: [connectedAccount],
     links: connectedResult.links,
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
-  expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
-  await waitForSolid(() =>
-    expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
-  );
+  }));
+  button(harness.accounts, ".profile-auth-accounts-refresh").click();
+  await waitForSolid(() => expect(draft.disabled).toBe(false));
+  expect(harness.accounts.querySelector('[role="alert"]')).toBeNull();
+  expect(draft.value).toBe("openai:work");
 });
 
 it("lets an admin link and unlink an existing model account", async () => {
@@ -425,6 +558,53 @@ it("lets an admin link and unlink an existing model account", async () => {
     profileId: "profile-1",
     provider: "openai",
   });
+});
+
+it("keeps a held catalog disabled and recovers from its error by reopening sign-in", async () => {
+  const held = createDeferred<UsersAuthConnectCatalogResult>();
+  const harness = await mountAccounts(async () => {
+    throw new Error("Unexpected account mutation");
+  });
+  harness.request.mockImplementationOnce(async () => held.promise);
+  button(harness.accounts, ".profile-auth-add-account").click();
+  await waitForSolid(() =>
+    expect(
+      button(harness.accounts, ".profile-auth-provider .picker-select__trigger").disabled,
+    ).toBe(true),
+  );
+  expect(harness.accounts.textContent).not.toContain(t("profilePage.modelAccounts.noMethods"));
+  held.reject(new Error("Catalog unavailable"));
+  await waitForSolid(() =>
+    expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
+      "Catalog unavailable",
+    ),
+  );
+  button(harness.accounts, ".profile-auth-connect-cancel").click();
+  flush();
+  button(harness.accounts, ".profile-auth-add-account").click();
+  await waitForSolid(() =>
+    expect(
+      button(harness.accounts, ".profile-auth-provider .picker-select__trigger").disabled,
+    ).toBe(false),
+  );
+  expect(harness.accounts.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("retires the previous connection's catalog without reopening its sign-in", async () => {
+  const held = createDeferred<UsersAuthConnectCatalogResult>();
+  const harness = await mountAccounts(async () => {
+    throw new Error("Unexpected account mutation");
+  });
+  harness.request.mockImplementationOnce(async () => held.promise);
+  button(harness.accounts, ".profile-auth-add-account").click();
+  harness.emit("connected", true);
+  await waitForSolid(() =>
+    expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
+  );
+  held.resolve(catalog);
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(harness.accounts.querySelector(".model-accounts-choice")).toBeNull();
 });
 
 it("polls one authorization at a time and uses its recorded outcome", async () => {
@@ -587,13 +767,14 @@ it("does not apply an old poll after replacing the connection and starting a new
   expect(harness.accounts.querySelector(".model-accounts-flow")).not.toBeNull();
 });
 
-it("keeps a failed status check visible and lets the person retry it", async () => {
+it("keeps repeated failed status checks retryable and retains the answer while checking", async () => {
   let polls = 0;
+  const completion = createDeferred<UsersAuthConnectStatusResult>();
   const harness = await mountAccounts(async () => {
-    if (++polls === 1) {
+    if (++polls < 3) {
       throw new Error("Gateway disconnected");
     }
-    return connectedResult;
+    return completion.promise;
   });
   await harness.start();
   await vi.advanceTimersByTimeAsync(2_000);
@@ -603,7 +784,26 @@ it("keeps a failed status check visible and lets the person retry it", async () 
   );
   await vi.advanceTimersByTimeAsync(10_000);
   expect(polls).toBe(1);
+  const answer = await input(
+    harness.accounts,
+    ".wizard-step__form input",
+    "https://example.test/callback",
+  );
   button(harness.accounts, ".profile-auth-connect-check").click();
+  await waitForSolid(() => {
+    expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
+      "Gateway disconnected",
+    );
+    expect(button(harness.accounts, ".profile-auth-connect-check").disabled).toBe(false);
+  });
+  expect(answer.value).toBe("https://example.test/callback");
+  button(harness.accounts, ".profile-auth-connect-check").click();
+  await waitForSolid(() =>
+    expect(button(harness.accounts, ".profile-auth-connect-check").disabled).toBe(true),
+  );
+  expect(harness.accounts.querySelector(".wizard-step__form input")).toBe(answer);
+  expect(answer.value).toBe("https://example.test/callback");
+  completion.resolve(connectedResult);
   await waitForSolid(() => expect(harness.accounts.textContent).toContain(connectedAccount.label));
   expect(harness.accounts.querySelector('[role="alert"]')).toBeNull();
 });

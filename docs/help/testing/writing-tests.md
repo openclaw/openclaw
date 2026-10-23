@@ -45,6 +45,7 @@ PRs state both.
   Gateway/process fixtures; never boot one per test when a suite-level fixture
   exists. Import narrow APIs, not broad barrels. Fix shared state; do not add
   serial configs or worker pins.
+- Async E2E waits: produced state, never action return.
 - For compiled subprocesses and legacy timeout helpers, follow the
   [collection/preload and timeout migration recipes](/help/testing/fixtures#compiled-subprocesses-and-timeout-helpers).
 

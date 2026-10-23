@@ -6,14 +6,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import {
   SignatureKind,
   SymbolFlags,
   type Checker,
   type Project,
   type Symbol,
-} from "typescript/unstable/async";
+} from "typescript/async";
 import { listPluginCompatRecords } from "../src/plugins/compat/registry.js";
 import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
 import { formatNativeTypeScriptDiagnostics } from "./lib/native-typescript-diagnostics.mts";
@@ -232,7 +232,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: owner-approved service-bound remote Control UI ingress.
       // +2: shared database-engine host and worker adapters.
       // +1: maintainer-requested context-engine-transcript-runtime watermark subpath (2026-10-08).
-      156,
+      // +1: approved shared OpenAI Decisions codec used by OpenAI and ClawRouter.
+      157,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -286,7 +287,13 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: MemorySearchResponse and AgentsWorkspaceGetResult type-only contracts
       // for the plugin-owned indexed Memory search presentation.
       // +5: maintainer-requested context-engine transcript watermark reader, its types, and fence error.
-      3805,
+      // +3: ControlUiChannelSettingsSnapshot, ControlUiChannelSettingsContext, and
+      // ControlUiChannelSettingsView for plugin-owned channel Settings presentations.
+      // +1: the shared message-tool source-reply finality resolver.
+      // +1: awaited web_search policy preparation for harnesses; the sync resolver stays.
+      // +3: shared Decisions support/evaluation functions and the canonical capability schema.
+      // +2: openRecord and ToolArgumentValidationError on the existing tool-plugin facade.
+      3815,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -327,7 +334,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same boot-selected family lookup.
       // +1: the same shared auth-patch application.
       // +1: maintainer-requested context-engine transcript watermark reader.
-      2206,
+      // +1: the shared message-tool source-reply finality resolver, so harnesses apply a run's default.
+      // +1: the same awaited web_search policy preparation.
+      // +2: the same shared Decisions support predicate and evaluator.
+      // +1: the same openRecord helper; ToolArgumentValidationError is construct-only.
+      2211,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

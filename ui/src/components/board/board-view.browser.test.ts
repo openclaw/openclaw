@@ -6,7 +6,7 @@ import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import "../../styles/base.css";
 import "../../styles/chat/board.css";
-import "./board-view.ts";
+import "./board-view.tsx";
 
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
 
@@ -139,6 +139,24 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     view.snapshot = { ...view.snapshot!, revision: 2 };
     await view.updateComplete;
     expect(track.scrollLeft).toBe(0);
+
+    const allTabs = view.snapshot!.tabs;
+    view.activeTabId = "tab-0";
+    view.snapshot = { ...view.snapshot!, tabs: allTabs.slice(0, 1) };
+    await view.updateComplete;
+    expect(view.querySelector(".board-tabs__track")).toBeNull();
+    view.activeTabId = "tab-7";
+    view.snapshot = { ...view.snapshot!, tabs: allTabs };
+    await view.updateComplete;
+    await vi.waitFor(() => {
+      const restored = view.querySelector<HTMLElement>(".board-tabs__track")!;
+      const selected = view.querySelector<HTMLElement>('[data-board-tab-id="tab-7"]')!;
+      expect(restored).not.toBe(track);
+      const bounds = restored.getBoundingClientRect();
+      const tab = selected.getBoundingClientRect();
+      expect(tab.left).toBeGreaterThanOrEqual(bounds.left - 1);
+      expect(tab.right).toBeLessThanOrEqual(bounds.right + 1);
+    });
   });
 
   it.each(["switch", "move"])("retains loaded widget state during %s", async (action) => {

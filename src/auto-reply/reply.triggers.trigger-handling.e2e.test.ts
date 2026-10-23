@@ -1,9 +1,9 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it, vi, type MockInstance } from "vitest";
+import { describe, expect, it, onTestFinished, vi, type MockInstance } from "vitest";
 import {
   expectInlineCommandHandledAndStripped,
-  getAbortEmbeddedAgentRunMock,
   getCompactEmbeddedAgentSessionMock,
   getRunEmbeddedAgentMock,
   installTriggerHandlingReplyHarness,
@@ -15,17 +15,28 @@ import {
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveSessionKey } from "../config/sessions.js";
 import {
   loadExactSessionEntry,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
+import { dispatchInboundMessage } from "./dispatch.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
+import { createTestFollowupRun } from "./reply/agent-runner.test-fixtures.js";
+import { markCompleteReplyConfig } from "./reply/get-reply-fast-path.test-support.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
+import { createReplyDispatcher } from "./reply/reply-dispatcher.js";
+import { createMockTypingController } from "./reply/test-helpers.js";
 import type { MsgContext } from "./templating.js";
+import type { ReplyPayload } from "./types.js";
 
 type GetReplyFromConfig = typeof import("./reply/get-reply.js").getReplyFromConfig;
 type ReplyAgentParams = Parameters<typeof import("./reply/agent-runner-run.js").runReplyAgent>[0];
@@ -77,11 +88,6 @@ vi.mock("./reply/agent-runner-run.js", () => ({
     });
     return { text: result?.payloads?.[0]?.text };
   },
-}));
-
-vi.mock("./reply/commands-compact.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./reply/commands-compact.runtime.js")>()),
-  isEmbeddedAgentRunAbortableForCompaction: () => false,
 }));
 
 let capturedGetReplyFromConfig: GetReplyFromConfig | undefined;
@@ -322,12 +328,6 @@ describe("trigger handling", () => {
           historyBody,
         ],
         ["current-message", { ...message, Body: `/thinking high ${currentBody}` }, {}, currentBody],
-        [
-          "heartbeat",
-          { Body: "HEARTBEAT /think:high", From: "+1003", To: "+1003" },
-          { isHeartbeat: true },
-          undefined,
-        ],
       ] as const;
       for (const [label, request, options, expectedPrompt] of thinkCases) {
         const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
@@ -343,35 +343,6 @@ describe("trigger handling", () => {
             firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent").prompt ?? "";
           expect(prompt, label).toBe(expectedPrompt);
         }
-      }
-    });
-  });
-
-  it("resolves heartbeat model selection from overrides", async () => {
-    await withTempHome(async (home) => {
-      for (const [label, provider, model] of [
-        ["heartbeat-override", "anthropic", "claude-haiku-4-5-20251001"],
-        ["stored-override", "openai", "gpt-5.4"],
-      ] as const) {
-        const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-        runEmbeddedAgentMock.mockReset();
-        mockRunEmbeddedAgentOk("ok");
-        const cfg = makeCfg(home);
-        cfg.session = { ...cfg.session, store: join(home, `${label}.sessions.json`) };
-        await seedTargetSession(requireSessionStorePath(cfg), MAIN_SESSION_KEY, {
-          sessionId: "main",
-          providerOverride: "openai",
-          modelOverride: "gpt-5.4",
-        });
-        if (label === "heartbeat-override") {
-          cfg.agents ??= {};
-          cfg.agents.defaults ??= {};
-          cfg.agents.defaults.heartbeat = { model: `${provider}/${model}` };
-        }
-        await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
-
-        const call = firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent");
-        expect(call).toMatchObject({ provider, model });
       }
     });
   });
@@ -413,68 +384,305 @@ describe("trigger handling", () => {
   it("aborts native target sessions and clears queued followups", async () => {
     await withTempHome(async (home) => {
       const cfg = makeStoredCfg(home, "native-stop");
-      getAbortEmbeddedAgentRunMock().mockReset().mockReturnValue(false);
+      setRuntimeConfigSnapshot(cfg);
+      onTestFinished(clearRuntimeConfigSnapshot);
       const storePath = requireSessionStorePath(cfg);
       const targetSessionKey = "agent:main:telegram:group:123";
       const targetSessionId = "session-target";
       await seedTargetSession(storePath, targetSessionKey);
-      const followupRun: FollowupRun = {
-        prompt: "queued",
-        enqueuedAt: Date.now(),
-        run: {
-          agentId: "main",
-          agentDir: join(home, "agent"),
-          sessionId: targetSessionId,
-          sessionKey: targetSessionKey,
-          messageProvider: "telegram",
-          agentAccountId: "acct",
-          sessionFile: join(home, "session.jsonl"),
-          workspaceDir: join(home, "workspace"),
-          config: cfg,
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          timeoutMs: 10,
-          blockReplyBreak: "text_end",
-        },
-      };
-      enqueueFollowupRun(
-        targetSessionKey,
-        followupRun,
-        { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
-        "none",
+      const providerStarted = Promise.withResolvers<AbortSignal>();
+      const providerAborted = Promise.withResolvers<void>();
+      const providerRelease = Promise.withResolvers<void>();
+      const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
+      runEmbeddedAgentMock.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
+        if (!params.abortSignal) {
+          throw new Error("Expected the active reply producer to receive an abort signal");
+        }
+        providerStarted.resolve(params.abortSignal);
+        await Promise.race([
+          providerRelease.promise,
+          new Promise<void>((resolve) => {
+            params.abortSignal?.addEventListener(
+              "abort",
+              () => {
+                providerAborted.resolve();
+                resolve();
+              },
+              { once: true },
+            );
+          }),
+        ]);
+        params.abortSignal.throwIfAborted();
+        return { payloads: [], meta: { durationMs: 1 } };
+      });
+      const activeFollowupRun = createTestFollowupRun({
+        agentId: "main",
+        config: cfg,
+        messageProvider: "telegram",
+        model: "claude-opus-4-7",
+        provider: "anthropic",
+        sessionFile: join(home, "active-session.jsonl"),
+        sessionId: targetSessionId,
+        sessionKey: targetSessionKey,
+        workspaceDir: join(home, "workspace"),
+      });
+      const { runReplyAgent } = await vi.importActual<typeof import("./reply/agent-runner-run.js")>(
+        "./reply/agent-runner-run.js",
       );
-      expect(getFollowupQueueDepth(targetSessionKey)).toBe(1);
-
-      const native = await vi.importActual<
-        typeof import("../agents/embedded-agent-runner/runs.js")
-      >("../agents/embedded-agent-runner/runs.js");
-      const { createEmbeddedRunHandle } =
-        await import("../agents/embedded-agent-runner/runs.test-support.js");
-      const abort = vi.fn();
-      const handle = createEmbeddedRunHandle({ abort });
-      native.setActiveEmbeddedRun(targetSessionId, handle, targetSessionKey, undefined, "main");
-      getAbortEmbeddedAgentRunMock().mockImplementation(native.abortEmbeddedAgentRun);
+      const activeRun = runReplyAgent({
+        commandBody: "held producer",
+        followupRun: activeFollowupRun,
+        queueKey: targetSessionKey,
+        resolvedQueue: { mode: "followup", debounceMs: 0 },
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        typing: createMockTypingController(),
+        sessionEntry: loadSessionEntry({ storePath, sessionKey: targetSessionKey }),
+        sessionKey: targetSessionKey,
+        storePath,
+        sessionCtx: {
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:111",
+          ChatType: "direct",
+          SessionKey: targetSessionKey,
+        },
+        defaultModel: "anthropic/claude-opus-4-7",
+        resolvedVerboseLevel: "off",
+        isNewSession: false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "never",
+      });
+      void activeRun.then(
+        () => providerStarted.reject(new Error("Active reply settled before its producer started")),
+        providerStarted.reject,
+      );
+      const activeAbortSignal = await providerStarted.promise;
       try {
-        const res = await getReplyFromConfig(
-          makeNativeTelegramCommandMessage({
+        expect(activeAbortSignal.aborted).toBe(false);
+        const queuedAbandoned = vi.fn();
+        const queuedSettled = vi.fn();
+        const followupRun: FollowupRun = {
+          prompt: "queued",
+          enqueuedAt: Date.now(),
+          run: {
+            agentId: "main",
+            agentDir: join(home, "agent"),
+            sessionId: targetSessionId,
+            sessionKey: targetSessionKey,
+            messageProvider: "telegram",
+            agentAccountId: "acct",
+            sessionFile: join(home, "session.jsonl"),
+            workspaceDir: join(home, "workspace"),
+            config: cfg,
+            provider: "anthropic",
+            model: "claude-opus-4-6",
+            timeoutMs: 10,
+            blockReplyBreak: "text_end",
+          },
+          turnAdoptionLifecycle: {
+            onAdopted: vi.fn(),
+            onAbandoned: queuedAbandoned,
+            onSettled: queuedSettled,
+          },
+        };
+        enqueueFollowupRun(
+          targetSessionKey,
+          followupRun,
+          { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
+          "none",
+        );
+        expect(getFollowupQueueDepth(targetSessionKey)).toBe(1);
+
+        const replies: ReplyPayload[] = [];
+        const dispatcher = createReplyDispatcher({
+          deliver: async (payload) => {
+            replies.push(payload);
+          },
+        });
+        await dispatchInboundMessage({
+          ctx: makeNativeTelegramCommandMessage({
             body: "/stop",
             slashSessionKey: "telegram:slash:111",
             targetSessionKey,
           }),
-          {},
           cfg,
-        );
+          dispatcher,
+        });
+        expect(activeAbortSignal.aborted).toBe(true);
+        await providerAborted.promise;
+        await activeRun;
 
-        expect(maybeReplyText(res)).toBe("⚙️ Agent was aborted.");
-        expect(getAbortEmbeddedAgentRunMock()).toHaveBeenCalledWith(targetSessionId);
-        expect(abort).toHaveBeenCalledOnce();
+        expect(replies).toEqual([expect.objectContaining({ text: "⚙️ Agent was aborted." })]);
+        expect(queuedAbandoned).toHaveBeenCalledOnce();
+        expect(queuedSettled).toHaveBeenCalledOnce();
         expect(loadSessionEntry({ storePath, sessionKey: targetSessionKey })?.abortedLastRun).toBe(
           true,
         );
         expect(getFollowupQueueDepth(targetSessionKey)).toBe(0);
       } finally {
-        native.clearActiveEmbeddedRun(targetSessionId, handle);
-        getAbortEmbeddedAgentRunMock().mockReset().mockReturnValue(false);
+        providerRelease.resolve();
+        await Promise.allSettled([activeRun]);
+      }
+    });
+  });
+
+  async function dispatchNativeTopicReset(params: {
+    home: string;
+    command: "/new" | "/reset";
+    beforeDispatch?: (fixture: {
+      cfg: ReturnType<typeof makeCfg>;
+      storePath: string;
+      targetSessionKey: string;
+    }) => Promise<void>;
+  }) {
+    const action = params.command.slice(1);
+    // Full runtime: the fast test bootstrap skips the real session rollover.
+    const cfg = markCompleteReplyConfig(makeStoredCfg(params.home, `native-${action}`), {
+      runtimeMode: "full",
+    });
+    setRuntimeConfigSnapshot(cfg);
+    onTestFinished(clearRuntimeConfigSnapshot);
+    const storePath = requireSessionStorePath(cfg);
+    // Telegram group topics dispatch native commands on the topic session itself.
+    const targetSessionKey = "agent:main:telegram:group:-1001234567890:topic:42";
+    await seedTargetSession(storePath, targetSessionKey, { lifecycleRevision: "before-reset" });
+    const hookEvents: string[] = [];
+    const hook = (event: { type: string; action: string }) => {
+      hookEvents.push(`${event.type}:${event.action}`);
+    };
+    registerInternalHook(`command:${action}`, hook);
+    onTestFinished(() => unregisterInternalHook(`command:${action}`, hook));
+    await params.beforeDispatch?.({ cfg, storePath, targetSessionKey });
+    const replies: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        replies.push(payload);
+      },
+    });
+    const result = await dispatchInboundMessage({
+      ctx: {
+        ...makeNativeTelegramCommandMessage({
+          body: params.command,
+          slashSessionKey: targetSessionKey,
+          targetSessionKey,
+        }),
+        ChatType: "group",
+        To: "telegram:-1001234567890",
+        MessageThreadId: 42,
+      },
+      cfg,
+      dispatcher,
+    });
+    return {
+      result,
+      replies,
+      hookEvents,
+      entry: loadSessionEntry({ storePath, sessionKey: targetSessionKey }),
+    };
+  }
+
+  it.each([
+    { command: "/new", text: "✅ New session started." },
+    { command: "/reset", text: "✅ Session reset." },
+  ] as const)(
+    "commits native $command in an idle group topic and fires its command hook",
+    async ({ command, text }) => {
+      await withTempHome(async (home) => {
+        const { result, replies, hookEvents, entry } = await dispatchNativeTopicReset({
+          home,
+          command,
+        });
+
+        expect(result).toMatchObject({ queuedFinal: true });
+        expect(replies).toEqual([expect.objectContaining({ text })]);
+        expect(hookEvents).toEqual([`command:${command.slice(1)}`]);
+        expect(entry?.lifecycleRevision).toBeTruthy();
+        expect(entry?.lifecycleRevision).not.toBe("before-reset");
+      });
+    },
+  );
+
+  it("still preempts another active run when native /new resets its topic", async () => {
+    await withTempHome(async (home) => {
+      const providerStarted = Promise.withResolvers<AbortSignal>();
+      const providerRelease = Promise.withResolvers<void>();
+      let activeRun: Promise<unknown> | undefined;
+      try {
+        const { replies, hookEvents, entry } = await dispatchNativeTopicReset({
+          home,
+          command: "/new",
+          beforeDispatch: async ({ cfg, storePath, targetSessionKey }) => {
+            getRunEmbeddedAgentMock().mockImplementationOnce(
+              async (params: { abortSignal?: AbortSignal }) => {
+                if (!params.abortSignal) {
+                  throw new Error("Expected the active reply producer to receive an abort signal");
+                }
+                providerStarted.resolve(params.abortSignal);
+                await Promise.race([
+                  providerRelease.promise,
+                  once(params.abortSignal, "abort").catch(() => undefined),
+                ]);
+                params.abortSignal.throwIfAborted();
+                return { payloads: [], meta: { durationMs: 1 } };
+              },
+            );
+            const { runReplyAgent } = await vi.importActual<
+              typeof import("./reply/agent-runner-run.js")
+            >("./reply/agent-runner-run.js");
+            activeRun = runReplyAgent({
+              commandBody: "held producer",
+              followupRun: createTestFollowupRun({
+                agentId: "main",
+                config: cfg,
+                messageProvider: "telegram",
+                model: "claude-opus-4-7",
+                provider: "anthropic",
+                sessionFile: join(home, "active-session.jsonl"),
+                sessionId: "session-target",
+                sessionKey: targetSessionKey,
+                workspaceDir: join(home, "workspace"),
+              }),
+              queueKey: targetSessionKey,
+              resolvedQueue: { mode: "followup", debounceMs: 0 },
+              shouldSteer: false,
+              shouldFollowup: false,
+              isActive: false,
+              typing: createMockTypingController(),
+              sessionEntry: loadSessionEntry({ storePath, sessionKey: targetSessionKey }),
+              sessionKey: targetSessionKey,
+              storePath,
+              sessionCtx: {
+                Provider: "telegram",
+                OriginatingChannel: "telegram",
+                OriginatingTo: "telegram:-1001234567890",
+                ChatType: "group",
+                SessionKey: targetSessionKey,
+              },
+              defaultModel: "anthropic/claude-opus-4-7",
+              resolvedVerboseLevel: "off",
+              isNewSession: false,
+              blockStreamingEnabled: false,
+              resolvedBlockStreamingBreak: "message_end",
+              shouldInjectGroupIntro: false,
+              typingMode: "never",
+            });
+            void activeRun.catch(() => undefined);
+            expect((await providerStarted.promise).aborted).toBe(false);
+          },
+        });
+
+        expect((await providerStarted.promise).aborted).toBe(true);
+        await activeRun?.catch(() => undefined);
+        expect(replies).toEqual([expect.objectContaining({ text: "✅ New session started." })]);
+        expect(hookEvents).toEqual(["command:new"]);
+        expect(entry?.lifecycleRevision).not.toBe("before-reset");
+      } finally {
+        providerRelease.resolve();
+        await Promise.allSettled([activeRun]);
       }
     });
   });

@@ -2,19 +2,22 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { createActiveRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import {
   initializeSessionReadContext,
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
-import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { beginSessionPermissionChange } from "./session-permission-change.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
@@ -79,15 +82,18 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       cfg,
     });
     const context = requestContext(cfg);
-    context.chatAbortControllers = connection.chatAbortControllers;
-    connection.chatAbortControllers.set("current-run", {
-      controller: new AbortController(),
-      sessionKey: key,
-      sessionId: "parent-session",
-      agentId: "main",
-      startedAtMs: now - 100,
-      expiresAtMs: now + 1000,
-    });
+    rpcSourceTesting.set(
+      "current-run",
+      await createActiveRpcSourceForTest(
+        {},
+        {
+          sessionKey: key,
+          sessionId: "parent-session",
+          agentId: "main",
+          storeScope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        },
+      ),
+    );
     subagentRuns.set("row-parity-child", {
       runId: "row-parity-child",
       childSessionKey: childKey,
@@ -148,7 +154,6 @@ it("delivers nested event rows identical to the full list for each viewer and cl
         const source = {
           ...buildGatewaySessionSnapshot({
             sessionRow: projection.snapshot({ key, agentId: "main" }).row,
-            includeSession: true,
             lifecycle: true,
           }),
           sessionKey: key,
@@ -307,11 +312,10 @@ it("delivers nested event rows identical to the full list for each viewer and cl
         );
       const publication = prepareSessionRowPublication(projection, now);
       const projectRun = createVisibleActiveSessionRunProjector(
-        connection,
         projection.state.rowContext.projectedAgentRuns,
       );
       const present = (index: number) =>
-        publication(peers[index]!.client, projectRun).present(captured, request);
+        publication(peers[index]!.client, projectRun).getPresentation().present(captured, request);
       publishPreview(preview);
       const stringify = vi.spyOn(JSON, "stringify");
       try {

@@ -5,7 +5,6 @@ repositories and process groups; the real v3 shell and supervisor are exercised.
 """
 import ctypes
 import errno
-import hashlib
 import importlib.util
 import json
 import os
@@ -141,7 +140,7 @@ class LockTests(unittest.TestCase):
         self.repo = self.root/'repo'; self.repo.mkdir()
         self.git('init', '-q', '-b', 'main')
         self.sources = self.root/'source'/'pr-lib';self.sources.mkdir(parents=True)
-        for file in (LOCK, RUNNER, PROVIDER, LOCK.with_name('host-tools.sh'), LOCK.with_name('github.sh'), LOCK.with_name('github.mjs'), LOCK.with_name('gh-api-preflight.mjs')):
+        for file in (LOCK, RUNNER, RUNNER.with_name('materialized-anchor.mjs'), PROVIDER, LOCK.with_name('host-tools.sh'), LOCK.with_name('github.sh'), LOCK.with_name('github.mjs'), LOCK.with_name('gh-api-preflight.mjs')):
             shutil.copyfile(file,self.sources/file.name)
         library = self.sources.parent/'lib';library.mkdir()
         # Preserve the supervisor's eager script imports without copying an app graph.
@@ -250,11 +249,11 @@ class LockTests(unittest.TestCase):
         self.assertFalse(anchor.exists())
         self.assertTrue((outside/'preserved').exists())
 
-    def test_anchor_retained_when_operation_lock_is_retained(self):
+    def test_anchor_retired_after_drained_operation_failure(self):
         p, anchor, _ = self.supervise_anchor('acquire_pr_operation_lock 42\nexit 7')
         self.complete(p, 7)
-        self.assertTrue(self.exists())
-        self.assertTrue(anchor.exists())
+        self.assertFalse(self.exists())
+        self.assertFalse(anchor.exists())
 
     def test_anchor_retained_without_creation_authority(self):
         for handoff in ('missing', 'closed', 'wrong-pid', 'foreign'):
@@ -280,7 +279,7 @@ class LockTests(unittest.TestCase):
         self.assertTrue(original.exists())
         self.assertEqual((anchor/'replacement').read_text(), 'foreign bytes\n')
 
-    def test_anchor_retained_after_interruption(self):
+    def test_anchor_retired_after_interruption(self):
         ready = self.root/'ready'
         p, anchor, _ = self.supervise_anchor('acquire_pr_operation_lock 42\n: > "'+str(ready)+'"\nsleep 30')
         deadline = time.monotonic()+5
@@ -288,7 +287,7 @@ class LockTests(unittest.TestCase):
             self.assertIsNone(p.poll()); self.assertLess(time.monotonic(), deadline); time.sleep(.02)
         p.send_signal(signal.SIGTERM)
         self.complete(p, 128+signal.SIGTERM)
-        self.assertTrue(anchor.exists())
+        self.assertFalse(anchor.exists())
         self.assertTrue(self.exists())
 
     @unittest.skipUnless(sys.platform == 'darwin', 'Darwin sandbox')
@@ -297,8 +296,8 @@ class LockTests(unittest.TestCase):
         self.assertFalse(self.exists())
         self.assertFalse((self.repo/'node_modules').exists())
 
-    def test_failure_stays_sticky_and_exact_cas_recovery(self):
-        self.complete(self.supervise('acquire_pr_operation_lock 42\nexit 7'),7)
+    def test_interruption_stays_sticky_and_exact_cas_recovery(self):
+        self.complete(self.supervise('acquire_pr_operation_lock 42\nkill -TERM "$$"'),128+signal.SIGTERM)
         self.assertTrue(self.exists()); old=self.git('rev-parse',self.ref)
         successor=self.git('hash-object','-w','--stdin',input='successor fixture\n')
         self.git('update-ref',self.ref,successor,old)
@@ -329,13 +328,13 @@ class LockTests(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0, out+err)
         self.assertTrue(self.exists())
 
-    def test_validation_failure_release_and_sticky_side_effects(self):
+    def test_drained_failure_releases_after_validation_or_side_effects(self):
         for mutated in (False, True):
             body = 'acquire_pr_operation_lock 42\nbegin_pr_operation_validation_phase\n'
             if mutated:
                 body += 'mark_pr_operation_side_effects_started\n'
             self.complete(self.supervise(body+'exit 1'), 1)
-            self.assertEqual(self.exists(), mutated)
+            self.assertFalse(self.exists())
 
     def test_live_owner_blocks_then_clean_drain_releases(self):
         ready=self.root/'ready'; go=self.root/'go'

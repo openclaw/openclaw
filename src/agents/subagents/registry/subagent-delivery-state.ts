@@ -21,6 +21,7 @@ export function resetRequesterSettleWakeRetry(
     ...wake,
     status: "pending",
     attemptCount: 0,
+    privateInput: undefined,
     replayCount: undefined,
     nextAttemptAt: undefined,
     lastError: undefined,
@@ -222,14 +223,15 @@ export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">):
   return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
 }
 
-/** A finished requester without its required message receipt must not execute again implicitly. */
+/** A finished requester without its required reply receipt must not execute again implicitly. */
 export function isCompletedRequesterDeliveryBlocked(
   entry: Pick<SubagentRunRecord, "delivery">,
 ): boolean {
   return (
     isDeliverySuspended(entry) &&
     entry.delivery?.suspendedReason === "permanent_failure" &&
-    entry.delivery.lastDropReason === "message_tool_delivery_missing"
+    (entry.delivery.lastDropReason === "message_tool_delivery_missing" ||
+      entry.delivery.lastDropReason === "visible_reply_missing")
   );
 }
 

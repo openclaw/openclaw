@@ -10,7 +10,7 @@ The default local backend: its restricted defaults, GPU and Docker-out-of-Docker
 
 The Docker backend runs tools locally through the `docker` CLI. Its selection and error behavior are unchanged; it does not check or fall back to Podman.
 
-Defaults: `network: "none"` (no egress), `readOnlyRoot: true`, `capDrop: ["ALL"]`, image `openclaw-sandbox:bookworm-slim`.
+Defaults: `network: "none"` (no egress), `readOnlyRoot: true`, `capDrop: ["ALL"]`, image `openclaw-sandbox:trixie-slim`.
 
 This explicit configuration keeps the agent workspace read-only and preserves
 the default restricted runtime posture:
@@ -25,7 +25,7 @@ the default restricted runtime posture:
         scope: "session",
         workspaceAccess: "ro",
         docker: {
-          image: "openclaw-sandbox:bookworm-slim",
+          image: "openclaw-sandbox:trixie-slim",
           readOnlyRoot: true,
           tmpfs: ["/tmp", "/var/tmp", "/run"],
           network: "none",

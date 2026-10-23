@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -11,23 +10,23 @@ import {
   relativeStandaloneEntry,
   resolveStandaloneBuildIdentity,
 } from "../../scripts/lib/bun-standalone-contract.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const version = "2026.10.3";
+const parse = (...flags: string[]) => parseStandaloneArguments(["out", ...flags]);
+const identity = (info: Parameters<typeof resolveStandaloneBuildIdentity>[0]) =>
+  resolveStandaloneBuildIdentity(info, version);
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-standalone-contract-"));
-  roots.push(root);
-  fs.mkdirSync(path.join(root, "runtime"));
-  return root;
+  const root = tempDirs.make("openclaw-standalone-contract-");
+  const runtime = path.join(root, "runtime");
+  fs.mkdirSync(runtime);
+  return { root, runtime };
 }
 
 describe("standalone build interface", () => {
   it("defaults to JIT and selects exactly one explicit compilation mode", () => {
-    expect(parseStandaloneArguments(["out"])).toEqual({
+    expect(parse()).toEqual({
       outputDirectory: "out",
       mode: "jit",
       compileFlags: [],
@@ -36,16 +35,11 @@ describe("standalone build interface", () => {
       "--bytecode": "bytecode",
       "--compile-aot": "aot",
     })) {
-      const parsed = parseStandaloneArguments(["out", flag]);
-      if (parsed.help) {
-        throw new Error("A build mode must not request help");
-      }
-      expect(parsed.mode).toBe(mode);
+      const parsed = parse(flag);
+      expect(parsed).toMatchObject({ mode });
     }
-    expect(() => parseStandaloneArguments(["out", "--bytecode", "--compile-aot"])).toThrow(
-      "at most one",
-    );
-    expect(() => parseStandaloneArguments(["out", "--unknown"])).toThrow("at most one");
+    expect(() => parse("--bytecode", "--compile-aot")).toThrow("at most one");
+    expect(() => parse("--unknown")).toThrow("at most one");
     expect(() => parseStandaloneArguments([])).toThrow("Usage:");
   });
 
@@ -54,7 +48,7 @@ describe("standalone build interface", () => {
       ["--plugins", "codex, slack,codex", "--bytecode"],
       ["--bytecode", "--plugins", "codex,slack"],
     ]) {
-      expect(parseStandaloneArguments(["out", ...flags])).toEqual({
+      expect(parse(...flags)).toEqual({
         outputDirectory: "out",
         mode: "bytecode",
         compileFlags: ["--bytecode"],
@@ -68,7 +62,7 @@ describe("standalone build interface", () => {
       ["--plugins", "--bytecode"],
       ["--plugins", "codex", "--plugins", "slack"],
     ]) {
-      expect(() => parseStandaloneArguments(["out", ...flags])).toThrow("--plugins");
+      expect(() => parse(...flags)).toThrow("--plugins");
     }
   });
 
@@ -102,28 +96,29 @@ describe("standalone build interface", () => {
 
   it("normalizes canonical runtime provenance", () => {
     expect(
-      resolveStandaloneBuildIdentity(
-        { version: "2026.10.3", commit: "A".repeat(40), builtAt: "2026-10-14T00:00:00.000Z" },
-        "2026.10.3",
-      ),
-    ).toEqual({ version: "2026.10.3", commit: "a".repeat(40) });
+      identity({ version, commit: "A".repeat(40), builtAt: "2026-10-14T00:00:00.000Z" }),
+    ).toEqual({ version, commit: "a".repeat(40) });
   });
 
   it.each([
-    [undefined, "2026.10.3"],
-    [{ version: "", commit: "a".repeat(40) }, "2026.10.3"],
-    [{ version: "2026.10.3", commit: null }, "2026.10.3"],
-    [{ version: "2026.10.3", commit: "abc123" }, "2026.10.3"],
-    [{ version: "2026.10.2", commit: "a".repeat(40) }, "2026.10.3"],
-  ])("refuses missing, invalid, or mixed runtime provenance (%s)", (buildInfo, packageVersion) => {
-    expect(() => resolveStandaloneBuildIdentity(buildInfo, packageVersion)).toThrow(
-      "Run pnpm build",
-    );
+    undefined,
+    { version: "", commit: "a".repeat(40) },
+    { version, commit: null },
+    { version, commit: "abc123" },
+    { version: "2026.10.2", commit: "a".repeat(40) },
+  ])("refuses missing, invalid, or mixed runtime provenance (%s)", (buildInfo) => {
+    expect(() => identity(buildInfo)).toThrow("Run pnpm build");
   });
 
   it("describes the executable and deterministic sidecar without following links", async () => {
-    const root = fixture();
-    const runtime = path.join(root, "runtime");
+    const { root, runtime } = fixture();
+    const sqlite = {
+      source: "bun",
+      version: "3.53.4",
+      extensionLoadingSupported: true,
+      compileOptions: ["ENABLE_FTS5"],
+      license: "public-domain",
+    };
     fs.writeFileSync(path.join(root, "openclaw"), "standalone\n");
     fs.writeFileSync(path.join(runtime, "a.js"), "export const value = 7;\n");
     fs.symlinkSync("a.js", path.join(runtime, "link"));
@@ -135,18 +130,8 @@ describe("standalone build interface", () => {
       embedded: { modules: 4, plugins: 1, workers: 2, inlineWorkers: 0 },
       packageManager: undefined,
       plugins: { embedded: ["slack", "codex"], omitted: ["signal", "matrix"] },
-      sqlite: {
-        source: "bun",
-        version: "3.53.4",
-        extensionLoadingSupported: true,
-        compileOptions: ["ENABLE_FTS5"],
-        license: "public-domain",
-      },
+      sqlite: structuredClone(sqlite),
       pruning: {
-        policy: "runtime-resources-v1",
-        removedFiles: 0,
-        removedBytes: 0,
-        removedSymlinks: 0,
         categories: { pluginAssets: { files: 1, bytes: 24 } },
         sidecarPlugins: [],
       },
@@ -162,13 +147,7 @@ describe("standalone build interface", () => {
         symlinkCount: 1,
         categories: { pluginAssets: { files: 1, bytes: 24 } },
         sidecarPlugins: [],
-        sqlite: {
-          source: "bun",
-          version: "3.53.4",
-          extensionLoadingSupported: true,
-          compileOptions: ["ENABLE_FTS5"],
-          license: "public-domain",
-        },
+        sqlite,
       },
       embedded: { modules: 4, plugins: 1, workers: 2, inlineWorkers: 0 },
       plugins: { embedded: ["codex", "slack"], omitted: ["matrix", "signal"] },
@@ -183,8 +162,7 @@ describe("standalone build interface", () => {
   it.each(["dangling", "outside", "indirect-outside", "cycle", "absolute-inside"])(
     "rejects a %s runtime symlink before describing the sidecar",
     async (kind) => {
-      const root = fixture();
-      const runtime = path.join(root, "runtime");
+      const { root, runtime } = fixture();
       const outside = path.join(root, "outside");
       fs.writeFileSync(outside, "outside\n");
       const link = path.join(runtime, "node_modules/.pnpm/node_modules/openclaw-control-ui");
@@ -213,8 +191,7 @@ describe("standalone build interface", () => {
   );
 
   it("allows contained directory links without counting their contents twice", async () => {
-    const root = fixture();
-    const runtime = path.join(root, "runtime");
+    const { runtime } = fixture();
     fs.mkdirSync(path.join(runtime, "assets"));
     fs.writeFileSync(path.join(runtime, "assets", "data"), "data");
     fs.symlinkSync("assets", path.join(runtime, "asset-link"));

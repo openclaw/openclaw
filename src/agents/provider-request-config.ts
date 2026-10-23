@@ -311,7 +311,6 @@ function resolveAuthOverride(params: {
         mode: "authorization-bearer",
         headerName: "Authorization",
         value,
-        injectAuthorizationHeader: true,
       } as const;
     }
   }
@@ -326,14 +325,12 @@ function resolveAuthOverride(params: {
         headerName,
         value,
         ...(prefix ? { prefix } : {}),
-        injectAuthorizationHeader: false,
       } as const;
     }
   }
   return {
     configured: false,
     mode: params.authHeader ? "authorization-bearer" : "provider-default",
-    injectAuthorizationHeader: params.authHeader === true,
   } as const;
 }
 

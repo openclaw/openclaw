@@ -2,9 +2,11 @@ import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, it } from "vitest";
+import { resolveNpmJsonEntries } from "../../../scripts/lib/npm-json-output.mts";
 import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { isRecord } from "../../normalization-core/src/record-coerce.js";
 
 type CommandResult = { stdout: string; stderr: string };
 type PackageManifest = {
@@ -48,6 +50,15 @@ const compatibility = {
       AnthropicToolProjection AnthropicProjectedToolChoice AnthropicCacheWriteUsage
       AnthropicPromptUsageSnapshot AnthropicIterationUsageSnapshot AnthropicIterationUsageResult`),
   },
+  "@openclaw/ai/internal/model-request-body": {
+    values: [
+      "encodedModelRequestBodyStream",
+      "modelRequestBodyState",
+      "prepareModelRequestBody",
+      "serializeModelRequestBody",
+    ],
+    types: ["EncodedModelRequestBody"],
+  },
   "@openclaw/ai/internal/openai": {
     values: names(`streamOpenAICompletions streamSimpleOpenAICompletions convertMessages
       parseAzureDeploymentNameMap resolveAzureDeploymentNameFromMap isTraditionalAzureOpenAIHost
@@ -61,7 +72,8 @@ const compatibility = {
       isAzureResponsesTextDeltaEvent resolveResponsesMessageSnapshotCollapse mapResponsesTerminalUsage
       readResponsesReasoningTokens resolveResponsesTerminalStopReason readResponsesToolCallItemIdentity
       createResponsesToolCallTracker mapOpenAIStopReason projectOpenAITools
-      reconcileOpenAIResponsesToolChoice reconcileOpenAICompletionsToolChoice responsesPromptObserver`),
+      reconcileOpenAIResponsesToolChoice reconcileOpenAICompletionsToolChoice responsesPromptObserver
+      encodedModelRequestBodyStream modelRequestBodyState`),
     types:
       names(`OpenAICompletionsOptions OpenAIReasoningEffort OpenAIApiReasoningEffort OpenAIResponsesOptions
       ResponsesTextContentPartType ResponsesTextDeltaEventType AzureResponsesTextContentPart
@@ -192,9 +204,15 @@ it("@openclaw/ai packed package installs externally and preserves every publishe
     ["pack", "--ignore-scripts", "--json", "--pack-destination", tempDir],
     packageRoot,
   );
-  const packResult = JSON.parse(pack.stdout) as Array<{ filename: string }>;
-  const tarball = path.join(tempDir, packResult[0]?.filename ?? "");
-  await fs.stat(tarball);
+  const [packResult] = resolveNpmJsonEntries(JSON.parse(pack.stdout));
+  const filename = isRecord(packResult) ? packResult.filename : undefined;
+  if (typeof filename !== "string" || !filename.endsWith(".tgz")) {
+    throw new Error("npm pack did not return a tarball filename");
+  }
+  const tarball = path.join(tempDir, filename);
+  if (!(await fs.stat(tarball)).isFile()) {
+    throw new Error("npm pack did not create a tarball file");
+  }
 
   await writeJson("package.json", { private: true, type: "module" });
   await runNpmCommand(
@@ -222,6 +240,24 @@ it("@openclaw/ai packed package installs externally and preserves every publishe
         if (missing.length > 0) {
           throw new Error(specifier + " missing runtime exports: " + missing.join(", "));
         }
+      }
+      const body = await import("@openclaw/ai/internal/model-request-body");
+      const legacy = await import("@openclaw/ai/internal/openai");
+      const options = {};
+      let encodings = 0;
+      legacy.modelRequestBodyState(options).encode = async (payload) => {
+        encodings++;
+        return body.serializeModelRequestBody(payload);
+      };
+      const prepared = await body.prepareModelRequestBody(options)({ stream: true, input: "hello" });
+      if (encodings !== 1 || !legacy.modelRequestBodyState(options).enabled) {
+        throw new Error("request-body option state was split across package entries");
+      }
+      if (legacy.encodedModelRequestBodyStream(prepared.body) !== true) {
+        throw new Error("encoded request-body stream metadata was split across package entries");
+      }
+      if (await prepared.body.text() !== '{"stream":true,"input":"hello"}') {
+        throw new Error("request-body encoding changed across package entries");
       }
     `;
   await runCommand(process.execPath, createNodeEvalArgs(importScript, { evalFlag: "-e" }), {

@@ -15,10 +15,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { AttemptSettlementWarning, EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexAsyncDeliverySettlement } from "./event-projector-options.js";
 import type { CodexThread } from "./protocol.js";
-import {
-  projectBoundedCodexThreadHistory,
-  type CodexThreadHistoryImportResult,
-} from "./transcript-history-projection.js";
+import { projectBoundedCodexThreadHistory } from "./transcript-history-projection.js";
 import {
   fingerprintCodexMirrorSourceMessage,
   isMirroredAgentMessage,
@@ -55,14 +52,13 @@ export async function importCodexThreadHistoryToTranscript(params: {
   cwd?: string;
   modelProvider?: string | null;
   config?: SessionTranscriptWriteLockParams["config"];
-}): Promise<CodexThreadHistoryImportResult> {
-  const { transcriptMessages, importedMessages, omittedMessages } =
-    projectBoundedCodexThreadHistory({
-      thread: params.thread,
-      throughTurnId: params.throughTurnId,
-      importedAt: Date.now(),
-      ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
-    });
+}): Promise<void> {
+  const { transcriptMessages } = projectBoundedCodexThreadHistory({
+    thread: params.thread,
+    throughTurnId: params.throughTurnId,
+    importedAt: Date.now(),
+    ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
+  });
   if (transcriptMessages.length > 0) {
     await mirror({
       assertCurrent: params.assertCurrent,
@@ -76,7 +72,6 @@ export async function importCodexThreadHistoryToTranscript(params: {
       idempotencyScope: `codex-app-server:${params.thread.id}:history`,
     });
   }
-  return { importedMessages, omittedMessages };
 }
 
 async function mirrorBestEffort(params: {

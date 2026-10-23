@@ -3,6 +3,7 @@ import type {
   RealtimeTranscriptionSession,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import { normalizeVoiceCallConfig } from "./config.js";
 import { MediaStreamHandler, type MediaStreamConfig } from "./media-stream.js";
 import { connectWs, startUpgradeWsServer } from "./websocket-test-support.js";
 
@@ -22,6 +23,7 @@ export const createStubSttProvider = (
 });
 export const createHandler = (config: Partial<MediaStreamConfig> = {}) =>
   new MediaStreamHandler({
+    ...normalizeVoiceCallConfig({}).streaming,
     transcriptionProvider: createStubSttProvider(),
     providerConfig: {},
     ...config,

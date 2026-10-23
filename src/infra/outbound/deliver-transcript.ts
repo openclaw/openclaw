@@ -1,12 +1,14 @@
 // Mirrors successful outbound payloads into the configured session transcript.
-import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   runWithoutOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
+import { runWithSessionControllerCleanup } from "../../sessions/session-controller.owner-context.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatErrorMessage } from "../errors.js";
@@ -19,7 +21,7 @@ const loadTranscriptRuntime = createLazyRuntimeModule(
 );
 
 export async function mirrorDeliveredPayloads(params: {
-  delivery: DeliverOutboundPayloadsCoreParams;
+  delivery: Pick<DeliverOutboundPayloadsCoreParams, "cfg" | "channel" | "to" | "mirror">;
   payloads: readonly NormalizedOutboundPayload[];
 }): Promise<void> {
   const mirror = params.delivery.mirror;
@@ -70,15 +72,24 @@ export async function mirrorDeliveredPayloads(params: {
     }
   };
   if (mirror.deferToSessionLane) {
-    // Do not await the requester lane: its turn can be waiting for this delivery.
-    // Keep shutdown custody, but discard the sender's work scope and writer claim.
+    // Do not await the requester: its turn can be waiting for this delivery.
+    // Retain shutdown custody while acquiring independent controller mutation ownership.
     const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
-    void runOutsideAsyncWorkScope(() =>
-      enqueueCommandInLane(
-        resolveSessionLane(mirror.sessionKey),
-        () => runWithoutOwnedSessionTranscriptWrites(append),
-        { taskIdentity: { taskKind: "delivery-mirror", sessionKey: mirror.sessionKey } },
-      ),
+    void runWithSessionControllerCleanup(() =>
+      runOutsideAsyncWorkScope(async () => {
+        const agentId = resolveSessionAgentId({
+          config: params.delivery.cfg,
+          sessionKey: mirror.sessionKey,
+          agentId: mirror.agentId,
+        });
+        await runSessionMutation({
+          scope: resolveSessionStorePathCore(params.delivery.cfg.session?.store, { agentId }),
+          identities: [mirror.sessionKey, mirror.expectedSessionId],
+          agentId,
+          policy: "wait",
+          run: () => runWithoutOwnedSessionTranscriptWrites(append),
+        });
+      }),
     )
       .catch((error: unknown) => warnFailure(formatErrorMessage(error)))
       .finally(() => releaseRootWork?.());

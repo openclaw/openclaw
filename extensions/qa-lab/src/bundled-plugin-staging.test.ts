@@ -83,14 +83,11 @@ describe("qa bundled plugin dir", () => {
       "dir",
     );
 
-    const { bundledPluginsDir: plugins, stagedRoot: root } = await f.stage([
-      ...selected,
-      "external-fixture",
-    ]);
+    const { bundledPluginsDir: plugins } = await f.stage([...selected, "external-fixture"]);
+    const root = path.join(f.repoRoot, ".artifacts/qa-runtime", path.basename(f.tempRoot));
     const staged = (...parts: string[]) => path.join(root, ...parts);
     const plugin = (file: string) => path.join(plugins, file);
     const read = (file: string) => readFile(file, "utf8");
-    expect(root).toBe(path.join(f.repoRoot, ".artifacts/qa-runtime", path.basename(f.tempRoot)));
     expect(plugins).toBe(staged("dist/extensions"));
     expect((await readdir(plugins)).toSorted()).toEqual(
       [...selected, "image-generation-core"].toSorted(),

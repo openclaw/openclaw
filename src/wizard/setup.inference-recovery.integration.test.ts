@@ -176,7 +176,6 @@ it.each([
             modelApi: "openai-completions",
             authFingerprint: fingerprintResolvedProviderAuth(auth),
           },
-          deps: { pluginMetadataPlugins: [] },
         }),
       );
       return { ok: true, modelRef: "example/fixture", latencyMs: 1 };

@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createCliCurrentPromptRenderer } from "../../agents/cli-runner/prompt-context.js";
 import { buildCurrentInboundPrompt } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import * as gitCoauthorPrompt from "../../agents/git-coauthor-prompt.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { prepareReplyRunContext, type PreparedReplyRunContext } from "./get-reply-run-context.js";
@@ -309,4 +311,32 @@ it("keeps sparse inbound positions separate from appended preprojected media", a
     sharedPath,
     sharedPath,
   ]);
+});
+
+it("keeps requester trailers in full and resumed backend prompt projections", async () => {
+  const trailer = "Co-authored-by: requester-c <9101+requester-c@users.noreply.github.com>";
+  vi.spyOn(gitCoauthorPrompt, "resolveRequestGitCoauthorPrompt").mockResolvedValue(trailer);
+  const envelope = await envelopeFor(
+    context("Create the requested commit", {
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "group",
+      InboundEventKind: "room_event",
+    }),
+    { agentId: "main", sessionKey: "agent:main:main" },
+  );
+  // Codex consumes text, while reused CLI sessions can select resumableText.
+  expect(envelope.currentInboundContext?.text).toContain(trailer);
+  expect(envelope.currentInboundContext?.resumableText).toContain(trailer);
+  expect(envelope.currentInboundContext?.fragments).toContainEqual({
+    kind: "runtime-instruction",
+    text: trailer,
+  });
+  const render = createCliCurrentPromptRenderer(
+    { currentInboundContext: envelope.currentInboundContext },
+    { mode: "reuse", sessionId: "credit-cli-session" },
+  );
+  expect(render(envelope.prefixedCommandBody)).toContain(trailer);
+  expect(render(envelope.prefixedCommandBody, true)).toContain(trailer);
+  expect(envelope.transcriptCommandBody).not.toContain(trailer);
 });

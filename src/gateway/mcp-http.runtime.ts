@@ -18,6 +18,7 @@ import {
   listCoreToolFactoryDescriptors,
 } from "../agents/tool-catalog.js";
 import { normalizeToolPolicyName, toolPolicyRestrictsTools } from "../agents/tool-policy.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import { hasSessionControlAuthority } from "../agents/tools/sessions-operator-authority.js";
 import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
@@ -68,6 +69,8 @@ type McpLoopbackScopeParams = {
   authProfileStore?: AuthProfileStore;
   authProfileStoreAgentDir?: string;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+  /** Run-owned configured MCP tools; only an exclusive CLI run supplies them. */
+  bundledTools?: readonly AnyAgentTool[];
   /** Host-selected coding owners for pre-grant projection only. */
   defaultMediatedToolNames?: readonly string[];
   messageActionTurnCapability?: string;
@@ -314,8 +317,9 @@ async function constructMcpLoopbackTools(
   // Restricted CLI grants use OpenClaw's implementations for coding tools;
   // native CLI tools bypass path, approval, sandbox, and exec policy.
   const mediatedNativeTools =
-    context.trustedInternalHandoff ||
-    toolPolicyRestrictsTools(pickSandboxToolPolicy(context.conversationToolPolicy))
+    toolsAllow === undefined &&
+    (context.trustedInternalHandoff ||
+      toolPolicyRestrictsTools(pickSandboxToolPolicy(context.conversationToolPolicy)))
       ? new Set(NATIVE_TOOL_EXCLUDE)
       : resolveMediatedNativeTools(toolsAllow, mode);
   for (const toolName of params.defaultMediatedToolNames ?? []) {
@@ -343,6 +347,7 @@ async function constructMcpLoopbackTools(
     authProfileStore: params.authProfileStore,
     onYield: params.onYield,
     skillWorkshop,
+    bundledTools: params.bundledTools,
     nativeCronCreatorToolAllowlist: context.nativeCronCreatorToolAllowlist ?? undefined,
     agentDir: params.authProfileStoreAgentDir,
     conversationReadOrigin: "delegated",

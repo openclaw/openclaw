@@ -30,6 +30,7 @@ import {
   normalizeAccentColor,
   normalizeCatalogOpenTarget,
   normalizeChatFollowUpModeOverride,
+  normalizeChatMessageMaxWidth,
   normalizeChatSendShortcut,
   normalizeChatWorkspaceDock,
   normalizeTextScale,
@@ -51,7 +52,6 @@ import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-ident
 
 export {
   normalizeCatalogOpenTarget,
-  normalizeChatFollowUpMode,
   normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
   normalizeTextScale,
@@ -85,49 +85,6 @@ function currentGatewaySelectionKeyForPage(pageUrl: string): string {
   return `${CURRENT_GATEWAY_SELECTION_KEY_PREFIX}${gatewayOriginScope(pageUrl)}`;
 }
 
-const CSS_WIDTH_KEYWORDS = new Set(["none", "min-content", "max-content"]);
-const CSS_WIDTH_FUNCTIONS = new Set(["calc", "clamp", "fit-content", "max", "min"]);
-const CSS_WIDTH_UNITS = new Set(["ch", "em", "rem", "vh", "vmax", "vmin", "vw", "px"]);
-const CSS_WIDTH_ALLOWED_CHARS = /^[0-9A-Za-z.%+\-*/(),\s]+$/;
-const CSS_WIDTH_IDENTIFIER_RE = /[A-Za-z][A-Za-z0-9-]*/g;
-const CSS_WIDTH_SIMPLE_RE = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|ch|vw|vh|vmin|vmax|%)$/i;
-const CSS_WIDTH_MAX_LENGTH = 96;
-
-function hasAllowedWidthIdentifiers(value: string): boolean {
-  for (const match of value.matchAll(CSS_WIDTH_IDENTIFIER_RE)) {
-    const identifier = match[0].toLowerCase();
-    if (
-      !CSS_WIDTH_FUNCTIONS.has(identifier) &&
-      !CSS_WIDTH_KEYWORDS.has(identifier) &&
-      !CSS_WIDTH_UNITS.has(identifier)
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-export function normalizeChatMessageMaxWidth(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().replace(/\s+/g, " ");
-  if (normalized.length === 0 || normalized.length > CSS_WIDTH_MAX_LENGTH) {
-    return undefined;
-  }
-  if (CSS_WIDTH_KEYWORDS.has(normalized.toLowerCase()) || CSS_WIDTH_SIMPLE_RE.test(normalized)) {
-    return normalized;
-  }
-  if (
-    !CSS_WIDTH_ALLOWED_CHARS.test(normalized) ||
-    !CSS.supports("max-width", normalized) ||
-    !hasAllowedWidthIdentifiers(normalized)
-  ) {
-    return undefined;
-  }
-  return /^(?:calc|clamp|fit-content|max|min)\(.+\)$/i.test(normalized) ? normalized : undefined;
-}
-
 function normalizeSidebarPreTeamScope(value: unknown): string | null | undefined {
   const agentId = normalizeOptionalString(value);
   return value === null ? null : agentId ? normalizeAgentId(agentId) : undefined;
@@ -138,14 +95,6 @@ type BooleanSettingKey = {
 }[keyof UiPreferences] &
   keyof PersistedUiSettings;
 
-function isViteDevPage(): boolean {
-  if (typeof document === "undefined") {
-    return false;
-  }
-  // Vite injects this development script outside the application's rendered DOM.
-  return Boolean(document.querySelector('script[src*="/@vite/client"]'));
-}
-
 function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const basePath = resolveControlUiPaths(location.pathname)[0];
@@ -154,7 +103,7 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   if (devGateway) {
     return { pageUrl, effectiveUrl: devGateway.gatewayUrl };
   }
-  if (isRemoteControlUiIngress() || !isViteDevPage()) {
+  if (isRemoteControlUiIngress() || globalThis.OPENCLAW_UI_DEV_SERVER !== true) {
     return { pageUrl, effectiveUrl: pageUrl };
   }
   // location.hostname already carries brackets for IPv6 literals; wrapping
@@ -470,6 +419,7 @@ export function loadUiPreferences(
       sidebarAgentsMode: parsed.sidebarAgentsMode === "roster" ? "roster" : "chip",
       sidebarPreTeamScope: normalizeSidebarPreTeamScope(parsed.sidebarPreTeamScope),
       sidebarCollapsedAgentIds: normalizeUniqueTrimmedStringList(parsed.sidebarCollapsedAgentIds),
+      sidebarRecentlyCreatedAgentId: normalizeOptionalString(parsed.sidebarRecentlyCreatedAgentId),
       sidebarEntries: profileId
         ? (personalNavigation?.railShortcuts ?? defaults.sidebarEntries)
         : (normalizeSidebarEntries(parsedRecord.railShortcuts) ?? defaults.sidebarEntries),
@@ -641,6 +591,7 @@ export function saveSettings(
     showAdvancedSettings: next.showAdvancedSettings === true ? true : undefined,
     // Empty pin list is the default; only real pins persist.
     pinnedAgentIds: next.pinnedAgentIds?.length ? next.pinnedAgentIds : undefined,
+    sidebarRecentlyCreatedAgentId: normalizeOptionalString(next.sidebarRecentlyCreatedAgentId),
     textScale: next.textScale !== undefined ? normalizeTextScale(next.textScale) : undefined,
     customTheme: next.customTheme || undefined,
     sessionsByGateway,

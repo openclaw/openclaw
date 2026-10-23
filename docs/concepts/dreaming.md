@@ -229,7 +229,7 @@ a repair warning and remain in place.
 
 Dreaming completions use the [subagent queue](/concepts/queue#background-work) at background priority and honor `agents.defaults.subagents.maxConcurrent`. Setting this existing limit to `1` serializes diary and consolidation completions across workspaces and plugins. The sweep coordinator does not consume a completion slot while it waits for phase work. System busyness shows these completions in the `subagent` row.
 
-An explicit multi-agent fleet needs an [ambient system owner](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.systemagent) for this job. If logs report `Agent-less cron job has no resolvable owner`, choose an existing agent to own the sweep. For example, if that agent is `ops`:
+An explicit multi-agent fleet needs an [ambient system owner](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.systemagent) to create this job. Without one, reconciliation skips creation and warns once while ownership remains unresolved. Choose an existing agent to own the sweep; reconciliation resumes automatically when the owner is configured. Existing managed jobs keep their current reconciliation behavior. For example, if the owner is `ops`:
 
 ```bash
 openclaw config set agents.defaults.systemAgent.agentId ops

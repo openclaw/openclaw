@@ -56,7 +56,6 @@ export function registerRealtimeVoiceSelection(
     ...registeredOwner,
     assertCurrent,
     read: () => {
-      assertCurrent();
       const selection = registeredOwner.read();
       return { ...selection, voices: [...selection.voices] };
     },
@@ -68,7 +67,6 @@ export function registerRealtimeVoiceSelection(
       ]);
       const assertRequestCurrent = () => {
         signal.throwIfAborted();
-        assertCurrent();
         request.assertCurrent();
       };
       assertRequestCurrent();

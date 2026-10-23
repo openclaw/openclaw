@@ -75,6 +75,7 @@ export function createAgentSchemaInspectionWorker() {
   let inspectionCount = 0;
   let snapshotCount = 0;
   let sequence = 0;
+  let releasePrestart: (() => void) | undefined;
   const startReader = (timeoutMs: number): ReaderProcess => {
     const entry = resolveRuntimeProcessEntrypointUrl("agentSchemaInspection");
     assertChildRuntimeAvailable();
@@ -258,6 +259,8 @@ export function createAgentSchemaInspectionWorker() {
         );
         const active = (reader ??= startReader(timeoutMs));
         active.closeBudgetMs = timeoutMs;
+        releasePrestart?.();
+        releasePrestart = undefined;
         const requestId = ++sequence;
         const response = createDeferredCore<AgentSchemaInspection | StateSchemaInspection | null>();
         let failure: Error | undefined;
@@ -352,7 +355,12 @@ export function createAgentSchemaInspectionWorker() {
             {
               type: kind === "state" ? "inspect-state" : "inspect",
               requestId,
-              input: postgresAgentId ? { ...input, agentId: postgresAgentId } : input,
+              input: {
+                ...input,
+                ...(postgresAgentId ? { agentId: postgresAgentId } : {}),
+                // Advanced IPC cannot clone the Windows case-insensitive env Proxy.
+                ...("env" in input && input.env ? { env: { ...input.env } } : {}),
+              },
               snapshot,
               ...(kind === "agent" && postgresAgent ? { databaseEngineSelection: selection } : {}),
             },
@@ -389,6 +397,27 @@ export function createAgentSchemaInspectionWorker() {
     },
   };
   return {
+    /** Load the isolated reader while startup discovers its targets; no database is opened. */
+    prestart(callerSignal?: AbortSignal): void {
+      const signal = resolveSqliteInspectionSignal(callerSignal);
+      signal?.throwIfAborted();
+      if (disposed || busy) {
+        throw new Error("Agent schema inspection worker is unavailable for prestart");
+      }
+      if (reader) {
+        return;
+      }
+      // An unused reader has no work to settle. Inspection installs its full budget below.
+      const active = (reader = startReader(0));
+      const onAbort = () => {
+        active.retired = true;
+        active.child.kill("SIGKILL");
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const release = () => signal?.removeEventListener("abort", onAbort);
+      releasePrestart = release;
+      void active.closed.then(release);
+    },
     get processCount() {
       return processCount;
     },
@@ -422,6 +451,8 @@ export function createAgentSchemaInspectionWorker() {
     },
     async [Symbol.asyncDispose]() {
       disposed = true;
+      releasePrestart?.();
+      releasePrestart = undefined;
       if (!reader) {
         return;
       }

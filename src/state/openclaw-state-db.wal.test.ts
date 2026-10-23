@@ -565,7 +565,9 @@ it("does not borrow a timer caller's maintenance authority", async ({ signal }) 
     periodicWork = Promise.resolve(maintenance.run(() => periodic()));
     await wait(signal);
     expect(observations).toEqual(["error"]);
-    expect(database.walMaintenance.health?.error).toContain("offline maintenance");
+    expect(database.walMaintenance.health?.error).toContain(
+      "without an active schema lease or maintenance scope",
+    );
     expect(prepare).not.toHaveBeenCalled();
     expect(database.walMaintenance.checkpoint()).toBe(false);
     expect(observations).toEqual(["error", "error"]);

@@ -2,7 +2,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DevicePairingStoreState } from "./device-pairing.types.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { readSqliteDatabaseWriteRevision } from "./sqlite-database-admission.js";
-import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 
 type DevicePairingStoreCache = {
   connection: EngineConnection;
@@ -51,7 +51,7 @@ export function readCachedDevicePairingStoreSnapshot(
   }
   const snapshot =
     deviceId === undefined
-      ? runSqliteDeferredTransactionSync(db, read, {
+      ? runSqliteReadSnapshotSync(db, read, {
           operationLabel: "devicePairing.snapshot",
         })
       : read();

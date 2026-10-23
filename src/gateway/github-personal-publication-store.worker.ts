@@ -126,13 +126,8 @@ export function writePersonalGitHubPublicationInDatabase(
   instanceId: string,
   executionId: string,
   values: Partial<PersonalGitHubPublicationRow>,
-  requireAction: boolean,
-  assertCurrent: () => void,
 ): PersonalGitHubPublicationRow {
   const { db } = database;
-  if (requireAction) {
-    assertCurrent();
-  }
   const updated = executeSqliteQueryTakeFirstSync(
     db,
     query(db)

@@ -3,8 +3,8 @@ import type {
   SessionUsageCreator,
   SessionsUsageAggregates,
 } from "../../../../src/shared/usage-types.js";
+import { SessionOwnerChip } from "../../components/solid/session-owner-chip.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
-import "../../components/solid/session-owner-chip.tsx";
 import { presenceViewerLabel } from "../../lib/presence-users.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
@@ -18,17 +18,43 @@ type UsageCreatorsProps = {
   onSelect: (key: string | null) => void;
 };
 
-function creatorLabel({ actor }: SessionUsageCreator): string {
+/** Legacy channel identities carry only a raw sender id; the creator key names the channel. */
+function channelCreatorLabel(key: string, id: string): string | undefined {
+  let parts: unknown;
+  try {
+    parts = JSON.parse(key);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(parts) || parts[1] !== "channel" || typeof parts[3] !== "string") {
+    return undefined;
+  }
+  const channel = parts[3];
+  const name = channel.charAt(0).toUpperCase() + channel.slice(1);
+  const local = id.startsWith(`${channel}:`) ? id.slice(channel.length + 1) : id;
+  const topic = /^group:[^:]+:topic:(.+)$/.exec(local);
+  if (topic) {
+    return t("usage.creators.channelTopic", { channel: name, topic: topic[1]! });
+  }
+  return local.startsWith("group:")
+    ? t("usage.creators.channelGroup", { channel: name })
+    : t("usage.creators.channelUser", { channel: name, id: local });
+}
+
+function creatorLabel({ key, actor }: SessionUsageCreator): string {
   if (!actor) {
     return t("usage.creators.unattributed");
   }
   const name =
     actor.label?.trim() ||
+    (actor.identity?.type === "legacy" && actor.id
+      ? channelCreatorLabel(key, actor.id)
+      : undefined) ||
     actor.identity?.id ||
     actor.id ||
     t(actor.type === "system" ? "usage.creators.system" : "usage.common.unknown");
   return actor.identity?.type === "profile"
-    ? presenceViewerLabel({ id: actor.identity.id, name })
+    ? presenceViewerLabel({ id: actor.identity.id, name: actor.label?.trim() || undefined })
     : name;
 }
 
@@ -73,8 +99,12 @@ export function UsageCreators(props: UsageCreatorsProps) {
     mode === "tokens" ? group.totals.totalTokens : group.totals.totalCost;
   const groups = createMemo(() => {
     const mode = props.mode;
+    // Sessions without a recorded creator sort last: they are a gap in the data, not a person.
     return props.groups.toSorted(
-      (a, b) => value(b, mode) - value(a, mode) || creatorLabel(a).localeCompare(creatorLabel(b)),
+      (a, b) =>
+        Number(!a.actor) - Number(!b.actor) ||
+        value(b, mode) - value(a, mode) ||
+        creatorLabel(a).localeCompare(creatorLabel(b)),
     );
   });
   const total = createMemo(() => {
@@ -88,13 +118,19 @@ export function UsageCreators(props: UsageCreatorsProps) {
           <th scope="col">{t("usage.creators.identity")}</th>
           <th scope="col">{t("usage.metrics.tokens")}</th>
           <th scope="col">{t("usage.metrics.cost")}</th>
-          <th scope="col">{t("usage.metrics.sessions")}</th>
+          <th scope="col">{t("usage.overview.sessions")}</th>
         </tr>
       </thead>
       <tbody>
         <For each={rows}>
           {(group) => (
-            <tr class={{ selected: group.key === props.selectedKey }}>
+            <tr
+              class={{
+                selected: group.key === props.selectedKey,
+                "usage-creator-row--unrecorded": !group.actor,
+              }}
+              title={group.actor ? undefined : t("usage.creators.unattributedHint")}
+            >
               <th scope="row">
                 <button
                   type="button"
@@ -105,7 +141,7 @@ export function UsageCreators(props: UsageCreatorsProps) {
                   <span class="usage-creator-name">
                     <span aria-hidden="true">
                       {group.actor?.id ? (
-                        <openclaw-session-owner-chip prop:owner={group.actor} size="row" />
+                        <SessionOwnerChip owner={group.actor} size="row" />
                       ) : undefined}
                     </span>
                     <span>{creatorLabel(group)}</span>
@@ -120,10 +156,10 @@ export function UsageCreators(props: UsageCreatorsProps) {
                 </button>
               </th>
               <td class={{ "usage-creator-primary": props.mode === "tokens" }}>
-                {formatUsageTokens(group.totals.totalTokens)}
+                {formatUsageTokens(group.totals.totalTokens, group.totals.usageReport)}
               </td>
               <td class={{ "usage-creator-primary": props.mode === "cost" }}>
-                {formatUsageCost(group.totals.totalCost)}
+                {formatUsageCost(group.totals.totalCost, 2, group.totals.usageReport)}
               </td>
               <td>{group.sessionCount}</td>
             </tr>

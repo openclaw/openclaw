@@ -256,6 +256,7 @@ function configuredModelRefsNeedCodex(params: {
     });
     for (const ref of refs) {
       if (
+        ref.capability === "decision" ||
         !configuredRefIsEffectiveForAgent({
           cfg: params.cfg,
           sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations,

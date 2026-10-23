@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import { emulateOverlayMedia } from "../test-helpers/overlay-browser-media.ts";
-import "./modal-dialog.ts";
+import "./modal-dialog.tsx";
 import "./tooltip.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
@@ -103,6 +103,7 @@ async function mountModal(
   modal.className = variant;
   const name = fieldDocument.createElement("input");
   name.autofocus = autofocus;
+  modal.initialFocus = () => (autofocus ? name : null);
   name.value = "Original name";
   name.setAttribute("aria-label", "Name");
   const notes = fieldDocument.createElement("textarea");

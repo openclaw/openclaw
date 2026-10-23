@@ -76,13 +76,12 @@ export function failUpdateCommandRun(
   error: unknown,
   run: NonNullable<UpdateCommandOptions["run"]>,
 ): ReturnType<typeof createUpdateErrorFact> | undefined {
-  const options = { env: run.env };
   // Recovery owns failure/outcome publication; outer unwind must not rewrite a
   // database whose exact contents may still be needed to reconcile restoration.
-  if (loadUpdateRecovery(run.runId, options)) {
+  if (loadUpdateRecovery(run.runId, run)) {
     return undefined;
   }
-  const active = getUpdateRun(run.runId, options);
+  const active = getUpdateRun(run.runId, run);
   if (active?.status !== "running") {
     return undefined;
   }
@@ -93,7 +92,7 @@ export function failUpdateCommandRun(
     run.runId,
     { failure: { step, detail: fact.message, failureFacts: [fact] } },
     defaultRuntime.error,
-    options,
+    run,
   );
   if (!active.verification.rollbackOutcome) {
     recordUpdateRunDiagnostics(
@@ -110,7 +109,7 @@ export function failUpdateCommandRun(
               }),
       }),
       defaultRuntime.error,
-      options,
+      run,
     );
   }
   return fact;
@@ -152,7 +151,7 @@ export function recordServiceReconciliationWarnings(
   if (run) {
     try {
       for (const row of updateRunStepsFromResultStep(step)) {
-        recordUpdateRunStep(run.runId, { ...row, endedAtMs: Date.now() }, { env: run.env });
+        recordUpdateRunStep(run.runId, { ...row, endedAtMs: Date.now() }, run);
       }
     } catch {
       assertCurrent();
@@ -175,7 +174,7 @@ export function recordServiceTimedStep(
   const startedAtMs = Math.max(0, endedAtMs - step.durationMs);
   try {
     for (const row of updateRunStepsFromResultStep(step)) {
-      recordUpdateRunStep(run.runId, { ...row, startedAtMs, endedAtMs }, { env: run.env });
+      recordUpdateRunStep(run.runId, { ...row, startedAtMs, endedAtMs }, run);
     }
   } catch {
     // The result step still reports the measured phase.
@@ -538,6 +537,7 @@ export function mergeWindowsTaskRecoveryFailure(
 
 export type UpdateAdmissionReportParams = {
   mode?: UpdateRunResult["mode"];
+  before?: UpdateRunResult["before"];
   stepResult?: Pick<UpdateRunResult, "steps" | "failedStep">;
   recoverySteps?: readonly UpdateRecoveryStep[];
   failureFacts?: readonly UpdateFailureFact[];
@@ -583,6 +583,7 @@ export function createPreMutationUpdateResult(
     mode: params.mode ?? (params.installKind === "git" ? "git" : "unknown"),
     root: params.root,
     reason: params.reason,
+    ...(params.before ? { before: params.before } : {}),
     failedStep: outcome.status === "error" ? failedStep : undefined,
     steps: stepResult?.failedStep
       ? stepResult.steps
@@ -709,7 +710,7 @@ export function recordUpdateResultNextAction(
         record.origin.nextAction = nextAction;
       }
     },
-    { env: run.env },
+    run,
   );
   return nextAction;
 }

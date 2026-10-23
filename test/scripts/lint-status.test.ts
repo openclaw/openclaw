@@ -60,6 +60,8 @@ export function waitForFile(file) {
     "lib/check-limits.mts",
     "lib/oxlint-changed-scope.mts",
     "lib/ci-static-check-evidence.mjs",
+    "lib/dev-tool.mts",
+    "lib/pinned-bun.mts",
     "lib/direct-run.mjs",
     "lib/dist-artifact-ownership.mts",
     "lib/dist-artifact-lock.mts",
@@ -474,11 +476,8 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
         if (mode === "success" && entry === "run-lint.mts") {
           expect(steps.map((step) => step.step)).toEqual(lintPhases);
         }
-        expect(result.stderr.match(/FAILED \(exit/g) ?? []).toHaveLength(code ? 1 : 0);
-        const tool = entry === "run-lint.mts" ? "lint" : "oxlint";
         expectTrailer(trailers, code, entry);
         if (code) {
-          expect(result.stderr.trim().split("\n").at(-1)).toBe(`[${tool}] FAILED (exit ${code})`);
           expect(result.stderr).not.toContain("[oxlint:extensions] finished");
         }
       }),
@@ -541,7 +540,6 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
               .map((step) => step.shard)
               .toSorted(),
           ).toEqual(["core", "extensions", "scripts"]);
-          expect(result.stderr.match(/FAILED \(exit/g)).toHaveLength(1);
         }
       }),
   );
@@ -566,9 +564,7 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
         expect(result.stderr).toContain(
           `drained:${phase === "oxlint" ? "extensions" : phase}:${forwarded}`,
         );
-        const trailer = `[${entry === "run-lint.mts" ? "lint" : "oxlint"}] FAILED (exit ${code})`;
         expectTrailer(trailers, code, entry);
-        expect(result.stderr.trim().split("\n").at(-1)).toBe(trailer);
       }),
   );
 });

@@ -118,18 +118,14 @@ export async function readImageOriginalBlob(
   if (!original) {
     throw new Error("Image download is unavailable");
   }
-  try {
-    const response = await fetchControlUiResource(original.src, {
-      credentials: "same-origin",
-      referrerPolicy: "no-referrer",
-    });
-    if (!response.ok) {
-      throw new Error("Image download failed");
-    }
-    return await response.blob();
-  } finally {
-    original.release?.();
+  const response = await fetchControlUiResource(original.src, {
+    credentials: "same-origin",
+    referrerPolicy: "no-referrer",
+  });
+  if (!response.ok) {
+    throw new Error("Image download failed");
   }
+  return await response.blob();
 }
 
 export function openMessageImage(

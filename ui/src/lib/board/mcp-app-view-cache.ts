@@ -1,6 +1,5 @@
 import type { BoardWidget, BoardWidgetAppViewResult } from "@openclaw/gateway-protocol";
 import { getOrCreatePromise } from "../../../../src/shared/lazy-promise.ts";
-import { formatUiError } from "../format-error.ts";
 import type { BoardWidgetAppViewState } from "./view-types.ts";
 
 type AppViewRequest = () => Promise<BoardWidgetAppViewResult>;
@@ -37,9 +36,8 @@ export class BoardMcpAppViewCache {
     return await getOrCreatePromise(this.entries, key, () =>
       request()
         .then<BoardWidgetAppViewState>((result) => ({ status: "ready", ...result }))
-        .catch<BoardWidgetAppViewState>((error: unknown) => ({
+        .catch<BoardWidgetAppViewState>(() => ({
           status: "stale",
-          error: formatUiError(error),
         })),
     );
   }

@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 // @vitest-environment node
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission,
   readStoredOutboxStore,
@@ -15,7 +16,6 @@ import { findChatSendPayload, makeChatHost, requestCalls } from "./chat-host.tes
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
@@ -113,9 +113,11 @@ it.each([true, false])(
     expect(host.chatQueue).toMatchObject([{ text: "keep this later draft", sendAttempts: 0 }]);
     expect(host.chatQueue[0]).not.toHaveProperty("queueMode");
     const queuedId = host.chatQueue[0]!.sendRunId;
-    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-      timeoutMs: 30_000,
-    });
+    expect(host.request).not.toHaveBeenCalledWith(
+      "chat.send",
+      expect.anything(),
+      expect.anything(),
+    );
     host.chatMessage = "next unfinished draft";
     host.connected = true;
     pending = false;

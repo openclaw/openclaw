@@ -6,7 +6,6 @@ import {
   afterEach,
   beforeAll,
   beforeEach,
-  describe,
   expect,
   it,
   vi,
@@ -32,8 +31,10 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
@@ -175,7 +176,9 @@ beforeEach(async () => {
   releaseModel = createDeferred();
   runEmbeddedAgent.mockImplementation(async (params) => {
     modelStarted.resolve();
-    await releaseModel.promise;
+    const signal = params.abortSignal;
+    await racePromiseWithAbortSignal(releaseModel.promise, signal, (aborted) => aborted.reason);
+    signal?.throwIfAborted();
     return {
       payloads: [{ text: answer }],
       meta: {
@@ -197,7 +200,6 @@ beforeEach(async () => {
     broadcastToConnIds: broadcast,
     sessionEventSubscribers: { getAll: () => new Set([connectionId]) },
     sessionMessageSubscribers: { get: () => new Set([connectionId]) },
-    chatAbortControllers: context.chatAbortControllers,
   });
   unsubscribe = onInternalSessionTranscriptUpdate((update) => {
     if ((update.target?.sessionId ?? update.sessionId) !== sessionId) {
@@ -257,6 +259,8 @@ const assistantMessage = (text: string) =>
   makeAgentAssistantMessage({ content: [{ type: "text", text }] });
 const matchingTexts = (messages: unknown[], text: string) =>
   messages.map(extractText).filter((value) => value === text);
+const generatedInputs = <T>(messages: T[]) =>
+  messages.filter((message) => extractText(message)?.includes(args.question));
 function transcriptMessages() {
   return loadTranscriptEventsSync(scope()).flatMap((event) => {
     const message = asOptionalRecord(asOptionalRecord(event)?.message);
@@ -324,12 +328,15 @@ async function rpc(method: string, params: Record<string, unknown>) {
   return expectDefined(asOptionalRecord(result), "Gateway RPC result");
 }
 async function waitForDispatchEnd() {
-  await getSessionWorkAdmissionRelease({ scope: storePath, identities: [canonicalKey, sessionId] });
-  // Admission release does not join the producer's remaining terminal writes.
+  await captureSessionControllerSettlement({
+    scope: storePath,
+    identities: [canonicalKey, sessionId],
+  });
+  // Controller settlement does not join the producer's remaining terminal writes.
   // Settle them before the next parity cell revokes its source or replaces its row.
   await requestExecution.waitForCompletion();
   await lifecycleWrites.drain();
-  expect(context.chatAbortControllers.size).toBe(0);
+  expect(rpcSourceTesting.size).toBe(0);
 }
 async function drainPublications() {
   await Promise.all(publications);
@@ -392,7 +399,7 @@ async function startHeldConsult() {
   const ack = await consult("Keep this task running until released.", "held-task");
   await Promise.race([
     modelStarted.promise,
-    getSessionWorkAdmissionRelease({ scope: storePath, identities: [canonicalKey, sessionId] }),
+    captureSessionControllerSettlement({ scope: storePath, identities: [canonicalKey, sessionId] }),
   ]);
   const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "held model invocation");
   const abortSignal = expectDefined(run.abortSignal, "admitted model cancellation signal");
@@ -477,32 +484,28 @@ it.each([
   }
 });
 
-describe("Browser Talk literal consult commands", () => {
-  it("does not turn a generated stop question into cancellation of the active consult", async () => {
-    const first = await startHeldConsult();
-    const ack = await consult("/stop", "literal-stop-during-task");
-    expect(ack.runId).not.toBe(first.ack.runId);
-    expect
-      .soft(first.abortSignal.aborted, "generated input cancelled the existing task")
-      .toBe(false);
-    releaseModel.resolve();
-    await waitForDispatchEnd();
-    expect(runEmbeddedAgent.mock.calls.map(([run]) => run.prompt)).toEqual(
-      expect.arrayContaining([expect.stringContaining("/stop")]),
-    );
-  });
+it("does not turn a generated stop question into cancellation of the active consult", async () => {
+  const first = await startHeldConsult();
+  const ack = await consult("/stop", "literal-stop-during-task");
+  expect(ack.runId).not.toBe(first.ack.runId);
+  expect.soft(first.abortSignal.aborted, "generated input cancelled the existing task").toBe(false);
+  releaseModel.resolve();
+  await waitForDispatchEnd();
+  expect(runEmbeddedAgent.mock.calls.map(([run]) => run.prompt)).toEqual(
+    expect.arrayContaining([expect.stringContaining("/stop")]),
+  );
+});
 
-  it("preserves an actual human stop command", async () => {
-    const first = await startHeldConsult();
-    const stopped = await rpc("chat.send", {
-      sessionKey,
-      message: "/stop",
-      idempotencyKey: "human-stop",
-    });
-    expect(stopped).toMatchObject({ aborted: true, runIds: [first.ack.runId] });
-    expect(first.abortSignal.aborted).toBe(true);
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+it("preserves an actual human stop command", async () => {
+  const first = await startHeldConsult();
+  const stopped = await rpc("chat.send", {
+    sessionKey,
+    message: "/stop",
+    idempotencyKey: "human-stop",
   });
+  expect(stopped).toMatchObject({ aborted: true, runIds: [first.ack.runId] });
+  expect(first.abortSignal.aborted).toBe(true);
+  expect(runEmbeddedAgent).toHaveBeenCalledOnce();
 });
 
 it("keeps read-only Talk operator consult scaffolding out of chat and later context but in the raw archive", async () => {
@@ -537,6 +540,9 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
     assistantMessage(modelReply),
   ];
   runEmbeddedAgent.mockImplementation(async (params) => {
+    const recorder = expectDefined(params.userTurnTranscriptRecorder, "consult input recorder");
+    await recorder.persistApproved();
+    expect(recorder.hasPersisted()).toBe(true);
     await params.onAgentEvent?.({
       stream: "lifecycle",
       data: { phase: "start" },
@@ -560,7 +566,7 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
   expect(ack.idempotencyKey).toBe(ack.runId);
   await Promise.race([
     modelStarted.promise,
-    getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] }),
+    captureSessionControllerSettlement({ scope: storePath, identities: [sessionKey, sessionId] }),
   ]);
   expect(context.logGateway.error).not.toHaveBeenCalled();
   expect(runEmbeddedAgent).toHaveBeenCalledOnce();
@@ -589,9 +595,7 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
   expectVisibleSpeechOnly(await historyMessages(), "chat.history", true);
 
   const storedMessages = transcriptMessages();
-  const generated = storedMessages.filter((message) =>
-    extractText(message)?.includes(args.question),
-  );
+  const generated = generatedInputs(storedMessages);
   expect(matchingTexts(storedMessages, consultAnswer)).toHaveLength(1);
   const storedToolResult = storedMessages.find(
     (message) => extractText(message) === consultToolResult,
@@ -721,9 +725,7 @@ it.each(["before-final", "after-final"] as const)(
       expectNoGeneratedInput(liveMessages(), "direct live publication");
 
       const storedMessages = transcriptMessages();
-      const generated = storedMessages.filter((message) =>
-        extractText(message)?.includes(args.question),
-      );
+      const generated = generatedInputs(storedMessages);
       expect(generated).toHaveLength(1);
       expect(generated[0]).toMatchObject({
         role: "user",
@@ -808,7 +810,7 @@ it.runIf(process.platform === "linux").each([false, true])(
 it.runIf(process.platform === "linux")(
   "isolates registered Talk replay across authenticated callers",
   async () => {
-    const { runTalkCallerReplay } = await import("./server.talk-caller-replay.test-support.js");
+    const { runTalkCallerReplay } = await import("./server.talk-native-action.test-support.js");
     await runTalkCallerReplay({
       ...parityFixture(),
       voiceSessionId: expectDefined(voiceSessionId, "shared voice identity"),

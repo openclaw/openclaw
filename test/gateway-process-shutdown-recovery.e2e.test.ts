@@ -1,24 +1,26 @@
 // Real process death is required: an in-process abort cannot prove durable startup custody.
 import { once } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
-import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
-import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
-import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { extractTextFromChatContent } from "../src/shared/chat-content.js";
 import { extractAssistantPhaseText } from "../src/shared/chat-message-content.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
-import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
-import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+  restartEnv,
+  readRestartSession,
+  writeRestartPlugin,
+  connectRestartClient,
+  writeRestartTitle,
+  restartModelConfig,
+  writeRestartToolCall,
+} from "./gateway-restart.test-support.js";
+import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
@@ -78,37 +80,20 @@ function nodeCommand(source: string): string {
 }
 
 function writeExec(response: ServerResponse, command: string, ordinal: number) {
-  const item = {
-    type: "function_call",
-    id: `fc_shutdown_${ordinal}`,
-    call_id: `call_shutdown_${ordinal}`,
-    name: "exec",
-    arguments: JSON.stringify({ command, awaitResults: true, timeoutSeconds: 120 }),
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: item.id,
-      delta: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_shutdown_${ordinal}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
+  writeRestartToolCall(
+    response,
+    "shutdown",
+    "exec",
+    { command, awaitResults: true, timeoutSeconds: 120 },
+    ordinal,
+  );
 }
 
 async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
   const toolStarted = createDeferred();
-  const resetResponseClosed = createDeferred();
+  const toolCheckpoint = createDeferred();
+  const toolCancelled = createDeferred();
+  const releaseToolCheckpoint = createDeferred();
   const failed = createDeferred<never>();
   const fourRecoveriesSeen = createDeferred();
   const recoveryStarts = new Set<Scenario>();
@@ -141,6 +126,17 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
             response.writeHead(204).end();
             return;
           }
+          if (request.url === "/tool-checkpoint") {
+            toolCheckpoint.resolve();
+            await withinTest(releaseToolCheckpoint.promise, signal);
+            response.writeHead(204).end();
+            return;
+          }
+          if (request.url === "/tool-cancelled") {
+            toolCancelled.resolve();
+            response.writeHead(204).end();
+            return;
+          }
           expect(request.url).toBe("/v1/responses");
           const chunks: Buffer[] = [];
           for await (const chunk of request) {
@@ -153,24 +149,8 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
               )
             : [];
           if (tools.length === 0) {
-            const message = {
-              type: "message",
-              id: "msg_title",
-              role: "assistant",
-              status: "completed",
-              content: [{ type: "output_text", text: "Synthetic shutdown task", annotations: [] }],
-            };
             if (body.stream === false) {
-              response.writeHead(200, { "content-type": "application/json" });
-              response.end(
-                JSON.stringify({
-                  id: "resp_title",
-                  object: "response",
-                  status: "completed",
-                  output: [message],
-                  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-                }),
-              );
+              writeRestartTitle(response, "Synthetic shutdown task");
             } else {
               writeOpenAiResponsesText(response, {
                 text: "Synthetic shutdown task",
@@ -214,27 +194,22 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
           if (recoveryStarts.size === 4) {
             fourRecoveriesSeen.resolve();
           }
-          if (scenario.name === "reset") {
-            response.once("close", () => resetResponseClosed.resolve());
-          }
           scenario.recoverySeen.resolve();
           if (scenario.phase === "held-recovery") {
             writePartial(response, scenario, ordinal);
             return;
           }
-          await withinTest(scenario.releaseResponse.promise, signal);
           if (scenario.name === "reset") {
-            if (!response.destroyed) {
-              writeExec(
-                response,
-                nodeCommand(
-                  `fetch(${JSON.stringify(`${origin}/forbidden-effect`)}, {method:"POST"})`,
-                ),
-                ordinal,
-              );
-            }
+            writeExec(
+              response,
+              nodeCommand(
+                `fetch(${JSON.stringify(`${origin}/forbidden-effect`)}, {method:"POST"})`,
+              ),
+              ordinal,
+            );
             return;
           }
+          await withinTest(scenario.releaseResponse.promise, signal);
           if (scenario.name === "raw-tool") {
             const recoveryCalls = scenario.calls.filter((call) => call.phase === "recovery");
             if (recoveryCalls.length === 1) {
@@ -274,12 +249,15 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
     recoveryStarts: () => [...recoveryStarts],
     peakRecoveryConcurrency: () => peakRecoveryConcurrency,
     toolStarted: toolStarted.promise,
-    resetResponseClosed: resetResponseClosed.promise,
+    toolCheckpoint: toolCheckpoint.promise,
+    toolCancelled: toolCancelled.promise,
+    releaseToolCheckpoint: () => releaseToolCheckpoint.resolve(),
     effects: () => effects,
     forbiddenEffects: () => forbiddenEffects,
     close: () =>
       runQaGatewayFixture(
         async () => {
+          releaseToolCheckpoint.resolve();
           for (const scenario of scenarios) {
             scenario.releaseResponse.resolve();
           }
@@ -294,7 +272,8 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
 it(
   "preserves unfinished task custody across process shutdown, but respects Stop and reset",
   { timeout: 180_000 },
-  async ({ signal }) => {
+  async (context) => {
+    const { signal } = context;
     const stream = createScenario("raw-stream");
     const tool = createScenario("raw-tool");
     const stopped = createScenario("stop");
@@ -315,29 +294,21 @@ it(
       stopTimeoutMs: 10_000,
       gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
       env: {
-        OPENAI_API_KEY: undefined,
-        OPENAI_BASE_URL: undefined,
-        OPENAI_API_BASE: undefined,
-        OPENCLAW_SKIP_PROVIDERS: undefined,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        ...restartEnv,
         OPENCLAW_NO_RESPAWN: "1",
       },
     });
+    context.onTestFailed(() =>
+      console.error(instance.logs().replaceAll(instance.gatewayToken, "[fixture token]")),
+    );
     let client: GatewayClient | undefined;
-    let phase = "startup";
     const gate = <T>(promise: Promise<T>) =>
       withinTest(Promise.race([promise, provider.failed]), signal);
     const connect = async () => {
-      client = await acquireGatewayTestClient(
+      client = await connectRestartClient(
+        instance,
         {
-          url: instance.url,
-          token: instance.gatewayToken,
-          clientName: "gateway-client",
-          mode: "backend",
-          scopes: ["operator.admin", "operator.read", "operator.write"],
-          deviceIdentity: loadOrCreateDeviceIdentity({
-            path: instance.state.path("device.sqlite"),
-          }),
+          mode: "test",
           onEvent: ({ event, payload }) => {
             if (!isRecord(payload)) {
               return;
@@ -359,12 +330,7 @@ it(
             }
           },
         },
-        {
-          signal,
-          timeoutMs: 30_000,
-          timeoutMessage: "shutdown recovery client did not connect",
-          closeMessage: "shutdown recovery client closed",
-        },
+        signal,
       );
       await client.request("sessions.subscribe", { agentId: "main" });
     };
@@ -413,22 +379,8 @@ it(
       expect(outcome, instance.logs()).toEqual(mode === "kill" ? [null, "SIGKILL"] : [0, null]);
       return child.pid;
     };
-    const readStoppedEntry = (scenario: Scenario) => {
-      const database = openNodeSqliteDatabase(
-        path.join(instance.state.agentDir(), "openclaw-agent.sqlite"),
-        { readOnly: true },
-      );
-      try {
-        const row = database
-          .prepare("SELECT entry_json FROM session_nodes WHERE session_key=?")
-          .get(scenario.key);
-        return asRecord(
-          typeof row?.entry_json === "string" ? JSON.parse(row.entry_json) : undefined,
-        );
-      } finally {
-        database.close();
-      }
-    };
+    const readStoppedEntry = (scenario: Scenario) =>
+      asRecord(readRestartSession(instance.state.agentDir(), scenario.key));
     const finish = async (scenario: Scenario) => {
       scenario.releaseResponse.resolve();
       await gate(scenario.completed.promise);
@@ -459,191 +411,184 @@ it(
     };
     await runQaGatewayFixture(
       async () => {
-        try {
-          await instance.state.writeConfig({
-            update: { checkOnStart: false },
-            browser: { enabled: false },
-            discovery: { mdns: { mode: "off" } },
-            plugins: { enabled: false },
-            models: {
-              mode: "replace",
-              providers: {
-                [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
-              },
-            },
-            agents: {
-              defaults: {
-                workspace: instance.state.workspaceDir,
-                model: { primary: model.modelRef },
-                modelPolicy: { allow: [model.modelRef] },
-                models: {
-                  [model.modelRef]: {
-                    agentRuntime: { id: "openclaw" },
-                    params: { transport: "sse", openaiWsWarmup: false },
-                  },
-                },
-                heartbeat: { every: "0m" },
-                maxConcurrent: 8,
-                timeoutSeconds: 120,
-                skipBootstrap: true,
-                skills: [],
-              },
-              entries: { main: {} },
-            },
-            tools: {
-              allow: ["exec", "process"],
-              exec: { mode: "full", host: "gateway" },
-              codeMode: { enabled: false },
-            },
-            gateway: {
-              mode: "local",
-              bind: "loopback",
-              port: instance.port,
-              auth: { mode: "token", token: instance.gatewayToken },
-              controlUi: { enabled: false },
-            },
-          });
-          await instance.startGateway();
-          await connect();
-          phase = "raw-sigterm";
-          await start(stream);
-          await start(tool);
-          await start(stopped);
-          expect(await client!.request("sessions.abort", { key: stopped.key })).toMatchObject({
-            status: "aborted",
-          });
-          expect(
-            await client!.request("agent.wait", { runId: stopped.runId, timeoutMs: 60_000 }),
-          ).toMatchObject({ status: "error" });
-          stopped.phase = "cancelled";
-          await start(reset);
-          await start(parallelA);
-          await start(parallelB);
-          const predecessor = await stopProcess("raw");
-          for (const scenario of rawRecoveries) {
-            const entry = readStoppedEntry(scenario);
-            expect(entry).toMatchObject({
-              sessionId: scenario.sessionId,
-              status: "interrupted",
-              mainRestartRecovery: expect.any(Object),
-            });
-            expect(entry.restartRecoveryTerminalRunIds ?? []).not.toContain(scenario.runId);
-            scenario.phase = "recovery";
-          }
-          expect(readStoppedEntry(stopped)).toMatchObject({ status: "killed" });
-          const resetRevision = readStoppedEntry(reset).lifecycleRevision;
-          expect(resetRevision).toBeTypeOf("string");
-          await instance.startGateway();
-          expect(instance.child?.pid).not.toBe(predecessor);
-          await connect();
-          // Four distinct turns must reach the provider while every response is held.
-          await gate(provider.fourRecoveriesSeen);
-          const firstRecoveries = provider.recoveryStarts();
-          expect(firstRecoveries).toHaveLength(4);
-          expect(provider.peakRecoveryConcurrency()).toBe(4);
-          const firstFinished = firstRecoveries.find((scenario) => scenario !== reset);
-          if (!firstFinished) {
-            throw new Error("Expected a started recovery that is not being reset");
-          }
-          await finish(firstFinished);
-          await gate(Promise.all(rawRecoveries.map((scenario) => scenario.recoverySeen.promise)));
-          const finishing = Promise.all(
-            rawRecoveries
-              .filter((scenario) => scenario !== reset && scenario !== firstFinished)
-              .map(finish),
-          );
-          void finishing.catch(() => {});
-          phase = "revoke-recovery";
-          const resetResult = await client!.request<{
-            ok: boolean;
-            entry: { sessionId: string; lifecycleRevision: string };
-          }>("sessions.reset", { key: reset.key, reason: "reset" });
-          expect(resetResult).toMatchObject({
-            ok: true,
-            entry: { sessionId: reset.sessionId, lifecycleRevision: expect.any(String) },
-          });
-          expect(resetResult.entry.lifecycleRevision).not.toBe(resetRevision);
-          expect(resetResult.entry).not.toHaveProperty("mainRestartRecovery");
-          await gate(provider.resetResponseClosed);
-          reset.releaseResponse.resolve();
-          reset.phase = "cancelled";
-          await gate(finishing);
-          const afterReset = await client!.request<SessionsListResult>("sessions.list", {
-            agentId: "main",
-          });
-          const replacement = afterReset.sessions.find((row) => row.key === reset.key);
-          expect(replacement).toMatchObject({ sessionId: reset.sessionId, hasActiveRun: false });
-          expect(afterReset.sessions.find((row) => row.key === stopped.key)).toMatchObject({
-            status: "killed",
-            hasActiveRun: false,
-          });
-          expect(provider.effects()).toBe(1);
-          expect(provider.forbiddenEffects()).toBe(0);
+        const pluginId = "shutdown-tool-checkpoint";
+        const pluginDir = instance.state.path("checkpoint-plugin");
 
-          phase = "managed-restart";
-          await start(managed);
-          await stopProcess("managed");
-          expect(readStoppedEntry(managed)).toMatchObject({
+        // The policy hook waits through cancellation; reset must revoke before its tool effect.
+        await writeRestartPlugin(
+          pluginDir,
+          {
+            id: pluginId,
+            activation: { onStartup: true },
+            configSchema: { type: "object", additionalProperties: false, properties: {} },
+          },
+          `export default {
+              id: ${JSON.stringify(pluginId)},
+              register(api) {
+                api.on("before_tool_call", async (event, ctx) => {
+                  if (ctx.sessionKey !== ${JSON.stringify(reset.key)}) return;
+                  const onAbort = () => {
+                    void fetch(${JSON.stringify(provider.baseUrl.replace("/v1", "/tool-cancelled"))}, {
+                      method: "POST",
+                    }).catch(() => {});
+                  };
+                  ctx.abortSignal?.addEventListener("abort", onAbort, { once: true });
+                  try {
+                    if (ctx.abortSignal?.aborted) onAbort();
+                    await fetch(${JSON.stringify(provider.baseUrl.replace("/v1", "/tool-checkpoint"))}, {
+                      method: "POST",
+                    });
+                  } finally {
+                    ctx.abortSignal?.removeEventListener("abort", onAbort);
+                  }
+                }, { matcher: ["exec"] });
+              },
+            };`,
+          "index.mjs",
+        );
+        await instance.state.writeConfig({
+          update: { checkOnStart: false },
+          browser: { enabled: false },
+          discovery: { mdns: { mode: "off" } },
+          plugins: {
+            enabled: true,
+            allow: [pluginId],
+            load: { paths: [pluginDir] },
+            entries: { [pluginId]: { enabled: true } },
+            slots: { memory: "none" },
+          },
+          ...restartModelConfig(
+            model,
+            instance.state.workspaceDir,
+            { maxConcurrent: 8 },
+            { catalogRefresh: { enabled: false } },
+          ),
+          tools: {
+            allow: ["exec", "process"],
+            exec: { mode: "full", host: "gateway" },
+            codeMode: { enabled: false },
+          },
+          gateway: {
+            mode: "local",
+            bind: "loopback",
+            port: instance.port,
+            auth: { mode: "token", token: instance.gatewayToken },
+            controlUi: { enabled: false },
+          },
+        });
+        await instance.startGateway();
+        await connect();
+        await start(stream);
+        await start(tool);
+        await start(stopped);
+        expect(await client!.request("sessions.abort", { key: stopped.key })).toMatchObject({
+          status: "aborted",
+        });
+        expect(
+          await client!.request("agent.wait", { runId: stopped.runId, timeoutMs: 60_000 }),
+        ).toMatchObject({ status: "error" });
+        stopped.phase = "cancelled";
+        await start(reset);
+        await start(parallelA);
+        await start(parallelB);
+        const predecessor = await stopProcess("raw");
+        for (const scenario of rawRecoveries) {
+          const entry = readStoppedEntry(scenario);
+          expect(entry).toMatchObject({
+            sessionId: scenario.sessionId,
             status: "interrupted",
-            sessionId: managed.sessionId,
+            mainRestartRecovery: expect.any(Object),
           });
-          managed.phase = "held-recovery";
-          await instance.startGateway();
-          await connect();
-          await gate(managed.recoverySeen.promise);
-          // Kill both an admitted original turn and a turn already recovering from restart.
-          phase = "sigkill-during-recovery";
-          await start(killed);
-          await stopProcess("kill");
-          managed.phase = "recovery";
-          killed.phase = "recovery";
-          await instance.startGateway();
-          await connect();
-          await gate(Promise.all([finish(managed), finish(killed)]));
-          expect(stopped.calls).toHaveLength(1);
-          expect(reset.calls).toHaveLength(2);
-          expect(managed.calls.map((call) => call.phase)).toEqual([
-            "initial",
-            "held-recovery",
-            "recovery",
-          ]);
-          expect(killed.calls.map((call) => call.phase)).toEqual(["initial", "recovery"]);
-          for (const scenario of [parallelA, parallelB]) {
-            expect(scenario.calls.map((call) => call.phase)).toEqual(["initial", "recovery"]);
-          }
-          expect(provider.peakRecoveryConcurrency()).toBe(4);
-          expect(provider.effects()).toBe(1);
-          expect(provider.forbiddenEffects()).toBe(0);
-          console.info(
-            JSON.stringify({
-              proof: "process-shutdown-custody",
-              rawSigterm: ["stream", "tool", "parallel-a", "parallel-b"],
-              interruptedSessions: rawRecoveries.length,
-              recoveryConcurrency: provider.peakRecoveryConcurrency(),
-              managedRestart: true,
-              sigkill: true,
-              secondRestartDuringRecovery: true,
-              explicitStop: "terminal",
-              effectsAfterReset: 0,
-              acceptedEffects: 1,
-              processes: 4,
-            }),
-          );
-        } catch (cause) {
-          throw new Error(
-            JSON.stringify({
-              phase,
-              calls: scenarios.map(({ name, calls }) => ({
-                name,
-                phases: calls.map((call) => call.phase),
-              })),
-              logs: instance.logs(),
-            }).replaceAll(instance.gatewayToken, "[fixture token]"),
-            { cause },
-          );
+          expect(entry.restartRecoveryTerminalRunIds ?? []).not.toContain(scenario.runId);
+          scenario.phase = "recovery";
         }
+        expect(readStoppedEntry(stopped)).toMatchObject({ status: "killed" });
+        const resetRevision = readStoppedEntry(reset).lifecycleRevision;
+        expect(resetRevision).toBeTypeOf("string");
+        await instance.startGateway();
+        expect(instance.child?.pid).not.toBe(predecessor);
+        await connect();
+        // Four distinct turns must reach the provider while every response is held.
+        await gate(provider.fourRecoveriesSeen);
+        const firstRecoveries = provider.recoveryStarts();
+        expect(firstRecoveries).toHaveLength(4);
+        expect(provider.peakRecoveryConcurrency()).toBe(4);
+        const firstFinished = firstRecoveries.find((scenario) => scenario !== reset);
+        if (!firstFinished) {
+          throw new Error("Expected a started recovery that is not being reset");
+        }
+        await finish(firstFinished);
+        await gate(Promise.all(rawRecoveries.map((scenario) => scenario.recoverySeen.promise)));
+        const finishing = Promise.all(
+          rawRecoveries
+            .filter((scenario) => scenario !== reset && scenario !== firstFinished)
+            .map(finish),
+        );
+        void finishing.catch(() => {});
+        await gate(reset.recoverySeen.promise);
+        await gate(provider.toolCheckpoint);
+        const resetting = client!.request<{
+          ok: boolean;
+          entry: { sessionId: string; lifecycleRevision: string };
+        }>("sessions.reset", { key: reset.key, reason: "reset" });
+        void resetting.catch(() => {});
+        await gate(provider.toolCancelled);
+        provider.releaseToolCheckpoint();
+        const resetResult = await gate(resetting);
+        expect(resetResult).toMatchObject({
+          ok: true,
+          entry: { sessionId: reset.sessionId, lifecycleRevision: expect.any(String) },
+        });
+        expect(resetResult.entry.lifecycleRevision).not.toBe(resetRevision);
+        expect(resetResult.entry).not.toHaveProperty("mainRestartRecovery");
+        reset.phase = "cancelled";
+        await gate(finishing);
+        const afterReset = await client!.request<SessionsListResult>("sessions.list", {
+          agentId: "main",
+        });
+        const replacement = afterReset.sessions.find((row) => row.key === reset.key);
+        expect(replacement).toMatchObject({ sessionId: reset.sessionId, hasActiveRun: false });
+        expect(afterReset.sessions.find((row) => row.key === stopped.key)).toMatchObject({
+          status: "killed",
+          hasActiveRun: false,
+        });
+        expect(provider.effects()).toBe(1);
+        expect(provider.forbiddenEffects()).toBe(0);
+        await start(managed);
+        await stopProcess("managed");
+        expect(readStoppedEntry(managed)).toMatchObject({
+          status: "interrupted",
+          sessionId: managed.sessionId,
+        });
+        managed.phase = "held-recovery";
+        await instance.startGateway();
+        await connect();
+        await gate(managed.recoverySeen.promise);
+        // Kill both an admitted original turn and a turn already recovering from restart.
+        await start(killed);
+        await stopProcess("kill");
+        managed.phase = "recovery";
+        killed.phase = "recovery";
+        await instance.startGateway();
+        await connect();
+        await gate(Promise.all([finish(managed), finish(killed)]));
+        expect(stopped.calls).toHaveLength(1);
+        expect(reset.calls).toHaveLength(2);
+        expect(managed.calls.map((call) => call.phase)).toEqual([
+          "initial",
+          "held-recovery",
+          "recovery",
+        ]);
+        expect(killed.calls.map((call) => call.phase)).toEqual(["initial", "recovery"]);
+        for (const scenario of [parallelA, parallelB]) {
+          expect(scenario.calls.map((call) => call.phase)).toEqual(["initial", "recovery"]);
+        }
+        expect(provider.peakRecoveryConcurrency()).toBe(4);
+        expect(provider.effects()).toBe(1);
+        expect(provider.forbiddenEffects()).toBe(0);
       },
       async () => {
+        provider.releaseToolCheckpoint();
         for (const scenario of scenarios) {
           scenario.releaseResponse.resolve();
         }

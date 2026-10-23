@@ -1,18 +1,17 @@
-import { createEffect, onSettled, untrack } from "solid-js";
+import { onSettled } from "solid-js";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
+import { nativeDockPanelCss as dockStyles } from "../dock-panel-styles.ts";
 import { nativePanelTabStripCss as tabStyles } from "../panel-tab-strip-styles.ts";
 import type { TerminalInputs } from "./terminal-panel-session-types.ts";
-import { TerminalPanelHostedActions, TerminalPanelView } from "./terminal-panel-view.tsx";
+import { TerminalPanelHostedActions } from "./terminal-panel-view-chrome.tsx";
+import { TerminalPanelView } from "./terminal-panel-view.tsx";
 import {
-  CATALOG_TERMINAL_READY_TIMEOUT_MS,
   createTerminalPanel,
   type TerminalPanelOwner,
   type TerminalPanelMethods,
 } from "./terminal-panel.ts";
-import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
-import dockStyles from "../dock-panel-solid.css?inline";
 import terminalStyles from "./terminal-panel.css?inline";
 
 type Host = SolidBridgeElement<TerminalInputs, TerminalPanelMethods>;
@@ -24,7 +23,7 @@ function ownerFor(host: Host) {
   if (retained) {
     return retained;
   }
-  const owner = createTerminalPanel(host);
+  const owner = createTerminalPanel(host, onSettled);
   owners.set(host, owner);
   for (const key of [
     "hostedTabs",
@@ -47,14 +46,18 @@ function ownerFor(host: Host) {
 const styles = `${dockStyles}\n${tabStyles}\n${terminalStyles}`;
 export const TerminalPanelHost = defineSolidBridge<TerminalInputs, TerminalPanelMethods>(
   "openclaw-terminal-panel",
-  (_props, host) => (
-    <>
-      <style>{styles}</style>
-      <TerminalPanel owner={ownerFor(host)} />
-    </>
-  ),
+  (_props, host) => {
+    const content = terminalPanel(ownerFor(host));
+    return (
+      <>
+        <style>{styles}</style>
+        {content}
+      </>
+    );
+  },
   {
     properties: {
+      mobile: { default: false, type: Boolean },
       client: { default: null, attribute: false },
       gatewayConnected: { default: true, type: Boolean },
       agentId: { default: null, attribute: false },
@@ -69,8 +72,6 @@ export const TerminalPanelHost = defineSolidBridge<TerminalInputs, TerminalPanel
       tabsInHeader: { default: false, type: Boolean },
       page: { default: false, type: Boolean },
       routeTarget: { default: null, attribute: false },
-      createTerminalController: { default: createIsolatedGhosttyTerminal, attribute: false },
-      catalogReadyTimeoutMs: { default: CATALOG_TERMINAL_READY_TIMEOUT_MS, attribute: false },
     },
     propertyChanged: (host, key) => owners.get(host)?.inputsChanged(key),
     methods: {
@@ -89,14 +90,10 @@ export const TerminalPanelHost = defineSolidBridge<TerminalInputs, TerminalPanel
   },
 );
 
-function TerminalPanel(props: { owner: TerminalPanelOwner }) {
+function terminalPanel(owner: TerminalPanelOwner) {
   const application = useOptionalApplication();
-  // Native ownerFor(host) retains this owner for the lifetime of this mount.
-  const owner = untrack(() => props.owner);
   owner.bindPresentation();
   const state = projectOwner(owner, (current) => current.viewState);
-  // Ghostty and hosted tab consumers need committed DOM before measuring.
-  createEffect(state.read, () => owner.rendered());
   onSettled(() => {
     let disposed = false;
     let detach: (() => void) | undefined;

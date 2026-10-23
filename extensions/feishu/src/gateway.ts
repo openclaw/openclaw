@@ -11,11 +11,9 @@ export const feishuGatewayAdapter: NonNullable<ChannelPlugin<ResolvedFeishuAccou
       { cfg: ctx.cfg, accountId: ctx.accountId },
       { requireEventSecrets: true },
     );
-    const port = account.config?.connectionMode === "webhook" ? resolveGatewayPort(ctx.cfg) : null;
+    const port = account.config.connectionMode === "webhook" ? resolveGatewayPort(ctx.cfg) : null;
     ctx.setStatus({ accountId: ctx.accountId, port });
-    ctx.log?.info(
-      `starting feishu[${ctx.accountId}] (mode: ${account.config?.connectionMode ?? "websocket"})`,
-    );
+    ctx.log?.info(`starting feishu[${ctx.accountId}] (mode: ${account.config.connectionMode})`);
     const statusSink = createAccountStatusSink(ctx);
     return monitorFeishuProvider({
       config: ctx.cfg,

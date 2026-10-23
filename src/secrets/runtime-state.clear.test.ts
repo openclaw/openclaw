@@ -52,47 +52,34 @@ it("retires migration refusals and the provider publisher before the resolver ru
     expectedRevision: state.getActiveSecretsRuntimeSnapshotRevisionState(),
     activateSnapshotIfCurrent: () => true,
   };
-  try {
-    await expect(state.activateProviderAuthRuntimeSnapshot(candidate)).resolves.toBe(true);
-    expect(published).toHaveBeenCalledOnce();
-    expect(() => diagnostics.assertAuthProfileMigrationReady(agentDir)).toThrow(refusal);
+  await expect(state.activateProviderAuthRuntimeSnapshot(candidate)).resolves.toBe(true);
+  expect(published).toHaveBeenCalledOnce();
+  expect(() => diagnostics.assertAuthProfileMigrationReady(agentDir)).toThrow(refusal);
 
-    state.clearSecretsRuntimeSnapshotState();
+  state.clearSecretsRuntimeSnapshotState();
 
-    await expect(state.activateProviderAuthRuntimeSnapshot(candidate)).resolves.toBe(true);
-    expect(published).toHaveBeenCalledOnce();
-    expect(() => diagnostics.assertAuthProfileMigrationReady(agentDir)).not.toThrow();
-  } finally {
-    state.clearSecretsRuntimeSnapshotState();
-    diagnostics.clearAuthProfileMigrationDiagnostics();
-  }
+  await expect(state.activateProviderAuthRuntimeSnapshot(candidate)).resolves.toBe(true);
+  expect(published).toHaveBeenCalledOnce();
+  expect(() => diagnostics.assertAuthProfileMigrationReady(agentDir)).not.toThrow();
 });
 
 it("isolates snapshot owners while exposing the active config pair for hot paths", () => {
   const resolvedValue = { nested: ["synthetic-value"] };
+  const refKey = "env:default:SYNTHETIC_KEY";
+  const owner = { ownerKind: "provider" as const, ownerId: "example", refKeys: [refKey] };
   const snapshot = preparedSnapshot({
     sourceConfig: { agents: { entries: { source: {} } } },
     config: { agents: { entries: { runtime: {} } } },
-    authStores: [],
     degradedOwners: [
       {
-        ownerKind: "provider",
-        ownerId: "example",
+        ...owner,
         state: "unavailable",
         paths: ["models.providers.example.apiKey"],
-        refKeys: ["env:default:SYNTHETIC_KEY"],
         reason: "secret provider failed",
         providerFailures: [{ source: "env", provider: "default" }],
       },
     ],
-    secretOwners: [
-      {
-        ownerKind: "provider",
-        ownerId: "example",
-        refKeys: ["env:default:SYNTHETIC_KEY"],
-        resolvedValues: [{ refKey: "env:default:SYNTHETIC_KEY", value: resolvedValue }],
-      },
-    ],
+    secretOwners: [{ ...owner, resolvedValues: [{ refKey, value: resolvedValue }] }],
   });
   const expectedOwners = structuredClone({
     degradedOwners: snapshot.degradedOwners,
@@ -105,11 +92,7 @@ it("isolates snapshot owners while exposing the active config pair for hot paths
     loadablePluginOrigins: new Map(),
   };
 
-  state.activateSecretsRuntimeSnapshotState({
-    snapshot,
-    refreshContext,
-    refreshHandler: null,
-  });
+  state.activateSecretsRuntimeSnapshotState({ snapshot, refreshContext, refreshHandler: null });
   refreshContext.env.SNAPSHOT_FIXTURE = "caller edit";
 
   snapshot.degradedOwners![0]!.paths.push("changed-at-source");

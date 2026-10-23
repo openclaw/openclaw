@@ -15,17 +15,16 @@ import {
 } from "../../lib/reactive/application.ts";
 import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { observeState } from "../../lib/reactive/observe-state.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
-import type { ModelAccountUsageElement } from "./account-usage.tsx";
+import { createModelProviderConfigActions } from "./config-actions.ts";
+import { createModelProviderMutationPresentation } from "./config-mutation-presentation.ts";
 import {
   modelProviderConfigBusy,
   modelProviderConfigMutationBlockedReason,
   modelDefaultsActions,
   modelProviderErrorMessage,
   readModelBehaviorConfig,
-  runModelProviderApiKeyMutation,
-  runModelProviderDefaultsMutation,
   type ModelProviderRowMessage,
 } from "./config-mutation.ts";
 import { ModelProviderCoreLoader, type ModelProviderRefreshReason } from "./core-load.ts";
@@ -34,12 +33,12 @@ import { createModelProviderDiscovery } from "./discovery-controller.tsx";
 import { createInstalledAgents } from "./installed-agents.tsx";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import { createModelProviderLogin } from "./login-controller.ts";
-import { createModelProvidersState, type ModelProvidersState } from "./page-state.ts";
+import { createModelProvidersState } from "./page-state.ts";
 import { createModelProviderProfileActions } from "./profile-actions-controller.ts";
+import { createModelProviderProfilePresentation } from "./profile-actions-presentation.ts";
 import { updateRecordEntry } from "./record-state.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
-import type { ModelProvidersViewProps } from "./view.tsx";
 
 export function createModelProviders(
   context: ApplicationContext,
@@ -52,8 +51,9 @@ export function createModelProviders(
   const gatewayState = projectGateway(context.gateway);
   const selection = projectAgentSelection(context.settingsAgentSelection);
   const overlays = projectOverlays(context.overlays);
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  const projection = observeState(createModelProvidersState());
+  const state = projection.state;
+  const notify = projection.invalidate;
   const mutationBlockedReason = (): string | null =>
     modelProviderConfigMutationBlockedReason(context) ??
     (state.selectedAgentId ? null : t("agents.noAgents"));
@@ -61,23 +61,11 @@ export function createModelProviders(
     mutationBlockedReason() === null && !modelProviderConfigBusy(context);
   let loaderPending = false;
   let connected = false;
-  const accountUsages = new Set<ModelAccountUsageElement>();
-  const state = createModelProvidersState();
   let pendingConnection = false;
   let pendingCredentialInvalidation = false;
   let profilesVisible = false;
   let readAccess = false;
-
-  function setState<Key extends keyof ModelProvidersState>(
-    key: Key,
-    value: ModelProvidersState[Key],
-  ) {
-    if (!Object.is(state[key], value)) {
-      state[key] = value;
-      notify();
-    }
-    return value;
-  }
+  let stopCatalog: (() => void) | undefined;
 
   /** Client the current data was loaded from; a new client means stale data. */
   let dataClient: GatewayBrowserClient | null = null;
@@ -88,9 +76,7 @@ export function createModelProviders(
     onStart: (reason) => {
       supplemental.beginCoreRefresh(reason === "forced");
       if (reason === "forced") {
-        for (const account of accountUsages) {
-          account.refreshUsage();
-        }
+        state.accountUsageRevision += 1;
       }
     },
     onComplete: ({ client, data }) => {
@@ -100,18 +86,16 @@ export function createModelProviders(
     },
     onCatalogComplete: (result) => {
       if (state.data) {
-        setState("data", {
+        state.data = {
           ...state.data,
           providerOutcomes: result.providerOutcomes ?? [],
           catalogError: null,
-        });
+        };
       }
     },
   });
   const refreshPolicy = new UsageRefreshPolicy({
-    isLoading: () =>
-      loaderPending || !routeDataObserved || core.loading || supplemental.usageLoading,
-    // Usage convergence must not restart the independent local-cost request.
+    isLoading: () => loaderPending || !routeDataObserved || core.loading || supplemental.loading,
     reload: () => supplemental.loadUsage(),
     onIncompleteUsageExhausted: notify,
   });
@@ -120,7 +104,7 @@ export function createModelProviders(
     getGateway: () => gateway,
     getData: () => state.data,
     getDataClient: () => dataClient,
-    setData: (data) => setState("data", data),
+    setData: (data) => (state.data = data),
     setDataClient: (client) => (dataClient = client),
     refreshPolicy,
   });
@@ -130,10 +114,19 @@ export function createModelProviders(
     invalidateRequests,
     ensureInitialData,
     onSnapshot: (change) => {
+      if (change.clientChanged) {
+        stopCatalog?.();
+        stopCatalog = change.snapshot.client
+          ? modelCatalog.subscribeModelCatalogCache(change.snapshot.client, notify, () => ({
+              agentId: state.selectedAgentId || undefined,
+            }))
+          : undefined;
+      }
       if (change.initial) {
         resetConnectionState();
       } else if (change.connectionChanged && !change.identityChanged) {
-        setState("busy", {});
+        mutations.retire();
+        state.busy = {};
         installedAgents.reset({ preserveVisibleData: true });
       }
       if (change.snapshot.phase === "connected") {
@@ -149,6 +142,7 @@ export function createModelProviders(
         readAccess = canRead;
       }
       installedAgents.synchronize();
+      login.synchronizePresentation();
       if (change.becameConnected && !change.initial && routeDataObserved && !loaderPending) {
         void refresh("replacement");
       }
@@ -159,32 +153,75 @@ export function createModelProviders(
     gateway,
     context,
   });
+  const mutations = createModelProviderMutationPresentation({
+    readScope: () => {
+      projection.read();
+      gatewayState.read();
+      return {
+        client: gateway.client,
+        connectionEpoch: gateway.epoch,
+        agentId: state.selectedAgentId,
+        agentEpoch,
+      };
+    },
+    isCurrent: (scope) =>
+      connected &&
+      scope.client !== null &&
+      gateway.isCurrent({ client: scope.client, epoch: scope.connectionEpoch }) &&
+      scope.agentId === state.selectedAgentId &&
+      scope.agentEpoch === agentEpoch,
+    readAuthStatus: () => {
+      projection.read();
+      return state.data?.authStatus ?? null;
+    },
+    readConfigObject: () => {
+      runtimeConfig.read();
+      gatewayState.read();
+      projection.read();
+      const snapshot = context.gateway.snapshot;
+      // Retained config is presentation only; admission still requires a current snapshot.
+      return (
+        currentConfigObject(context.runtimeConfig.state) ??
+        (snapshot.phase !== "connected" && dataClient && dataClient === snapshot.client
+          ? context.runtimeConfig.state.configForm
+          : null)
+      );
+    },
+  });
+  const profilePresentation = createModelProviderProfilePresentation({
+    scope: mutations.scope,
+    isCurrent: mutations.isCurrent,
+    retirement: mutations.retirement,
+    authStatus: mutations.authStatus,
+  });
   const profileActions = createModelProviderProfileActions({
+    onLogoutStarted: (receipt) => void profilePresentation.logoutStarted(receipt),
     getAgentEpoch: () => agentEpoch,
     getAgentId: () => state.selectedAgentId,
     getClient: () => context.gateway.snapshot.client,
     getClientEpoch: () => gateway.epoch,
     getData: () => state.data,
     getOrders: () => state.profileOrders,
-    setData: (data) => setState("data", data),
-    setOrders: (orders) => setState("profileOrders", orders),
+    setData: (data) => (state.data = data),
+    setOrders: (orders) => (state.profileOrders = orders),
     clearMessage: (cardId) => setMessage(cardId, null),
     canMutate: () => canMutate(),
+    hasMutationAccess: () => mutationBlockedReason() === null,
     cancelRefresh: () => core.invalidate(),
     refresh: () => refresh("forced"),
     isCurrentClient: (client, epoch) => gateway.isCurrent({ client, epoch }),
     isBusy: (key) => Boolean(state.busy[key]),
     setBusy: (key, value) => setBusy(key, value),
     setProbeResult: (cardId, result) =>
-      setState("probeResults", updateRecordEntry(state.probeResults, cardId, result)),
+      (state.probeResults = updateRecordEntry(state.probeResults, cardId, result)),
     setProbeError: (cardId, error) => setMessage(cardId, { kind: "error", text: error }),
     getConfig: () => context.runtimeConfig,
   });
   const discovery = createModelProviderDiscovery({
     canOpen: canMutate,
     getOwner: () => ({
-      client: gatewayState.read().snapshot.client,
-      agentId: selection.read().state.selectedId,
+      client: context.gateway.snapshot.client,
+      agentId: context.settingsAgentSelection.state.selectedId,
     }),
     onClose: () => void refresh("replacement"),
     onError: (error) =>
@@ -199,6 +236,7 @@ export function createModelProviders(
       overlays.read();
       return {
         context,
+        connectionEpoch: gateway.epoch,
         agentId: state.selectedAgentId,
         authStatus: state.data?.authStatus ?? null,
       };
@@ -206,24 +244,16 @@ export function createModelProviders(
     canStart: canMutate,
     onDiscover: () => {
       setMessage("connection", null);
-      void discovery.open();
+      discovery.open();
     },
     onApiKey: (provider) => {
-      setState("addProviderId", provider);
-      setState("addProviderKey", "");
+      state.addProviderId = provider;
+      state.addProviderKey = "";
       setAddProviderOpen(true);
       setMessage("add", null);
     },
     canContinue: () => mutationBlockedReason() === null,
     refresh: (providerId) => refresh("replacement", providerId),
-  });
-  const projection = projectSource(state, {
-    read: (value) => value,
-    subscribe: (_, listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    equality: "revision",
   });
   let previousRouteData: ModelProvidersRouteData | undefined;
   let previousLoaderPending: boolean | undefined;
@@ -249,6 +279,12 @@ export function createModelProviders(
       core.invalidate();
       routeDataObserved = true;
       setSelectedAgent(context.settingsAgentSelection.state.selectedId ?? "");
+      // The catalog can change after preload completes but before this page subscribes.
+      const catalogScope = { agentId: state.selectedAgentId };
+      const catalogCurrent =
+        !data.client ||
+        !modelCatalog.peekModelCatalog(data.client, catalogScope, { allowStale: true }) ||
+        modelCatalog.peekModelCatalog(data.client, catalogScope) !== undefined;
       if (
         readAccess &&
         (data.agentId ?? "") === state.selectedAgentId &&
@@ -256,8 +292,11 @@ export function createModelProviders(
         gateway.isRouteDataCurrent(data)
       ) {
         supplemental.adoptCoreData(data.client, data.data);
+        if (!catalogCurrent) {
+          retryCatalog();
+        }
       } else {
-        setState("data", null);
+        state.data = null;
         dataClient = null;
         refreshPolicy.resetPayload();
       }
@@ -296,11 +335,6 @@ export function createModelProviders(
       }
     },
   );
-  // The catalog cache subscription belongs to the current Gateway client.
-  createEffect(
-    () => gatewayState.read().snapshot.client,
-    (client) => (client ? modelCatalog.subscribeModelCatalogCache(client, notify) : undefined),
-  );
   function syncConfig() {
     if (!context.runtimeConfig.state.configSnapshot && !context.runtimeConfig.state.configLoading) {
       void context.runtimeConfig.ensureLoaded().catch(() => undefined);
@@ -310,11 +344,20 @@ export function createModelProviders(
   onSettled(() => {
     connected = true;
     gateway.connect();
+    let location = context.router.getState().location;
     const syncAgent = () => {
+      discovery.synchronize();
       syncSelectedAgent();
       installedAgents.synchronize();
+      login.synchronizePresentation();
     };
     const cleanups = [
+      context.router.subscribe((next) => {
+        if (next.location !== location) {
+          mutations.retire();
+          location = next.location;
+        }
+      }),
       modelCatalog.subscribeModelCatalogChanges(context.gateway, () => {
         if (login.busy) {
           pendingCredentialInvalidation = true;
@@ -331,13 +374,15 @@ export function createModelProviders(
     syncAgent();
     synchronizeRoute(inputs.routeData, inputs.loaderPending ?? false);
     return () => {
-      listeners.clear();
+      mutations.retire();
+      projection.dispose();
       connected = false;
       for (const cleanup of cleanups) {
         cleanup();
       }
       profileActions.resetOrders();
       refreshPolicy.dispose();
+      stopCatalog?.();
       gateway.dispose();
     };
   });
@@ -396,35 +441,36 @@ export function createModelProviders(
   function resetConnectionState() {
     profilesVisible = false;
     readAccess = false;
-    setState("data", null);
+    state.data = null;
     dataClient = null;
     refreshPolicy.resetPayload();
     discovery.cancelLoading();
     installedAgents.reset();
     resetAgentScopeState();
     profileActions.resetProbes();
-    setState("defaultsDraft", null);
+    state.defaultsDraft = null;
   }
 
   function resetAgentScopeState() {
+    mutations.retire();
     pendingCredentialInvalidation = false;
     login.reset();
-    setState("busy", {});
-    setState("messages", {});
-    setState("probeResults", {});
+    state.busy = {};
+    state.messages = {};
+    state.probeResults = {};
     closeKeyEditor();
     profileActions.cancelLogout();
     profileActions.resetOrders();
     setAddProviderOpen(false);
-    setState("addProviderId", "");
-    setState("addProviderKey", "");
+    state.addProviderId = "";
+    state.addProviderKey = "";
   }
 
   function setSelectedAgent(agentId: string): boolean {
     if (agentId === state.selectedAgentId) {
       return false;
     }
-    setState("selectedAgentId", agentId);
+    state.selectedAgentId = agentId;
     agentEpoch += 1;
     resetAgentScopeState();
     return true;
@@ -435,7 +481,7 @@ export function createModelProviders(
       return;
     }
     invalidateRequests();
-    setState("data", null);
+    state.data = null;
     dataClient = null;
     refreshPolicy.resetPayload();
     // probeEpochs stays: per-card counters must remain monotonic across agent
@@ -471,105 +517,24 @@ export function createModelProviders(
   }
 
   const setBusy = (key: string, value: boolean) =>
-    setState("busy", updateRecordEntry(state.busy, key, value ? true : null));
+    (state.busy = updateRecordEntry(state.busy, key, value ? true : null));
 
   const setMessage = (key: string, message: ModelProviderRowMessage | null) =>
-    setState("messages", updateRecordEntry(state.messages, key, message));
+    (state.messages = updateRecordEntry(state.messages, key, message));
 
-  function closeKeyEditor() {
-    setState("keyEditorProvider", null);
-    setState("keyDraft", "");
-  }
-
-  async function mutateApiKey(
-    provider: string,
-    configKey: string,
-    apiKey: string | null,
-    action: "edit" | "add" = "edit",
-  ) {
-    const client = gateway.client;
-    const key = action === "add" ? "add" : `key:${provider}`;
-    if (!client || !canMutate() || state.busy[key] || apiKey === "") {
-      return;
-    }
-    const clientEpoch = gateway.epoch;
-    const capturedAgentEpoch = agentEpoch;
-    const isCurrent = () =>
-      gateway.isCurrent({ client, epoch: clientEpoch }) && agentEpoch === capturedAgentEpoch;
-    profileActions.clearProbe(provider);
-    const result = await runModelProviderApiKeyMutation(
-      {
-        runtimeConfig: context.runtimeConfig,
-        isCurrentClient: isCurrent,
-        isCurrentAgent: isCurrent,
-        canMutate: () => canMutate(),
-        refreshProviders: async () => {
-          const previous = state.data;
-          await refresh("replacement");
-          if (isCurrent() && state.data?.error) {
-            const warning = state.data.error;
-            setState("data", previous);
-            return warning;
-          }
-          return state.data?.error ?? state.data?.catalogError ?? null;
-        },
-        setBusy: (busy) => setBusy(key, busy),
-        setMessage: (message) => {
-          setMessage(provider, message);
-          if (action === "add") {
-            setMessage("add", message);
-          }
-        },
-      },
-      {
-        client,
-        agentId: state.selectedAgentId,
-        provider: configKey,
-        apiKey,
-        success: t(
-          action === "add"
-            ? "modelProviders.add.saved"
-            : apiKey === null
-              ? "modelProviders.apiKey.removed"
-              : "modelProviders.apiKey.saved",
-          { provider },
-        ),
-      },
-    );
-    if (!result.ok || !isCurrent()) {
-      return;
-    }
-    if (action === "add") {
-      if (state.addProviderId === provider && state.addProviderKey.trim() === apiKey) {
-        setAddProviderOpen(Boolean(result.warning));
-        if (!result.warning) {
-          setState("addProviderId", "");
-        }
-        setState("addProviderKey", "");
-      }
-    } else if (state.keyEditorProvider === provider && state.keyDraft.trim() === apiKey) {
-      closeKeyEditor();
-    }
-  }
-
-  async function saveDefaults() {
-    const defaults = state.defaultsDraft;
-    if (!defaults) {
-      return;
-    }
-    const capturedAgentEpoch = agentEpoch;
-    const settled = await runModelProviderDefaultsMutation(context, gateway, {
-      defaults,
-      busy: Boolean(state.busy.defaults),
-      isCurrentAgent: () => agentEpoch === capturedAgentEpoch,
-      setBusy: (busy) => setBusy("defaults", busy),
-      setMessage: (message) => setMessage("defaults", message),
-    });
-    // Retry retains rejected writes in the config owner; the picker shows saved defaults.
-    if (settled !== null && state.defaultsDraft === defaults) {
-      setState("defaultsDraft", null);
-    }
-  }
+  const { closeKeyEditor, mutateApiKey, saveDefaults } = createModelProviderConfigActions({
+    context,
+    gateway,
+    state,
+    mutations,
+    getAgentEpoch: () => agentEpoch,
+    canMutate,
+    clearProbe: profileActions.clearProbe,
+    refresh: () => refresh("replacement"),
+    setBusy,
+    setMessage,
+    setAddProviderOpen,
+  });
 
   function viewProps() {
     i18nRevision();
@@ -580,14 +545,11 @@ export function createModelProviders(
     selection.read();
     overlays.read();
     const gatewaySnapshot = context.gateway.snapshot;
-    const data = state.data ?? EMPTY_MODEL_PROVIDERS_DATA;
-    const configState = context.runtimeConfig.state;
-    // Retained config is presentation only; mutation admission still requires a current snapshot.
-    const configObject =
-      currentConfigObject(configState) ??
-      (gatewaySnapshot.phase !== "connected" && dataClient && dataClient === gatewaySnapshot.client
-        ? configState.configForm
-        : null);
+    const data = {
+      ...(state.data ?? EMPTY_MODEL_PROVIDERS_DATA),
+      authStatus: mutations.authStatus(),
+    };
+    const configObject = mutations.configObject();
     const catalog = modelCatalog.readAgentModelCatalog(
       readAccess ? gatewaySnapshot.client : null,
       state.selectedAgentId,
@@ -605,37 +567,39 @@ export function createModelProviders(
         defaultsDraft: state.defaultsDraft,
       });
     const stageDefaults = (patch: Partial<DefaultsDraft>) => {
-      setState("defaultsDraft", {
+      state.defaultsDraft = {
         ...(state.defaultsDraft ?? configuredDefaults),
         ...patch,
-      });
+      };
       setMessage("defaults", null);
       void saveDefaults();
     };
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
     const usageAvailable = isGatewayMethodAdvertised(gatewaySnapshot, "codex.accountUsage");
     const pageLogin = login.pageActions;
-    const props: ModelProvidersViewProps = {
+    const props = {
       installedAgents: undefined,
       providerQuery: providerQuery(),
-      onProviderQueryChange: setProviderQuery,
       onConnectProvider: () => void login.connectProvider(values.configuredModels),
-      usageClient: !mutationBlockedReason() && usageAvailable ? gatewaySnapshot.client : null,
-      usageAgentId: state.selectedAgentId,
-      registerAccountUsage: (element) => {
-        accountUsages.add(element);
-        return () => accountUsages.delete(element);
-      },
+      accountUsage:
+        !mutationBlockedReason() && usageAvailable && gatewaySnapshot.client
+          ? {
+              client: gatewaySnapshot.client,
+              agentId: state.selectedAgentId,
+              revision: state.accountUsageRevision,
+            }
+          : null,
       connected: gatewaySnapshot.phase === "connected",
       loading: state.data === null && !rosterError && !noSelectableAgents,
       refreshing: core.loading,
       error: rosterError ?? (noSelectableAgents ? t("agents.noAgents") : data.error),
-      providerUsageFailed: data.providerUsage?.ok === false,
-      supplementalLoading: loaderPending || supplemental.loading,
+      providerUsageFailed: data.providerUsageFailed,
       updatedAt: data.updatedAt,
+      onOpenUsage: () => context.navigate("usage"),
       credentialAgentLabel: agentLabel,
       cards: noSelectableAgents ? [] : installedAgents.filterProviders(cards),
       ...values,
+      catalogReceipt: core.catalogReceipt,
       catalogDiscovering: core.catalogLoading || Boolean(catalog?.pendingProviders?.length),
       catalogDiscoveryError: core.catalogLoading ? null : (core.catalogError ?? data.catalogError),
       configBusy: modelProviderConfigBusy(context),
@@ -660,26 +624,26 @@ export function createModelProviders(
               context.runtimeConfig.refresh({ background: true }),
               refresh("forced", core.retryProvider),
             ])),
-      onOpenKeyEditor: (provider) => {
-        setState("keyEditorProvider", provider);
-        setState("keyDraft", "");
+      onOpenKeyEditor: (provider: string) => {
+        state.keyEditorProvider = provider;
+        state.keyDraft = "";
         setMessage(provider, null);
       },
       onCloseKeyEditor: () => closeKeyEditor(),
-      onKeyDraftChange: (value) => setState("keyDraft", value),
-      onSaveKey: (provider, configKey) =>
+      onKeyDraftChange: (value: string) => (state.keyDraft = value),
+      onSaveKey: (provider: string, configKey: string) =>
         void mutateApiKey(provider, configKey, state.keyDraft.trim()),
-      onRemoveKey: (provider, configKey) => void mutateApiKey(provider, configKey, null),
-      onProbe: (cardId, providers) => void profileActions.probe(cardId, providers),
-      onRequestLogout: (pending) => void profileActions.requestLogout(pending),
-      onProfileOrderChange: (cardId, provider, profileIds) =>
-        profileActions.setOrder(cardId, provider, profileIds),
+      onProbe: (cardId: string, providers: string[]) =>
+        void profileActions.probe(cardId, providers),
+      onRequestLogout: (pending: Parameters<typeof profileActions.requestLogout>[0]) =>
+        void profileActions.requestLogout(pending),
+      onProfileOrderChange: profileActions.setOrder,
       onAddProviderToggle: () => {
         setAddProviderOpen((open) => !open);
-        setState("addProviderKey", "");
+        state.addProviderKey = "";
         setMessage("add", null);
       },
-      onAddProviderKeyChange: (value) => setState("addProviderKey", value),
+      onAddProviderKeyChange: (value: string) => (state.addProviderKey = value),
       onAddProvider: () => {
         const provider = state.addProviderId;
         if (provider) {
@@ -695,7 +659,6 @@ export function createModelProviders(
       cards,
       installedAgentsAvailable: installedAgents.available(),
       scope: {
-        agentLabel,
         onConnect: pageLogin.onConnect,
         connectDisabled: pageLogin.connectDisabled || discovery.busy || addProviderOpen(),
       },
@@ -714,6 +677,8 @@ export function createModelProviders(
     installedAgents,
     discovery,
     login,
+    mutations,
+    logoutSaving: profilePresentation.logoutSaving,
     retryCatalog,
   };
 }

@@ -31,6 +31,7 @@ import {
   createSharedRunIntegrationSession,
   loadSharedRunIntegrationHarness,
 } from "./run.shared-integration-harness.test-support.js";
+import type { EmbeddedRunAttemptInternalParams } from "./run/internal-params.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
 let baseParams: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>["runParams"];
@@ -120,24 +121,28 @@ function observeSettlement(run: ReturnType<typeof runEmbeddedAgent>) {
 
 async function withHeldAttempt(
   overrides: Partial<Parameters<typeof runEmbeddedAgent>[0]>,
-  enter: (params: EmbeddedRunAttemptParams) => void | Promise<void>,
+  enter: (params: EmbeddedRunAttemptInternalParams) => void | Promise<void>,
   verify: (
     run: ReturnType<typeof runEmbeddedAgent>,
     started: Promise<void>,
     completion: { settled: boolean },
+    settleAttempt: () => void,
   ) => Promise<void>,
 ) {
   vi.useFakeTimers();
   const held = createDeferred<ReturnType<typeof makeAttemptResult>>();
   const started = createDeferred();
   mockedRunEmbeddedAttempt.mockImplementationOnce(async (input) => {
-    await enter(input as EmbeddedRunAttemptParams);
+    const params = input as EmbeddedRunAttemptInternalParams;
+    await enter(params);
     started.resolve();
-    return await held.promise;
+    const result = await held.promise;
+    params.abortSignal?.throwIfAborted();
+    return result;
   });
   const run = runEmbeddedAgent({ ...baseParams, ...overrides });
   try {
-    await verify(run, started.promise, observeSettlement(run));
+    await verify(run, started.promise, observeSettlement(run), () => held.resolve(sessionResult()));
   } finally {
     held.resolve(sessionResult());
     await run.catch(() => undefined);
@@ -174,8 +179,8 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     const observe: typeof enqueue = (lane, task, options) =>
       enqueue(
         lane,
-        (marker) => {
-          const work = task(marker);
+        () => {
+          const work = task();
           queuedTasks.push(work);
           pendingTasks.add(work);
           void work.then(
@@ -302,7 +307,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     },
   );
 
-  it("releases the lane after a post-compaction abort when the backend ignores cancellation", async () => {
+  it("retains the lane after a post-compaction abort until the backend settles", async () => {
     let attemptAborted = false;
     prepareCompactedAttempt();
     await withHeldAttempt(
@@ -311,13 +316,15 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         await repeatToolOutcome(onToolOutcome);
         attemptAborted = abortSignal?.aborted ?? false;
       },
-      async (run, started, completion) => {
+      async (run, started, completion, settleAttempt) => {
         await Promise.race([started, run]);
         expect(attemptAborted).toBe(true);
         await vi.advanceTimersByTimeAsync(30_001);
-        expect(completion.settled).toBe(true);
+        expect(completion.settled).toBe(false);
         expect(pendingTasks.size, "backend still runs after the outer timeout").toBeGreaterThan(0);
+        settleAttempt();
         await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+        expect(completion.settled).toBe(true);
       },
     );
   });
@@ -386,6 +393,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
   it("enforces the runtime deadline after a paused built-in attempt resumes", async () => {
     let publishDeadline: EmbeddedRunAttemptParams["onAttemptDeadlineChanged"];
     let attemptSignal: AbortSignal | undefined;
+    let replyOperation: EmbeddedRunAttemptInternalParams["replyOperation"];
     await withHeldAttempt(
       {
         runId: "run-builtin-deadline-handoff",
@@ -393,13 +401,21 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         agentHarnessRuntimeOverride: "openclaw",
       },
       (params) => {
+        const operation = params.replyOperation;
+        if (!operation) {
+          throw new Error("Built-in attempt requires controller admission");
+        }
+        replyOperation = operation;
+        params.bindWatchdogAttempt?.(
+          operation.watchdog.attachAttempt({ assertCurrent: () => undefined }),
+        );
         publishDeadline = params.onAttemptDeadlineChanged;
         attemptSignal = params.abortSignal;
         // The legacy notification must not substitute a heartbeat for the owner's deadline.
         params.onAttemptTimeoutArmed?.();
         publishDeadline?.({ kind: "unlimited" });
       },
-      async (run, started, completion) => {
+      async (run, started, completion, settleAttempt) => {
         await vi.advanceTimersByTimeAsync(0);
         await Promise.race([started, run]);
         await vi.advanceTimersByTimeAsync(30_001);
@@ -407,25 +423,36 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
 
         publishDeadline?.({ kind: "bounded", deadlineAtMs: Date.now() + 10 });
         await vi.advanceTimersByTimeAsync(30_011);
-        expect(completion.settled).toBe(true);
+        expect(replyOperation?.watchdog.snapshot().executionDeadlineAtMs).toBeLessThanOrEqual(
+          Date.now(),
+        );
+        await replyOperation?.watchdog.tick();
+        expect(completion.settled).toBe(false);
         expect(pendingTasks.size, "backend still runs after the owner deadline").toBeGreaterThan(0);
+        settleAttempt();
+        await expect(run).rejects.toMatchObject({
+          name: "CommandLaneTaskTimeoutError",
+        });
         expect(attemptSignal?.aborted).toBe(true);
-        expect(attemptSignal?.reason).toMatchObject({ name: "CommandLaneTaskTimeoutError" });
-        await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+        expect(completion.settled).toBe(true);
       },
     );
   });
 
   it.each(["timeout", "abort"] as const)(
-    "releases a native lane when %s ignores cancellation",
+    "retains a native lane after %s until the attempt settles",
     async (kind) => {
+      const stopped = createDeferred();
+      let attemptSignal: AbortSignal | undefined;
       await withHeldAttempt(
         {
           runId: `run-native-${kind}-lane-release`,
           timeoutMs: 48 * 60 * 60 * 1000,
           agentHarnessRuntimeOverride: "openclaw",
         },
-        ({ onAttemptTimeoutArmed, onAttemptTimeout, onAttemptAbort }) => {
+        ({ abortSignal, onAttemptTimeoutArmed, onAttemptTimeout, onAttemptAbort }) => {
+          attemptSignal = abortSignal;
+          abortSignal?.addEventListener("abort", () => stopped.resolve(), { once: true });
           onAttemptTimeoutArmed?.();
           if (kind === "timeout") {
             onAttemptTimeout?.(new Error("attempt timed out"));
@@ -433,16 +460,29 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
             onAttemptAbort?.();
           }
         },
-        async (run, started, completion) => {
+        async (run, started, completion, settleAttempt) => {
           await vi.advanceTimersByTimeAsync(0);
           await started;
           await vi.advanceTimersByTimeAsync(30_001);
+          // Writer fencing is asynchronous; timer advancement does not join its receipt.
+          await Promise.race([stopped.promise, run]);
 
-          expect(completion.settled).toBe(true);
+          expect(completion.settled).toBe(false);
+          expect(attemptSignal?.aborted).toBe(true);
           expect(pendingTasks.size, "backend still runs after the outer timeout").toBeGreaterThan(
             0,
           );
+          settleAttempt();
           await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+          if (kind === "timeout") {
+            await expect(run).rejects.toBe(attemptSignal?.reason);
+          }
+          expect(attemptSignal?.reason).toMatchObject(
+            kind === "timeout"
+              ? { name: "CommandLaneTaskTimeoutError" }
+              : { name: "AbortError", message: "agent run aborted" },
+          );
+          expect(completion.settled).toBe(true);
         },
       );
     },

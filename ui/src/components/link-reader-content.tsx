@@ -1,8 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { LinkReaderMarkdown, documentUrl, type LoadImage } from "./link-reader-markdown.tsx";
 import type { ReaderReadyView, ReaderSection } from "./link-reader-panel-view.ts";
 import { linkReaderAuthorHref } from "./link-reader-response.ts";
@@ -36,9 +38,14 @@ function DateLabel(props: { value: string | undefined }) {
   );
 }
 
-function Diff(props: { patch: string; filename: string }) {
+function Diff(props: {
+  patch: string;
+  filename: string;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
+}) {
   return (
     <pre
+      ref={[elementRef(props.onScrollPortRef)]}
       class="lr-diff"
       tabindex={0}
       aria-label={t("linkReader.diffLabel", { filename: props.filename })}
@@ -69,7 +76,11 @@ function TruncationNote(props: { truncated: boolean | undefined; label: string }
   );
 }
 
-function FileContent(props: { file: ControlUiLinkReaderFile; expanded: boolean }) {
+function FileContent(props: {
+  file: ControlUiLinkReaderFile;
+  expanded: boolean;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
+}) {
   // Preserve native toggles until the document changes its expansion preference.
   const expanded = createMemo(() => props.expanded);
   return (
@@ -88,7 +99,13 @@ function FileContent(props: { file: ControlUiLinkReaderFile; expanded: boolean }
         when={props.file.patch}
         fallback={<p class="lr-note">{t("linkReader.patchUnavailable")}</p>}
       >
-        {(patch) => <Diff patch={patch()} filename={props.file.path} />}
+        {(patch) => (
+          <Diff
+            patch={patch()}
+            filename={props.file.path}
+            onScrollPortRef={props.onScrollPortRef}
+          />
+        )}
       </Show>
       <TruncationNote truncated={props.file.patchTruncated} label="linkReader.patchTruncated" />
     </details>
@@ -97,6 +114,7 @@ function FileContent(props: { file: ControlUiLinkReaderFile; expanded: boolean }
 
 function CommentContent(props: {
   comment: ControlUiLinkReaderComment;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
   base: string;
   loadImage?: LoadImage;
 }) {
@@ -136,7 +154,11 @@ function CommentContent(props: {
         {(diff) => (
           <details class="lr-file lr-review-diff">
             <summary>{t("linkReader.reviewContext")}</summary>
-            <Diff patch={diff()} filename={props.comment.context?.path ?? ""} />
+            <Diff
+              patch={diff()}
+              filename={props.comment.context?.path ?? ""}
+              onScrollPortRef={props.onScrollPortRef}
+            />
             <TruncationNote
               truncated={props.comment.context?.diffTruncated}
               label="linkReader.patchTruncated"
@@ -359,23 +381,14 @@ function DeferredSection(props: {
 }) {
   let element: HTMLElement | undefined;
   const label = () => t("linkReader." + props.section);
-  createEffect(
-    () => props.section === "files" && props.state === "idle",
-    (observe) => {
-      if (!observe || !element || typeof IntersectionObserver === "undefined") {
-        return undefined;
+  createIntersectionObserver(
+    () => (props.section === "files" && props.state === "idle" && element ? [element] : []),
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        props.onLoad();
       }
-      const observer = new IntersectionObserver(
-        (entries) => {
-          if (entries.some((entry) => entry.isIntersecting)) {
-            props.onLoad();
-          }
-        },
-        { rootMargin: "120px" },
-      );
-      observer.observe(element);
-      return () => observer.disconnect();
     },
+    { rootMargin: "120px" },
   );
   return (
     <section
@@ -415,6 +428,7 @@ export function LinkReaderContent(props: {
   loadImage?: LoadImage;
   sections?: ReaderReadyView["sections"];
   onLoadSection?: (section: ReaderSection) => void;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
 }) {
   const elements: Partial<Record<"overview" | ReaderSection, HTMLElement>> = {};
   const authorHref = () => linkReaderAuthorHref(props.detail.authorUrl, props.detail.url);
@@ -587,7 +601,11 @@ export function LinkReaderContent(props: {
           >
             <For each={files()} keyed={(file) => file.path}>
               {(file) => (
-                <FileContent file={file()} expanded={props.detail.filesExpanded === true} />
+                <FileContent
+                  file={file()}
+                  expanded={props.detail.filesExpanded === true}
+                  onScrollPortRef={props.onScrollPortRef}
+                />
               )}
             </For>
           </ListSection>
@@ -620,6 +638,7 @@ export function LinkReaderContent(props: {
               {(comment) => (
                 <CommentContent
                   comment={comment()}
+                  onScrollPortRef={props.onScrollPortRef}
                   base={props.detail.url}
                   loadImage={props.loadImage}
                 />

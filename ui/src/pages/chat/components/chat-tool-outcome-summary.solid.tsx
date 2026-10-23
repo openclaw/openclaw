@@ -1,5 +1,4 @@
-import type { JSX } from "@solidjs/web";
-import { Show, createMemo, omit } from "solid-js";
+import { Show, createMemo } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { resolveToolApprovalReviewOutcome } from "../../../lib/chat/tool-approval-reviews.ts";
@@ -16,7 +15,7 @@ export type ToolOutcomeSummaryProps = {
 export function ToolOutcomeSummary(props: ToolOutcomeSummaryProps) {
   const outcomes = createMemo(() => summarizeToolCardOutcomes(props.cards, props.activity));
   const outcome = () =>
-    outcomes().exitCode === undefined
+    outcomes().exitCode === undefined || outcomes().exitCode === 0
       ? t("chat.toolCards.failed")
       : t("chat.toolCards.exitCode", { code: String(outcomes().exitCode) });
   return (
@@ -40,7 +39,7 @@ export function ToolOutcomeSummary(props: ToolOutcomeSummaryProps) {
 }
 
 type ReviewOutcome = ReturnType<typeof resolveToolApprovalReviewOutcome>;
-function ToolReviewOutcome(props: { outcome: ReviewOutcome; reviewer?: string }) {
+export function ToolReviewOutcome(props: { outcome: ReviewOutcome; reviewer?: string }) {
   return (
     <Show when={props.outcome}>
       <span
@@ -62,34 +61,5 @@ function ToolReviewOutcome(props: { outcome: ReviewOutcome; reviewer?: string })
         />
       </span>
     </Show>
-  );
-}
-
-export function ChatToolOutcomeSummary(
-  props: ToolOutcomeSummaryProps & JSX.HTMLAttributes<HTMLElement>,
-) {
-  const attributes = omit(props, "cards", "includeCount", "activity", "children");
-  return (
-    <openclaw-chat-tool-outcome-summary {...attributes}>
-      <ToolOutcomeSummary
-        cards={props.cards}
-        includeCount={props.includeCount}
-        activity={props.activity}
-      />
-    </openclaw-chat-tool-outcome-summary>
-  );
-}
-
-export function ChatToolReviewOutcome(
-  props: {
-    outcome: ReviewOutcome;
-    reviewer?: string;
-  } & JSX.HTMLAttributes<HTMLElement>,
-) {
-  const attributes = omit(props, "outcome", "reviewer", "children");
-  return (
-    <openclaw-chat-tool-review-outcome {...attributes}>
-      <ToolReviewOutcome outcome={props.outcome} reviewer={props.reviewer} />
-    </openclaw-chat-tool-review-outcome>
   );
 }

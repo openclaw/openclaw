@@ -470,6 +470,7 @@ export function advanceTranscriptMutationAtInTransaction(
     strictly?: boolean;
     windowUpdatedAt?: number;
     rowTranscript?: SessionRowTranscriptProjection;
+    persistActorMutation?: boolean;
   } = {},
 ): void {
   return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
@@ -479,7 +480,6 @@ export function advanceTranscriptMutationAtInTransaction(
     }
     if (!options.strictly) {
       const state = readTranscriptMutationStateInTransaction(database, sessionId);
-      transcriptUpdatedAt = Math.max(transcriptUpdatedAt, state.updatedAt ?? 0);
       if (state.updatedAt !== null && state.updatedAt >= transcriptUpdatedAt) {
         return;
       }
@@ -521,7 +521,9 @@ export function advanceTranscriptMutationAtInTransaction(
       return;
     }
     if (actor?.window) {
-      executeSqliteQuerySync(database.db, update);
+      if (options.persistActorMutation !== false) {
+        executeSqliteQuerySync(database.db, update);
+      }
       if (options.windowUpdatedAt !== undefined) {
         actor.window.updated_at = options.windowUpdatedAt;
       }
@@ -623,11 +625,13 @@ export function touchTranscriptMutationInTransaction(
   sessionId: string,
   windowUpdatedAt?: number,
   rowTranscript?: SessionRowTranscriptProjection,
+  persistActorMutation = true,
 ): void {
   advanceTranscriptMutationAtInTransaction(database, sessionId, Date.now(), {
     strictly: true,
     windowUpdatedAt,
     rowTranscript,
+    persistActorMutation,
   });
 }
 
@@ -638,10 +642,6 @@ export function deleteTranscriptEventsInTransaction(
   return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
     assertSessionTranscriptHot(database.db, sessionId);
     const db = getSessionKysely(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("transcript_event_identities").where("session_id", "=", sessionId),
-    );
     const result = executeSqliteQuerySync(
       database.db,
       db.deleteFrom("transcript_events").where("session_id", "=", sessionId),

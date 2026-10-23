@@ -7,16 +7,17 @@ const { runtimeFactoryMocks, moveDestinationMocks } = getWorkerPlacementStartupM
 
 import { getRuntimeConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   beginGatewayRestartSignalAdmission,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import {
-  beginSessionWorkAdmission,
-  runExclusiveSessionLifecycleMutation,
-  startSessionWorkAdmissionInterruption,
-} from "../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  runSessionMutation,
+  startSessionControllerInterruption,
+} from "../sessions/session-controller.lifecycle.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
@@ -25,6 +26,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { createGatewayStartupTrace } from "./server-startup-trace.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import {
   createEnvironments,
@@ -35,8 +37,8 @@ import {
   startRuntime,
 } from "./server-worker-placement.test-support.js";
 import * as workspaceRetention from "./worker-environments/node-workspace-retain-coordinator.js";
-import type { WorkerPlacementRecoveryBarrier } from "./worker-environments/placement-dispatch-startup.js";
 import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
+import type { WorkerPlacementRecoveryBarrier } from "./worker-environments/placement-recovery-contract.js";
 
 const createRuntime = createRuntimeFactory(createGatewayWorkerPlacementRuntime, getRuntimeConfig);
 function mockDispatch(overrides: Partial<WorkerPlacementDispatchService> = {}) {
@@ -91,6 +93,47 @@ beforeEach(() => {
 });
 
 describe("worker placement startup health lifetime", () => {
+  it("admits startup while publication recovery waits and drains that recovery on stop", async () => {
+    const publicationStarted = createDeferredCore();
+    const releasePublication = createDeferredCore();
+    mockDispatch();
+    const environments = createEnvironments();
+    const runtime = createRuntime({ environments: environments as never });
+    vi.spyOn(runtime.githubPublication, "resumeSessionRequests").mockImplementationOnce(
+      async () => {
+        publicationStarted.resolve();
+        await releasePublication.promise;
+      },
+    );
+    let ready = false;
+    const starting = startRuntime(runtime).then((sidecar) => {
+      ready = true;
+      return sidecar;
+    });
+    try {
+      await publicationStarted.promise;
+      await setImmediate();
+      expect(ready).toBe(true);
+      const sidecar = await starting;
+      expect(sidecar).not.toBeNull();
+      expect(environments.start).toHaveBeenCalledOnce();
+
+      let stopped = false;
+      const stopping = sidecar!.stop().then(() => {
+        stopped = true;
+      });
+      await setImmediate();
+      expect(stopped).toBe(false);
+      expect(environments.stop).not.toHaveBeenCalled();
+      releasePublication.resolve();
+      await stopping;
+      expect(environments.stop).toHaveBeenCalledOnce();
+    } finally {
+      releasePublication.resolve();
+      await (await starting)?.stop();
+    }
+  });
+
   it("samples disk on schedule while reconciliation is stuck and drains both on stop", async () => {
     const time = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(time.clock);
@@ -144,13 +187,21 @@ describe("worker placement startup health lifetime", () => {
       environments: environments as never,
       warn,
     });
+    const log = createSubsystemLogger("worker-startup-test");
+    const info = vi.spyOn(log, "info").mockImplementation(() => {});
+    const startupTrace = createGatewayStartupTrace(log);
     let sidecar: Awaited<ReturnType<typeof runtime.startRuntime>> | undefined;
     let scheduledWake: void | Promise<void> = undefined;
 
     try {
-      sidecar = await startRuntime(runtime);
+      sidecar = await startRuntime(runtime, { startupTrace });
 
       expect(sidecar).not.toBeNull();
+      const completedPhases = info.mock.calls.flatMap(([line]) => {
+        const match = /sidecars\.worker-environments\.([\w-]+) [\d.]+ms/.exec(line);
+        return match ? [match[1]] : [];
+      });
+      expect(completedPhases.slice(0, 3)).toEqual(["github-ready", "workspaces", "active"]);
       expect(reconcileActive).not.toHaveBeenCalled();
       expect(diskSpace.sweep).toHaveBeenCalledOnce();
       // Settle the background startup sweep before advancing its next deadline.
@@ -188,6 +239,8 @@ describe("worker placement startup health lifetime", () => {
       releaseScheduledCleanup.resolve();
       await sidecar?.stop();
       await scheduledWake;
+      startupTrace.close();
+      info.mockRestore();
       retentionFactory.mockRestore();
     }
   });
@@ -559,10 +612,11 @@ describe("worker placement startup recovery authority", () => {
       const events: string[] = [];
       const controller = new AbortController();
       const identity = {
+        agentId: request.agentId,
         scope: storePath,
         identities: [request.sessionKey, request.sessionId],
       };
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         ...identity,
         assertAllowed: () => {},
         onInterrupt: (reason) => controller.abort(reason),
@@ -584,7 +638,8 @@ describe("worker placement startup recovery authority", () => {
         )
         .finally(() => admission.release());
       await vi.waitFor(() => expect(events).toEqual(["recovery:/gateway/workspace"]));
-      const contender = runExclusiveSessionLifecycleMutation("placement-activate", {
+      const contender = runSessionMutation({
+        agentId: request.agentId,
         scope: storePath,
         identities: [
           request.sessionKey,
@@ -596,13 +651,13 @@ describe("worker placement startup recovery authority", () => {
           events.push("contender");
         },
       });
-      const interruption = startSessionWorkAdmissionInterruption(identity);
+      const interruption = startSessionControllerInterruption(identity);
       const admissionReleased = vi.fn();
       void interruption.released.then(admissionReleased);
       try {
         expect(controller.signal.aborted).toBe(true);
         await setImmediate();
-        expect(admission.isActive()).toBe(true);
+        expect(admission.isActive()).toBe(false);
         expect(events).toEqual(["recovery:/gateway/workspace"]);
         expect(admissionReleased).not.toHaveBeenCalled();
       } finally {

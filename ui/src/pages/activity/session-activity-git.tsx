@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For, Show, untrack } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { ControlUiLinkReaderPreview } from "../../../../src/shared/control-ui-link-reader.js";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -9,7 +9,7 @@ import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../components/link-reader-hovercard-registration.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   orderSessionPullRequests,
   sessionPullRequestStateIcons,
@@ -82,25 +82,28 @@ type ActivitySessionGitProps = {
 };
 
 export function ActivitySessionGit(props: ActivitySessionGitProps) {
+  const scope = createMemo(
+    () => ({ gateway: props.context.gateway, key: props.sessionKey ?? "" }),
+    { equals: (a, b) => a.gateway === b.gateway && a.key === b.key },
+  );
+  return (
+    <Show when={scope()} keyed>
+      {(source) => SessionGit(source, props)}
+    </Show>
+  );
+}
+
+function SessionGit(
+  source: { gateway: ApplicationContext["gateway"]; key: string },
+  props: ActivitySessionGitProps,
+) {
   const token = {};
-  const currentGateway = createMemo(() => props.context.gateway);
-  const sessionKey = createMemo(() => props.sessionKey ?? "");
-  const source = () => ({ gateway: currentGateway(), key: sessionKey() });
-  // Seed the projections once; the effect below owns later source replacements.
-  const initial = untrack(source);
-  const gatewayProjection = projectGateway(initial.gateway);
-  const projection = projectSource(initial, {
-    read: ({ gateway, key }) => sessionPullRequestsForGateway(gateway).get(key),
-    // The projection owns snapshot observation; the effect below owns the session's remote watch.
-    subscribe: ({ gateway }, notify) => sessionPullRequestsForGateway(gateway).subscribe(notify),
-    equality: "revision",
-  });
-  // Acquire the Gateway pull-request watch for the currently presented session.
-  createEffect(source, ({ gateway, key }) => {
-    gatewayProjection.replaceSource(gateway);
-    projection.replaceSource({ gateway, key });
-    const store = sessionPullRequestsForGateway(gateway);
-    store.watch(token, [key], { foreground: true });
+  const store = sessionPullRequestsForGateway(source.gateway);
+  const gatewayProjection = projectGateway(source.gateway);
+  const projection = projectOwner(store, (owner) => owner.get(source.key));
+  // Each keyed Gateway/session scope owns exactly one remote watch.
+  onSettled(() => {
+    store.watch(token, [source.key], { foreground: true });
     return () => store.unwatch(token);
   });
   const connection = () => gatewayProjection.read().snapshot;

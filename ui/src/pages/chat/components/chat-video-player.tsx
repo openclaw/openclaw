@@ -1,5 +1,6 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -8,6 +9,7 @@ import {
   openAttachmentCardFromClick,
   type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
+import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import { createChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
@@ -29,6 +31,8 @@ type ChatVideoPlayerProps = {
   onMediaLoaded?: () => void;
 };
 
+const inputHandlers = new WeakMap<HTMLElement, (key: keyof ChatVideoPlayerProps) => void>();
+
 function ChatVideoPlayerContent(
   props: ChatVideoPlayerProps,
   host: SolidBridgeElement<ChatVideoPlayerProps>,
@@ -41,9 +45,10 @@ function ChatVideoPlayerContent(
   let media: HTMLVideoElement | undefined;
   let mediaVisible = false;
   let expandButton: HTMLButtonElement | undefined;
+  let active = true;
   const syncSource = () => {
     const currentMedia = media;
-    if (!currentMedia || !host.isConnected || !mediaVisible) {
+    if (!active || !currentMedia || !host.isConnected || !mediaVisible) {
       return;
     }
     // The bridge holds current synchronous inputs for ref, event, and async callbacks.
@@ -55,24 +60,32 @@ function ChatVideoPlayerContent(
       host.authToken,
     );
   };
-  const sourceSnapshot = createMemo(
-    () => [props.src, props.sourceIdentity, props.playback, props.authToken] as const,
-    { equals: (before, after) => before.every((value, index) => value === after[index]) },
-  );
-  // Synchronize the browser media resource when its authorized source changes.
-  createEffect(sourceSnapshot, ([src]) => {
-    if (!src && media) {
+  function handleInputsChanged(key: keyof ChatVideoPlayerProps): void {
+    if (key !== "src" && key !== "sourceIdentity" && key !== "playback" && key !== "authToken") {
+      return;
+    }
+    if (!host.src && media) {
       sourceController.cancel();
       sourceController.reset(media);
     }
-    if (sourceController.readiness === "unavailable") {
+    if (
+      sourceController.readiness === "unavailable" ||
+      key === "sourceIdentity" ||
+      key === "authToken"
+    ) {
       sourceController.cancel();
+      if (media && !media.paused) {
+        media.pause();
+      }
     }
-    syncSource();
-  });
+    sourceController.queueSync(syncSource);
+  }
   onSettled(() => {
+    inputHandlers.set(host, handleInputsChanged);
     syncSource();
     return () => {
+      active = false;
+      inputHandlers.delete(host);
       sourceState.dispose();
       sourceController.cancel();
     };
@@ -103,19 +116,19 @@ function ChatVideoPlayerContent(
   const preparing = () => sourceState.read().readiness === "preparing" && !props.preview;
   const loading = () => props.preview && !frameReady();
   const onExpand = () => (props.onExpand && sourceState.read().readySource ? expand : undefined);
-  const dimensions = createMemo(() =>
+  const dimensions = () =>
     props.mediaWidth && props.mediaHeight
       ? { "aspect-ratio": `${props.mediaWidth} / ${props.mediaHeight}` }
       : props.preview
         ? { "aspect-ratio": "16 / 9" }
-        : {},
-  );
+        : {};
   const Player = () => {
+    const copyRef = attachmentContextCopyRef(() => ({ name: props.label, href: downloadHref() }));
     const viewport = createChatAttachmentViewportRef(() => {
       mediaVisible = true;
       syncSource();
     });
-    onCleanup(() => {
+    const playerRef = elementRef<HTMLDivElement>(() => () => {
       mediaVisible = false;
       expandButton = undefined;
       const previousMedia = media;
@@ -132,7 +145,7 @@ function ChatVideoPlayerContent(
           { "chat-assistant-attachment-card--loading": loading() },
         ]}
         aria-busy={loading() ? "true" : undefined}
-        ref={viewport}
+        ref={[viewport, copyRef, playerRef]}
         data-openable={onExpand() ? "" : undefined}
         onClick={(event) => openAttachmentCardFromClick(event, onExpand())}
       >
@@ -195,16 +208,24 @@ function ChatVideoPlayerContent(
     );
   };
   return (
-    <Show
-      when={sourceState.read().readiness !== "unavailable"}
-      fallback={<CompactAttachmentCard {...card()} onExpand={props.onFallbackExpand} />}
-    >
-      <Player />
-    </Show>
+    <>
+      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {sourceState.read().readiness === "unavailable"
+          ? `${props.label.trim() || t("chat.attachments.video")}: ${t("chat.attachments.previewUnavailable")}`
+          : ""}
+      </span>
+      <Show
+        when={sourceState.read().readiness !== "unavailable"}
+        fallback={<CompactAttachmentCard {...card()} onExpand={props.onFallbackExpand} />}
+      >
+        <Player />
+      </Show>
+    </>
   );
 }
 
 defineSolidBridge("openclaw-chat-video-player", ChatVideoPlayerContent, {
+  propertyChanged: (host, key) => inputHandlers.get(host)?.(key),
   properties: {
     src: { default: "" },
     preview: { default: false },

@@ -1,4 +1,3 @@
-/** Heartbeat prompt defaults, scratch detection, and acknowledgment handling. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "./tokens.js";
@@ -23,58 +22,7 @@ export const INTERNAL_WAKE_TRANSCRIPT_PROMPTS = {
   cron: "[OpenClaw cron wake]",
   event: "[OpenClaw session event]",
 } as const;
-export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
-
-/**
- * Check if heartbeat scratch is "effectively empty" - meaning it has no actionable tasks.
- * This allows skipping heartbeat API calls when no tasks are configured.
- *
- * Scratch is considered effectively empty if it contains only:
- * - Whitespace / empty lines
- * - Markdown/HTML comments
- * - Markdown ATX headers (`#`, `##`, ...)
- * - Markdown fence markers such as ``` or ```markdown
- * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
- *
- * Note: Missing scratch returns false (not effectively empty) so the model can
- * still decide what to do. This function applies only when a scratch row exists.
- */
-export function isHeartbeatContentEffectivelyEmpty(content: string | undefined | null): boolean {
-  if (typeof content !== "string") {
-    return false;
-  }
-
-  let inHtmlComment = false;
-  for (let line of content.split("\n")) {
-    while (inHtmlComment || line.trimStart().startsWith("<!--")) {
-      const searchText: string = inHtmlComment ? line : line.trimStart();
-      const commentEnd = searchText.indexOf("-->");
-      inHtmlComment = commentEnd === -1;
-      if (inHtmlComment) {
-        line = "";
-        break;
-      }
-      line = searchText.slice(commentEnd + 3);
-    }
-    const trimmed = line.trim();
-    if (
-      !trimmed ||
-      /^#+(\s|$)/.test(trimmed) ||
-      /^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed) ||
-      /^```[A-Za-z0-9_-]*$/.test(trimmed)
-    ) {
-      continue;
-    }
-    return false;
-  }
-  return true;
-}
-
-/** Resolves configured heartbeat prompt text with the built-in default fallback. */
-export function resolveHeartbeatPromptCore(raw?: string): string {
-  return normalizeOptionalString(raw) || HEARTBEAT_PROMPT;
-}
 
 /** Resolves heartbeat prompt text and guarantees heartbeat_respond tool instructions are present. */
 export function resolveHeartbeatPromptForResponseTool(raw?: string): string {

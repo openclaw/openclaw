@@ -1,14 +1,17 @@
-import type { JSX } from "@solidjs/web";
+import { Dynamic, type JSX } from "@solidjs/web";
 import { createMemo, For, Match, Show, Switch } from "solid-js";
 import type { WizardStep } from "../api/types.ts";
+import { registerModelSetupEnglish } from "../i18n/locales/en-model-setup.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { liveValue } from "../lib/reactive/live-value.ts";
 import { handleCopyButton } from "./copy-button-state.ts";
 import { Picker, type PickerParams } from "./select-picker.ts";
 import { SensitiveInput } from "./sensitive-input.tsx";
 import { ChannelPicker, type ChannelPickerOption } from "./solid/channel-picker.tsx";
 import "../styles/wizard-step-controls.css";
+
+registerEnglishCatalog(registerModelSetupEnglish);
 
 type WizardStepOption = NonNullable<WizardStep["options"]>[number];
 type WizardStepControlsProps = {
@@ -19,6 +22,7 @@ type WizardStepControlsProps = {
   validationErrorId?: string;
   onValueChange: (value: unknown) => void;
   onAnswer: (value: unknown) => void;
+  onAutofocusRef?: (element: HTMLElement) => void;
   confirmAffirmativeLabel?: string;
   leadingAction?: JSX.Element;
   externalAuthInput?: boolean;
@@ -34,8 +38,8 @@ function stepClass(props: WizardStepControlsProps, name: string) {
   return `${props.presentation === "channels" ? "channels-wizard" : "wizard-step"}__${name}`;
 }
 
-export function WizardBusyButton(props: { statusLabel: string; buttonLabel?: string }) {
-  const label = () => props.buttonLabel ?? t("modelSetup.wizard.continue");
+export function WizardBusyButton(props: { statusLabel: string }) {
+  const label = () => t("modelSetup.wizard.continue");
   return (
     <button type="button" class="btn primary" disabled aria-busy="true" aria-label={label()}>
       <span class="btn__label">{label()}</span>
@@ -94,7 +98,7 @@ function OptionBody(props: { option: WizardStepOption; channels?: boolean; selec
   );
 }
 
-function SignIn(props: Pick<WizardStepControlsProps, "step" | "presentation">) {
+function SignIn(props: Pick<WizardStepControlsProps, "step" | "presentation" | "onAutofocusRef">) {
   const code = createMemo(() => props.step.deviceCode);
   const copyLabel = () => t(code() ? "modelSetup.wizard.copyCode" : "modelSetup.wizard.copyLink");
   const copyValue = createMemo(() => code()?.code ?? props.step.externalUrl);
@@ -108,6 +112,7 @@ function SignIn(props: Pick<WizardStepControlsProps, "step" | "presentation">) {
         <div class="wizard-step__actions">
           <Show when={props.step.externalUrl}>
             <a
+              ref={(element) => props.onAutofocusRef?.(element)}
               class="btn primary wizard-step__external-link"
               autofocus={props.presentation === "model-setup"}
               data-link-reader-external
@@ -119,15 +124,20 @@ function SignIn(props: Pick<WizardStepControlsProps, "step" | "presentation">) {
             </a>
           </Show>
           <Show when={copyValue()} keyed>
-            {(value) => (
-              <button
-                type="button"
-                class="btn"
-                onClick={(event) => void handleCopyButton(event, value, copyLabel())}
-              >
-                <span data-copy-label>{copyLabel()}</span>
-              </button>
-            )}
+            {(value) => {
+              let label!: HTMLSpanElement;
+              return (
+                <button
+                  type="button"
+                  class="btn"
+                  onClick={(event) => void handleCopyButton(event, value, copyLabel(), { label })}
+                >
+                  <span ref={(element) => (label = element)} data-copy-label>
+                    {copyLabel()}
+                  </span>
+                </button>
+              );
+            }}
           </Show>
         </div>
         <div
@@ -162,9 +172,9 @@ function ActionRow(props: {
   children: JSX.Element;
 }) {
   return (
-    <Show when={props.modal} fallback={<div class={props.class}>{props.children}</div>}>
-      <openclaw-modal-actions class={props.class}>{props.children}</openclaw-modal-actions>
-    </Show>
+    <Dynamic component={props.modal ? "openclaw-modal-actions" : "div"} class={props.class}>
+      {props.children}
+    </Dynamic>
   );
 }
 
@@ -172,6 +182,7 @@ function Answer(props: WizardStepControlsProps & { label: string; onClick?: () =
   const label = () => props.answerLabel ?? props.label;
   const button = (
     <button
+      ref={(element) => props.onAutofocusRef?.(element)}
       type={props.onClick ? "button" : "submit"}
       class="btn primary"
       autofocus={props.presentation === "model-setup"}
@@ -236,7 +247,7 @@ function TextForm(props: WizardStepControlsProps) {
         </div>
       </Show>
       <Show when={!props.externalAuthInput}>
-        <SignIn step={props.step} presentation={props.presentation} />
+        <SignIn {...props} />
       </Show>
       <Show
         when={props.step.sensitive && props.onToggleSensitiveVisibility}
@@ -286,7 +297,7 @@ function TextForm(props: WizardStepControlsProps) {
 function TextStep(props: WizardStepControlsProps) {
   return (
     <Show when={props.externalAuthInput} fallback={<TextForm {...props} />}>
-      <SignIn step={props.step} presentation={props.presentation} />
+      <SignIn {...props} />
       <details class="wizard-step__manual-entry">
         <summary class="muted">{t("modelSetup.wizard.manualEntry")}</summary>
         <TextForm {...props} />
@@ -303,10 +314,12 @@ function TextStep(props: WizardStepControlsProps) {
 
 function SingleChoice(props: WizardStepControlsProps & { options: WizardStepOption[] }) {
   const label = () => props.step.message || props.step.title || t("chat.questions.answer");
-  const channels = () =>
-    props.presentation === "channels" &&
-    props.channelSelect &&
-    props.options.every((option) => typeof option.value === "string");
+  const channels = createMemo(
+    () =>
+      props.presentation === "channels" &&
+      props.channelSelect &&
+      props.options.every((option) => typeof option.value === "string"),
+  );
   const params = createMemo<PickerParams<ChannelPickerOption>>(() => {
     const selected = props.options.findIndex((option) => Object.is(option.value, props.value));
     return {
@@ -354,6 +367,7 @@ function SingleChoice(props: WizardStepControlsProps & { options: WizardStepOpti
         <For each={props.options} keyed={false}>
           {(option, index) => (
             <button
+              ref={(element) => props.onAutofocusRef?.(element)}
               type="button"
               class={index === 0 ? "btn primary" : "btn"}
               autofocus={props.presentation === "model-setup" && index === 0}
@@ -445,18 +459,16 @@ function OptionsStep(props: WizardStepControlsProps) {
         fallback={
           <>
             <SingleChoice {...props} options={options()} />
-            <Show
-              when={props.presentation !== "channels"}
-              fallback={props.busy && <Answer {...props} label={t("modelSetup.wizard.continue")} />}
-            >
-              <Show when={props.presentation === "model-setup"} fallback={props.leadingAction}>
-                <Show when={options().length > 2 && props.leadingAction}>
-                  <openclaw-modal-actions class="wizard-step__actions wizard-step__actions--split">
-                    {props.leadingAction}
-                  </openclaw-modal-actions>
-                </Show>
-              </Show>
-            </Show>
+            {props.presentation === "channels"
+              ? props.busy && <Answer {...props} label={t("modelSetup.wizard.continue")} />
+              : props.presentation === "model-setup"
+                ? options().length > 2 &&
+                  props.leadingAction && (
+                    <openclaw-modal-actions class="wizard-step__actions wizard-step__actions--split">
+                      {props.leadingAction}
+                    </openclaw-modal-actions>
+                  )
+                : props.leadingAction}
           </>
         }
       >
@@ -509,7 +521,7 @@ function ContinueStep(props: WizardStepControlsProps) {
   return (
     <>
       <Message {...props} />
-      <SignIn step={props.step} presentation={props.presentation} />
+      <SignIn {...props} />
       <Answer
         {...props}
         label={t("modelSetup.wizard.continue")}
@@ -528,7 +540,7 @@ function ProgressStep(props: WizardStepControlsProps) {
           <Message {...props} />
         </div>
       </Show>
-      <SignIn step={props.step} presentation={props.presentation} />
+      <SignIn {...props} />
       <Show when={props.leadingAction}>
         <ActionRow
           modal={props.presentation === "model-setup"}

@@ -1,16 +1,15 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { spawnSync } from "node:child_process";
 import { Command } from "commander";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { registerCompletionCli } from "./completion-cli.js";
 import {
   createDocumentedCompletionProgram,
+  runBashCompletionScript,
   runGeneratedBashCompletion,
 } from "./completion-cli.test-support.js";
 import { createProgramContext } from "./program/context.js";
 import { setProgramContext } from "./program/program-context.js";
-import { quoteCliArg } from "./quote-cli-arg.js";
 
 describe.skipIf(process.platform === "win32")("registered completion --shell bash", () => {
   let script: string;
@@ -42,21 +41,7 @@ describe.skipIf(process.platform === "win32")("registered completion --shell bas
         [["openclaw", "gateway", "stability", "--bundle", "--", "--j"], []],
         [["openclaw", "gateway", "stability", "--bundle", "--token", "--", "--j"], ["--json"]],
       ])("honors option operands and terminators in %j", (words, expected) => {
-        const result = spawnSync(bashPath, ["--noprofile", "--norc"], {
-          encoding: "utf8",
-          input: `${script}
-COMP_WORDS=(${words.map(quoteCliArg).join(" ")})
-COMP_CWORD=${words.length - 1}
-COMP_LINE=${quoteCliArg(words.join(" "))}
-COMP_POINT=\${#COMP_LINE}
-_openclaw_completion openclaw "\${COMP_WORDS[COMP_CWORD]}"
-printf '%s\\n' "\${COMPREPLY[@]}"
-`,
-        });
-        expect(result.error).toBeUndefined();
-        expect(result.stderr).toBe("");
-        expect(result.status).toBe(0);
-        expect(result.stdout.split("\n").filter(Boolean)).toEqual(expected);
+        expect(runBashCompletionScript(script, words, { bashPath })).toEqual(expected);
       });
     },
   );
@@ -81,99 +66,59 @@ describe("completion-cli native Bash words", () => {
     ).toEqual(["--json"]);
   });
 
-  it.skipIf(process.platform === "win32").each([
-    {
-      line: "openclaw completion --shell=",
-      words: ["openclaw", "completion", "--shell", "="],
-      word: "",
-      expected: ["zsh", "bash", "powershell", "fish"],
-    },
-    {
-      line: "openclaw completion --shell=fish",
-      words: ["openclaw", "completion", "--shell=fish"],
-      word: "f",
-      point: 29,
-      expected: ["fish"],
-    },
-    {
-      line: "openclaw completion --sh=fish",
-      words: ["openclaw", "completion", "--sh=fish"],
-      word: "--sh",
-      point: 24,
-      expected: ["--shell"],
-    },
-    {
-      line: "openclaw completion -ysfish",
-      words: ["openclaw", "completion", "-ysfish"],
-      word: "-ysf",
-      point: 24,
-      expected: ["-ysfish"],
-    },
-    {
-      line: "openclaw --profile=gateway completion --shell=fish --yes",
-      words: [
-        "openclaw",
-        "--profile",
-        "=",
-        "gateway",
-        "completion",
-        "--shell",
-        "=",
-        "fish",
-        "--yes",
+  it
+    .skipIf(process.platform === "win32")
+    .each([
+      ["completion --shell=", "completion --shell =", "", ["zsh", "bash", "powershell", "fish"]],
+      ["completion --shell=fish", "completion --shell=fish", "f", ["fish"], 29],
+      ["completion --sh=fish", "completion --sh=fish", "--sh", ["--shell"], 24],
+      ["completion -ysfish", "completion -ysfish", "-ysf", ["-ysfish"], 24],
+      [
+        "--profile=gateway completion --shell=fish --yes",
+        "--profile = gateway completion --shell = fish --yes",
+        "f",
+        ["fish"],
+        47,
+        7,
       ],
-      word: "f",
-      point: 47,
-      cword: 7,
-      expected: ["fish"],
+      ["completion --shell=fish", "completion --shell=fish", "comple", ["completion"], 15, 1],
+      ["gateway --token = status --j", "gateway --token = status --j", "--j", ["--json"]],
+      ["completion>/dev/null --shell f", "completion > /dev/null --shell f", "f", ["fish"]],
+      [
+        "gateway --token=prefix:status --f",
+        "gateway --token = prefix : status --f",
+        "--f",
+        ["--force"],
+      ],
+      ...['"f"', "\\f", 'f"i'].map((value): NativeWordsCase => [
+        `completion --shell ${value}`,
+        `completion --shell ${value}`,
+        value === 'f"i' ? "i" : value,
+        [value === 'f"i' ? "ish" : "fish"],
+      ]),
+      ["completion --shell='f", "completion --shell = 'f", "f", ["fish"]],
+      ['completion -s "f', 'completion -s "f', "f", ["fish"]],
+    ] satisfies NativeWordsCase[])(
+    "respects native Bash word boundaries in %s",
+    (line, words, word, expected, point, cword) => {
+      const program = createDocumentedCompletionProgram().option("--profile <name>", "Profile");
+      expect(
+        runGeneratedBashCompletion(program, ["openclaw", ...words.split(" ")], {
+          line: `openclaw ${line}`,
+          word,
+          point,
+          cword,
+        }),
+      ).toEqual(expected);
     },
-    {
-      line: "openclaw completion --shell=fish",
-      words: ["openclaw", "completion", "--shell=fish"],
-      word: "comple",
-      point: 15,
-      cword: 1,
-      expected: ["completion"],
-    },
-    {
-      line: "openclaw gateway --token = status --j",
-      words: ["openclaw", "gateway", "--token", "=", "status", "--j"],
-      word: "--j",
-      expected: ["--json"],
-    },
-    {
-      line: "openclaw completion>/dev/null --shell f",
-      words: ["openclaw", "completion", ">", "/dev/null", "--shell", "f"],
-      word: "f",
-      expected: ["fish"],
-    },
-    {
-      line: "openclaw gateway --token=prefix:status --f",
-      words: ["openclaw", "gateway", "--token", "=", "prefix", ":", "status", "--f"],
-      word: "--f",
-      expected: ["--force"],
-    },
-    ...['"f"', "\\f", 'f"i'].map((value) => ({
-      line: `openclaw completion --shell ${value}`,
-      words: ["openclaw", "completion", "--shell", value],
-      word: value === 'f"i' ? "i" : value,
-      expected: [value === 'f"i' ? "ish" : "fish"],
-    })),
-    {
-      line: "openclaw completion --shell='f",
-      words: ["openclaw", "completion", "--shell", "=", "'f"],
-      word: "f",
-      expected: ["fish"],
-    },
-    {
-      line: 'openclaw completion -s "f',
-      words: ["openclaw", "completion", "-s", '"f'],
-      word: "f",
-      expected: ["fish"],
-    },
-  ])("respects native Bash word boundaries in $line at $point", ({ words, expected, ...input }) => {
-    const program = createDocumentedCompletionProgram().option("--profile <name>", "Profile");
-
-    expect(runGeneratedBashCompletion(program, words, input)).toEqual(expected);
-  });
+  );
 });
+
+type NativeWordsCase = [
+  line: string,
+  words: string,
+  word: string,
+  expected: string[],
+  point?: number,
+  cword?: number,
+];

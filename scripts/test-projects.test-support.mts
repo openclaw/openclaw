@@ -776,7 +776,6 @@ const MARKDOWN_RENDER_CHUNKING_TEST_TARGETS = [
   "packages/markdown-core/src/ir.test.ts",
   "packages/markdown-core/src/render-aware-chunking.test.ts",
   "packages/markdown-core/src/render.annotations.test.ts",
-  "packages/markdown-core/src/render.crossing.test.ts",
   "src/plugin-sdk/format-capabilities.test.ts",
   "src/plugin-sdk/text-chunking.test.ts",
   "extensions/googlechat/src/format.test.ts",
@@ -798,6 +797,10 @@ const SOURCE_TEST_TARGETS = new Map([
       "src/agents/live-target-matcher.test.ts",
       "src/agents/model-compat.test.ts",
     ],
+  ],
+  [
+    "src/plugin-sdk/lazy-value.ts",
+    ["src/plugin-sdk/core.test.ts", "src/plugin-sdk/channel-entry-contract.test.ts"],
   ],
   ["src/plugin-sdk/memory-host-events.ts", ["src/plugin-sdk/memory-host-events.test.ts"]],
   ["src/plugin-sdk/persistent-dedupe.ts", ["src/plugin-sdk/memory-host-events.test.ts"]],
@@ -3235,6 +3238,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [
     "scripts/lib/release-context.mjs",
     ["full-release-validation-at-sha", "release-candidate-checklist", packageAcceptance],
+  ],
+  [
+    "scripts/lib/release-candidate-changelog.mts",
+    ["full-release-validation-at-sha", "release-candidate-checklist"],
   ],
   [
     "scripts/lib/clawhub-bootstrap-artifact.mjs",

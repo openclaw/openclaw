@@ -22,11 +22,6 @@ import { startUpdateRunWatcher, wakeUpdateRunWatcher } from "./update-run-watche
 export function createDeferredGatewayUpdateCheck(params: {
   scheduler: GatewayScheduler;
   startupTrace?: GatewayStartupTrace;
-  createUpdateCheck: (
-    ...args: Parameters<typeof createGatewayUpdateCheck>
-  ) =>
-    | ReturnType<typeof createGatewayUpdateCheck>
-    | Promise<ReturnType<typeof createGatewayUpdateCheck>>;
   getConfig: () => OpenClawConfig;
   /** Catalog republication borrows unchanged plugin instances from this live Gateway registry. */
   getPluginRegistry: () => PluginRegistry | undefined;
@@ -127,7 +122,7 @@ export function createDeferredGatewayUpdateCheck(params: {
       }
       ownerReady = (async () => {
         try {
-          owner = await params.createUpdateCheck({
+          owner = (await import("../infra/update-startup.js")).createGatewayUpdateCheck({
             lifecycle,
             getConfig: params.getConfig,
             applyRemoteCatalogUpdate: (signal) =>

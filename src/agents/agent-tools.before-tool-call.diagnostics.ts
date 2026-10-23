@@ -31,6 +31,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import type { SessionControllerWatchdogAttempt } from "../sessions/session-controller.watchdog.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import type { Skill } from "../skills/loading/skill-contract.js";
 import {
@@ -72,8 +73,18 @@ export function startToolExecutionLiveness(
   event: Omit<Extract<DiagnosticEventInput, { type: "tool.execution.started" }>, "type">,
   emitDiagnostics: boolean,
   signal?: AbortSignal,
+  attempt?: SessionControllerWatchdogAttempt,
 ) {
-  const liveness = createDiagnosticToolExecutionLiveness(signal);
+  const liveness = createDiagnosticToolExecutionLiveness(
+    signal,
+    attempt
+      ? {
+          attempt,
+          toolCallId: event.toolCallId ?? event.toolName,
+          toolName: event.toolName,
+        }
+      : undefined,
+  );
   if (emitDiagnostics) {
     emitTrustedDiagnosticEvent(
       markToolExecutionLivenessDiagnosticEvent(
@@ -122,7 +133,8 @@ export function prepareToolTerminalPresentation({
   }
   let project: ToolTerminalPresentationProjector | undefined;
   if (formatter) {
-    // Retain isolated formatter inputs, not the executable tool or its hook context.
+    // Formatters observe post-execution mutations, then stay isolated from later middleware.
+    // The pre-execution custody snapshot intentionally cannot replace this capture.
     const formatterParams = observer ? structuredClone(toolParams) : toolParams;
     project = (result) => {
       try {
@@ -627,7 +639,7 @@ export async function reconcileLoopCallExecutionParams(args: {
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
     });
-    const churn = reconcileToolCallExecutionParams(sessionState, {
+    const active = reconcileToolCallExecutionParams(sessionState, {
       toolName: args.toolName,
       toolParams: args.toolParams,
       toolCallId: args.toolCallId,
@@ -635,10 +647,11 @@ export async function reconcileLoopCallExecutionParams(args: {
       warningThreshold: TOOL_LOOP_WARNING_THRESHOLD,
     });
     markDiagnosticArgumentChurnObservation({
+      watchdogAttempt: args.ctx.watchdogAttempt,
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
       runId: args.ctx.runId,
-      active: churn.active,
+      active,
     });
   } catch (err) {
     log.warn(
@@ -689,6 +702,7 @@ export async function recordLoopOutcome(args: {
         record.argsHash,
       ).count > 0;
     markDiagnosticArgumentChurnObservation({
+      watchdogAttempt: args.ctx.watchdogAttempt,
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
       runId: args.ctx.runId,

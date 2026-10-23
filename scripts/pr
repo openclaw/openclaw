@@ -6,6 +6,19 @@ fi
 
 set -euo pipefail
 
+# Install creator cleanup before even the Git preflight or argument validation.
+# Physical paths keep helper argv aligned with Node's canonical module URLs.
+script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+script_parent_dir="$(dirname "$script_self")"
+if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ] &&
+  [ "${OPENCLAW_PR_ANCHOR_CREATOR_PID:-}" = "$$" ] && [ "${OPENCLAW_PR_ANCHOR_FD:-}" = 9 ]; then
+  trap 'node "$script_parent_dir/pr-lib/materialized-anchor.mjs" retire "$script_self" || true' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 131' QUIT
+  trap 'exit 143' TERM
+fi
+
 # This bootstrap stays inline: no local helper is trusted before code selection.
 pr_git() { "${OPENCLAW_PR_GIT:-${GIT_EXEC:-git}}" "$@"; }
 pr_run_bounded() (
@@ -37,8 +50,8 @@ export GIT_EXEC
 export OPENCLAW_PR_GIT="$GIT_EXEC"
 
 # Older trusted wrappers use bare Git before reaching a newer supervisor.
-# Keep this Git-only adapter across exec; OS temp reaping owns its lifetime,
-# as with materialized anchor copies. Matching inodes let reentry reuse it.
+# Keep this Git-only adapter across exec; OS temp reaping owns its lifetime.
+# Matching inodes let reentry reuse it.
 pr_path_git=$(type -P git 2>/dev/null || true)
 case "$pr_path_git" in /*|"") ;; *) pr_path_git="$PWD/$pr_path_git" ;; esac
 if [ -z "$pr_path_git" ] || [ ! "$pr_path_git" -ef "$GIT_EXEC" ]; then
@@ -70,7 +83,7 @@ pr_subcommand_classification() {
     ls | ci-dispatch)
       printf 'advisory\n'
       ;;
-    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
+    gc | lock-recover | tooling-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
       printf 'landing\n'
       ;;
     *) return 1 ;;
@@ -102,23 +115,229 @@ if [ "${1-}" = "--dev-wrapper" ]; then
 fi
 requested_subcommand="${1-}"
 
+# Only this explicit recovery may select current main over a retained workflow.
+# Parse before source selection, then parse normally again before taking a lock.
+PR_WORKFLOW_RECOVERY_OUTCOME=""
+PR_WORKFLOW_RECOVERY_HEAD=""
+pr_read_current_workflow_request() {
+  local argument found=0
+  for argument in "$@"; do
+    [ "$argument" != --current-workflow ] || found=$((found + 1))
+  done
+  [ "$found" -ne 0 ] || return 0
+  [ "$found" -eq 1 ] && [ "${1-}" = merge-recover ] &&
+    [[ "${2-}" =~ ^[1-9][0-9]*$ ]] && [[ "${3-}" =~ ^[0-9a-f]{40}$ ]] &&
+    [ "${4-}" = --confirmed-operator-recovery ] || return 2
+  PR_WORKFLOW_RECOVERY_OUTCOME="$3"
+  shift 4
+  local admin=false confirmed=false body=false current=false
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --current-workflow) [ "$current" = false ] || return 2; current=true; shift ;;
+      --replacement-head)
+        [ -z "$PR_WORKFLOW_RECOVERY_HEAD" ] && [[ "${2-}" =~ ^[0-9a-f]{40}$ ]] || return 2
+        PR_WORKFLOW_RECOVERY_HEAD="$2"; shift 2 ;;
+      --body-file) [ "$body" = false ] && [ -n "${2-}" ] || return 2; body=true; shift 2 ;;
+      --admin-evidence) [ "$admin" = false ] && [ -n "${2-}" ] || return 2; admin=true; shift 2 ;;
+      --confirmed-operator-admin) [ "$confirmed" = false ] || return 2; confirmed=true; shift ;;
+      *) return 2 ;;
+    esac
+  done
+  [ "$current" = true ] && [ "$admin" = "$confirmed" ] &&
+    { [ -n "$PR_WORKFLOW_RECOVERY_HEAD" ] || [ "$admin" = true ]; }
+}
+pr_read_current_workflow_request "$@" || {
+  echo "--current-workflow requires confirmed merge-recover with an exact outcome and either a replacement head or confirmed same-head admin recovery." >&2
+  exit 2
+}
+
 # This bootstrap cannot load helpers from an unverified extracted tree.
 pr_batch_wrapper_git() {
   node --input-type=module - "$GIT_EXEC" "$@" <<'EOF_WRAPPER_GIT'
 import { spawnSync } from "node:child_process";
-import { lstatSync } from "node:fs";
-import { join } from "node:path";
+import { fstatSync, lstatSync, readSync, realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 const [binary, operation, repository, revision, ...paths] = process.argv.slice(2);
 function git(directory, args, input) {
   const result = spawnSync(binary, ["-C", directory, ...args], {
     input, maxBuffer: Infinity, stdio: ["pipe", "pipe", "ignore"],
+    env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
   });
   if (result.error || result.signal || result.status !== 0) throw new Error("Git read failed");
   return result.stdout;
 }
 const oid = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 try {
-  if (operation === "differences") {
+  if (operation.startsWith("workflow-")) {
+    if (!/^[1-9][0-9]*$/.test(revision)) throw new Error("Invalid workflow PR");
+    const ref = `refs/openclaw/pr-workflow-bindings/${revision}`;
+    const run = args => git(repository, args).toString("utf8").trim();
+    const owner = realpathSync(run(["rev-parse", "--path-format=absolute", "--git-common-dir"]));
+    const remote = run(["remote", "get-url", "origin"]);
+    const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(remote) ? new URL(remote) : null;
+    const scp = !url && /^(?:([^/@:]+)@)?(\[[^\]]+\]|[^/:]+):(.+)$/.exec(remote);
+    // SCP paths can be relative to an SSH user's home. Preserve that transport,
+    // user, path case and URL ports instead of conflating different endpoints.
+    const identity = url ? url.protocol === "file:"
+      ? realpathSync(fileURLToPath(url)) : url.href
+      : scp ? JSON.stringify(["scp", scp[1] ?? "", scp[2].toLowerCase(), scp[3]])
+      : realpathSync(resolve(repository, remote));
+    if (!identity || url && (url.username && url.protocol !== "ssh:" || url.password)) throw new Error("Invalid repository identity");
+    const read = () => {
+      const symbolic = spawnSync(binary, ["-C", repository, "symbolic-ref", "--quiet", ref], { stdio: "ignore" });
+      if (symbolic.error || symbolic.signal || symbolic.status !== 1) throw new Error("Invalid symbolic workflow binding");
+      const listing = run(["for-each-ref", "--format=%(objectname) %(symref)", ref]);
+      if (!listing) return null;
+      if (!oid.test(listing)) throw new Error("Invalid workflow binding ref");
+      const headers = run(["cat-file", "commit", listing]).split("\n\n", 1)[0].split("\n");
+      const parents = headers.filter(line => line.startsWith("parent ")).map(line => line.slice(7));
+      const entries = run(["ls-tree", listing]).split("\n");
+      if (parents.length !== 1 || entries.length !== 1 || !/^100644 blob [a-f0-9]+\tbinding.json$/.test(entries[0])) {
+        throw new Error("Invalid workflow binding tree");
+      }
+      if (Number(run(["cat-file", "-s", `${listing}:binding.json`])) > 4096) throw new Error("Oversized workflow binding");
+      const record = JSON.parse(run(["show", `${listing}:binding.json`]));
+      if (JSON.stringify(Object.keys(record).sort()) !== JSON.stringify(["owner", "pr", "repository", "source", "version"]) ||
+          record.version !== 1 || record.pr !== revision || record.owner !== owner || record.repository !== identity ||
+          !oid.test(record.source) || parents[0] !== record.source ||
+          run(["cat-file", "-t", record.source]) !== "commit") throw new Error("Workflow binding identity mismatch");
+      return { oid: listing, source: record.source };
+    };
+    const requireSource = (source, anchor = "refs/remotes/origin/main") => {
+      if (!oid.test(source)) throw new Error("Invalid workflow source");
+      run(["merge-base", "--is-ancestor", source, anchor]);
+    };
+    const current = read();
+    const requireRecovery = (source, outcome, replacementHead, anchor = "refs/remotes/origin/main") => {
+      const symbolicAnchor = spawnSync(binary, ["-C", repository, "symbolic-ref", "--quiet", anchor], { stdio: "ignore" });
+      if (symbolicAnchor.error || symbolicAnchor.signal || symbolicAnchor.status !== 1) {
+        throw new Error("Refusing symbolic or unreadable current workflow anchor");
+      }
+      if (!current || !oid.test(outcome) || (replacementHead !== "" && !oid.test(replacementHead)) ||
+          source !== run(["rev-parse", "--verify", `${anchor}^{commit}`]) ||
+          !["https://github.com/openclaw/openclaw", "https://github.com/openclaw/openclaw.git",
+            "git@github.com:openclaw/openclaw.git", "ssh://git@github.com/openclaw/openclaw.git"].includes(run(["config", "--get", "remote.origin.url"]))) {
+        throw new Error("Current workflow recovery requires official current main and a retained workflow");
+      }
+      requireSource(current.source, anchor);
+      const outcomeRef = `refs/openclaw/pr-merge-outcomes/${revision}`;
+      const symbolic = spawnSync(binary, ["-C", repository, "symbolic-ref", "--quiet", outcomeRef], { stdio: "ignore" });
+      if (symbolic.error || symbolic.signal || symbolic.status !== 1 ||
+          run(["rev-parse", "--verify", outcomeRef]) !== outcome || run(["cat-file", "-t", outcome]) !== "commit") {
+        throw new Error("Current workflow recovery outcome changed");
+      }
+      const record = JSON.parse(run(["show", `${outcome}:outcome.json`]));
+      const cancelledAuto = replacementHead !== "" && record.route === "auto" &&
+        record.cancellation?.state === "confirmed";
+      // This admits current trusted code, not another dispatch. The existing
+      // provider-rejection owner must still qualify exact HTTP 405 capture bytes
+      // and revalidate the unchanged head and live admin authority before writing.
+      const rejectedAdmin = replacementHead === "" && record.route === "admin" &&
+        record.accepted === false &&
+        record.priorCiAdmin?.dispatchTransport === "rest";
+      if (record.version !== 1 || record.pr !== Number(revision) ||
+          record.base !== "main" || record.phase !== "intent" ||
+          record.method !== "squash" || record.landed !== null || !(cancelledAuto || rejectedAdmin)) {
+        throw new Error("Current workflow recovery requires a confirmed cancelled nonqueue auto outcome or an unaccepted same-head REST admin intent");
+      }
+    };
+    if (operation === "workflow-recovery-select" || operation === "workflow-recovery-provenance") {
+      const [outcome, replacementHead, anchor = "refs/remotes/origin/main"] = paths;
+      const source = operation === "workflow-recovery-select" ? run(["rev-parse", "--verify", `${anchor}^{commit}`]) : paths[3];
+      requireRecovery(source, outcome, replacementHead, anchor);
+      process.stdout.write(operation === "workflow-recovery-select" ? `${current.oid}\t${source}\n` :
+        JSON.stringify({ binding: current.oid, from: current.source, to: source }));
+    } else if (operation === "workflow-read" || operation === "workflow-inspect") {
+      if (current && operation === "workflow-read") requireSource(current.source);
+      if (current) process.stdout.write(`${current.oid}\t${current.source}\n`);
+    } else if (operation === "workflow-context-write") {
+      const [source, binding, creator, bootstrapFlag, outcome = "", replacementHead = ""] = paths;
+      const bootstrap = bootstrapFlag === "1";
+      if (outcome) requireRecovery(source, outcome, replacementHead);
+      if (!oid.test(source) || (current?.oid ?? "") !== binding || !outcome && !bootstrap && current && current.source !== source ||
+          !/^[1-9][0-9]*$/.test(creator)) throw new Error("Workflow selection changed before handoff");
+      if (bootstrap) {
+        if (source !== run(["rev-parse", "--verify", "HEAD^{commit}"])) throw new Error("Canonical bootstrap changed");
+      } else requireSource(source);
+      process.stdout.write(JSON.stringify({ version: 1, owner, repository: identity, pr: revision, source, binding, creator, bootstrap,
+        ...(outcome ? { recovery: { outcome, replacementHead } } : {}) }));
+    } else if (operation === "workflow-context-read") {
+      const held = fstatSync(8);
+      if (!held.isFile() || held.uid !== process.getuid() || (held.mode & 0o777) !== 0o400 || held.nlink !== 0 ||
+          held.size < 1 || held.size > 4096 || `${held.dev}:${held.ino}` !== process.env.OPENCLAW_PR_WORKFLOW_CONTEXT) {
+        throw new Error("Invalid workflow selection descriptor");
+      }
+      const bytes = Buffer.alloc(held.size);
+      if (readSync(8, bytes, 0, bytes.length, 0) !== bytes.length) throw new Error("Incomplete workflow selection");
+      const selection = JSON.parse(bytes.toString("utf8"));
+      const [creator, supervisor, outcome = "", replacementHead = ""] = paths;
+      if (outcome) {
+        if (JSON.stringify(selection.recovery) !== JSON.stringify({ outcome, replacementHead }) || selection.bootstrap) {
+          throw new Error("Workflow recovery selection changed across handoff");
+        }
+        requireRecovery(selection.source, outcome, replacementHead);
+      }
+      const supervised = selection.creator === supervisor && process.env.OPENCLAW_PR_DEDICATED_PROCESS_GROUP === "1" &&
+        process.env.OPENCLAW_PR_LOCK_NOTIFY_FD === "3" && process.env.OPENCLAW_PR_LOCK_SUPERVISOR_PID === supervisor;
+      const keys = ["binding", "bootstrap", "creator", "owner", "pr", "repository", "source", "version", ...(outcome ? ["recovery"] : [])].sort();
+      if (JSON.stringify(Object.keys(selection).sort()) !== JSON.stringify(keys) ||
+          selection.version !== 1 || selection.owner !== owner || selection.repository !== identity || selection.pr !== revision ||
+          typeof selection.bootstrap !== "boolean" ||
+          !oid.test(selection.source) || (selection.creator !== creator && !supervised) ||
+          selection.binding !== (current?.oid ?? "") || !outcome && !selection.bootstrap && current && current.source !== selection.source) {
+        throw new Error("Workflow selection changed across handoff");
+      }
+      if (!selection.bootstrap) requireSource(selection.source);
+      process.stdout.write(`${selection.binding || "-"}\t${selection.source}\t${selection.bootstrap ? "1" : "0"}\n`);
+    } else if (operation === "workflow-cold-select") {
+      const [bootstrap, expected, main] = paths;
+      if (!oid.test(bootstrap) || !oid.test(main) || (current?.oid ?? "") !== expected) {
+        throw new Error("Workflow binding changed during cold acquisition");
+      }
+      let selected;
+      if (current) {
+        requireSource(current.source, main);
+        selected = current.source;
+      } else {
+        const ancestry = spawnSync(binary, ["-C", repository, "merge-base", "--is-ancestor", bootstrap, main],
+          { stdio: "ignore", env: { ...process.env, GIT_NO_LAZY_FETCH: "1" } });
+        if (ancestry.error || ancestry.signal || ![0, 1].includes(ancestry.status)) throw new Error("Cannot qualify canonical bootstrap");
+        selected = ancestry.status === 0 ? bootstrap : main;
+      }
+      const closure = source => {
+        const inventory = run(["show", `${source}:scripts/pr-lib/wrapper-components.txt`]).split("\n");
+        return git(repository, ["ls-tree", "-r", "-z", "--full-tree", source, "--", "scripts/pr", "scripts/pr-lib", ...inventory]);
+      };
+      // Loaded helpers belong to the captured bootstrap, even if files move
+      // during acquisition. Compare immutable closures before admitting it.
+      if (!closure(bootstrap).equals(closure(selected))) {
+        throw new Error(`Cold workflow source differs from the running canonical wrapper ${bootstrap}; selected source ${selected}`);
+      }
+      process.stdout.write(selected);
+    } else if (operation === "workflow-admit") {
+      const [source, expected, anchor = "refs/remotes/origin/main", outcome = "", replacementHead = ""] = paths;
+      if (outcome) requireRecovery(source, outcome, replacementHead, anchor);
+      if (!oid.test(source) || (current?.oid ?? "") !== expected || !outcome && current && current.source !== source) {
+        throw new Error("Workflow binding changed before admission");
+      }
+      requireSource(source, anchor);
+      if (current) process.stdout.write(current.oid);
+      else {
+        const record = JSON.stringify({ version: 1, repository: identity, owner, pr: revision, source });
+        const blob = git(repository, ["hash-object", "-w", "--stdin"], record).toString().trim();
+        const tree = git(repository, ["mktree"], `100644 blob ${blob}\tbinding.json\n`).toString().trim();
+        const commit = git(repository, ["-c", "commit.gpgsign=false", "commit-tree", tree, "-p", source],
+          "Native PR workflow binding\n").toString().trim();
+        run(["update-ref", "--no-deref", ref, commit, "0".repeat(source.length)]);
+        process.stdout.write(commit);
+      }
+    } else if (operation === "workflow-retire") {
+      if (!current || current.oid !== paths[0]) throw new Error("Workflow binding changed before completion");
+      requireSource(current.source, paths[1]);
+      run(["update-ref", "--no-deref", "-d", ref, current.oid]);
+    } else throw new Error("Unknown workflow operation");
+  } else if (operation === "differences") {
     const queries = paths.flatMap(path => [`HEAD:${path}`, `${revision}:${path}`]);
     const rows = git(repository, ["cat-file", "--batch-check=%(objectname)"], queries.join("\n") + "\n")
       .toString("utf8").split("\n");
@@ -168,10 +387,145 @@ try {
   } else {
     throw new Error("Unknown wrapper Git operation");
   }
-} catch {
+} catch (error) {
+  if (operation.startsWith("workflow-")) console.error(error.message);
   process.exitCode = 1;
 }
 EOF_WRAPPER_GIT
+}
+
+PR_WORKFLOW_PR=""
+PR_WORKFLOW_BINDING_OID=""
+PR_WORKFLOW_SOURCE_REVISION=""
+PR_WORKFLOW_BOOTSTRAP=0
+PR_WORKFLOW_RECOVERY_PROVENANCE=""
+PR_WORKFLOW_TRUST_ANCHOR="refs/remotes/origin/main"
+pr_read_workflow_binding() {
+  local classification binding tracking_status=0
+  classification=$(pr_subcommand_classification "$requested_subcommand" 2>/dev/null || true)
+  [ "$classification" = landing ] || return 0
+  case "$requested_subcommand" in gc | lock-recover) return 0 ;; esac
+  [[ "${2-}" =~ ^[1-9][0-9]*$ ]] || return 0
+  PR_WORKFLOW_PR="$2"
+  if [ -n "${OPENCLAW_PR_WORKFLOW_CONTEXT:-}" ]; then
+    binding=$(pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" "$PR_WORKFLOW_PR" "$$" "$PPID" \
+      "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD") || return 1
+    IFS=$'\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION PR_WORKFLOW_BOOTSTRAP <<< "$binding"
+  else
+    if [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ]; then
+      binding=$(pr_batch_wrapper_git workflow-recovery-select "$canonical_repo_root" "$PR_WORKFLOW_PR" \
+        "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD") || return 1
+      IFS=$'\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
+      return 0
+    fi
+    if pr_git -C "$canonical_repo_root" symbolic-ref -q refs/remotes/origin/main >/dev/null 2>&1; then
+      echo "Refusing a symbolic main tracking ref for workflow selection." >&2
+      return 1
+    fi
+    pr_git -C "$canonical_repo_root" show-ref --verify --quiet refs/remotes/origin/main || tracking_status=$?
+    if [ "$tracking_status" -eq 1 ] && [ "$script_self" = "$canonical_repo_root/scripts/pr" ]; then
+      # Only canonical code may bootstrap. A retained record is data until the
+      # locked acquisition authenticates its source against canonical main.
+      binding=$(pr_batch_wrapper_git workflow-inspect "$canonical_repo_root" "$PR_WORKFLOW_PR") || return 1
+      IFS=$'\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
+      PR_WORKFLOW_SOURCE_REVISION=$(pr_git -C "$canonical_repo_root" rev-parse --verify 'HEAD^{commit}') || return 1
+      PR_WORKFLOW_BOOTSTRAP=1
+    else
+      [ "$tracking_status" -le 1 ] || return 1
+      binding=$(pr_batch_wrapper_git workflow-read "$canonical_repo_root" "$PR_WORKFLOW_PR") || return 1
+      IFS=$'\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
+    fi
+  fi
+  [ "$PR_WORKFLOW_BINDING_OID" != - ] || PR_WORKFLOW_BINDING_OID=""
+  if [ "$PR_WORKFLOW_BOOTSTRAP" = 1 ]; then
+    [ "$script_self" = "$canonical_repo_root/scripts/pr" ] || return 1
+  fi
+  if [ -n "${OPENCLAW_PR_WORKFLOW_CONTEXT:-}" ] || [ "$PR_WORKFLOW_BOOTSTRAP" = 1 ]; then
+    verify_pr_workflow_source "$PR_WORKFLOW_SOURCE_REVISION" "$script_parent_dir/.." || return 1
+  fi
+}
+
+verify_pr_workflow_source() {
+  local inventory component
+  local components=(scripts/pr scripts/pr-lib)
+  inventory=$(pr_git -C "$canonical_repo_root" show "$1:scripts/pr-lib/wrapper-components.txt") || return 1
+  while IFS= read -r component; do components+=("$component"); done <<< "$inventory"
+  pr_batch_wrapper_git verify "$canonical_repo_root" "$1" "$2" "${components[@]}"
+}
+
+hold_pr_workflow_selection() {
+  [ -n "$PR_WORKFLOW_PR" ] && [ -z "${OPENCLAW_PR_WORKFLOW_CONTEXT:-}" ] || return 0
+  verify_pr_workflow_source "$1" "$2" || return 1
+  local context
+  context=$(mktemp "${TMPDIR:-/tmp}/openclaw-pr-selection.XXXXXX") || return 1
+  if ! pr_batch_wrapper_git workflow-context-write "$canonical_repo_root" "$PR_WORKFLOW_PR" \
+    "$1" "$PR_WORKFLOW_BINDING_OID" "$$" "$PR_WORKFLOW_BOOTSTRAP" \
+    "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" > "$context" || ! chmod 400 "$context"; then
+    rm -f "$context"
+    return 1
+  fi
+  # FD 8 carries selection; FD 9 remains the archive cleanup owner.
+  # Positional reads keep exec/child reentry independent of shared FD offsets.
+  exec 8< "$context"
+  rm "$context"
+  OPENCLAW_PR_WORKFLOW_CONTEXT=$(node -e 'const s=require("node:fs").fstatSync(8); process.stdout.write(`${s.dev}:${s.ino}`)') || return 1
+  export OPENCLAW_PR_WORKFLOW_CONTEXT
+}
+
+admit_pr_workflow_binding() {
+  [ -n "$PR_WORKFLOW_PR" ] || return 0
+  [ "$PR_WORKFLOW_PR" = "$1" ] && [ -n "$PR_WORKFLOW_SOURCE_REVISION" ] || return 1
+  local qualification_ref="" main=""
+  if [ "$PR_WORKFLOW_BOOTSTRAP" = 1 ] || [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ]; then
+    qualification_ref="refs/openclaw/pr-workflow-qualification/$1/$PR_OPERATION_LOCK_OWNER_OID"
+    local ref_status=0 symbolic_status=0 selected
+    pr_git -C "$canonical_repo_root" symbolic-ref -q "$qualification_ref" >/dev/null 2>&1 || symbolic_status=$?
+    [ "$symbolic_status" -eq 1 ] || { echo "Refusing symbolic or unreadable qualification ref: $qualification_ref." >&2; return 1; }
+    pr_git -C "$canonical_repo_root" show-ref --verify --quiet "$qualification_ref" || ref_status=$?
+    [ "$ref_status" -eq 1 ] || { echo "Workflow qualification ref already exists; preserve $qualification_ref." >&2; return 1; }
+    mark_pr_operation_side_effects_started || return 1
+    if ! fetch_canonical_main "$qualification_ref"; then
+      echo "Cold workflow acquisition failed; inspect $qualification_ref before any cleanup." >&2
+      return 1
+    fi
+    main=$(pr_git -C "$canonical_repo_root" rev-parse --verify "$qualification_ref^{commit}") || return 1
+    PR_WORKFLOW_TRUST_ANCHOR="$main"
+    if [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ]; then
+      # Current main is selected only for this operation. Keep the historical
+      # binding intact so normal reconciliation still uses its admitted source.
+      verify_pr_workflow_source "$main" "$script_parent_dir/.." || {
+        echo "Current main workflow changed; rerun recovery from current main. Preserving $qualification_ref." >&2
+        return 1
+      }
+      selected="$main"
+    elif ! selected=$(pr_batch_wrapper_git workflow-cold-select "$canonical_repo_root" "$1" \
+      "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$main"); then
+      echo "Cold workflow qualification failed; use the admitted source from a qualified checkout. Preserving $qualification_ref." >&2
+      return 1
+    fi
+    verify_pr_workflow_source "$PR_WORKFLOW_SOURCE_REVISION" "$script_parent_dir/.." || return 1
+    PR_WORKFLOW_SOURCE_REVISION="$selected"
+  fi
+  # Verify again under the operation lock: initial selection may have waited
+  # behind another command, and only admitted bytes may mint a lasting pin.
+  verify_pr_workflow_source "$PR_WORKFLOW_SOURCE_REVISION" "$script_parent_dir/.." || return 1
+  pr_operation_lock_owner_is_current "$canonical_repo_root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+  mark_pr_operation_side_effects_started || return 1
+  PR_WORKFLOW_BINDING_OID=$(pr_batch_wrapper_git workflow-admit "$canonical_repo_root" "$1" \
+    "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$PR_WORKFLOW_TRUST_ANCHOR" \
+    "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD") || return 1
+  if [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ]; then
+    PR_WORKFLOW_RECOVERY_PROVENANCE=$(pr_batch_wrapper_git workflow-recovery-provenance "$canonical_repo_root" "$1" \
+      "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "$PR_WORKFLOW_TRUST_ANCHOR" "$PR_WORKFLOW_SOURCE_REVISION") || return 1
+  fi
+  if [ -n "$qualification_ref" ]; then
+    # Preserve acquisition evidence until admission succeeds; retire only our
+    # captured value, never a changed qualification ref.
+    pr_operation_lock_owner_is_current "$canonical_repo_root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+    pr_git -C "$canonical_repo_root" update-ref --no-deref -d "$qualification_ref" "$main" || return 1
+  fi
+  exec 8<&-
+  unset OPENCLAW_PR_WORKFLOW_CONTEXT
 }
 
 # Keep dependency sourcing independent of wrapper selection. In particular, an
@@ -274,9 +628,6 @@ EOF_TOOLING
 
 # Select trusted wrapper code independently from the canonical repository root;
 # a linked wrapper may be removed by merge-run or gc before supervision ends.
-# Physical paths keep helper argv aligned with Node's canonical module URLs.
-script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
-script_parent_dir="$(dirname "$script_self")"
 canonical_repo_root="$script_parent_dir/.."
 # Bootstrap paths stay fixed so an edited inventory cannot exclude itself from
 # the working-tree and anchor checks. The inventory owns the remaining closure.
@@ -294,6 +645,7 @@ if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ]; then
     exit 1
   fi
   canonical_repo_root="$OPENCLAW_PR_ANCHOR_REPO_ROOT"
+  pr_read_workflow_binding "$@"
   # Older parents pin only their own dependency set. The anchored child owns
   # completing its installation before any loader, supervisor, or lock starts.
   pr_materialize_dependencies "$script_parent_dir/pr-lib/materialize-dependencies.mjs" \
@@ -301,7 +653,8 @@ if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ]; then
 elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
   canonical_repo_root="$(dirname "$common_git_dir")"
   canonical_self="$canonical_repo_root/scripts/$(basename "${BASH_SOURCE[0]}")"
-  if [ "$script_self" != "$canonical_self" ] && [ -x "$canonical_self" ]; then
+  pr_read_workflow_binding "$@"
+  if [ "$PR_WORKFLOW_BOOTSTRAP" != 1 ] && [ -x "$canonical_self" ] && { [ "$script_self" != "$canonical_self" ] || [ -n "$PR_WORKFLOW_PR" ]; }; then
     linked_inventory=$(pr_git -C "$script_parent_dir" show HEAD:scripts/pr-lib/wrapper-components.txt)
     while IFS= read -r wrapper_component; do
       pr_wrapper_components+=("$wrapper_component")
@@ -317,7 +670,7 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
     canonical_wrapper_revision=$(
       pr_git -C "$canonical_repo_root" rev-parse "${pr_wrapper_components[@]/#/HEAD:}" 2>/dev/null || true
     )
-    if [ -n "$linked_wrapper_revision" ] &&
+    if [ "$script_self" != "$canonical_self" ] && [ -z "$PR_WORKFLOW_PR" ] && [ -n "$linked_wrapper_revision" ] &&
       [ "$linked_wrapper_revision" = "$canonical_wrapper_revision" ] &&
       pr_git -C "$canonical_repo_root" diff --quiet HEAD -- "${pr_wrapper_components[@]/#/:(top)}"; then
       exec "$canonical_self" "$@"
@@ -328,7 +681,13 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
     # does not need the materialized dependency context.
     # refs/remotes/... explicitly: bare "origin/main" is a DWIM name that a
     # local branch or tag named origin/main could shadow, spoofing the anchor.
-    anchor_commit=$(pr_git -C "$script_parent_dir" rev-parse --verify refs/remotes/origin/main^{commit} 2>/dev/null || true)
+    anchor_commit="${PR_WORKFLOW_SOURCE_REVISION:-$(pr_git -C "$script_parent_dir" rev-parse --verify refs/remotes/origin/main^{commit} 2>/dev/null || true)}"
+    anchor_description="origin/main"
+    anchor_reference="refs/remotes/origin/main"
+    if [ -n "$PR_WORKFLOW_BINDING_OID" ]; then
+      anchor_description="retained PR #$PR_WORKFLOW_PR workflow $anchor_commit"
+      anchor_reference="$anchor_description"
+    fi
     anchor_wrapper_revision=""
     if [ -n "$anchor_commit" ] &&
       anchor_inventory=$(pr_git -C "$script_parent_dir" show "$anchor_commit:scripts/pr-lib/wrapper-components.txt" 2>/dev/null); then
@@ -354,9 +713,9 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
     # Reuse the verified materializer for code-only linked PR operations.
     if [ "$linked_matches_anchor" != "1" ] ||
       { is_locked_pr_command "$requested_subcommand" && [ ! -d "$script_parent_dir/../node_modules" ]; }; then
-      wrapper_route_reason="differs from origin/main"
+      wrapper_route_reason="differs from $anchor_description"
       if [ "$linked_matches_anchor" = "1" ]; then
-        wrapper_route_reason="matches origin/main but has no node_modules directory"
+        wrapper_route_reason="matches $anchor_description but has no node_modules directory"
       fi
       requested_classification=$(pr_subcommand_classification "$requested_subcommand" 2>/dev/null || true)
       if [ "$linked_matches_anchor" != "1" ] && [ "$dev_wrapper_opt_in" = "1" ] && [ "$requested_classification" = "advisory" ]; then
@@ -375,10 +734,11 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
         # changes relative to main. When the canonical checkout is byte-identical
         # to the fetched origin/main anchor, exec-ing it runs exactly the trusted
         # anchor code; announce the substitution so it is never silent.
-        if [ -n "$anchor_wrapper_revision" ] &&
+        if [ "$script_self" != "$canonical_self" ] && [ -n "$anchor_wrapper_revision" ] &&
           [ "$canonical_wrapper_revision" = "$anchor_wrapper_revision" ] &&
           pr_git -C "$canonical_repo_root" diff --quiet HEAD -- "${anchor_components[@]/#/:(top)}"; then
-          echo "scripts/pr wrapper in this worktree $wrapper_route_reason; running the canonical checkout's wrapper (matches the origin/main trust anchor): $canonical_repo_root" >&2
+          hold_pr_workflow_selection "$anchor_commit" "$canonical_repo_root" || exit 1
+          echo "scripts/pr wrapper in this worktree $wrapper_route_reason; running the canonical checkout's wrapper (matches the $anchor_description trust anchor): $canonical_repo_root" >&2
           exec "$canonical_self" "$@"
         fi
         # The canonical checkout cannot supply trusted code and dependency context.
@@ -392,9 +752,14 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
         # paths intact in the materialized tree.
         anchor_git_root=$(pr_git -C "$script_parent_dir" rev-parse --show-toplevel 2>/dev/null || true)
         if [ -n "$anchor_wrapper_revision" ] && [ -n "$anchor_git_root" ] &&
-          anchor_exec_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-anchor.XXXXXX" 2>/dev/null); then
+          anchor_exec_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-anchor.$$.XXXXXX" 2>/dev/null); then
           # Hold the directory we created across exec, not an environment pathname.
           # FD 9 is reserved for the supervisor; bootstrap children are awaited.
+          trap 'rm -rf "$anchor_exec_dir"' EXIT
+          trap 'exit 129' HUP
+          trap 'exit 130' INT
+          trap 'exit 131' QUIT
+          trap 'exit 143' TERM
           exec 9< "$anchor_exec_dir"
           anchor_extraction_valid=0
           # BSD tar can stop at the end marker before Git finishes writing padding,
@@ -425,18 +790,26 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
             fi
             if ! pr_materialize_dependencies "$anchor_dependency_owner" "$anchor_exec_dir/node_modules"
             then
-              rm -rf "$anchor_exec_dir"
               exit 1
             fi
-            # Bash re-reads this copy during execution. Only the same-process
-            # supervisor may retire it after the entire operation has drained.
-            # Older anchors without that handoff retain OS temp-reaping behavior.
-            echo "scripts/pr wrapper in this worktree $wrapper_route_reason; running wrapper code materialized from the refs/remotes/origin/main trust anchor at revision $(pr_git -C "$script_parent_dir" rev-parse --short "$anchor_commit")." >&2
+            # Bash re-reads this copy: successful exec hands cleanup to the
+            # same creator PID, in anchored bash or its drained supervisor.
+            # Older anchors without that handoff are reclaimed by the stale sweep.
+            hold_pr_workflow_selection "$anchor_commit" "$anchor_exec_dir" || exit 1
+            echo "scripts/pr wrapper in this worktree $wrapper_route_reason; running wrapper code materialized from the $anchor_reference trust anchor at revision $(pr_git -C "$script_parent_dir" rev-parse --short "$anchor_commit")." >&2
+            # Bash 3.2 clears traps even when exec fails; errexit must be off
+            # until we reinstall cleanup on the failure-only continuation.
+            shopt -s execfail
+            set +e
             OPENCLAW_PR_ANCHOR_REPO_ROOT="$canonical_repo_root" \
               OPENCLAW_PR_ANCHOR_CREATOR_PID="$$" OPENCLAW_PR_ANCHOR_FD=9 \
               exec "$anchor_exec_dir/scripts/pr" "$@"
+            trap 'rm -rf "$anchor_exec_dir"' EXIT
+            echo "Unable to execute the materialized scripts/pr wrapper." >&2
+            exit 1
           fi
           rm -rf "$anchor_exec_dir"
+          trap - EXIT HUP INT QUIT TERM
           exec 9<&-
         fi
         # HEAD blobs are authoritative here: the uncommitted-wrapper guard above
@@ -470,6 +843,13 @@ fi
 canonical_repo_root="$(cd "$canonical_repo_root" && pwd -P)"
 readonly canonical_repo_root
 
+if [ -n "$PR_WORKFLOW_PR" ]; then
+  # A pin is admission state, not caller-selected code. The operation lock
+  # fences the verified closure and initial record before any PR side effect.
+  PR_WORKFLOW_SOURCE_REVISION="${PR_WORKFLOW_SOURCE_REVISION:-${anchor_commit:-$(pr_git -C "$canonical_repo_root" rev-parse --verify refs/remotes/origin/main^{commit})}}"
+  hold_pr_workflow_selection "$PR_WORKFLOW_SOURCE_REVISION" "$script_parent_dir/.." || exit 1
+fi
+
 is_main_only_pr_command() {
   case "$1" in
     prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover) return 0 ;;
@@ -486,6 +866,12 @@ is_supervised_pr_process() {
 # The supervisor changes cwd to the canonical repo. Resolve explicit body and
 # evidence paths relative to the operator's caller before crossing that
 # boundary; do not read them.
+if [ "${1-}" = tooling-recover ]; then
+  [ "$#" -ge 3 ] || { echo "tooling-recover requires a PR and plan" >&2; exit 2; }
+  recovery_plan=$(node -e 'process.stdout.write(require("node:path").resolve(process.argv[1]))' -- "$3") || exit 1
+  set -- "$1" "$2" "$recovery_plan" "${@:4}"
+fi
+
 if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ] || [ "${1-}" = prepare-baseline-refresh ] || [ "${1-}" = prepare-baseline-successor ] || [ "${1-}" = prepare-baseline-signing-request ] || [ "${1-}" = prepare-baseline-signing-continue ]; then
   merge_cli_args=() merge_cli_body_next=false
   for merge_cli_arg in "$@"; do
@@ -509,7 +895,14 @@ if [ "${1-}" = "gc" ] || is_locked_pr_command "${1-}"; then
     unset OPENCLAW_PR_LOCK_NOTIFY_FD
     unset OPENCLAW_PR_LOCK_SUPERVISOR_PID
     command -v node >/dev/null 2>&1 || { echo "Missing required command: node" >&2; exit 1; }
+    shopt -s execfail
+    set +e
     exec node "$script_parent_dir/pr-lib/process-group-runner.mjs" "$canonical_repo_root" "$script_self" "$@"
+    if [ "${OPENCLAW_PR_ANCHOR_CREATOR_PID:-}" = "$$" ] && [ "${OPENCLAW_PR_ANCHOR_FD:-}" = 9 ]; then
+      trap 'node "$script_parent_dir/pr-lib/materialized-anchor.mjs" retire "$script_self" || true' EXIT
+    fi
+    echo "Unable to execute the scripts/pr supervisor." >&2
+    exit 1
   fi
 fi
 
@@ -523,6 +916,7 @@ Usage:
   scripts/pr ls
   scripts/pr gc [--pr <number>] [--dry-run]
   scripts/pr lock-recover <PR> <OWNER_OID> --confirmed-no-running-tools
+  scripts/pr tooling-recover <PR> <plan> --plan-sha256 <SHA256> --confirmed-quiescent
   scripts/pr review-init <PR>
   scripts/pr review-checkout-main <PR>
   scripts/pr review-checkout-pr <PR>
@@ -558,7 +952,7 @@ Usage:
     Exact evidence is required; branch-caused failures, security checks, and enforced reviews remain blocking.
     This requires --confirmed-operator-admin and immediate squash without auto-merge.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
-  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA> --auto-merge] [--merged-head <SHA>] [--cancel-auto [--observed-head <SHA>]] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA> [--auto-merge]] [--current-workflow] [--merged-head <SHA>] [--cancel-auto [--observed-head <SHA>]] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
     Defaults to the retained head; replacement requires an explicitly selected full lowercase 40-character SHA,
     freshly authored exact-head review/preparation and completed CI proof. Standing landing authority covers
@@ -567,6 +961,8 @@ Usage:
     Paired admin flags permit an explicitly selected head after confirmed auto cancellation, including the retained SHA.
     They also permit same-head recovery without --replacement-head for the complete known prior-CI REST base-modified HTTP 405 rejection.
     This reruns current admin admission and retains the original captures; other admin failures remain fenced.
+    --current-workflow explicitly selects current official main for either cancelled-auto replacement or
+    same-head qualified HTTP 405 admin recovery; the retained binding remains unchanged.
     --replacement-head <SHA> --auto-merge retires an unaccepted prior-CI REST admin intent fenced by a different
     exact current head, then requests ordinary current-head auto-merge. It requires exact-head github_pending
     preparation and all normal required-check gates; it never reuses prior admin evidence.
@@ -680,6 +1076,10 @@ main() {
         esac
       done
       ;;
+    tooling-recover)
+      [ "$#" -eq 5 ] && is_canonical_pr_number "$1" && [ "$3" = --plan-sha256 ] &&
+        [[ "$4" =~ ^[0-9a-f]{64}$ ]] && [ "$5" = --confirmed-quiescent ] || { usage; exit 2; }
+      ;;
     review-tests)
       [ "$#" -ge 2 ] || { usage; exit 2; }
       ;;
@@ -699,6 +1099,10 @@ main() {
       fi
       while [ "$#" -gt 0 ]; do
         case "$1" in
+          --current-workflow)
+            [ "$cmd" = merge-recover ] && [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ] || { usage; exit 2; }
+            shift
+            ;;
           --cancel-auto)
             [ "$cmd" = merge-recover ] && [ "$cancel_auto" = false ] || { usage; exit 2; }
             cancel_auto=true
@@ -823,6 +1227,12 @@ main() {
     begin_pr_operation_validation_phase
     # Temp-backed shell redirections must fail while the supervisor can auto-release.
     validate_pr_temp_storage
+    if [ "$PR_WORKFLOW_BOOTSTRAP" = 1 ] && [ "$cmd" = prepare-push ] && [ "${2:-}" = --resume-crabbox-run ]; then
+      echo "Publisher resume requires an authenticated workflow source; restore its main tracking anchor before resuming. No acquisition attempted." >&2
+      return 1
+    fi
+    [ -z "$PR_WORKFLOW_PR" ] || ensure_gh_api_auth
+    admit_pr_workflow_binding "$locked_pr"
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 131' QUIT
@@ -830,6 +1240,11 @@ main() {
   fi
 
   case "$cmd" in
+    tooling-recover)
+      mark_pr_operation_side_effects_started
+      node "$script_parent_dir/pr-lib/materialize-dependencies.mjs" --recover "$1" "$2" "$4" \
+        "$(repo_root)" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"
+      ;;
     ls)
       list_pr_worktrees
       ;;

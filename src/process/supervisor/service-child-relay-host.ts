@@ -317,9 +317,6 @@ export async function createServiceChildRelayAdapter(
     loseIdentity("construction aborted");
     constructionAbort.reject(waitError ?? new Error("service child construction aborted"));
   };
-  const removeConstructionAbortListener = () => {
-    params.abortSignal?.removeEventListener("abort", onConstructionAbort);
-  };
 
   const finishAuthorityClose = (missingReceiptError: string) => {
     if (state === "closed" || state === "identity-lost") {
@@ -564,12 +561,11 @@ export async function createServiceChildRelayAdapter(
     events.emitError(error, "process");
   });
   const finishWindowsAuthority = () => {
-    if (!useWindowsJobAnchor || !childDisconnected || !childExited) {
-      return;
+    if (useWindowsJobAnchor && childDisconnected && childExited) {
+      finishAuthorityClose(
+        childError?.message ?? "Windows service child anchor exited without a closing receipt",
+      );
     }
-    finishAuthorityClose(
-      childError?.message ?? "Windows service child anchor exited without a closing receipt",
-    );
   };
   child.once("disconnect", () => {
     childDisconnected = true;
@@ -579,7 +575,7 @@ export async function createServiceChildRelayAdapter(
     childExited = true;
     retirement.observeExit(code, signal);
     relayExit.resolve();
-    removeConstructionAbortListener();
+    params.abortSignal?.removeEventListener("abort", onConstructionAbort);
     if (useWindowsJobAnchor) {
       finishWindowsAuthority();
     }
@@ -631,16 +627,14 @@ export async function createServiceChildRelayAdapter(
         startup.promise,
         delivery?.deliverTo(child, { abortSignal: params.abortSignal }),
       ]);
-      const startupError = startupResult.status === "rejected" ? startupResult.reason : undefined;
-      const secretDeliveryError =
-        secretDeliveryResult.status === "rejected" ? secretDeliveryResult.reason : undefined;
       // Preserve admission failure over the secret pipe it closes as a consequence.
-      if (startupError !== undefined || secretDeliveryError !== undefined) {
-        if (startupError !== undefined) {
-          await startupErrorAckDelivery;
-          await cleanup.promise;
-        }
-        throw startupError ?? secretDeliveryError;
+      if (startupResult.status === "rejected") {
+        await startupErrorAckDelivery;
+        await cleanup.promise;
+        throw startupResult.reason;
+      }
+      if (secretDeliveryResult.status === "rejected") {
+        throw secretDeliveryResult.reason;
       }
       if (params.input !== undefined && params.prepareInput) {
         await params.prepareInput();
@@ -662,7 +656,7 @@ export async function createServiceChildRelayAdapter(
       stopServiceChildOwner(child, useLinuxSubreaper);
       throw error;
     } finally {
-      removeConstructionAbortListener();
+      params.abortSignal?.removeEventListener("abort", onConstructionAbort);
     }
   })();
   void ready.catch(() => {});

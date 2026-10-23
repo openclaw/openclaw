@@ -81,7 +81,7 @@ export function bindPostgresSearch(
     fullText: Object.keys(text).length
       ? {
           match(index, query) {
-            const column = relation(index);
+            const column = relation(index, query.kind === "contains" ? index.fields[0] : undefined);
             // Long intent prompts can exceed PostgreSQL's tsquery tree limit.
             // Ordinary queries keep the indexable single-tsquery predicate.
             if (
@@ -100,11 +100,11 @@ export function bindPostgresSearch(
                 throw new Error("Contains requires a declared PostgreSQL trigram index");
               }
               const pattern = `%${query.text.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
-              return /* kysely-allow-raw: PostgreSQL's literal trigram predicate returns boolean. */ sql<boolean>`${relation(index, index.fields[0])} ILIKE ${pattern} ESCAPE '\\'`;
+              return /* kysely-allow-raw: PostgreSQL's literal trigram predicate returns boolean. */ sql<boolean>`${column} ILIKE ${pattern} ESCAPE '\\'`;
             }
             return /* kysely-allow-raw: PostgreSQL's tsvector predicate returns boolean. */ sql<boolean>`${column} @@ ${tsquery(query, config)}`;
           },
-          rank(index, query) {
+          rank(index, query, options) {
             if (query?.kind === "contains") {
               if (index.postgres?.mode !== "trigram") {
                 throw new Error("Contains requires a declared PostgreSQL trigram index");
@@ -117,7 +117,7 @@ export function bindPostgresSearch(
             }
             const column = relation(index);
             return {
-              value: /* kysely-allow-raw: The native rank is a numeric scalar. */ sql<number>`ts_rank_cd(${column}, ${requireQuery(query)}, 2)`,
+              value: /* kysely-allow-raw: The native rank is a numeric scalar. */ sql<number>`ts_rank_cd(${column}, ${requireQuery(query)}, ${options?.postgres?.normalization ?? 2})`,
               order: "desc",
               toRank: (raw) => raw,
             };

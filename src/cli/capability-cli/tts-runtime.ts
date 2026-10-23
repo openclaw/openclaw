@@ -76,7 +76,7 @@ export async function runTtsConvert(params: {
     const prefsPath = await resolveTtsPrefsPathAsync(ttsConfig);
     const ttsProvider =
       params.provider ??
-      resolveModelRefOverride(normalizeOptionalString(params.modelId)).provider ??
+      resolveModelRefOverride(params.modelId).provider ??
       (await getTtsProviderAsync(ttsConfig, prefsPath));
     const effectiveCfg = await injectTtsAuthProfileApiKey({
       cfg,
@@ -94,18 +94,13 @@ export async function runTtsConvert(params: {
       voiceId: params.voiceId,
       channelId: params.channel,
     });
-    const hasExplicitSelection = Boolean(
-      overrides.provider ||
-      normalizeOptionalString(params.modelId) ||
-      normalizeOptionalString(params.voiceId),
-    );
     const localResult = await textToSpeech({
       text: params.text,
       cfg: effectiveCfg,
       prefsPath,
       channel: params.channel,
       overrides,
-      disableFallback: hasExplicitSelection,
+      disableFallback: Boolean(overrides.provider),
     });
     if (!localResult.success || !localResult.audioPath) {
       throw new Error(localResult.error ?? "TTS conversion failed");

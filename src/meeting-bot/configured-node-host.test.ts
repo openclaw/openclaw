@@ -1,15 +1,55 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const childProcessMocks = vi.hoisted(() => ({
-  spawnSync: vi.fn(),
-}));
+const spawnSync = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
-  spawnSync: childProcessMocks.spawnSync,
+  spawnSync,
 }));
 
+import { resolveMeetingAudioRuntimeForFormat } from "./audio-backend.js";
+import { createPulseCommands } from "./audio-backend.test-support.js";
 import { createMeetingConfiguredNodeHost } from "./configured-node-host.js";
+
+const defaults = { backend: "auto", bufferBytes: 4_096, format: "pcm16-24khz" } as const;
+const channelMap = "front-left,front-right";
+const properties = `'device.description="OpenClaw Meeting Audio"'`;
+const sink = "openclaw_meeting_audio";
+const modules = [
+  [
+    "module-null-sink",
+    `sink_name=${sink}`,
+    "rate=48000",
+    "channels=2",
+    `channel_map=${channelMap}`,
+    `sink_properties=${properties}`,
+  ],
+  [
+    "module-remap-source",
+    `source_name=${sink}`,
+    `master=${sink}.monitor`,
+    "channels=2",
+    `master_channel_map=${channelMap}`,
+    `channel_map=${channelMap}`,
+    "remix=no",
+    `source_properties=${properties}`,
+  ],
+];
+
+function mockPulse(loaded = false) {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  vi.spyOn(Date, "now").mockReturnValue(0);
+  const run = createPulseCommands(loaded);
+  spawnSync.mockImplementation((command: string, args: string[]) => run([command, ...args]));
+}
+
+function expectCommand(command: string) {
+  expect(spawnSync).toHaveBeenCalledWith(
+    "/bin/sh",
+    ["-lc", 'command -v "$1" >/dev/null 2>&1', "sh", command],
+    expect.objectContaining({ encoding: "utf8" }),
+  );
+}
 
 function createHost() {
   return createMeetingConfiguredNodeHost({
@@ -23,11 +63,7 @@ function createHost() {
     },
     browserLabel: "Test meeting",
     commandName: "testmeeting.chrome",
-    defaultAudio: {
-      backend: "auto",
-      bufferBytes: 4_096,
-      format: "pcm16-24khz",
-    },
+    defaultAudio: defaults,
     defaultAudioInputCommand: ["legacy-capture"],
     defaultAudioOutputCommand: ["legacy-playback"],
     displayName: "Test meeting",
@@ -45,106 +81,82 @@ describe("configured meeting node host", () => {
     vi.resetAllMocks();
   });
 
-  it("provisions PipeWire-Pulse and probes node-local default commands", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    let sinkLoaded = false;
-    let sourceLoaded = false;
-    childProcessMocks.spawnSync.mockImplementation((command: string, args: string[]) => {
-      if (command === "/bin/sh") {
-        return { status: 0, stdout: "", stderr: "" };
-      }
-      if (command !== "pactl") {
-        return { status: 1, stdout: "", stderr: `unexpected command: ${command}` };
-      }
-      if (args[0] === "info") {
-        return { status: 0, stdout: "Server Name: PulseAudio (on PipeWire)", stderr: "" };
-      }
-      if (args[0] === "load-module") {
-        if (args[1] === "module-null-sink") {
-          sinkLoaded = true;
+  it.each([false, true])("provisions and probes audio with existing modules=%s", async (loaded) => {
+    mockPulse(loaded);
+    const overrides = loaded
+      ? {
+          audioInputCommand: ["trusted-capture", "--raw"],
+          audioOutputCommand: ["trusted-playback", "--raw"],
+          bargeInInputCommand: ["trusted-barge-in"],
         }
-        if (args[1] === "module-remap-source") {
-          sourceLoaded = true;
-        }
-        return { status: 0, stdout: "42", stderr: "" };
-      }
-      if (args[0] === "list" && args[2] === "sinks") {
-        return {
-          status: 0,
-          stdout: sinkLoaded ? "42\topenclaw_meeting_audio\tPipeWire" : "",
-          stderr: "",
-        };
-      }
-      if (args[0] === "list" && args[2] === "sources") {
-        return {
-          status: 0,
-          stdout: sourceLoaded ? "43\topenclaw_meeting_audio\tPipeWire" : "",
-          stderr: "",
-        };
-      }
-      return { status: 0, stdout: "", stderr: "" };
-    });
-
-    const result = JSON.parse(await createHost()(JSON.stringify({ action: "setup" }))) as Record<
-      string,
-      unknown
-    >;
+      : {};
+    const result: unknown = JSON.parse(
+      await createHost()(JSON.stringify({ action: "setup", ...overrides })),
+    );
 
     expect(result).toEqual({
       ok: true,
       audioBackend: "pipewire-pulse",
       audioDeviceLabel: "OpenClaw Meeting Audio",
     });
-    expect(childProcessMocks.spawnSync).toHaveBeenCalledWith(
-      "/bin/sh",
-      ["-lc", 'command -v "$1" >/dev/null 2>&1', "sh", "parec"],
-      expect.objectContaining({ encoding: "utf8" }),
-    );
-    expect(childProcessMocks.spawnSync).toHaveBeenCalledWith(
-      "/bin/sh",
-      ["-lc", 'command -v "$1" >/dev/null 2>&1', "sh", "pacat"],
-      expect.objectContaining({ encoding: "utf8" }),
-    );
-    expect(childProcessMocks.spawnSync).not.toHaveBeenCalledWith(
+    for (const command of loaded
+      ? ["trusted-capture", "trusted-playback", "trusted-barge-in"]
+      : ["parec", "pacat"]) {
+      expectCommand(command);
+    }
+    expect(spawnSync).not.toHaveBeenCalledWith(
       "/bin/sh",
       expect.arrayContaining(["legacy-capture"]),
       expect.anything(),
     );
+    const loads = spawnSync.mock.calls.filter(([, args]) => args[0] === "load-module");
+    expect(loads).toEqual(
+      loaded
+        ? []
+        : modules.map((args) => [
+            "pactl",
+            ["load-module", ...args],
+            { encoding: "utf8", timeout: 10_000 },
+          ]),
+    );
   });
 
-  it("probes explicit command overrides after provisioning the backend", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    childProcessMocks.spawnSync.mockImplementation((command: string, args: string[]) => {
-      if (command === "/bin/sh") {
-        return { status: 0, stdout: "", stderr: "" };
-      }
-      if (args[0] === "info") {
-        return { status: 0, stdout: "Server Name: PulseAudio (on PipeWire)", stderr: "" };
-      }
-      if (args[0] === "list" && args[2] === "sinks") {
-        return { status: 0, stdout: "42\topenclaw_meeting_audio\tPipeWire", stderr: "" };
-      }
-      if (args[0] === "list" && args[2] === "sources") {
-        return { status: 0, stdout: "43\topenclaw_meeting_audio\tPipeWire", stderr: "" };
-      }
-      return { status: 0, stdout: "", stderr: "" };
-    });
-
-    await createHost()(
-      JSON.stringify({
-        action: "setup",
-        audioInputCommand: ["trusted-capture", "--raw"],
-        audioOutputCommand: ["trusted-playback", "--raw"],
-        bargeInInputCommand: ["trusted-barge-in"],
-      }),
+  it("selects the native backend for macOS and Linux", () => {
+    expect(
+      (["darwin", "linux"] as const).map(
+        (platform) => resolveMeetingAudioRuntimeForFormat({ ...defaults, platform }).backend,
+      ),
+    ).toEqual(["blackhole-2ch", "pipewire-pulse"]);
+    expect(() => resolveMeetingAudioRuntimeForFormat({ ...defaults, platform: "win32" })).toThrow(
+      "unsupported on win32",
     );
+  });
 
-    for (const command of ["trusted-capture", "trusted-playback", "trusted-barge-in"]) {
-      expect(childProcessMocks.spawnSync).toHaveBeenCalledWith(
-        "/bin/sh",
-        ["-lc", 'command -v "$1" >/dev/null 2>&1', "sh", command],
-        expect.objectContaining({ encoding: "utf8" }),
-      );
-    }
+  it("builds PipeWire-Pulse raw command pairs", () => {
+    const rawArgs = [
+      "--raw",
+      `--device=${sink}`,
+      "--format=s16le",
+      "--rate=24000",
+      "--channels=1",
+      "--latency-msec=86",
+    ];
+    expect(resolveMeetingAudioRuntimeForFormat({ ...defaults, platform: "linux" })).toMatchObject({
+      backend: "pipewire-pulse",
+      deviceLabel: "OpenClaw Meeting Audio",
+      inputCommand: ["parec", ...rawArgs],
+      outputCommand: ["pacat", "--raw", "--playback", ...rawArgs.slice(1)],
+    });
+  });
+
+  it("preserves explicit command overrides while resolving the host backend", () => {
+    expect(
+      resolveMeetingAudioRuntimeForFormat({
+        ...defaults,
+        inputCommand: ["capture"],
+        outputCommand: ["playback"],
+        platform: "linux",
+      }),
+    ).toMatchObject({ inputCommand: ["capture"], outputCommand: ["playback"] });
   });
 });

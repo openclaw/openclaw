@@ -24,10 +24,14 @@ import {
 import { listReadOnlyChannelPluginsForConfigAsync } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelAccountSnapshot,
+  ChannelStatusIssue,
+} from "../../channels/plugins/types.public.js";
 import { resolveUnavailableChannelAccountSnapshot } from "../../channels/status/account-state.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
+import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { isAccountEnabled } from "../../shared/account-enabled.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
@@ -43,13 +47,14 @@ import {
   type ChannelAccountParams,
   resolveRuntimeAccountSnapshot,
 } from "./channels-account.js";
-import {
-  collectGatewayChannelStatusIssues,
-  resolveDeferredChannelReloadIssue,
-} from "./channels-status-issues.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestHandler, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandler,
+  GatewayRequestHandlers,
+  RespondFn,
+} from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
 function resolveChannelOperationParams(params: {
@@ -454,15 +459,15 @@ export const channelsHandlers: GatewayRequestHandlers = {
     };
     const { results: channelResults } = await runTasksWithConcurrency({
       tasks: statusPlugins.map((plugin) => async () => {
-        const deadline = Date.now() + timeoutMs;
+        const deadline = performance.now() + timeoutMs;
         const abort = probe ? new AbortController() : undefined;
         const remainingBudget = () => {
           abort?.signal.throwIfAborted();
-          const remaining = deadline - Date.now();
+          const remaining = deadline - performance.now();
           if (remaining <= 0) {
             throw new Error(`status timed out after ${timeoutMs}ms`);
           }
-          return remaining;
+          return Math.floor(remaining);
         };
         const build = async (live: boolean, error?: string) => {
           const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
@@ -479,7 +484,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
           });
           let summary: unknown = fallbackSummary();
           if (
-            Date.now() < deadline &&
+            performance.now() < deadline &&
             plugin.status?.buildChannelSummary &&
             Object.hasOwn(resolvedAccounts, defaultAccountId)
           ) {
@@ -514,7 +519,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
           warnings: statusWarnings,
           run: () => build(true),
         });
-        if (result.ok && Date.now() < deadline) {
+        if (result.ok && performance.now() < deadline) {
           return result.value;
         }
         abort?.abort();
@@ -537,14 +542,28 @@ export const channelsHandlers: GatewayRequestHandlers = {
         defaultAccountIdMap[result.pluginId] = result.defaultAccountId;
       }
     }
-    payload.statusIssues = collectGatewayChannelStatusIssues({
-      payload,
-      plugins: statusPlugins,
-      reloadingChannels: runtime.reloadingChannels,
-      defaultAccountIds: defaultAccountIdMap,
-      context,
-      warnings: statusWarnings,
-    });
+    const issues: ChannelStatusIssue[] = [];
+    for (const plugin of statusPlugins) {
+      try {
+        issues.push(
+          ...collectChannelStatusIssues(payload, [
+            runtime.reloadingChannels?.has(plugin.id) ? { id: plugin.id } : plugin,
+          ]),
+        );
+      } catch (error) {
+        statusWarnings.push(`${plugin.id} status diagnostics failed: ${formatForLog(error)}`);
+      }
+      const defaultAccountId = defaultAccountIdMap[plugin.id];
+      const deferredIssue = resolveDeferredChannelReloadIssue(
+        context,
+        plugin.id,
+        typeof defaultAccountId === "string" ? defaultAccountId : DEFAULT_ACCOUNT_ID,
+      );
+      if (deferredIssue) {
+        issues.push(deferredIssue);
+      }
+    }
+    payload.statusIssues = issues.slice(0, 50);
     if (statusWarnings.length > 0) {
       payload.partial = true;
       payload.warnings = statusWarnings.toSorted().slice(0, 50);
@@ -603,3 +622,23 @@ export const channelsHandlers: GatewayRequestHandlers = {
     });
   },
 };
+
+function resolveDeferredChannelReloadIssue(
+  context: GatewayRequestContext,
+  channel: ChannelId,
+  accountId: string,
+): ChannelStatusIssue | undefined {
+  const deferred = context.getDeferredChannelReloads?.().find((entry) => entry.channel === channel);
+  if (!deferred) {
+    return undefined;
+  }
+  return {
+    channel,
+    accountId,
+    kind: "config",
+    message: deferred.publicationPending
+      ? "Channel configuration reload is deferred while active work finishes. The previous configuration is still in use."
+      : "Channel reload is deferred while active work finishes.",
+    fix: "Wait for active work to finish, then refresh channel status. Stopping and starting the channel does not apply unpublished configuration.",
+  };
+}

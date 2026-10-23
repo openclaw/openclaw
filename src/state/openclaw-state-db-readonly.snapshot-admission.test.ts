@@ -1,25 +1,52 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
+import {
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../infra/gateway-state-owner-record.js";
 import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
+import type {
+  RetainedPreparedSqliteReadOnlyLocation,
+  RetainedSqliteSnapshotPreparation,
+} from "../infra/sqlite-readonly-location.types.js";
+import * as snapshotWorker from "../infra/sqlite-readonly-worker.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { expectCalls, makeReadSource, settle } from "./openclaw-state-db-fixtures.test-support.js";
-import { createReadWorkerFixture } from "./openclaw-state-db-readonly.test-support.js";
+import {
+  createReadWorkerFixture,
+  observeAsyncFixture,
+} from "./openclaw-state-db-readonly.test-support.js";
 import type { OpenClawStateReadOutcome } from "./openclaw-state-read.types.js";
 
 const mocks = vi.hoisted(() => ({
+  warn: vi.fn(),
+  info: vi.fn(),
   capture: vi.fn(),
   assertFresh: vi.fn<() => void>(),
   prepare: vi.fn(),
+  fork: vi.fn(),
+  start: vi.fn<(...args: unknown[]) => RetainedSqliteSnapshotPreparation>(),
+  closePreparation: vi.fn<() => Promise<void>>(),
   cleanup: vi.fn<() => Promise<boolean>>(),
   read: vi.fn<Parameters<typeof createReadWorkerFixture>[0]>(),
   forbiddenNative: vi.fn(() => {
     throw new Error("Native reads must not be reached by rejected admission");
   }),
 }));
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "state/db" ? { ...logger, warn: mocks.warn, info: mocks.info } : logger;
+    },
+  };
+});
 vi.mock("./openclaw-state-db-cache.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./openclaw-state-db-cache.js")>();
   return {
@@ -40,6 +67,8 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-snapshot-source.js")>()),
   prepareSqliteReadOnlyLocation: mocks.prepare,
   prepareSqliteReadOnlyLocationSync: mocks.forbiddenNative,
+  startSqliteReadOnlyLocationAsync: mocks.start,
+  forkSqlitePrivateSnapshot: mocks.fork,
 }));
 vi.mock("../infra/sqlite-readonly-location-cleanup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-readonly-location-cleanup.js")>()),
@@ -59,12 +88,15 @@ vi.mock("./openclaw-state-read-worker.js", () =>
 import { isStateDatabaseReadAdmissionInvalidatedError as isInvalidated } from "./openclaw-state-db-async-lifecycle.js";
 import {
   executeExistingOpenClawStateRead as readExisting,
+  forkActiveOpenClawStateDatabaseReadSnapshot as forkSnapshot,
   getActiveOpenClawStateDatabaseReadSnapshot as activeSnapshot,
   withDisposableOpenClawStateReads,
   withExistingOpenClawStateDatabaseCurrentReadOnly as readCurrent,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync as readPreserving,
   withExistingOpenClawStateDatabaseReadOnly as readOnly,
   withOpenClawStateDatabaseReadSnapshot as withSnapshot,
   withSynchronousArtifactPreservingStateSnapshot as withSyncSnapshot,
+  withArtifactPreservingStateReads,
 } from "./openclaw-state-db-readonly.js";
 import {
   getExistingOpenClawStateSchemaPath as existingSchemaPath,
@@ -77,14 +109,18 @@ let source: string;
 let options: { path: string };
 
 beforeEach(() => {
+  mocks.warn.mockClear();
+  mocks.info.mockClear();
   source = makeReadSource(directories, "state-snapshot-admission-").path;
   options = { path: source };
   mocks.forbiddenNative.mockClear();
+  mocks.fork.mockReset();
   mocks.read.mockReset().mockResolvedValue({
     value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
   });
   mocks.assertFresh.mockReset();
   mocks.cleanup.mockReset().mockResolvedValue(true);
+  mocks.closePreparation.mockReset().mockResolvedValue();
   mocks.capture.mockReset().mockImplementation((databasePath: string) => ({
     databasePath,
     identity: {},
@@ -94,33 +130,375 @@ beforeEach(() => {
     location: "/fixture/private.sqlite",
     cleanupAsync: mocks.cleanup,
   });
+  mocks.start.mockReset().mockImplementation(() => {
+    const retained = preparation(() => retained.resolve(privateSource()));
+    return retained.operation;
+  });
 });
 
-it("waits for temporary schema custody before admitting one discovery snapshot", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-  try {
-    mocks.assertFresh.mockImplementation(() => {
-      if (performance.now() < 9_000) {
-        throw new StateDatabaseAdmissionPendingError(source, "temporary schema custody");
+function preparation(service: () => void = () => {}) {
+  const retained = createRetainedOperation<RetainedPreparedSqliteReadOnlyLocation>(service);
+  return {
+    ...retained,
+    operation: {
+      ...retained.operation,
+      startClose: () => observeAsyncFixture(mocks.closePreparation),
+    },
+  };
+}
+
+function readRows(readOptions?: Parameters<typeof readExisting>[2]) {
+  return readExisting(options, { type: "backup.runs" }, readOptions);
+}
+
+function privateSource(): RetainedPreparedSqliteReadOnlyLocation {
+  return {
+    location: "/fixture/private.sqlite",
+    cleanupAsync: mocks.cleanup,
+    startCleanup: () => observeAsyncFixture(mocks.cleanup),
+  };
+}
+
+it("closes an unused lazy scope without source admission, including escaped readers", async () => {
+  let escaped!: ReturnType<typeof AsyncLocalStorage.snapshot>;
+  await withSnapshot(
+    async () => {
+      escaped = AsyncLocalStorage.snapshot();
+      expect(await forkSnapshot(options)).toBeUndefined();
+    },
+    { ...options, lazy: true },
+  );
+  await escaped(expectRetiredAdmission);
+  expectCalls(0, mocks.capture, mocks.prepare, mocks.start, mocks.cleanup, mocks.forbiddenNative);
+});
+
+it("lets a sync reader join the same lazy preparation started by an async reader", async () => {
+  let ready = false;
+  let delivered = false;
+  mocks.start.mockImplementation(() => {
+    const retained = preparation(() => {
+      if (ready) {
+        retained.resolve(privateSource());
       }
     });
-    const operation = vi.fn(async () => "admitted");
-    const read = withSnapshot(operation, {
-      path: source,
-      admissionTimeoutMs: 300_000,
+    return retained.operation;
+  });
+  await withSnapshot(
+    async () => {
+      const reading = readRows().then((result) => {
+        delivered = true;
+        return result;
+      });
+      expect(mocks.start).toHaveBeenCalledOnce();
+      expect(mocks.read).not.toHaveBeenCalled();
+      ready = true;
+      const snapshot = activeSnapshot(options);
+      expect(snapshot?.location).toBe("/fixture/private.sqlite");
+      expect(delivered).toBe(false);
+      await expect(reading).resolves.toMatchObject({ runs: [] });
+      await readRows();
+      expect(activeSnapshot(options)).toBe(snapshot);
+      expect(mocks.read.mock.calls.map(([location]) => location.location)).toEqual([
+        "/fixture/private.sqlite",
+        "/fixture/private.sqlite",
+      ]);
+      expect(mocks.cleanup).not.toHaveBeenCalled();
+    },
+    { ...options, lazy: true },
+  );
+  expectCalls(1, mocks.start, mocks.cleanup, mocks.closePreparation);
+  expectCalls(0, mocks.prepare, mocks.forbiddenNative);
+});
+
+it("honors preservation entered after a lazy report was created", async () => {
+  const identity = { key: "file:7:9" };
+  const refusal = new Error("stop after observing nested preservation admission");
+  mocks.capture.mockReturnValue({ identity, assertCurrent() {} });
+  mocks.start.mockImplementation(() => {
+    const retained = preparation();
+    retained.reject(refusal);
+    return retained.operation;
+  });
+  await expect(
+    withSnapshot(
+      async () => {
+        expect(mocks.start).not.toHaveBeenCalled();
+        await readPreserving(() => "unreachable", options);
+      },
+      { ...options, lazy: true },
+    ),
+  ).rejects.toBe(refusal);
+  expect(mocks.start).toHaveBeenCalledWith(
+    source,
+    expect.objectContaining({
+      preserveSourceArtifacts: true,
+      expectedSourceIdentity: identity,
+    }),
+  );
+  expectCalls(1, mocks.start, mocks.closePreparation);
+  expectCalls(0, mocks.prepare, mocks.forbiddenNative);
+});
+
+it("joins in-flight materialization before lending a private fork", async () => {
+  const retained = preparation();
+  mocks.start.mockReturnValue(retained.operation);
+  const family = { root: "/fixture", main: "1:2:3:4:5:6", wal: "1:7:8:9:10:11" };
+  const fork = { location: "/fixture/fork.sqlite" };
+  mocks.fork.mockResolvedValue(fork);
+  await withSnapshot(
+    async () => {
+      const reading = readRows();
+      const forking = forkSnapshot(options);
+      expect(mocks.fork).not.toHaveBeenCalled();
+      retained.resolve({ ...privateSource(), privateFamily: family });
+      expect(await forking).toBe(fork);
+      await reading;
+      expect(mocks.start).toHaveBeenCalledOnce();
+      expect(mocks.fork.mock.calls[0]?.slice(0, 2)).toEqual(["/fixture/private.sqlite", family]);
+    },
+    { ...options, lazy: true },
+  );
+});
+
+it("drains a cancelled fork before releasing the report source", async () => {
+  const entered = createDeferredCore();
+  const finish = createDeferredCore();
+  const caller = new AsyncWorkScope();
+  const cancelled = new Error("caller cancelled private fork");
+  mocks.prepare.mockResolvedValue({
+    ...privateSource(),
+    privateFamily: { root: "/fixture", main: "1:2:3:4:5:6", wal: null },
+  });
+  mocks.fork.mockImplementation(async (_path, _family, signal: AbortSignal) => {
+    entered.resolve();
+    await finish.promise;
+    signal.throwIfAborted();
+  });
+  const operation = settle(
+    caller.track(() =>
+      withSnapshot(async () => {
+        await forkSnapshot(options);
+      }, options),
+    ),
+  );
+  await entered.promise;
+  caller.beginClose(cancelled);
+  expect(mocks.cleanup).not.toHaveBeenCalled();
+  finish.resolve();
+  expect(await operation).toEqual({ error: cancelled });
+  await caller.drain();
+  expect(mocks.cleanup).toHaveBeenCalledOnce();
+});
+
+it("joins failed eager retained production and preserves its cleanup failure", async () => {
+  const failure = new Error("retained producer failed");
+  const cleanupFailure = new Error("retained producer cleanup failed");
+  const closing = createDeferredCore();
+  const finishClose = createDeferredCore();
+  mocks.start.mockImplementation(() => {
+    const retained = preparation();
+    retained.reject(failure);
+    return retained.operation;
+  });
+  mocks.closePreparation.mockImplementation(async () => {
+    closing.resolve();
+    await finishClose.promise;
+    throw cleanupFailure;
+  });
+  let settled = false;
+  const operation = settle(
+    withArtifactPreservingStateReads(() => withSnapshot(async () => "unreachable", options)),
+  ).then((result) => {
+    settled = true;
+    return result;
+  });
+  await closing.promise;
+  expect(settled).toBe(false);
+  finishClose.resolve();
+  expect(await operation).toMatchObject({
+    error: { cause: failure, errors: [failure, cleanupFailure] },
+  });
+  expectCalls(1, mocks.start, mocks.closePreparation);
+  expectCalls(0, mocks.prepare, mocks.cleanup);
+});
+
+it("keeps current and live reads outside the lazy report source", async () => {
+  await withSnapshot(
+    async () => {
+      await readRows({ current: true });
+      await readRows({ live: true });
+      expect(mocks.start).not.toHaveBeenCalled();
+      await readRows();
+      await readRows({ current: true });
+      expect(mocks.read.mock.calls.map(([location]) => location.location)).toEqual([
+        source,
+        source,
+        "/fixture/private.sqlite",
+        source,
+      ]);
+    },
+    { ...options, lazy: true },
+  );
+  expectCalls(1, mocks.start, mocks.cleanup);
+});
+
+it("rechecks source admission after lazy materialization and cleans rejected bytes", async () => {
+  const failure = new Error("source admission changed during preparation");
+  mocks.capture.mockImplementation((databasePath: string) => ({
+    databasePath,
+    identity: {},
+    assertCurrent() {
+      throw failure;
+    },
+  }));
+  await expect(
+    withSnapshot(async () => activeSnapshot(options), { ...options, lazy: true }),
+  ).rejects.toBe(failure);
+  expectCalls(1, mocks.start, mocks.cleanup, mocks.closePreparation);
+  expectCalls(0, mocks.read, mocks.forbiddenNative);
+});
+
+it("joins lazy preparation close after caller cancellation", async () => {
+  const caller = new AsyncWorkScope();
+  const started = createDeferredCore();
+  const closing = createDeferredCore();
+  const finishClose = createDeferredCore();
+  const cancelled = new Error("caller cancelled lazy preparation");
+  mocks.closePreparation.mockImplementation(async () => {
+    closing.resolve();
+    await finishClose.promise;
+  });
+  mocks.start.mockImplementation((_pathname, value) => {
+    const { signal } = value as { signal: AbortSignal };
+    const retained = preparation(() => {
+      started.resolve();
+      if (signal.aborted) {
+        retained.reject(signal.reason);
+      }
     });
-    const outcome = settle(read);
-    expectCalls(0, mocks.capture, mocks.prepare, operation);
-    await vi.advanceTimersByTimeAsync(9_000);
-    expect(await outcome).toEqual({ value: "admitted" });
-    expectCalls(1, operation, mocks.cleanup);
+    signal.addEventListener("abort", () => retained.operation.service(), { once: true });
+    return retained.operation;
+  });
+  let settled = false;
+  const result = settle(
+    caller.track(() =>
+      withSnapshot(
+        async () => {
+          await readRows();
+        },
+        { ...options, lazy: true },
+      ),
+    ),
+  ).then((value) => {
+    settled = true;
+    return value;
+  });
+  await started.promise;
+  caller.beginClose(cancelled);
+  try {
+    await closing.promise;
+    expect(settled).toBe(false);
   } finally {
-    vi.useRealTimers();
+    finishClose.resolve();
+  }
+  expect(await result).toEqual({ error: cancelled });
+  await caller.drain();
+  expectCalls(1, mocks.start, mocks.closePreparation);
+  expectCalls(0, mocks.read, mocks.cleanup, mocks.forbiddenNative);
+});
+
+it("does not query a canceled read after the shared preparation completes", async () => {
+  const caller = new AbortController();
+  const cancelled = new Error("only this read was cancelled");
+  const retained = preparation();
+  mocks.start.mockReturnValue(retained.operation);
+  await withSnapshot(
+    async () => {
+      const reading = settle(readRows({ signal: caller.signal }));
+      caller.abort(cancelled);
+      retained.resolve(privateSource());
+      expect(await reading).toEqual({ error: cancelled });
+      expect(mocks.read).not.toHaveBeenCalled();
+      await expect(readRows()).resolves.toMatchObject({
+        runs: [],
+      });
+    },
+    { ...options, lazy: true },
+  );
+  expectCalls(1, mocks.start, mocks.read, mocks.cleanup, mocks.closePreparation);
+});
+
+it("bounds sync joining even when the async caller owns the deadline", async () => {
+  const budget = vi.spyOn(snapshotWorker, "readSqliteInspectionBudget").mockReturnValue({
+    timeoutMs: 0,
+    size: "controlled fixture",
+  });
+  mocks.start.mockImplementation((_pathname, value) => {
+    const { signal } = value as { signal: AbortSignal };
+    const retained = preparation(() => {
+      if (signal.aborted) {
+        retained.reject(signal.reason);
+      }
+    });
+    signal.addEventListener("abort", () => retained.operation.service(), { once: true });
+    return retained.operation;
+  });
+  try {
+    await expect(
+      snapshotWorker.withSqliteReadOnlyWorkerScope(
+        () => withSnapshot(async () => activeSnapshot(options), { ...options, lazy: true }),
+        { signal: new AbortController().signal, deadlineOwnedByCaller: true },
+      ),
+    ).rejects.toThrow("SQLite read-only snapshot timed out");
+    expectCalls(1, mocks.start, mocks.closePreparation);
+    expectCalls(0, mocks.read, mocks.cleanup, mocks.forbiddenNative);
+  } finally {
+    budget.mockRestore();
   }
 });
 
+it.each(["schema", "offline"] as const)(
+  "waits for %s custody before admitting one discovery snapshot",
+  async (kind) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const Refusal =
+        kind === "schema"
+          ? StateDatabaseAdmissionPendingError
+          : StateDatabaseOfflineMaintenanceError;
+      mocks.assertFresh.mockImplementation(() => {
+        if (performance.now() < 65_000) {
+          const pid = performance.now() < 30_000 ? 1234 : 5678;
+          throw new Refusal(
+            source,
+            `Offline maintenance by sqlite-maintenance process ${pid}; retry when it finishes.`,
+          );
+        }
+      });
+      const operation = vi.fn(async () => "admitted");
+      const read = withSnapshot(operation, {
+        path: source,
+        admissionTimeoutMs: 300_000,
+      });
+      const outcome = settle(read);
+      expectCalls(0, mocks.capture, mocks.prepare, operation);
+      await vi.advanceTimersByTimeAsync(65_000);
+      expect(await outcome).toEqual({ value: "admitted" });
+      expectCalls(1, mocks.capture, mocks.prepare, operation, mocks.cleanup);
+      expect(mocks.warn.mock.calls).toEqual([
+        [expect.stringMatching(/300 s remaining.*process 1234/)],
+        [expect.stringMatching(/270 s remaining.*process 5678/)],
+        [expect.stringMatching(/240 s remaining.*process 5678/)],
+      ]);
+      expect(mocks.info).toHaveBeenCalledWith(expect.stringContaining("admission acquired"));
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
 it.each([
-  "maintenance",
+  "unclassified",
   "other database",
   "default",
   "exhausted",
@@ -128,11 +506,11 @@ it.each([
   "shutdown",
 ] as const)("refuses %s before preparing discovery bytes", async (kind) => {
   const refusal =
-    kind === "maintenance"
-      ? new Error("genuine offline maintenance")
-      : new StateDatabaseAdmissionPendingError(
+    kind === "unclassified"
+      ? new Error("unclassified ownership refusal")
+      : new StateDatabaseOfflineMaintenanceError(
           kind === "other database" ? path.join(path.dirname(source), "other") : source,
-          "temporary schema custody",
+          "Offline maintenance by sqlite-maintenance process 1234; retry when it finishes.",
         );
   const caller = new AsyncWorkScope();
   const cancelled = new Error("caller closed while waiting for schema custody");
@@ -169,6 +547,11 @@ it.each([
           ? { name: "AbortError" }
           : refusal;
     expect(await outcome).toMatchObject({ error: { cause } });
+    if (kind === "exhausted") {
+      expect(mocks.warn).toHaveBeenLastCalledWith(
+        expect.stringMatching(/wait ended.*process 1234/),
+      );
+    }
     expectCalls(0, mocks.capture, mocks.prepare, operation, mocks.cleanup);
     expect(vi.getTimerCount()).toBe(0);
   } finally {
@@ -191,32 +574,39 @@ it("preserves discovery capture failure without preparing bytes", async () => {
   expectCalls(0, mocks.prepare, operation);
 });
 
-it("retires snapshot admission even when discovery cleanup fails", async () => {
-  mocks.cleanup.mockResolvedValueOnce(false);
-  let escape!: ReturnType<typeof AsyncLocalStorage.snapshot>;
-  await expect(
-    withSnapshot(async () => {
-      escape = AsyncLocalStorage.snapshot();
-      expect(activeSnapshot(options)).toBeDefined();
-      return 1;
-    }, options),
-  ).rejects.toThrow("snapshot cleanup failed");
-  await escape(expectRetiredAdmission);
-  const other = { path: path.join(path.dirname(source), "other") };
-  expect(escape(() => activeSnapshot(other))).toBeUndefined();
-  expectCalls(0, mocks.forbiddenNative, mocks.read);
-});
+it.each([false, true])(
+  "retires snapshot admission even when discovery cleanup fails (lazy=%s)",
+  async (lazy) => {
+    mocks.cleanup.mockResolvedValueOnce(false);
+    let escape!: ReturnType<typeof AsyncLocalStorage.snapshot>;
+    await expect(
+      withSnapshot(
+        async () => {
+          escape = AsyncLocalStorage.snapshot();
+          expect(activeSnapshot(options)).toBeDefined();
+          return 1;
+        },
+        { ...options, lazy },
+      ),
+    ).rejects.toThrow("snapshot cleanup failed");
+    await escape(expectRetiredAdmission);
+    const other = { path: path.join(path.dirname(source), "other") };
+    expect(escape(() => activeSnapshot(other))).toBeUndefined();
+    expectCalls(0, mocks.forbiddenNative, mocks.read);
+  },
+);
 
 // Escaped continuations retain ALS, but admission ends before private bytes are removed.
 async function expectRetiredAdmission() {
   const attempts = {
+    fork: () => forkSnapshot(options),
     getter: () => activeSnapshot(options),
     native: () => readOnly(() => "read", options),
     currentRows: () => readCurrent(() => "read", options),
     currentSnapshot: () => withSyncSnapshot(() => "read", { current: options }),
     nestedSnapshot: () => withSnapshot(async () => "nested", options),
     nestedDisposable: () => withDisposableOpenClawStateReads(source, async () => "nested"),
-    worker: () => readExisting(options, { type: "backup.runs" }),
+    worker: () => readRows(),
   };
   await Promise.all(
     Object.entries(attempts).map(async ([name, run]) => {
@@ -226,7 +616,7 @@ async function expectRetiredAdmission() {
   );
 }
 
-it.each(["snapshot", "disposable"] as const)(
+it.each(["snapshot", "lazy", "disposable"] as const)(
   "drains an admitted %s reader while rejecting escaped new reads, then rejects the closed scope",
   async (kind) => {
     const started = createDeferredCore();
@@ -250,12 +640,12 @@ it.each(["snapshot", "disposable"] as const)(
     let read!: ReturnType<typeof readExisting>;
     const callback = async () => {
       escape = AsyncLocalStorage.snapshot();
-      read = readExisting(options, { type: "backup.runs" });
+      read = readRows();
       await started.promise;
     };
     const closing =
-      kind === "snapshot"
-        ? withSnapshot(callback, options)
+      kind !== "disposable"
+        ? withSnapshot(callback, { ...options, lazy: kind === "lazy" })
         : withDisposableOpenClawStateReads(source, callback);
     await startedClosing.promise;
     try {
@@ -270,7 +660,7 @@ it.each(["snapshot", "disposable"] as const)(
     expect(await read).toEqual(expected.value);
     await escape(expectRetiredAdmission);
     expect(mocks.forbiddenNative).not.toHaveBeenCalled();
-    expect(mocks.cleanup).toHaveBeenCalledTimes(kind === "snapshot" ? 1 : 0);
+    expect(mocks.cleanup).toHaveBeenCalledTimes(kind !== "disposable" ? 1 : 0);
   },
 );
 
@@ -283,9 +673,10 @@ it("keeps captured schema authority while selecting current rows", async () => {
         expect([existingSchemaPath(), location.location]).toEqual([source, source]);
         return { value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } };
       });
-      await expect(
-        readExisting(options, { type: "backup.runs" }, { current: true, context }),
-      ).resolves.toMatchObject({ ok: true, runs: [] });
+      await expect(readRows({ current: true, context })).resolves.toMatchObject({
+        ok: true,
+        runs: [],
+      });
       expect(mocks.read).toHaveBeenCalledOnce();
     }, options),
   );

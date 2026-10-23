@@ -19,7 +19,10 @@ import {
   isGatewayServerTestFile,
 } from "../../test/vitest/vitest.gateway-server-paths.mjs";
 import { startupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
-import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
+import {
+  autoReplyReplySubtreeTestInclude,
+  fullSuiteVitestShards,
+} from "../../test/vitest/vitest.test-shards.mjs";
 import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { uiIsolatedTestFiles } from "../../test/vitest/vitest.ui-isolated-paths.mjs";
 import {
@@ -381,7 +384,6 @@ const COMPACT_NODE_TEST_OWNER_RUNNERS = new Map([
       ["agentic-control-plane-http-plugin-ws", DEFAULT_NODE_TEST_RUNNER],
       ["agentic-control-plane-runtime-ui-tools", DEFAULT_NODE_TEST_RUNNER],
       ["auto-reply-reply-agent-runner", DEFAULT_NODE_TEST_RUNNER],
-      ["core-runtime-infra-heartbeat-runner", DEFAULT_NODE_TEST_RUNNER],
       ["core-runtime-infra-storage-state", DEFAULT_NODE_TEST_RUNNER],
       ["core-runtime-infra-system-runtime", DEFAULT_NODE_TEST_RUNNER],
     ]),
@@ -551,7 +553,6 @@ const COMPACT_SECONDS_HINTS: readonly [
   ["core-runtime-infra-gateway-processes", 1, undefined, 1],
   ["core-runtime-infra-gateway-watch", 1, undefined, 1],
   ["core-runtime-infra-heartbeat-core", 7, undefined, 10],
-  ["core-runtime-infra-heartbeat-runner", 59, undefined, 106],
   ["core-runtime-infra-misc", 14, undefined, 33],
   ["core-runtime-infra-misc-dedupe-disk", 1, undefined, 1],
   ["core-runtime-infra-misc-os", 1, undefined, 1],
@@ -1651,7 +1652,11 @@ const AUTO_REPLY_REPLY_SHARD_RULES = [
 ] as const;
 
 function createAutoReplyReplySplitShards(): NodeTestSplitShard[] {
-  const files = listTrackedTestFiles("src/auto-reply/reply");
+  const files = listScopedOwnerTestFiles({
+    root: "src/auto-reply/reply",
+    include: autoReplyReplySubtreeTestInclude,
+    exclude: databaseWorkerCoreTestFiles,
+  });
   const groups = {
     "auto-reply-reply-agent-runner": [] as string[],
     "auto-reply-reply-commands": [] as string[],
@@ -1882,10 +1887,9 @@ function createCronSplitShards(): NodeTestSplitShard[] {
     .filter((shard) => shard.includePatterns.length > 0);
 }
 
-// Keep precedence: specific owners such as heartbeat-runner precede their broad prefixes.
+// Keep precedence: specific owners precede their broad prefixes.
 const INFRA_SHARD_PREFIXES = [
   ["approval-exec", ["approval", "exec"]],
-  ["heartbeat-runner", ["heartbeat-runner"]],
   ["heartbeat-core", ["heartbeat"]],
   ["outbound-actions", ["outbound/message-action"]],
   ["outbound-core", ["outbound/"]],
@@ -2019,7 +2023,6 @@ function createInfraSplitShards(): NodeTestSplitShard[] {
     "core-runtime-infra-gateway-processes",
     "core-runtime-infra-gateway-watch",
     "core-runtime-infra-heartbeat-core",
-    "core-runtime-infra-heartbeat-runner",
     "core-runtime-infra-misc",
     "core-runtime-infra-misc-dedupe-disk",
     "core-runtime-infra-misc-os",
@@ -4327,9 +4330,29 @@ export function createSelectedNodeTestShardBundles(
     ...packSelectedNodeTestJobs(projected, options.runnerBackend, canonicalFamilies, groupSeconds),
   ];
   for (const job of selectedJobs) {
+    normalizeSingletonNodeTestJob(job);
     job.runner = resolveSelectedNodeTestRunner(job, options.runnerBackend);
   }
   return applyNativeSoloTimings(selectedJobs, options.runnerBackend);
+}
+
+export function normalizeSingletonNodeTestJob<
+  T extends Pick<NodeTestShard, "planConcurrency" | "groups" | "env">,
+>(job: T): T {
+  if (job.planConcurrency === 2 && job.groups?.length === 1) {
+    // Packing is settled: no sibling can overlap this child. Explicit group
+    // limits survive projection; unpinned groups still need the two-worker ceiling.
+    job.planConcurrency = 1;
+    if (job.groups[0]?.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined) {
+      job.env = {
+        ...job.env,
+        OPENCLAW_VITEST_MAX_WORKERS: String(
+          Math.min(2, Number(job.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 2)),
+        ),
+      };
+    }
+  }
+  return job;
 }
 
 function compactPreparationSeconds(

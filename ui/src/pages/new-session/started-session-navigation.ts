@@ -149,7 +149,10 @@ export class StartedSessionNavigation {
     }).options;
     await navigateWithRouteTransition({
       document,
-      from: "new-session",
+      getOutlet: () => context.routeOutlet,
+      // The instant-thread handoff already shows Chat; animating it again on
+      // create acceptance would bump the visible transcript.
+      from: context.router.getState().matches[0]?.routeId,
       to: "chat",
       router: context.router,
       signal: context.lifecycleAbortSignal,

@@ -1,9 +1,16 @@
 import type { SkillsWorkshopReadResult } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import {
+  action,
+  affects,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  onSettled,
+  refresh,
+} from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { projectGateway, projectAgentSelection } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -21,6 +28,7 @@ import { resolveWorkshopAccess } from "./access.ts";
 import { loadWorkshopSnapshot, type WorkshopMutation, type WorkshopSnapshot } from "./api.ts";
 import { SKILL_WORKSHOP_LEARNING_PROMPT } from "./learning-prompt.ts";
 import { resolveWorkshopMode, setWorkshopMode, type SkillWorkshopMode } from "./mode.ts";
+import type { WorkshopViewerResult } from "./view-shared.tsx";
 import {
   archivedWorkshopSkills,
   SkillWorkshopView,
@@ -32,24 +40,28 @@ import {
   type WorkshopViewerTarget,
 } from "./view.tsx";
 
-type WorkshopScope = { client: GatewayBrowserClient; agentId: string };
+type WorkshopScope = {
+  client: GatewayBrowserClient;
+  agentId: string;
+  abort: AbortController;
+  retired: Promise<void>;
+  retire: () => void;
+};
 
 function resolveWorkshopAgentId(context: ApplicationContext): string {
   const snapshot = context.gateway.snapshot;
-  const selectedAgentId = context.agentSelection.state.selectedId;
-  const sessionAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
-  return selectedAgentId
-    ? normalizeAgentId(selectedAgentId)
-    : sessionAgentId
-      ? normalizeAgentId(sessionAgentId)
-      : resolveUiSelectedGlobalAgentId(snapshot);
+  return normalizeAgentId(
+    context.agentSelection.state.selectedId ||
+      parseAgentSessionKey(snapshot.sessionKey)?.agentId ||
+      resolveUiSelectedGlobalAgentId(snapshot),
+  );
 }
 
 class SkillWorkshopPageState {
-  private scope: WorkshopScope | null = null;
+  scope: WorkshopScope | null = null;
+  listRequest: { result: Promise<WorkshopSnapshot | null> } | null = null;
+  viewerRequest: { result: Promise<WorkshopViewerResult | null> } | null = null;
   private snapshot: WorkshopSnapshot | null = null;
-  private loading = false;
-  private error: string | null = null;
   private viewer: WorkshopViewer | null = null;
   private pendingAction: string | null = null;
   private actionError: string | null = null;
@@ -63,24 +75,26 @@ class SkillWorkshopPageState {
 
   constructor(
     private readonly context: ApplicationContext,
-    private readonly revision: () => number,
     private readonly changed: () => void,
   ) {
-    const gateway = projectGateway(context.gateway);
-    const selection = projectAgentSelection(context.agentSelection);
-    const agents = projectAgents(context.agents);
-    const config = projectRuntimeConfig(context.runtimeConfig);
-    // Connection and agent changes retire the workshop scope before issuing Gateway reads.
-    createEffect(
-      () =>
-        [gateway.revision(), selection.revision(), agents.revision(), config.revision()] as const,
-      () => {
+    onSettled(() => {
+      const sync = () => {
         this.syncScope();
         changed();
-      },
-    );
-    onCleanup(() => {
-      this.scope = null;
+      };
+      const stops = [
+        // Connection receipts retire the prior workshop scope before pending operations settle.
+        context.gateway.subscribe(sync),
+        // Selection receipts abort prior-agent work before another workshop action starts.
+        context.agentSelection.subscribe(sync),
+      ];
+      sync();
+      return () => {
+        stops.forEach((stop) => stop());
+        this.scope?.abort.abort();
+        this.scope?.retire();
+        this.scope = null;
+      };
     });
   }
 
@@ -92,9 +106,22 @@ class SkillWorkshopPageState {
     if (client === (this.scope?.client ?? null) && agentId === (this.scope?.agentId ?? null)) {
       return;
     }
-    this.scope = client && agentId ? { client, agentId } : null;
+    this.scope?.abort.abort();
+    this.scope?.retire();
+    const retired = Promise.withResolvers<void>();
+    this.scope =
+      client && agentId
+        ? {
+            client,
+            agentId,
+            abort: new AbortController(),
+            retired: retired.promise,
+            retire: retired.resolve,
+          }
+        : null;
     this.snapshot = null;
-    this.error = null;
+    this.listRequest = null;
+    this.viewerRequest = null;
     this.viewer = null;
     this.pendingAction = null;
     this.actionError = null;
@@ -102,25 +129,20 @@ class SkillWorkshopPageState {
     this.learningError = null;
     this.modeBusy = false;
     this.modeError = null;
-    this.loading = false;
     if (this.scope) {
       void this.load();
     }
   }
 
-  private async load(): Promise<void> {
+  private load(): Promise<void> {
     const scope = this.scope;
     if (!scope) {
-      return;
+      return Promise.resolve();
     }
     void this.context.runtimeConfig.ensureLoaded();
-    this.loading = true;
-    this.error = null;
-    this.changed();
-    try {
-      const snapshot = await loadWorkshopSnapshot(scope.client, scope.agentId);
+    const result = loadWorkshopSnapshot(scope.client, scope.agentId).then((snapshot) => {
       if (this.scope !== scope) {
-        return;
+        return null;
       }
       this.snapshot = snapshot;
       const selected = this.viewer?.target.name;
@@ -145,16 +167,16 @@ class SkillWorkshopPageState {
       } else if (!this.viewer) {
         this.selectFirst();
       }
-    } catch (error) {
-      if (this.scope === scope) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      if (this.scope === scope) {
-        this.loading = false;
-        this.changed();
-      }
-    }
+      this.changed();
+      return snapshot;
+    });
+    this.listRequest = { result };
+    this.changed();
+    // The rendering read presents rejection; callers only join owner settlement.
+    return result.then(
+      () => undefined,
+      () => undefined,
+    );
   }
 
   private async open(target: WorkshopViewerTarget): Promise<void> {
@@ -162,9 +184,7 @@ class SkillWorkshopPageState {
     if (!scope) {
       return;
     }
-    const viewer: WorkshopViewer = { target, status: "loading" };
-    this.viewer = viewer;
-    this.changed();
+    this.viewer = { target };
     const read = (params: Partial<WorkshopViewerTarget>) =>
       scope.client.request<SkillsWorkshopReadResult>("skills.workshop.read", {
         agentId: scope.agentId,
@@ -177,20 +197,21 @@ class SkillWorkshopPageState {
       target.versionId !== undefined &&
       target.filePath === "SKILL.md" &&
       this.snapshot?.list.skills.some((skill) => skill.name === target.name) === true;
-    let next: WorkshopViewer;
-    try {
-      const [result, current] = await Promise.all([
-        read(target),
-        compare ? read({ filePath: "SKILL.md" }) : undefined,
-      ]);
-      next = { target, status: "ready", result, ...(current ? { current: current.content } : {}) };
-    } catch (error) {
-      next = { target, status: "error", error: formatUiError(error) };
-    }
-    if (this.scope === scope && this.viewer?.target === target) {
+    const pending = Promise.all([
+      read(target),
+      compare ? read({ filePath: "SKILL.md" }) : undefined,
+    ]).then(([result, current]) => {
+      if (this.scope !== scope || this.viewer?.target !== target) {
+        return null;
+      }
+      const next = { target, result, ...(current ? { current: current.content } : {}) };
       this.viewer = next;
       this.changed();
-    }
+      return next;
+    });
+    this.viewerRequest = { result: pending };
+    this.changed();
+    await pending.catch(() => undefined);
   }
 
   /** Selects the top row of the current list so the detail pane is never empty. */
@@ -218,9 +239,7 @@ class SkillWorkshopPageState {
       ? undefined
       : list?.archived.find((skill) => skill.name === name)?.versions[0]?.id;
     if (live || versionId) {
-      if (this.tab === "files" || this.viewer?.target.name !== name) {
-        this.tab = this.tab === "history" ? "history" : "instructions";
-      }
+      this.tab = this.tab === "history" ? "history" : "instructions";
       void this.open({ name, filePath: "SKILL.md", versionId });
     }
   };
@@ -239,7 +258,7 @@ class SkillWorkshopPageState {
     this.tab = tab;
     const target = this.viewer?.target;
     if (target) {
-      const files = this.viewer?.status === "ready" ? this.viewer.result.files : [];
+      const files = this.viewer?.result?.files ?? [];
       const support = files.find((file) => file !== "SKILL.md");
       if (tab === "files" && target.filePath === "SKILL.md" && support) {
         void this.open({ name: target.name, filePath: support, versionId: target.versionId });
@@ -250,7 +269,7 @@ class SkillWorkshopPageState {
     this.changed();
   };
 
-  private readonly mutate = async (mutation: WorkshopMutation, key: string) => {
+  readonly mutate = async (mutation: WorkshopMutation, key: string) => {
     const scope = this.scope;
     const access = resolveWorkshopAccess(this.context.gateway.snapshot);
     const allowed =
@@ -289,8 +308,9 @@ class SkillWorkshopPageState {
     }
   };
 
-  private readonly setMode = async (mode: SkillWorkshopMode) => {
+  readonly setMode = async (mode: SkillWorkshopMode) => {
     const context = this.context;
+    const scope = this.scope;
     if (this.modeBusy || !resolveWorkshopAccess(context.gateway.snapshot).canSetMode) {
       return;
     }
@@ -298,14 +318,35 @@ class SkillWorkshopPageState {
     this.modeError = null;
     this.changed();
     try {
-      this.modeError = await setWorkshopMode(context.runtimeConfig, mode);
+      const error = await setWorkshopMode(context.runtimeConfig, mode);
+      if (this.scope === scope) {
+        this.modeError = error;
+      }
+    } catch (error) {
+      if (this.scope === scope) {
+        this.modeError = formatUiError(error);
+      }
     } finally {
-      this.modeBusy = false;
-      this.changed();
+      if (this.scope === scope) {
+        this.modeBusy = false;
+        this.changed();
+      }
     }
   };
 
-  private readonly learn = async () => {
+  presentationFailed(kind: "mutation" | "mode" | "learning", error: unknown) {
+    const message = formatUiError(error);
+    if (kind === "mutation") {
+      this.actionError = message;
+    } else if (kind === "mode") {
+      this.modeError = message;
+    } else {
+      this.learningError = message;
+    }
+    this.changed();
+  }
+
+  readonly learn = async () => {
     const context = this.context;
     const scope = this.scope;
     if (!scope || this.learningBusy) {
@@ -334,7 +375,10 @@ class SkillWorkshopPageState {
     this.changed();
     const createdAt = Date.now();
     try {
-      const result = await context.sessions.createResult(params, { reconciliation: "background" });
+      const result = await context.sessions.createResult(params, {
+        reconciliation: "background",
+        signal: scope.abort.signal,
+      });
       if (context.gateway.snapshot.client !== client) {
         return;
       }
@@ -378,6 +422,10 @@ class SkillWorkshopPageState {
           navigationKey: result.key,
         }).options,
       );
+    } catch (error) {
+      if (isCurrent()) {
+        this.learningError = formatUiError(error);
+      }
     } finally {
       if (isCurrent()) {
         this.learningBusy = false;
@@ -387,17 +435,15 @@ class SkillWorkshopPageState {
   };
 
   viewProps() {
-    this.revision();
     const context = this.context;
     return {
       context,
       agentId: this.scope?.agentId ?? null,
       access: resolveWorkshopAccess(context.gateway.snapshot),
       snapshot: this.snapshot,
-      loading: this.loading,
-      error:
-        this.error ??
-        (context.runtimeConfig.state.configSnapshot ? null : context.runtimeConfig.state.lastError),
+      error: context.runtimeConfig.state.configSnapshot
+        ? null
+        : context.runtimeConfig.state.lastError,
       viewer: this.viewer,
       filter: this.filter,
       sort: this.sort,
@@ -415,9 +461,6 @@ class SkillWorkshopPageState {
       onRetry: () => void this.load(),
       onSelectSkill: this.selectSkill,
       onOpen: (target: WorkshopViewerTarget) => void this.open(target),
-      onMutate: (mutation: WorkshopMutation, key: string) => void this.mutate(mutation, key),
-      onModeChange: (mode: SkillWorkshopMode) => void this.setMode(mode),
-      onLearn: () => void this.learn(),
       onFilter: this.setFilter,
       onSort: (sort: WorkshopSort) => {
         this.sort = sort;
@@ -429,14 +472,120 @@ class SkillWorkshopPageState {
 }
 
 export function SkillWorkshopPage() {
+  const context = useApplication();
+  const agents = projectAgents(context.agents);
+  const runtimeConfig = projectRuntimeConfig(context.runtimeConfig);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const state = new SkillWorkshopPageState(useApplication(), revision, () => {
+  const state = new SkillWorkshopPageState(context, () => {
     setRevision((value) => value + 1);
   });
-  const view = createMemo(() => state.viewProps());
+  const ownerView = createMemo(() => {
+    revision();
+    agents.read();
+    runtimeConfig.read();
+    return state.viewProps();
+  });
+  const scope = createMemo(() => {
+    revision();
+    return state.scope;
+  });
+  const listRequest = createMemo(() => {
+    revision();
+    return state.listRequest;
+  });
+  const viewerRequest = createMemo(() => {
+    revision();
+    return state.viewerRequest;
+  });
+  const list = createMemo(() => listRequest()?.result ?? Promise.resolve(null));
+  const viewer = createMemo(() => viewerRequest()?.result ?? Promise.resolve(null));
+  const mode = createMemo(() => ownerView().mode);
+  const presentation = createMemo(() => {
+    const currentScope = scope();
+    const [pendingAction, setPendingAction] = createOptimistic<string | null>(null);
+    const [modeBusy, setModeBusy] = createOptimistic(false);
+    const [learningBusy, setLearningBusy] = createOptimistic(false);
+    const [expectedMode, setExpectedMode] = createOptimistic(() => mode());
+    return {
+      currentScope,
+      pendingAction,
+      setPendingAction,
+      modeBusy,
+      setModeBusy,
+      learningBusy,
+      setLearningBusy,
+      expectedMode,
+      setExpectedMode,
+    };
+  });
+  const present = action(function* (
+    captured: ReturnType<typeof presentation>,
+    result: Promise<void>,
+    kind: "mutation" | "mode" | "learning",
+    expected?: string,
+  ) {
+    if (state.scope === captured.currentScope) {
+      if (kind === "mutation") {
+        captured.setPendingAction(expected ?? null);
+        affects(list);
+      } else if (kind === "mode") {
+        captured.setModeBusy(true);
+        captured.setExpectedMode(expected === "auto" ? "auto" : "off");
+      } else {
+        captured.setLearningBusy(true);
+      }
+    }
+    yield Promise.race([result, captured.currentScope?.retired ?? Promise.resolve()]);
+    if (state.scope === captured.currentScope) {
+      if (kind === "mutation") {
+        // The owner already reloaded; this only reconciles its read receipt.
+        yield refresh(list).catch(() => undefined);
+      } else if (kind === "mode") {
+        yield refresh(mode);
+      }
+    }
+  });
+  const run = async (
+    kind: "mutation" | "mode" | "learning",
+    operation: () => Promise<void>,
+    expected?: string,
+  ) => {
+    const captured = presentation();
+    const result = operation();
+    // Land synchronous owner admission before joining the presentation transition.
+    await Promise.resolve();
+    try {
+      await present(captured, result, kind, expected);
+    } catch (error) {
+      if (state.scope === captured.currentScope) {
+        state.presentationFailed(kind, error);
+      }
+    }
+  };
+  const view = createMemo(() => {
+    return {
+      ...ownerView(),
+      get pendingAction() {
+        return presentation().pendingAction() ?? ownerView().pendingAction;
+      },
+      get modeBusy() {
+        return presentation().modeBusy() || ownerView().modeBusy;
+      },
+      get learningBusy() {
+        return presentation().learningBusy() || ownerView().learningBusy;
+      },
+      get mode() {
+        return presentation().expectedMode();
+      },
+      onMutate: (mutation: WorkshopMutation, key: string) =>
+        void run("mutation", () => state.mutate(mutation, key), key),
+      onModeChange: (next: SkillWorkshopMode) => void run("mode", () => state.setMode(next), next),
+      onLearn: () => void run("learning", state.learn),
+    };
+  });
   return (
     <openclaw-skill-workshop-page>
-      <SkillWorkshopView view={view} />
+      <SkillWorkshopView view={view} reads={{ listRequest, list, viewerRequest, viewer }} />
     </openclaw-skill-workshop-page>
   );
 }

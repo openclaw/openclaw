@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, vi } from "vitest";
+import { expect, vi, type TestContext } from "vitest";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -8,10 +9,12 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
+import { createTestApprovalFixture } from "./exec-approval-manager.test-support.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
 import type { NodeRegistry, NodeSession } from "./node-registry.js";
 import {
   createApprovalClient,
+  createApprovalClientLookup,
   waitForApprovalRequested,
 } from "./server-methods/approval-request.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -20,7 +23,7 @@ export const DEMO_PLUGIN_ID = "demo";
 export const DEMO_COMMAND = "demo.read";
 export const DEMO_PARAMS = { path: "/tmp/x" };
 
-export const createNodeSession = (): NodeSession => ({
+export const createNodeSession = (overrides: Partial<NodeSession> = {}): NodeSession => ({
   nodeId: "node-1",
   connId: "conn-1",
   client: {} as NodeSession["client"],
@@ -32,6 +35,7 @@ export const createNodeSession = (): NodeSession => ({
   nodePluginTools: [],
   nodeSkills: [],
   connectedAtMs: 0,
+  ...overrides,
 });
 
 export const nodeCommandsConfig = (commands: { allow?: string[]; deny?: string[] }) => ({
@@ -79,6 +83,63 @@ export function createContext({
 
 export const createOperatorClient = (connId = "conn-requester"): GatewayClient =>
   createApprovalClient({ connId, clientId: "client-owner", deviceId: "device-owner" });
+
+export function createRuntimeClient(
+  runId: string,
+  sessionKey = "agent:main:test",
+  authority = { lifecycleGeneration: "generation", claimId: "claim" },
+): GatewayClient {
+  const operationalRunInstance = createOperationalRunInstanceRef(runId);
+  return {
+    ...createOperatorClient(),
+    internal: {
+      agentRuntimeIdentity: {
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey,
+        operationalRunInstance,
+        delegatedAuthority: {
+          kind: "local",
+          operationalRunInstance,
+          ...authority,
+        },
+      },
+    },
+  };
+}
+
+export function createPolicyApprovalFixture(
+  test: TestContext,
+  options: Omit<
+    NonNullable<Parameters<typeof createTestApprovalFixture<PluginApprovalRequestPayload>>[1]>,
+    "approvalKind"
+  > = {},
+  contextOptions: ContextOptions = {},
+) {
+  const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(test, {
+    approvalKind: "plugin",
+    ...options,
+  });
+  const { context, invoke } = createContext({
+    pluginApprovalManager: fixture.manager,
+    getApprovalClientConnIds: createApprovalClientLookup([
+      createOperatorClient("conn-owner-approval"),
+    ]),
+    ...contextOptions,
+  });
+  return {
+    ...fixture,
+    context,
+    invoke,
+    request: (
+      client: GatewayClient | null = createOperatorClient(),
+      overrides: Partial<Parameters<typeof applyPluginNodeInvokePolicy>[0]> = {},
+    ) =>
+      expectSinglePendingApproval(fixture.manager, context, () =>
+        fixture.track(invokeDemoPolicy(context, client, overrides)),
+      ),
+  };
+}
 
 export type NodeInvokePolicyRegistration = PluginRegistry["nodeInvokePolicies"][number];
 type NodeInvokePolicyHandler = NodeInvokePolicyRegistration["policy"]["handle"];
@@ -135,6 +196,7 @@ export function setDangerousDemoCommandRegistry(policies: NodeInvokePolicyRegist
 export const invokeDemoPolicy = async (
   context: GatewayRequestContext,
   client: GatewayClient | null = null,
+  overrides: Partial<Parameters<typeof applyPluginNodeInvokePolicy>[0]> = {},
 ) =>
   await applyPluginNodeInvokePolicy({
     context,
@@ -142,6 +204,7 @@ export const invokeDemoPolicy = async (
     nodeSession: createNodeSession(),
     command: DEMO_COMMAND,
     params: DEMO_PARAMS,
+    ...overrides,
   });
 
 export async function expectSinglePendingApproval<T>(

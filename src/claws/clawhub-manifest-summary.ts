@@ -1,8 +1,7 @@
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
-import type { ClawHubClawManifestSummary } from "../infra/clawhub-packages.js";
 import { ClawHubSourceError } from "./clawhub-source-artifact.js";
 
-export function parseClawManifestSummary(value: unknown): ClawHubClawManifestSummary {
+export function parseClawManifestSummary(value: unknown): { name?: string; description?: string } {
   if (!isJsonObject(value) || value.schemaVersion !== 1) {
     throw new ClawHubSourceError(
       "clawhub_manifest_summary_missing",
@@ -34,15 +33,7 @@ export function parseClawManifestSummary(value: unknown): ClawHubClawManifestSum
     );
   }
   return {
-    schemaVersion: 1,
-    agent: {
-      id: agent.id,
-      ...(typeof agent.name === "string" ? { name: agent.name } : {}),
-      ...(typeof agent.description === "string" ? { description: agent.description } : {}),
-    },
-    workspace: { bootstrapFiles: workspace.bootstrapFiles, fileCount: workspace.fileCount },
-    packages: { skillCount: packages.skillCount, pluginCount: packages.pluginCount },
-    mcpServerCount: value.mcpServerCount,
-    cronJobCount: value.cronJobCount,
+    ...(typeof agent.name === "string" ? { name: agent.name } : {}),
+    ...(typeof agent.description === "string" ? { description: agent.description } : {}),
   };
 }

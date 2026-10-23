@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -11,6 +10,7 @@ import { appendTranscriptEvent } from "../config/sessions/session-accessor.trans
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -25,12 +25,13 @@ import {
   scope,
   target,
 } from "./session-activity-summaries.test-support.js";
+import * as summarySource from "./session-activity-summary-source.js";
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import type { defaultCompleteModel } from "./session-observer-model.js";
+import * as observerModel from "./session-observer-model.js";
 
 let testState: OpenClawTestState;
-let testSignal: AbortSignal;
 let cfg: OpenClawConfig;
 let service: SessionActivitySummaryService;
 const recap = "Completed the requested work.";
@@ -47,20 +48,12 @@ const createService = () =>
     scheduler: createTestGatewayScheduler(),
     getConfig: () => cfg,
     onChanged: changed,
-    prepareModel: async () => preparedActivityRecapModel,
-    completeModel: complete,
   });
 const ensure = async (entry = read()) => {
-  const published = createDeferred();
-  changed.mockImplementation(() => {
-    if (view()?.state === "current") {
-      published.resolve();
-    }
-  });
-  const result = await service.ensure(target, entry);
-  await withinTest(published.promise, testSignal);
-  // The publication probe reads fixture state synchronously; detach it before SQL observation.
-  changed.mockReset();
+  const work = new AsyncWorkScope();
+  const result = await work.track(() => service.ensure(target, entry));
+  await work.drain();
+  expect(view()?.state).toBe("current");
   return result;
 };
 const expectPrompt = (call: number, previousRecap: string, notes: string[]) => {
@@ -71,17 +64,19 @@ const expectPrompt = (call: number, previousRecap: string, notes: string[]) => {
   });
 };
 
-beforeEach(async ({ signal }) => {
-  testSignal = signal;
+beforeEach(async () => {
   cfg = { agents: { defaults: { utilityModel: "test/utility" } } };
   testState = await createActivityRecapSessionFixture(cfg);
   complete.mockReset().mockResolvedValue(activityRecapResult(recap));
+  vi.spyOn(observerModel, "defaultPrepareModel").mockResolvedValue(preparedActivityRecapModel);
+  vi.spyOn(observerModel, "defaultCompleteModel").mockImplementation(complete);
   changed.mockReset();
   service = createService();
 });
 afterEach(async () => {
   await service.dispose();
   await testState.cleanup();
+  vi.restoreAllMocks();
 });
 
 it("keeps committed recap progress across stale requests and summarizes new activity once", async () => {
@@ -106,15 +101,20 @@ it("keeps committed recap progress across stale requests and summarizes new acti
   await ensure(requestedEntry);
   expectPrompt(1, "Earlier work.", []);
 
+  changed.mockClear();
+  const sourceReads = vi.spyOn(summarySource, "readActivitySummarySource");
   for (let request = 0; request < 3; request += 1) {
     const response = await ensure(requestedEntry);
     expect(response.text).toBe(recap);
     expect(complete).toHaveBeenCalledTimes(1);
   }
+  expect(changed).not.toHaveBeenCalled();
+  expect(sourceReads).not.toHaveBeenCalled();
 
   await messages(1, 1);
   await ensure(requestedEntry);
   expectPrompt(2, recap, ["assistant: Outcome 1"]);
+  expect(sourceReads).toHaveBeenCalledTimes(1);
   await ensure(requestedEntry);
   expect(complete).toHaveBeenCalledTimes(2);
   expect(read()?.activitySummary).toMatchObject({ coveredMessages: 2, totalMessages: 2 });

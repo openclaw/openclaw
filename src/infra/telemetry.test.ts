@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createConfigIO } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as officialCatalog from "../plugins/official-external-plugin-catalog.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as pluginRuntime from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
@@ -41,12 +42,12 @@ function payloadFor(config: OpenClawConfig = {}, surface: "gateway" | "cli" = "g
   return buildTelemetryPayload(config, { surface });
 }
 
-function checkUpdate(config: OpenClawConfig = {}, nowMs = NOW, fetchImpl = globalThis.fetch) {
-  return checkTelemetryUpdate(() => config, {
-    surface: "gateway",
-    fetchImpl,
-    nowMs,
-  });
+function checkUpdate(config: OpenClawConfig = {}, nowMs = NOW, fetchImpl?: typeof fetch) {
+  vi.spyOn(Date, "now").mockReturnValue(nowMs);
+  if (fetchImpl) {
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
+  }
+  return checkTelemetryUpdate(() => config);
 }
 
 function providerConfig(baseUrl: string, apiKey?: string) {
@@ -55,6 +56,10 @@ function providerConfig(baseUrl: string, apiKey?: string) {
     ...(apiKey ? { apiKey } : {}),
     models: [],
   };
+}
+
+function expectState(lastPingAt: number, latestVersion = update.version, note?: string) {
+  expect(readState()).toEqual({ lastPingAt, latestVersion, ...(note ? { note } : {}) });
 }
 
 function installPluginRegistry(...plugins: Parameters<typeof createPluginRecord>[0][]): void {
@@ -117,6 +122,8 @@ describe("anonymous telemetry", () => {
         OPENCLAW_NIX_MODE: undefined,
         OPENCLAW_NO_AUTO_UPDATE: undefined,
         OPENCLAW_TELEMETRY_ENDPOINT: undefined,
+        VITEST: undefined,
+        NODE_ENV: undefined,
       },
     });
     installPluginRegistry(
@@ -158,12 +165,9 @@ describe("anonymous telemetry", () => {
     expect(serialized).not.toMatch(
       /"(?:id|accountId|userId|machineId|installId|token|apiKey|secret|password|prompt|message|host|hostname|baseUrl|path|email|models)"\s*:/iu,
     );
-    expect(serialized).not.toContain("private-");
-    expect(serialized).not.toContain("acme-internal-crm");
-    expect(serialized).not.toContain("acme-internal-workflows");
-    expect(serialized).not.toContain("acme-llm");
-    expect(serialized).not.toContain("example.invalid");
-    expect(serialized).not.toContain("@");
+    expect(serialized).not.toMatch(
+      /private-|acme-internal-(?:crm|workflows)|acme-llm|example\.invalid|@/u,
+    );
     expect(serialized).not.toContain(testState.stateDir);
     expect(payload.features.sessionsLast24h).toBeGreaterThanOrEqual(0);
   });
@@ -195,8 +199,7 @@ describe("anonymous telemetry", () => {
       plugins: ["diagnostics-otel", "whatsapp"],
       pluginsEnabled: 2,
     });
-    expect(JSON.stringify(payload)).not.toContain("private-");
-    expect(JSON.stringify(payload)).not.toContain("+15555550123");
+    expect(JSON.stringify(payload)).not.toMatch(/private-|\+15555550123/u);
   });
 
   it("classifies configured channels by their loaded plugin owner", async () => {
@@ -215,6 +218,54 @@ describe("anonymous telemetry", () => {
       pluginsEnabled: 2,
     });
     expect(JSON.stringify(payload)).not.toContain("acme-internal-crm");
+  });
+
+  it.each([
+    { id: "bundled-plugin", origin: "bundled" as const, expected: ["bundled-plugin"] },
+    {
+      id: "official-plugin",
+      origin: "global" as const,
+      trustedOfficialInstall: true,
+      expected: ["official-plugin"],
+    },
+    {
+      id: "opencode",
+      origin: "workspace" as const,
+      packageName: "@openclaw/opencode-provider",
+      expected: ["opencode"],
+    },
+    {
+      id: "opencode",
+      origin: "workspace" as const,
+      packageName: "@acme/private",
+      expected: [],
+    },
+  ])("reports only a public identity for $id from $origin", async ({ expected, ...plugin }) => {
+    installPluginRegistry(plugin);
+    const payload = await payloadFor();
+    expect(payload.features.plugins).toEqual(expected);
+    expect(payload.features.pluginsEnabled).toBe(1);
+    expect(JSON.stringify(payload)).not.toContain("@acme/private");
+  });
+
+  it("never consults the hosted catalog when reporting private plugin identities", async () => {
+    const hostedCatalog = vi
+      .spyOn(officialCatalog, "loadConfiguredHostedOfficialExternalPluginCatalogEntries")
+      .mockResolvedValue({
+        source: "bundled-fallback",
+        entries: [{ id: "acme-internal-crm", name: "@acme/internal-crm" }],
+        error: "hosted fixture",
+      });
+    installPluginRegistry({
+      id: "acme-internal-crm",
+      origin: "global",
+      packageName: "@acme/internal-crm",
+    });
+    const payload = await payloadFor();
+    expect(payload.features.plugins).toEqual([]);
+    expect(payload.features.pluginsEnabled).toBe(1);
+    expect(JSON.stringify(payload)).not.toContain("acme-internal-crm");
+    expect(hostedCatalog).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -293,11 +344,7 @@ describe("anonymous telemetry", () => {
 
     unblock();
     await expect(checkUpdate({}, NOW + 240_000)).resolves.toEqual(announced);
-    expect(readState()).toEqual({
-      lastPingAt: NOW,
-      latestVersion: announced.version,
-      note: announced.note,
-    });
+    expectState(NOW, announced.version, announced.note);
     await expect(checkUpdate({}, NOW + DAY_MS - 1)).resolves.toEqual(announced);
     expect(mockHttp.requests()).toHaveLength(1);
 
@@ -305,10 +352,7 @@ describe("anonymous telemetry", () => {
       version: "2026.8.25",
     });
     expect(mockHttp.requests()).toHaveLength(2);
-    expect(readState()).toEqual({
-      lastPingAt: NOW + DAY_MS,
-      latestVersion: "2026.8.25",
-    });
+    expectState(NOW + DAY_MS, "2026.8.25");
   });
 
   it.each(["endpoint", "state directory"] as const)(
@@ -349,10 +393,7 @@ describe("anonymous telemetry", () => {
 
     await expect(checkUpdate({}, NOW + 120_000, fetchImpl)).resolves.toEqual(update);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(readState()).toEqual({
-      lastPingAt: NOW,
-      latestVersion: "2026.8.24",
-    });
+    expectState(NOW);
   });
 
   it("does not replace a newer persisted success with a retained older response", async () => {
@@ -410,8 +451,10 @@ describe("anonymous telemetry", () => {
     expect(readState()).toEqual(newerState);
   });
 
-  it("sends only an anonymous GET when explicitly opted out", async () => {
-    const config = createFeatureConfig(false);
+  it.each(["opt-out", "do-not-track"])("sends only an anonymous GET for %s", async (mode) => {
+    if (mode === "do-not-track") {
+      setTestEnvValue("DO_NOT_TRACK", "true");
+    }
     mockHttp.intercept({
       url: TELEMETRY_URL,
       method: "GET",
@@ -421,7 +464,7 @@ describe("anonymous telemetry", () => {
       reply: { json: update },
     });
 
-    await expect(checkUpdate(config)).resolves.toEqual(update);
+    await expect(checkUpdate(createFeatureConfig(mode !== "opt-out"))).resolves.toEqual(update);
 
     expect(mockHttp.requests()).toHaveLength(1);
   });
@@ -438,19 +481,6 @@ describe("anonymous telemetry", () => {
     });
 
     await expect(checkUpdate(config)).resolves.toEqual(update);
-
-    expect(mockHttp.requests()).toHaveLength(1);
-  });
-
-  it("DO_NOT_TRACK=true suppresses feature stats but keeps update checks", async () => {
-    setTestEnvValue("DO_NOT_TRACK", "true");
-    mockHttp.intercept({
-      url: TELEMETRY_URL,
-      method: "GET",
-      reply: { json: update },
-    });
-
-    await expect(checkUpdate(createFeatureConfig())).resolves.toEqual(update);
 
     expect(mockHttp.requests()).toHaveLength(1);
   });
@@ -482,10 +512,9 @@ describe("anonymous telemetry", () => {
     expect(mockHttp.requests()).toHaveLength(1);
   });
 
-  it("never accesses the network in a test environment without an injected fetch", async () => {
-    await expect(
-      checkTelemetryUpdate(() => ({}), { surface: "gateway", nowMs: NOW }),
-    ).resolves.toBeNull();
+  it("never accesses the network in a test environment", async () => {
+    setTestEnvValue("VITEST", "true");
+    await expect(checkTelemetryUpdate(() => ({}))).resolves.toBeNull();
 
     expect(mockHttp.requests()).toHaveLength(0);
   });
@@ -552,10 +581,7 @@ describe("anonymous telemetry", () => {
     await expect(checkUpdate({}, NOW + DAY_MS + 1, fetchImpl)).resolves.toEqual(update);
     expect(canceled).toBe(true);
     expect(enqueuedBytes).toBeLessThan(32 * chunk.length);
-    expect(readState()).toEqual({
-      lastPingAt: NOW,
-      latestVersion: "2026.8.24",
-    });
+    expectState(NOW);
     await expect(checkUpdate({}, NOW + DAY_MS + 30_001, fetchImpl)).resolves.toEqual(update);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });

@@ -243,6 +243,19 @@ describe("gateway caller context wrapper", () => {
     expect(isToolWrappedWithBeforeToolCallHook(wrapped)).toBe(true);
   });
 
+  it("retains the source receiver while executing in the admitted caller context", async () => {
+    const tool = makeTool();
+    tool.execute = async function () {
+      expect(this).toBe(tool);
+      expect(getCaller()).toEqual(agentCaller);
+      return { content: [], details: {} };
+    };
+
+    const wrapped = wrapToolWithGatewayCallerIdentity(tool, agentCaller);
+    await wrapped.execute("caller-context", {});
+    expect(getCaller()).toBeUndefined();
+  });
+
   it("applies caller identity to private preparation and execution", async () => {
     const seen: unknown[] = [];
     const tool = attachInternalToolExecutionPreparer(makeTool(), async () => {

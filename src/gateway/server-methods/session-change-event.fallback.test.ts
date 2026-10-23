@@ -16,6 +16,7 @@ import { getSessionRepositoryWorkspaceStore } from "../../state/session-reposito
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import type { SerializedGatewayFrame } from "../serialized-json.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createGatewayConnectionState } from "../server-connection-state.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
@@ -47,7 +48,6 @@ afterEach(async () => {
 it("coalesces prepared keyless refreshes without repeating prepared facts", async () => {
   const context = {
     getRuntimeConfig: () => ({}),
-    chatAbortControllers: new Map(),
     getSessionEventSubscriberConnIds: () => new Set(["listener"]),
     broadcastToConnIds: vi.fn(),
   } satisfies Parameters<typeof emitSessionsChanged>[0];
@@ -109,7 +109,7 @@ it.each(["ready", "preparation"] as const)(
       const client = createTestGatewayClient(request);
       const { sessions, emitEvent } = createSessionCapabilityHarness(client.request.bind(client));
       const frames: unknown[] = [];
-      const send = vi.fn((frame: string | Buffer) => {
+      const send = vi.fn((frame: string | Buffer | SerializedGatewayFrame) => {
         const decoded = JSON.parse(frame.toString());
         frames.push(decoded);
         emitEvent(decoded);
@@ -167,7 +167,6 @@ it.each(["ready", "preparation"] as const)(
       const context = {
         ...bindSessionRowProjection({}, () => projection),
         broadcastToConnIds: broadcast,
-        chatAbortControllers: connection.chatAbortControllers,
         getRuntimeConfig: () => cfg,
         getSessionEventSubscriberConnIds: () => new Set(["conn-1", "no-read"]),
       };
@@ -272,7 +271,6 @@ it.each(["main", "global"])(
       const context = {
         ...bindSessionRowProjection({}, () => projection),
         broadcastToConnIds: broadcast,
-        chatAbortControllers: new Map(),
         getRuntimeConfig: () => cfg,
         getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
       };

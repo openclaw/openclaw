@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { workerTaskPoolEntrypoints } from "../infra/worker-task-pool-runtime.test-support.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
@@ -15,54 +15,28 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-/**
- * Dispatches a real task to a pool worker and lets the host deadline abort it:
- * the input factory resolves immediately (so the task is posted to the worker
- * over IPC), then the worker blocks on Atomics.wait, so the pool's own deadline
- * timer (worker-task-pool-core.ts:525) aborts the dispatched task with the
- * production WorkerTaskError("worker task timed out", "timeout").
- *
- * The pool is warmed with a settled task first so worker boot has already
- * finished; otherwise the worker's first dispatch can lag the fake deadline on
- * a loaded host and the check would abort a queued, not dispatched, task.
- *
- * The caller must assert the returned view proves the worker started the task
- * (view[0] > 0) outside the fallback owner, which would otherwise swallow a
- * failing dispatch proof as an ordinary candidate error.
- */
+// Warm the worker, then await its IPC notification before advancing the deadline.
+// The caller must assert view[0] outside fallback, which could swallow a failed assertion.
 async function runPoolTaskWithDeadline(
   pool: WorkerTaskPool<unknown, { label: string }>,
 ): Promise<{ deadline: Error & { code?: string }; view: Int32Array }> {
   await pool.run({ label: "warm" }, {});
   const counters = new SharedArrayBuffer(8);
   const view = new Int32Array(counters);
-  const release = () => Atomics.store(view, 1, 1);
-  // The worker notifies the host before it blocks on the fake deadline; awaiting
-  // that signal (a real IPC notification, not a bounded setImmediate poll) proves
-  // the task genuinely reached a worker before the controlled clock advances, so
-  // the deadline can never fire on host-side preparation however the host is
-  // scheduled.
   const started = createDeferredCore();
   const pending = pool.run(
     () => ({ label: "hang-until-deadline", wait: true, counters, notifications: 1 }),
-    {
-      timeoutMs: 50,
-      onNotification: () => started.resolve(),
-    },
+    { timeoutMs: 50, onNotification: () => started.resolve() },
   );
   // Handle the expected rejection before advancing timers yields to the event loop.
   const deadline = pending.catch((value: unknown) => value);
   await started.promise;
   try {
     await vi.advanceTimersByTimeAsync(50);
-    return {
-      deadline: (await deadline) as Error & { code?: string },
-      view,
-    };
+    return { deadline: (await deadline) as Error & { code?: string }, view };
   } finally {
-    // Wake the blocked worker so pool close can retire it cleanly after the
-    // deadline has already cancelled the task.
-    release();
+    // Release the blocked worker for pool cleanup after cancellation.
+    Atomics.store(view, 1, 1);
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -79,65 +53,56 @@ const fallbackOptions = {
   lane: "worker-deadline-lane",
 };
 
-describe("model fallback with a real local worker deadline", () => {
-  it("stops configured fallback when a real pool deadline fires during preparation", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const pool = new WorkerTaskPool<unknown, { label: string }>({ workerUrl, maxWorkers: 1 });
-    pools.push(pool);
-    let dispatched: Int32Array | undefined;
-    let deadline: (Error & { code?: string }) | undefined;
-    try {
-      const run = vi.fn<() => Promise<string>>().mockImplementation(async () => {
-        if (run.mock.calls.length === 1) {
-          const outcome = await runPoolTaskWithDeadline(pool);
-          dispatched = outcome.view;
-          deadline = outcome.deadline;
-          throw outcome.deadline;
-        }
-        return "fallback candidate ran";
-      });
-      const attempt = runWithModelFallback({ ...fallbackOptions, run });
-      // Attach the handler before awaiting so the rejection the deadline
-      // triggers is always handled, then let the owner reach the candidate
-      // attempt (microtask-only path when cfg is unset). The deadline fires
-      // inside runPoolTaskWithDeadline after the task is genuinely dispatched.
-      const resultPromise = attempt.then(
-        (value) => ({ ok: true as const, value }),
-        (value: unknown) => ({ ok: false as const, value }),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      const result = await resultPromise;
-      // Assert every proof outside the fallback owner, so a swallowed candidate
-      // assertion cannot fake the real-dispatch or attribution claims.
-      expect(dispatched?.[0]).toBeGreaterThan(0);
-      expect(deadline).toBeDefined();
-      expect(findLocalWorkerTaskTimeout(deadline)).toBe(deadline);
-      expect(resolveModelFallbackError(deadline)).toEqual({
-        kind: "coordination",
-        error: deadline,
-      });
-      expect(result).toEqual({ ok: false, value: deadline });
-      expect(run).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
+it("stops configured fallback when a real pool deadline fires during preparation", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const pool = new WorkerTaskPool<unknown, { label: string }>({ workerUrl, maxWorkers: 1 });
+  pools.push(pool);
+  let dispatched: Int32Array | undefined;
+  let deadline: (Error & { code?: string }) | undefined;
+  try {
+    const run = vi.fn<() => Promise<string>>().mockImplementation(async () => {
+      if (run.mock.calls.length === 1) {
+        const outcome = await runPoolTaskWithDeadline(pool);
+        dispatched = outcome.view;
+        deadline = outcome.deadline;
+        throw outcome.deadline;
+      }
+      return "fallback candidate ran";
+    });
+    const attempt = runWithModelFallback({ ...fallbackOptions, run });
+    // Handle rejection before yielding to the candidate and its controlled deadline.
+    const resultPromise = attempt.then(
+      (value) => ({ ok: true as const, value }),
+      (value: unknown) => ({ ok: false as const, value }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    const result = await resultPromise;
+    expect(dispatched?.[0]).toBeGreaterThan(0);
+    expect(deadline).toBeDefined();
+    expect(findLocalWorkerTaskTimeout(deadline)).toBe(deadline);
+    expect(resolveModelFallbackError(deadline)).toEqual({
+      kind: "coordination",
+      error: deadline,
+    });
+    expect(result).toEqual({ ok: false, value: deadline });
+    expect(run).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("still rotates models for a genuine provider HTTP 408 timeout", async () => {
+  const provider408 = Object.assign(new Error("request timed out"), { status: 408 });
+  expect(resolveModelFallbackError(provider408)).toMatchObject({
+    kind: "failover",
+    error: { reason: "timeout", status: 408 },
   });
 
-  it("still rotates models for a genuine provider HTTP 408 timeout", async () => {
-    const provider408 = Object.assign(new Error("request timed out"), { status: 408 });
-    const resolution = resolveModelFallbackError(provider408);
-    expect(resolution.kind).toBe("failover");
-    if (resolution.kind === "failover") {
-      expect(resolution.error.reason).toBe("timeout");
-      expect(resolution.error.status).toBe(408);
-    }
-
-    const run = vi
-      .fn<() => Promise<string>>()
-      .mockRejectedValueOnce(provider408)
-      .mockResolvedValueOnce("fallback candidate ran");
-    const result = await runWithModelFallback({ ...fallbackOptions, run });
-    expect(result.outcome).toBe("completed");
-    expect(run).toHaveBeenCalledTimes(2);
-  });
+  const run = vi
+    .fn<() => Promise<string>>()
+    .mockRejectedValueOnce(provider408)
+    .mockResolvedValueOnce("fallback candidate ran");
+  const result = await runWithModelFallback({ ...fallbackOptions, run });
+  expect(result.outcome).toBe("completed");
+  expect(run).toHaveBeenCalledTimes(2);
 });

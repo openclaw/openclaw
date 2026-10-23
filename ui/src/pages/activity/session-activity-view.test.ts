@@ -16,7 +16,10 @@ import { DashboardsView } from "../dashboards/view.tsx";
 import { mountSolid, props, row } from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.tsx";
 
-const renderSessionActivityViewSolid = mountSolid(renderSessionActivityView);
+const renderSessionActivityViewSolid = mountSolid<ReturnType<typeof props>>(
+  renderSessionActivityView,
+  (input) => createSolidApplicationContextProvider(input.context).wrapper,
+);
 
 let container: HTMLDivElement;
 function show(input: Parameters<typeof props>[0] = {}, target = container) {
@@ -368,6 +371,7 @@ describe("session activity semantics", () => {
         mountDashboards(
           () =>
             createComponent(DashboardsView, {
+              readReady: () => undefined,
               data: {
                 result: input.result!,
                 error: null,

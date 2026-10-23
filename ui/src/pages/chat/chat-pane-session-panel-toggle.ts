@@ -23,12 +23,13 @@ import {
 } from "../../components/terminal/terminal-pending-actions.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import { lazySidebarElements } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { closeSlot, openSlot, setSidebarDock } from "./sidebar-layout.ts";
+import { closeSlot, openSlot, setSidebarDock, type SidebarSlotId } from "./sidebar-layout.ts";
 
 interface ActivePanelOwner {
-  renderRoot: ParentNode;
+  sidebarRegion: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null;
   state: ChatPageHost;
   linkReaders: readonly ControlUiLinkReaderDescriptor[];
   pluginPanels: readonly `${string}/${string}`[];
@@ -45,6 +46,7 @@ interface SessionPanelToggleOptions {
   current: () => ActivePanelOwner | null;
   pending: { requests: Map<SessionPanelToggleSlot, PendingSessionPanelToggle> };
   updateSidebarLayout: (layout: ChatPageHost["sidebarLayout"]) => void;
+  onOpenPanel?: (slot: SidebarSlotId) => void;
 }
 
 const panelToggleEvents = [
@@ -98,6 +100,9 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
       layout = setSidebarDock(layout, detail.dock);
     }
     options.updateSidebarLayout(layout);
+    if (detail.open) {
+      options.onOpenPanel?.(slot);
+    }
   }
 
   function handle(
@@ -155,23 +160,15 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
     }
     if (slot === "terminal") {
       const intent = terminalToggleIntent(event, resolveChatAgentId(owner.state));
-      const embeddedTerminal = owner.renderRoot.querySelector<
-        HTMLElementTagNameMap["openclaw-terminal-panel"]
-      >("openclaw-terminal-panel[embedded]");
-      const terminalConstructor = customElements.get("openclaw-terminal-panel");
-      const embeddedTerminalMounted =
-        embeddedTerminal !== null &&
-        terminalConstructor !== undefined &&
-        embeddedTerminal instanceof terminalConstructor;
-      if (embeddedTerminalMounted) {
-        embeddedTerminal.activateTerminalHost();
-      }
+      // A new pane can hold the tag before its lazy sidebar bridge upgrades it.
+      const embeddedTerminalMounted = owner.sidebarRegion?.activateTerminalHost?.() ?? false;
       if (intent) {
         void terminalIntentQueue.queue(intent, {
           deferUntilHostChange: !embeddedTerminalMounted,
         });
       }
       options.updateSidebarLayout(layout);
+      options.onOpenPanel?.(slot);
       return;
     }
     const existing = options.pending.requests.get(slot);
@@ -182,6 +179,7 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
     ) {
       existing.events.push(event);
       options.updateSidebarLayout(layout);
+      options.onOpenPanel?.(slot);
       return;
     }
     const queue: PendingSessionPanelToggle = {
@@ -196,27 +194,26 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
       owner.state.sessionKey === sessionKey;
     options.pending.requests = new Map(options.pending.requests).set(slot, queue);
     options.updateSidebarLayout(layout);
+    options.onOpenPanel?.(slot);
     void Promise.all([
       customElements.whenDefined("openclaw-chat-sidebar-region"),
       customElements.whenDefined(tagName),
     ])
       .then(async () => {
-        // Read the live pane fence after lazy registration publishes its readiness.
-        await options.current()?.awaitDomCommit();
+        // Definition precedes the lazy owner's publication that mounts its outlet.
+        await Promise.all([
+          lazySidebarElements.snapshot.get("region")?.pending,
+          lazySidebarElements.snapshot.get(slot)?.pending,
+        ]);
         if (!isCurrent()) {
           return;
         }
-        const region = owner.renderRoot.querySelector<
-          HTMLElementTagNameMap["openclaw-chat-sidebar-region"]
-        >("openclaw-chat-sidebar-region");
-        await region?.updateComplete;
+        await owner.awaitDomCommit();
         if (!isCurrent()) {
           return;
         }
-        // The region's sibling outlet can connect a panel before its owner has committed.
-        const recipient =
-          owner.renderRoot.querySelector<HTMLElementTagNameMap[PanelTagName]>(tagName);
-        await recipient?.updateComplete;
+        const region = options.current()?.sidebarRegion;
+        await region?.awaitPanelCommit(slot);
         if (!isCurrent()) {
           return;
         }
@@ -273,7 +270,14 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
     listen(window, TERMINAL_PANEL_DOCK_BOTTOM_EVENT, () => {
       const owner = options.current();
       if (owner) {
-        owner.state.updateSidebarLayout(closeSlot(owner.state.sidebarLayout, "terminal"));
+        const layout = owner.state.sidebarLayout;
+        const next = closeSlot(layout, "terminal");
+        // Moving the terminal leaves the desktop panel open, even when its
+        // last tab becomes the launcher. Mobile keeps its existing dismissal.
+        if (owner.sidebarRegion?.presentation !== "mobile") {
+          next.open = layout.open;
+        }
+        owner.state.updateSidebarLayout(next);
       }
     }),
   );

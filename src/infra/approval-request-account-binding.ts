@@ -1,4 +1,3 @@
-// Matches approval requests against channel account and session bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
@@ -81,7 +80,6 @@ export async function classifyApprovalRequestChannelRouteAsync(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
   channel: string;
-  defaultAccountId?: string | null;
 }): Promise<ApprovalRequestChannelRouteClass> {
   const expectedChannel = normalizeMessageChannel(params.channel);
   if (!expectedChannel) {

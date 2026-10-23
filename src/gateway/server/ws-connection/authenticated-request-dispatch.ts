@@ -24,8 +24,13 @@ import {
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
-import { isGatewayAuthGrantCurrent, isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
+import {
+  captureGatewayAuthPolicy,
+  isGatewayAuthGrantCurrent,
+  isGatewayAuthPolicyCurrent,
+} from "../../auth-policy.js";
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
+import { errorShapeFromError } from "../../error-shape.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
 import { hasCurrentRemoteControlUiIngress } from "../../ingress-attribution.js";
 import {
@@ -130,29 +135,27 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     const req = parsed;
     const context = buildRequestContext();
     const sourceContext = context.resolveGatewayContext?.() ?? context;
-    const isCommittedGrantCurrent = () =>
-      isGatewayAuthGrantCurrent(
-        client.authPolicy,
-        sourceContext.getCommittedRuntimeConfig?.() ?? sourceContext.getRuntimeConfig(),
-      );
+    let committedAuthPolicy = client.authPolicy;
+    const isCommittedGrantCurrent = () => {
+      const config =
+        sourceContext.getCommittedRuntimeConfig?.() ?? sourceContext.getRuntimeConfig();
+      if (!isGatewayAuthGrantCurrent(committedAuthPolicy, config)) {
+        return false;
+      }
+      // Keep equivalent issued policies; contextual ingress still rechecks its live grant.
+      if (committedAuthPolicy && !committedAuthPolicy.browserOrigin?.remoteControlUiIngress) {
+        committedAuthPolicy = captureGatewayAuthPolicy(config, committedAuthPolicy);
+      }
+      return true;
+    };
     if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
       return;
     }
-    const diagnostics = createGatewayRpcDiagnostics(
-      req.method,
-      getMethodRegistry,
-      extraHandlers,
-      req.method === "models.list" ||
-        req.method === "sessions.list" ||
-        req.method === "cron.list" ||
-        req.method === "chat.history"
-        ? {
-            clientKind: client.connect.client.id,
-            source: sendResponse === send ? "wire" : "internal",
-            params: req.params,
-          }
-        : undefined,
-    );
+    const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers, {
+      clientKind: client.connect.client.id,
+      source: sendResponse === send ? "wire" : "internal",
+      params: req.params,
+    });
     logWs("in", "req", { connId, id: req.id, method: req.method });
     const generationState = SharedGatewaySessionGenerationState.fromReader(
       getRequiredSharedGatewaySessionGeneration,
@@ -523,10 +526,9 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             false,
             undefined,
             staleInstall?.error ??
-              errorShape(
-                ErrorCodes.UNAVAILABLE,
-                formatForLog(err),
-                err instanceof GatewayClientRequestError
+              errorShapeFromError(ErrorCodes.UNAVAILABLE, err, {
+                message: formatForLog(err),
+                ...(err instanceof GatewayClientRequestError
                   ? {
                       retryable: err.retryable,
                       retryAfterMs: err.retryAfterMs,
@@ -534,8 +536,8 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                     }
                   : startTimedOut
                     ? { retryable: true, details: { reason: "request-start-timeout" } }
-                    : undefined,
-              ),
+                    : undefined),
+              }),
           );
         } finally {
           settled.resolve();

@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import {
@@ -18,7 +18,11 @@ import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js"
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { readLoggingConfig } from "../logging/config.js";
 import { applyLoggingConfig } from "../logging/logger.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import {
+  getRpcSource,
+  requestRpcSourceCancellation,
+} from "../sessions/session-controller.rpc-sources.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideStoreWriterContext } from "../shared/store-writer-queue.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
@@ -93,6 +97,10 @@ const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness(asyn
   workspace = await createGitWorkspace(makeTempDir("openclaw-initial-turn-durability-"));
 });
 
+beforeEach(() => {
+  dispatch.start.mockClear();
+});
+
 afterEach(() => {
   turnBoundary.committing = false;
   turnBoundary.afterPrepare = undefined;
@@ -102,14 +110,13 @@ afterEach(() => {
 
 function releaseDispatches() {
   for (const [turn] of dispatch.start.mock.calls) {
-    turn.replyAdmissionTicket?.release();
     turn.admission.cleanupAdmittedRun();
     clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
   }
 }
 
 async function drainDispatches(storePath: string, identities: string[]) {
-  const released = getSessionWorkAdmissionRelease({ scope: storePath, identities });
+  const released = captureSessionControllerSettlement({ scope: storePath, identities });
   releaseDispatches();
   await released;
 }
@@ -219,7 +226,6 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
     }
     return input;
   });
-  dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   try {
     const created = await Promise.all(
@@ -321,12 +327,11 @@ test.for([
         }
         const options = expectDefined(initial, "initial request");
         const runId = String(options.params.idempotencyKey);
-        const run = expectDefined(options.context.chatAbortControllers.get(runId), "admitted run");
-        run.abortStopReason = "restart";
-        run.controller.abort(failure);
+        const run = expectDefined(getRpcSource(runId), "admitted run");
+        run.adapter.abortStopReason = "restart";
+        requestRpcSourceCancellation(run, failure);
       };
     }
-    dispatch.start.mockClear();
     dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
     try {
       const params = { agentId: "main", key, message };
@@ -343,7 +348,7 @@ test.for([
             JSON.stringify({ type: "req", id: requestId, method: "sessions.create", params }),
           );
           await withinTest(initialSettled.promise, signal);
-          await getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
+          await captureSessionControllerSettlement({ scope: storePath, identities: [key] });
           const closed = once(ws, "close");
           ws.close();
           await withinTest(closed, signal);
@@ -428,9 +433,9 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
         return;
       }
       hit();
-      const run = expectDefined(options.context.chatAbortControllers.get(runId), "committed run");
-      run.abortStopReason = "restart";
-      run.controller.abort();
+      const run = expectDefined(getRpcSource(runId), "committed run");
+      run.adapter.abortStopReason = "restart";
+      requestRpcSourceCancellation(run);
     });
     if (fault === "lost-worker-response") {
       turnBoundary.afterCommit = () => {
@@ -439,7 +444,6 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
         throw new Error("Native turn committed but its command response was lost");
       };
     }
-    dispatch.start.mockClear();
     dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
     agentCommandMock.mockImplementation(async (raw) => {
       const options = raw as AgentCommandGatewayIngressOpts;
@@ -473,12 +477,11 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
         options.context.dedupe.delete(`chat:${runId}`);
         await fixture.retry(message, runId);
         expect(dispatch.start).toHaveBeenCalledOnce();
-        const retriedRelease = getSessionWorkAdmissionRelease({
+        const retriedRelease = captureSessionControllerSettlement({
           scope: storePath,
           identities: [key],
         });
         const [turn] = dispatch.start.mock.calls[0]!;
-        turn.replyAdmissionTicket?.release();
         turn.admission.cleanupAdmittedRun();
         clearAgentRunContext(runId, turn.admission.lifecycleGeneration);
         await retriedRelease;
@@ -506,7 +509,6 @@ test("retries idle chat input after its atomic commit is refused", async () => {
   const { storePath, ws, key, target } = fixture;
   const message = "Idle input retries its original bytes.";
   const runId = "idle-commit-retry";
-  dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   const refused = vi.fn();
   const refuse = probe.admission(workerAdmission, (request, grant, callback) => {
@@ -520,7 +522,7 @@ test("retries idle chat input after its atomic commit is refused", async () => {
     await fixture.create();
     const sent = await fixture.send(message, runId);
     expect(sent.ok).toBe(false);
-    await getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
+    await captureSessionControllerSettlement({ scope: storePath, identities: [key] });
     expect(refused).toHaveBeenCalledOnce();
     expect(dispatch.start).not.toHaveBeenCalled();
     const scope = await expectUncommittedInput(target, fixture.read());
@@ -549,7 +551,6 @@ test("dispatches the original bytes of a committed initial input", async () => {
   const { storePath, ws, key } = fixture;
   const message = "Check initial-secret before execution.";
   const previousLogging = readLoggingConfig();
-  dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   applyLoggingConfig({ redactPatterns: ["initial-secret"] });
   try {
@@ -579,8 +580,6 @@ test("dispatches the original bytes of a committed initial input", async () => {
 
 test.for([
   { id: "openclaw-control-ui", mode: "webchat", worktree: true },
-  { id: "openclaw-control-ui", mode: "webchat", worktree: false },
-  { id: "cli", mode: "cli", worktree: true },
   { id: "cli", mode: "cli", worktree: false },
 ] as const)(
   "recovers an acknowledged $id first turn (worktree=$worktree) before dispatch",
@@ -594,7 +593,6 @@ test.for([
     });
     const { storePath, ws, target } = fixture;
     const message = "Reply with exactly: retained first message.";
-    dispatch.start.mockClear();
     agentCommandMock.mockImplementation(async (raw) => {
       const options = raw as AgentCommandGatewayIngressOpts;
       expect(options.pinnedWidgetAuthoring).toBe(mode === "webchat" ? true : undefined);

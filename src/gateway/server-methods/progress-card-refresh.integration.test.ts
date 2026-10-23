@@ -2,8 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
-import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
 import {
@@ -11,6 +9,17 @@ import {
   registerAgentRunContext,
   clearAgentRunContext,
 } from "../../infra/agent-run-registry.js";
+import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import {
+  releaseSessionControllerClaim,
+  tryClaimSessionControllerTask,
+} from "../../sessions/session-controller.mailbox.js";
+import {
+  getRpcSourceIdentity,
+  getRpcSourceProjectSessionActive,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
@@ -25,7 +34,7 @@ import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
-import { createProgressCardHandlers } from "./progress-card.js";
+import { progressCardHandlers } from "./progress-card.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 installGatewayTestHooks();
@@ -58,6 +67,34 @@ function expectNoChat(f: Fixture) {
   ).toHaveLength(0);
 }
 
+async function claimRefreshOperation(f: Fixture, runId: string) {
+  const source = rpcSourceTesting.get(runId);
+  if (!source) {
+    throw new Error("Missing controller-owned refresh source");
+  }
+  if (f.activeRun && !f.activeRun.result) {
+    f.activeRun.complete();
+    await f.activeRun.ownerSettlement;
+  }
+  const claim = tryClaimSessionControllerTask(source.input);
+  if (!claim) {
+    throw new Error("Refresh source was not selected by its controller");
+  }
+  const operation = createReplyOperation({
+    ...f.scope,
+    resetTriggered: false,
+    mailboxClaim: claim,
+  });
+  return {
+    operation,
+    source,
+    release: () => {
+      operation.complete();
+      releaseSessionControllerClaim(claim);
+    },
+  };
+}
+
 async function refreshCard(
   f: Fixture,
   idempotencyKey: string,
@@ -75,7 +112,7 @@ async function refreshCard(
     context: f.context,
     respond,
     isWebchatConnect: () => true,
-    extraHandlers: options.extraHandlers ?? createProgressCardHandlers(),
+    extraHandlers: options.extraHandlers ?? progressCardHandlers,
   });
   return respond;
 }
@@ -108,7 +145,7 @@ describe("registered progress refresh admission", () => {
         }
         const cardRead = createDeferredCore();
         const releaseRead = createDeferredCore();
-        const handlers = createProgressCardHandlers();
+        const handlers = { ...progressCardHandlers };
         let readingTerminalCard = false;
         let revoked = false;
         const originalRefresh = handlers["progressCard.refresh"]!;
@@ -242,151 +279,169 @@ describe("registered progress refresh admission", () => {
     );
     expectNoChat(f);
   });
-  it("starts a hidden status-only turn when steering is unavailable", async () => {
-    await using f = await createFixture({ active: true, preserveContent: true });
-    await putCard(f, "Previous status");
-    const respond = await refreshCard(f, "refresh-click");
-    expect(respond).toHaveBeenCalledWith(...acceptedResponse());
-    const payload = respond.mock.calls[0]?.[1];
-    if (!isRecord(payload) || typeof payload.runId !== "string") {
-      throw new Error("Missing refresh run");
-    }
-    const recorder = await f.dispatchedRecorder;
-    expect(await recorder.resolveMessage()).toMatchObject({
-      display: false,
-      provenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
-    });
-    expect(getAgentRunContext(payload.runId)).toMatchObject({
-      isControlUiVisible: false,
-      projectSessionMessages: false,
-      projectSessionActive: false,
-      projectSessionLifecycle: false,
-    });
-    expect(f.context.chatAbortControllers.get(payload.runId)).toMatchObject({
-      controlUiVisible: false,
-      projectSessionActive: false,
-    });
-    const dispatch = dispatchInboundMessageMock.mock.calls[0]?.[0] as Dispatch;
-    expect(dispatch.ctx.InternalTurnSource).toBe("progress-card-refresh");
-    expect(dispatch.ctx.InputProvenance).toMatchObject({ sourceTool: "progress_card_refresh" });
-    expect(dispatch.toolsAllow).toContain("progress_card");
-    expect(dispatch.toolsAllow).not.toContain("exec");
-    const prepared = dispatch.replyOptions?.onSessionPrepared;
-    if (!prepared) {
-      throw new Error("Missing real admission preparation callback");
-    }
-    prepared(f.scope);
-    expect(f.context.chatAbortControllers.get(payload.runId)?.sessionId).toBe(f.scope.sessionId);
-    await recorder.persistApproved();
-    const messages = transcriptMessages(loadTranscriptEventsSync(f.scope));
-    expect(messages).toContainEqual(expect.objectContaining({ display: false }));
-    expect(JSON.stringify(projectChatDisplayMessages(messages))).not.toContain(
-      "Refresh this session",
-    );
-    await f.finishDispatch();
-    expect(() => prepared({ ...f.scope, sessionId: "late-refresh" })).toThrow(
-      "no longer owns its admission",
-    );
-    expect((await progressCardStore.get(f.scope.sessionKey, f.scope.agentId))?.markdown).toBe(
-      "Previous status",
-    );
-    const retry = await refreshCard(f, "refresh-click", undefined, { id: "retry" });
-    expect(retry).toHaveBeenCalledWith(...terminalResponse());
-    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-    expectNoChat(f);
-  });
-  it("steers duplicate unconfirmed refreshes without answering questions or cancelling work", async () => {
-    const f = await createFixture({ active: true, preserveContent: true });
-    const operation = f.activeRun!;
-    const profile = ensureGatewayOwnerProfile("Gateway Owner");
-    f.client.internal = { authenticatedOperator: true, operatorRoleActor: { kind: "system" } };
-    f.client.authenticatedUserProfile = {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    };
-    const captured = await captureGatewayOperatorRunAuthority({
-      client: { ...f.client, connId: "original-owner-connection" },
-      context: f.context,
-    });
-    const run = createQueueTestRun({ prompt: "Continue the original work" });
-    run.operatorAuthority = captured?.authority;
-    run.run = {
-      ...run.run,
-      config: f.context.getRuntimeConfig(),
-      agentId: f.scope.agentId,
-      sessionId: f.scope.sessionId,
-      sessionKey: f.scope.sessionKey,
-      messageProvider: "webchat",
-      chatType: "direct",
-      gatewayUiCommandTarget: { connId: "original-owner-connection", profileId: profile.id },
-      traceAuthorized: true,
-      senderIsOwner: true,
-    };
-    const cancel = vi.fn();
-    const claim = vi.fn(async () => true);
-    const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
-      async (_text, options, assertCurrent) => {
-        assertCurrent();
-        expect(options).toMatchObject({ isInboundUserMessage: false, debounceMs: 0 });
-        expect(await options?.userTurnTranscriptRecorder?.resolveMessage()).toMatchObject({
+  it.each([false, true])(
+    "starts a hidden status-only turn when idle or steering is unavailable (active=%s)",
+    async (active) => {
+      await using f = await createFixture({ active, preserveContent: true });
+      let releaseRefresh: (() => void) | undefined;
+      try {
+        await putCard(f, "Previous status");
+        const respond = await refreshCard(f, "refresh-click");
+        expect(respond).toHaveBeenCalledWith(...acceptedResponse());
+        const payload = respond.mock.calls[0]?.[1];
+        if (!isRecord(payload) || typeof payload.runId !== "string") {
+          throw new Error("Missing refresh run");
+        }
+        const recorder = await f.dispatchedRecorder;
+        expect(await recorder.resolveMessage()).toMatchObject({
           display: false,
+          provenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
         });
-        await options?.userTurnTranscriptRecorder?.persistApproved();
-        assertCurrent();
-        options?.onQueueAccepted?.(true);
-        return { transcriptCommit: "unconfirmed", errorMessage: "Receipt still pending" };
-      },
-    );
-    await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
-    const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
-      runId: "original-work",
-      toolAuthorityFingerprint: fingerprint,
-      cancel,
-      messageInjectionV2: {
-        version: 2,
-        isAvailable: () => true,
-        queueMessage,
-        claimPendingUserInputAnswer: claim,
-      },
-    });
-    const visibleProjection = { isControlUiVisible: true, projectSessionMessages: true };
-    registerAgentRunContext("original-work", {
-      sessionKey: f.scope.sessionKey,
-      ...visibleProjection,
-    });
-    try {
-      expect(captured).toBeDefined();
-      await putCard(f, "Working");
-      const respond = vi.fn<RespondFn>();
-      await Promise.all(
-        Array.from({ length: 2 }, (_, index) =>
-          refreshCard(f, "active-refresh", respond, { id: `refresh-${index}` }),
-        ),
+        expect(getAgentRunContext(payload.runId)).toMatchObject({
+          isControlUiVisible: false,
+          projectSessionMessages: false,
+          projectSessionActive: false,
+          projectSessionLifecycle: false,
+        });
+        const source = rpcSourceTesting.get(payload.runId);
+        expect(source?.adapter).toMatchObject({ controlUiVisible: false });
+        const dispatch = dispatchInboundMessageMock.mock.calls[0]?.[0] as Dispatch;
+        expect(dispatch.ctx.InternalTurnSource).toBe("progress-card-refresh");
+        expect(dispatch.ctx.InputProvenance).toMatchObject({ sourceTool: "progress_card_refresh" });
+        expect(dispatch.toolsAllow).toContain("progress_card");
+        expect(dispatch.toolsAllow).not.toContain("exec");
+        const prepared = dispatch.replyOptions?.onSessionPrepared;
+        if (!prepared) {
+          throw new Error("Missing real admission preparation callback");
+        }
+        prepared(f.scope);
+        const claimed = await claimRefreshOperation(f, payload.runId);
+        releaseRefresh = claimed.release;
+        expect(getRpcSourceProjectSessionActive(claimed.source)).toBe(false);
+        expect(getRpcSourceIdentity(claimed.source).sessionId).toBe(f.scope.sessionId);
+        await recorder.persistApproved();
+        const messages = transcriptMessages(loadTranscriptEventsSync(f.scope));
+        expect(messages).toContainEqual(expect.objectContaining({ display: false }));
+        expect(JSON.stringify(projectChatDisplayMessages(messages))).not.toContain(
+          "Refresh this session",
+        );
+        releaseRefresh();
+        releaseRefresh = undefined;
+        await f.finishDispatch();
+        expect(() => prepared({ ...f.scope, sessionId: "late-refresh" })).toThrow(
+          "no longer owns its admission",
+        );
+        expect((await progressCardStore.get(f.scope.sessionKey, f.scope.agentId))?.markdown).toBe(
+          "Previous status",
+        );
+        const retry = await refreshCard(f, "refresh-click", undefined, { id: "retry" });
+        expect(retry).toHaveBeenCalledWith(...terminalResponse());
+        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+        expectNoChat(f);
+      } finally {
+        releaseRefresh?.();
+      }
+    },
+  );
+  it.each([false, true])(
+    "steers duplicate active refreshes without answering questions or cancelling work (unconfirmed=%s)",
+    async (unconfirmed) => {
+      const f = await createFixture({ active: true, preserveContent: true });
+      const operation = f.activeRun!;
+      const profile = ensureGatewayOwnerProfile("Gateway Owner");
+      f.client.internal = { authenticatedOperator: true, operatorRoleActor: { kind: "system" } };
+      f.client.authenticatedUserProfile = {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      };
+      const captured = await captureGatewayOperatorRunAuthority({
+        client: { ...f.client, connId: "original-owner-connection" },
+        context: f.context,
+      });
+      const run = createQueueTestRun({ prompt: "Continue the original work" });
+      run.operatorAuthority = captured?.authority;
+      run.run = {
+        ...run.run,
+        config: f.context.getRuntimeConfig(),
+        agentId: f.scope.agentId,
+        sessionId: f.scope.sessionId,
+        sessionKey: f.scope.sessionKey,
+        messageProvider: "webchat",
+        chatType: "direct",
+        gatewayUiCommandTarget: { connId: "original-owner-connection", profileId: profile.id },
+        traceAuthorized: true,
+        senderIsOwner: true,
+      };
+      const cancel = vi.fn();
+      const claim = vi.fn(async () => true);
+      const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
+        async (_text, options, assertCurrent) => {
+          assertCurrent();
+          expect(options).toMatchObject({ isInboundUserMessage: false, debounceMs: 0 });
+          expect(await options?.userTurnTranscriptRecorder?.resolveMessage()).toMatchObject({
+            display: false,
+          });
+          await options?.userTurnTranscriptRecorder?.persistApproved();
+          assertCurrent();
+          options?.onQueueAccepted?.(true);
+          if (unconfirmed) {
+            return { transcriptCommit: "unconfirmed", errorMessage: "Receipt still pending" };
+          }
+          return undefined;
+        },
       );
-      expect(respond.mock.calls).toEqual([acceptedResponse(), acceptedResponse()]);
-      expect(claim).not.toHaveBeenCalled();
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(getAgentRunContext("original-work")).toMatchObject(visibleProjection);
-      await f.finishDispatch();
-      const retry = await refreshCard(f, "active-refresh", undefined, { id: "retry-steer" });
-      expect(retry).toHaveBeenCalledWith(...acceptedResponse());
-      expect(queueMessage).toHaveBeenCalledOnce();
-      expect(cancel).not.toHaveBeenCalled();
-      expectNoChat(f);
-    } finally {
-      clearAgentRunContext("original-work");
-      await f.cleanup();
-      captured?.release();
-    }
-  });
+      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+      const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
+      operation.setPhase("running");
+      operation.attachBackend({
+        kind: "embedded",
+        supportsTranscriptCommitWait: true,
+        runId: "original-work",
+        toolAuthorityFingerprint: fingerprint,
+        cancel,
+        messageInjectionV2: {
+          version: 2,
+          isAvailable: () => true,
+          queueMessage,
+          claimPendingUserInputAnswer: claim,
+        },
+      });
+      const visibleProjection = { isControlUiVisible: true, projectSessionMessages: true };
+      registerAgentRunContext("original-work", {
+        sessionKey: f.scope.sessionKey,
+        ...visibleProjection,
+      });
+      try {
+        expect(captured).toBeDefined();
+        await putCard(f, "Working");
+        const respond = vi.fn<RespondFn>();
+        await Promise.all(
+          Array.from({ length: 2 }, (_, index) =>
+            refreshCard(f, "active-refresh", respond, { id: `refresh-${index}` }),
+          ),
+        );
+        expect(respond.mock.calls).toEqual([acceptedResponse(), acceptedResponse()]);
+        expect(claim).not.toHaveBeenCalled();
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        expect(getAgentRunContext("original-work")).toMatchObject(visibleProjection);
+        await f.finishDispatch();
+        const retry = await refreshCard(f, "active-refresh", undefined, { id: "retry-steer" });
+        expect(retry).toHaveBeenCalledWith(...acceptedResponse());
+        expect(queueMessage).toHaveBeenCalledOnce();
+        expect(cancel).not.toHaveBeenCalled();
+        expectNoChat(f);
+      } finally {
+        clearAgentRunContext("original-work");
+        await f.cleanup();
+        captured?.release();
+      }
+    },
+  );
   it("keeps a new human message on its own visible turn while a hidden refresh runs", async () => {
     const f = await createFixture({ active: false, preserveContent: true });
-    let hiddenOperation: ReturnType<typeof createReplyOperation> | undefined;
+    let releaseHidden: (() => void) | undefined;
     try {
       await putCard(f, "Previous status");
       const respond = await refreshCard(f, "hidden-start", undefined, { id: "hidden-start" });
@@ -395,7 +450,15 @@ describe("registered progress refresh admission", () => {
         throw new Error("Missing hidden refresh acceptance");
       }
       await f.dispatchedRecorder;
-      hiddenOperation = createReplyOperation({ ...f.scope, resetTriggered: false });
+      const hiddenDispatch = dispatchInboundMessageMock.mock.calls[0]?.[0] as Dispatch;
+      const prepareHidden = hiddenDispatch.replyOptions?.onSessionPrepared;
+      if (!prepareHidden) {
+        throw new Error("Missing hidden refresh preparation callback");
+      }
+      prepareHidden(f.scope);
+      const hidden = await claimRefreshOperation(f, accepted.runId);
+      releaseHidden = hidden.release;
+      const hiddenOperation = hidden.operation;
       hiddenOperation.bindToolAuthoritySnapshot({
         fingerprint: () => "same-authority",
         project: () => "same-authority",
@@ -405,6 +468,7 @@ describe("registered progress refresh admission", () => {
       const claim = vi.fn(async () => false);
       hiddenOperation.attachBackend({
         kind: "embedded",
+        supportsTranscriptCommitWait: true,
         runId: accepted.runId,
         toolAuthorityFingerprint: "same-authority",
         cancel: vi.fn(),
@@ -436,7 +500,7 @@ describe("registered progress refresh admission", () => {
       expect(getAgentRunContext(f.params.idempotencyKey)?.projectSessionMessages).not.toBe(false);
       expect(getAgentRunContext(accepted.runId)?.projectSessionMessages).toBe(false);
     } finally {
-      hiddenOperation?.complete();
+      releaseHidden?.();
       await f.cleanup();
     }
   });

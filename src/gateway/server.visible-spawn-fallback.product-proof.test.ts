@@ -25,7 +25,6 @@ import {
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as backoff from "../infra/backoff.js";
-import { requestHeartbeatAndWait } from "../infra/heartbeat-wake.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -83,14 +82,23 @@ type Scenario = {
   backup?: string;
   directAgent?: boolean;
   directModel?: string;
+  stopControl?: "typed" | "session";
 };
 
 async function startProvider(scenario: Scenario) {
-  const requests: Array<{ model: string; child: boolean; authorization?: string }> = [];
+  const requests: Array<{
+    model: string;
+    child: boolean;
+    authorization?: string;
+    waitingInput: boolean;
+  }> = [];
   const errors: unknown[] = [];
   let spawn: Receipt | undefined;
   let spawnRequested = false;
   let primaryRateLimited = !scenario.directAgent;
+  const parentHeld = createDeferred();
+  const childHeld = createDeferred();
+  const releaseControl = createDeferred();
   const server = createServer((request, response) => {
     void (async () => {
       try {
@@ -99,12 +107,22 @@ async function startProvider(scenario: Scenario) {
           return;
         }
         const { model, input } = (await json(request)) as ProviderRequest;
-        const child = JSON.stringify(input.filter((item) => item.role === "user")).includes(WORKER);
+        const userInput = JSON.stringify(input.filter((item) => item.role === "user"));
+        const child = userInput.includes(WORKER);
         const title = JSON.stringify(
           input.filter((item) => item.role === "developer" || item.role === "system"),
         ).includes("Generate a concise session title");
         const { authorization } = request.headers;
-        requests.push({ model, child: child && !title, authorization });
+        requests.push({
+          model,
+          child: child && !title,
+          authorization,
+          waitingInput:
+            !title && userInput.includes("This waiting input must not reach inference after Stop"),
+        });
+        if (requests.at(-1)?.waitingInput) {
+          throw new Error("Cancelled waiting input reached inference");
+        }
         if (child && !title && model === "primary" && primaryRateLimited) {
           response.writeHead(429, { "content-type": "application/json" });
           const type = "rate_limit_exceeded";
@@ -121,6 +139,13 @@ async function startProvider(scenario: Scenario) {
         if (title || child || spawnRequested) {
           if (!title && !child && !spawn) {
             errors.push(new Error("Missing sessions_spawn receipt"));
+          }
+          if (scenario.stopControl && !title) {
+            (child ? childHeld : parentHeld).resolve();
+            await releaseControl.promise;
+            if (response.destroyed) {
+              return;
+            }
           }
           const childText = primaryRateLimited ? SUCCESS : INITIAL_SUCCESS;
           writeOpenAiResponsesText(response, {
@@ -158,7 +183,12 @@ async function startProvider(scenario: Scenario) {
     rateLimitPrimary() {
       primaryRateLimited = true;
     },
-    stop: () => closeProvider(server),
+    controlSourcesHeld: Promise.all([parentHeld.promise, childHeld.promise]),
+    releaseHeldResponses: () => releaseControl.resolve(),
+    stop: () => {
+      releaseControl.resolve();
+      return closeProvider(server);
+    },
   };
 }
 
@@ -206,7 +236,6 @@ async function withProofGateway(
           defaults: {
             workspace: home.workspaceDir,
             skipBootstrap: true,
-            heartbeat: { every: "0m" },
             model: scenario.cli ? CHILD_BACKUP : scenario.inherited ? ladder : undefined,
             models: Object.fromEntries(
               [PRIMARY, BACKUP, CHILD_BACKUP].map((ref) => [
@@ -289,15 +318,8 @@ async function withProofGateway(
         },
       });
     },
-    // Flush older delayed notices before this Gateway closes.
-    () =>
-      gateway &&
-      requestHeartbeatAndWait({
-        source: "manual",
-        intent: "immediate",
-        reason: "wake",
-        coalesceMs: 0,
-      }),
+    // Release held provider responses before Gateway shutdown joins accepted work.
+    () => provider?.releaseHeldResponses(),
     () => gateway && disconnectGatewayClient(gateway.client),
     () => gateway?.server.close({ reason: `${prefix} complete` }),
     () => provider?.stop(),
@@ -323,6 +345,16 @@ const assistantTexts = (messages: History["messages"]) =>
     .map((message) => extractTextFromChatContent(message.content));
 
 const scenarios: Scenario[] = [
+  {
+    name: "typed Stop cancels real child and pending input",
+    directAgent: true,
+    stopControl: "typed",
+  },
+  {
+    name: "session Stop cancels real child and pending input",
+    directAgent: true,
+    stopControl: "session",
+  },
   { name: "configured agent ladder", backup: "backup" },
   { name: "configured qualified alias", configuredAlias: true, backup: "backup" },
   { name: "inherited primary with distinct child ladder", inherited: true, backup: "child-backup" },
@@ -374,20 +406,68 @@ describe("sessions_spawn model fallback through the Gateway", () => {
         });
         expect(accepted.status).toBe("started");
         const wait = (runId: string) => waitForRun(client, runId);
-        expect(await wait(accepted.runId)).toMatchObject({ status: "ok" });
+        if (scenario.stopControl) {
+          await provider.controlSourcesHeld;
+        } else {
+          expect(await wait(accepted.runId)).toMatchObject({ status: "ok" });
+        }
+        const spawn = provider.spawn;
+        expect(spawn).toMatchObject({
+          status: "accepted",
+          childSessionKey: expect.any(String),
+          runId: expect.any(String),
+        });
+        assert(spawn, "Parent did not receive the sessions_spawn result");
+        if (scenario.stopControl) {
+          const pendingRunId = randomUUID();
+          await client.request(
+            "agent",
+            {
+              sessionKey: parentKey,
+              message: "This waiting input must not reach inference after Stop",
+              idempotencyKey: pendingRunId,
+            },
+            { expectFinal: false },
+          );
+          if (scenario.stopControl === "typed") {
+            await expect(
+              client.request("chat.send", {
+                sessionKey: parentKey,
+                message: "/stop",
+                idempotencyKey: randomUUID(),
+              }),
+            ).resolves.toMatchObject({ ok: true, aborted: true });
+          } else {
+            await expect(
+              client.request("sessions.abort", { key: parentKey, clearQueued: true }),
+            ).resolves.toMatchObject({ ok: true, status: "aborted" });
+          }
+          const described = await client.request<{
+            session: { status: string; hasActiveRun: boolean };
+          }>("sessions.describe", { key: spawn.childSessionKey, agentId: "main" });
+          expect(described.session).toMatchObject({ status: "killed", hasActiveRun: false });
+          for (const runId of [accepted.runId, spawn.runId, pendingRunId]) {
+            const stopped = await wait(runId);
+            expect(stopped.status).not.toBe("ok");
+          }
+          const active = await client.request<SessionsListResult>("sessions.list", {
+            activeOnly: true,
+            agentId: "main",
+          });
+          expect(active.sessions.map((session) => session.key)).not.toContain(parentKey);
+          expect(active.sessions.map((session) => session.key)).not.toContain(
+            spawn.childSessionKey,
+          );
+          expect(provider.requests.some((request) => request.waitingInput)).toBe(false);
+          expect(provider.errors).toEqual([]);
+          return;
+        }
         if (scenario.configuredAlias) {
           expect(provider.requests.filter((request) => !request.child)).toContainEqual(
             expect.objectContaining({ model: "primary" }),
           );
           expect(provider.requests.some((request) => request.model === "fast")).toBe(false);
         }
-        expect(provider.spawn).toMatchObject({
-          status: "accepted",
-          childSessionKey: expect.any(String),
-          runId: expect.any(String),
-        });
-        const spawn = provider.spawn;
-        assert(spawn, "Parent did not receive the sessions_spawn result");
         const { childSessionKey: childKey } = spawn;
         let settledRunId = spawn.runId;
         let terminal = await wait(settledRunId);
@@ -450,6 +530,7 @@ describe("sessions_spawn model fallback through the Gateway", () => {
         const childRequests = provider.requests
           .slice(requestOffset)
           .filter((request) => request.child);
+        const childModels = childRequests.map((request) => request.model);
         expect(terminal).toMatchObject({ status: scenario.backup ? "ok" : "error" });
         expect(entry?.modelOverrideSource).toBe(scenario.model ? "user" : "auto");
         if (!scenario.model && !scenario.inherited) {
@@ -461,10 +542,10 @@ describe("sessions_spawn model fallback through the Gateway", () => {
         expect(childRequests.filter((request) => request.model === "primary")).toHaveLength(1);
         expect(provider.errors).toEqual([]);
         if (scenario.backup) {
-          expect(childRequests.map((request) => request.model)).toContain(scenario.backup);
+          expect(childModels).toContain(scenario.backup);
           expect(text).toContain(SUCCESS);
           if (scenario.inherited || scenario.directAgent) {
-            expect(childRequests.map((request) => request.model)).not.toContain("backup");
+            expect(childModels).not.toContain("backup");
           }
         } else {
           expect(childRequests.every((request) => request.model === "primary")).toBe(true);

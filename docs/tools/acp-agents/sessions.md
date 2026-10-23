@@ -60,7 +60,7 @@ Two ways to start an ACP session:
 ### `sessions_spawn` parameters
 
 <ParamField path="user" type="string">
-  The person's requester_profile.id, required when several people have steered this turn.
+  An admitted participant's requester_profile.id. Omit to keep the execution's original requester. Explicit selection uses that person's authority and authenticated requester facts; it does not establish their intent or approval.
 </ParamField>
 
 <ParamField path="task" type="string" required>

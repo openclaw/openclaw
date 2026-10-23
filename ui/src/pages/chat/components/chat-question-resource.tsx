@@ -1,5 +1,18 @@
 import type { Question } from "@openclaw/gateway-protocol";
-import { createEffect, createSignal, For, onSettled, Show, untrack } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  createStore,
+  Errored,
+  For,
+  lazy,
+  Loading,
+  onSettled,
+  reconcile,
+  Show,
+} from "solid-js";
 import { isQuestionThumbnail } from "../../../../../packages/gateway-protocol/src/question-media.js";
 import type {
   QuestionResourceAction,
@@ -11,6 +24,7 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { assertUploadsEnabled } from "../../../lib/uploads.ts";
 import { admitAttachmentFiles, resolveChatAttachmentLimits } from "./chat-attachment-admission.ts";
 
@@ -21,32 +35,31 @@ type ResourceProps = {
   agentId?: string;
   selected: ReadonlySet<string>;
   disabled: boolean;
-  "onResource-selection"?: (event: CustomEvent<{ values: string[] }>) => void;
+  onSelection?: (values: string[]) => void;
 };
+
+type OperationScope = { live: boolean; abort: AbortController | undefined };
+
+const ResourcePreview = lazy(() => import("../../../components/mcp-app-view.tsx"), {
+  export: "McpAppView",
+});
 
 /** Local presentation only; the pending question and MCP view own all resource grants. */
 export function ChatQuestionResource(props: ResourceProps) {
   let host!: HTMLElement;
   const context = useOptionalApplication();
   const gateway = context && projectGateway(context.gateway);
-  const [operationRevision, setOperationRevision] = createSignal(0);
-  const isBusy = () => {
-    operationRevision();
-    return Boolean(operationAbort);
-  };
-  const [error, setError] = createSignal("");
-  const [uploaded, setUploaded] = createSignal<Array<{ uri: string; name: string }>>([]);
+  const [isBusy, setBusy] = createOptimistic(false);
+  const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();
+  // Outcome observation must not hold the controls presenting the admitted operation.
+  const outcome = createMemo(() => attempt()?.result.then(() => null), { loadingValue: undefined });
+  const [uploaded, setUploaded] = createStore<Array<{ uri: string; name: string }>>([]);
   const [preview, setPreview] = createSignal<{
-    view?: {
-      id: string;
-      View: (typeof import("../../../components/mcp-app-view-registration.ts"))["McpAppView"];
-    };
+    view?: { id: string };
     text?: string;
     images?: string[];
   } | null>(null);
-  let generation = 0;
-  let operationAbort: AbortController | undefined;
-  let live = true;
+  let operationScope: OperationScope | undefined;
   const key = () =>
     JSON.stringify([
       props.requestId,
@@ -56,139 +69,134 @@ export function ChatQuestionResource(props: ResourceProps) {
       props.agentId,
       context ? gatewayPresentationScope(context.gateway).key : -1,
     ]);
-  // The initial request identifies local results until the first scope transition.
-  let identity = untrack(key);
-  // Retire transport work and its local results when the question loses authority.
-  createEffect(
-    () => {
-      gateway?.read();
-      return [key(), props.disabled] as const;
-    },
-    ([nextIdentity, disabled]) => {
-      if (nextIdentity !== identity || disabled) {
-        operationAbort?.abort();
-        generation++;
-        if (nextIdentity !== identity) {
-          setUploaded([]);
-        }
-        identity = nextIdentity;
-        operationAbort = undefined;
-        setOperationRevision((revision) => revision + 1);
-        setError("");
-        setPreview(null);
-      }
-    },
-  );
-  onSettled(() => () => {
-    live = false;
-    operationAbort?.abort();
-    generation++;
+  const identity = createMemo(() => {
+    gateway?.read();
+    return key();
   });
-  async function operation(action: (isCurrent: () => boolean) => Promise<QuestionResourceAction>) {
+  const presentOperation = action(function* (pending: Promise<void>, signal: AbortSignal) {
+    if (signal.aborted) {
+      return;
+    }
+    const retired = Promise.withResolvers<void>();
+    const stop = listen(signal, "abort", () => retired.resolve(), { once: true });
+    setBusy(true);
+    try {
+      yield Promise.race([pending, retired.promise]);
+    } finally {
+      stop();
+    }
+  });
+  async function operation(prepare: (isCurrent: () => boolean) => Promise<QuestionResourceAction>) {
     const client = context?.gateway.snapshot.client;
     const question = props.question;
+    const active = operationScope;
     if (
       !context ||
       context.gateway.snapshot.phase !== "connected" ||
       !client ||
       !question?.resource?.viewId ||
       props.disabled ||
-      operationAbort ||
+      !active?.live ||
+      active.abort ||
       !props.sessionKey
     ) {
       return;
     }
-    const operationGeneration = ++generation;
+    const viewId = question.resource.viewId;
     const abort = new AbortController();
-    operationAbort = abort;
+    active.abort = abort;
     const scope = gatewayPresentationScope(context.gateway).key;
     const operationIdentity = key();
     const current = () =>
       host.isConnected &&
-      live &&
+      active.live &&
       !props.disabled &&
-      operationGeneration === generation &&
       operationIdentity === key() &&
       context.gateway.snapshot.client === client &&
       gatewayPresentationScope(context.gateway).key === scope;
-    setOperationRevision((revision) => revision + 1);
-    setError("");
-    try {
-      const request = await action(current);
-      if (!current()) {
-        return;
-      }
-      const result = await client.request<QuestionResourceActionResult>(
-        "mcp.app.formResource",
-        {
-          sessionKey: props.sessionKey,
-          agentId: props.agentId,
-          viewId: question.resource.viewId,
-          requestId: props.requestId,
-          questionId: question.questionId,
-          ...request,
-        },
-        { signal: abort.signal },
-      );
-      if (!current()) {
-        return;
-      }
-      if ("resources" in result) {
-        if (
-          !Array.isArray(result.resources) ||
-          result.resources.length > 64 ||
-          !result.resources.every(
-            (resource) =>
-              typeof resource.uri === "string" &&
-              resource.uri.length <= 2048 &&
-              typeof resource.name === "string",
-          )
-        ) {
-          throw new Error("Invalid resource upload result");
+    const pending = (async () => {
+      try {
+        const request = await prepare(current);
+        if (!current()) {
+          return;
         }
-        const allUploaded = new Map(
-          [...uploaded(), ...result.resources].map((resource) => [resource.uri, resource]),
+        const result = await client.request<QuestionResourceActionResult>(
+          "mcp.app.formResource",
+          {
+            sessionKey: props.sessionKey,
+            agentId: props.agentId,
+            viewId,
+            requestId: props.requestId,
+            questionId: question.questionId,
+            ...request,
+          },
+          { signal: abort.signal },
         );
-        if (allUploaded.size > 64 || (!question.multiSelect && result.resources.length !== 1)) {
-          throw new Error("Invalid resource upload count");
+        if (!current()) {
+          return;
         }
-        setUploaded([...allUploaded.values()]);
-        const values = question.multiSelect ? new Set(props.selected) : new Set<string>();
-        for (const resource of result.resources) {
-          values.add(resource.uri);
-        }
-        dispatchSelection([...values]);
-      } else if ("preview" in result) {
-        if (result.preview.viewId) {
-          const { McpAppView } = await import("../../../components/mcp-app-view-registration.ts");
-          if (!current()) {
-            return;
+        if ("resources" in result) {
+          if (
+            !Array.isArray(result.resources) ||
+            result.resources.length > 64 ||
+            !result.resources.every(
+              (resource) =>
+                typeof resource.uri === "string" &&
+                resource.uri.length <= 2048 &&
+                typeof resource.name === "string",
+            )
+          ) {
+            throw new Error("Invalid resource upload result");
           }
-          setPreview({ view: { id: result.preview.viewId, View: McpAppView } });
-        } else {
-          const text = result.preview.contents?.map((entry) => entry.text ?? "").join("\n") ?? "";
-          const images = result.preview.contents
-            ?.flatMap((entry) => {
-              const url =
-                entry.blob && entry.mimeType
-                  ? `data:${entry.mimeType};base64,${entry.blob}`
-                  : undefined;
-              return isQuestionThumbnail(url) ? [url] : [];
-            })
-            .slice(0, 4);
-          setPreview({ text: text.slice(0, 65536), images });
+          const allUploaded = new Map(
+            [...uploaded, ...result.resources].map((resource) => [resource.uri, resource]),
+          );
+          if (allUploaded.size > 64 || (!question.multiSelect && result.resources.length !== 1)) {
+            throw new Error("Invalid resource upload count");
+          }
+          setUploaded(reconcile([...allUploaded.values()], "uri"));
+          const values = question.multiSelect ? new Set(props.selected) : new Set<string>();
+          for (const resource of result.resources) {
+            values.add(resource.uri);
+          }
+          dispatchSelection([...values]);
+        } else if ("preview" in result) {
+          if (result.preview.viewId) {
+            // Keep the previous preview and operation busy until its renderer is ready.
+            await ResourcePreview.preload();
+            if (!current()) {
+              return;
+            }
+            setPreview({ view: { id: result.preview.viewId } });
+          } else {
+            const text = result.preview.contents?.map((entry) => entry.text ?? "").join("\n") ?? "";
+            const images = result.preview.contents
+              ?.flatMap((entry) => {
+                const url =
+                  entry.blob && entry.mimeType
+                    ? `data:${entry.mimeType};base64,${entry.blob}`
+                    : undefined;
+                return isQuestionThumbnail(url) ? [url] : [];
+              })
+              .slice(0, 4);
+            setPreview({ text: text.slice(0, 65536), images });
+          }
+        }
+      } catch (failure) {
+        if (current()) {
+          throw failure;
+        }
+      } finally {
+        if (current()) {
+          active.abort = undefined;
         }
       }
-    } catch (failure) {
-      if (current()) {
-        setError(formatUiError(failure));
-      }
-    } finally {
-      if (current()) {
-        operationAbort = undefined;
-        setOperationRevision((revision) => revision + 1);
-      }
-    }
+    })();
+    // The scoped boundary may retire before it observes this attempt's rejection.
+    void pending.catch(() => {});
+    setAttempt({ result: pending });
+    await Promise.resolve();
+    await presentOperation(pending, abort.signal).catch(() => {});
   }
 
   async function upload(input: HTMLInputElement) {
@@ -202,7 +210,7 @@ export function ChatQuestionResource(props: ResourceProps) {
       const limits = resolveChatAttachmentLimits(context?.gateway.snapshot.hello?.policy);
       if (
         !limits ||
-        files.length + uploaded().length > 64 ||
+        files.length + uploaded.length > 64 ||
         admitAttachmentFiles(files, limits, 0).length !== files.length
       ) {
         throw new Error(t("chat.questions.resourceUploadTooLarge"));
@@ -225,21 +233,38 @@ export function ChatQuestionResource(props: ResourceProps) {
     });
   }
 
-  const dispatchSelection = (values: string[]) =>
-    host.dispatchEvent(
-      new CustomEvent("resource-selection", {
-        detail: { values },
-        bubbles: true,
-        composed: true,
-      }),
-    );
+  const dispatchSelection = (values: string[]) => props.onSelection?.(values);
   return (
     <openclaw-chat-question-resource
       ref={(element) => {
         host = element;
       }}
-      onResource-selection={(event) => props["onResource-selection"]?.(event)}
     >
+      {/* Request scope owns uploads; disabled transitions retire only operation state. */}
+      <For each={[identity()]}>
+        {() => {
+          onSettled(() => {
+            setUploaded(() => []);
+          });
+          return (
+            <For each={[props.disabled]}>
+              {() => {
+                onSettled(() => {
+                  const next: OperationScope = { live: true, abort: undefined };
+                  operationScope = next;
+                  setAttempt(undefined);
+                  setPreview(null);
+                  return () => {
+                    next.live = false;
+                    next.abort?.abort();
+                  };
+                });
+                return null;
+              }}
+            </For>
+          );
+        }}
+      </For>
       {props.question?.resource?.viewId && (
         <div class="chat-question-panel__resource-actions">
           <For each={props.question.options}>
@@ -251,7 +276,7 @@ export function ChatQuestionResource(props: ResourceProps) {
                     <button
                       class="btn btn--sm"
                       type="button"
-                      disabled={props.disabled || isBusy()}
+                      disabled={isBusy() || props.disabled}
                       onClick={() =>
                         void operation(async () => ({ action: "preview", optionIndex: index() }))
                       }
@@ -274,19 +299,19 @@ export function ChatQuestionResource(props: ResourceProps) {
                 }
                 accept={props.question.resource.userOptions.accept?.join(",")}
                 webkitdirectory={props.question.resource.userOptions.kind === "directory"}
-                disabled={props.disabled || isBusy()}
+                disabled={isBusy() || props.disabled}
                 onChange={(event) => void upload(event.currentTarget)}
               />
             </label>
           )}
-          <For each={uploaded().filter((entry) => props.selected.has(entry.uri))}>
+          <For each={uploaded.filter((entry) => props.selected.has(entry.uri))}>
             {(entry) => (
               <div>
                 {entry.name}
                 <button
                   class="btn btn--sm"
                   type="button"
-                  disabled={props.disabled || isBusy()}
+                  disabled={isBusy() || props.disabled}
                   onClick={() =>
                     dispatchSelection([...props.selected].filter((value) => value !== entry.uri))
                   }
@@ -297,7 +322,11 @@ export function ChatQuestionResource(props: ResourceProps) {
             )}
           </For>
           {isBusy() && <div role="status">{t("common.loading")}</div>}
-          {error() && <div role="alert">{error()}</div>}
+          <Show when={!isBusy()}>
+            <Errored fallback={(error) => <div role="alert">{formatUiError(error())}</div>}>
+              {outcome()}
+            </Errored>
+          </Show>
           <Show
             when={preview()?.view}
             keyed
@@ -318,7 +347,11 @@ export function ChatQuestionResource(props: ResourceProps) {
               )
             }
           >
-            {(view) => <view.View sessionKey={props.sessionKey} viewId={view.id} />}
+            {(view) => (
+              <Loading>
+                <ResourcePreview sessionKey={props.sessionKey} viewId={view.id} />
+              </Loading>
+            )}
           </Show>
         </div>
       )}
@@ -329,8 +362,7 @@ export function ChatQuestionResource(props: ResourceProps) {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-chat-question-resource": HTMLAttributes<HTMLElement> &
-        Pick<ResourceProps, "onResource-selection">;
+      "openclaw-chat-question-resource": HTMLAttributes<HTMLElement>;
     }
   }
 }

@@ -198,9 +198,7 @@ async function withoutParentTranscriptSql(operation: () => Promise<void>) {
     for (const entry of observed) {
       expect(entry.databasePath, "caller-thread file-backed SQLite activity").toBeNull();
       if (entry.sql !== undefined) {
-        expect(entry.sql).toBe(
-          "SELECT sqlite_version() AS version, sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
-        );
+        expect(entry.sql).toMatch(/^SELECT sqlite_version\(\) AS version, /u);
       }
     }
   } finally {
@@ -521,7 +519,7 @@ it("returns complete stored reads and typed errors after existing-only status an
     expect(await store.readUtterancesForSession(session)).toEqual(
       storedUtterances(session, utterances),
     );
-    expect(await store.readUtterancesForSession(session, { maxUtterances: 3 })).toEqual(
+    expect((await store.readSummarySnapshot(session, 3))?.utterances).toEqual(
       storedUtterances(session, utterances.slice(-3)),
     );
     expect((await store.readSummary(session)).summary).toEqual(summary);

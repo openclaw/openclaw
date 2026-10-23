@@ -5,12 +5,12 @@ import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatModelControls } from "./chat-model-controls.tsx";
 
 type Props = Parameters<typeof ChatModelControls>[0];
 
-function controls(overrides: Partial<Props>) {
+async function controls(overrides: Partial<Props>) {
   const sessions = createSessionsListResult({ model: "primary", modelProvider: "example" });
   const selectedSession = {
     ...sessions.sessions[0]!,
@@ -54,6 +54,9 @@ function controls(overrides: Partial<Props>) {
   picker.open = true;
   picker.dispatchEvent(new Event("toggle"));
   flush();
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+  );
   const update = (next: Partial<Props>) => {
     setCurrent({ ...current(), ...next });
     flush();
@@ -88,7 +91,7 @@ it.each([
   { name: "sending", sending: true },
   { name: "preparing", activeRunId: "active-run" },
   { name: "streaming", stream: "A reply in progress" },
-])("edits model, reasoning, and speed preferences while $name", (busy) => {
+])("edits model, reasoning, and speed preferences while $name", async (busy) => {
   const {
     model,
     option,
@@ -98,7 +101,7 @@ it.each([
     onModelSelect,
     onThinkingSelect,
     onFastModeSelect,
-  } = controls(busy);
+  } = await controls(busy);
   expect(model.getAttribute("aria-disabled")).toBe("false");
   expect(effort.getAttribute("aria-disabled")).toBe("false");
   option.click();
@@ -121,8 +124,8 @@ it.each([
     modelMutationDisabledReason: "Read only",
     effortMutationDisabledReason: "Read only",
   },
-])("retains $name guards during an active response", (guard) => {
-  const { model, option, slider, onModelSelect, onThinkingSelect } = controls({
+])("retains $name guards during an active response", async (guard) => {
+  const { model, option, slider, onModelSelect, onThinkingSelect } = await controls({
     ...guard,
     activeRunId: "active-run",
     stream: "Working",
@@ -136,7 +139,7 @@ it.each([
   expect(onThinkingSelect).not.toHaveBeenCalled();
 });
 
-it("retires and restores an unavailable context-window control with its access guard", () => {
+it("retires and restores an unavailable context-window control with its access guard", async () => {
   const contextWindowTarget = {
     contextWindow: "standard",
     contextWindowDefault: "standard",
@@ -145,7 +148,10 @@ it("retires and restores an unavailable context-window control with its access g
       { id: "extended", label: "Extended", contextWindow: 200_000 },
     ],
   };
-  const view = controls({ contextWindowTarget, contextWindowMutationDisabledReason: "Admin only" });
+  const view = await controls({
+    contextWindowTarget,
+    contextWindowMutationDisabledReason: "Admin only",
+  });
   expect(
     view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled,
   ).toBe(true);
@@ -155,4 +161,45 @@ it("retires and restores an unavailable context-window control with its access g
   expect(
     view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled,
   ).toBe(true);
+});
+
+it("updates model selection against a retained and replaced catalog", async () => {
+  const view = await controls({});
+  const option = (id: string) =>
+    view.container.querySelector<HTMLButtonElement>(`[data-chat-model-option="example/${id}"]`);
+  const selectSession = (model: string) => {
+    const sessions = createSessionsListResult({
+      model,
+      modelProvider: "example",
+      modelOverrideSource: "user",
+    });
+    view.update({ selectedSession: sessions.sessions[0], sessionsResult: sessions });
+  };
+
+  selectSession("other");
+  await waitForSolid(() => {
+    expect(option("other")?.getAttribute("aria-selected")).toBe("true");
+    expect(option("primary")?.getAttribute("aria-selected")).toBe("false");
+  });
+
+  view.update({
+    modelCatalog: [
+      { id: "other", name: "Other refreshed", provider: "example", supportsFastMode: true },
+      { id: "replacement", name: "Replacement", provider: "example", supportsFastMode: true },
+    ],
+  });
+  await waitForSolid(() => {
+    expect(option("other")?.textContent).toContain("Other refreshed");
+    expect(option("replacement")).not.toBeNull();
+    expect(option("primary")).toBeNull();
+  });
+
+  selectSession("replacement");
+  await waitForSolid(() => {
+    expect(option("replacement")?.getAttribute("aria-selected")).toBe("true");
+    expect(option("other")?.getAttribute("aria-selected")).toBe("false");
+    expect(view.model.textContent).toContain("Replacement");
+  });
+  expectDefined(option("other"), "refreshed model option").click();
+  expect(view.onModelSelect).toHaveBeenCalledWith("example/other", "main", undefined);
 });

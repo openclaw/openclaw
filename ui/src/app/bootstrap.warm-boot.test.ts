@@ -122,7 +122,7 @@ describe("warm boot profile validation", () => {
     const runtime = bootstrapApplication();
     expect(runtime.warmBoot).toBe(true);
     fixture.gateway.connect();
-    fixture.current().opts.onClose?.({
+    fixture.current().testOptions.onClose?.({
       code: 4008,
       reason: "pairing required",
       willRetry: true,
@@ -131,14 +131,14 @@ describe("warm boot profile validation", () => {
     expect(runtime.warmBoot).toBe(false);
     fixture
       .current()
-      .opts.onClose?.({ code: 1006, reason: "network unavailable", willRetry: true });
+      .testOptions.onClose?.({ code: 1006, reason: "network unavailable", willRetry: true });
     expect(fixture.gateway.snapshot.lastErrorCode).toBeNull();
     expect(runtime.warmBoot).toBe(false);
     expect(localStorage.getItem(BOOT_RECORD_PREFIX + scope)).toBeNull();
     expect(sessionStorage.getItem("retained-draft")).toBe("Keep this draft");
   });
 
-  it("keeps a version2 roster private until live discovery, including same-profile reconnect failure", async () => {
+  it("keeps a version2 roster private until live discovery and retains that discovery on reconnect failure", async () => {
     const record = seedBootRecord({
       recoveryScope: "test-recovery-scope",
       agents: makeBootRoster({
@@ -179,9 +179,10 @@ describe("warm boot profile validation", () => {
     });
     await pending;
     expect(agents.state.agentsList?.agents).toEqual([{ id: "shared" }]);
+    const confirmed = agents.state.agentsList;
 
     publish("reconnecting");
-    expect(agents.state.agentsList).toBeNull();
+    expect(agents.state.agentsList).toBe(confirmed);
     expect(runtime.context.offlineSessionDefaults).toEqual({
       mainKey: "workspace",
       scope: "global",
@@ -189,7 +190,7 @@ describe("warm boot profile validation", () => {
     discover.mockRejectedValue(new Error("roster unavailable"));
     publish("connected");
     await agents.ensureList();
-    expect(agents.state.agentsList).toBeNull();
+    expect(agents.state.agentsList).toBe(confirmed);
     expect(agents.state.agentsError).toContain("roster unavailable");
     expect(request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(2);
   });

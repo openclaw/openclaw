@@ -28,14 +28,10 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
-import {
-  getSessionWorkAdmissionOwnerRelease,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { getExistingSessionControllerMailbox } from "../../sessions/session-controller.mailbox.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { waitForFast } from "../subagent-test-fixtures.test-helpers.js";
-import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "./main-session-recovery-admission.js";
 import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
 import * as recoveryTargets from "./main-session-restart-recovery-exact-target.js";
 import {
@@ -60,6 +56,22 @@ const gatewayRuntime = createRecoveryRuntimeFixture({
   sendRecoveryNotice: async () => ({ suppressed: false }),
 });
 
+/** Reads the durable reservation at the moment the resend's mailbox input settles. */
+function observeReservationAtResendSettlement(params: {
+  storePath: string;
+  sessionKey: string;
+  runId: unknown;
+}) {
+  const input = getExistingSessionControllerMailbox(
+    params.sessionKey,
+    captureSessionTarget({ storeScope: params.storePath, sessionKey: params.sessionKey }),
+  )?.entries.find((entry) => entry.protocolRunId === params.runId);
+  expect(input, "the resend must be a mailbox input").toBeDefined();
+  return input!.settlement.promise.then(
+    () => loadSessionEntry(params)?.mainRestartRecovery?.reservation,
+  );
+}
+
 describe("startup recovery admission", () => {
   let tmpDir: string;
   const { makeMainSessionFixture, writeCompletedToolTranscript } =
@@ -83,7 +95,6 @@ describe("startup recovery admission", () => {
   ) {
     const recovery = scheduleRestartAbortedMainSessionRecovery({
       getConfig: () => ({}),
-      delayMs: 0,
       stateDir: tmpDir,
       gatewayRuntime,
       ...options,
@@ -366,50 +377,39 @@ describe("startup recovery admission", () => {
     },
   );
 
-  it("skips a recovery target replaced while its admission waits", async () => {
+  it("skips a recovery target replaced while runtime preparation waits", async () => {
     const { storePath, sessionKey } = await makeMainSessionFixture();
-    const mutationEntered = createDeferred();
-    const releaseMutation = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation("recover", {
-      scope: storePath,
-      identities: [sessionKey, "main-session"],
-      run: async () => {
-        mutationEntered.resolve();
-        await releaseMutation.promise;
-        await replaceSessionEntry(
-          { storePath, sessionKey },
-          { sessionId: "replacement-session", updatedAt: Date.now(), status: "done" },
-        );
-      },
-    });
-    await mutationEntered.promise;
+    const preparationEntered = createDeferred();
+    const releasePreparation = createDeferred();
     const recovery = retryRecovery({
       expectedSessionId: "main-session",
       storePath,
       sessionKey,
-      gatewayRuntime,
+      gatewayRuntime: {
+        ...gatewayRuntime,
+        prepareRestartRecovery: async () => {
+          preparationEntered.resolve();
+          await releasePreparation.promise;
+          return undefined;
+        },
+      },
     });
     try {
-      await waitForFast(() =>
-        expect(
-          getSessionWorkAdmissionOwnerRelease({
-            scope: storePath,
-            identities: [sessionKey, "main-session"],
-            owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
-          }),
-        ).toBeDefined(),
+      await preparationEntered.promise;
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        { sessionId: "replacement-session", updatedAt: Date.now(), status: "done" },
       );
-      releaseMutation.resolve();
-      await mutation;
-      await expect(recovery).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 1 });
+      releasePreparation.resolve();
+      await expect(recovery).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
       expect(callGateway).not.toHaveBeenCalled();
       expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
         sessionId: "replacement-session",
         status: "done",
       });
     } finally {
-      releaseMutation.resolve();
-      await Promise.allSettled([mutation, recovery]);
+      releasePreparation.resolve();
+      await recovery;
     }
   });
 
@@ -708,6 +708,84 @@ describe("startup recovery admission", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
+  it("keeps hard-drain refusal quiet and preserves recovery for the next lifecycle", async ({
+    signal,
+  }) => {
+    const target = await finalAttempt("cycle-shutdown");
+    const before = structuredClone(loadSessionEntry(target));
+    const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
+    const prepare = vi.spyOn(gatewayRuntime, "prepareRestartRecovery");
+    vi.useFakeTimers();
+    gatewayWorkAdmission.markGatewayRestartDraining("stop (SIGTERM)");
+    const recovery = schedule({ maxRetries: 1 });
+    // Settle the admission rejection and its diagnostic before stop can cancel the scheduler.
+    await vi.advanceTimersByTimeAsync(0);
+    await recovery.stop();
+    expect(warn).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry(target)).toEqual(before);
+
+    resetGatewayWorkAdmission();
+    rotateAgentEventLifecycleGeneration();
+    const restarted = schedule({ maxRetries: 1 });
+    await withinTest(gatewayRuntime.expectAdmission(1, restarted, target), signal);
+    const resumed = loadSessionEntry(target);
+    expect(resumed).toMatchObject({
+      sessionId: before?.sessionId,
+      abortedLastRun: false,
+      mainRestartRecovery: { cycleId: "cycle-shutdown", chargedAttempts: 3 },
+    });
+    expect(resumed?.mainRestartRecovery?.reservation).toBeUndefined();
+    expect(resumed?.mainRestartRecovery?.tombstone).toBeUndefined();
+    expect(resumed?.pendingFinalDelivery).toEqual(before?.pendingFinalDelivery);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it.for([
+    {
+      name: "ordinary failure during drain",
+      draining: true,
+      failure: () => new Error("preparation failed"),
+    },
+    {
+      name: "wrapped drain failure",
+      draining: true,
+      failure: () =>
+        new Error("preparation failed", { cause: new gatewayWorkAdmission.GatewayDrainingError() }),
+    },
+    {
+      name: "aggregate drain failure",
+      draining: true,
+      failure: () =>
+        new AggregateError(
+          [new gatewayWorkAdmission.GatewayDrainingError(), new Error("cleanup failed")],
+          "preparation cleanup failed",
+        ),
+    },
+    {
+      name: "drain error without active drain",
+      draining: false,
+      failure: () => new gatewayWorkAdmission.GatewayDrainingError(),
+    },
+  ])("reports $name from admitted recovery", async ({ draining, failure }) => {
+    vi.useFakeTimers();
+    const error = failure();
+    vi.spyOn(gatewayRuntime, "prepareRestartRecovery").mockImplementation(() => {
+      if (draining) {
+        gatewayWorkAdmission.markGatewayRestartDraining("stop (SIGTERM)");
+      }
+      throw error;
+    });
+    const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
+    const recovery = schedule({ maxRetries: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    await recovery.stop();
+    expect(warn).toHaveBeenCalledWith(`main-session restart recovery gave up: ${String(error)}`);
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
   it.for([
     { name: "the final startup retry consumes the last charge", agentId: "main", dirs: ["main"] },
     {
@@ -732,11 +810,17 @@ describe("startup recovery admission", () => {
         targets.push({ agentId, sessionKey, storePath: fixture.storePath });
       }
       const { storePath } = targets[0]!;
+      let reservationAtSettlement: Promise<unknown> | undefined;
       if (multipleStores) {
         failDispatch();
       } else {
         vi.mocked(callGateway)
-          .mockImplementationOnce(async () => {
+          .mockImplementationOnce(async (request) => {
+            reservationAtSettlement = observeReservationAtResendSettlement({
+              storePath,
+              sessionKey,
+              runId: (request.params as { idempotencyKey?: unknown }).idempotencyKey,
+            });
             await replaceSessionEntry(
               { sessionKey: "agent:main:fresh", storePath },
               {
@@ -780,6 +864,8 @@ describe("startup recovery admission", () => {
           vi.mocked(callGateway).mock.calls.filter(([call]) => call.method === "agent"),
         ).toHaveLength(2);
       } else {
+        // The failed attempt's rollback commits before its mailbox input settles.
+        await expect(reservationAtSettlement).resolves.toBeUndefined();
         const freshEntry = loadSessionEntry({ sessionKey: "agent:main:fresh", storePath });
         expect(freshEntry).toMatchObject({
           sessionId: "fresh-session",

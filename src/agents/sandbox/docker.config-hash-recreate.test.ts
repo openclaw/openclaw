@@ -79,7 +79,12 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
       harness.ensureSandboxContainer(params),
     ]);
 
-    expect(first).toEqual({ containerName: "oc-test-shared", containerId: "c".repeat(64) });
+    expect(first).toMatchObject({
+      containerName: "oc-test-shared",
+      containerId: "c".repeat(64),
+      configHash: expect.any(String),
+      currentConfig: true,
+    });
     expect(second).toEqual(first);
     expect(calls("create")).toHaveLength(1);
     expect(calls("start")).toHaveLength(1);
@@ -126,7 +131,12 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
               ...(backendId === "podman" ? { engine: harness.PODMAN_SANDBOX_ENGINE } : {}),
               ...containerParams(cfg, workspaceDir),
             }),
-          ).resolves.toEqual({ containerName, containerId: "c".repeat(64) });
+          ).resolves.toMatchObject({
+            containerName,
+            containerId: "c".repeat(64),
+            configHash: expect.any(String),
+            currentConfig: true,
+          });
 
           await expect(registry.readRegistryEntry(containerName)).resolves.toMatchObject({
             runtimeState: "ready",
@@ -348,7 +358,12 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
         args: expect.arrayContaining(["create", "--name", containerName]),
       });
       if (state === "missing") {
-        await expect(operation).resolves.toEqual({ containerName, containerId: "c".repeat(64) });
+        await expect(operation).resolves.toMatchObject({
+          containerName,
+          containerId: "c".repeat(64),
+          currentConfig: true,
+          configHash: expect.any(String),
+        });
         expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith(containerName);
         expect(spawnState.calls).toContainEqual(createCall);
       } else {
@@ -496,10 +511,8 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
     cfg.docker.workdir = "/workspace/.";
     cfg.docker.dangerouslyAllowExternalBindSources = true;
     prepareCreation();
-
     const createCall = await createPodman(cfg, workspaceDir);
     const bindArgs = collectDockerFlagValues(createCall.args, "-v");
-
     expect(createCall.command).toBe("podman");
     expect(bindArgs).not.toContain(customMount);
     expect(bindArgs).toContain(`${path.join(workspaceDir, "skills")}:/workspace/skills:ro,z`);

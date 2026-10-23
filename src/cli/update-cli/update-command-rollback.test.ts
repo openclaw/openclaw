@@ -36,7 +36,12 @@ const mocks = vi.hoisted(() => ({
   serviceState: vi.fn<typeof import("../../daemon/service.js").readGatewayServiceState>(),
   execSchtasks: vi.fn<typeof import("../../daemon/schtasks-exec.js").execSchtasks>(),
 }));
-vi.mock("../../daemon/schtasks-exec.js", () => ({ execSchtasks: mocks.execSchtasks }));
+// mock-isolation: Rollback owns a synthetic task; native enable/disable must not reach the host.
+vi.mock("../../daemon/schtasks-exec.js", () => ({
+  execSchtasks: mocks.execSchtasks,
+  execScheduledTaskEnabledChange: (taskName: string, enabled: boolean) =>
+    mocks.execSchtasks(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]),
+}));
 vi.mock("../../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service.js")>()),
   readGatewayServiceState: mocks.serviceState,

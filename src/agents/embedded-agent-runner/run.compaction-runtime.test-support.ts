@@ -11,6 +11,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
+import { serializeAgentEventCallback } from "../embedded-agent-subscribe.callback.js";
 import type { EmbeddedRunCompactionRecoveryInput } from "./run/compaction-runtime.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import { clearEmbeddedSessionPromptStates } from "./session-prompt-state.js";
@@ -64,7 +65,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
 
   const { admitReplyTurn } = await import("../../auto-reply/reply/reply-turn-admission.js");
   const { waitForReplyRunSuccessorAdmission } =
-    await import("../../auto-reply/reply/reply-run-registry.js");
+    await import("../../sessions/session-controller.wait.js");
   let replyOperation: PreparedEmbeddedRunInput["runParams"]["replyOperation"];
 
   const memoryManager = options.inMemory ? SessionManager.inMemory(workspaceDir) : undefined;
@@ -199,7 +200,11 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       expect(writerFence).toBeUndefined();
     } else {
       expect(writerFence?.expectedWriterRunId).toBe(runId);
-      runParams.sessionTarget = { ...target, ...writerFence };
+      runParams.sessionTarget = {
+        ...target,
+        expectedLifecycleRevision: writerFence?.expectedLifecycleRevision,
+        expectedWriterRunId: writerFence?.expectedWriterRunId,
+      };
     }
     if (options.replyAdmission) {
       const reply = await admitReplyTurn({
@@ -228,9 +233,14 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
         forgetActiveSessionForShutdown(accepted.sessionId);
       }
     };
+    // The worker accepts only the exact fence fields carried by an admitted run target.
+    const fencedTarget = {
+      ...target,
+      expectedLifecycleRevision: writerFence?.expectedLifecycleRevision,
+      expectedWriterRunId: writerFence?.expectedWriterRunId,
+    };
     const openWriter = async () =>
-      memoryManager ??
-      (await SessionManager.openAsync({ ...target, ...writerFence }, workspaceDir));
+      memoryManager ?? (await SessionManager.openAsync(fencedTarget, workspaceDir));
     const compact = vi.fn<ContextEngine["compact"]>(async () => {
       const writer = await openWriter();
       await writer.appendCompactionAsync("Summary of earlier topic", firstKeptEntryId, 4_097);
@@ -260,8 +270,9 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       { hookName: "before_compaction", handler: beforeHook },
       { hookName: "after_compaction", handler: afterHook },
     ]);
-    const onAgentEvent = vi.fn();
-    runParams.onAgentEvent = onAgentEvent;
+    const onAgentEvent =
+      vi.fn<NonNullable<PreparedEmbeddedRunInput["runParams"]["onAgentEvent"]>>();
+    runParams.onAgentEvent = serializeAgentEventCallback(onAgentEvent);
     const runtime = createEmbeddedRunCompactionRuntime({
       runParams,
       contextEngine,
@@ -408,9 +419,16 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       }
     };
     const expectNoContinuation = () => {
-      for (const retry of [...retries, armPostCompactionGuard, onAgentEvent]) {
+      for (const retry of [...retries, armPostCompactionGuard]) {
         expect(retry).not.toHaveBeenCalled();
       }
+      expect(
+        onAgentEvent.mock.calls.filter(
+          ([event]) =>
+            event.stream !== "compaction" ||
+            (event.data.phase !== "start" && event.data.phase !== "end"),
+        ),
+      ).toEqual([]);
     };
     return {
       compact,
@@ -419,6 +437,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       replyOperation,
       beforeHook,
       afterHook,
+      onAgentEvent,
       updates,
       controller,
       callerError,

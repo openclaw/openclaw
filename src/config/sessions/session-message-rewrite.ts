@@ -117,11 +117,11 @@ async function rewritePreparedTranscriptMessage<T>(
     resolveSqliteTranscriptScope(requested, params.readSource),
   );
   const database = { ...toDatabaseOptions(scope), path: scope.path };
-  const selection = structuredClone({
+  const selection = {
     scope,
     target: params.target,
     expectedEntry: params.expectedEntry,
-  });
+  };
   return await runSessionEntryWorkerOperation<
     SessionMessageRewriteCommitted,
     MessageRewriteResult<T> | null

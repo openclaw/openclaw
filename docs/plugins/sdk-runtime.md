@@ -34,6 +34,12 @@ enabling behavior that depends on it; equal product versions and tool names do
 not establish support. These process-stable facts do not grant caller authority,
 and they remain unavailable during metadata-only registration.
 
+Versioned APIs use string tokens in that list. For example,
+`api.runtime.capabilities?.includes("requester-model-catalog-v1")` advertises the
+[requester-admitted model catalog](/plugins/sdk-runtime/models#requester-admitted-model-catalog).
+An absent token is unsupported; do not substitute a product-version check or
+attach capability properties to the array.
+
 `sender-restricted-hidden-helpers-v1` guarantees that sender-restricted requesters
 can start only hidden helpers of the same agent, retaining their restricted tool
 surface and session root. Channels may use this capability to enable helper
@@ -342,6 +348,9 @@ immediately and returns the callback's value or promise. It detaches the calling
 turn, request, and unrelated async-local context while preserving the instance's
 host resource bindings. Each call selects that exact instance's current adopted
 registry, so a retained plugin sees replacement providers after a reload.
+Background SQLite readers belong to the instance, independently of the temporary
+scope that loaded it or invoked the callback. They stay available through admitted
+work and cleanup, and close with the instance's module resources.
 
 Use it when installing timers, watchers, and listeners, and again when delivering
 each background callback. Keep the runner with the resource that owns it; an old
@@ -356,8 +365,10 @@ cleanup owner. Like the other instance lifecycle fields, it can be absent on an
 API host without a managed instance.
 
 Inspection release reports settled disposal failures without marking the managed
-resources as still retained. Prepared-model shutdown records those failures and
-can finish after cleanup settles. Unfinished disposal and failed host cleanup
+resources as still retained. It joins physical cleanup even when an earlier
+bounded retirement report timed out, so that timeout does not poison later
+Gateway closes. Prepared-model shutdown records callback failures and can finish
+after cleanup settles. Unfinished disposal and failed host cleanup
 prerequisites still prevent shutdown from reporting a completed resource release.
 
 Stopping or restarting the Gateway preserves persistent plugin session state and

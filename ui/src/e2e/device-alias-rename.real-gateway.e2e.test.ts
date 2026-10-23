@@ -4,6 +4,7 @@ import { validateDevicePairRenameParams } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { listDevicePairing, type PairedDevice } from "../../../src/infra/device-pairing.js";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   approvePairing,
@@ -55,9 +56,16 @@ function pairedDeviceProof(device: PairedDevice | undefined) {
 // Reload remembers the confirmed URL and may not ask again.
 async function confirmGatewayUrl(page: Page, options: { required: boolean }) {
   const confirmation = page.locator("openclaw-gateway-url-confirmation");
-  await confirmation
-    .waitFor({ state: "visible", timeout: options.required ? 10_000 : 3_000 })
-    .catch(() => undefined);
+  const confirmationWait = confirmation.waitFor({
+    state: "visible",
+    timeout: options.required ? 10_000 : 3_000,
+  });
+  // A live reload handshake also proves the saved Gateway needs no confirmation.
+  await (
+    options.required
+      ? confirmationWait
+      : Promise.race([confirmationWait, waitForControlUiGatewayReady(page, 3_000)])
+  ).catch(() => undefined);
   if (!(await confirmation.isVisible().catch(() => false))) {
     if (options.required) {
       throw new Error("gateway URL confirmation dialog did not appear");
@@ -81,6 +89,7 @@ async function waitForAlias(page: Page, reload = false) {
   if (reload) {
     await page.reload();
     await confirmGatewayUrl(page, { required: false });
+    await waitForControlUiGatewayReady(page);
   }
   await page.locator(".device-entry .settings-row__title", { hasText: NEW_ALIAS }).waitFor();
 }
@@ -98,8 +107,10 @@ suite.define(() => {
 
       const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
         await import("../../../src/infra/device-identity.js");
-      const identityPath = path.join(state.stateDir, `device-alias-proof.sqlite`);
-      const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+      const identity = loadOrCreateDeviceIdentity({
+        env: state.env,
+        identityKey: "device-alias-proof",
+      });
       await approvePairing({
         deviceId: identity.deviceId,
         publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),

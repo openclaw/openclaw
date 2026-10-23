@@ -21,6 +21,9 @@ const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runt
 export const QUEUE_CAP_REJECTION_TEXT =
   "This message was not queued because the session queue is full. Please try again after the current response finishes.";
 
+export const COLLABORATIVE_STEERING_DISABLED_TEXT =
+  "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.";
+
 type SourceReplySuppressionState = {
   ctx: { InboundEventKind?: InboundEventKind };
   explicitCommandTurnCtx: boolean;

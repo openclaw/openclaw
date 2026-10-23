@@ -1,215 +1,160 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { beforeEach, expect, it, vi } from "vitest";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { PluginEntryConfig } from "./types.plugins.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
+// mock-isolation: Synthetic channel shapes isolate DM warning policy from schema admission.
 vi.mock("./zod-schema.js", () => ({
-  OpenClawSchema: {
-    safeParse: (raw: unknown) => ({ success: true, data: raw }),
-  },
+  OpenClawSchema: { safeParse: (raw: unknown) => ({ success: true, data: raw }) },
 }));
+beforeEach(clearPluginMetadataLifecycleCaches);
 
-beforeEach(() => {
-  clearPluginMetadataLifecycleCaches();
-});
-
-function validateDmPolicy(
+function warnings(raw: unknown, plugins: PluginManifestRecord[]) {
+  const result = validateConfigObjectWithPlugins(raw, {
+    pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins } },
+  });
+  expect(result.ok).toBe(true);
+  return result.warnings;
+}
+function dmWarnings(
   channels: Record<string, unknown>,
-  doctorCapabilities?: {
-    dmAllowFromMode?: "topOnly" | "topOrNested" | "nestedOnly";
-    openDmRequiresAllowFromWildcard?: boolean;
-  },
+  doctorCapabilities?: { dmAllowFromMode: "nestedOnly" },
 ) {
-  return validateConfigObjectWithPlugins(
+  return warnings(
     { channels },
-    {
-      pluginMetadataSnapshot: {
-        manifestRegistry: {
-          diagnostics: [],
-          plugins: Object.keys(channels).map((id) =>
-            createPluginManifestRecordFixture({
-              id,
-              channels: [id],
-              packageChannel: { id, doctorCapabilities },
-            }),
-          ),
-        },
-      },
-    },
+    Object.keys(channels).map((id) =>
+      createPluginManifestRecordFixture({
+        id,
+        channels: [id],
+        packageChannel: { id, doctorCapabilities },
+      }),
+    ),
   );
 }
+const forChannel = (issues: ReturnType<typeof warnings>, channel: string) =>
+  issues.filter((issue) => issue.path.startsWith(`channels.${channel}`));
 
-describe("validateConfigObjectWithPlugins DM policy warnings", () => {
-  const ownerCases: Array<{
-    name: string;
-    entries: Record<string, PluginEntryConfig>;
+type OwnerCase = [
+  name: string,
+  entries: Record<string, PluginEntryConfig>,
+  expected: "plus" | "core" | "first",
+  options?: {
+    origin?: PluginManifestRecord["origin"];
     allow?: string[];
     deny?: string[];
-    plusOrigin?: PluginManifestRecord["origin"];
-    expected: "plus" | "core" | "first";
-    disabledConfigWarning?: boolean;
-  }> = [
-    { name: "preferred owner", entries: { plus: { enabled: true } }, expected: "plus" },
-    {
-      name: "disabled closer replacement",
-      entries: { plus: { enabled: false }, core: { enabled: true } },
-      plusOrigin: "config",
-      expected: "core",
-    },
-    {
-      name: "denied replacement",
-      entries: { plus: { enabled: true }, core: { enabled: true } },
-      deny: ["plus"],
-      expected: "core",
-    },
-    {
-      name: "ineligible workspace replacement",
-      entries: { core: { enabled: true } },
-      plusOrigin: "workspace",
-      expected: "core",
-    },
-    {
-      name: "untrusted material config",
-      entries: { plus: { config: {} }, core: { enabled: true } },
-      allow: ["core"],
-      expected: "core",
-      disabledConfigWarning: true,
-    },
-    {
-      name: "same-origin dual selection",
-      entries: { plus: { enabled: true }, core: { enabled: true } },
-      expected: "first",
-    },
-  ];
-  it.each(
-    ownerCases.flatMap((scenario) => {
-      // Ineligible replacements must lose even when first; selected peers retain both orders.
-      const orders =
-        scenario.expected === "core" ? (["plus"] as const) : (["plus", "core"] as const);
-      return orders.map((first) => ({ scenario, first, requiresWildcard: first === "plus" }));
-    }),
-  )(
-    "uses $scenario.name DM capability with $first first and requiresWildcard=$requiresWildcard",
-    ({ scenario, first, requiresWildcard }) => {
-      const owner = scenario.expected === "first" ? first : scenario.expected;
-      const order = first === "plus" ? ["plus", "core"] : ["core", "plus"];
-      const registry: PluginManifestRegistry = {
-        diagnostics: [],
-        plugins: order.map((id) =>
-          createPluginManifestRecordFixture({
-            id,
-            origin: id === "plus" ? (scenario.plusOrigin ?? "global") : "global",
-            channels: ["proofchat"],
-            configSchema: { type: "object", additionalProperties: true },
-            packageChannel: {
-              id: "proofchat",
-              doctorCapabilities: {
-                openDmRequiresAllowFromWildcard:
-                  id === owner ? requiresWildcard : !requiresWildcard,
-              },
-            },
-            channelConfigs: {
-              proofchat: {
-                ...(id === "plus" ? { preferOver: ["core"] } : {}),
-                schema: {
-                  type: "object",
-                  properties: { [id]: { type: "string" } },
-                  required: [id],
-                  additionalProperties: true,
-                },
-              },
-            },
-          }),
-        ),
-      };
-      const result = validateConfigObjectWithPlugins(
-        {
-          plugins: { entries: scenario.entries, allow: scenario.allow, deny: scenario.deny },
-          channels: {
-            proofchat: {
-              [owner]: "selected schema",
-              dmPolicy: "open",
-              allowFrom: ["123"],
-              accounts: {
-                ops: { dmPolicy: "open", allowFrom: ["456"] },
-                empty: { dmPolicy: "allowlist", allowFrom: [] },
-              },
+    disabled?: boolean;
+  },
+];
+const enabled = { enabled: true };
+const disabled = { enabled: false };
+const untrusted = { config: {} };
+const coreOnly = { allow: ["core"], disabled: true };
+const owners: OwnerCase[] = [
+  ["preferred owner", { plus: enabled }, "plus"],
+  ["disabled replacement", { plus: disabled, core: enabled }, "core", { origin: "config" }],
+  ["denied replacement", { plus: enabled, core: enabled }, "core", { deny: ["plus"] }],
+  ["ineligible workspace replacement", { core: enabled }, "core", { origin: "workspace" }],
+  ["untrusted material config", { plus: untrusted, core: enabled }, "core", coreOnly],
+  ["same-origin dual selection", { plus: enabled, core: enabled }, "first"],
+];
+
+it.each(
+  owners.flatMap(([name, entries, expected, options = {}]) =>
+    (expected === "core" ? ["plus"] : ["plus", "core"]).map((first) => ({
+      name,
+      entries,
+      options,
+      first,
+      owner: expected === "first" ? first : expected,
+      requiresWildcard: first === "plus",
+    })),
+  ),
+)(
+  "uses $name DM capability with $first first",
+  ({ entries, options, first, owner, requiresWildcard }) => {
+    const order = first === "plus" ? ["plus", "core"] : ["core", "plus"];
+    const issues = warnings(
+      {
+        plugins: { entries, allow: options.allow, deny: options.deny },
+        channels: {
+          proofchat: {
+            [owner]: "selected schema",
+            dmPolicy: "open",
+            allowFrom: ["123"],
+            accounts: {
+              ops: { dmPolicy: "open", allowFrom: ["456"] },
+              empty: { dmPolicy: "allowlist", allowFrom: [] },
             },
           },
         },
-        { pluginMetadataSnapshot: { manifestRegistry: registry } },
-      );
-
-      expect(result.ok).toBe(true);
-      expect(
-        result.warnings
-          .filter((warning) => warning.path.startsWith("channels.proofchat"))
-          .map((warning) => warning.path),
-      ).toEqual(
-        requiresWildcard
-          ? [
-              "channels.proofchat.allowFrom",
-              "channels.proofchat.accounts.ops.allowFrom",
-              "channels.proofchat.accounts.empty.allowFrom",
-            ]
-          : ["channels.proofchat.accounts.empty.allowFrom"],
-      );
-      if (scenario.disabledConfigWarning) {
-        expect(result.warnings).toContainEqual(
-          expect.objectContaining({
-            path: "plugins.entries.plus",
-            message: expect.stringContaining("plugin disabled"),
-          }),
-        );
-      }
-    },
-  );
-
-  it("uses manifest metadata to skip nested-only DM config shapes", () => {
-    const result = validateDmPolicy(
-      { matrix: { dm: { policy: "open" } } },
-      { dmAllowFromMode: "nestedOnly" },
-    );
-    expect(result.ok).toBe(true);
-    expect(result.warnings.filter((warning) => warning.path.startsWith("channels.matrix"))).toEqual(
-      [],
-    );
-  });
-
-  it("does not warn for disabled channels or accounts", () => {
-    const result = validateDmPolicy({
-      mattermost: {
-        enabled: false,
-        dmPolicy: "open",
-        accounts: { team: { dmPolicy: "open" } },
       },
+      order.map((id) =>
+        createPluginManifestRecordFixture({
+          id,
+          origin: id === "plus" ? (options.origin ?? "global") : "global",
+          channels: ["proofchat"],
+          configSchema: { type: "object", additionalProperties: true },
+          packageChannel: {
+            id: "proofchat",
+            doctorCapabilities: {
+              openDmRequiresAllowFromWildcard: id === owner ? requiresWildcard : !requiresWildcard,
+            },
+          },
+          channelConfigs: {
+            proofchat: {
+              ...(id === "plus" ? { preferOver: ["core"] } : {}),
+              schema: {
+                type: "object",
+                properties: { [id]: { type: "string" } },
+                required: [id],
+                additionalProperties: true,
+              },
+            },
+          },
+        }),
+      ),
+    );
+    const suffixes = requiresWildcard
+      ? ["allowFrom", "accounts.ops.allowFrom", "accounts.empty.allowFrom"]
+      : ["accounts.empty.allowFrom"];
+    expect(forChannel(issues, "proofchat").map((issue) => issue.path)).toEqual(
+      suffixes.map((suffix) => `channels.proofchat.${suffix}`),
+    );
+    if (options.disabled) {
+      expect(issues).toContainEqual(
+        expect.objectContaining({
+          path: "plugins.entries.plus",
+          message: expect.stringContaining("plugin disabled"),
+        }),
+      );
+    }
+  },
+);
+
+it.each([
+  ["nested-only config", { matrix: { dm: { policy: "open" } } }, { dmAllowFromMode: "nestedOnly" }],
+  [
+    "disabled channels/accounts",
+    {
+      mattermost: { enabled: false, dmPolicy: "open", accounts: { team: { dmPolicy: "open" } } },
       slack: { accounts: { work: { enabled: false, dmPolicy: "open" } } },
-    });
-    expect(result.ok).toBe(true);
-    expect(
-      result.warnings.filter((warning) => warning.path.startsWith("channels.mattermost")),
-    ).toEqual([]);
-    expect(result.warnings.filter((warning) => warning.path.startsWith("channels.slack"))).toEqual(
-      [],
-    );
-  });
+    },
+    undefined,
+  ],
+] as const)("does not warn for %s", (_name, channels, capabilities) => {
+  expect(
+    dmWarnings(channels, capabilities).filter((issue) => issue.path.startsWith("channels.")),
+  ).toEqual([]);
+});
 
-  it("does not suggest channel allowFrom as sufficient when account allowFrom overrides it", () => {
-    const result = validateDmPolicy({
-      mattermost: {
-        allowFrom: ["*"],
-        accounts: { team: { dmPolicy: "open", allowFrom: [] } },
-      },
-    });
-    expect(result.ok).toBe(true);
-    const warning = result.warnings.find(
-      (entry) => entry.path === "channels.mattermost.accounts.team.allowFrom",
-    );
-    expect(warning?.message).toContain(
-      "remove channels.mattermost.accounts.team.allowFrom to inherit channels.mattermost.allowFrom",
-    );
-    expect(warning?.message).not.toContain("(or channels.mattermost.allowFrom)");
+it("does not suggest channel allowFrom as sufficient when account allowFrom overrides it", () => {
+  const issues = dmWarnings({
+    mattermost: { allowFrom: ["*"], accounts: { team: { dmPolicy: "open", allowFrom: [] } } },
   });
+  const path = "channels.mattermost.accounts.team.allowFrom";
+  const warning = issues.find((entry) => entry.path === path);
+  expect(warning?.message).toContain(`remove ${path} to inherit channels.mattermost.allowFrom`);
+  expect(warning?.message).not.toContain("(or channels.mattermost.allowFrom)");
 });

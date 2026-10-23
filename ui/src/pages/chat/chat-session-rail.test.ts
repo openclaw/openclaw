@@ -6,6 +6,8 @@ import type { SessionObserverDigest } from "../../../../packages/gateway-protoco
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../app/theme-branding.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
@@ -15,6 +17,7 @@ import {
   requestSessionCompanionAnswer,
 } from "./chat-session-companion.ts";
 import type { ChatSessionRailElement } from "./components/chat-session-rail.tsx";
+import { DirectDictationControl } from "./composer-direct-dictation.ts";
 import "./components/chat-session-rail.tsx";
 
 function digest(health: SessionObserverDigest["health"] = "on-track"): SessionObserverDigest {
@@ -77,6 +80,55 @@ describe("ChatSessionCompanionThreads", () => {
     expect(request).toHaveBeenCalledExactlyOnceWith(
       "sessions.companion.ask",
       { sessionKey: "one", agentId: "work", question: "Question" },
+      { timeoutMs: 70_000 },
+    );
+  });
+
+  it("carries the agent's Side chat model choices on questions", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.hydrate(
+      "one",
+      async () => ({ exchanges: [], defaultModel: "test/utility" }),
+      "work",
+    );
+    threads.setModelSelection("work", {
+      model: "test/model-c",
+      thinkingLevel: "high",
+      fastMode: true,
+    });
+    // A choice follows the agent into its other sessions, never into another agent.
+    expect(threads.view("two", "work").modelSelection).toEqual({
+      model: "test/model-c",
+      thinkingLevel: "high",
+      fastMode: true,
+    });
+    expect(threads.view("one", "other").modelSelection).toEqual({});
+    threads.setModelSelection("work", { model: undefined, fastMode: false });
+    expect(threads.view("one", "work")).toMatchObject({
+      defaultModel: "test/utility",
+      modelSelection: { thinkingLevel: "high", fastMode: false },
+    });
+
+    const request = vi.fn(async () => ({ answer: "Answer", ts: 1 }));
+    const client = { request: request as GatewayBrowserClient["request"] };
+    await requestSessionCompanionAnswer(
+      client,
+      "one",
+      "Question",
+      "work",
+      undefined,
+      undefined,
+      threads.view("one", "work").modelSelection,
+    );
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "sessions.companion.ask",
+      {
+        sessionKey: "one",
+        agentId: "work",
+        question: "Question",
+        thinkingLevel: "high",
+        fastMode: false,
+      },
       { timeoutMs: 70_000 },
     );
   });
@@ -255,6 +307,7 @@ describe("ChatSessionRailElement", () => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   async function mount(overrides: Partial<ChatSessionRailElement> = {}) {
@@ -269,6 +322,58 @@ describe("ChatSessionRailElement", () => {
     await element.updateComplete;
     return element;
   }
+
+  it("consumes only the latest visible focus intent and retires it on disconnect", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    const initial = vi.fn(() => true);
+    const current = vi.fn(() => true);
+    const element = await mount({ presented: true, focusRequest: initial });
+    element.focusRequest = current;
+    await element.updateComplete;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(initial).not.toHaveBeenCalled();
+    expect(current).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(element.querySelector("textarea"));
+
+    const hidden = vi.fn(() => true);
+    element.presented = false;
+    element.focusRequest = hidden;
+    await element.updateComplete;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(hidden).not.toHaveBeenCalled();
+
+    const retired = vi.fn(() => true);
+    element.presented = true;
+    element.focusRequest = retired;
+    await element.updateComplete;
+    element.remove();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(retired).not.toHaveBeenCalled();
+  });
+
+  it("follows changed turns while preserving a manually scrolled draft edit", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    const element = await mount({ presented: true });
+    const thread = element.querySelector<HTMLElement>(".chat-session-rail__thread")!;
+    Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 200 });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(thread.scrollTop).toBe(200);
+
+    thread.scrollTop = 60;
+    element.companion = { ...element.companion, draft: "A local draft" };
+    await element.updateComplete;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(thread.scrollTop).toBe(60);
+
+    element.companion = {
+      ...element.companion,
+      turns: [{ question: "What changed?", status: "answered", answer: "A completed turn", ts: 1 }],
+    };
+    await element.updateComplete;
+    Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 500 });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(thread.scrollTop).toBe(500);
+  });
 
   it.each([
     { phrases: [], expected: "" },
@@ -312,9 +417,46 @@ describe("ChatSessionRailElement", () => {
 
     element.querySelector("form")?.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
     expect(onSubmit).toHaveBeenCalledWith("What should I verify?");
-    expect(element.querySelector(".chat-session-rail__answer strong")?.textContent).toBe("Only");
+    const answer = element.querySelector(".chat-group.assistant");
+    expect(answer?.querySelector(".chat-group-messages strong")?.textContent).toBe("Only");
     expect(element.querySelector("script")).toBeNull();
-    expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
+    // The main transcript's footer replaces the bespoke "as of" line.
+    expect(answer?.querySelector(".chat-group-footer time.chat-group-timestamp")).not.toBeNull();
+    expect(element.textContent).not.toContain("as of");
+  });
+
+  it("returns focus to the rail composer after deleting its last comment", async () => {
+    const onAttachmentsChange = vi.fn();
+    const element = await mount({
+      presented: true,
+      onAttachmentsChange,
+      companion: {
+        turns: [],
+        loading: false,
+        draft: "Keep this draft",
+        attachments: [
+          {
+            id: "rail-comment",
+            mimeType: "text/plain",
+            selectionAnnotation: {
+              text: "Selected text",
+              comment: "Explain this",
+              sessionKey: "agent:main:run",
+              start: 0,
+              end: 13,
+            },
+          },
+        ],
+      },
+    });
+    const textarea = element.querySelector("textarea")!;
+    await waitForSolid(() =>
+      expect(element.querySelector('button[aria-label="Delete comment"]')).not.toBeNull(),
+    );
+    element.querySelector<HTMLButtonElement>('button[aria-label="Delete comment"]')!.click();
+    expect(onAttachmentsChange).toHaveBeenCalledWith([]);
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.value).toBe("Keep this draft");
   });
 
   it("retains selected answer text while draft and presentation props update", async () => {
@@ -333,7 +475,9 @@ describe("ChatSessionRailElement", () => {
         draft: "",
       },
     });
-    const text = element.querySelector(".chat-session-rail__answer strong")!.firstChild!;
+    const text = element.querySelector(
+      ".chat-group.assistant .chat-group-messages strong",
+    )!.firstChild!;
     const range = document.createRange();
     range.selectNodeContents(text);
     const selection = document.getSelection()!;
@@ -347,6 +491,82 @@ describe("ChatSessionRailElement", () => {
     expect(selection.toString()).toBe("Retained answer");
     expect(selection.anchorNode).toBe(text);
     selection.removeAllRanges();
+  });
+
+  it("offers the main composer's attachment and dictation controls", async () => {
+    const element = await mount({
+      client: createTestGatewayClient(async () => ({})),
+      companion: { turns: [], loading: false, draft: "" },
+    });
+    const attach = () => element.querySelector<HTMLButtonElement>(".agent-chat__input-btn--attach");
+    const microphone = () => element.querySelector<HTMLButtonElement>(".chat-send-btn--voice");
+    expect(attach()?.disabled).toBe(false);
+    expect(microphone()?.disabled).toBe(false);
+    expect(element.querySelector<HTMLInputElement>(".agent-chat__file-input")?.accept).toBe(
+      "image/*",
+    );
+
+    element.connected = false;
+    await element.updateComplete;
+    expect(attach()?.disabled).toBe(true);
+    expect(microphone()?.disabled).toBe(true);
+  });
+
+  it("offers Side chat's own model picker instead of canned starter questions", async () => {
+    const onModelSelect = vi.fn();
+    const element = await mount({
+      companion: { turns: [], loading: false, draft: "" },
+      modelControls: {
+        activeRunId: null,
+        agentDefaultModel: "test/model-a",
+        connected: true,
+        gatewayAvailable: true,
+        loading: false,
+        modelCatalog: [{ id: "model-a", name: "Model A", provider: "test" }],
+        modelCatalogState: { status: "ready", hasSnapshot: true, initialized: true },
+        modelOverrides: { "side-chat:agent:main:run": null },
+        modelSwitching: false,
+        sending: false,
+        sessionKey: "side-chat:agent:main:run",
+        selectedSession: undefined,
+        sessionsResult: null,
+        stream: null,
+        onModelSelect,
+      },
+    });
+    const picker = element.querySelector<HTMLElement>(
+      ".agent-chat__composer-trail [data-chat-model-select]",
+    );
+    expect(picker?.textContent).toContain("Model A");
+    expect(element.querySelector(".chat-session-rail__starter")).toBeNull();
+  });
+
+  it("commits active dictation before a keyboard submit sends the question", async () => {
+    const onSubmit = vi.fn();
+    const element = await mount({
+      onSubmit,
+      companion: { turns: [], loading: false, draft: "Summarize" },
+    });
+    const finishActive = vi.fn(async () => {
+      element.companion = { turns: [], loading: false, draft: "Summarize the spoken part" };
+      await element.updateComplete;
+      return true;
+    });
+    vi.spyOn(DirectDictationControl.prototype, "dictation", "get").mockReturnValue({
+      active: true,
+      finalizing: false,
+      finishActive,
+    } as never);
+
+    element
+      .querySelector("textarea")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    expect(onSubmit).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledExactlyOnceWith("Summarize the spoken part"),
+    );
+    expect(finishActive).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])(
@@ -376,7 +596,9 @@ describe("ChatSessionRailElement", () => {
           ],
         },
       });
-      expect(element.querySelector<HTMLButtonElement>(".chat-send-btn")?.disabled).toBe(!image);
+      expect(element.querySelector<HTMLButtonElement>("button[type=submit]")?.disabled).toBe(
+        !image,
+      );
       element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
       element
         .querySelector("textarea")!
@@ -418,7 +640,7 @@ describe("ChatSessionRailElement", () => {
       await threads.submit("one", "Explain this image", ask);
       await element.updateComplete;
       expect(element.textContent).toContain(
-        "This Side chat model cannot read images. Choose an image-capable utility model, then retry.",
+        "This Side chat model cannot read images. Choose an image-capable model, then retry.",
       );
       expect(element.textContent).not.toContain("No utility model is configured");
       expect(ask).toHaveBeenCalledOnce();
@@ -468,7 +690,7 @@ describe("ChatSessionRailElement", () => {
         },
       });
       const textarea = element.querySelector<HTMLTextAreaElement>("textarea")!;
-      const send = element.querySelector<HTMLButtonElement>(".chat-send-btn")!;
+      const send = element.querySelector<HTMLButtonElement>("button[type=submit]")!;
       const type = async (draft: string) => {
         textarea.value = draft;
         textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -546,23 +768,19 @@ describe("ChatSessionRailElement", () => {
     });
 
     const skeleton = element.querySelector("openclaw-panel-loading-skeleton");
-    await skeleton?.updateComplete;
     expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("chat");
     expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
   });
 
-  it("offers starter questions instead of an empty thread, and asks the tapped one", async () => {
+  it("opens with the native empty state and one composer without suggested questions", async () => {
     const onSubmit = vi.fn();
     const element = await mount({ onSubmit });
+    const empty = element.querySelector("openclaw-panel-empty-state");
 
-    const starters = [...element.querySelectorAll(".chat-session-rail__starter")];
-    expect(starters.map((starter) => starter.textContent?.trim())).toEqual([
-      "What changed?",
-      "Why did it stop?",
-      "What's left?",
-    ]);
-
-    (starters[1] as HTMLButtonElement).click();
-    expect(onSubmit).toHaveBeenCalledExactlyOnceWith("Why did it stop?");
+    expect(empty?.querySelector(".empty-state__title")?.textContent).toBe("Side chat");
+    expect(element.textContent).not.toMatch(/What changed\?|Why did it stop\?|What's left\?/);
+    expect(element.querySelectorAll("form")).toHaveLength(1);
+    expect(element.querySelectorAll('textarea[aria-label="Ask in side chat"]')).toHaveLength(1);
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });

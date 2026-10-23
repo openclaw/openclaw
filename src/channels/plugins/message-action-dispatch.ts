@@ -20,10 +20,11 @@ import {
 } from "./message-action-current-conversation.js";
 import {
   resolveChannelMessageActionFacts,
+  type ChannelMessageActionName,
   type ChannelMessageActionReadPolicy,
 } from "./message-action-names.js";
 import { resolveChannelPluginRegistration } from "./registry.js";
-import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
+import type { ChannelMessageActionContext } from "./types.core.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 
 declare const serverOwnedConversationReadOrigin: unique symbol;
@@ -204,7 +205,7 @@ function attachExternalCurrentTargetSibling(params: {
       (!requestedTarget.kind || !normalized.kind || normalized.kind === requestedTarget.kind)
     );
   });
-  if (typeof trustedCurrentTarget !== "string" || !trustedCurrentTarget.trim()) {
+  if (!trustedCurrentTarget) {
     return params.ctx;
   }
   return {

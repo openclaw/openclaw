@@ -39,7 +39,6 @@ function sessionContext(f: Fixture, cfg: OpenClawConfig = {}) {
     getRuntimeConfig: () => cfg,
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     broadcastToConnIds: f.broadcast,
-    chatAbortControllers: new Map(),
   };
 }
 

@@ -302,52 +302,34 @@ describe("native owner content records", () => {
       fs.cpSync(f.root, baseline, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
     });
 
-    it.each([
-      "rename",
-      "lockfile",
-      "generator",
-      "compiler policy",
-      "compiler API",
-      "missing output",
-      "tampered output",
-      "orphan output",
-    ])("rejects %s against a real native record", (mutation) => {
-      // Restore the same native generation before each independent invalidation.
-      fs.rmSync(f.root, { recursive: true, force: true });
-      fs.cpSync(baseline, f.root, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
-      const matches = () =>
-        f.matches(record, f.root, ["dist/src/api.d.ts", f.inputReceipt], "dist");
-      expect(matches(), "pristine native generation").toBe(true);
-      switch (mutation) {
-        case "rename":
-          fs.renameSync(f.file("nested/value.js"), f.file("nested/renamed.js"));
-          break;
-        case "lockfile":
-          f.write("pnpm-lock.yaml", "changed lock");
-          break;
-        case "generator":
-          f.write("scripts/compile-extension-boundary.mts", "export const changed = true;");
-          break;
-        case "compiler policy":
-          f.write("scripts/lib/local-check-runtime.mts", "export const policy = 2;");
-          break;
-        case "compiler API": {
-          const file = "node_modules/typescript/dist/api/async/api.js";
-          f.write(file, `${fs.readFileSync(path.join(f.root, file), "utf8")}\n`);
-          break;
-        }
-        case "missing output":
-          fs.rmSync(f.file("dist/nested/value.d.ts"));
-          break;
-        case "tampered output":
-          f.write("dist/nested/value.d.ts", "truncated");
-          break;
-        case "orphan output":
-          f.write("dist/nested/orphan.d.ts", "export {};");
-          break;
-      }
-      expect(matches()).toBe(false);
-    });
+    const mutations = {
+      rename: () => fs.renameSync(f.file("nested/value.js"), f.file("nested/renamed.js")),
+      lockfile: () => f.write("pnpm-lock.yaml", "changed lock"),
+      generator: () =>
+        f.write("scripts/compile-extension-boundary.mts", "export const changed = true;"),
+      "compiler policy": () =>
+        f.write("scripts/lib/local-check-runtime.mts", "export const policy = 2;"),
+      "compiler API": () => {
+        const file = "node_modules/typescript/dist/api/async/api.js";
+        f.write(file, `${fs.readFileSync(f.file(file), "utf8")}\n`);
+      },
+      "missing output": () => fs.rmSync(f.file("dist/nested/value.d.ts")),
+      "tampered output": () => f.write("dist/nested/value.d.ts", "truncated"),
+      "orphan output": () => f.write("dist/nested/orphan.d.ts", "export {};"),
+    };
+    it.each(Object.entries(mutations))(
+      "rejects %s against a real native record",
+      (_name, mutate) => {
+        // Restore the same native generation before each independent invalidation.
+        fs.rmSync(f.root, { recursive: true, force: true });
+        fs.cpSync(baseline, f.root, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
+        const matches = () =>
+          f.matches(record, f.root, ["dist/src/api.d.ts", f.inputReceipt], "dist");
+        expect(matches(), "pristine native generation").toBe(true);
+        mutate();
+        expect(matches()).toBe(false);
+      },
+    );
   });
 
   it("rejects a same-byte external file link in otherwise warm native membership", () => {

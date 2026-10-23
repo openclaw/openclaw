@@ -7,10 +7,6 @@ import { resolveModelFallbackOptions } from "../../auto-reply/reply/agent-runner
 import { handleDirectiveOnly } from "../../auto-reply/reply/directive-handling.impl.js";
 import { parseInlineSessionDirectives } from "../../auto-reply/reply/directive-handling.parse.js";
 import {
-  admitFollowupTurn,
-  type AdmittedFollowupTurn,
-} from "../../auto-reply/reply/followup-turn-admission.js";
-import {
   enqueueFollowupRun,
   scheduleFollowupDrain,
   type FollowupRun,
@@ -19,7 +15,10 @@ import {
   clearFollowupQueue,
   getExistingFollowupQueue,
 } from "../../auto-reply/reply/queue/state.js";
-import * as replyAdmission from "../../auto-reply/reply/reply-turn-admission.js";
+import {
+  prepareReplyAgentTurn,
+  type AdmittedFollowupTurn,
+} from "../../auto-reply/reply/reply-agent-turn-preparation.js";
 import { createTypingController } from "../../auto-reply/reply/typing.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -27,13 +26,17 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as sessionMailbox from "../../sessions/session-controller.mailbox.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { sessionMutationHandlers } from "./sessions-mutations.js";
+import {
+  createSessionMutationCatalog,
+  startSessionMutationRequest,
+} from "./sessions-mutations.native-consent.test-support.js";
 import { createSessionMutationTestContext } from "./sessions-mutations.owner.test-support.js";
 import { setupSessionMutationState } from "./sessions-mutations.state.test-support.js";
 import * as catalogPreparation from "./sessions-patch-catalog-preparation.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayRequestContext } from "./types.js";
 
 // mock-isolation: Provider discovery is outside this synthetic session/queue preference boundary.
 vi.mock("../../plugins/provider-thinking.js", () => ({
@@ -47,7 +50,6 @@ vi.mock("../../auto-reply/reply/agent-runner-memory.js", () => ({
 // mock-isolation: Use the fixture config without ambient runtime or secret-Gateway state.
 vi.mock("../../auto-reply/reply/agent-runner-utils.js", () => ({
   resolveQueuedReplyExecutionConfig: async (config: OpenClawConfig) => config,
-  resolveQueuedReplyRuntimeConfig: (config: OpenClawConfig) => config,
 }));
 
 const withState = setupSessionMutationState();
@@ -91,7 +93,7 @@ async function admitQueued(
   queued: FollowupRun,
   onQueuedFollowupAdmitted?: () => Promise<void>,
 ) {
-  const result = await admitFollowupTurn({
+  const result = await prepareReplyAgentTurn({
     queued,
     defaults: {
       typing: createTypingController({}),
@@ -127,33 +129,23 @@ async function seedSession(thinkingLevel = "low", overrides: Partial<SessionEntr
 
 async function patchSession(patch: Record<string, unknown>, config = cfg) {
   const params = { key: sessionKey, ...patch };
-  const responses: Parameters<RespondFn>[] = [];
   const context = {
     ...createSessionMutationTestContext(config),
-    loadGatewayModelCatalogSnapshot: async () => ({
-      agentId: "main",
-      agentDir: "/fixture/agent",
-      workspaceDir: "/fixture/workspace",
-      config,
-      catalogComplete: true,
-      entries: catalog,
-      routeVariants: catalog,
-    }),
+    loadGatewayModelCatalogSnapshot: async () =>
+      createSessionMutationCatalog(
+        config,
+        { agentDir: () => "/fixture/agent", workspaceDir: "/fixture/workspace" },
+        catalog,
+      ),
     getSessionEventSubscriberConnIds: () => new Set(),
-    chatQueuedTurns: new Map(),
     dedupe: new Map(),
   } satisfies GatewayRequestContext;
-  await expectDefined(
-    sessionMutationHandlers["sessions.patch"],
-    "patch handler",
-  )({
+  const { responses, running } = startSessionMutationRequest("sessions.patch", params, {
     req: { type: "req", id: "selection-patch", method: "sessions.patch", params },
-    params,
     client: null,
     context,
-    isWebchatConnect: () => true,
-    respond: (...response) => responses.push(response),
   });
+  await running;
   expect(responses).toHaveLength(1);
   return expectDefined(responses[0], "patch response");
 }
@@ -185,7 +177,7 @@ function enqueue(
       config: cfg,
       ...selectionX,
       hasSessionModelOverride: true,
-      modelOverrideSource: "user",
+      modelOverrideSource: "user" as const,
       timeoutMs: 30_000,
       blockReplyBreak: "message_end",
       ...overrides,
@@ -444,7 +436,7 @@ it.each([
       const c = enqueue(state, "C still waiting");
       const committed = createDeferredCore();
       const releaseRefresh = createDeferredCore();
-      const enteringAdmission = createDeferredCore();
+      const requestingClaim = createDeferredCore();
       const prepareCatalog = catalogPreparation.createSessionPatchCatalogPreparation;
       let held = false;
       vi.spyOn(catalogPreparation, "createSessionPatchCatalogPreparation").mockImplementation(
@@ -466,10 +458,10 @@ it.each([
           };
         },
       );
-      const admit = replyAdmission.admitReplyTurn;
-      vi.spyOn(replyAdmission, "admitReplyTurn").mockImplementation((params) => {
-        const result = admit(params);
-        enteringAdmission.resolve();
+      const requestClaim = sessionMailbox.claimSessionControllerInput;
+      vi.spyOn(sessionMailbox, "claimSessionControllerInput").mockImplementation((queued) => {
+        const result = requestClaim(queued);
+        requestingClaim.resolve();
         return result;
       });
       const changing = patchSession(patch);
@@ -484,8 +476,10 @@ it.each([
           // must affect C without changing the already admitted B snapshot.
           expect((await patchSession(later))[0]).toBe(true);
         });
-        void starting.catch(enteringAdmission.reject);
-        await enteringAdmission.promise;
+        void starting.catch(requestingClaim.reject);
+        await requestingClaim.promise;
+        // The writer fence holds mailbox selection before reply admission begins.
+        expect(expectDefined(b.controllerInput, "queued input").claim).toBeUndefined();
         releaseRefresh.resolve();
         expect((await changing)[0]).toBe(true);
         turn = await starting;
@@ -497,6 +491,11 @@ it.each([
         await changing;
         turn ??= await starting;
         turn?.operation.complete();
+        const claim = b.controllerInput?.claim;
+        if (claim) {
+          sessionMailbox.releaseSessionControllerClaim(claim);
+          await claim.settlement.promise;
+        }
       }
     }),
 );

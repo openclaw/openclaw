@@ -10,7 +10,7 @@ import {
   getProfileLifecycle,
   getOrCreateProfileRuntime,
 } from "./server-context.lifecycle.js";
-import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
+import type { BrowserServerState } from "./server-context.types.js";
 
 type TestProfileConfig = NonNullable<NonNullable<OpenClawConfig["browser"]>["profiles"]>[string];
 const mockState = vi.hoisted(
@@ -18,42 +18,32 @@ const mockState = vi.hoisted(
     cfgProfiles: Record<string, TestProfileConfig>;
   } => ({ cfgProfiles: {} }),
 );
-const lifecycleMocks = vi.hoisted(() => ({
-  closeChromeMcpSession: vi.fn(async () => false),
-  closePlaywrightBrowserConnection: vi.fn(async (_opts: { cdpUrl: string }) => {}),
-  retirePlaywrightBrowserConnection: vi.fn((_opts: { cdpUrl: string }) => true),
-  stopOpenClawChrome: vi.fn(async () => {}),
+const { closePlaywright, retirePlaywright, stopChrome } = vi.hoisted(() => ({
+  closePlaywright: vi.fn(async (_opts: { cdpUrl: string }) => {}),
+  retirePlaywright: vi.fn((_opts: { cdpUrl: string }) => true),
+  stopChrome: vi.fn(async () => {}),
 }));
 
 function buildConfig(): OpenClawConfig {
-  return {
-    browser: {
-      enabled: true,
-      color: "#FF4500",
-      headless: true,
-      defaultProfile: "openclaw",
-      profiles: { ...mockState.cfgProfiles },
-    },
-  };
+  return { browser: { headless: true, profiles: { ...mockState.cfgProfiles } } };
 }
 
 vi.mock("./config-refresh-source.js", () => ({
   loadBrowserConfigForRuntimeRefresh: () => buildConfig(),
 }));
 
-vi.mock("./chrome.js", () => ({
-  stopOpenClawChrome: lifecycleMocks.stopOpenClawChrome,
-}));
+// mock-isolation: Exercise lifecycle ownership without starting a browser process.
+vi.mock("./chrome.js", () => ({ stopOpenClawChrome: stopChrome }));
 
-vi.mock("./chrome-mcp.js", () => ({
-  closeChromeMcpSession: lifecycleMocks.closeChromeMcpSession,
-}));
+// mock-isolation: MCP transport is outside this profile lifecycle fixture.
+vi.mock("./chrome-mcp.js", () => ({ closeChromeMcpSession: async () => false }));
 
+// mock-isolation: Supply controlled connection retirement without loading Playwright.
 vi.mock("./pw-ai-module.js", () => ({
   getLoadedPwAiModule: () => ({
     retirePlaywrightBrowserConnectionExact: (opts: { cdpUrl: string }) => ({
-      retired: lifecycleMocks.retirePlaywrightBrowserConnection(opts),
-      close: async () => await lifecycleMocks.closePlaywrightBrowserConnection(opts),
+      retired: retirePlaywright(opts),
+      close: async () => await closePlaywright(opts),
     }),
   }),
   getPwAiModule: async () => null,
@@ -62,42 +52,38 @@ vi.mock("./pw-ai-module.js", () => ({
 const { resolveBrowserConfig, resolveProfile } = await import("./config.js");
 const { refreshResolvedBrowserConfigFromDisk } = await import("./resolved-config-refresh.js");
 
-function createBrowserState() {
+function createProfileFixture(
+  name: string,
+  config: TestProfileConfig,
+  lastTargetId: string | null = null,
+) {
+  mockState.cfgProfiles[name] = config;
   const cfg = buildConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const state: BrowserServerState = {
     server: null,
     port: 18791,
-    resolved,
+    resolved: resolveBrowserConfig(cfg.browser, cfg),
     profiles: new Map(),
   };
-  return { state };
-}
-
-function createProfileFixture(
-  options: {
-    name?: string;
-    config?: TestProfileConfig;
-    lastTargetId?: string | null;
-  } = {},
-) {
-  const name = options.name ?? "openclaw";
-  if (options.config) {
-    mockState.cfgProfiles[name] = options.config;
-  }
-  const { state } = createBrowserState();
   const profile = expectDefined(resolveProfile(state.resolved, name), `${name} profile missing`);
   const runtime = getOrCreateProfileRuntime(state, profile);
-  runtime.lastTargetId = options.lastTargetId ?? null;
-  return { state, profile, runtime };
+  runtime.lastTargetId = lastTargetId;
+  return {
+    state,
+    profile,
+    runtime,
+    lifecycle: getProfileLifecycle(runtime),
+    start: (run: (signal: AbortSignal) => Promise<void>) =>
+      enqueueProfileStart({ state, runtime, key: "default", run }),
+    update: (next: TestProfileConfig) => {
+      mockState.cfgProfiles[name] = next;
+      refreshProfiles(state);
+    },
+  };
 }
 
 function createExtensionRelayFixture(name = "chrome") {
-  const fixture = createProfileFixture({
-    name,
-    config: { cdpPort: 18799, driver: "extension" },
-    lastTargetId: "shared-tab",
-  });
+  const fixture = createProfileFixture(name, { cdpPort: 18799, driver: "extension" }, "shared-tab");
   const relay = {
     ownership: "owned",
     port: 18799,
@@ -127,47 +113,23 @@ function refreshProfiles(state: BrowserServerState) {
   refreshResolvedBrowserConfigFromDisk({ current: state, refreshConfigFromDisk: true });
 }
 
-function updateProfile(state: BrowserServerState, name: string, config: TestProfileConfig) {
-  mockState.cfgProfiles[name] = config;
-  refreshProfiles(state);
-}
-
-function enqueueCurrentProfileStart(
-  state: BrowserServerState,
-  runtime: ProfileRuntimeState,
-  run: (signal: AbortSignal) => Promise<void>,
-) {
-  return enqueueProfileStart({
-    state,
-    runtime,
-    key: "default",
-    run,
-  });
-}
-
 describe("server-context hot-reload profiles", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    lifecycleMocks.closeChromeMcpSession.mockResolvedValue(false);
-    lifecycleMocks.closePlaywrightBrowserConnection.mockResolvedValue(undefined);
-    lifecycleMocks.retirePlaywrightBrowserConnection.mockReturnValue(true);
-    lifecycleMocks.stopOpenClawChrome.mockResolvedValue(undefined);
-    mockState.cfgProfiles = {
-      openclaw: { cdpPort: 18800, color: "#FF4500" },
-    };
+    retirePlaywright.mockReturnValue(true);
+    mockState.cfgProfiles = { openclaw: { cdpPort: 18800 } };
   });
 
   it("preserves live relay credentials across refreshes and retires them on port changes", async () => {
-    const { state, runtime, relay } = createExtensionRelayFixture();
+    const { state, runtime, relay, lifecycle, update } = createExtensionRelayFixture();
     const expectedUrl = runtime.profile.cdpUrl;
-    state.resolved = {
-      ...state.resolved,
+    Object.assign(state.resolved, {
       extensionRelayToken: relay.token,
       extensionRelayInternalTokens: {
         chrome: relay.internalToken,
         orphaned: "closed-relay-credential",
       },
-    };
+    });
 
     for (let request = 0; request < 3; request += 1) {
       refreshProfiles(state);
@@ -175,19 +137,17 @@ describe("server-context hot-reload profiles", () => {
 
       expect(resolved?.cdpUrl).toBe(expectedUrl);
       expect(state.extensionRelays?.get("chrome")).toBe(relay);
-      expect(state.resolved.extensionRelayInternalTokens).toEqual({
-        chrome: relay.internalToken,
-      });
+      expect(state.resolved.extensionRelayInternalTokens).toEqual({ chrome: relay.internalToken });
       expect(state.resolved.extensionRelayToken).toBe(relay.token);
       expect(runtime.lastTargetId).toBe("shared-tab");
     }
     expect(relay.close).not.toHaveBeenCalled();
-    updateProfile(state, "chrome", { cdpPort: 18801, driver: "extension" });
+    update({ cdpPort: 18801, driver: "extension" });
 
     expect(state.resolved.extensionRelayInternalTokens).not.toHaveProperty("chrome");
     expect(runtime.profile.cdpPort).toBe(18801);
-    expect(getProfileLifecycle(runtime).transitionReason).toContain("cdpPort");
-    await getProfileLifecycle(runtime).tail;
+    expect(lifecycle.transitionReason).toContain("cdpPort");
+    await lifecycle.tail;
     expect(relay.close).toHaveBeenCalledOnce();
     expect(state.extensionRelays?.has("chrome")).toBe(false);
   });
@@ -231,7 +191,7 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("never re-adopts a relay credential while an unexposed close is still pending", async () => {
-    const { state, runtime, relay, close } = createExtensionRelayFixture();
+    const { state, relay, close, lifecycle } = createExtensionRelayFixture();
     const closeStarted = createDeferred<void>();
     const closeReleased = createDeferred<void>();
     relay.close.mockImplementationOnce(async () => {
@@ -241,94 +201,81 @@ describe("server-context hot-reload profiles", () => {
 
     const closing = close();
     await closeStarted.promise;
-    expect(getProfileLifecycle(runtime).transitionReason).toBeNull();
+    expect(lifecycle.transitionReason).toBeNull();
 
     refreshProfiles(state);
     expect(state.resolved.extensionRelayInternalTokens).not.toHaveProperty("chrome");
 
     closeReleased.resolve();
     await closing;
-    await getProfileLifecycle(runtime).tail;
+    await lifecycle.tail;
     expect(relay.close).toHaveBeenCalledOnce();
   });
 
   it("retires the adapter and stale selection when switching from Chromium to Lightpanda", async () => {
     const cdpUrl = "ws://127.0.0.1:9222/devtools/browser/engine-fixture";
-    const { state, runtime } = createProfileFixture({
-      name: "switchable",
-      config: { engine: "chromium", cdpUrl, attachOnly: true },
-      lastTargetId: "old-target",
-    });
-    updateProfile(state, "switchable", { engine: "lightpanda", cdpUrl, attachOnly: true });
-
-    expect(runtime.profile.engine).toBe("lightpanda");
-    expect(runtime.profile.cdpUrl).toBe(cdpUrl);
-    expect(runtime.lastTargetId).toBeNull();
-    expect(getProfileLifecycle(runtime).transitionReason).toBe(
-      "profile invariants changed: engine",
+    const { runtime, lifecycle, update } = createProfileFixture(
+      "switchable",
+      { engine: "chromium", cdpUrl, attachOnly: true },
+      "old-target",
     );
-    expect(lifecycleMocks.retirePlaywrightBrowserConnection).toHaveBeenCalledWith({ cdpUrl });
-    await getProfileLifecycle(runtime).tail;
-    expect(lifecycleMocks.closePlaywrightBrowserConnection).toHaveBeenCalledWith({ cdpUrl });
-    expect(lifecycleMocks.stopOpenClawChrome).not.toHaveBeenCalled();
+    update({ engine: "lightpanda", cdpUrl, attachOnly: true });
+
+    expect(runtime).toMatchObject({
+      profile: { engine: "lightpanda", cdpUrl },
+      lastTargetId: null,
+    });
+    expect(lifecycle.transitionReason).toBe("profile invariants changed: engine");
+    expect(retirePlaywright).toHaveBeenCalledWith({ cdpUrl });
+    await lifecycle.tail;
+    expect(closePlaywright).toHaveBeenCalledWith({ cdpUrl });
+    expect(stopChrome).not.toHaveBeenCalled();
   });
 
   it("reconciles existing-session command and structural argument changes", () => {
-    const { state, runtime } = createProfileFixture({
-      name: "work",
-      config: {
-        cdpUrl: "http://127.0.0.1:9222",
-        color: "#0066CC",
-        driver: "existing-session",
-        mcpCommand: "/old/mcp",
-        mcpArgs: ["--one"],
-      },
+    const { lifecycle, update } = createProfileFixture("work", {
+      cdpUrl: "http://127.0.0.1:9222",
+      driver: "existing-session",
+      mcpCommand: "/old/mcp",
+      mcpArgs: ["--one"],
     });
+    update({ ...mockState.cfgProfiles.work, mcpCommand: "/new/mcp", mcpArgs: ["--one", "--two"] });
 
-    updateProfile(state, "work", {
-      ...mockState.cfgProfiles.work,
-      mcpCommand: "/new/mcp",
-      mcpArgs: ["--one", "--two"],
-    });
-
-    expect(getProfileLifecycle(runtime).transitionReason).toContain("mcpCommand");
-    expect(getProfileLifecycle(runtime).transitionReason).toContain("mcpArgs");
+    expect(lifecycle.transitionReason).toContain("mcpCommand");
+    expect(lifecycle.transitionReason).toContain("mcpArgs");
   });
 
   it("rapid A to B to C closes both stale endpoints and adopts only C", async () => {
-    const { state, profile, runtime } = createProfileFixture({
-      name: "work",
-      config: { cdpPort: 18801, color: "#0066CC" },
+    const { state, profile, runtime, lifecycle, start, update } = createProfileFixture("work", {
+      cdpPort: 18801,
     });
     const retired = new Set<string>();
-    lifecycleMocks.retirePlaywrightBrowserConnection.mockImplementation(({ cdpUrl }) => {
-      if (retired.has(cdpUrl)) {
-        return false;
-      }
+    retirePlaywright.mockImplementation(({ cdpUrl }) => {
+      const first = !retired.has(cdpUrl);
       retired.add(cdpUrl);
-      return true;
+      return first;
     });
 
-    updateProfile(state, "work", { cdpPort: 18802, color: "#00AA00" });
+    update({ cdpPort: 18802 });
     const workB = expectDefined(resolveProfile(state.resolved, "work"), "work B missing");
     const adopted: string[] = [];
-    const pendingB = enqueueCurrentProfileStart(state, runtime, async () => {
+    const pendingB = start(async () => {
       adopted.push(workB.cdpUrl);
     });
 
-    updateProfile(state, "work", { cdpPort: 18803, color: "#AA00AA" });
+    update({ cdpPort: 18803 });
     const workC = expectDefined(resolveProfile(state.resolved, "work"), "work C missing");
     expect(runtime.profile.cdpUrl).toBe(workC.cdpUrl);
 
     await expect(pendingB).rejects.toThrow(/profile invariants changed/i);
-    await getProfileLifecycle(runtime).tail;
+    await lifecycle.tail;
     await expect(
-      enqueueCurrentProfileStart(state, runtime, async () => {
+      start(async () => {
         adopted.push(runtime.profile.cdpUrl);
       }),
     ).resolves.toBeUndefined();
 
-    expect(lifecycleMocks.closePlaywrightBrowserConnection.mock.calls).toEqual([
+    expect(closePlaywright.mock.calls).toEqual([
       [{ cdpUrl: profile.cdpUrl }],
       [{ cdpUrl: workB.cdpUrl }],
     ]);
@@ -336,49 +283,43 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("keeps a removed-name tombstone until a pending start cleans its late handle", async () => {
-    const {
-      state,
-      profile,
-      runtime: oldRuntime,
-    } = createProfileFixture({
-      name: "constructor",
-      config: { cdpPort: 18801, color: "#0066CC" },
-    });
-    expect(oldRuntime.running).toBeNull();
+    const { state, profile, runtime, lifecycle, start, update } = createProfileFixture(
+      "constructor",
+      { cdpPort: 18801 },
+    );
+    expect(runtime.running).toBeNull();
     const lateRunning = { pid: 321 } as RunningChrome;
     const launch = createDeferred<void>();
     const launchStarted = createDeferred<void>();
-    const pendingStart = enqueueCurrentProfileStart(state, oldRuntime, async () => {
+    const pendingStart = start(async () => {
       launchStarted.resolve();
       await launch.promise;
-      getProfileLifecycle(oldRuntime).handles.add(lateRunning);
+      lifecycle.handles.add(lateRunning);
     });
     await launchStarted.promise;
 
     Reflect.deleteProperty(mockState.cfgProfiles, "constructor");
     refreshProfiles(state);
-    expect(getProfileLifecycle(oldRuntime).terminal).toBe("config-removed");
-    expect(state.profiles.get("constructor")).toBe(oldRuntime);
+    expect(lifecycle.terminal).toBe("config-removed");
+    expect(state.profiles.get("constructor")).toBe(runtime);
 
-    updateProfile(state, "constructor", { cdpPort: 18802, color: "#00AA00" });
+    update({ cdpPort: 18802 });
     const workB = expectDefined(resolveProfile(state.resolved, "constructor"), "work B missing");
-    expect(getOrCreateProfileRuntime(state, workB)).toBe(oldRuntime);
-    expect(() => enqueueCurrentProfileStart(state, oldRuntime, async () => {})).toThrow(
-      /config-removed/,
-    );
+    expect(getOrCreateProfileRuntime(state, workB)).toBe(runtime);
+    expect(() => start(async () => {})).toThrow(/config-removed/);
 
     launch.resolve();
     await expect(pendingStart).rejects.toThrow(/config-removed|lifecycle changed/i);
-    await getProfileLifecycle(oldRuntime).tail;
+    await lifecycle.tail;
     await Promise.resolve();
     expect(state.profiles.has("constructor")).toBe(false);
-    expect(lifecycleMocks.stopOpenClawChrome).toHaveBeenCalledExactlyOnceWith(lateRunning);
+    expect(stopChrome).toHaveBeenCalledExactlyOnceWith(lateRunning);
     const replacement = getOrCreateProfileRuntime(state, workB);
-    expect(replacement).not.toBe(oldRuntime);
+    expect(replacement).not.toBe(runtime);
     await expect(
-      enqueueCurrentProfileStart(state, replacement, async () => {}),
+      enqueueProfileStart({ state, runtime: replacement, key: "default", run: async () => {} }),
     ).resolves.toBeUndefined();
-    expect(lifecycleMocks.closePlaywrightBrowserConnection).toHaveBeenCalledWith({
+    expect(closePlaywright).toHaveBeenCalledWith({
       cdpUrl: profile.cdpUrl,
     });
   });

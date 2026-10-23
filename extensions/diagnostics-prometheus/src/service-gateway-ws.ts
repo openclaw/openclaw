@@ -20,6 +20,24 @@ export function recordGatewayWsEvent(
         labels,
         evt.bytes,
       );
+      if (evt.wireBytes !== undefined) {
+        store.counter(
+          "openclaw_gateway_ws_event_wire_bytes_total",
+          "Outbound Gateway WebSocket payload bytes after compression per socket, excluding framing.",
+          labels,
+          evt.wireBytes,
+        );
+      }
+      for (const [le, count] of Object.entries(evt.frameBytes ?? {})) {
+        // Seed empty buckets without changing other counters' zero-increment behavior.
+        const record = count === 0 ? store.counterValue : store.counter;
+        record(
+          "openclaw_gateway_ws_event_frame_bytes",
+          "Cumulative counts of accepted raw Gateway event frames by byte-size upper bound.",
+          { ...labels, le },
+          count,
+        );
+      }
       if (evt.presenceMode) {
         const presenceLabels = { mode: evt.presenceMode };
         store.counter(

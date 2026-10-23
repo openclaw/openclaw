@@ -83,7 +83,11 @@ export function createGatewayUpdateLifecycle(
         run: () =>
           run(work)
             .then((nextDelayMs) => arm(Math.max(1, nextDelayMs)))
-            .catch(() => undefined),
+            .catch((error: unknown) => {
+              if (!signal.aborted) {
+                throw error;
+              }
+            }),
       });
     };
     arm(0);

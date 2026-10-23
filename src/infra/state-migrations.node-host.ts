@@ -22,11 +22,11 @@ import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist,
-  legacyMigrationSourceSnapshotsMatch as sourceSnapshotsMatch,
   readLegacyMigrationSourceSnapshot,
   type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
+import { decodeUtf8Input } from "./utf8-input.js";
 
 const LEGACY_NODE_HOST_MAX_BYTES = 64 * 1024;
 const CONFIG_KEYS = new Set(["version", "nodeId", "token", "displayName", "gateway"]);
@@ -106,7 +106,7 @@ function parseLegacyGateway(value: unknown): NodeHostGatewayConfig | undefined {
 }
 
 function parseLegacyNodeHostConfig(snapshot: LegacySourceSnapshot): CanonicalNodeHostState {
-  const parsed = JSON.parse(snapshot.raw) as unknown;
+  const parsed = JSON.parse(decodeUtf8Input(snapshot.buffer, "Legacy node-host config")) as unknown;
   if (!isRecord(parsed)) {
     throw new Error("legacy node-host config must be an object");
   }
@@ -336,9 +336,7 @@ export async function migrateLegacyNodeHostConfig(params: {
       const snapshot = await source.read();
       const legacy = parseLegacyNodeHostConfig(snapshot);
       params.beforeVerify?.();
-      if (!sourceSnapshotsMatch(await source.read(), snapshot)) {
-        throw new Error("legacy node-host source changed after Doctor loaded it");
-      }
+      await source.verify(snapshot, "legacy node-host source changed after Doctor loaded it");
 
       let result: ReturnType<typeof migrateIntoDatabase>;
       try {

@@ -114,7 +114,6 @@ describe("selected bundled install config recovery", () => {
             resolvePluginInstallPreactionRequest({
               actionCommand,
               commandPath: ["plugins", "install"],
-              argv,
             }),
           );
         })

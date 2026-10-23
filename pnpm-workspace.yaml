@@ -16,32 +16,55 @@ minimumReleaseAgeExclude:
   # Solid itself is exempt from the release-age gate (Peter, 2026-10-11).
   - "solid-js"
   - "@solidjs/*"
+  # Reviewed pnpm security bump (#179992); remove after 2026-10-28T11:16:18.199Z.
+  - "pnpm@12.15.0"
+  - "@pnpm/exe.android-arm64@12.15.0"
+  - "@pnpm/exe.android-x64@12.15.0"
+  - "@pnpm/exe.darwin-arm64@12.15.0"
+  - "@pnpm/exe.darwin-x64@12.15.0"
+  - "@pnpm/exe.freebsd-x64@12.15.0"
+  - "@pnpm/exe.linux-arm64-musl@12.15.0"
+  - "@pnpm/exe.linux-arm64@12.15.0"
+  - "@pnpm/exe.linux-ppc64@12.15.0"
+  - "@pnpm/exe.linux-riscv64@12.15.0"
+  - "@pnpm/exe.linux-s390x@12.15.0"
+  - "@pnpm/exe.linux-x64-musl@12.15.0"
+  - "@pnpm/exe.linux-x64@12.15.0"
+  - "@pnpm/exe.win32-arm64@12.15.0"
+  - "@pnpm/exe.win32-x64@12.15.0"
   # Reviewed Edge TTS 403 fix; remove after 2026-10-19T16:27:27.581Z.
   - "node-edge-tts@1.2.11"
-  # Reviewed fs-safe 0.26.7 release and native helpers; remove after 2026-10-24T03:52:12.618Z.
-  - "@openclaw/fs-safe@0.26.7"
-  - "@openclaw/fs-safe-darwin-arm64@0.26.7"
-  - "@openclaw/fs-safe-darwin-x64@0.26.7"
-  - "@openclaw/fs-safe-freebsd-arm64@0.26.7"
-  - "@openclaw/fs-safe-freebsd-x64@0.26.7"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.26.7"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.26.7"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.26.7"
-  - "@openclaw/fs-safe-linux-x64-musl@0.26.7"
-  - "@openclaw/fs-safe-win32-arm64-msvc@0.26.7"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.26.7"
-  # Reviewed proc-safe 0.3.0 release and native helpers; remove after 2026-10-20T18:53:55.137Z.
-  - "@openclaw/proc-safe@0.3.0"
-  - "@openclaw/proc-safe-darwin-arm64@0.3.0"
-  - "@openclaw/proc-safe-darwin-x64@0.3.0"
-  - "@openclaw/proc-safe-freebsd-arm64@0.3.0"
-  - "@openclaw/proc-safe-freebsd-x64@0.3.0"
-  - "@openclaw/proc-safe-linux-arm64-gnu@0.3.0"
-  - "@openclaw/proc-safe-linux-arm64-musl@0.3.0"
-  - "@openclaw/proc-safe-linux-x64-gnu@0.3.0"
-  - "@openclaw/proc-safe-linux-x64-musl@0.3.0"
-  - "@openclaw/proc-safe-win32-arm64-msvc@0.3.0"
-  - "@openclaw/proc-safe-win32-x64-msvc@0.3.0"
+  # Reviewed fs-safe 0.26.8 release and native helpers; remove after 2026-10-25T20:33:09.777Z.
+  - "@openclaw/fs-safe@0.26.8"
+  - "@openclaw/fs-safe-darwin-arm64@0.26.8"
+  - "@openclaw/fs-safe-darwin-x64@0.26.8"
+  - "@openclaw/fs-safe-freebsd-arm64@0.26.8"
+  - "@openclaw/fs-safe-freebsd-x64@0.26.8"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.26.8"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.26.8"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.26.8"
+  - "@openclaw/fs-safe-linux-x64-musl@0.26.8"
+  - "@openclaw/fs-safe-win32-arm64-msvc@0.26.8"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.26.8"
+  # Reviewed proc-safe 0.4.2 release and native helpers; remove after 2026-10-26T00:51:31.079Z.
+  - "@openclaw/proc-safe@0.4.2"
+  - "@openclaw/proc-safe-darwin-arm64@0.4.2"
+  - "@openclaw/proc-safe-darwin-x64@0.4.2"
+  - "@openclaw/proc-safe-freebsd-arm64@0.4.2"
+  - "@openclaw/proc-safe-freebsd-x64@0.4.2"
+  - "@openclaw/proc-safe-linux-arm64-gnu@0.4.2"
+  - "@openclaw/proc-safe-linux-arm64-musl@0.4.2"
+  - "@openclaw/proc-safe-linux-x64-gnu@0.4.2"
+  - "@openclaw/proc-safe-linux-x64-musl@0.4.2"
+  - "@openclaw/proc-safe-win32-arm64-msvc@0.4.2"
+  - "@openclaw/proc-safe-win32-x64-msvc@0.4.2"
+  # Draft tsrs type-check trial (obviyus); remove after 2026-10-23T16:59:18.996Z.
+  - "tsrs@0.16.0-ts7.1.0-dev.20260929"
+  - "@tsrs/darwin-arm64@0.16.0-ts7.1.0-dev.20260929"
+  - "@tsrs/linux-arm64-gnu@0.16.0-ts7.1.0-dev.20260929"
+  - "@tsrs/linux-arm64-musl@0.16.0-ts7.1.0-dev.20260929"
+  - "@tsrs/linux-x64-gnu@0.16.0-ts7.1.0-dev.20260929"
+  - "@tsrs/linux-x64-musl@0.16.0-ts7.1.0-dev.20260929"
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
@@ -59,20 +82,19 @@ overrides:
   "chevrotain>lodash-es": 4.18.1
   "@chevrotain/cst-dts-gen>lodash-es": 4.18.1
   "@chevrotain/gast>lodash-es": 4.18.1
-  "@agentclientprotocol/codex-acp@2.1.1>@openai/codex": 0.162.0
+  "@agentclientprotocol/codex-acp@2.2.2>@openai/codex": 0.162.1
   "@codemirror/commands@6.11.1>@codemirror/view": 6.43.14
   "@codemirror/view@6.43.14>@codemirror/state": 6.7.6
   "@anthropic-ai/sdk": 0.133.0
-  "@anthropic-ai/vertex-sdk@0.20.4>google-auth-library": 11.2.0
+  "@anthropic-ai/vertex-sdk@0.20.4>google-auth-library": 11.3.0
   "@opentelemetry/core": 2.12.0
   "@opentelemetry/propagator-jaeger": 2.12.0
-  "@solidjs/vite-plugin@3.0.0-next.49>@solidjs/babel-plugin": 2.0.0-rc.14
-  "@aws-sdk/core": 3.978.1
-  "@aws-sdk/credential-provider-node": 3.972.84
+  "@aws-sdk/core": 3.978.3
+  "@aws-sdk/credential-provider-node": 3.972.86
   "@aws-sdk/xml-builder": 3.972.41
   "@hono/node-server": 2.1.4
   axios: 1.20.0
-  fast-uri: 4.2.1
+  fast-uri: 4.2.2
   follow-redirects: 1.16.1
   defu: 6.1.7
   fast-xml-parser: 5.11.2
@@ -84,23 +106,22 @@ overrides:
   source-map-js: 1.2.2
   file-type: 22.1.1
   form-data: 4.0.6
-  ip-address: 10.7.3
-  "mailauth@7.1.1>nodemailer": 10.0.16
+  ip-address: 10.7.4
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
   proxy-addr: 2.0.8
   qs: 6.16.0
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
-  typebox: 1.3.36
+  typebox: 1.3.37
   tar: 7.5.22
   tough-cookie: 6.0.2
-  "tsdown>rolldown-plugin-dts": 0.28.6
+  "tsdown>rolldown-plugin-dts": 0.28.8
   # Keep both Lit analyzers on the same classic compiler until they support native TS7.
-  "web-component-analyzer@2.0.0>typescript": 5.9.3
+  "web-component-analyzer@2.0.0>typescript": 6.0.3
   "zca-js@2.2.0>tough-cookie": 6.0.2
   yauzl: 3.4.0
-  protobufjs: 8.8.0
-  uuid: 14.0.2
+  protobufjs: 8.8.1
+  uuid: 14.0.3
 
 allowBuilds:
   onnxruntime-node: false
@@ -124,6 +145,10 @@ allowBuilds:
   node-pty: true
 
 packageExtensions:
+  # rc14 imports long directly; protobufjs's transitive edge is not visible in isolated graphs.
+  "baileys@7.0.0-rc14":
+    dependencies:
+      long: 5.3.2
   # The transient npm lock generator also needs the peer marked optional.
   baileys:
     peerDependenciesMeta:

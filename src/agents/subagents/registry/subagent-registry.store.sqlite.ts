@@ -6,7 +6,7 @@ import {
   sqliteStringSet,
 } from "../../../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../../infra/sqlite-transaction.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import {
@@ -421,7 +421,7 @@ export function loadSubagentRunsForSessionsInDatabase(
   inMemoryRuns: Iterable<Pick<SubagentRunReadRecord, "childSessionKey" | "requesterSessionKey">>,
 ) {
   const { db } = database;
-  const result = runSqliteDeferredTransactionSync(db, () => {
+  const result = runSqliteReadSnapshotSync(db, () => {
     const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
     const identities = executeSqliteQuerySync(
       db,

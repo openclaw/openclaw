@@ -148,33 +148,25 @@ it("bounds every GitHub CLI lookup", async () => {
   expect(fixture.execPlainGh).toHaveBeenNthCalledWith(3, mergedAuthorsArgs, options);
 });
 
-it("resolves renamed seed profiles by stable account id", async () => {
-  const fixture = mockClawtributorsFixture({
-    seedEntry: credit("old-handle", "Original credit"),
-    accountLookup: githubUser("new-handle", 42),
-  });
-
-  await importUpdateClawtributors();
-
-  expect(fixture.execPlainGh).toHaveBeenCalledWith(
-    ["api", "user/42"],
-    expect.objectContaining({ timeout: 120_000, killSignal: "SIGKILL" }),
-  );
-  expect(fixture.readWrittenReadme()).toContain(credit("new-handle", "Original credit"));
-  expect(fixture.readWrittenReadme()).not.toContain('href="https://github.com/old-handle"');
-});
-
-it("keeps deleted seed profiles as unlinked credit on HTTP 404", async () => {
-  const fixture = mockClawtributorsFixture({
-    seedEntry: credit("gone-handle", "Gone contributor"),
-    accountLookup: null,
-  });
-
-  await importUpdateClawtributors();
-
-  expect(fixture.readWrittenReadme()).toContain(avatar("Gone contributor"));
-  expect(fixture.readWrittenReadme()).not.toContain('href="https://github.com/gone-handle"');
-});
+it.each([githubUser("new-handle", 42), null])(
+  "preserves seed credit after account lookup: %j",
+  async (accountLookup) => {
+    const alt = "Original credit";
+    const fixture = mockClawtributorsFixture({
+      seedEntry: credit("old-handle", alt),
+      accountLookup,
+    });
+    await importUpdateClawtributors();
+    expect(fixture.execPlainGh).toHaveBeenCalledWith(
+      ["api", "user/42"],
+      expect.objectContaining({ timeout: 120_000, killSignal: "SIGKILL" }),
+    );
+    expect(fixture.readWrittenReadme()).toContain(
+      accountLookup ? credit(accountLookup.login, alt) : avatar(alt),
+    );
+    expect(fixture.readWrittenReadme()).not.toContain('href="https://github.com/old-handle"');
+  },
+);
 
 it("aborts instead of unlinking credit on transient account lookup failures", async () => {
   const fixture = mockClawtributorsFixture({

@@ -33,12 +33,11 @@ describe("legacy web tool config", () => {
     expect(result.config.tools?.web?.search).toEqual({ provider: "grok" });
     expect(result.config.plugins?.entries).toEqual({
       brave: pluginSearch({ apiKey: "test-key" }),
-      xai: pluginSearch({ apiKey: "test-secret", model: "grok-4.3" }),
+      xai: pluginSearch({ apiKey: "test-secret", model: "grok-4-1-fast" }),
       moonshot: pluginSearch({ apiKey: "sample", model: "kimi-k2.5" }),
     });
     expect(result.changes).toEqual([
       "Moved tools.web.search.apiKey → plugins.entries.brave.config.webSearch.apiKey.",
-      'Updated tools.web.search.grok.model from "grok-4-1-fast" to "grok-4.3".',
       "Moved tools.web.search.grok → plugins.entries.xai.config.webSearch.",
       "Moved tools.web.search.kimi → plugins.entries.moonshot.config.webSearch.",
     ]);
@@ -131,10 +130,10 @@ describe("legacy web tool config", () => {
 
   it.each([
     [
-      "repairs models before moving auth",
+      "preserves the model while moving auth",
       { apiKey: "placeholder", model: "grok-3" },
-      { x_search: { model: "grok-4.3" } },
-      ['Updated tools.web.x_search.model from "grok-3" to "grok-4.3".', movedXAuth],
+      { x_search: { model: "grok-3" } },
+      [movedXAuth],
     ],
     [
       "removes an emptied source",
@@ -148,10 +147,11 @@ describe("legacy web tool config", () => {
     expect(result.changes).toEqual(changes);
   });
 
-  it("repairs retired model-only aliases without creating plugin config", () => {
-    const retired = xSearch({ enabled: true, model: "grok-code-fast-1" });
-    expect(retired.config.tools.web.x_search).toEqual({ enabled: true, model: "grok-build-0.1" });
-    expect(retired.config).not.toHaveProperty("plugins");
+  it("preserves model-only selections without creating plugin config", () => {
+    const result = xSearch({ enabled: true, model: "grok-code-fast-1" });
+    expect(result.config.tools.web.x_search).toEqual({ enabled: true, model: "grok-code-fast-1" });
+    expect(result.config).not.toHaveProperty("plugins");
+    expect(result.changes).toEqual([]);
     expect(xSearch({ model: "grok-latest" }).changes).toStrictEqual([]);
   });
 });

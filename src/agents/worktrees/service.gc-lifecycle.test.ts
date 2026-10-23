@@ -17,9 +17,9 @@ import { deleteSessionEntryLifecycle } from "../../config/sessions/session-acces
 import type { SessionEntry } from "../../config/sessions/types.js";
 import * as gitExec from "../../infra/git-exec.js";
 import {
-  isSessionLifecycleMutationActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
+  isSessionMutationActive,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import {
   removeSessionWorktree,
   restoreSessionWorktree,
@@ -76,14 +76,12 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 const initializeRepository = useManagedWorktreeTestRepository();
 
-it("releases session mutation admission during Git while the registry claim fences consumers", async ({
-  signal,
-}) => {
+async function archivedSession(name: string) {
   const root = tempDirs.make("openclaw-worktree-cleanup-lifecycle-");
   const repoRoot = await initializeRepository(root);
   const stateDir = path.join(root, "state");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const sessionKey = "agent:main:archived-worktree";
+  const sessionKey = `agent:main:${name}-worktree`;
   const storePath = path.join(root, "sessions.json");
   const cfg = { session: { store: storePath } };
   setRuntimeConfigSnapshot(cfg);
@@ -91,18 +89,27 @@ it("releases session mutation admission during Git while the registry claim fenc
     env,
     stateDir,
     repoRoot,
-    name: "archived",
+    name,
     now: 1,
     ownerKind: "session",
     ownerId: sessionKey,
   });
   const entry: SessionEntry = {
-    sessionId: "archived-session",
+    sessionId: `${name}-session`,
     updatedAt: 1,
     archivedAt: 1,
     worktree: { id: record.id, branch: record.branch, repoRoot },
   };
-  await replaceSessionEntry({ agentId: "main", sessionKey, storePath, env }, entry);
+  const scope = { sessionKey, storePath, env };
+  await replaceSessionEntry({ agentId: "main", ...scope }, entry);
+  return { repoRoot, env, sessionKey, storePath, cfg, record, entry, scope };
+}
+
+it("releases session mutation admission during Git while the registry claim fences consumers", async ({
+  signal,
+}) => {
+  const { repoRoot, env, sessionKey, storePath, cfg, record, entry, scope } =
+    await archivedSession("archived");
   await fs.writeFile(path.join(record.path, "draft.txt"), "preserved draft\n");
   const service = new ManagedWorktreeService({ env });
   const entered = createDeferred();
@@ -141,18 +148,16 @@ it("releases session mutation admission during Git while the registry claim fenc
   const identities = [sessionKey, entry.sessionId];
   try {
     await waitForStage(entered.promise, "snapshot capture");
-    expect(isSessionLifecycleMutationActive(storePath, identities)).toBe(false);
+    expect(isSessionMutationActive(storePath, identities)).toBe(false);
     await expect(acquireWorktreeRunLease(record.id, { env })).rejects.toThrow(/remov/i);
-    await runExclusiveSessionLifecycleMutation("restore", {
+    await runSessionMutation({
+      policy: "wait",
       scope: storePath,
       identities,
       run: async () => {
-        await expect(
-          restoreSessionWorktree({
-            entry,
-            scope: { sessionKey, storePath, env },
-          }),
-        ).rejects.toMatchObject({ reason: "busy" });
+        await expect(restoreSessionWorktree({ entry, scope })).rejects.toMatchObject({
+          reason: "busy",
+        });
         // A session delete cannot hold this fence while waiting on the remover's checkout lease.
         await expect(service.remove({ id: record.id, reason: "session-delete" })).rejects.toThrow(
           /removal is in progress/i,
@@ -161,7 +166,9 @@ it("releases session mutation admission during Git while the registry claim fenc
     });
     release.resolve();
     await waitForStage(checkoutRemoved.promise, "checkout removal");
-    await runExclusiveSessionLifecycleMutation("delete", {
+    await runSessionMutation({
+      kind: "delete",
+      policy: "wait",
       scope: storePath,
       identities,
       run: async () => {
@@ -188,7 +195,7 @@ it("releases session mutation admission during Git while the registry claim fenc
     await cleanup;
   }
   expect((await cleanup).removed).toEqual([record.id]);
-  expect(isSessionLifecycleMutationActive(storePath, identities)).toBe(false);
+  expect(isSessionMutationActive(storePath, identities)).toBe(false);
   const removed = getRegistryWorktree(env, record.id)!;
   expect(removed.removedAt).toBeGreaterThanOrEqual(cleanupStarted);
   expect(removed.removedAt).toBeLessThanOrEqual(Date.now());
@@ -198,37 +205,9 @@ it("releases session mutation admission during Git while the registry claim fenc
 });
 
 it("refuses unarchive after an interrupted removal releases its process claim", async () => {
-  const root = tempDirs.make("openclaw-worktree-partial-cleanup-");
-  const repoRoot = await initializeRepository(root);
-  const stateDir = path.join(root, "state");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const sessionKey = "agent:main:partial-worktree";
-  const storePath = path.join(root, "sessions.json");
-  const cfg = { session: { store: storePath } };
-  setRuntimeConfigSnapshot(cfg);
-  const record = await materializeManagedWorktreeFixture({
-    env,
-    stateDir,
-    repoRoot,
-    name: "partial",
-    now: 1,
-    ownerKind: "session",
-    ownerId: sessionKey,
-  });
-  const entry: SessionEntry = {
-    sessionId: "partial-session",
-    updatedAt: 1,
-    archivedAt: 1,
-    worktree: { id: record.id, branch: record.branch, repoRoot },
-  };
-  await replaceSessionEntry({ agentId: "main", sessionKey, storePath, env }, entry);
+  const { repoRoot, env, record, entry, scope } = await archivedSession("partial");
   await requireGit(repoRoot, ["update-ref", `refs/openclaw/removals/${record.id}`, "HEAD"]);
-  await expect(
-    restoreSessionWorktree({
-      entry,
-      scope: { sessionKey, storePath, env },
-    }),
-  ).rejects.toThrow(/removal is incomplete/i);
+  await expect(restoreSessionWorktree({ entry, scope })).rejects.toThrow(/removal is incomplete/i);
   expect(entry.archivedAt).toBe(1);
   expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
 });

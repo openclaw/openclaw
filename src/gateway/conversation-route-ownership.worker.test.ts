@@ -13,6 +13,7 @@ import { resolveConversationRouteFingerprint } from "../config/sessions/conversa
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { currentConversationBindingPublication } from "../infra/outbound/current-conversation-bindings.publication.js";
 import { createChannelHandler } from "../infra/outbound/deliver-channel.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import type { SqliteWorkerOperations } from "../infra/sqlite-worker-contract.js";
@@ -22,6 +23,8 @@ import { setActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plug
 import { buildConversationRef } from "../routing/conversation-ref.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   createChannelTestPluginBase,
   createOutboundTestPlugin,
@@ -32,6 +35,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
+  prepareConversationDeliveryRouteAuthorization,
   resolveConversationRouteEligibilitiesForAgent,
   withAuthorizedConversationDelivery,
   withAuthorizedQueuedConversationDelivery,
@@ -57,6 +61,36 @@ afterAll(async () => state.cleanup());
 
 function installReefPlugin(plugin: ChannelPlugin) {
   setActivePluginRegistry(createTestRegistry([{ pluginId: "reef", source: "test", plugin }]));
+}
+
+function seedConversation(peerId: string) {
+  const scope = { agentId: "main", databaseAgentId: "main", storePath };
+  const sessionKey = `agent:main:reef:channel:${peerId}`;
+  replaceSessionEntrySync(
+    { ...scope, sessionKey },
+    {
+      sessionId: `session-${peerId}`,
+      updatedAt: 100,
+      chatType: "channel",
+      delivery: {
+        kind: "external",
+        route: {
+          channel: "reef",
+          accountId: "default",
+          target: { to: `reef:${peerId}`, chatType: "channel" },
+        },
+        context: { channel: "reef", accountId: "default", to: `reef:${peerId}` },
+        origin: { provider: "reef", accountId: "default", nativeChannelId: "native-original" },
+      },
+    },
+  );
+  const conversationRef = buildConversationRef({
+    channel: "reef",
+    accountId: "default",
+    kind: "channel",
+    peerId,
+  });
+  return { scope, sessionKey, conversationRef };
 }
 
 it("expires plugin binding inspection when async route preparation settles", async () => {
@@ -122,32 +156,7 @@ it("expires plugin binding inspection when async route preparation settles", asy
 it.each(["final", "queued"] as const)(
   "%s authority initiates current platform effects under its worker grant and joins accepted sends",
   async (phase) => {
-    const scope = { agentId: "main", databaseAgentId: "main", storePath };
-    const sessionKey = `agent:main:reef:channel:${phase}`;
-    replaceSessionEntrySync(
-      { ...scope, sessionKey },
-      {
-        sessionId: `session-${phase}`,
-        updatedAt: 100,
-        chatType: "channel",
-        delivery: {
-          kind: "external",
-          route: {
-            channel: "reef",
-            accountId: "default",
-            target: { to: `reef:${phase}`, chatType: "channel" },
-          },
-          context: { channel: "reef", accountId: "default", to: `reef:${phase}` },
-          origin: { provider: "reef", accountId: "default", nativeChannelId: "native-original" },
-        },
-      },
-    );
-    const conversationRef = buildConversationRef({
-      channel: "reef",
-      accountId: "default",
-      kind: "channel",
-      peerId: phase,
-    });
+    const { scope, sessionKey, conversationRef } = seedConversation(phase);
     const conversation = await readConversation(scope, conversationRef);
     expect(conversation).toMatchObject({ sessionKey, nativeChannelId: "native-original" });
     const routeFingerprint = resolveConversationRouteFingerprint(conversation!);
@@ -356,3 +365,92 @@ it.each(["final", "queued"] as const)(
     }
   },
 );
+
+it("allows no-op binding delivery and fences a retained grant after reassignment", async () => {
+  const cfg: OpenClawConfig = {
+    ...config,
+    agents: { entries: { main: {}, other: {} } },
+  };
+  const peerId = "retained-binding-authority";
+  const { scope, sessionKey, conversationRef } = seedConversation(peerId);
+  const bindingRef = { channel: "reef", accountId: "default", conversationId: peerId };
+  const sendText = vi.fn().mockResolvedValue({ channel: "reef", messageId: "allowed" });
+  installReefPlugin({
+    ...createOutboundTestPlugin({ id: "reef", outbound: { deliveryMode: "direct", sendText } }),
+    conversationBindings: { supportsCurrentConversationBinding: true },
+  });
+  openOpenClawStateDatabase();
+  const identity = captureOpenClawStateWorkerContext().admission.identity.key;
+  expect(identity).toMatch(/^file:/);
+  const conversation = await readConversation(scope, conversationRef);
+  expect(conversation).toMatchObject({ sessionKey, nativeChannelId: "native-original" });
+  const authority = {
+    config: cfg,
+    readCurrentConfig: () => cfg,
+    agentId: "main",
+    conversationRef,
+    expectedRouteFingerprint: resolveConversationRouteFingerprint(conversation!),
+  };
+  const bindings = getSessionBindingService();
+  await bindings.bind({
+    conversation: bindingRef,
+    targetSessionKey: sessionKey,
+    targetKind: "session",
+  });
+  const routeAuthority = await prepareConversationDeliveryRouteAuthorization({
+    ...authority,
+    conversation: conversation!,
+  });
+  type BindingChange = Parameters<
+    Parameters<typeof currentConversationBindingPublication.subscribeFacts>[0]
+  >[0];
+  const changes: BindingChange[] = [];
+  const unsubscribe = currentConversationBindingPublication.subscribeFacts((change) => {
+    changes.push(change);
+  });
+  try {
+    const handler = await createChannelHandler({
+      cfg,
+      channel: "reef",
+      to: `reef:${peerId}`,
+      withDirectAdapterHandoff: (initiate) =>
+        withAuthorizedConversationDelivery({ ...authority, scope, routeAuthority }, initiate),
+    });
+    const missingRef = { ...bindingRef, conversationId: "missing-retained-binding-authority" };
+    expect(await bindings.resolveByConversationAsync(missingRef)).toBeNull();
+    expect(changes).toHaveLength(2);
+    const [pending, settled] = changes;
+    if (!pending || !settled || !("operation" in pending) || !("operation" in settled)) {
+      throw new Error("Missing native pending/settled binding operation");
+    }
+    expect(changes).toMatchObject([
+      { kind: "pending", identity },
+      { kind: "settled", identity, outcome: "unchanged" },
+    ]);
+    expect(settled.operation).toBe(pending.operation);
+    await expect(handler.sendText("allowed after no-op settlement")).resolves.toMatchObject({
+      messageId: "allowed",
+    });
+    expect(sendText).toHaveBeenCalledOnce();
+
+    // Only the runtime binding changes; the retained config, plugin, and conversation stay current.
+    const replacement = await bindings.bind({
+      conversation: bindingRef,
+      targetSessionKey: "agent:other:reef:channel:replacement",
+      targetKind: "session",
+    });
+    expect(replacement).toMatchObject({
+      targetSessionKey: "agent:other:reef:channel:replacement",
+    });
+    const committed = changes.find((change) => "receipt" in change);
+    expect(committed).toMatchObject({ receipt: { source: { identity } } });
+    expect(await readConversation(scope, conversationRef)).toEqual(conversation);
+    await expect(handler.sendText("rejected after runtime reassignment")).rejects.toThrow(
+      "Conversation binding ownership changed",
+    );
+    expect(sendText).toHaveBeenCalledOnce();
+  } finally {
+    unsubscribe();
+    routeAuthority.dispose();
+  }
+});

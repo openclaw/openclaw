@@ -21,6 +21,8 @@ import {
   createSolidApplicationContextProvider,
 } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { createConfigPage } from "./config-page-state.ts";
+import { completeConfigContext } from "./config-page.test-support.ts";
 import { MemorySettingsPage, type MemorySettingsPageProps } from "./memory-page.tsx";
 import { configRouteData, type ConfigRouteData } from "./route-data.ts";
 
@@ -288,7 +290,7 @@ export function createMemoryPage(params: {
   }
   Object.assign(context, { settingsAgentSelection });
   const [revision, setRevision] = createSignal(0);
-  const input: MemorySettingsPageProps = {
+  const input: Omit<MemorySettingsPageProps, "admittedRoute"> = {
     configObject: params.configObject,
     routeData: params.routeData ?? memoryTabRoute("settings"),
     mutationDisabled: false,
@@ -335,16 +337,24 @@ export function createMemoryPage(params: {
     element,
     () =>
       mountSolid(
-        () => (
-          <MemorySettingsPage
-            configObject={(revision(), input.configObject)}
-            routeData={(revision(), input.routeData)}
-            mutationDisabled={input.mutationDisabled}
-            pluginsHref={input.pluginsHref}
-            memoryImportHref={input.memoryImportHref}
-            buildEditor={input.buildEditor}
-          />
-        ),
+        () => {
+          const state = createConfigPage(
+            completeConfigContext(context),
+            () => ({ pageId: "memory", routeData: (revision(), input.routeData) }),
+            () => element,
+          );
+          return (
+            <MemorySettingsPage
+              configObject={(revision(), input.configObject)}
+              routeData={(revision(), input.routeData)}
+              admittedRoute={state.admittedRoute}
+              mutationDisabled={input.mutationDisabled}
+              pluginsHref={input.pluginsHref}
+              memoryImportHref={input.memoryImportHref}
+              buildEditor={input.buildEditor}
+            />
+          );
+        },
         { container: element, wrapper: provider.wrapper },
       ).unmount,
   );

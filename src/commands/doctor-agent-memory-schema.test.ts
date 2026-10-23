@@ -155,7 +155,9 @@ it("blocks runtime admission until a lost Doctor repair releases maintenance", a
     expect(inspectedPaths).not.toContain(laterPath);
     expect(close.mock.calls.some(([pathname]) => pathname === laterPath)).toBe(false);
     expect(scan.mock.calls.filter(([pathname]) => pathname === laterPath)).toHaveLength(0);
-    await expect(newerAdmission).rejects.toThrow("undergoing offline maintenance");
+    await expect(newerAdmission).rejects.toThrow(
+      "without an active schema lease or maintenance scope",
+    );
     expect(fs.readFileSync(laterPath)).toEqual(laterBefore);
     await expect(
       agentDatabase.withOpenClawAgentDatabaseAsync(laterOptions, (database) =>

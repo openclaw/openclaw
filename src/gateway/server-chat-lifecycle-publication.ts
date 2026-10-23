@@ -25,10 +25,11 @@ export type SessionEventSnapshotDependencies = {
       ownerEvent?: AgentEventPayload;
       sessionRows?: SessionRowReadView;
     },
-  ) => { row: GatewaySessionRow | null; lifecycleRunId?: string };
+  ) => { row: GatewaySessionRow | null; lifecycleRunId?: string; storePath?: string };
   resolveSessionActiveRunState?: (params: {
     requestedKey: string;
     canonicalKey: string;
+    storePath?: string;
     sessionId?: string;
     agentId?: string;
   }) => { active: boolean; runIds?: string[] };
@@ -64,6 +65,7 @@ function createSessionEventSnapshotBuilder({
       ? resolveSessionActiveRunState?.({
           requestedKey: sessionKey,
           canonicalKey: row?.key ?? sessionKey,
+          ...(lifecycleSnapshot.storePath ? { storePath: lifecycleSnapshot.storePath } : {}),
           ...(row?.sessionId ? { sessionId: row.sessionId } : {}),
           ...(agentId ? { agentId } : {}),
         })
@@ -71,7 +73,6 @@ function createSessionEventSnapshotBuilder({
     return buildGatewaySessionSnapshot({
       sessionRow: row,
       agentId,
-      includeSession: true,
       lifecycle: lifecycleProjection,
       event: evt,
       lifecycleRunId,

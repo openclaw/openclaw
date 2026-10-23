@@ -1,9 +1,47 @@
 import { afterEach, expect, it, vi } from "vitest";
 import * as gateway from "../gateway/call.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
-import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
+import { modelReferenceCheck } from "./doctor-model-reference-check.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each(["published", "other-provider", "offline"])(
+  "checks runtime-only models against the selected Gateway (%s)",
+  async (catalogState) => {
+    vi.spyOn(gateway, "isImplicitLocalGatewayTarget").mockResolvedValue(true);
+    vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
+      pid: 123,
+      port: 19568,
+      createdAt: "fixture",
+    });
+    const call = vi.spyOn(gateway, "callGateway");
+    if (catalogState === "offline") {
+      call.mockRejectedValue(new Error("Gateway offline"));
+    } else {
+      call.mockResolvedValue({
+        models: [
+          {
+            provider: catalogState === "published" ? "google" : "ollama",
+            id: "gemini-flash-lite-latest",
+            name: "Runtime model",
+          },
+        ],
+      });
+    }
+    const ref = "google/gemini-flash-lite-latest";
+    const typo = "google/gemini-flash-lite-lates";
+    const findings = await modelReferenceCheck.detect({
+      mode: "lint",
+      env: {},
+      cfg: { agents: { defaults: { imageModel: { primary: ref, fallbacks: [typo] } } } },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+    expect(findings.map((finding) => finding.target)).toEqual(
+      catalogState === "published" ? [typo] : [ref, typo],
+    );
+    expect(call).toHaveBeenCalledOnce();
+  },
+);
 
 it.each([false, true])(
   "uses only prepared Gateway warnings in Doctor (offline=%s)",
@@ -25,7 +63,7 @@ it.each([false, true])(
         ],
       });
     }
-    const findings = await createModelReferenceCheck().detect({
+    const findings = await modelReferenceCheck.detect({
       mode: "lint",
       cfg: {},
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -58,7 +96,7 @@ it("does not execute Gateway secret providers without Doctor's allow-exec opt-in
     createdAt: "fixture",
   });
   const call = vi.spyOn(gateway, "callGateway").mockResolvedValue({ models: [] });
-  const findings = await createModelReferenceCheck().detect({
+  const findings = await modelReferenceCheck.detect({
     mode: "lint",
     env: {},
     cfg: {

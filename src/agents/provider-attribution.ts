@@ -8,6 +8,7 @@ import type {
   PluginManifestProviderRequestProvider,
 } from "../plugins/manifest.js";
 import {
+  isPluginProviderEndpointClass,
   matchesPluginProviderEndpoint,
   normalizePluginProviderBaseUrl,
 } from "../plugins/plugin-metadata-provider-facts.js";
@@ -481,30 +482,7 @@ export function resolveProviderRequestCapabilities(
   const api = normalizeOptionalLowercaseString(input.api);
   const endpointClass = policy.endpointClass;
   const isKnownNativeEndpoint =
-    endpointClass === "anthropic-public" ||
-    endpointClass === "cerebras-native" ||
-    endpointClass === "chutes-native" ||
-    endpointClass === "deepseek-native" ||
-    endpointClass === "github-copilot-native" ||
-    endpointClass === "groq-native" ||
-    endpointClass === "meta-native" ||
-    endpointClass === "mistral-public" ||
-    endpointClass === "minimax-native" ||
-    endpointClass === "moonshot-native" ||
-    endpointClass === "modelstudio-native" ||
-    endpointClass === "novita-native" ||
-    endpointClass === "nvidia-native" ||
-    endpointClass === "openai-public" ||
-    endpointClass === "openai" ||
-    endpointClass === "opencode-native" ||
-    endpointClass === "opencode-go-native" ||
-    endpointClass === "azure-openai" ||
-    endpointClass === "openrouter" ||
-    endpointClass === "xai-native" ||
-    endpointClass === "xiaomi-native" ||
-    endpointClass === "zai-native" ||
-    endpointClass === "google-generative-ai" ||
-    endpointClass === "google-vertex";
+    isPluginProviderEndpointClass(endpointClass) && endpointClass !== "vercel-ai-gateway";
 
   const manifestProviderRequest = resolveManifestProviderRequest(
     provider,

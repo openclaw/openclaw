@@ -8,8 +8,10 @@ import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { page as usageRoute } from "./route.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { page as usageRoute } from "./route.tsx";
 import type { UsageRouteData, UsageSessionEntry } from "./types.ts";
 import { createUsagePage } from "./usage-page-state.ts";
 import { buildAggregatesFromSessions } from "./view.test-support.ts";
@@ -62,6 +64,36 @@ export function usageCalls<T extends readonly unknown[]>(
 
 export function textOf(root: Pick<ParentNode, "querySelector">, selector: string) {
   return root.querySelector(selector)?.textContent;
+}
+
+export async function settleUsagePage(page: TestUsagePage) {
+  await waitForFast(() => expect(page.usageLoading).toBe(false));
+  await page.updateComplete;
+}
+
+export async function queryUsagePage(page: TestUsagePage, query: string) {
+  const input = page.querySelector<HTMLInputElement>(".usage-query-input")!;
+  input.value = query;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await settleUsagePage(page);
+}
+
+export function changeUsageControl(control: HTMLInputElement | HTMLSelectElement, value: string) {
+  control.value = value;
+  control.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+export function usageButton(page: TestUsagePage, label: string, selector = "button") {
+  const button = [...page.querySelectorAll<HTMLButtonElement>(selector)].find(
+    (entry) => (entry.getAttribute("aria-label") ?? entry.textContent?.trim()) === label,
+  );
+  expect(button).toBeDefined();
+  return button!;
+}
+
+export function selectUsageSession(page: TestUsagePage, index = 0) {
+  page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[index]!.click();
 }
 
 type UsagePublicationFixture = {
@@ -117,6 +149,13 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
     agents: {
       state: { agentsList: null, agentsLoading: false, agentsError: null },
       ensureList: vi.fn(async () => null),
+      subscribe,
+    },
+    agentIdentity: {
+      get: () => null,
+      entries: () => [],
+      ensure: async () => undefined,
+      invalidate: () => undefined,
       subscribe,
     },
     agentSelection: {
@@ -204,13 +243,15 @@ export async function createPage(
           get state() {
             return model.read();
           },
-          context,
           get result() {
             return model.result();
           },
         });
       },
-      { container },
+      {
+        container,
+        wrapper: content ? createSolidApplicationContextProvider(context).wrapper : undefined,
+      },
     ).unmount;
   };
   const page = {
@@ -292,7 +333,6 @@ export function createPendingUsageRouteData(
     },
     result: null,
     costSummary: null,
-    providerUsage: { state: "pending" },
     loadedAtMs: null,
     error: null,
   };
@@ -359,10 +399,13 @@ export async function preloadUsage(page: TestUsagePage): Promise<void> {
   await page.updateComplete;
 }
 
+/** Tests written against the recent-first session order opt back into it; the page sorts by cost. */
+export async function showRecentSessions(page: TestUsagePage): Promise<void> {
+  page.read().callbacks.display.onChange({ sessionSort: "recent" });
+  await vi.waitFor(() => expect(page.usageLoading).toBe(false));
+  await page.updateComplete;
+}
+
 export function refreshButton(page: TestUsagePage): HTMLButtonElement {
-  const button = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-    (entry) => entry.textContent?.trim() === "Refresh",
-  );
-  expect(button).toBeDefined();
-  return button!;
+  return usageButton(page, "Refresh");
 }

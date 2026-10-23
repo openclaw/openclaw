@@ -11,33 +11,34 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
 import type {
   ReplyBackendMessageInjectionV2,
   ReplyBackendQueueMessageOptions,
   ReplyMessageInjectionOptions,
-} from "./reply-run-registry.contracts.js";
-import { beginReplyMessageInjectionTarget, replyRunRegistry } from "./reply-run-registry.js";
+} from "../../sessions/session-controller.contracts.js";
+import { beginReplyMessageInjectionTarget } from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
-import { testing } from "./reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { createQueueTestRun, toolAuthorityOverlay } from "./reply-tool-authority.test-support.js";
 
 afterEach(() => {
-  testing.resetReplyRunRegistry();
+  testing.resetSessionControllerForTest();
   vi.restoreAllMocks();
 });
 
-const overlay = { senderIsOwner: true, disableTools: false, traceAuthorized: false };
+const defaultOverlay = { senderIsOwner: true, disableTools: false, traceAuthorized: false };
 type Operation = ReturnType<typeof createTestReplyOperation>;
 type Attempt = Awaited<ReturnType<typeof beginReplyMessageInjectionTarget>>;
 
 function begin(operation: Operation, options: ReplyMessageInjectionOptions) {
   return beginReplyMessageInjectionTarget(
-    replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!,
+    captureCurrentReplyMessageInjectionTarget(operation.key)!,
     "retained source",
     { isInboundUserMessage: true, ...options },
   );
@@ -91,16 +92,19 @@ async function createPolicyOperation(
   const run = createQueueTestRun({ prompt: name });
   Object.assign(run.run, {
     agentId: "main",
-    sessionId: name,
+    sessionId: `${name}-run`,
     sessionKey: `agent:main:${name}`,
     runtimePolicySessionKey: mainAlias ? "agent:main:main" : policyKey,
     senderIsOwner: true,
     config,
   });
-  const operation = createTestReplyOperation({ sessionKey: run.run.sessionKey, sessionId: name });
+  const operation = createTestReplyOperation({
+    sessionKey: run.run.sessionKey,
+    sessionId: run.run.sessionId,
+  });
   await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
   const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
-  return { operation, fingerprint, policyKey, policyEntry };
+  return { operation, fingerprint, policyKey, policyEntry, overlay: toolAuthorityOverlay(run) };
 }
 
 function attachPreparedNativeBackend(
@@ -148,10 +152,12 @@ it.each(["worker", "compatibility"] as const)(
       const sourcePreparation = {
         assertCurrent: vi.fn(),
         prepareCurrent: vi.fn(async () =>
-          assertSourcePolicy(await source.operation.projectToolAuthorityFingerprintAsync(overlay)),
+          assertSourcePolicy(
+            await source.operation.projectToolAuthorityFingerprintAsync(source.overlay),
+          ),
         ),
         compatAssertCurrent: vi.fn(() =>
-          assertSourcePolicy(source.operation.projectToolAuthorityFingerprint(overlay)),
+          assertSourcePolicy(source.operation.projectToolAuthorityFingerprint(source.overlay)),
         ),
       };
       if (kind === "worker") {
@@ -172,7 +178,7 @@ it.each(["worker", "compatibility"] as const)(
       let attempt: Attempt | undefined;
       try {
         attempt = await begin(target.operation, {
-          toolAuthorityOverlay: overlay,
+          toolAuthorityOverlay: target.overlay,
           toolAuthorityPreparation: sourcePreparation,
         });
         await gate.wait(attempt);
@@ -233,10 +239,8 @@ it.each([
             policyStorePath: change === "missing-store" ? defaultStorePath : configuredStorePath,
           }
         : {};
-      const { operation, fingerprint, policyKey, policyEntry } = await createPolicyOperation(
-        "retained-policy",
-        { mainAlias: true, ...options },
-      );
+      const { operation, fingerprint, policyKey, policyEntry, overlay } =
+        await createPolicyOperation("retained-policy", { mainAlias: true, ...options });
       let atBackend = false;
       const effect = attachPreparedNativeBackend(operation, fingerprint, () => {
         atBackend = true;
@@ -347,7 +351,7 @@ it.each(["with-overlay", "separate-caller", "legacy", "legacy-run-with-caller"] 
     operation.setPhase("running");
     const attempt = await begin(operation, {
       toolAuthorityFingerprint: "policy",
-      ...(kind === "with-overlay" ? { toolAuthorityOverlay: overlay } : {}),
+      ...(kind === "with-overlay" ? { toolAuthorityOverlay: defaultOverlay } : {}),
       assertCurrent: separateCaller ? assertSource : undefined,
       toolAuthorityPreparation: {
         ...(kind === "legacy-run-with-caller" ? { authorityKind: "run" as const } : {}),
@@ -363,13 +367,72 @@ it.each(["with-overlay", "separate-caller", "legacy", "legacy-run-with-caller"] 
         gate.open();
       }
       await expect(attempt.outcome).resolves.toMatchObject(
-        legacy ? { status: "rejected", reason: "injection_unavailable" } : { status: "failed" },
+        legacy
+          ? { status: "rejected", reason: "guarded_injection_unsupported" }
+          : { status: "failed" },
       );
       await expect(attempt.acceptance).resolves.toBe(false);
       expect(effect).not.toHaveBeenCalled();
     } finally {
       await gate.settle(attempt);
     }
+  },
+);
+
+it.each(["completion", "observer", "before-acceptance"] as const)(
+  "retains prepared native input custody after %s failure",
+  async (failurePoint) => {
+    const completionError = new Error("backend completion failed");
+    const observerError = new Error("acceptance observer failed");
+    const onQueueAccepted = vi.fn(() => {
+      if (failurePoint === "observer") {
+        throw observerError;
+      }
+    });
+    const queueMessage = vi.fn(async () => {});
+    const queueMessageAsync = vi.fn<
+      NonNullable<ReplyBackendMessageInjectionV2["queueMessageAsync"]>
+    >(async (_text, options, preparation) => {
+      await preparation.prepareCurrent();
+      preparation.assertCurrent();
+      if (failurePoint !== "before-acceptance") {
+        options?.onQueueAccepted?.(true);
+      }
+      throw completionError;
+    });
+    const operation = createTestReplyOperation();
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      messageInjectionV2: {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage,
+        queueMessageAsync,
+      },
+    });
+    operation.setPhase("running");
+    const target = captureCurrentReplyMessageInjectionTarget(operation.key)!;
+    const attempt = await beginReplyMessageInjectionTarget(target, "continue", {
+      onQueueAccepted,
+      toolAuthorityPreparation: {
+        assertCurrent() {},
+        compatAssertCurrent() {},
+        async prepareCurrent() {},
+      },
+    });
+
+    await expect(attempt.outcome).resolves.toMatchObject(
+      failurePoint === "before-acceptance"
+        ? { status: "rejected", reason: "runtime_rejected" }
+        : { status: "indeterminate" },
+    );
+    await expect(attempt.acceptance).resolves.toBe(failurePoint !== "before-acceptance");
+    expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(failurePoint !== "before-acceptance");
+    expect(queueMessageAsync).toHaveBeenCalledOnce();
+    expect(queueMessage).not.toHaveBeenCalled();
+    expect(operation.result).toBeNull();
+    expect(operation.abortSignal.aborted).toBe(false);
   },
 );
 
@@ -384,6 +447,7 @@ it.each(["confirmation-rejection", "participant-callback", "participant-fulfille
     operation.attachBackend({
       kind: "embedded",
       runId: "run-a",
+      supportsTranscriptCommitWait: true,
       toolAuthorityFingerprint: "policy",
       cancel: vi.fn(),
       messageInjection: {
@@ -411,7 +475,7 @@ it.each(["confirmation-rejection", "participant-callback", "participant-fulfille
       confirmSteerTargetRunIdForPersistence: confirm,
     };
     const attempt = await beginReplyMessageInjectionTarget(
-      replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!,
+      captureCurrentReplyMessageInjectionTarget(operation.key)!,
       "uncertain",
       {
         isInboundUserMessage: true,

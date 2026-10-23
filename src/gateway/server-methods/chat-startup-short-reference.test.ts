@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -16,9 +15,9 @@ import {
   rolePolicyConfig,
   sharingPolicyClient,
 } from "../session-sharing.test-utils.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { requestHistory } from "./chat-history-fixtures.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
-import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const key = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
 
@@ -39,17 +38,12 @@ async function startup(
   shortId = "12345678",
   limit?: number,
 ) {
-  const respond = vi.fn<RespondFn>();
-  const handler = expectDefined(chatHistoryHandlers["chat.startup"], "startup handler");
-  await handler({
-    params: { shortId, agentId: "main", ...(limit === undefined ? {} : { limit }) },
+  return requestHistory(
+    "chat.startup",
+    { shortId, agentId: "main", ...(limit === undefined ? {} : { limit }) },
     context,
     client,
-    respond,
-    req: { type: "req", id: "short", method: "chat.startup" },
-    isWebchatConnect: () => false,
-  });
-  return respond;
+  );
 }
 
 describe("chat.startup short references", () => {
@@ -79,7 +73,6 @@ describe("chat.startup short references", () => {
           broadcastToConnIds,
           sessionEventSubscribers: subscribers,
           sessionMessageSubscribers: { get: () => new Set() },
-          chatAbortControllers: new Map(),
         });
         const lateMessage = { role: "assistant", content: "Arrived during startup", timestamp: 2 };
         const readChatStartupProjection = vi.fn(async () => {

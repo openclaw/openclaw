@@ -28,57 +28,49 @@ it("waits for a delayed EOF exit without forcing the app-server", async () => {
 });
 
 describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
-  it.each(["confirmed", "unconfirmed"] as const)(
-    "kills a stuck transport and preserves %s process containment",
-    async (cleanup) => {
-      vi.useFakeTimers();
-      const harness = createClientHarness({ autoEmitExit: false });
-      const root = { pid: 12345, ppid: process.pid, pgid: 12345, state: "S", startedAt: "fake" };
-      Object.assign(harness.process, { pid: root.pid });
-      // Model OS reads/signals; the real containment owner must produce the receipt.
-      vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockImplementation(
-        async () => {
-          if (cleanup === "unconfirmed") {
-            throw new processSnapshot.ProcessInspectionError("unavailable");
-          }
-          return [{ ...root }];
-        },
-      );
-      vi.spyOn(processSnapshot, "readCodexAppServerProcess").mockImplementation(async () => ({
-        ...root,
-      }));
-      const signal = (_pid: number, value?: string | number): true => {
-        if (value === "SIGSTOP") {
-          root.state = "T";
-        }
-        if (value === "SIGCONT") {
-          root.state = "S";
-        }
-        if (value === "SIGKILL") {
-          harness.process.emit("exit", null, "SIGKILL");
-        }
-        return true;
-      };
-      const kill = vi.spyOn(process, "kill").mockImplementation(signal);
-      vi.mocked(harness.process.kill).mockImplementation((value) => signal(root.pid, value));
-      const warning = vi.spyOn(embeddedAgentLog, "warn");
-      const closing = harness.client.closeAndWait({ forceKillDelayMs: 10, exitTimeoutMs: 100 });
-      await vi.advanceTimersByTimeAsync(20);
-      await expect(closing).resolves.toEqual({
-        exited: true,
-        cleanup: cleanup === "confirmed" ? "terminated" : "uncertain",
-      });
-      expect(kill).toHaveBeenCalledWith(-root.pid, "SIGKILL");
-      if (cleanup === "confirmed") {
-        expect(warning).toHaveBeenCalledWith(
-          "Codex app-server required forced shutdown; process cleanup confirmed",
-        );
-      } else {
-        expect(warning).not.toHaveBeenCalled();
+  it.each(["confirmed", "unconfirmed"])("preserves %s force-kill containment", async (cleanup) => {
+    vi.useFakeTimers();
+    const harness = createClientHarness({ autoEmitExit: false });
+    const root = { pid: 12345, ppid: process.pid, pgid: 12345, state: "S", startedAt: "fake" };
+    Object.assign(harness.process, { pid: root.pid });
+    // Model OS reads/signals; the real containment owner must produce the receipt.
+    vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockImplementation(async () => {
+      if (cleanup === "unconfirmed") {
+        throw new processSnapshot.ProcessInspectionError("unavailable");
       }
-      expect(vi.getTimerCount()).toBe(0);
-    },
-  );
+      return [{ ...root }];
+    });
+    vi.spyOn(processSnapshot, "readCodexAppServerProcess").mockImplementation(async () => ({
+      ...root,
+    }));
+    const signal = (_pid: number, value?: string | number): true => {
+      if (value === "SIGSTOP" || value === "SIGCONT") {
+        root.state = value === "SIGSTOP" ? "T" : "S";
+      }
+      if (value === "SIGKILL") {
+        harness.process.emit("exit", null, "SIGKILL");
+      }
+      return true;
+    };
+    const kill = vi.spyOn(process, "kill").mockImplementation(signal);
+    vi.mocked(harness.process.kill).mockImplementation((value) => signal(root.pid, value));
+    const warning = vi.spyOn(embeddedAgentLog, "warn");
+    const closing = harness.client.closeAndWait({ forceKillDelayMs: 10, exitTimeoutMs: 100 });
+    await vi.advanceTimersByTimeAsync(20);
+    await expect(closing).resolves.toEqual({
+      exited: true,
+      cleanup: cleanup === "confirmed" ? "terminated" : "uncertain",
+    });
+    expect(kill).toHaveBeenCalledWith(-root.pid, "SIGKILL");
+    if (cleanup === "confirmed") {
+      expect(warning).toHaveBeenCalledWith(
+        "Codex app-server required forced shutdown; process cleanup confirmed",
+      );
+    } else {
+      expect(warning).not.toHaveBeenCalled();
+    }
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it("lets the native server exit through its npm launcher", async () => {
     const root = tempDirs.make("codex-client-shutdown-");
@@ -117,10 +109,7 @@ child.on("exit", (code, signal) => {
       await client.request("test/ready", {}, { timeoutMs: 5_000 });
       // Shared-client retirement calls close before its owner joins closeAndWait.
       client.close();
-      await expect(client.closeAndWait()).resolves.toEqual({
-        exited: true,
-        cleanup: "closed",
-      });
+      await expect(client.closeAndWait()).resolves.toEqual({ exited: true, cleanup: "closed" });
       await exited;
       expect(child.exitCode).toBe(0);
       expect(warning).not.toHaveBeenCalled();

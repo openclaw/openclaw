@@ -160,6 +160,17 @@ function sdkCompletion(responseId: string, content: string): SdkResponse {
   return sdkEvents(completedEvent(responseId, content));
 }
 
+/** A completion without url_citation, for tool-flow tests whose replies cite nothing. */
+function sdkUncitedCompletion(responseId: string, content: string): SdkResponse {
+  const event = completedEvent(responseId, content);
+  for (const item of event.response.output) {
+    for (const part of item.content) {
+      part.annotations = [];
+    }
+  }
+  return sdkEvents(event);
+}
+
 function sdkEvents(...events: Array<Record<string, unknown>>): SdkResponse {
   return {
     data: (async function* () {
@@ -235,9 +246,12 @@ describe("native OpenAI Responses SSE continuation", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     cleanupSessionResources();
     configureAiTransportHost(initialHost);
+    if (vi.isFakeTimers()) {
+      await vi.runAllTimersAsync();
+    }
     vi.useRealTimers();
   });
 
@@ -283,6 +297,93 @@ describe("native OpenAI Responses SSE continuation", () => {
       });
     },
   );
+
+  it("continues after a hosted web search answer with sources through effort and tool turns", async () => {
+    const search = completedEvent("resp_search", "searched answer");
+    const toolCall = {
+      type: "function_call",
+      id: "fc_lookup",
+      call_id: "call_lookup",
+      name: "lookup",
+      arguments: "{}",
+      status: "completed",
+    };
+    const toolTurn = completedEvent("resp_tool", "");
+    sseState.outcomes.push(
+      sdkEvents({
+        ...search,
+        response: {
+          ...search.response,
+          output: [
+            {
+              type: "web_search_call",
+              id: "ws_1",
+              status: "completed",
+              action: { type: "search", query: "source" },
+            },
+            ...search.response.output,
+          ],
+        },
+      }),
+      sdkEvents(
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { ...toolCall, arguments: "" },
+        },
+        { type: "response.output_item.done", output_index: 0, item: toolCall },
+        { ...toolTurn, response: { ...toolTurn.response, output: [toolCall] } },
+      ),
+      sdkCompletion("resp_final", "used lookup result"),
+    );
+    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+    const tools = [functionTool("lookup")];
+    const messages: Context["messages"] = [userMessage("first question", 1)];
+    const first = await run({ messages, tools }, { onPayload }, astra);
+    // Sources reach the visible reply; the server keeps only the provider prose.
+    expect(first.content).toContainEqual(
+      expect.objectContaining({
+        type: "text",
+        text: "searched answer\n\n[source](https://example.test/source)",
+      }),
+    );
+    messages.push(first, userMessage("second question", 2));
+    const second = await run({ messages, tools }, { onPayload, reasoningEffort: "high" }, astra);
+    expect(second.stopReason).toBe("toolUse");
+    const call = second.content.find((block) => block.type === "toolCall");
+    if (call?.type !== "toolCall") {
+      throw new Error("Expected the lookup tool call");
+    }
+    messages.push(second, {
+      role: "toolResult",
+      toolCallId: call.id,
+      toolName: call.name,
+      content: [{ type: "text", text: "lookup result" }],
+      isError: false,
+      timestamp: 3,
+    });
+    const third = await run({ messages, tools }, { onPayload, reasoningEffort: "high" }, astra);
+
+    expect(third.stopReason).toBe("stop");
+    expect(sseState.requests[1]).toMatchObject({
+      previous_response_id: "resp_search",
+      reasoning: { effort: "low" },
+      input: [
+        { type: "configuration_update", reasoning: { effort: "high" } },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "second question" }],
+        },
+      ],
+    });
+    expect(sseState.requests[2]).toMatchObject({
+      previous_response_id: "resp_tool",
+      reasoning: { effort: "low" },
+      input: [{ type: "function_call_output", call_id: "call_lookup", output: "lookup result" }],
+    });
+    expect(sseState.requests[2]?.input).toHaveLength(1);
+  });
 
   it("never engages for a custom endpoint without the explicit opt-in, even with store:true forced (the host carries no trust signal on its own)", async () => {
     sseState.outcomes.push(
@@ -508,13 +609,21 @@ describe("native OpenAI Responses SSE continuation", () => {
           };
         })(),
       },
-      sdkCompletion("resp_final", "used lookup result"),
+      sdkUncitedCompletion("resp_final", "used lookup result"),
     );
     const agent = new Agent({
       initialState: {
         model: astra,
         thinkingLevel: "low",
-        tools: [{ ...functionTool("lookup"), label: "lookup", execute }],
+        tools: [
+          { ...functionTool("lookup"), label: "lookup", execute },
+          {
+            ...functionTool("sessions_yield"),
+            label: "sessions_yield",
+            async: false,
+            execute: vi.fn(),
+          },
+        ],
       },
       streamFn: createOpenAIResponsesTransportStreamFn(),
       getApiKey: () => "test-key",
@@ -532,6 +641,7 @@ describe("native OpenAI Responses SSE continuation", () => {
       expect(sseState.requests).toHaveLength(1);
       expect(sseState.requests[0]?.tools).toEqual([
         expect.objectContaining({ name: "lookup", async: true }),
+        expect.not.objectContaining({ async: true }),
       ]);
       releaseTool.resolve();
       await prompt;
@@ -555,6 +665,58 @@ describe("native OpenAI Responses SSE continuation", () => {
       agent.abort();
       await prompt;
     }
+  });
+
+  it("keeps Astra tools synchronous without sessions_yield to collect async results", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "lookup result" }],
+      details: {},
+    }));
+    const call = {
+      type: "function_call",
+      id: "fc_lookup",
+      call_id: "call_lookup",
+      name: "lookup",
+      arguments: "{}",
+      status: "completed",
+    };
+    const completed = completedEvent("resp_call", "");
+    sseState.outcomes.push(
+      sdkEvents(
+        { type: "response.output_item.added", output_index: 0, item: { ...call, arguments: "" } },
+        { type: "response.output_item.done", output_index: 0, item: call },
+        { ...completed, response: { ...completed.response, output: [call] } },
+      ),
+      sdkUncitedCompletion("resp_final", "used lookup result"),
+    );
+    // plugins is synchronous but cannot collect async results (cron surfaces lack sessions_yield).
+    const agent = new Agent({
+      initialState: {
+        model: astra,
+        thinkingLevel: "low",
+        tools: [
+          { ...functionTool("lookup"), label: "lookup", execute },
+          { ...functionTool("plugins"), label: "plugins", async: false, execute: vi.fn() },
+        ],
+      },
+      streamFn: createOpenAIResponsesTransportStreamFn(),
+      getApiKey: () => "test-key",
+      sessionId: "sync-agent",
+      transport: "sse",
+    });
+    await agent.prompt("Look it up and report.");
+    expect(sseState.requests[0]?.tools).not.toContainEqual(
+      expect.objectContaining({ async: true }),
+    );
+    expect(sseState.requests).toHaveLength(2);
+    const replay = sseState.requests[1]?.input as Array<{ type: string }>;
+    expect(replay.filter((item) => item.type === "function_call_output")).toEqual([
+      { type: "function_call_output", call_id: "call_lookup", output: "lookup result" },
+    ]);
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [expect.objectContaining({ text: "used lookup result" })],
+    });
   });
 
   it.each([

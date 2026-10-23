@@ -5,22 +5,53 @@ import {
   listSessionPendingInputs,
   type SessionPendingInput,
 } from "../../config/sessions/session-accessor.js";
+import {
+  getRpcSourceIdentity,
+  isRpcSourceQueued,
+  listRpcSourceEntries,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.history.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
-import {
-  isQueuedFollowupChatTurnForSession,
-  type QueuedChatTurnMap,
-} from "../chat-queued-turns.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
+import {
+  captureRpcSourceScopeMatcher,
+  type SessionRuntimeScope,
+} from "../session-runtime-scope.js";
 import { replaceOversizedChatHistoryMessages } from "./chat-history-budget.js";
 
 const PENDING_INPUT_DISPLAY_MAX_BYTES = 128 * 1024;
 // Correlation is useful for browser UUIDs, but arbitrary external run IDs must
 // not turn a bounded display page into an unbounded payload. Never truncate IDs.
 const PENDING_INPUT_CORRELATION_MAX_CHARS = 256;
+
+/** Capture follow-up queue correlation within the selected Gateway and physical session. */
+export function captureQueuedChatInputRunIds(
+  scope: SessionRuntimeScope & { sessionKey: string; sessionId: string; agentId?: string },
+): ReadonlySet<string> {
+  const matchesScope = captureRpcSourceScopeMatcher(scope);
+  return new Set(
+    listRpcSourceEntries().flatMap(([runId, source]) => {
+      if (
+        runId.length > PENDING_INPUT_CORRELATION_MAX_CHARS ||
+        !matchesScope(source) ||
+        !isRpcSourceQueued(source) ||
+        source.input.custody.enqueued !== true ||
+        source.input.injection !== undefined
+      ) {
+        return [];
+      }
+      const identity = getRpcSourceIdentity(source);
+      return identity.sessionKey === scope.sessionKey &&
+        identity.sessionId === scope.sessionId &&
+        identity.agentId === scope.agentId
+        ? [runId]
+        : [];
+    }),
+  );
+}
 
 export function projectPendingInputMessage(
   input: SessionPendingInput,
@@ -60,7 +91,7 @@ export async function readChatPendingInputs(
     before?: number;
     limit: number;
     maxChars: number;
-    queuedTurns?: QueuedChatTurnMap;
+    queuedRunIds?: ReadonlySet<string>;
     cronStorePath?: string;
   },
 ): Promise<ChatPendingInputsPage> {
@@ -72,15 +103,6 @@ export async function readChatPendingInputs(
     page.items.map((input) => input.message),
     options.cronStorePath,
   );
-  let queuedCount = 0;
-  for (const runId of options.queuedTurns?.keys() ?? []) {
-    if (
-      runId.length <= PENDING_INPUT_CORRELATION_MAX_CHARS &&
-      isQueuedFollowupChatTurnForSession(options.queuedTurns, runId, scope)
-    ) {
-      queuedCount += 1;
-    }
-  }
   const projectProfile = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
   const visible = page.items.flatMap((input) => {
     const message = projectPendingInputMessage(
@@ -99,7 +121,7 @@ export async function readChatPendingInputs(
   }).messages;
   return {
     ...page,
-    ...(options.queuedTurns ? { queuedCount } : {}),
+    ...(options.queuedRunIds ? { queuedCount: options.queuedRunIds.size } : {}),
     items: visible.map(({ input: item }, index) => {
       const display: ChatPendingInputsPage["items"][number] = {
         id: item.id,
@@ -109,10 +131,7 @@ export async function readChatPendingInputs(
       };
       if (item.runId.length <= PENDING_INPUT_CORRELATION_MAX_CHARS) {
         display.runId = item.runId;
-        if (
-          item.state === "queued" &&
-          isQueuedFollowupChatTurnForSession(options.queuedTurns, item.runId, scope)
-        ) {
+        if (item.state === "queued" && options.queuedRunIds?.has(item.runId)) {
           display.queued = true;
         }
       }

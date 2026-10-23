@@ -1,7 +1,6 @@
 import {
   hasSessionProjectionAcceptedFinal,
   reduceSessionProjectionRunEvent,
-  type SessionProjectionRunStatus,
 } from "../../packages/gateway-client/src/session-projection.js";
 import type { ChatLogOperations } from "./components/chat-log.js";
 import {
@@ -18,6 +17,7 @@ import {
   getTuiSessionProjection,
   hasDisplayableTuiSessionFinal,
   isIdentityOnlyTuiSessionInvalidation,
+  isFailedTuiRunStatus,
   projectTuiSessionMessage,
   projectTuiSessionFinal,
   readTuiSessionProjectionScope,
@@ -38,13 +38,10 @@ import type {
   SessionChangedEvent,
   SessionMessageEvent,
   TuiHistoryLoadResult,
+  TuiSessionRow,
 } from "./tui-types.js";
 
 const ACTIVITY_PHASES = new Set(["start", "finishing", "end", "error"]);
-
-function isFailedTuiRunStatus(status: SessionProjectionRunStatus | undefined): boolean {
-  return status === "aborted" || status === "error" || status === "timeout";
-}
 
 type EventHandlerContext = Omit<
   Parameters<typeof createTuiRunLifecycle>[0],
@@ -57,6 +54,7 @@ type EventHandlerContext = Omit<
   };
   updateFooter: () => void;
   loadHistory: () => Promise<TuiHistoryLoadResult>;
+  applySessionEventRow?: (row: TuiSessionRow) => boolean;
   noteLocalRunId?: (runId: string) => void;
   isLocalBtwRunId?: (runId: string) => boolean;
   forgetLocalBtwRunId?: (runId: string) => void;
@@ -70,6 +68,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     state,
     setActivityStatus,
     refreshSessionInfo,
+    applySessionEventRow,
     loadHistory,
     noteLocalRunId,
     isLocalRunId,
@@ -530,7 +529,10 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
     }
 
-    if (runCoordinator.routeSessionMessageRefresh(Boolean(liveUserMessage || authoritativeRunId))) {
+    if (
+      runCoordinator.routeSessionMessageRefresh(Boolean(liveUserMessage || authoritativeRunId)) &&
+      !(evt.session && applySessionEventRow?.(evt.session))
+    ) {
       void refreshSessionInfo?.();
     }
   });
@@ -674,6 +676,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       if (phase === "start") {
+        if (localMode && evt.data?.explicitFollowup === true) {
+          chatLog.addSystem("Your followup has started.");
+        }
         setActivityStatus("running");
       }
       if (phase === "finishing") {

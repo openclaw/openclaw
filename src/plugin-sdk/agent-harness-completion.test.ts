@@ -14,20 +14,20 @@ const mocks = vi.hoisted(() => ({
   reconcile: vi.fn(async () => "unowned"),
   resolveCompletionOrigin: vi.fn(async () => undefined),
   custodyCurrent: true,
-  isCustodyCurrent: vi.fn((custody: CompletionCustody) => custody.isCurrent()),
+  custodyError: new Error("Completion custody retired"),
   runWithCustody: vi.fn(
     <T>(custody: CompletionCustody, _scope: CompletionScope, run: () => T): T => {
       if (!custody.isCurrent()) {
-        throw new Error("Completion custody retired");
+        throw mocks.custodyError;
       }
       return run();
     },
   ),
 }));
+// mock-isolation: Keep process-global custody and Gateway continuation state outside this fixture.
 vi.mock("../agents/agent-harness-completion-custody.js", () => ({
   captureAgentHarnessCompletionCustody: vi.fn(),
   createAgentHarnessCompletionEventSink: vi.fn(),
-  isAgentHarnessCompletionCustodyCurrent: mocks.isCustodyCurrent,
   runWithAgentHarnessCompletionCustody: mocks.runWithCustody,
 }));
 vi.mock("../agents/agent-harness-completion-delivery.js", () => ({
@@ -53,7 +53,11 @@ vi.mock("../agents/subagents/announce/subagent-announce-origin.js", () => ({
   resolveSubagentCompletionOrigin: mocks.resolveCompletionOrigin,
 }));
 import * as completionSdk from "./agent-harness-completion.js";
-import { deliverAgentHarnessCompletion } from "./agent-harness-completion.js";
+import {
+  deliverAgentHarnessCompletion,
+  isDurableAgentHarnessCompletionDelivery,
+  type AgentHarnessCompletionDelivery,
+} from "./agent-harness-completion.js";
 
 const source = {
   requesterSessionKey: "main",
@@ -103,6 +107,35 @@ function retireDuringOriginResolution(retire: () => void) {
   });
 }
 
+type Phases = NonNullable<AgentHarnessCompletionDelivery["phases"]>;
+const direct = (phases?: Phases): AgentHarnessCompletionDelivery => ({
+  delivered: true,
+  path: "direct",
+  ...(phases ? { phases } : {}),
+});
+const directPhase = (delivered: boolean): Phases => [
+  { phase: "direct-primary", delivered, path: delivered ? "direct" : "none" },
+];
+it.each<[string, AgentHarnessCompletionDelivery, boolean]>([
+  ["direct result without phases", direct(), true],
+  ["direct result with no executed phase", direct([]), false],
+  ["completed direct phase", direct(directPhase(true)), true],
+  ["unsuccessful direct phase", direct(directPhase(false)), false],
+  [
+    "steer evidence does not prove direct delivery",
+    direct([
+      { phase: "steer-primary", delivered: true, path: "steered" },
+      { phase: "steer-fallback", delivered: false, path: "none", reason: "steer_dropped" },
+    ]),
+    false,
+  ],
+  ["successful steer", { delivered: true, path: "steered", phases: [] }, true],
+  ["queued result", { delivered: true, path: "queued" }, false],
+  ["failed result", { delivered: false, path: "direct" }, false],
+])("preserves %s", (_name, delivery, durable) => {
+  expect(isDurableAgentHarnessCompletionDelivery(delivery)).toBe(durable);
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.custodyCurrent = true;
@@ -127,7 +160,10 @@ it("enters retained custody without exposing its internal execution callback", a
   const custody = custodyFixture();
   const input = params();
   mocks.deliver.mockImplementation(async () => {
-    expect(mocks.runWithCustody.mock.calls).toEqual([[custody, input.scope, expect.any(Function)]]);
+    expect(mocks.runWithCustody).toHaveBeenCalled();
+    for (const call of mocks.runWithCustody.mock.calls) {
+      expect(call).toEqual([custody, input.scope, expect.any(Function)]);
+    }
     assertAdmission(source);
     return { delivered: true, path: "direct" };
   });
@@ -143,7 +179,10 @@ it("rejects custody retired during awaited origin resolution", async () => {
   retireDuringOriginResolution(() => {
     mocks.custodyCurrent = false;
   });
-  await rejects({ completionCustody: custody }, "custody retired");
+  await expect(deliver({ completionCustody: custody })).rejects.toMatchObject({
+    message: "Harness completion custody retired",
+    cause: mocks.custodyError,
+  });
   expect(mocks.deliver).not.toHaveBeenCalled();
 });
 

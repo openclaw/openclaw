@@ -3,18 +3,35 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
+import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
+import { abortSessionControllerInput } from "../sessions/session-controller.mailbox.js";
+import {
+  rpcSourceTesting,
+  setRpcSourceIdentityForTest,
+} from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { createAgentDedupeLifecycle } from "./agent-turn/agent-dedupe-lifecycle.js";
+import { prepareAgentRequestRouting } from "./agent-turn/agent-request-routing.js";
+import { createAgentTurnIo } from "./agent-turn/io.js";
 import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { startExactAuthorizationRequest } from "./server-methods.authorization.test-support.js";
+import { createRequestGate } from "./server-methods.request-gate.test-support.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
+import { admitChatSend } from "./server-methods/chat-send-admission.js";
 import * as chat from "./server-methods/chat-send-external-entry.js";
+import { normalizeChatSendRequest } from "./server-methods/chat-send-request.js";
+import {
+  prepareChatSendSession,
+  qualifyChatSendSession,
+} from "./server-methods/chat-send-session.js";
 import { createActiveRun } from "./server-methods/chat.abort.test-helpers.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
@@ -22,6 +39,7 @@ import { sessionCreateHandlers } from "./server-methods/sessions-create.js";
 import { sessionMessagingHandlers } from "./server-methods/sessions-messaging.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
+import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { resolveSessionSharingTargetAsync } from "./session-sharing.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
@@ -64,24 +82,14 @@ function pausedHandler(
   handler: GatewayRequestHandler,
   before?: (options: Parameters<GatewayRequestHandler>[0]) => void,
 ) {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
+  const gate = createRequestGate();
   return {
     handler: (async (options) => {
       before?.(options);
-      entered.resolve();
-      await release.promise;
+      await gate.pause();
       await handler(options);
     }) satisfies GatewayRequestHandler,
-    async during(request: Promise<void>, change: () => void | Promise<void>) {
-      try {
-        await Promise.race([entered.promise, request]);
-        await change();
-      } finally {
-        release.resolve();
-        await request;
-      }
-    },
+    during: gate.during,
   };
 }
 
@@ -135,7 +143,7 @@ describe("invocation-owned session mutations", () => {
           owner: owner === "connection" ? { connId: client.connId } : { deviceId: "alias-device" },
         });
         const original = run("own-incarnation");
-        context.chatAbortControllers.set("selected", rebind ? original : foreign);
+        rpcSourceTesting.set("selected", rebind ? original : foreign);
         const paused = pausedHandler(sessionAbortHandlers["sessions.abort"]!, (options) =>
           expect(readGatewayRequestMutationAuthority(options).sessionScope).toBe(
             broad ? undefined : "operator.sessions.write",
@@ -151,10 +159,10 @@ describe("invocation-owned session mutations", () => {
         await paused.during(request, () => {
           expect(respond).not.toHaveBeenCalled();
           if (rebind) {
-            context.chatAbortControllers.set("selected", foreign);
+            rpcSourceTesting.set("selected", foreign);
           }
         });
-        expect([foreign, original].map((entry) => entry.controller.signal.aborted)).toEqual([
+        expect([foreign, original].map((entry) => entry.input.abortSignal.aborted)).toEqual([
           broad,
           false,
         ]);
@@ -162,8 +170,8 @@ describe("invocation-owned session mutations", () => {
         expect(respond.mock.calls[0]?.[0]).toBe(broad);
         if (!broad) {
           expect([...context.dedupe]).toEqual(before);
-          expect(context.chatAbortControllers.get("selected")).toBe(foreign);
-          expect(context.chatQueuedTurns.size).toBe(0);
+          expect(rpcSourceTesting.get("selected")).toBe(foreign);
+          expect(rpcSourceTesting.size).toBe(1);
         }
       });
     },
@@ -252,6 +260,8 @@ describe("invocation-owned session mutations", () => {
             const runId = `${kind}-${explicit}-${mismatch}`;
             const requestKey = mismatch === "missing-target" ? "agent:main:missing" : key;
             const run = createActiveRun(mismatch === "key" ? "agent:main:other" : requestKey, {
+              // An unbound source cannot publish a native operation with an empty incarnation.
+              queued: kind !== "active" || mismatch === "unbound" || mismatch === "missing-target",
               agentId: "main",
               sessionId:
                 mismatch === "incarnation"
@@ -261,25 +271,10 @@ describe("invocation-owned session mutations", () => {
                     : "current-incarnation",
               owner: { connId: client.connId },
             });
-            if (kind === "active") {
-              context.chatAbortControllers.set(runId, run);
-            } else if (kind === "queued") {
-              context.chatQueuedTurns.set(runId, run);
-            } else {
-              context.dedupe.set(`${kind}:${runId}`, {
-                ts: Date.now(),
-                ok: true,
-                payload: {
-                  runId,
-                  status: "accepted",
-                  agentId: "main",
-                  ownerConnId: client.connId,
-                  ...(mismatch === "unbound" || mismatch === "missing-target"
-                    ? {}
-                    : { sessionKey: run.sessionKey, sessionId: run.sessionId }),
-                },
-              });
+            if (kind !== "active" && kind !== "queued") {
+              run.adapter.kind = kind === "agent" ? "agent" : "chat-send";
             }
+            rpcSourceTesting.set(runId, run);
             const before = [...context.dedupe];
             const { request, respond } = startExactAuthorizationRequest(
               method,
@@ -292,64 +287,142 @@ describe("invocation-owned session mutations", () => {
             );
             await request;
             const allowed = mismatch === "none";
-            if (kind === "active" || kind === "queued") {
-              expect(run.controller.signal.aborted).toBe(allowed);
-            } else if (!allowed) {
+            expect(run.input.abortSignal.aborted).toBe(allowed);
+            if (!allowed) {
               expect([...context.dedupe]).toEqual(before);
             }
             if (allowed) {
               expectAborted(respond, method, runId);
             }
             expect(respond).toHaveBeenCalledOnce();
+            abortSessionControllerInput(run.input, "Fixture case finished");
+            await run.input.settlement.promise;
+            rpcSourceTesting.deleteExpected(runId, run);
           }
         }
       });
     },
   );
 
-  it.each([
-    { kind: "active", method: "chat.abort" },
-    { kind: "queued", method: "chat.abort" },
-    { kind: "queued", method: "sessions.abort" },
-  ] as const)(
-    "$method does not adopt a reentrant $kind producer replacement during narrow Stop",
-    async ({ kind, method }) => {
+  it.each(
+    (
+      [
+        { kind: "active", method: "chat.abort" },
+        { kind: "queued", method: "chat.abort" },
+        { kind: "queued", method: "sessions.abort" },
+      ] as const
+    ).flatMap((entry) =>
+      (["registration", "key", "sessionId", "agentId"] as const).map((changed) => ({
+        kind: entry.kind,
+        method: entry.method,
+        changed,
+      })),
+    ),
+  )(
+    "$method does not adopt a reentrant $kind producer $changed during narrow Stop",
+    async ({ kind, method, changed }) => {
       await withState(async () => {
-        const { client, cfg, run } = ownerFixture("reentrant-stop-owner");
+        const { client, cfg, context } = ownerFixture("reentrant-stop-owner");
         client.connId = "reentrant-stop";
-
         await upsertSessionEntryCore(scope, ownedEntry(client, "original"));
-        for (const changed of ["registration", "key", "sessionId", "agentId"] as const) {
-          const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-          const runs = kind === "active" ? context.chatAbortControllers : context.chatQueuedTurns;
-          const [first, second, replacement] = [run("original"), run("original"), run("original")];
-          runs.set("first", first);
+        const runs = rpcSourceTesting;
+        const session = expectDefined(
+          await resolveSessionSharingTargetAsync({ cfg, ...scope }),
+          "narrow Stop session target",
+        );
+        const target = {
+          queued: kind === "queued",
+          storeScope: session.storePath,
+          agentId: "main",
+          sessionId: "original",
+          owner: { connId: client.connId },
+        };
+        const first = createActiveRun(key, target);
+        // One controller has one active turn; only queued rows retain a second input.
+        const second = kind === "queued" ? createActiveRun(key, target) : undefined;
+        let replacement: ReturnType<typeof createActiveRun> | undefined;
+        runs.set("first", first);
+        if (second) {
           runs.set("second", second);
-          first.controller.signal.addEventListener(
-            "abort",
-            () => {
-              if (changed === "registration") {
-                runs.set("second", replacement);
-              } else if (changed === "key") {
-                second.sessionKey = "agent:main:other";
-              } else {
-                second[changed] = "replacement";
-              }
-            },
-            { once: true },
-          );
-          const { request, respond } = startExactAuthorizationRequest(
-            method,
-            method === "chat.abort" ? { sessionKey: key } : { key },
-            { client, context, extraHandlers: stopHandlers },
-            changed,
-          );
-          await request;
-          expect(first.controller.signal.aborted).toBe(true);
-          expect([second, replacement].some((entry) => entry.controller.signal.aborted)).toBe(
+        }
+        first.input.abortSignal.addEventListener(
+          "abort",
+          () => {
+            if (kind === "active" || changed === "registration") {
+              // Reserve successors after Stop captures the original mailbox inputs.
+              replacement = createActiveRun(changed === "key" ? "agent:main:other" : key, {
+                ...target,
+                sessionId: changed === "sessionId" ? "replacement" : "original",
+                agentId: changed === "agentId" ? "replacement" : "main",
+              });
+              runs.set("second", replacement);
+            } else if (changed === "key") {
+              setRpcSourceIdentityForTest(expectDefined(second, "queued narrow Stop source"), {
+                sessionKey: "agent:main:other",
+              });
+            } else if (changed === "sessionId") {
+              setRpcSourceIdentityForTest(expectDefined(second, "queued narrow Stop source"), {
+                sessionId: "replacement",
+              });
+            } else {
+              setRpcSourceIdentityForTest(expectDefined(second, "queued narrow Stop source"), {
+                agentId: "replacement",
+              });
+            }
+          },
+          { once: true },
+        );
+        const { request, respond } = startExactAuthorizationRequest(
+          method,
+          method === "chat.abort" ? { sessionKey: key } : { key },
+          { client, context, extraHandlers: stopHandlers },
+          changed,
+        );
+        await request;
+        expect(first.input.abortSignal.aborted).toBe(true);
+        if (kind === "queued") {
+          expect(expectDefined(second, "queued narrow Stop source").input.abortSignal.aborted).toBe(
             false,
           );
-          expectAborted(respond, method, "first");
+        }
+        if (kind === "active" || changed === "registration") {
+          expect(
+            expectDefined(replacement, "reentrant narrow Stop successor").input.abortSignal.aborted,
+          ).toBe(false);
+        }
+        expectAborted(respond, method, "first");
+      });
+    },
+  );
+
+  it.each(["key", "incarnation"] as const)(
+    "does not borrow a different owned run %s for narrow Stop",
+    async (changed) => {
+      await withState(async () => {
+        const { client, cfg } = ownerFixture("stop-owner");
+        client.connId = "same-connection";
+        await upsertSessionEntryCore(scope, ownedEntry(client, "own-row"));
+        for (const grant of ["operator.sessions.write", "operator.write"]) {
+          client.connect.scopes = [grant];
+          const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+          const run = createActiveRun(changed === "key" ? "agent:main:other" : key, {
+            agentId: "main",
+            sessionId: changed === "key" ? "own-row" : "prior-incarnation",
+            owner: { connId: client.connId },
+          });
+          rpcSourceTesting.set("different-run", run);
+          const { request, respond } = startExactAuthorizationRequest(
+            "chat.abort",
+            { sessionKey: key, runId: "different-run" },
+            { client, context, extraHandlers: { "chat.abort": handleChatAbortRequest } },
+            grant,
+          );
+          await request;
+          expect(run.input.abortSignal.aborted).toBe(grant === "operator.write");
+          expect(respond.mock.calls[0]?.[0]).toBe(grant === "operator.write");
+          abortSessionControllerInput(run.input, "Fixture case finished");
+          await run.input.settlement.promise;
+          rpcSourceTesting.deleteExpected("different-run", run);
         }
       });
     },
@@ -432,16 +505,14 @@ describe("invocation-owned session mutations", () => {
           visibility: "draft" as const,
         };
         await upsertSessionEntryCore(scope, entry);
-        const entered = createDeferredCore();
-        const resume = createDeferredCore();
+        using gate = createRequestGate();
         const effect = vi.fn();
         let current = true;
         const dispatch = vi
           .spyOn(chat, "handleDirectExternalChatSend")
           .mockImplementation(async (options) => {
             const authority = readGatewayRequestMutationAuthority(options);
-            entered.resolve();
-            await resume.promise;
+            await gate.pause();
             authority.assertCurrent();
             options.sessionMutationAuthorization?.assertCurrent();
             effect();
@@ -460,7 +531,7 @@ describe("invocation-owned session mutations", () => {
         );
         const outcome = Promise.allSettled([request]);
         try {
-          await Promise.race([entered.promise, request]);
+          await Promise.race([gate.entered, request]);
           expect(dispatch).toHaveBeenCalledOnce();
           if (changed === "source") {
             current = false;
@@ -469,7 +540,7 @@ describe("invocation-owned session mutations", () => {
             await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement" });
           }
         } finally {
-          resume.resolve();
+          gate.release();
           await outcome;
           dispatch.mockRestore();
         }
@@ -495,7 +566,7 @@ describe("invocation-owned session mutations", () => {
   it.each(["source", "generation", "missing-single", "missing-batch"] as const)(
     "session mutation preserves the original %s fence",
     async (changed) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await withState(async () => {
         const { client, context } = ownerFixture("batch-owner");
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const entry = {
@@ -559,4 +630,118 @@ describe("invocation-owned session mutations", () => {
       });
     },
   );
+});
+
+describe("pending Stop admission", () => {
+  const pendingKey = "agent:main:pending-stop";
+  const pendingScope = { agentId: "main", sessionKey: pendingKey };
+  const aborted = { status: "timeout", summary: "aborted" };
+
+  async function createPendingOwner(profileName: string) {
+    const { client, cfg, context } = ownerFixture(profileName);
+    client.connId = "pending-owner";
+    const entry = ownedEntry(client, "original");
+    await upsertSessionEntryCore(pendingScope, entry);
+    const stop = async (runId: string) => {
+      const { request, respond } = startExactAuthorizationRequest(
+        "chat.abort",
+        { sessionKey: pendingKey, runId },
+        { client, context, extraHandlers: { "chat.abort": handleChatAbortRequest } },
+        "stop",
+      );
+      await request;
+      return respond.mock.calls[0]?.[1];
+    };
+    return { client, cfg, context, entry, stop };
+  }
+
+  it.each(["current", "replacement"] as const)(
+    "does not treat an agent routing reservation as controller admission across %s row state",
+    async (target) => {
+      await withState(async () => {
+        const { client, cfg, context, entry, stop } =
+          await createPendingOwner("pending-agent-owner");
+        const runId = `pending-agent-${target}`;
+        const request = { message: "queued", ...pendingScope, idempotencyKey: runId };
+        const routing = { cfg, request, runId, context, agentDedupeKeys: [`agent:${runId}`] };
+        const lifecycle = createAgentDedupeLifecycle({
+          ...routing,
+          suppressVisibleSessionEffects: false,
+          ownerConnId: client.connId,
+          io: createAgentTurnIo(vi.fn()),
+        });
+        expect(
+          await prepareAgentRequestRouting({
+            ...routing,
+            respond: vi.fn(),
+            isRawModelRun: false,
+            reserveDedupe: lifecycle.reserve,
+            bindDedupeSessionTarget: lifecycle.bindSessionTarget,
+            clearDedupe: lifecycle.clearUnaccepted,
+          }),
+        ).toBeDefined();
+        expect(rpcSourceTesting.size).toBe(0);
+        const pending = context.dedupe.get(`agent:${runId}`);
+        if (target === "replacement") {
+          await upsertSessionEntryCore(pendingScope, { ...entry, sessionId: "replacement" });
+        }
+        expect(await stop(runId)).toMatchObject({ aborted: false });
+        expect(context.dedupe.get(`agent:${runId}`)).toBe(pending);
+      });
+    },
+  );
+
+  it("keeps a real chat admission abortable while its original session lifecycle is held", async () => {
+    await withState(async () => {
+      await loadOrCreateProcessDeviceIdentityAsync();
+      const { client, context, stop } = await createPendingOwner("pending-chat-owner");
+      const runId = "pending-chat-admission";
+      const request = await normalizeChatSendRequest({
+        params: { sessionKey: pendingKey, message: "queued", idempotencyKey: runId },
+        client,
+      });
+      if (!request.ok) {
+        throw new Error(request.error);
+      }
+      const session = await prepareChatSendSession({ request: request.value, client, context });
+      if (!session.ok) {
+        throw new Error("chat session preparation failed");
+      }
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const hold = runSessionMutation({
+        scope: session.value.storePath,
+        identities: [pendingKey, "original"],
+        run: async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      });
+      await entered.promise;
+      const preparedSession = await qualifyChatSendSession(session.value);
+      const admission = admitChatSend({
+        request: request.value,
+        session: preparedSession,
+        client,
+        context,
+        respond: vi.fn(),
+      });
+      try {
+        await vi.waitFor(() =>
+          expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true),
+        );
+        expect(rpcSourceTesting.has(runId)).toBe(false);
+        expect(await stop(runId)).toMatchObject({ aborted: true, runIds: [runId] });
+      } finally {
+        release.resolve();
+        await hold;
+        const settled = await admission;
+        if (settled.ok) {
+          settled.value.cleanupAdmittedRun();
+        }
+        expect(settled.ok).toBe(false);
+        expect(context.dedupe.get(`chat:${runId}`)?.payload).toMatchObject(aborted);
+      }
+    });
+  });
 });

@@ -172,9 +172,7 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         sessionId: entry.sessionId,
         updatedAt: entry.updatedAt,
         sessionStartedAt: entry.sessionStartedAt,
-        ...(cliBinding
-          ? { cliSessionBindings: { "claude-cli": structuredClone(cliBinding) } }
-          : {}),
+        ...(cliBinding ? { cliSessionBindings: { "claude-cli": cliBinding } } : {}),
       }
     : undefined;
   if (request.kind === "rpc" || request.kind === "rpc-message") {

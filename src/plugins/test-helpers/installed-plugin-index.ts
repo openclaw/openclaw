@@ -60,11 +60,7 @@ export function createInstalledPluginIndex(
         packageBuild: { bundledDist: false },
         enabled: true,
         syntheticAuthRefs: ["demo"],
-        startup: {
-          sidecar: false,
-          memory: false,
-          agentHarnesses: [],
-        },
+        startup: { sidecar: false, memory: false, agentHarnesses: [] },
         compat: [],
       },
     ],
@@ -94,10 +90,5 @@ export function createInstalledPluginIndexCandidate(
     }),
     "utf8",
   );
-  return {
-    idHint: id,
-    source: path.join(rootDir, "index.ts"),
-    rootDir,
-    origin: "global",
-  };
+  return { idHint: id, source: path.join(rootDir, "index.ts"), rootDir, origin: "global" };
 }

@@ -7,12 +7,14 @@ import { resolveWorkerToolAuthority } from "../../gateway/worker-environments/wo
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type { EmbeddedRunAttemptParamsV2 } from "../../plugin-sdk/agent-harness-runtime.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
 import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
 } from "../admitted-run-context.js";
+import { buildExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { createSubscribedSessionHarness } from "../embedded-agent-subscribe.e2e-harness.js";
 import type { ExecSessionDefaults } from "../exec-defaults.js";
 import { createAgentHarnessHostCapabilities } from "../harness/host-capability.js";
@@ -67,13 +69,6 @@ vi.mock("../tool-terminal-outcome.js", () => ({
   createToolTerminalObserver: vi.fn(() => vi.fn()),
 }));
 
-vi.mock("./run/attempt-exec-approval-continuation.js", () => ({
-  prepareExecApprovalContinuationForAttempt: vi.fn(({ prompt, transcriptPrompt }) => ({
-    prompt,
-    transcriptPrompt,
-  })),
-}));
-
 vi.mock("../harness/selection.js", () => ({
   runAgentHarnessAttempt: mocks.runAttempt,
   runAgentHarnessSettledTurnFinalization: vi.fn(),
@@ -118,7 +113,6 @@ function makeDispatchInput(
     getLifecycleGeneration: () => lifecycleGeneration,
     getParams: () => params,
     globalLane: "retry-dispatch-global",
-    sessionLane: "retry-dispatch-session",
     initialQueuedLifecycleGeneration: lifecycleGeneration,
     setLifecycleGeneration: (value) => {
       lifecycleGeneration = value;
@@ -199,8 +193,6 @@ function makeDispatchInput(
     bootstrapPromptWarningSignaturesSeen: [],
     resolveRuntimeFallbackReason: () => null,
     getPostCompactionAbortError: vi.fn(() => undefined),
-    setPostCompactionAbortController: vi.fn(),
-    clearPostCompactionAbortController: vi.fn(),
   } as unknown as Parameters<typeof dispatch>[0];
 }
 
@@ -233,6 +225,13 @@ async function publicationTools(input: Parameters<typeof dispatch>[0]) {
   }).map((tool) => tool.name);
 }
 
+function extractApprovalOutput(prompt: string): string {
+  const begin = "<<<BEGIN_UNTRUSTED_EXEC_OUTPUT>>>";
+  const start = prompt.indexOf(begin) + begin.length + 1;
+  const end = prompt.indexOf("\n<<<END_UNTRUSTED_EXEC_OUTPUT>>>", start);
+  return prompt.slice(start, end);
+}
+
 describe("embedded run retry dispatch", () => {
   let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
   beforeEach(async () => {
@@ -246,6 +245,46 @@ describe("embedded run retry dispatch", () => {
     admission.close();
     clearRuntimeConfigSnapshot();
   });
+
+  it.each([
+    { contextTokenBudget: 8_000, expectedOutputLength: 9_600 },
+    { contextTokenBudget: undefined, expectedOutputLength: 16_000 },
+  ])(
+    "sizes approved output to the actual attempt budget $contextTokenBudget before dispatch",
+    async ({ contextTokenBudget, expectedOutputLength }) => {
+      const prompt = buildExecApprovalContinuationPrompt("p".repeat(40_000));
+      const transcript = buildExecApprovalContinuationPrompt("t".repeat(40_000));
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: transcript.message },
+        target: async () => {
+          throw new Error("Dispatch fixture must not persist a transcript");
+        },
+      });
+      const replace = vi.spyOn(recorder, "replaceTextBeforePersistence");
+      const input = makeDispatchInput();
+      Object.assign(input.runInput.runParams, {
+        prompt: prompt.message,
+        transcriptPrompt: transcript.message,
+        execApprovalContinuationPromptRange: prompt.resultRange,
+        execApprovalContinuationTranscriptPromptRange: transcript.resultRange,
+        userTurnTranscriptRecorder: recorder,
+      });
+      const runtime = input.preparedRuntime.snapshot();
+      runtime.contextTokenBudget = contextTokenBudget;
+      runtime.effectiveModel.contextWindow = 20_000;
+
+      const { dispatchedAttempt } = await dispatch(input);
+      const prepared = dispatchedAttempt.preparedAttempt;
+      expect(extractApprovalOutput(prepared.prompt)).toHaveLength(expectedOutputLength);
+      expect(extractApprovalOutput(prepared.transcriptPrompt ?? "")).toHaveLength(
+        expectedOutputLength,
+      );
+      expect(extractApprovalOutput(prepared.prompt)).toMatch(/^p/);
+      expect(extractApprovalOutput(prepared.transcriptPrompt ?? "")).toMatch(/^t/);
+      expect(replace).toHaveBeenCalledExactlyOnceWith(prepared.transcriptPrompt);
+      expect(recorder.message?.content).toBe(prepared.transcriptPrompt);
+    },
+  );
 
   it.each([
     {

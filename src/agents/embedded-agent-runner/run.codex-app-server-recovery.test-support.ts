@@ -78,16 +78,6 @@ function runNative(runId: string, overrides: Partial<Parameters<typeof runEmbedd
   return runCodex(runId, { provider: "openai", model: "gpt-5.6-luna", ...overrides });
 }
 
-function replyWithAbort(abortByUser: () => boolean) {
-  return {
-    abortByUser,
-    markDeferredMaintenanceWaitEnded: vi.fn(),
-    markGlobalLaneWaitEnded: vi.fn(),
-    markWaitingForDeferredMaintenance: vi.fn(),
-    markWaitingForGlobalLane: vi.fn(),
-  } as unknown as NonNullable<Parameters<typeof runEmbeddedAgent>[0]["replyOperation"]>;
-}
-
 function expectIncompleteTimeout(
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>,
   message: string,
@@ -229,7 +219,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     "retries without a durable writer only while its exact native admission is active (%s)",
     async (owner) => {
       const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
-      const { createReplyOperation } = await import("../../auto-reply/reply/reply-run-registry.js");
+      const { createReplyOperation } = await import("../../sessions/session-controller.js");
       const runId = `run-native-retry-${owner}`;
       const sessionKey = `agent:main:${runId}`;
       const admission = prepareSystemAgentRunAdmission({}, runId, "main", "native-retry-test");
@@ -284,7 +274,20 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     async (kind) => {
       const controller = new AbortController();
       const upstreamAbort = new Error("upstream cancelled");
-      const abortByUser = vi.fn(() => true);
+      const { createReplyOperation } = await import("../../sessions/session-controller.js");
+      const runId = `run-codex-cancel-${kind}`;
+      const replyOperation =
+        kind === "ordinary"
+          ? undefined
+          : createReplyOperation({
+              sessionKey: `agent:main:${runId}`,
+              sessionId: runId,
+              resetTriggered: false,
+              ...(kind === "upstream" ? { upstreamAbortSignal: controller.signal } : {}),
+            });
+      const abortByUser = replyOperation
+        ? vi.spyOn(replyOperation, "abortByUser")
+        : vi.fn(() => true);
       mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
         if (kind === "upstream") {
           controller.abort(upstreamAbort);
@@ -297,26 +300,32 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
             })
           : codexFailure("closed");
       });
-      const pending = runCodex(
-        `run-codex-cancel-${kind}`,
-        kind === "ordinary"
-          ? {}
-          : {
-              isFinalFallbackAttempt: false,
-              ...(kind === "upstream" ? { abortSignal: controller.signal } : {}),
-              replyOperation: replyWithAbort(abortByUser),
-            },
-      );
-      if (kind === "upstream") {
-        await expect(pending).rejects.toBe(upstreamAbort);
-      } else {
-        await expect(pending).rejects.toMatchObject({
-          name: "AbortError",
-          message: "agent run aborted",
-        });
+      try {
+        const pending = runCodex(
+          runId,
+          replyOperation
+            ? {
+                sessionId: replyOperation.sessionId,
+                sessionKey: replyOperation.key,
+                isFinalFallbackAttempt: false,
+                ...(kind === "upstream" ? { abortSignal: controller.signal } : {}),
+                replyOperation,
+              }
+            : {},
+        );
+        if (kind === "upstream") {
+          await expect(pending).rejects.toBe(upstreamAbort);
+        } else {
+          await expect(pending).rejects.toMatchObject({
+            name: "AbortError",
+            message: "agent run aborted",
+          });
+        }
+        expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+        expect(abortByUser).toHaveBeenCalledTimes(kind === "replay-safe" ? 1 : 0);
+      } finally {
+        replyOperation?.complete();
       }
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-      expect(abortByUser).toHaveBeenCalledTimes(kind === "replay-safe" ? 1 : 0);
     },
   );
 

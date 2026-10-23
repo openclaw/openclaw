@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as exec from "../process/exec.js";
 import { installLaunchAgent, stageLaunchAgent } from "./launchd-install.js";
-import { readLaunchAgentProgramArgumentsFromFile as readCommand } from "./launchd-plist.js";
+import {
+  buildLaunchAgentPlist,
+  readLaunchAgentProgramArgumentsFromFile as readCommand,
+} from "./launchd-plist.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import { readLaunchAgentProgramArguments } from "./launchd-runtime.js";
 import * as serviceFiles from "./launchd-service-files.js";
@@ -70,6 +73,78 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+const buildPlist = (overrides: Partial<Parameters<typeof buildLaunchAgentPlist>[0]> = {}) =>
+  buildLaunchAgentPlist({
+    label: "ai.openclaw.gateway",
+    programArguments,
+    stdoutPath: "/dev/null",
+    stderrPath: "/dev/null",
+    ...overrides,
+  });
+const writePlist = (file: string, overrides: Parameters<typeof buildPlist>[0]) =>
+  writeFile(file, buildPlist(overrides), 0o644);
+function mockPlutil() {
+  vi.spyOn(exec, "runExec").mockImplementation(async (file, args, options) => {
+    if (file !== "/usr/bin/plutil" || typeof options !== "object" || !options.input) {
+      throw new Error(`Unexpected native command: ${file}`);
+    }
+    return decodeLaunchAgentPlistFixture(options.input, args[1]);
+  });
+}
+
+describe("LaunchAgent plist", () => {
+  beforeEach(mockPlutil);
+  it("gives the installed Gateway 330 seconds to drain and exit", () => {
+    expect(buildPlist()).toMatch(/<key>ExitTimeOut<\/key>\s*<integer>330<\/integer>/u);
+  });
+  it.each([false, true])("round-trips environment (strict=%s)", async (strict) => {
+    const { plistPath, envFile, wrapper } = fixture("plist-env", {});
+    await writeFile(
+      envFile,
+      strict
+        ? "export FILE='file'\nexport SHARED='file wins'\n"
+        : "export EDITED=$(id)\nexport NEXT='retained'\n",
+      0o600,
+    );
+    await writePlist(plistPath, {
+      programArguments: ["/bin/sh", wrapper, envFile, ...programArguments],
+      environment: strict ? { INLINE: "inline", SHARED: "original" } : undefined,
+    });
+    const command = await readCommand(
+      plistPath,
+      strict
+        ? {
+            requireEffective: true,
+            expectedEnvironmentWrapperPath: wrapper,
+            expectedEnvironmentFilePath: envFile,
+          }
+        : undefined,
+    );
+    expect(command?.environment).toMatchObject(
+      strict
+        ? { INLINE: "inline", SHARED: "file wins", FILE: "file" }
+        : { EDITED: "$(id)", NEXT: "retained" },
+    );
+    if (strict) {
+      expect(command).toMatchObject({
+        programArguments,
+        environmentValueSources: { INLINE: "inline", SHARED: "inline-and-file", FILE: "file" },
+      });
+    }
+  });
+  it.each(["", "--max-old-space-size=24576"])("preserves NODE_OPTIONS=%j", async (nodeOptions) => {
+    const { plistPath } = fixture("node-options", {});
+    const commandArgs = ["/usr/bin/node", "--max-old-space-size=16384", "gateway.js"];
+    await writePlist(plistPath, {
+      programArguments: commandArgs,
+      environment: { NODE_OPTIONS: nodeOptions, UNUSED: "", MISSING: undefined },
+    });
+    const command = await readCommand(plistPath);
+    expect(command?.environment).toEqual({ NODE_OPTIONS: nodeOptions });
+    expect(command?.programArguments).toEqual(commandArgs);
+  });
+});
+
 // Binary plist containing only a synthetic label, command, and inline environment value.
 const binaryPlist = Buffer.from(
   "YnBsaXN0MDDVAQIDBAUGBwkMDFVMYWJlbF8QEFByb2dyYW1Bcmd1bWVudHNfEBRFbnZpcm9ubWVudFZhcmlhYmxlc1lSdW5BdExvYWRZS2VlcEFsaXZlXxAZYWkub3BlbmNsYXcucm9sbGJhY2stdGVzdKEIXS91c3IvYmluL3RydWXRCgtfEBBTWU5USEVUSUNfSU5MSU5FXxAVcHJpdmF0ZSBmaXh0dXJlIHZhbHVlCQgTGSxDTVdzdYOGmbEAAAAAAAABAQAAAAAAAAANAAAAAAAAAAAAAAAAAAAAsg==",
@@ -81,16 +156,23 @@ describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", ()
     ["three-line PEM", "-----BEGIN PRIVATE KEY-----  \nfixture\n-----END PRIVATE KEY-----"],
     ["escaped quotes and trailing newline", "first 'quoted'\nsecond 'line'\n"],
   ])("preserves %s through service readCommand and restart regeneration", async (_name, value) => {
-    vi.spyOn(exec, "runExec").mockImplementation(async (file, args, options) => {
-      if (file !== "/usr/bin/plutil" || typeof options !== "object" || !options.input) {
-        throw new Error(`Unexpected native command: ${file}`);
-      }
-      return decodeLaunchAgentPlistFixture(options.input, args[1]);
-    });
+    mockPlutil();
     const environment = { FIXTURE: value, NEXT: "retained" };
     const { env, label, plistPath, wrapper, envFile, args } = fixture("reinstall", environment);
     const expected = { programArguments, environment };
+    const legacy = path.join(
+      env.HOME,
+      "Library",
+      "LaunchAgents",
+      "ai.openclaw.legacy-gateway.plist",
+    );
+    await writeFile(legacy, "legacy definition", 0o600);
     await stageLaunchAgent(args);
+    expect(await readSnapshot(legacy)).toEqual({
+      contents: Buffer.from("legacy definition"),
+      mode: 0o600,
+    });
+    expect(native.launchctl).not.toHaveBeenCalled();
     await expect(readLaunchAgentProgramArguments(env)).resolves.toMatchObject(expected);
     await serviceFiles.rewriteLaunchAgentPlistForRestart({ env, label, plistPath });
     const plist = await fs.readFile(plistPath, "utf8");
@@ -181,6 +263,8 @@ describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", ()
         publications.push(await readSnapshot(from));
       }
       await rename(from, to);
+      const stat = await fs.stat(to);
+      await fs.utimes(to, stat.atime, new Date(stat.mtimeMs + 10));
     });
     if (publicationFailure) {
       native.ownership.mockImplementation(async () => {
@@ -193,6 +277,9 @@ describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", ()
     await expect(install(args)).rejects.toThrow(
       publicationFailure ? "synthetic ownership conflict" : "synthetic activation refusal",
     );
+    if (publicationFailure) {
+      expect(native.launchctl).not.toHaveBeenCalled();
+    }
     expect(publications.at(-1)).toEqual({ contents: binaryPlist, mode });
     for (const [file, contents, permissions] of originalFiles) {
       expect(await readSnapshot(file)).toEqual({ contents, mode: permissions });

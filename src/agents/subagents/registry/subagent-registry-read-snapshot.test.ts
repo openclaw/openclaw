@@ -1,4 +1,5 @@
-import { expect, it, vi } from "vitest";
+import { aroundEach, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../../state/openclaw-state-db-cache.js";
@@ -13,254 +14,194 @@ import {
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
 import {
-  persistRegistryFixture,
-  saveSubagentRegistryToSqlite,
+  persistRegistryFixture as persist,
+  saveSubagentRegistryToSqlite as save,
 } from "./subagent-registry-state.fixture.test-support.js";
 import {
-  clearSubagentRunsReadCacheForTest,
-  prepareSubagentMaintenanceRunsSnapshotForRead,
+  clearSubagentRunsReadCacheForTest as clearReadCache,
+  prepareSubagentMaintenanceRunsSnapshotForRead as prepareMaintenance,
   prepareSubagentRunsSnapshotForRunIds,
-  prepareSubagentRunsSnapshotForSessions,
+  prepareSubagentRunsSnapshotForSessions as prepareSessions,
 } from "./subagent-registry-state.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-function retainedRun() {
-  return createSubagentRunRecord({
-    runId: "physical",
-    childSessionKey: "agent:main:subagent:collector",
-    swarmRunId: "collector",
-    collect: true,
-    completion: { required: false, resultText: "prepared result" },
-    delivery: { status: "not_required" },
-  });
-}
+const rows = (...entries: SubagentRunRecord[]) => new Map(entries.map((row) => [row.runId, row]));
+const prepareRun = (memory = rows()) => prepareSubagentRunsSnapshotForRunIds(memory, ["collector"]);
+const resultText = (runs: ReadonlyMap<string, SubagentRunRecord>) =>
+  runs.get("physical")?.completion?.resultText;
+const change = (entry: SubagentRunRecord, next: SubagentRunRecord | null) => ({
+  value: undefined,
+  postimages: new Map([[entry.runId, next]]),
+});
 
-async function withPersistedReads(run: () => Promise<void>) {
-  await withOpenClawTestState(
+let entry: SubagentRunRecord;
+let memory: Map<string, SubagentRunRecord>;
+aroundEach((runTest) =>
+  withOpenClawTestState(
     { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
     async () => {
       openOpenClawStateDatabase();
-      clearSubagentRunsReadCacheForTest();
+      clearReadCache();
+      entry = createSubagentRunRecord({
+        runId: "physical",
+        childSessionKey: "agent:main:subagent:collector",
+        swarmRunId: "collector",
+        collect: true,
+        completion: { required: false, resultText: "prepared result" },
+        delivery: { status: "not_required" },
+      });
+      memory = rows(entry);
       try {
-        await run();
+        await runTest();
       } finally {
-        clearSubagentRunsReadCacheForTest();
+        clearReadCache();
       }
     },
-  );
-}
+  ),
+);
 
-it("captures current committed maintenance protection after preparation", async () => {
-  await withPersistedReads(async () => {
-    const entry = retainedRun();
-    persistRegistryFixture(new Map([[entry.runId, entry]]));
-    const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(new Map());
-    const completed = { ...entry, cleanupCompletedAt: 100 };
-    const active = { ...entry, runId: "new-child", childSessionKey: "agent:main:subagent:new" };
-    persistRegistryFixture(
-      new Map([
-        [completed.runId, completed],
-        [active.runId, active],
-      ]),
-      [completed.runId, active.runId],
-    );
-    const current = prepared.capture();
-    expect(current.get(entry.runId)?.cleanupCompletedAt).toBe(100);
-    expect(current.get(active.runId)?.childSessionKey).toBe(active.childSessionKey);
-  });
+it("captures current committed maintenance protection", async () => {
+  persist(memory);
+  const prepared = await prepareMaintenance(rows());
+  const completed = { ...entry, cleanupCompletedAt: 100 };
+  const active = { ...entry, runId: "new-child", childSessionKey: "agent:main:subagent:new" };
+  persist(rows(completed, active), [completed.runId, active.runId]);
+  const current = prepared.capture();
+  expect(current.get(entry.runId)).toMatchObject({ cleanupCompletedAt: 100 });
+  expect(current.get(active.runId)).toMatchObject({ childSessionKey: active.childSessionKey });
 });
 
-it("does not retain a removed live-only row as a prepared durable payload", async () => {
-  await withPersistedReads(async () => {
-    const entry = retainedRun();
-    const memory = new Map([[entry.runId, entry]]);
-    const prepared = await prepareSubagentRunsSnapshotForRunIds(memory, ["collector"]);
-    memory.delete(entry.runId);
-    expect(prepared.consume((runs) => [...runs.values()])).toEqual({ ready: true, value: [] });
-  });
-});
-
-it.each(["update", "delete"] as const)(
-  "consumes a committed resident %s after preparing its run ID",
+it.each(["live-only delete", "update", "delete"] as const)(
+  "consumes committed resident %s",
   async (kind) => {
-    await withPersistedReads(async () => {
-      const entry = retainedRun();
-      persistRegistryFixture(new Map([[entry.runId, entry]]));
-      const memory = new Map([[entry.runId, entry]]);
-      const prepared = await prepareSubagentRunsSnapshotForRunIds(memory, ["collector"]);
+    if (kind !== "live-only delete") {
+      persist(memory);
+    }
+    const prepared = await prepareRun(memory);
+    if (kind === "live-only delete") {
+      memory.delete(entry.runId);
+      expect(prepared.consume((runs) => [...runs.values()])).toEqual({ ready: true, value: [] });
+    } else {
       await mutateSubagentRuns(
         [entry.runId],
-        (rows) => ({
-          value: undefined,
-          postimages: new Map([
-            [
-              entry.runId,
-              kind === "delete"
-                ? null
-                : {
-                    ...rows.get(entry.runId)!,
-                    completion: { required: false, resultText: "committed child result" },
-                  },
-            ],
-          ]),
-        }),
+        (current) => {
+          const next = {
+            ...current.get(entry.runId)!,
+            completion: { required: false, resultText: "committed child result" },
+          };
+          return change(entry, kind === "delete" ? null : next);
+        },
         { runs: memory },
       );
-      expect(prepared.consume((runs) => runs.get(entry.runId)?.completion?.resultText)).toEqual({
+      expect(prepared.consume(resultText)).toEqual({
         ready: true,
         value: kind === "delete" ? undefined : "committed child result",
       });
-    });
+    }
   },
 );
 
 it.each(["preparing caller", "consuming caller", "database"] as const)(
-  "rejects a prepared read after its %s loses admission",
+  "rejects a read after %s loses admission",
   async (owner) => {
-    await withPersistedReads(async () => {
-      const entry = retainedRun();
-      saveSubagentRegistryToSqlite(new Map([[entry.runId, entry]]));
-      const work = new AsyncWorkScope();
-      const prepare = () => prepareSubagentRunsSnapshotForRunIds(new Map(), ["collector"]);
-      const prepared = owner === "preparing caller" ? await work.track(prepare) : await prepare();
-      const reason = new Error("prepared read caller canceled");
-      const consume = vi.fn();
-      try {
-        if (owner === "database") {
-          await closeOpenClawStateDatabaseByPathAsync(
-            captureOpenClawStateWorkerContext().admission.databasePath,
-          );
-        } else {
-          work.beginClose(reason);
-        }
-        const read = () => prepared.consume(consume);
-        expect(() => (owner === "consuming caller" ? work.run(read) : read())).toThrow();
-        expect(consume).not.toHaveBeenCalled();
-      } finally {
-        await work.drain();
-      }
-    });
-  },
-);
-
-it("keeps a prepared private read inside its exact active snapshot", async () => {
-  await withPersistedReads(async () => {
-    const entry = retainedRun();
-    saveSubagentRegistryToSqlite(new Map([[entry.runId, entry]]));
-    const prepared = createDeferredCore<PreparedSubagentRunsRead>();
-    const release = createDeferredCore();
-    const privateRead = withOpenClawStateDatabaseReadSnapshot(async () => {
-      const read = await prepareSubagentRunsSnapshotForRunIds(new Map(), ["collector"]);
-      expect(read.consume((runs) => runs.get(entry.runId)?.completion?.resultText)).toEqual({
-        ready: true,
-        value: "prepared result",
-      });
-      prepared.resolve(read);
-      await release.promise;
-    });
+    save(memory);
+    const work = new AsyncWorkScope();
+    onTestFinished(() => work.drain());
+    const prepared =
+      owner === "preparing caller" ? await work.track(() => prepareRun()) : await prepareRun();
     const consume = vi.fn();
-    try {
-      const read = await Promise.race([
-        prepared.promise,
-        privateRead.then(() => {
-          throw new Error("Private snapshot closed before preparing its read");
-        }),
-      ]);
-      expect(() => read.consume(consume)).toThrow("left its database snapshot scope");
-      await withOpenClawStateDatabaseReadSnapshot(async () => {
-        expect(() => read.consume(consume)).toThrow("left its database snapshot scope");
-      });
-      release.resolve();
-      await privateRead;
-      expect(() => read.consume(consume)).toThrow();
-      expect(consume).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      await privateRead;
+    if (owner === "database") {
+      await closeOpenClawStateDatabaseByPathAsync(
+        captureOpenClawStateWorkerContext().admission.databasePath,
+      );
+    } else {
+      work.beginClose(new Error("prepared read caller canceled"));
     }
-  });
-});
-
-it("prepares durable grandchildren through live-only parents and refuses changed live topology", async () => {
-  await withPersistedReads(async () => {
-    const root = "agent:main:cron:prepared";
-    const parent = {
-      ...retainedRun(),
-      runId: "live-parent",
-      requesterSessionKey: root,
-      childSessionKey: "agent:main:subagent:live-parent",
-    };
-    const grandchild = {
-      ...retainedRun(),
-      runId: "persisted-grandchild",
-      requesterSessionKey: parent.childSessionKey,
-      childSessionKey: "agent:main:subagent:persisted-grandchild",
-    };
-    saveSubagentRegistryToSqlite(new Map([[grandchild.runId, grandchild]]));
-    const memory = new Map([[parent.runId, parent]]);
-    const prepared = await prepareSubagentRunsSnapshotForSessions(memory, [root]);
-    expect(
-      prepared.consume((runs) => ({
-        rawParent: runs.get(parent.runId) === parent,
-        grandchild: runs.get(grandchild.runId)?.childSessionKey,
-      })),
-    ).toEqual({
-      ready: true,
-      value: { rawParent: true, grandchild: grandchild.childSessionKey },
-    });
-    memory.set("new-child", {
-      ...parent,
-      runId: "new-child",
-      childSessionKey: "agent:main:subagent:new",
-    });
-    const consume = vi.fn();
-    expect(prepared.consume(consume)).toEqual({ ready: false });
+    const read = () => prepared.consume(consume);
+    expect(() => (owner === "consuming caller" ? work.run(read) : read())).toThrow();
     expect(consume).not.toHaveBeenCalled();
-  });
-});
-
-it.each(["update"] as const)(
-  "preserves fresh durable descendants after a refused named %s",
-  async () => {
-    await withPersistedReads(async () => {
-      const entry = retainedRun();
-      persistRegistryFixture(new Map([[entry.runId, entry]]));
-      // A foreign committed value must beat the old resident committed snapshot.
-      const foreign = { ...entry, task: "foreign committed task" };
-      saveSubagentRegistryToSqlite(new Map([[foreign.runId, foreign]]));
-      const fresh = await prepareSubagentRunsSnapshotForSessions(new Map(), [
-        entry.requesterSessionKey,
-      ]);
-      expect(fresh.consume((runs) => runs.get(entry.runId)?.task)).toEqual({
-        ready: true,
-        value: foreign.task,
-      });
-      const write = await configureMockSubagentRegistryPersistence({
-        persistRegistryRows: () => {
-          throw new Error("synthetic persistence refusal");
-        },
-      });
-      try {
-        const update = { ...entry, task: "refused local task" };
-        await expect(
-          mutateSubagentRuns(
-            [entry.runId],
-            () => ({
-              value: undefined,
-              postimages: new Map([[entry.runId, update]]),
-            }),
-            { runs: new Map([[foreign.runId, foreign]]) },
-          ),
-        ).rejects.toThrow("synthetic persistence refusal");
-        const prepared = await prepareSubagentRunsSnapshotForSessions(new Map(), [
-          entry.requesterSessionKey,
-        ]);
-        expect(prepared.consume((runs) => runs.get(entry.runId)?.task)).toEqual({
-          ready: true,
-          value: foreign.task,
-        });
-      } finally {
-        write.mockRestore();
-      }
-    });
   },
 );
+
+it("confines private reads to their exact active snapshot", async () => {
+  save(memory);
+  const prepared = createDeferredCore<PreparedSubagentRunsRead>();
+  const release = createDeferredCore();
+  const privateRead = withOpenClawStateDatabaseReadSnapshot(async () => {
+    const read = await prepareRun();
+    expect(read.consume(resultText)).toEqual({ ready: true, value: "prepared result" });
+    prepared.resolve(read);
+    await release.promise;
+  });
+  onTestFinished(async () => {
+    release.resolve();
+    await privateRead;
+  });
+  const consume = vi.fn();
+  const read = await awaitGateBeforeSettlement(
+    prepared.promise,
+    privateRead,
+    "Private snapshot closed before preparing its read",
+  );
+  const outside = () => read.consume(consume);
+  expect(outside).toThrow("left its database snapshot scope");
+  await withOpenClawStateDatabaseReadSnapshot(async () => {
+    expect(outside).toThrow("left its database snapshot scope");
+  });
+  release.resolve();
+  await privateRead;
+  expect(outside).toThrow();
+  expect(consume).not.toHaveBeenCalled();
+});
+
+it("hydrates live-parent descendants and rejects changed topology", async () => {
+  const root = "agent:main:cron:prepared";
+  const child = (runId: string, requesterSessionKey: string) => ({
+    ...entry,
+    runId,
+    requesterSessionKey,
+    childSessionKey: `agent:main:subagent:${runId}`,
+  });
+  const parent = child("live-parent", root);
+  const grandchild = child("persisted-grandchild", parent.childSessionKey);
+  save(rows(grandchild));
+  memory = rows(parent);
+  const prepared = await prepareSessions(memory, [root]);
+  expect(
+    prepared.consume((runs) => ({
+      rawParent: runs.get(parent.runId) === parent,
+      grandchild: runs.get(grandchild.runId)?.childSessionKey,
+    })),
+  ).toEqual({ ready: true, value: { rawParent: true, grandchild: grandchild.childSessionKey } });
+  memory.set("new-child", {
+    ...parent,
+    runId: "new-child",
+    childSessionKey: "agent:main:subagent:new",
+  });
+  const consume = vi.fn();
+  expect(prepared.consume(consume)).toEqual({ ready: false });
+  expect(consume).not.toHaveBeenCalled();
+});
+
+it("keeps fresh descendants after a refused update", async () => {
+  persist(memory);
+  // A foreign commit must beat the old resident snapshot, even after a refused local write.
+  const foreign = { ...entry, task: "foreign committed task" };
+  save(rows(foreign));
+  const prepare = () => prepareSessions(rows(), [entry.requesterSessionKey]);
+  const expected = { ready: true, value: foreign.task };
+  expect((await prepare()).consume((runs) => runs.get(entry.runId)?.task)).toEqual(expected);
+  await configureMockSubagentRegistryPersistence({
+    persistRegistryRows: () => {
+      throw new Error("synthetic persistence refusal");
+    },
+  });
+  await expect(
+    mutateSubagentRuns(
+      [entry.runId],
+      () => change(entry, { ...entry, task: "refused local task" }),
+      { runs: rows(foreign) },
+    ),
+  ).rejects.toThrow("synthetic persistence refusal");
+  expect((await prepare()).consume((runs) => runs.get(entry.runId)?.task)).toEqual(expected);
+});

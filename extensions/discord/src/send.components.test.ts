@@ -21,12 +21,6 @@ const MODAL: DiscordComponentMessageSpec = {
 };
 const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
-vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => ({
-  ...(await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
-    "openclaw/plugin-sdk/plugin-config-runtime",
-  )),
-  loadConfig: () => ({ session: { dmScope: "main" } }),
-}));
 vi.mock("./components-registry.js", () => ({
   registerDiscordComponentEntries: vi.fn().mockResolvedValue(undefined),
 }));

@@ -37,8 +37,18 @@ function expectLive(result: Inspection, ...files: string[]) {
   }
 }
 
+function expectViolations(result: Inspection, ...messages: (string | RegExp)[]) {
+  expect(result.violations).toEqual(
+    messages.map((message) =>
+      typeof message === "string"
+        ? expect.stringContaining(message)
+        : expect.stringMatching(message),
+    ),
+  );
+}
+
 function expectClosed(result: Inspection, file?: string, names: string[] = []) {
-  expect(result.violations).toEqual([]);
+  expectViolations(result);
   expect(result.operations.get(kernelFile)).toEqual(new Set(["readKernel"]));
   if (file) {
     expect(result.operations.get(file)).toEqual(new Set(names));
@@ -47,7 +57,7 @@ function expectClosed(result: Inspection, file?: string, names: string[] = []) {
 
 function expectConsumerRejected(result: Inspection, ...files: string[]) {
   expectLive(result, ...files);
-  expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
+  expectViolations(result, "src/consumer.ts:");
 }
 const legacy = `
 /** @deprecated Use the worker API; removal follows a stable deprecation window. */
@@ -129,9 +139,7 @@ it.each([
   ],
 ])("rejects a bundled %s without allowing it to hide the live operation", (_name, consumer) => {
   const result = inspectBarrel(consumer);
-  expect(result.violations).toEqual([
-    expect.stringMatching(/src\/consumer.ts:\d+:\d+: bundled runtime reference/),
-  ]);
+  expectViolations(result, /src\/consumer.ts:\d+:\d+: bundled runtime reference/);
   expect(result.operations.has(legacyFile)).toBe(false);
   expect(result.operations.get(secondFile)).toEqual(new Set([second]));
 });
@@ -145,13 +153,12 @@ it("checks same-file calls and propagates reachability through reviewed wrappers
     function bundled() { return ${second}(); }`,
   );
   expect(result.operations.size).toBe(0);
-  expect(result.violations).toEqual([
-    expect.stringContaining("extensions/plugin/runtime.ts:"),
-    expect.stringContaining(`${legacyFile}:`),
-    expect.stringContaining(
-      `${legacyFile}:${first}: reviewed compatibility operation is reachable`,
-    ),
-  ]);
+  expectViolations(
+    result,
+    "extensions/plugin/runtime.ts:",
+    `${legacyFile}:`,
+    `${legacyFile}:${first}: reviewed compatibility operation is reachable`,
+  );
 });
 
 it("permits a deprecated API only from an exact reviewed one-shot entry", () => {
@@ -182,9 +189,7 @@ it("permits a deprecated API only from an exact reviewed one-shot entry", () => 
     ["src/flows/unreviewed.ts", doctor],
     [doctorFile, doctor.replace(`return ${first}()`, `return () => ${first}()`)],
   ] as const) {
-    expect(inspectDoctor(file, source).violations).toEqual([
-      expect.stringContaining("bundled runtime reference"),
-    ]);
+    expectViolations(inspectDoctor(file, source), "bundled runtime reference");
   }
 });
 
@@ -303,19 +308,20 @@ const legacyStore = `
   export declare const runtime: { openSyncKeyedStore<T>(): Store<T> };
 `;
 
+function inspectStore(consumer: string) {
+  return kernelResult(legacyStore, consumer, pluginStateLegacyFile);
+}
+
 it.each([
   ["Required factory", "createSyncKeyedStore<number>()"],
   ["runtime contract", "runtime.openSyncKeyedStore<number>()"],
 ])("guards every legacy store member through the %s", (_label, factory) => {
   for (const escape of [false, true]) {
-    const result = inspectKernel({
-      [pluginStateLegacyFile]: legacyStore,
-      "src/consumer.ts": `
+    const result = inspectStore(`
         import { createSyncKeyedStore, runtime } from './plugin-state/plugin-state-store.legacy.js';
         const store = ${factory};
         ${legacyStoreMethods.map((name) => (escape ? `retain(store.${name});` : `store.${name}(1);`)).join("\n")}
-      `,
-    });
+      `);
     expect(result.operations.has(kernelFile)).toBe(false);
     expect(result.violations).toHaveLength(legacyStoreMethods.length);
     for (const name of legacyStoreMethods) {
@@ -327,33 +333,24 @@ it.each([
 });
 
 it("rejects shorthand method escapes from typed receivers and parameters", () => {
-  const result = inspectKernel({
-    [pluginStateLegacyFile]: legacyStore,
-    "src/consumer.ts": `
+  const result = inspectStore(`
       import { createSyncKeyedStore, type Store } from './plugin-state/plugin-state-store.legacy.js';
       const { consume } = createSyncKeyedStore<number>();
       consume(1);
       export function receive({ clear }: Store<number>) { retain(clear); }
-    `,
-  });
-  expect(result.violations).toEqual([
-    expect.stringContaining("createSyncKeyedStore.consume"),
-    expect.stringContaining("createSyncKeyedStore.clear"),
-  ]);
+    `);
+  expectViolations(result, "createSyncKeyedStore.consume", "createSyncKeyedStore.clear");
   expect(result.operations.has(kernelFile)).toBe(false);
 });
 
 it("keeps scalar authority and unguarded projection reads independent of guarded store members", () => {
-  const result = inspectKernel({
-    [pluginStateLegacyFile]: legacyStore,
-    "src/consumer.ts": `
+  const result = inspectStore(`
       import { createSyncKeyedStore } from './plugin-state/plugin-state-store.legacy.js';
       const store = createSyncKeyedStore<number>();
       const { lookup } = store;
       lookup();
       store.entries();
-    `,
-  });
+    `);
   expectClosed(
     result,
     pluginStateLegacyFile,
@@ -421,7 +418,7 @@ it.each(["openclaw/plugin-sdk", "@openclaw/plugin-sdk"])(
       "src/plugin-sdk/index.ts": `export { ${first} as oldQuery } from './sqlite-runtime-legacy.js';`,
       "src/consumer.ts": `import { oldQuery } from '${specifier}'; oldQuery();`,
     });
-    expect(result.violations).toEqual([expect.stringContaining("src/consumer.ts:")]);
+    expectViolations(result, "src/consumer.ts:");
   },
 );
 
@@ -533,23 +530,14 @@ it.each([
 });
 
 it.each<[string, string, Record<string, string>]>([
-  [
-    "escaped arrow property",
+  ...[
+    ["arrow", "read: () => readKernel()"],
+    ["function", "read: function () { return readKernel(); }"],
+  ].map(([kind, read]): [string, string, Record<string, string>] => [
+    `escaped ${kind} property`,
     secondFile,
-    {
-      [secondFile]: receiverOwner("read: () => readKernel()", "start() { register(this.read); }"),
-    },
-  ],
-  [
-    "escaped function property",
-    secondFile,
-    {
-      [secondFile]: receiverOwner(
-        "read: function () { return readKernel(); }",
-        "start() { register(this.read); }",
-      ),
-    },
-  ],
+    { [secondFile]: receiverOwner(read, "start() { register(this.read); }") },
+  ]),
   [
     "unregistered nondeprecated factory",
     "src/receiver.ts",
@@ -617,7 +605,7 @@ it("rejects a deprecated factory reached through a live receiver method", () => 
   });
   expectLive(result, kernelFile, "src/receiver.ts", legacyFile);
   expect(result.operations.get(secondFile)).toEqual(new Set([second]));
-  expect(result.violations).toEqual([expect.stringContaining(`${legacyFile}:${first}:`)]);
+  expectViolations(result, `${legacyFile}:${first}:`);
 });
 
 it("records SQL inside a closed receiver method as compatibility-only", () => {
@@ -639,7 +627,7 @@ it("rejects a reviewed API escaped by a discovered helper", () => {
       export function helper() { register(${first}); }`,
   });
   expect(result.operations.has(legacyFile)).toBe(false);
-  expect(result.violations).toEqual([expect.stringContaining("src/helper.ts:")]);
+  expectViolations(result, "src/helper.ts:");
 });
 
 it("records direct call locations but excludes nested callback SQL", () => {
@@ -671,30 +659,44 @@ export function ${first}() { return selectResolvedUserProfile(); }`,
   expect(result.callLocations.get(profileFile)).toEqual(new Set(["1:53", "3:10", "3:48"]));
 });
 
-it.each(["readPluginState", "writePluginState"])(
+it.each([
+  ["readPluginState", true],
+  ["writePluginState", true],
+  ["runSqliteDeferredTransactionSync", false],
+  ["runSqliteReadSnapshotSync", false],
+] as const)(
   "follows inline callbacks through %s but keeps escaped callbacks live",
-  (scope) => {
+  (scope, plugin) => {
+    const transactionFile = "src/infra/sqlite-transaction.ts";
     const pluginStateFile = "src/plugin-state/plugin-state-store.sqlite.ts";
+    const entryFile = plugin ? pluginStateFile : "src/transaction-reader.ts";
+    const entry = plugin ? "accessPluginState" : "read";
     const inspectCallback = (callback: string) =>
       inspect(
         {
-          [pluginStateFile]: `import { readKernel } from '../session-kernel.js';
+          [kernelFile]: kernel,
+          ...(plugin
+            ? {}
+            : {
+                [transactionFile]: `export function ${scope}(db, callback) { return callback(); }`,
+              }),
+          [entryFile]: plugin
+            ? `import { readKernel } from '../session-kernel.js';
 function ${scope}(operation, message, callback) { return callback(); }
 export function accessPluginState() {
   return ${scope}('lookup', 'failed', ${callback});
-}`,
-          [kernelFile]: kernel,
+}`
+            : `import { ${scope} } from './infra/sqlite-transaction.js';
+import { readKernel } from './session-kernel.js';
+export function read() { return ${scope}(db, ${callback}); }`,
         },
-        `import { accessPluginState } from '../plugin-state/plugin-state-store.sqlite.js';
+        `import { ${entry} } from '../${entryFile.slice(4).replace(/\.ts$/, ".js")}';
 /** @deprecated Use workers. */
-export function ${first}() { return accessPluginState(); }`,
+export function ${first}() { return ${entry}(); }`,
       );
 
-    const inline = inspectCallback("() => readKernel()");
-    expectClosed(inline);
-
-    const escaped = inspectCallback("() => () => readKernel()");
-    expect(escaped.operations.has(kernelFile)).toBe(false);
+    expectClosed(inspectCallback("() => readKernel()"));
+    expect(inspectCallback("() => () => readKernel()").operations.has(kernelFile)).toBe(false);
   },
 );
 

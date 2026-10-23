@@ -99,7 +99,7 @@ async function rescueChild(pidPath: string, signal: AbortSignal) {
   const pid = existsSync(pidPath) ? Number(readFileSync(pidPath, "utf8")) : 0;
   if (pid && isProcessAlive(pid)) {
     process.kill(pid, "SIGKILL");
-    await waitForProcessState(() => !isPidAlive(pid), `process still alive: ${pid}`, signal);
+    await waitForProcessState(() => !isProcessAlive(pid), `process still alive: ${pid}`, signal);
   }
 }
 
@@ -344,6 +344,15 @@ describe("run-oxlint", () => {
       ["--tsconfig=config/tsconfig/oxlint.core.json", "--tsconfig=extensions/tsconfig.json"],
     ]) {
       expect(shouldPrepareExtensionPackageBoundaryArtifacts(args)).toBe(true);
+    }
+  });
+
+  it("skips plugin boundary artifacts for source-backed UI lint", () => {
+    for (const args of [
+      ["--tsconfig", "tsconfig.ui.json", "ui/src/main.ts"],
+      ["--tsconfig=tsconfig.ui.json", "--tsconfig=config/tsconfig/oxlint.core.json"],
+    ]) {
+      expect(shouldPrepareExtensionPackageBoundaryArtifacts(args)).toBe(false);
     }
   });
 

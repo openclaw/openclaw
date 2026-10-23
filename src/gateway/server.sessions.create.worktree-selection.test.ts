@@ -18,7 +18,6 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   copyGitWorkspace,
@@ -200,7 +199,7 @@ test.for([
         }
       };
       const stopTitleObserver = sessionChanges.subscribe(checkTitle);
-      const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
+      const context = {};
       const attachment = {
         type: "file",
         mimeType: "text/plain",
@@ -340,7 +339,7 @@ test("sessions.create maps worktree options and preserves a nested dot-prefixed 
   }
 });
 
-test("sessions.create maps an admin-selected worktree cwd and rejects repository changes", async () => {
+test("sessions.create maps an admin-selected worktree cwd", async () => {
   const openClawState = await createState("openclaw-session-selected-workspace-");
   const selectedRoot = tempDirs.make(
     "openclaw-session-selected-repository-",
@@ -375,12 +374,6 @@ test("sessions.create maps an admin-selected worktree cwd and rejects repository
     );
     expect(created.payload?.entry.spawnedCwd).toBe(worktreePath);
     expect(created.payload?.entry.worktree?.canonicalWorkspaceDir).toBe(selectedWorkspace);
-
-    const mismatched = await createSession({ key, worktree: true, cwd: configuredWorkspace });
-    expect(mismatched).toMatchObject({
-      ok: false,
-      error: { message: "session worktree belongs to a different repository" },
-    });
   } finally {
     createSpy.mockRestore();
     findSpy.mockRestore();
