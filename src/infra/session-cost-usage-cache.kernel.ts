@@ -15,6 +15,7 @@ import {
   deleteSessionCostUsagePartitionsInDatabase,
   pruneSessionCostUsagePartitionsInDatabase,
 } from "./session-cost-usage-partitions.worker.js";
+import { boundedUsageCacheColumn } from "./session-cost-usage-read-expression.js";
 import {
   decodeUsageCostRollupEnvelope,
   USAGE_COST_ROLLUP_SCOPE as ROLLUP_SCOPE,
@@ -94,30 +95,8 @@ export function readSessionCostUsageRollupRowsInDatabase(
       .selectFrom("cache_entries")
       .select(["key", "updated_at"])
       .select((eb) => [
-        (budget
-          ? eb
-              .case()
-              .when(eb.fn<number>("octet_length", ["value_json"]), "<=", 64 * 1024)
-              .then(eb.ref("value_json"))
-              .else(null)
-              .end()
-          : eb.ref("value_json")
-        ).as("value_json"),
-        (options?.includeBody
-          ? budget
-            ? eb
-                .case()
-                .when(
-                  eb.fn<number>("length", ["blob"]),
-                  "<=",
-                  Math.min(1024 * 1024, budget.remainingBytes),
-                )
-                .then(eb.ref("blob"))
-                .else(null)
-                .end()
-            : eb.ref("blob")
-          : eb.val(null)
-        ).as("blob"),
+        boundedUsageCacheColumn("value_json", budget).as("value_json"),
+        (options?.includeBody ? boundedUsageCacheColumn("blob", budget) : eb.val(null)).as("blob"),
         eb.fn<number>("coalesce", [eb.fn<number>("length", ["blob"]), eb.val(0)]).as("body_bytes"),
         eb.fn<number>("octet_length", ["value_json"]).as("header_bytes"),
       ])

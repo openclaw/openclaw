@@ -13,6 +13,7 @@ import {
   usageCostPartitionKey,
   type UsageCostPartition,
 } from "./session-cost-usage-partitions.js";
+import { boundedUsageCacheColumn } from "./session-cost-usage-read-expression.js";
 import { USAGE_COST_ROLLUP_SCOPE } from "./session-cost-usage-rollup-codec.js";
 import type { EngineConnection } from "./sql-connection.js";
 
@@ -90,28 +91,8 @@ export function readSessionCostUsagePartitionsInDatabase(
       .selectFrom("cache_entries")
       .select("key")
       .select((eb) => [
-        (budget
-          ? eb
-              .case()
-              .when(eb.fn<number>("octet_length", ["value_json"]), "<=", 64 * 1024)
-              .then(eb.ref("value_json"))
-              .else(null)
-              .end()
-          : eb.ref("value_json")
-        ).as("value_json"),
-        (budget
-          ? eb
-              .case()
-              .when(
-                eb.fn<number>("length", ["blob"]),
-                "<=",
-                Math.min(1024 * 1024, budget.remainingBytes),
-              )
-              .then(eb.ref("blob"))
-              .else(null)
-              .end()
-          : eb.ref("blob")
-        ).as("blob"),
+        boundedUsageCacheColumn("value_json", budget).as("value_json"),
+        boundedUsageCacheColumn("blob", budget).as("blob"),
         eb.fn<number>("octet_length", ["value_json"]).as("header_bytes"),
         eb.fn<number>("length", ["blob"]).as("body_bytes"),
       ])
