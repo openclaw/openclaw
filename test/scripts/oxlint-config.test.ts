@@ -1375,6 +1375,36 @@ describe("oxlint config", () => {
           "max-lines": ["error", { max: 1200, skipBlankLines: true, skipComments: true }],
         },
       },
+      {
+        files: [
+          "packages/ai/src/providers/google-shared.test.ts",
+          "packages/ai/src/providers/openai-chatgpt-responses.test.ts",
+          "src/agents/embedded-agent-runner/run/terminal-resolution.test.ts",
+          "ui/src/pages/new-session/draft-submission-flow.test.ts",
+        ],
+        rules: {
+          "max-lines": ["error", { max: 1050, skipBlankLines: true, skipComments: true }],
+        },
+      },
+      {
+        files: ["src/node-host/node-worker-supervisor.ts"],
+        rules: {
+          "max-lines": ["error", { max: 1350, skipBlankLines: true, skipComments: true }],
+        },
+      },
+      {
+        files: [
+          "packages/ai/src/transports/openai-responses-stream-internal.ts",
+          "src/infra/deferred-plugin-session-sources.ts",
+          "src/plugins/doctor-contract-registry.ts",
+          "src/sessions/user-turn-transcript.ts",
+          "src/state/openclaw-state-db-async-lifecycle.ts",
+          "ui/src/pages/chat/components/chat-transcript-virtualizer-host.ts",
+        ],
+        rules: {
+          "max-lines": ["error", { max: 850, skipBlankLines: true, skipComments: true }],
+        },
+      },
     ]);
   });
 
