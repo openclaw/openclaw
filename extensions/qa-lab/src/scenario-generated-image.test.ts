@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { extractGatewayMessageText } from "./gateway-log-sentinel.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
@@ -186,6 +187,7 @@ async function runImageScenario(
       randomUUID: () => "test",
       normalizeLowercaseStringOrEmpty,
       projectQaToolMessages,
+      extractGatewayMessageText,
       readEffectiveTools: async () => new Set(["image_generate"]),
       reset: () => state.reset(),
       runAgentPrompt,

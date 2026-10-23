@@ -25,7 +25,6 @@ const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
   "./codex-plugin.fixture.js": () => import("./codex-plugin.fixture.js"),
   "./errors.js": () => import("./errors.js"),
   "./gateway-log-redaction.js": () => import("./gateway-log-redaction.js"),
-  "./gateway-log-sentinel.js": () => import("./gateway-log-sentinel.js"),
   "./providers/mock-openai/mock-openai-input.js": () =>
     import("./providers/mock-openai/mock-openai-input.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-allowbots.js": () =>

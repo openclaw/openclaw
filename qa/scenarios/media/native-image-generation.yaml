@@ -192,20 +192,17 @@ flow:
         - set: generationTaskId
           value:
             expr: >-
-              (await qaImport('./gateway-log-sentinel.js')).extractGatewayMessageText(completedGenerations[0]?.result ?? {})
+              extractGatewayMessageText(completedGenerations[0]?.result ?? {})
                 .match(/^Background task started for image generation \(([^)\r\n]+)\)\./)?.[1]
         - set: completionTranscript
           value:
             expr: >-
-              await (async () => {
-                const { extractGatewayMessageText } = await qaImport('./gateway-log-sentinel.js');
-                return (imageHistory.messages ?? []).filter((message) =>
+              (imageHistory.messages ?? []).filter((message) =>
                   message.role === 'assistant' && typeof generationTaskId === 'string'
                   && typeof message.__openclaw?.runId === 'string'
                   && message.__openclaw.runId.startsWith(`image_generate:${generationTaskId}:ok:agent-loop`))
                   .map((message) => ({ runId: message.__openclaw.runId, text: extractGatewayMessageText(message) }))
-                  .findLast((message) => message.text.trim().length > 0);
-              })()
+                  .findLast((message) => message.text.trim().length > 0)
         - set: completionReplies
           value:
             expr: >-
