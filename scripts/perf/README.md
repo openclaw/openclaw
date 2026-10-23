@@ -321,10 +321,13 @@ Setup identifies the subscription owner's native work scope
 from its direct caller stack, then restores the original tracking method before
 measurement. Exactly one scope must be found; connection and ingress lifetimes
 are excluded. Native idle barriers run inside the allocation capture and record
-settlement duration; failure to settle within 30 seconds fails the run. Every client must
-receive all watched keys before measurement. Final observations after settlement
-must match the initial snapshots; canonical hashes sort clients and session keys,
-while raw frames preserve delivery order for inspection.
+settlement duration; failure to settle within 30 seconds fails the run. Cold setup
+snapshots are saved separately. After warmup and timed subscriptions, every client
+must receive ready snapshots with task receipt fields for all watched keys before
+notification measurement. Initial and final captures both wait for a response on
+each WebSocket after settlement. Final observations must match these warm initial
+snapshots; canonical hashes sort clients and session keys, while raw frames preserve
+delivery order for inspection. Snapshot artifacts are saved even if equality fails.
 
 Use separate identical fixtures and ports for both sides. The common
 `--start-at` starts subscribe timing; notification timing starts 30 seconds later.

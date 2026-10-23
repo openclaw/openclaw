@@ -428,10 +428,13 @@ if (values.child) {
     }
     await delay(2000);
     const setupSettlement = await command("arm");
-    const initialState = snapshotState();
-    const initialSnapshotHash = snapshotHash(initialState);
-    const initialFrameCount = frames.length;
-    writeFileSync(path.join(output, "initial-frames.json"), JSON.stringify(frames));
+    for (const peer of peers) {
+      await rpc(peer, "sessions.describe", { key: keys[0] });
+    }
+    const setupState = snapshotState();
+    const setupSnapshotHash = snapshotHash(setupState);
+    writeFileSync(path.join(output, "setup-snapshots.json"), JSON.stringify(setupState));
+    writeFileSync(path.join(output, "setup-frames.json"), JSON.stringify(frames));
     for (let index = 0; index < 10; index++) {
       await rpc(peers[0]!, "sessions.patch", { key: key(4991), [mutation]: `warmup-${index % 2}` });
     }
@@ -454,6 +457,22 @@ if (values.child) {
       );
     }
     const preMeasurementSettlement = await command("settle");
+    for (const peer of peers) {
+      await rpc(peer, "sessions.describe", { key: keys[0] });
+    }
+    const initialState = snapshotState();
+    const initialSnapshotHash = snapshotHash(initialState);
+    const initialFrameCount = frames.length;
+    writeFileSync(path.join(output, "initial-snapshots.json"), JSON.stringify(initialState));
+    writeFileSync(path.join(output, "initial-frames.json"), JSON.stringify(frames));
+    for (const { client, sessions } of initialState) {
+      for (const [sessionKey, snapshot] of sessions) {
+        assert(isRecord(snapshot));
+        assert.equal(snapshot.status, "ready", `Client ${client} ${sessionKey} is not ready`);
+        assert(Array.isArray(snapshot.taskPullRequests));
+        assert.equal(typeof snapshot.taskPullRequestCount, "number");
+      }
+    }
     if (values["start-at"]) {
       const notifyAt = integer(values["start-at"], "--start-at") + 30000;
       assert(Date.now() < notifyAt, "Subscribe phase missed the paired notification start");
@@ -521,15 +540,15 @@ if (values.child) {
     }
     const finalState = snapshotState();
     const finalSnapshotHash = snapshotHash(finalState);
-    assert.equal(
-      finalSnapshotHash,
-      initialSnapshotHash,
-      `Unrelated ${mutation} writes changed PR snapshots`,
-    );
     writeFileSync(path.join(output, "frames.json"), JSON.stringify(frames));
     writeFileSync(
       path.join(output, "snapshots.json"),
       JSON.stringify({ initialState, finalState }),
+    );
+    assert.equal(
+      finalSnapshotHash,
+      initialSnapshotHash,
+      `Unrelated ${mutation} writes changed PR snapshots`,
     );
     const result = {
       format: "session-pr-subscriptions-v1",
@@ -563,6 +582,7 @@ if (values.child) {
       listLatency: listLatency.length ? summarize(listLatency) : null,
       notifySettlementLatency: summarize(notifySettlementLatency),
       schedulingDelay: summarize(schedulingDelay),
+      setupSnapshotHash,
       initialSnapshotHash,
       finalSnapshotHash,
       snapshotsBeforeMeasurement: initialFrameCount,
