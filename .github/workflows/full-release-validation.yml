@@ -81,6 +81,7 @@ on:
           - plugin-prerelease
           - install-smoke
           - cross-os
+          - windows-node
           - live-e2e
           - package
           - qa-parity
@@ -436,7 +437,7 @@ jobs:
           plugin_required=false
           [[ "$RERUN_GROUP" =~ ^(all|plugin-prerelease)$ ]] && plugin_required=true
           release_artifact_required=false
-          if [[ "$RERUN_GROUP" =~ ^(all|cross-os)$ &&
+          if [[ "$RERUN_GROUP" =~ ^(all|cross-os|windows-node)$ &&
                 -z "${RELEASE_PACKAGE_SPEC// }" ]]; then
             release_artifact_required=true
           elif [[ "$RERUN_GROUP" =~ ^(all|package)$ &&
@@ -913,7 +914,7 @@ jobs:
             else
               echo "- Plugin prerelease: skipped by rerun group"
             fi
-            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "install-smoke" || "$RERUN_GROUP" == "cross-os" || "$RERUN_GROUP" == "live-e2e" || "$RERUN_GROUP" == "package" || "$RERUN_GROUP" == "qa-parity" || "$RERUN_GROUP" == "qa-live" ]]; then
+            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "install-smoke" || "$RERUN_GROUP" == "cross-os" || "$RERUN_GROUP" == "windows-node" || "$RERUN_GROUP" == "live-e2e" || "$RERUN_GROUP" == "package" || "$RERUN_GROUP" == "qa-parity" || "$RERUN_GROUP" == "qa-live" ]]; then
               echo "- Release/live/Docker/package/QA: \`OpenClaw Release Checks\`"
             else
               echo "- Release/live/Docker/package/QA: skipped by rerun group"
@@ -1781,7 +1782,7 @@ jobs:
   release_checks_candidate:
     name: Run release checks candidate validation
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, candidate_acquisition]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","windows-node","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: *linux_runner_small
     timeout-minutes: 15
     outputs:

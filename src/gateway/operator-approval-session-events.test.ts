@@ -54,12 +54,14 @@ function createRuntime(
   params: Omit<
     Parameters<typeof createOperatorApprovalSessionEventRuntime>[0],
     "sessionMessageSubscribers" | "broadcastToConnIds"
-  >,
+  > & { now?: () => number },
 ) {
+  const { now = Date.now, ...runtimeParams } = params;
+  vi.spyOn(Date, "now").mockImplementation(now);
   const subscribers = createSessionMessageSubscriberRegistry();
   const broadcastToConnIds = vi.fn<GatewayBroadcastToConnIdsFn>();
   const runtime = createOperatorApprovalSessionEventRuntime({
-    ...params,
+    ...runtimeParams,
     sessionMessageSubscribers: subscribers,
     broadcastToConnIds,
   });
@@ -750,7 +752,6 @@ describe("operator approval session events", () => {
     const harness = createRuntime({
       clients: [parent],
       databaseOptions,
-      now: () => Date.now(),
       reconcileTerminal: (record) =>
         managerHolder.current?.reconcileDurableTerminal(record) ?? false,
       getLiveManager: () => managerHolder.current,

@@ -523,7 +523,7 @@ function setupDesktopLayout() {
   const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
   Object.defineProperty(document, "fonts", {
     configurable: true,
-    value: { ready: Promise.resolve() },
+    value: Object.assign(new EventTarget(), { ready: Promise.resolve() }),
   });
   onTestFinished(() => {
     if (previousFonts) {

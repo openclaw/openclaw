@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
@@ -15,6 +15,42 @@ import {
   mountElement,
 } from "./board-widget-cell.test-support.ts";
 import "./board-widget-cell.solid.tsx";
+
+const mcpLoad = vi.hoisted(() => ({
+  promise: Promise.resolve(),
+  requested: vi.fn(),
+  fail: false,
+}));
+// mock-isolation: Keep the controlled MCP host and deferred import independent of the real sandbox renderer.
+vi.mock("../mcp-app-view.tsx", async () => {
+  mcpLoad.requested();
+  await mcpLoad.promise;
+  return {
+    McpAppView: (
+      props: Parameters<typeof import("../mcp-app-view.tsx").McpAppView>[0] & {
+        "onOpenclaw-mcp-app-view-expired"?: (event: Event) => void;
+      },
+    ) => {
+      if (mcpLoad.fail) {
+        throw new Error("MCP renderer temporarily unavailable");
+      }
+      return (
+        <mcp-app-view
+          ref={props.ref}
+          class={props.class}
+          prop:sessionKey={props.sessionKey}
+          prop:viewId={props.viewId}
+          prop:fillContainer={props.fillContainer}
+          prop:surface={props.surface}
+          title={props.title}
+          onOpenclaw-mcp-app-view-expired={(event: Event) =>
+            props["onOpenclaw-mcp-app-view-expired"]?.(event)
+          }
+        />
+      );
+    },
+  };
+});
 
 class TestMcpAppView extends HTMLElement {
   sessionKey = "";
@@ -135,6 +171,53 @@ afterEach(() => {
 });
 
 describe("board MCP App cell lifecycle", () => {
+  it("preloads before the lease and never revives a disposed cell after loading", async () => {
+    const setVisible = stubChangingVisibility();
+    const code = deferred();
+    const lease = deferred<BoardWidgetAppViewState>();
+    mcpLoad.promise = code.promise;
+    mcpLoad.fail = true;
+    onTestFinished(() => {
+      code.resolve();
+      lease.resolve(readyAppView("retired-view"));
+      mcpLoad.fail = false;
+    });
+
+    const cancelled = await mount({ widgetAppView: () => lease.promise });
+    await waitForSolid(() => expect(mcpLoad.requested).toHaveBeenCalledOnce());
+    lease.resolve(readyAppView("retired-view"));
+    await settle(cancelled);
+    expect(testId(cancelled, "board-mcp-app-loading")).not.toBeNull();
+    expect(app(cancelled)).toBeNull();
+    cancelled.remove();
+    await settle(cancelled);
+    const retiredContent = cancelled.innerHTML;
+
+    const current = await mount();
+    expect(testId(current, "board-mcp-app-loading")).not.toBeNull();
+    expect(app(current)).toBeNull();
+    setVisible(false);
+    await settle(current);
+    code.resolve();
+    await settle(current);
+    expect(app(current)).toBeNull();
+    expect(current.querySelector(".lazy-view-error")).toBeNull();
+    setVisible(true);
+    await waitForSolid(() =>
+      expect(current.querySelector(".lazy-view-error")?.textContent).toContain(
+        "MCP renderer temporarily unavailable",
+      ),
+    );
+    mcpLoad.fail = false;
+    current.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
+    await waitForApp(current);
+    expect(app(current)?.viewId).toBe("initial-view");
+    expect(app(cancelled)).toBeNull();
+    expect(cancelled.querySelector(".lazy-view-error")).toBeNull();
+    expect(cancelled.innerHTML).toBe(retiredContent);
+    expect(cancelled.isConnected).toBe(false);
+  });
+
   it("admits one action per tick and restores controls after it fails", async () => {
     const removal = deferred();
     const retry = deferred();
@@ -320,6 +403,25 @@ describe("board MCP App cell lifecycle", () => {
     expect(app(cell)).toBe(remountedView);
     expect(remountedView?.teardown).not.toHaveBeenCalled();
     expect(widgetAppView).toHaveBeenCalledOnce();
+  });
+
+  it("updates ready leases and titles without replacing the native view", async () => {
+    vi.useFakeTimers({ now: 10_000 });
+    const renewal = deferred<BoardWidgetAppViewState>();
+    const cell = await mountLease("initial-view", 20_000, () => renewal.promise);
+    await waitForApp(cell);
+    const view = app(cell)!;
+    await update(cell, { active: false, widget: widget({ title: "Updated app" }) });
+    expect(app(cell)).toBe(view);
+    expect(view.title).toBe("Updated app");
+    await update(cell, { active: true });
+    expect(app(cell)).toBe(view);
+    expect(view.teardown).not.toHaveBeenCalled();
+    await advance(cell, 5_000);
+    renewal.resolve(readyAppView("renewed-view", 30_000));
+    await settle(cell);
+    expect(app(cell)).toBe(view);
+    expect(view.viewId).toBe("renewed-view");
   });
 
   it("lets an in-flight materialization finish while inactive without duplicating it", async () => {

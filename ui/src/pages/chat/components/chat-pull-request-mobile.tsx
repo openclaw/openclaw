@@ -14,8 +14,8 @@ import { createPullRequestCopy } from "./chat-pull-request-copy.ts";
 import { ChecksRows } from "./chat-pull-request-shared.tsx";
 import { chatPullRequestId } from "./chat-pull-requests.ts";
 import "./chat-pull-request-presenters.css";
-import "./chat-ci-details.ts";
-import "./chat-ci-automation-control.ts";
+import "./chat-ci-details.tsx";
+import "./chat-ci-automation-control.tsx";
 
 registerGitHubEnglish();
 

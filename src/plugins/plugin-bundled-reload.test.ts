@@ -101,7 +101,9 @@ it("keeps host shared imports available to bundled Workers across recovery and d
   fs.writeFileSync(
     entry,
     `import shared from "../../shared.cjs";
+    import { readFileSync } from "node:fs";
     export default { increment: () => ++shared.count,
+      sharedSource: readFileSync(new URL("../../shared.cjs", import.meta.url), "utf8"),
       workerUrl: new URL("../../owned.worker.mjs", import.meta.url) };`,
   );
   const host = createRequire(import.meta.url)(shared);
@@ -119,7 +121,11 @@ it("keeps host shared imports available to bundled Workers across recovery and d
       return instance;
     });
   const load = (instance: PluginInstance) =>
-    (instance.loadModule(entry) as { default: { increment(): number; workerUrl: URL } }).default;
+    (
+      instance.loadModule(entry) as {
+        default: { increment(): number; sharedSource: string; workerUrl: URL };
+      }
+    ).default;
   const runWorker = async (url: URL) => {
     const worker = new Worker(fileURLToPath(url.href), { execArgv: [] });
     try {
@@ -131,6 +137,7 @@ it("keeps host shared imports available to bundled Workers across recovery and d
   };
   const instance = create();
   expect(load(instance).increment()).toBe(1);
+  expect(load(instance).sharedSource).toBe(sharedBytes);
   expect(host.count).toBe(1);
   await runWorker(load(instance).workerUrl);
   const recovery = withPluginSourceCaptureDirectory(captures, () =>
@@ -143,6 +150,7 @@ it("keeps host shared imports available to bundled Workers across recovery and d
   instances.push(restored);
   withPluginSourceCaptureDirectory(captures, () => recovery.bind(restored));
   expect(load(restored).increment()).toBe(2);
+  expect(load(restored).sharedSource).toBe(sharedBytes);
   expect(host.count).toBe(2);
   await runWorker(load(restored).workerUrl);
   await restored.dispose();

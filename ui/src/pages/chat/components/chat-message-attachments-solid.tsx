@@ -116,6 +116,7 @@ export function AssistantAttachments(
     () => new Map(comments().map((item) => [item, resolveComment(item)])),
     { lazy: true },
   );
+  // Comment resolution can acquire resources during rendering, before settled setup runs.
   onCleanup(() => releaseChatMediaResourceOwner(refreshComments));
   return (
     <Show when={props.attachments.length}>

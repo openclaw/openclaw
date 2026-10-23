@@ -1112,6 +1112,11 @@ When a recovered turn starts with an eligible channel delivery route, OpenClaw
 sends a resumption notice to that conversation, retaining its account and topic.
 The final reply uses the same delivery route. Transcript-only turns stay private,
 and a turn that has already finished does not receive a late resumption notice.
+Channel-less turns started through the `agent` RPC remain channel-less after
+recovery. Control UI and `chat.send` / `sessions.send` WebChat turns retain their
+WebChat context. In-flight claims from older builds that did not record the
+original channel retain the previous WebChat fallback for session keys without
+an external channel route; no migration is needed.
 A failed notice does not restart or replay the recovered work. Main-session
 resumption notices are best-effort and live-only: automatic-delivery permission and the recovery
 owner are rechecked immediately before the channel send. They are not replayed

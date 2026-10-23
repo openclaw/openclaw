@@ -1095,6 +1095,7 @@ openclaw-settings-save-indicator:empty {
   --sidebar-lead: 20px;
   --sidebar-row-gap: 8px;
   --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
+  --sidebar-session-row-inset: 2px;
   --sidebar-pad-x: 10px;
   --sidebar-session-link-padding-block: 4px;
   --sidebar-session-row-floor: 30px;
@@ -1711,7 +1712,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-session-tree__loading {
   min-height: var(--sidebar-session-row-min-height);
-  margin-inline: var(--sidebar-text-offset) 2px;
+  margin-inline: calc(var(--sidebar-text-offset) + var(--sidebar-session-row-inset)) 4px;
   clip-path: inset(calc((100% - 10px) / 2) 0 round var(--radius-sm));
 }
 
@@ -1923,13 +1924,13 @@ openclaw-settings-save-indicator:empty {
   align-items: center;
   min-width: 0;
   min-height: var(--sidebar-session-row-min-height);
-  padding: 0 calc(4px + var(--sidebar-session-state-reserve, 0px)) 0 2px;
+  padding: 0 calc(4px + var(--sidebar-session-state-reserve, 0px)) 0
+    var(--sidebar-session-row-inset);
   border-radius: var(--radius-md);
   color: var(--muted);
   cursor: var(--cursor-action);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
+  /* Inherited color would restyle every row descendant on each animation frame. */
+  transition: background var(--duration-fast) ease;
 }
 
 /* Inset only the paint: adjacent fills need breathing room without shrinking
@@ -2253,7 +2254,6 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-recent-session--active .sidebar-recent-session__name {
-  font-weight: 600;
   color: var(--text-strong);
 }
 
@@ -3105,7 +3105,6 @@ a:is(
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
     transform var(--duration-fast) ease;
 }
 

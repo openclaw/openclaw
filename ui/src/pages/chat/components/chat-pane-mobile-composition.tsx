@@ -21,7 +21,6 @@ import {
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
 import type { SessionPlacementPresentation } from "../../../components/session-placement-move-dialog.tsx";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { closeMenusWithin } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
@@ -613,7 +612,6 @@ export function ChatPaneMobileComposition(props: {
             )
           }
           onOpenDetails={(source) => props.header.onOpenDetails?.(source)}
-          navigationIcon={<Icon name="sessionMenu" />}
           notice={
             props.header.gatewayStatus?.kind && props.header.gatewayStatus.kind !== "connected"
               ? {

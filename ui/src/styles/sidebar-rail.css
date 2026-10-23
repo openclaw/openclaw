@@ -9,6 +9,11 @@
   --sidebar-pad-x: 8px;
 }
 
+/* Preserve title space beside the rail, row insets, and the 44px menu target. */
+.shell--mobile-nav .sidebar--rail .sidebar-shell {
+  --sidebar-pad-x: 6px;
+}
+
 .sidebar-rail {
   --sidebar-rail-control-size: 36px;
   --sidebar-rail-action-size: 30px;

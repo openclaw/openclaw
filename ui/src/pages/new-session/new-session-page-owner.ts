@@ -7,7 +7,6 @@ import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import { createIdleImport } from "../../lib/idle-import.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -84,7 +83,6 @@ export class NewSessionPageOwner {
 
   retainedForHandoff: object | null = null;
   openedFor: string | null = null;
-  readonly critterImport = createIdleImport(() => import("../../components/lobster-pet.tsx"));
   openedGroupDefaults = "";
   openedAgentId = "";
   messageOwnerKey = "";
@@ -243,7 +241,6 @@ export class NewSessionPageOwner {
     }
     this.draft.connect();
     this.submission.draftPersistence.connect();
-    this.critterImport.schedule();
     this.changed();
   }
 
@@ -257,7 +254,6 @@ export class NewSessionPageOwner {
       stop();
     }
     this.closeAttachmentPanel();
-    this.critterImport.dispose();
     this.dictation.dispose();
     this.connectMachine.close();
     if (!this.retainedForHandoff) {

@@ -16,10 +16,7 @@ import {
 import { patchSessionEntryTarget } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryTargetOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
-import type {
-  SessionActor,
-  SessionActorAuthority,
-} from "../../config/sessions/session-actor-contract.js";
+import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
 import type { SessionTranscriptTurnLifecyclePatch } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
@@ -115,7 +112,7 @@ export function createReplyRestartRecoveryClaimController(
     }
   };
 
-  const readAuthority: SessionActorAuthority = {
+  const readAuthority = {
     assertCurrent: assertReadCurrent,
     authorize: assertReadCurrent,
   };
@@ -427,8 +424,7 @@ export function createReplyRestartRecoveryClaimController(
     }
 
     const deliveryContext = params.resolveDeliveryContext(entry);
-    const recoverableDeliveryContext =
-      deliveryContext && sourceTurnId ? deliveryContext : undefined;
+    const recoverableDeliveryContext = sourceTurnId ? deliveryContext : undefined;
     if (recoverableDeliveryContext && !strandedRetryRunId) {
       const sourceMessage = recorder?.getPersistedMessage?.() ?? (await recorder?.resolveMessage());
       const persistedSourceTurnId = normalizeOptionalString(sourceMessage?.idempotencyKey);
@@ -533,6 +529,9 @@ export function createReplyRestartRecoveryClaimController(
                   ? "channel"
                   : "internal"
                 : undefined)),
+      restartRecoverySourceMessageChannel: transfersControlUiClaim
+        ? entry.restartRecoverySourceMessageChannel
+        : undefined,
       restartRecoverySourceReplyDeliveryMode: transfersControlUiClaim
         ? undefined
         : params.sourceReplyDeliveryMode,
