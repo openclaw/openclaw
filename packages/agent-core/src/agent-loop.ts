@@ -50,6 +50,8 @@ import {
   immediateToolArgumentValidationError,
   immediateToolCallError,
   immediateToolPreparationError,
+  hidesToolCallFromChannelProgress,
+  type ResolvedToolCallOutcome,
   type FinalizedToolCallOutcome,
   type ImmediateToolCallOutcome,
 } from "./tool-call-outcome.js";
@@ -65,7 +67,6 @@ import type {
   AgentLoopConfig,
   AgentLoopTurnUpdate,
   AgentMessage,
-  AgentTool,
   AgentToolCall,
   StreamFn,
   ToolLoopIntervention,
@@ -556,6 +557,10 @@ async function executeToolCalls(
   if (sequential && scheduling) {
     await scheduling.waitForPrevious();
   }
+  if (signal?.aborted) {
+    // This batch was admitted before its predecessor failed, but cannot launch now.
+    batch.lifecycle?.releaseSkippedCalls?.(admittedIds(toolCalls, batch.validated));
+  }
   return executeToolCallGroups(batch, toolCalls, sequential);
 }
 
@@ -576,22 +581,6 @@ type ToolBatchContext = {
   waitForPrevious?: () => Promise<void>;
   isLocalError?: AgentCoreStreamRuntimeDeps["isLocalError"];
 };
-
-type ResolvedToolCallOutcome =
-  | { kind: "resolved"; tool?: AgentTool }
-  | { kind: "error"; error: unknown };
-
-function hidesToolCallFromChannelProgress(
-  batch: ToolBatchContext,
-  toolCall: AgentToolCall,
-): boolean {
-  const resolution = batch.resolved.get(toolCall);
-  const tool =
-    resolution?.kind === "resolved"
-      ? resolution.tool
-      : batch.currentContext.tools?.find((candidate) => candidate.name === toolCall.name);
-  return tool?.hideFromChannelProgress === true;
-}
 
 async function executeToolCallGroups(
   batch: ToolBatchContext,

@@ -35,6 +35,25 @@ type ToolOutcomeContext = {
   lifecycle?: Pick<InternalToolBatchLifecycle, "observeOutcome">;
 };
 
+export type ResolvedToolCallOutcome =
+  | { kind: "resolved"; tool?: AgentTool }
+  | { kind: "error"; error: unknown };
+
+export function hidesToolCallFromChannelProgress(
+  batch: {
+    currentContext: AgentContext;
+    resolved: ReadonlyMap<AgentToolCall, ResolvedToolCallOutcome>;
+  },
+  toolCall: AgentToolCall,
+): boolean {
+  const resolution = batch.resolved.get(toolCall);
+  const tool =
+    resolution?.kind === "resolved"
+      ? resolution.tool
+      : batch.currentContext.tools?.find((candidate) => candidate.name === toolCall.name);
+  return tool?.hideFromChannelProgress === true;
+}
+
 export type FinalizedToolCallOutcome = {
   loopOutcome?: Pick<AfterToolOutcomeContext, "toolCall" | "args" | "result" | "isError">;
   toolCall: AgentToolCall;

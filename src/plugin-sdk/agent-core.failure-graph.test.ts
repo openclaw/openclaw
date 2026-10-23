@@ -275,6 +275,52 @@ it("retains returned and rejected failures from separate streamed tool batches",
   expect(agent.state.isStreaming).toBe(false);
 });
 
+it("releases an admitted sequential async batch when its predecessor fails locally", async () => {
+  const uncertain = new SqliteWorkerError("Synthetic predecessor failure", "outcome-unknown");
+  const waitingAdmitted = Promise.withResolvers<void>();
+  const executeWaiting = vi.fn(async () => ({ content: [], details: {} }));
+  const releaseWaiting = vi.fn();
+  const calls = [makeCall("first"), makeCall("waiting")].map((call) =>
+    Object.assign(call, { async: true as const }),
+  );
+  const streamFn = vi.fn(() => {
+    const stream = createAssistantMessageEventStream();
+    startToolCalls(stream, calls);
+    finishMessageStream(stream, makeAssistantMessage(calls));
+    return stream;
+  });
+  const agent = new Agent({
+    toolExecution: "parallel",
+    streamFn,
+    initialState: {
+      tools: [
+        {
+          ...makeTool("first"),
+          async execute() {
+            await waitingAdmitted.promise;
+            await nextTurn();
+            throw uncertain;
+          },
+        },
+        { ...makeTool("waiting"), executionMode: "sequential", execute: executeWaiting },
+      ],
+    },
+  });
+  setInternalBeforeToolBatch(agent, async ({ calls: admittedCalls }) => {
+    if (admittedCalls.some(({ toolCall }) => toolCall.name === "waiting")) {
+      waitingAdmitted.resolve();
+      return attachInternalToolBatchLifecycle({}, { releaseSkippedCalls: releaseWaiting });
+    }
+    return undefined;
+  });
+  const outcome = await agent.prompt("Run both streamed tools").catch((error: unknown) => error);
+  expectFailureGraph(outcome, uncertain);
+  expect(releaseWaiting).toHaveBeenCalledExactlyOnceWith(["waiting"]);
+  expect(executeWaiting).not.toHaveBeenCalled();
+  expect(streamFn).toHaveBeenCalledOnce();
+  expect(agent.state.isStreaming).toBe(false);
+});
+
 it.each(["reject", "complete"] as const)(
   "settles an invoked pending guard that later %ss",
   async (settlement) => {
