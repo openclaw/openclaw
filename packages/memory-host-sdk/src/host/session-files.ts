@@ -28,6 +28,8 @@ import {
   prepareSessionEntryInWorker,
   prepareSessionEntriesInWorker,
   prepareAssistantTranscriptText,
+  withSessionEntrySourceInWorker,
+  type PreparedSessionEntrySource,
   readSessionEntrySnapshotInWorker,
   readRestoredSessionTranscript,
   readTranscriptStatsAsync,
@@ -46,6 +48,8 @@ import {
   parseSessionTimestampMs,
   projectSessionEntryRecord,
   renderSessionExportLines,
+  sessionSourceRecords,
+  yieldSessionEntryParseIfNeeded,
 } from "./session-entry-projection.js";
 import { resolveBuildSessionSqliteIdentity } from "./session-entry-source.js";
 import { classifySessionMessageOrigin } from "./session-provenance.js";
@@ -530,17 +534,6 @@ export async function statSessionEntry(
   return sqliteSessionFileState(absPath, identity, stats, opts.updatedAtMs);
 }
 
-async function yieldSessionEntryParseIfNeeded(
-  lineIndex: number,
-  everyLines: number,
-): Promise<void> {
-  if (lineIndex > 0 && lineIndex % everyLines === 0) {
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-  }
-}
-
 export async function buildSessionEntry(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
@@ -553,12 +546,15 @@ export async function buildSessionEntry(
   const prepare = async () => {
     if (identity) {
       const { onTranscriptMessage, parseYieldEveryLines, ...options } = { ...opts, ...identity };
-      if (onTranscriptMessage || parseYieldEveryLines !== undefined) {
-        const snapshot = await readSessionEntrySnapshotInWorker(
-          absPath,
-          options,
-          Boolean(onTranscriptMessage),
+      if (onTranscriptMessage) {
+        return withSessionEntrySourceInWorker(absPath, options, (source) =>
+          source
+            ? buildSessionEntryFromSource(absPath, opts, undefined, source)
+            : Promise.resolve(null),
         );
+      }
+      if (parseYieldEveryLines !== undefined) {
+        const snapshot = await readSessionEntrySnapshotInWorker(absPath, options);
         return snapshot ? buildSessionEntryFromSource(absPath, opts, snapshot) : null;
       }
       const prepared = await prepareSessionEntryInWorker(absPath, options);
@@ -680,12 +676,13 @@ async function buildSessionEntryFromSource(
   absPath: string,
   opts: BuildSessionEntryOptions,
   preparedSnapshot?: SessionEntrySnapshot,
+  preparedSource?: PreparedSessionEntrySource,
 ): Promise<SessionFileEntry | null> {
   const sqliteIdentity = resolveBuildSessionSqliteIdentity(absPath, opts);
   try {
     const snapshot =
       preparedSnapshot ??
-      (sqliteIdentity
+      (sqliteIdentity && !preparedSource
         ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity, {
             // Observers require original messages and run only after the snapshot closes.
             projectEvent: opts.onTranscriptMessage
@@ -693,13 +690,16 @@ async function buildSessionEntryFromSource(
               : (event) => projectSessionEntryRecord(event, prepareAssistantTranscriptText),
           })
         : null);
+    const metadata = preparedSource?.snapshot ?? snapshot;
     const sqliteSource =
-      snapshot && sqliteIdentity
+      metadata && sqliteIdentity
         ? {
-            ...sqliteSessionFileState(absPath, sqliteIdentity, snapshot.stats, opts.updatedAtMs),
-            records: snapshot.events,
-            resetRecallCutoff: resolveSessionResetRecallCutoff(snapshot.events),
-            sessionKey: snapshot.sessionKey,
+            ...sqliteSessionFileState(absPath, sqliteIdentity, metadata.stats, opts.updatedAtMs),
+            records: preparedSource?.records ?? snapshot?.events ?? [],
+            resetRecallCutoff:
+              preparedSource?.resetRecallCutoff ??
+              resolveSessionResetRecallCutoff(snapshot?.events ?? []),
+            sessionKey: metadata.sessionKey,
           }
         : null;
     if (sqliteIdentity && !sqliteSource) {
@@ -777,22 +777,17 @@ async function buildSessionEntryFromSource(
     let insideHeartbeatTurn = false;
     let insideRecalledMemoryTurn = false;
     let turnOrigin: MemoryOriginClass = "untrusted";
-    // SQLite is fully snapshotted before yielding or invoking observers. Archives
+    // SQLite is fully captured before yielding or invoking observers. Archives
     // retain raw line ordinals, including blank and malformed JSONL entries.
-    for (
-      let jsonlIdx = 0, lineStart = 0;
-      sqliteSource ? jsonlIdx < sqliteSource.records.length : lineStart <= raw.length;
-      jsonlIdx++
-    ) {
+    let jsonlIdx = -1;
+    for (const sourceRecord of sessionSourceRecords(sqliteSource?.records, raw)) {
+      jsonlIdx++;
       await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
       let record: unknown;
-      if (sqliteSource) {
-        record = sqliteSource.records[jsonlIdx];
+      if (sourceRecord.kind === "record") {
+        record = sourceRecord.record;
       } else {
-        const newlineIndex = raw.indexOf("\n", lineStart);
-        const lineEnd = newlineIndex === -1 ? raw.length : newlineIndex;
-        const line = raw.slice(lineStart, lineEnd);
-        lineStart = newlineIndex === -1 ? raw.length + 1 : newlineIndex + 1;
+        const { line } = sourceRecord;
         if (!line.trim()) {
           continue;
         }

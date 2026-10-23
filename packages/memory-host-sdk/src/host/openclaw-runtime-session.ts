@@ -166,6 +166,12 @@ export const prepareSessionEntryInWorker = bindTranscriptRead(
   (runtime) => runtime.prepareSessionEntryInWorker,
 );
 
+export type { PreparedSessionEntrySource } from "../../../../src/config/sessions/session-entry-prepared-source.js";
+
+export const withSessionEntrySourceInWorker = bindTranscriptRead(
+  (runtime) => runtime.withSessionEntrySourceInWorker,
+);
+
 export const readSessionEntrySnapshotInWorker = bindTranscriptRead(
   (runtime) => runtime.readSessionEntrySnapshotInWorker,
 );

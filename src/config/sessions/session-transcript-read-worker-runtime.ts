@@ -1,4 +1,7 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { ContextPreparationTimeoutError } from "../../agents/failover/local-preparation-error.js";
 import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
@@ -12,8 +15,13 @@ import {
 } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions } from "../../infra/worker-task-pool.types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import {
+  readPreparedSessionEntryRecords,
+  type PreparedSessionEntrySource,
+} from "./session-entry-prepared-source.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
 import {
@@ -289,12 +297,11 @@ export async function prepareSessionEntriesInWorker(entries: SessionEntriesWorke
 export async function readSessionEntrySnapshotInWorker(
   absPath: string,
   options: SessionEntryWorkerInput["options"],
-  includeOriginalMessages: boolean,
 ) {
   const result = await readSessionEntryInWorker({
     kind: "session-entry",
     mode: "snapshot",
-    includeOriginalMessages,
+    includeOriginalMessages: false,
     absPath,
     options,
   });
@@ -304,7 +311,102 @@ export async function readSessionEntrySnapshotInWorker(
   return result.snapshot;
 }
 
-async function readSessionEntryInWorker(input: SessionEntryWorkerInput) {
+/** Custody starts on the host, so worker exit can never orphan a prepared export. */
+export async function withSessionEntrySourceInWorker(
+  absPath: string,
+  options: SessionEntryWorkerInput["options"],
+  consume: (
+    source: PreparedSessionEntrySource | undefined,
+  ) => Promise<
+    import("../../../packages/memory-host-sdk/src/host/session-files.js").SessionFileEntry | null
+  >,
+) {
+  let directory: Promise<string> | undefined;
+  let settled = false;
+  const settlement = Promise.withResolvers<void>();
+  const cleanup = async () => {
+    // Allocation failures create nothing; the worker request already reports that error.
+    const allocated = await directory?.catch(() => undefined);
+    if (allocated) {
+      await fs.rm(allocated, { recursive: true, force: true });
+    }
+  };
+  let failure: { error: unknown } | undefined;
+  let entry:
+    | import("../../../packages/memory-host-sdk/src/host/session-files.js").SessionFileEntry
+    | null = null;
+  try {
+    const result = await readSessionEntryInWorker(
+      { kind: "session-entry", mode: "snapshot", includeOriginalMessages: true, absPath, options },
+      {
+        onExecutionSettled() {
+          settled = true;
+          settlement.resolve();
+        },
+        async onRequest(value, context) {
+          if (asOptionalRecord(value)?.kind !== "session-entry-source" || directory) {
+            throw new Error("Unexpected session export source exchange");
+          }
+          context.signal.throwIfAborted();
+          directory = fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-export-"));
+          const filePath = path.join(await directory, "records");
+          context.signal.throwIfAborted();
+          return { input: { filePath }, timeoutMs: 60_000 };
+        },
+      },
+    );
+    if (!("preparedSource" in result)) {
+      throw new Error("Session transcript worker returned an array instead of a prepared source");
+    }
+    if (!result.preparedSource) {
+      entry = await consume(undefined);
+    } else {
+      if (!directory || !settled) {
+        throw new Error("Session export returned before source custody and native settlement");
+      }
+      // Public observers start only after terminal success and the worker's reader cleanup.
+      entry = await consume({
+        ...result.preparedSource,
+        records: readPreparedSessionEntryRecords(path.join(await directory, "records")),
+      });
+    }
+  } catch (error) {
+    failure = { error };
+  }
+  if (settled || !directory) {
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      throw failure
+        ? new AggregateError(
+            [failure.error, cleanupError],
+            "Session export and source cleanup failed",
+            { cause: failure.error },
+          )
+        : cleanupError;
+    }
+  } else {
+    // A failed stop still owns its files. The existing native settlement receipt
+    // releases them when retirement eventually succeeds, not on early rejection.
+    void settlement.promise.then(cleanup).catch((error: unknown) => {
+      createSubsystemLogger("memory").warn("Failed cleaning prepared session export", {
+        error: String(error),
+      });
+    });
+  }
+  if (failure) {
+    throw failure.error;
+  }
+  return entry;
+}
+
+async function readSessionEntryInWorker(
+  input: SessionEntryWorkerInput,
+  taskOptions: Pick<
+    WorkerTaskOptions<SessionEntryWorkerInput>,
+    "onRequest" | "onExecutionSettled"
+  > = {},
+) {
   const { absPath, options } = input;
   const receipt = resolveSessionTranscriptReadFence(options);
   const result = unwrapSessionTranscriptWorkerReply<
@@ -316,6 +418,7 @@ async function readSessionEntryInWorker(input: SessionEntryWorkerInput) {
         ...(receipt ? { admission: { ...receipt } } : {}),
       },
       {
+        ...taskOptions,
         inputBytes:
           2 *
           (absPath.length +
@@ -330,7 +433,7 @@ async function readSessionEntryInWorker(input: SessionEntryWorkerInput) {
       },
     ),
   );
-  if (!("entry" in result) && !("snapshot" in result)) {
+  if (!("entry" in result) && !("snapshot" in result) && !("preparedSource" in result)) {
     throw new Error("Session transcript worker returned reset metadata instead of an export");
   }
   return result;

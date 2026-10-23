@@ -14,7 +14,6 @@ import {
   runSqliteReadSnapshotSync,
 } from "../../infra/sqlite-transaction.js";
 import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
-import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -31,7 +30,14 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
-import { readTranscriptExportInSlices } from "./session-accessor.sqlite-export-slices.js";
+import {
+  readTranscriptExportInSlices,
+  type TranscriptExportSink,
+  type TranscriptExportOptions,
+  type TranscriptExportSnapshot,
+  type TranscriptExportRequest,
+  type TranscriptExportRead,
+} from "./session-accessor.sqlite-export-slices.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
@@ -59,7 +65,6 @@ import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionTranscriptReadSnapshot } from "./session-history-read.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
-import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
 import { assertTranscriptEventReadBudget } from "./session-transcript-read-bytes.js";
 import {
@@ -161,45 +166,6 @@ export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): Tra
   return loadTranscriptReadSnapshotSync(scope).events;
 }
 
-type TranscriptExportOptions = {
-  projection?: "reset-boundary";
-  /** Reduce each decoded event synchronously before retaining the snapshot. */
-  projectEvent?: (event: TranscriptEvent) => TranscriptEvent;
-  /** Worker-owned projection from the preceding export; null starts an incremental reader. */
-  previous?: {
-    events: TranscriptEvent[];
-    generation: string | null;
-    throughSeq: number;
-  } | null;
-};
-
-type TranscriptExportSnapshot = {
-  events: TranscriptEvent[];
-  stats: SessionTranscriptStats;
-  sessionKey: string | undefined;
-  generation?: string | null;
-  throughSeq?: number;
-  /**
-   * Rows after `afterSeq` through `throughSeq` that a sliced read still has to add, and the
-   * transcript context version this head was read at.
-   */
-  deferred?: { afterSeq?: number; throughSeq: number; version: SessionTranscriptContextVersion };
-};
-
-type TranscriptExportRequest = {
-  resolved: ResolvedTranscriptReadScope;
-  scope: SessionTranscriptReadScope;
-  options: TranscriptExportOptions;
-  admission?: UserTurnTranscriptAdmissionReceipt;
-};
-
-type TranscriptExportRead = {
-  request: TranscriptExportRequest;
-  snapshot: TranscriptExportSnapshot;
-  throughSeq: number;
-  afterSeq?: number;
-};
-
 /**
  * Snapshot export payloads and their identity without opening the writable lifecycle, reading
  * the rows in bounded slices after the head. A deferred `batchHead` is reused while the
@@ -210,12 +176,35 @@ export function readTranscriptExportSnapshotReadOnlySync(
   options: TranscriptExportOptions = {},
   batchHead?: TranscriptExportSnapshot,
 ) {
+  return readTranscriptExportSnapshot(scope, options, batchHead);
+}
+
+/** Internal original-message export: retain metadata, never the decoded event array. */
+export function readTranscriptExportSourceReadOnlySync(
+  scope: SessionTranscriptReadScope,
+  sink: TranscriptExportSink,
+) {
+  const snapshot = readTranscriptExportSnapshot(scope, {}, undefined, sink);
+  if (!snapshot) {
+    return undefined;
+  }
+  const { events: _events, ...metadata } = snapshot;
+  return metadata;
+}
+
+function readTranscriptExportSnapshot(
+  scope: SessionTranscriptReadScope,
+  options: TranscriptExportOptions,
+  batchHead?: TranscriptExportSnapshot,
+  sink?: TranscriptExportSink,
+) {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  const request = { resolved, scope, options };
+  const request = { resolved, scope, options, sink };
   return readTranscriptExportInSlices({
     ...options,
     sessionId: resolved.sessionId,
     batchHead,
+    sink,
     transaction: (read) =>
       withOpenClawAgentDatabaseReadOnly(
         (database) =>
@@ -338,6 +327,10 @@ export function readTranscriptExportSnapshotsFromDatabase(
             continue;
           }
           // Separate decoded objects preserve independent projections for repeated requests.
+          if (read.request.sink) {
+            read.request.sink.write(row.event_json);
+            continue;
+          }
           const event: TranscriptEvent = JSON.parse(row.event_json);
           read.snapshot.events.push(
             runWithSessionTranscriptReadFence(read.request.admission, () =>

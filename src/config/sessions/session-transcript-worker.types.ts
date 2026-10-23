@@ -504,6 +504,11 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
           snapshot: ReturnType<
             typeof import("./session-accessor.sqlite-read.js").readTranscriptExportSnapshotReadOnlySync
           >;
+        }
+      | {
+          preparedSource:
+            | import("./session-entry-prepared-source.js").PreparedSessionEntryDescriptor
+            | undefined;
         };
     "session-entries": SessionEntriesWorkerResult;
   };

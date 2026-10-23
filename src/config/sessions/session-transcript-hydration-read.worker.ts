@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import type { SessionCompactionPreparation } from "./session-history-read.types.js";
@@ -10,7 +12,127 @@ import {
 
 export async function readSessionEntrySnapshotRequest(
   request: Extract<SessionEntryWorkerInput, { mode: "snapshot" }>,
+  channel: WorkerTaskChannel | undefined,
+  control: WorkerTaskControl,
 ) {
+  if (request.includeOriginalMessages) {
+    if (!channel) {
+      throw new Error("Original session exports require their host source owner");
+    }
+    return control.runNativeSection(async () => {
+      // The host owns the private directory before disclosing it, including failed
+      // exchanges. Cleanup waits for native settlement, never just a worker reply.
+      const response = await channel.request({ kind: "session-entry-source" });
+      let filePath: string;
+      try {
+        const destination = asOptionalRecord(response.input)?.filePath;
+        if (typeof destination !== "string") {
+          throw new Error("Original session export destination is unavailable");
+        }
+        filePath = destination;
+      } finally {
+        response.consumed();
+      }
+      control.throwIfCancelled();
+      const { readTranscriptExportSourceReadOnlySync } =
+        await import("./session-accessor.sqlite-read.js");
+      const { readPreparedSessionEntryRecords } =
+        await import("./session-entry-prepared-source.js");
+      const { resolveSessionResetRecallBoundary } =
+        await import("../../../packages/memory-host-sdk/src/host/session-reset-recall.js");
+      const fd = fs.openSync(filePath, "wx", 0o600);
+      let snapshot;
+      let failure: { error: unknown } | undefined;
+      try {
+        let position = 0;
+        const write = (buffer: Buffer, length: number) => {
+          for (let offset = 0; offset < length;) {
+            const written = fs.writeSync(fd, buffer, offset, length - offset, position);
+            offset += written;
+            position += written;
+          }
+        };
+        // Only this operation owns the workspace; publish the initialized frame prefix.
+        let frame = Buffer.alloc(0);
+        snapshot = readTranscriptExportSourceReadOnlySync(request.options, {
+          reset() {
+            fs.ftruncateSync(fd);
+            position = 0;
+          },
+          write(json) {
+            control.throwIfCancelled();
+            const payloadBytes = Buffer.byteLength(json, "utf8");
+            const length = 4 + payloadBytes;
+            if (frame.length < length) {
+              frame = Buffer.allocUnsafe(length);
+            }
+            frame.writeUInt32BE(payloadBytes);
+            frame.write(json, 4, payloadBytes, "utf8");
+            write(frame, length);
+          },
+        });
+      } catch (error) {
+        failure = { error };
+      }
+      try {
+        fs.closeSync(fd);
+      } catch (cleanupError) {
+        throw failure
+          ? new AggregateError(
+              [failure.error, cleanupError],
+              "Session export preparation and file close failed",
+              { cause: failure.error },
+            )
+          : cleanupError;
+      }
+      if (failure) {
+        throw failure.error;
+      }
+      if (!snapshot) {
+        return { preparedSource: undefined };
+      }
+      // Validate the complete source after its read transactions and writer FD close.
+      // Only reset navigation and the largest decoded event stay live in this pass.
+      let eventCount = 0;
+      let reset: { firstKeptEntryId: unknown; index: number } | undefined;
+      for (const event of readPreparedSessionEntryRecords(filePath)) {
+        control.throwIfCancelled();
+        const record = asOptionalRecord(event);
+        if (record?.type === "reset") {
+          reset = { firstKeptEntryId: record.firstKeptEntryId, index: eventCount };
+        }
+        eventCount++;
+      }
+      let keptIndex = -1;
+      const keptId = reset?.firstKeptEntryId;
+      if (reset && typeof keptId === "string" && keptId.trim()) {
+        let index = 0;
+        for (const event of readPreparedSessionEntryRecords(filePath)) {
+          control.throwIfCancelled();
+          if (index >= reset.index) {
+            break;
+          }
+          if (asOptionalRecord(event)?.id === keptId) {
+            keptIndex = index;
+            break;
+          }
+          index++;
+        }
+      }
+      return {
+        preparedSource: {
+          snapshot,
+          resetRecallCutoff: reset
+            ? resolveSessionResetRecallBoundary(
+                reset.firstKeptEntryId,
+                reset.index,
+                () => keptIndex,
+              )
+            : { state: "absent" as const },
+        },
+      };
+    });
+  }
   const { readTranscriptExportSnapshotReadOnlySync } =
     await import("./session-accessor.sqlite-read.js");
   const { projectSessionEntryRecord } =
@@ -18,9 +140,7 @@ export async function readSessionEntrySnapshotRequest(
   const { prepareAssistantTranscriptText } = await import("../../shared/chat-message-content.js");
   return {
     snapshot: readTranscriptExportSnapshotReadOnlySync(request.options, {
-      projectEvent: request.includeOriginalMessages
-        ? undefined
-        : (event) => projectSessionEntryRecord(event, prepareAssistantTranscriptText),
+      projectEvent: (event) => projectSessionEntryRecord(event, prepareAssistantTranscriptText),
     }),
   };
 }

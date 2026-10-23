@@ -1,8 +1,16 @@
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawAgentDatabaseReadOnlyResult } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
+import type {
+  TranscriptEvent,
+  SessionTranscriptReadScope,
+  SessionTranscriptStats,
+} from "./session-accessor.sqlite-contract.js";
+import {
+  getSessionKysely,
+  type ResolvedTranscriptReadScope,
+} from "./session-accessor.sqlite-scope-helpers.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
@@ -13,6 +21,46 @@ import {
 } from "./session-transcript-read-bytes.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 
+export type TranscriptExportOptions = {
+  projection?: "reset-boundary";
+  /** Reduce each decoded event synchronously before retaining the snapshot. */
+  projectEvent?: (event: TranscriptEvent) => TranscriptEvent;
+  /** Worker-owned projection from the preceding export; null starts an incremental reader. */
+  previous?: {
+    events: TranscriptEvent[];
+    generation: string | null;
+    throughSeq: number;
+  } | null;
+};
+
+export type TranscriptExportSnapshot = {
+  events: TranscriptEvent[];
+  stats: SessionTranscriptStats;
+  sessionKey: string | undefined;
+  generation?: string | null;
+  throughSeq?: number;
+  /**
+   * Rows after `afterSeq` through `throughSeq` that a sliced read still has to add, and the
+   * transcript context version this head was read at.
+   */
+  deferred?: { afterSeq?: number; throughSeq: number; version: SessionTranscriptContextVersion };
+};
+
+export type TranscriptExportRequest = {
+  resolved: ResolvedTranscriptReadScope;
+  scope: SessionTranscriptReadScope;
+  options: TranscriptExportOptions;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+  sink?: TranscriptExportSink;
+};
+
+export type TranscriptExportRead = {
+  request: TranscriptExportRequest;
+  snapshot: TranscriptExportSnapshot;
+  throughSeq: number;
+  afterSeq?: number;
+};
+
 type ExportDatabase = Pick<OpenClawAgentDatabase, "db" | "path">;
 
 /** Rows an export head left to a sliced read, and the context version it was read at. */
@@ -22,6 +70,9 @@ type DeferredTranscriptRows = {
 
 /** Payload text from one read transaction; `resumeAfterSeq` is set when the budget ended it. */
 type TranscriptPayloadSlice = { payloads: Array<string | undefined>; resumeAfterSeq?: number };
+
+/** Private export destination; restarting a snapshot must discard its earlier rows. */
+export type TranscriptExportSink = { write: (json: string) => void; reset: () => void };
 
 /**
  * Reads one export snapshot: the head in the first slice's transaction (or the batch head while
@@ -42,8 +93,9 @@ export function readTranscriptExportInSlices<
   batchHead?: Snapshot;
   projection?: "reset-boundary";
   projectEvent?: (event: TranscriptEvent) => TranscriptEvent;
+  sink?: TranscriptExportSink;
 }) {
-  const { sessionId, transaction, batchHead, projectEvent } = params;
+  const { sessionId, transaction, batchHead, projectEvent, sink } = params;
   const hot = (snapshot: Snapshot | "cold") => {
     if (snapshot === "cold") {
       throw new SessionTranscriptColdError(sessionId);
@@ -51,6 +103,9 @@ export function readTranscriptExportInSlices<
     return snapshot;
   };
   const readWhole = () => {
+    // A changed revision cannot append to the partial prepared source. The rare stable
+    // copy holds one read transaction for disk I/O, but decoding stays outside it.
+    sink?.reset();
     const whole = transaction((database) => hot(params.readHead(database)));
     return whole.found ? whole.value : undefined;
   };
@@ -84,12 +139,17 @@ export function readTranscriptExportInSlices<
   const events = [...snapshot.events];
   let slice = first.value.slice;
   while (slice) {
-    // Each captured payload is released as it is parsed.
+    // Release each captured payload after parsing or copying it to the prepared source.
     const { payloads } = slice;
     for (let index = 0; index < payloads.length; index++) {
-      const event: TranscriptEvent = JSON.parse(payloads[index]!);
+      const payload = payloads[index]!;
       payloads[index] = undefined;
-      events.push(projectEvent ? projectEvent(event) : event);
+      if (sink) {
+        sink.write(payload);
+      } else {
+        const event: TranscriptEvent = JSON.parse(payload);
+        events.push(projectEvent ? projectEvent(event) : event);
+      }
     }
     const afterSeq = slice.resumeAfterSeq;
     if (afterSeq === undefined) {

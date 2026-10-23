@@ -13,10 +13,16 @@ import {
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
+import {
+  resolveSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "../../../../src/config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync as replaceEvents } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "../../../../src/config/sessions/session-actor-memory-owner.js";
 import { runWithSessionTranscriptReadFence as withReadFence } from "../../../../src/config/sessions/session-transcript-read-fence.js";
+import { WorkerTaskPool } from "../../../../src/infra/worker-task-pool.js";
 import { registerSecretValueForRedaction } from "../../../../src/logging/secret-redaction-registry.js";
+import { openOpenClawAgentDatabase } from "../../../../src/state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../../src/state/openclaw-agent-db.paths.js";
 import {
   createOpenClawTestState,
@@ -335,15 +341,32 @@ describe("SQLite session snapshots and reset content revision", () => {
       payloadGuard.mockRestore();
     }
     const observed: unknown[] = [];
-    const during = await exportEntry(scope, {
-      parseYieldEveryLines: 1,
-      onTranscriptMessage: (message) => {
-        observed.push(message);
-        if (observed.length === 1) {
-          expect(replaceEvents(scope, [first])).toBe(true);
-        }
-      },
-    });
+    // This is the actual worker exchange, not a projected fixture. Original payloads
+    // must not accumulate in its reply even when an observer needs every message.
+    const transport = vi.spyOn(WorkerTaskPool.prototype, "run");
+    let during: SessionFileEntry;
+    try {
+      during = await exportEntry(scope, {
+        parseYieldEveryLines: 1,
+        onTranscriptMessage: (message) => {
+          observed.push(message);
+          if (observed.length === 1) {
+            expect(replaceEvents(scope, [first])).toBe(true);
+          }
+        },
+      });
+      const replies = await Promise.all(
+        transport.mock.results
+          .filter((result) => result.type === "return")
+          .map((result) => result.value),
+      );
+      expect(replies.length).toBeGreaterThan(0);
+      for (const reply of replies) {
+        expect(Buffer.byteLength(JSON.stringify(reply))).toBeLessThan(4096);
+      }
+    } finally {
+      transport.mockRestore();
+    }
 
     expect(during).toEqual(before);
     expect(observed).toEqual([first.message, kept.message]);
@@ -356,6 +379,31 @@ describe("SQLite session snapshots and reset content revision", () => {
     const after = await exportEntry(scope);
     expect(after.content).toBe("User: first");
     expect(cutoffDescriptor(after)?.value).toEqual({ state: "absent" });
+  });
+
+  it("rejects a late corrupt original payload before observing any messages", async () => {
+    const scope = sessionScope("corrupt-original");
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    expect(
+      replaceEvents(scope, [
+        messageEvent("first", "user", "visible", null),
+        messageEvent("late", "assistant", "compressed-corruption-probe".repeat(4096), "first"),
+      ]),
+    ).toBe(true);
+    const { db } = openOpenClawAgentDatabase(
+      toDatabaseOptions(resolveSqliteTranscriptReadScope(scope)),
+    );
+    const corrupted = db
+      .prepare(
+        "UPDATE transcript_events SET event_utf8_bytes = event_utf8_bytes + 1 WHERE session_id = ? AND event_zstd IS NOT NULL",
+      )
+      .run(scope.sessionId);
+    expect(Number(corrupted.changes)).toBe(1);
+    const observer = vi.fn();
+    await expect(exportEntry(scope, { onTranscriptMessage: observer })).rejects.toThrow(
+      /Compressed transcript payload length does not match/u,
+    );
+    expect(observer).not.toHaveBeenCalled();
   });
 
   it("carries the admitted input fence through the reset metadata worker", async () => {

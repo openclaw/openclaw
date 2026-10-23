@@ -451,12 +451,15 @@ const reviewedOperations = new Map([
       {
         tier: "W",
         operations: [
+          // Retain the original operation paths for historical ratchet comparisons.
           "readTranscriptExportSnapshotReadOnlySync",
           "readTranscriptExportSnapshotReadOnlySync.transaction",
+          "readTranscriptExportSnapshot",
+          "readTranscriptExportSnapshot.transaction",
           "readTranscriptExportSnapshotsFromDatabase",
         ],
         evidence:
-          "Transcript hydration, memory-entry export, and reset-recall dispatch run in transcript workers. Main-thread buildSessionEntry supplies a worker snapshot for SQLite; its in-process branch has no SQLite identity. Actor projection also receives a supplied snapshot. Other readers retain native SDK callers.",
+          "The private readTranscriptExportSnapshot kernel serves only readTranscriptExportSnapshotReadOnlySync and readTranscriptExportSourceReadOnlySync. The original-source adapter is called by session-transcript-hydration-read.worker.ts; snapshot hydration, memory-entry export, and reset-recall dispatch also run in transcript workers. Main-thread buildSessionEntry supplies a worker snapshot for SQLite; its in-process branch has no SQLite identity. Actor projection also receives a supplied snapshot. Other readers retain native SDK callers.",
       },
     ],
   ],

@@ -646,7 +646,7 @@ serveOwnedWorkerTasks(
           if (request.mode === "snapshot") {
             const { readSessionEntrySnapshotRequest } =
               await import("./session-transcript-hydration-read.worker.js");
-            return readSessionEntrySnapshotRequest(request);
+            return readSessionEntrySnapshotRequest(request, channel, control);
           }
           const { prepareSessionMemoryEntry } = await import("./session-memory-entry.worker.js");
           return prepareSessionMemoryEntry(request);

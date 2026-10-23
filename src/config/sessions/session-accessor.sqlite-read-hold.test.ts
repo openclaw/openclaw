@@ -6,6 +6,7 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { readActiveTranscriptEntryAnchor, replaceSessionEntry } from "./session-accessor.js";
 import {
   readTranscriptExportSnapshotReadOnlySync,
+  readTranscriptExportSourceReadOnlySync,
   readTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
 import {
@@ -228,22 +229,41 @@ describe("SQLite transcript readers release the read snapshot before parsing", (
     ]);
   });
 
-  it("rereads in one transaction when the transcript changes between slices", async () => {
-    const { events, scope } = await seedSession();
-    sliceBudget.bytes = 1;
-    const db = openStore(scope);
-    // An in-place rewrite of the already parsed first row, with the update time writers bump.
-    transactionLog.afterFirst = () => {
-      db.prepare(
-        `UPDATE transcript_events SET event_json = json_set(event_json, '$.cwd', 'rewritten')
+  it.each(["array", "source"] as const)(
+    "rereads %s in one transaction when the transcript changes between slices",
+    async (mode) => {
+      const { events, scope } = await seedSession();
+      sliceBudget.bytes = 1;
+      const db = openStore(scope);
+      // An in-place rewrite of the already parsed first row, with the update time writers bump.
+      transactionLog.afterFirst = () => {
+        db.prepare(
+          `UPDATE transcript_events SET event_json = json_set(event_json, '$.cwd', 'rewritten')
          WHERE session_id = ? AND seq = (SELECT min(seq) FROM transcript_events WHERE session_id = ?)`,
-      ).run(scope.sessionId, scope.sessionId);
-      touchTranscript(scope)();
-    };
-    expect(readEvents(scope)).toEqual([{ ...events[0], cwd: "rewritten" }, ...events.slice(1)]);
-    // First slice, the transaction that saw the new version, then one whole reread.
-    expect(transactionLog.entries).toEqual(["transaction", "transaction", "transaction"]);
-  });
+        ).run(scope.sessionId, scope.sessionId);
+        touchTranscript(scope)();
+      };
+      let captured;
+      if (mode === "source") {
+        const staged: string[] = [];
+        const snapshot = readTranscriptExportSourceReadOnlySync(scope, {
+          write: (json) => {
+            staged.push(json);
+          },
+          reset: () => {
+            staged.length = 0;
+          },
+        });
+        expect(snapshot).not.toHaveProperty("events");
+        captured = staged.map((json) => JSON.parse(json));
+      } else {
+        captured = readEvents(scope);
+      }
+      expect(captured).toEqual([{ ...events[0], cwd: "rewritten" }, ...events.slice(1)]);
+      // First slice, the transaction that saw the new version, then one whole reread.
+      expect(transactionLog.entries).toEqual(["transaction", "transaction", "transaction"]);
+    },
+  );
 
   // A string-length budget undercounts multibyte text (UTF-8 stores CJK at 3 bytes per
   // character), and a stored-size budget undercounts zstd rows, which decode to far more text.

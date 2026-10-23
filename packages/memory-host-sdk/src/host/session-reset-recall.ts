@@ -13,15 +13,26 @@ export function resolveSessionResetRecallCutoff(
   if (resetIndex < 0) {
     return { state: "absent" };
   }
-  const reset = events[resetIndex] as { firstKeptEntryId?: unknown };
-  if (reset.firstKeptEntryId === undefined) {
+  const reset = asOptionalRecord(events[resetIndex])!;
+  return resolveSessionResetRecallBoundary(reset.firstKeptEntryId, resetIndex, (entryId) =>
+    events.findIndex(
+      (event, index) => index < resetIndex && asOptionalRecord(event)?.id === entryId,
+    ),
+  );
+}
+
+/** Shared validation for array snapshots and bounded immutable-source lookup. */
+export function resolveSessionResetRecallBoundary(
+  firstKeptEntryId: unknown,
+  resetIndex: number,
+  findKeptIndex: (entryId: string) => number,
+): SessionResetRecallCutoff {
+  if (firstKeptEntryId === undefined) {
     return { state: "valid", cutoffLine: resetIndex + 1 };
   }
-  if (typeof reset.firstKeptEntryId !== "string" || !reset.firstKeptEntryId.trim()) {
+  if (typeof firstKeptEntryId !== "string" || !firstKeptEntryId.trim()) {
     return { state: "invalid" };
   }
-  const keptIndex = events.findIndex(
-    (event, index) => index < resetIndex && asOptionalRecord(event)?.id === reset.firstKeptEntryId,
-  );
+  const keptIndex = findKeptIndex(firstKeptEntryId);
   return keptIndex < 0 ? { state: "invalid" } : { state: "valid", cutoffLine: keptIndex + 1 };
 }

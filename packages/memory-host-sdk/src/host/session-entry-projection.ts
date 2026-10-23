@@ -174,3 +174,33 @@ export function parseSessionTimestampMs(
   }
   return 0;
 }
+
+export async function yieldSessionEntryParseIfNeeded(
+  lineIndex: number,
+  everyLines: number,
+): Promise<void> {
+  if (lineIndex > 0 && lineIndex % everyLines === 0) {
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+}
+
+/** One accumulator consumes all adapters without retaining original decoded records. */
+export function* sessionSourceRecords(
+  records: Iterable<unknown> | undefined,
+  raw: string,
+): Generator<{ kind: "record"; record: unknown } | { kind: "line"; line: string }> {
+  if (records) {
+    for (const record of records) {
+      yield { kind: "record", record };
+    }
+    return;
+  }
+  for (let lineStart = 0; lineStart <= raw.length;) {
+    const newlineIndex = raw.indexOf("\n", lineStart);
+    const lineEnd = newlineIndex === -1 ? raw.length : newlineIndex;
+    yield { kind: "line", line: raw.slice(lineStart, lineEnd) };
+    lineStart = newlineIndex === -1 ? raw.length + 1 : newlineIndex + 1;
+  }
+}
