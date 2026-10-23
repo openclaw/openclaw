@@ -760,7 +760,6 @@ export async function startGatewayPostAttachRuntime(params: {
               await loadMainSessionRestartRecoveryModule();
             if (params.isClosing?.() !== true) {
               mainSessionRecoverySidecar = scheduleRestartAbortedMainSessionRecovery({
-                delayMs: 0,
                 getConfig: params.getConfig,
                 shouldContinue: () => params.isClosing?.() !== true,
                 startupCheckedStorePaths: params.mainSessionRecoveryStartupCheckedStorePaths,

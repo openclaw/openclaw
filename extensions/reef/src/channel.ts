@@ -62,48 +62,6 @@ async function listTrustedPeers(config: ReefAccount["config"]): Promise<string[]
     : [];
 }
 
-function describeReefAccount(account: ReefAccount, friendCount: number) {
-  return {
-    accountId: "default",
-    enabled: account.enabled,
-    configured: account.configured,
-    extra: {
-      handle: account.config.handle,
-      relayUrl: account.config.relayUrl,
-      friendCount,
-    },
-  };
-}
-
-function resolveReefDmPolicy(allowFrom: string[]) {
-  return {
-    policy: "pairing" as const,
-    allowFrom,
-    policyPath: "Reef local peer trust",
-    allowFromPath: "Reef local peer trust",
-    approveHint: "openclaw pairing approve reef <code>",
-    normalizeEntry: (entry: string) => normalizeReefTarget(entry) ?? entry,
-  };
-}
-
-async function listTrustedPeerDirectoryEntries(params: {
-  config: ReefAccount["config"];
-  query: string | null | undefined;
-  limit: number | null | undefined;
-}) {
-  const query = normalizeReefTarget(params.query ?? "") ?? params.query?.trim().toLowerCase();
-  const peers = (await listTrustedPeers(params.config)).filter(
-    (peer) => !query || peer === query || peer.includes(query),
-  );
-  const limit = params.limit == null ? peers.length : Math.max(0, params.limit);
-  return peers.slice(0, limit).map((peer) => ({
-    kind: "user" as const,
-    id: peer,
-    name: `@${peer}'s agent`,
-    handle: `@${peer}`,
-  }));
-}
-
 function matchesReefToolTarget(target: string, toolContext?: ChannelThreadingToolContext): boolean {
   const currentTarget = toolContext?.currentMessagingTarget ?? toolContext?.currentChannelId;
   const normalizedCurrent = normalizeReefTarget(currentTarget ?? "");
@@ -143,8 +101,19 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
     resolveAllowFromAsync: ({ cfg }) => listTrustedPeers(resolveAccount(cfg).config),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom.map(String).map((entry) => normalizeReefTarget(entry) ?? entry),
-    describeAccountAsync: async (account) =>
-      describeReefAccount(account, (await listTrustedPeers(account.config)).length),
+    describeAccountAsync: async (account) => {
+      const friendCount = (await listTrustedPeers(account.config)).length;
+      return {
+        accountId: "default",
+        enabled: account.enabled,
+        configured: account.configured,
+        extra: {
+          handle: account.config.handle,
+          relayUrl: account.config.relayUrl,
+          friendCount,
+        },
+      };
+    },
   },
   messaging: {
     targetPrefixes: ["reef"],
@@ -191,12 +160,20 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
       matchesReefToolTarget(to, toolContext) ? toolContext?.currentThreadTs : undefined,
   },
   directory: createChannelDirectoryAdapter({
-    listPeers: async ({ cfg, query, limit }) =>
-      listTrustedPeerDirectoryEntries({
-        config: resolveReefConfig(cfg as ReefCoreConfig),
-        query,
-        limit,
-      }),
+    listPeers: async ({ cfg, query: rawQuery, limit: requestedLimit }) => {
+      const config = resolveReefConfig(cfg as ReefCoreConfig);
+      const query = normalizeReefTarget(rawQuery ?? "") ?? rawQuery?.trim().toLowerCase();
+      const peers = (await listTrustedPeers(config)).filter(
+        (peer) => !query || peer === query || peer.includes(query),
+      );
+      const limit = requestedLimit == null ? peers.length : Math.max(0, requestedLimit);
+      return peers.slice(0, limit).map((peer) => ({
+        kind: "user" as const,
+        id: peer,
+        name: `@${peer}'s agent`,
+        handle: `@${peer}`,
+      }));
+    },
     listGroups: async () => [],
   }),
   message: reefMessageAdapter,
@@ -215,8 +192,17 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
     },
   },
   security: {
-    resolveDmPolicyAsync: async ({ account }) =>
-      resolveReefDmPolicy(await listTrustedPeers(account.config)),
+    resolveDmPolicyAsync: async ({ account }) => {
+      const allowFrom = await listTrustedPeers(account.config);
+      return {
+        policy: "pairing" as const,
+        allowFrom,
+        policyPath: "Reef local peer trust",
+        allowFromPath: "Reef local peer trust",
+        approveHint: "openclaw pairing approve reef <code>",
+        normalizeEntry: (entry: string) => normalizeReefTarget(entry) ?? entry,
+      };
+    },
   },
   status: {
     defaultRuntime: { accountId: "default", enabled: true, configured: false },

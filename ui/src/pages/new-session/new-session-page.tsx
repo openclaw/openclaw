@@ -188,6 +188,7 @@ function DraftBlock(props: {
             props.page().data?.group && props.page().context?.sessions.groupsStatus() === "loading",
           )
         }
+        retryRead={props.page().gateway.catalogRetryRead}
         onRetry={() => props.page().gateway.handleCatalogRetry()}
         agentSelect={
           <Show when={Boolean(props.page().submission.completedSubmission)}>
@@ -538,9 +539,14 @@ defineSolidBridge<
   propertyChanged: (host) => {
     const owner = pageOwners.get(host);
     owner?.retireSubmissionPresentation();
+    owner?.browser.close();
     owner?.changed();
   },
-  disconnected: (host) => pageOwners.get(host)?.retireSubmissionPresentation(),
+  disconnected: (host) => {
+    const owner = pageOwners.get(host);
+    owner?.retireSubmissionPresentation();
+    owner?.browser.close();
+  },
   methods: {
     focusComposer: (host) => pageOwners.get(host)?.focusComposer(),
   },

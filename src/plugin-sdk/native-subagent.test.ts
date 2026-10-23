@@ -65,6 +65,12 @@ it("exports the optional native contract through the public plugin API", () => {
     Native | undefined
   >();
   expectTypeOf<Command["runtimeCapabilities"]>().toEqualTypeOf<
-    readonly ("subagents" | "models")[] | undefined
+    readonly ("subagents" | "models" | "scheduledTurns")[] | undefined
+  >();
+  type ScheduledTurns = NonNullable<
+    NonNullable<CommandContext["runtimeContext"]>["scheduledTurns"]
+  >;
+  expectTypeOf<Parameters<ScheduledTurns["schedule"]>[0]["schedule"]>().toEqualTypeOf<
+    { kind: "at"; at: string } | { kind: "every"; everyMs: number }
   >();
 });

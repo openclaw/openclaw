@@ -48,6 +48,9 @@ async function associatedPullRequests(api, prefix, sha) {
 }
 
 async function selectRunPullRequests(api, prefix, run, repository, defaultBranch) {
+  if (run.conclusion !== "skipped" && !positiveInteger(run.run_attempt)) {
+    throw new Error("CI event has no valid workflow run attempt.");
+  }
   let candidates = run.pull_requests;
   if (!Array.isArray(candidates)) {
     throw new Error("CI workflow response has no pull request association list.");
@@ -66,7 +69,13 @@ async function selectRunPullRequests(api, prefix, run, repository, defaultBranch
         pullRequest.head.repo?.id === run.head_repository.id &&
         pullRequest.head.ref === run.head_branch
       ) {
-        selected.set(pullRequest.number, { pr: pullRequest.number, head: pullRequest.head.sha });
+        selected.set(pullRequest.number, {
+          pr: pullRequest.number,
+          head: pullRequest.head.sha,
+          ...(run.conclusion === "skipped"
+            ? {}
+            : { ciRunId: run.id, ciRunAttempt: run.run_attempt }),
+        });
       }
     }
   }
@@ -314,10 +323,16 @@ async function resolvePullRequests(api, event, eventName, repository) {
   if (eventName === "schedule") {
     return reconcileCompletedRuns(api, prefix, repository, defaultBranch);
   }
-  if (eventName !== "workflow_run" || event.action !== "completed") {
+  const replay = eventName === "workflow_dispatch";
+  if (!replay && (eventName !== "workflow_run" || event.action !== "completed")) {
     throw new Error("Security review requires an automatic pull request or CI event.");
   }
-  const runId = event.workflow_run?.id;
+  const replayId = event.inputs?.completed_ci_run_id;
+  const runId = replay
+    ? typeof replayId === "string" && /^[1-9][0-9]*$/u.test(replayId)
+      ? Number(replayId)
+      : null
+    : event.workflow_run?.id;
   if (!positiveInteger(runId)) {
     throw new Error("CI event has no valid workflow run identifier.");
   }
@@ -331,7 +346,7 @@ async function resolvePullRequests(api, event, eventName, repository) {
     run.path !== workflow.path ||
     run.repository?.full_name !== repository ||
     !shaPattern.test(run.head_sha ?? "") ||
-    run.head_sha !== event.workflow_run?.head_sha
+    (!replay && run.head_sha !== event.workflow_run?.head_sha)
   ) {
     throw new Error("CI completion does not match the repository's CI workflow.");
   }

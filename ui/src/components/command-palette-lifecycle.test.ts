@@ -65,6 +65,24 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.textContent).not.toContain("Old chat");
   });
 
+  it.each(["open", "toggle"])(
+    "honors %s before a retained palette remount settles",
+    async (method) => {
+      const { palette, provider, query } = await mountPalette();
+      palette.remove();
+      await palette.updateComplete;
+      provider.append(palette);
+      if (method === "open") {
+        palette.openPalette();
+      } else {
+        palette.togglePalette();
+      }
+      await palette.updateComplete;
+      expect(palette.isOpen).toBe(true);
+      expect(query(".cmd-palette__input")).not.toBeNull();
+    },
+  );
+
   it("keeps local filtering usable if the connection drops during typing", async () => {
     const list = vi.fn(async () => null);
     const { palette, setConnected } = await mountSearch({}, list);

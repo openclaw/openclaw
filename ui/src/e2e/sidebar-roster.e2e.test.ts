@@ -141,7 +141,12 @@ suite.define(() => {
             items.map((item) => item.getAttribute("data-agent-id")),
           ),
         ).toEqual(["main", "forge", "scout"]);
-        expect(await sidebar.locator(".sidebar-recent-session").count()).toBe(0);
+        // Agent-only roster: the saved personal pin is the only session row, in Pinned.
+        expect(
+          await sidebar
+            .locator(".sidebar-recent-session")
+            .evaluateAll((items) => items.map((item) => item.getAttribute("data-session-key"))),
+        ).toEqual(["agent:forge:project"]);
         expect(await sidebar.locator("[data-agent-collapse]").count()).toBe(0);
         expect(
           await sidebar.locator(".sidebar-agent-roster__signals .session-unread-dot").count(),
@@ -167,9 +172,12 @@ suite.define(() => {
         expect(ringInset).toBeGreaterThanOrEqual(4);
         expect(
           await sidebar
-            .locator('.sidebar-rail [data-sidebar-entry="session:agent:forge:project"]')
+            .locator('[data-session-section="pinned"] [data-session-key="agent:forge:project"]')
             .count(),
         ).toBe(1);
+        expect(
+          await sidebar.locator('.sidebar-rail [data-sidebar-entry^="session:"]').count(),
+        ).toBe(0);
         await captureSidebarUiProof(suite, page, "sidebar-agent-only-roster.png");
 
         const forge = sidebar.locator('[data-agent-group="forge"]');

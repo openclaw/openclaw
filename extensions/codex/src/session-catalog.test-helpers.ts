@@ -66,7 +66,7 @@ import {
   runCatalogListInline,
 } from "./session-catalog-list-operation.js";
 import { readCodexSessionTranscript as readCodexSessionTranscriptRuntime } from "./session-catalog-listing.js";
-export { catalogError, CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
+export { CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
 export {
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_TERMINAL_START_COMMAND,
@@ -659,7 +659,6 @@ export {
   path,
   resolveSessionAgentIdsStrict,
   resolveCodexAppServerUserHomeDir,
-  resolveStorePath,
   sessionBindingIdentity,
   createCodexCatalogHomeResolver,
   createCodexTestBindingStore,

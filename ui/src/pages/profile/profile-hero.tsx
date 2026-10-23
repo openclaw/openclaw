@@ -5,7 +5,7 @@ import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { SettingsGroup } from "../../components/solid/settings-ui.tsx";
 import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
-import "../../components/viewer-facepile.ts";
+import "../../components/solid/viewer-facepile.tsx";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";

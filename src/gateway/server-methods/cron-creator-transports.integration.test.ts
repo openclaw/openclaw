@@ -421,7 +421,7 @@ it.each([
     let transportTools: CreatorTransportTools | undefined;
     try {
       if (transport === "cli") {
-        await ensureMcpLoopbackServer(0);
+        await ensureMcpLoopbackServer();
       }
       await inRun(
         runId,

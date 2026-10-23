@@ -105,13 +105,9 @@ export function createAgentSkillsReset(options: {
     agents: ApplicationContext["agents"],
   ) => boolean;
   onUpdated: (agentId: string) => void;
+  retired: () => Promise<void>;
 }) {
-  let lifetime = Promise.withResolvers<void>();
   return {
-    retire() {
-      lifetime.resolve();
-      lifetime = Promise.withResolvers<void>();
-    },
     clear(agentId: string) {
       if (!options.canReset()) {
         return undefined;
@@ -131,7 +127,7 @@ export function createAgentSkillsReset(options: {
       if (!canDispatch()) {
         return undefined;
       }
-      const retirement = lifetime.promise;
+      const retirement = options.retired();
       const completion = clearAgentSkillFilter(runtimeConfig, agentId, canDispatch).then(
         (updated) => {
           if (!canDispatch()) {

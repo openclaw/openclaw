@@ -150,6 +150,11 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
     before converting the roster. Current keyed `agents.entries` configurations
     without a legacy marker keep their dynamic system-agent selection.
 
+    When adopting inference accounts for legacy jobs, Doctor shares one captured
+    configuration across the migration. Agent workspaces can reuse provider
+    preparation, while each job still resolves its own model, account preferences,
+    and authorization. Existing bindings and model selections stay unchanged.
+
     Missing interval anchors are repaired by Doctor. Runtime scheduling can
     calculate the next run without writing an anchor into an old definition.
     Schedule maintenance and run outcomes preserve stored ownership and authored
@@ -211,7 +216,7 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
 
     Stale OAuth shadow cleanup preserves profiles with sidecar references in either the legacy file or the canonical store. If a legacy auth file cannot be read or parsed, Doctor skips that agent's shadow cleanup and warns with the file path; inspect or restore it before retrying. A missing legacy file does not prevent cleanup of ordinary SQLite-only profiles.
 
-    Legacy auth-profile JSON and `logs/config-health.json` must contain valid UTF-8. Doctor refuses malformed bytes before importing them, preserves the source, and reports the affected path. Keep the original bytes and restore valid UTF-8 JSON from a verified backup before rerunning `openclaw doctor --fix`; do not use a lossy conversion. Valid Unicode, including a literal replacement character, remains supported. Malformed auth archives cannot authorize recovered profile mappings.
+    Legacy auth-profile JSON, retired `identity/*device-auth.json` files, and `logs/config-health.json` must contain valid UTF-8. Doctor refuses malformed bytes before importing them, preserves the source, and reports the affected path. Keep the original bytes and restore valid UTF-8 JSON from a verified backup before rerunning `openclaw doctor --fix`; do not use a lossy conversion. Valid Unicode, including a literal replacement character, remains supported. Malformed auth archives cannot authorize recovered profile mappings.
 
   </Accordion>
   <Accordion title="6. Hooks model validation">

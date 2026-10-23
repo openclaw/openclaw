@@ -5,6 +5,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../agents/agent-scope.js";
 import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
 import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
 import {
   findAuthorizedSwarmCollectorRequest,
@@ -287,8 +288,12 @@ export async function prepareAgentRequestPreflight(params: {
     idempotencyKey: runId,
     execApprovalFollowupApprovalId,
   });
+  // The public legacy wire tag retains noninteractive bootstrap behavior.
+  const bootstrapContextRunKind: BootstrapContextRunKind | undefined =
+    request.bootstrapContextRunKind === "heartbeat" ? "cron" : request.bootstrapContextRunKind;
   return {
     request,
+    bootstrapContextRunKind,
     cfg,
     runId,
     allowModelOverride,

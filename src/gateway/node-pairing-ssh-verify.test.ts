@@ -1,6 +1,6 @@
-// SSH-verified node pairing policy and verifier tests (probe injected).
+// SSH-verified node pairing policy and verifier tests.
 import crypto from "node:crypto";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   deriveDeviceIdFromPublicKey,
@@ -8,10 +8,13 @@ import {
 } from "../infra/device-identity.js";
 import type { FreshNodePairingEligibilityParams } from "./node-pairing-auto-approve.js";
 import { planNodePairingSshVerify, startNodePairingSshVerify } from "./node-pairing-ssh-verify.js";
+import * as sshProbe from "./node-pairing-ssh-verify.runtime.js";
 import type {
   NodeIdentityProbeParams,
   NodeIdentityProbeResult,
 } from "./node-pairing-ssh-verify.runtime.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 function makeIdentity(): { deviceId: string; publicKey: string } {
   const { publicKey } = crypto.generateKeyPairSync("ed25519");
@@ -51,12 +54,12 @@ function probeReturning(result: NodeIdentityProbeResult) {
 
 function startProbe(
   identity: ReturnType<typeof makeIdentity>,
-  probe: NonNullable<Parameters<typeof startNodePairingSshVerify>[0]["probe"]>,
+  probe: typeof sshProbe.runNodeIdentityProbe,
   plan = makePlan(),
 ) {
+  vi.spyOn(sshProbe, "runNodeIdentityProbe").mockImplementation(probe);
   return startNodePairingSshVerify({
     plan,
-    probe,
     expectedDeviceId: identity.deviceId,
     expectedPublicKey: identity.publicKey,
   });

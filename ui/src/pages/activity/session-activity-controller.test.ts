@@ -1,11 +1,16 @@
 // @vitest-environment node
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   sessionActivityListing,
   useSessionActivityControllerFixture,
 } from "./session-activity-controller.test-support.ts";
-import { createSessionActivity } from "./session-activity-owner.ts";
+import { ACTIVITY_SUMMARY_ENSURE_METHOD, createSessionActivity } from "./session-activity-owner.ts";
+
+type BackfillResponse =
+  | SessionsListResult
+  | { sessions: Array<Pick<GatewaySessionRow, "key" | "agentId" | "activitySummary">> };
 
 const result = sessionActivityListing([]);
 const { active, setup } = useSessionActivityControllerFixture();
@@ -14,7 +19,7 @@ let controller: ReturnType<typeof createSessionActivity>;
 const dayAt = (month: number, day: number, hour = 0, minute = 0, year = 2026) =>
   new Date(year, month, day, hour, minute);
 let request: ReturnType<typeof setup>["request"];
-let held: ReturnType<typeof createDeferred<typeof result>>;
+let held: ReturnType<typeof createDeferred<BackfillResponse>>;
 const pulse = (index: number) =>
   request.mock.calls[index]![1] as { activityPulseBoundaries: number[]; activeMinutes?: number };
 const advance = async (ms: number, calls: number) => {
@@ -25,18 +30,24 @@ beforeEach(() => {
   vi.useFakeTimers();
   ({ client, controller, request } = setup());
   request.mockResolvedValue(result);
-  held = createDeferred<typeof result>();
+  held = createDeferred<BackfillResponse>();
 });
-afterEach(() => {
+afterEach(async () => {
   held.resolve(result);
   controller.dispose();
+  await held.promise;
   vi.unstubAllGlobals();
 });
 
-it("reconstructs conditional Activity rows before reconciling fresh metadata", async () => {
-  const filters = { personId: null, time: "all" as const, query: "" };
-  request.mockResolvedValueOnce(sessionActivityListing([active], { rowsRevision: "first" }));
+it("retains same-query rows across conditional refreshes and clears changed people", async () => {
+  const filters = { personId: "former", time: "all" as const, query: "" };
+  const initial = sessionActivityListing([active], {
+    rowsRevision: "first",
+    involvingProfileId: "current",
+  });
+  request.mockResolvedValueOnce(initial);
   await controller.load(client, filters);
+  expect(controller.result).toEqual(initial);
   request.mockResolvedValueOnce(
     sessionActivityListing([], {
       rowsRevision: "first",
@@ -45,10 +56,18 @@ it("reconstructs conditional Activity rows before reconciling fresh metadata", a
       totalCount: 20,
     }),
   );
-  await controller.load(client, filters, "refresh");
+  const refreshing = controller.load(client, filters, "refresh");
+  expect(controller.result).toEqual(initial);
+  await refreshing;
   expect(request).toHaveBeenLastCalledWith(
     "sessions.list",
-    expect.objectContaining({ ifRowsRevision: "delta:first" }),
+    expect.objectContaining({
+      ifRowsRevision: "delta:first",
+      involvingProfileId: "former",
+      excludeDock: true,
+      includePeople: true,
+      sortBy: "activity",
+    }),
     expect.objectContaining({ signal: expect.any(AbortSignal) }),
   );
   expect(controller.result).toMatchObject({ sessions: [active], totalCount: 20 });
@@ -61,6 +80,8 @@ it("reconstructs conditional Activity rows before reconciling fresh metadata", a
   );
   await controller.load(client, filters, "refresh");
   expect(controller.result?.sessions).toEqual([renamed]);
+  void controller.load(client, { ...filters, personId: "other" });
+  expect(controller.result).toBeUndefined();
 });
 
 it("requests calendar-aligned pulse windows, including clock-change dates", async () => {
@@ -184,28 +205,6 @@ it.each([
   expect(controller.result).toEqual(replacement);
 });
 
-it("keeps the same-query snapshot during invalidation and clears it on person changes", async () => {
-  const resolved = { ...result, involvingProfileId: "current" };
-  request.mockResolvedValue(resolved);
-  const filters = { personId: "former", time: "all" as const, query: "" };
-  await controller.load(client, filters);
-  expect(controller.result).toEqual(resolved);
-  void controller.load(client, filters, "refresh");
-  expect(controller.result).toEqual(resolved);
-  expect(request).toHaveBeenLastCalledWith(
-    "sessions.list",
-    expect.objectContaining({
-      involvingProfileId: "former",
-      excludeDock: true,
-      includePeople: true,
-      sortBy: "activity",
-    }),
-    expect.anything(),
-  );
-  void controller.load(client, { ...filters, personId: "other" });
-  expect(controller.result).toBeUndefined();
-});
-
 it("holds a trailing Activity refresh through page hiding and retires it on disconnect", async () => {
   const documentEvents = Object.assign(new EventTarget(), { visibilityState: "visible" });
   const pageEvents = new EventTarget();
@@ -231,4 +230,212 @@ it("holds a trailing Activity refresh through page hiding and retires it on disc
   controller.invalidate();
   controller.dispose();
   await advance(5_000, 3);
+});
+
+describe("Activity recap generation", () => {
+  const filters = { personId: null, time: "all" as const, query: "" };
+  const recap = (text: string, state: "stale" | "unavailable" = "stale") => ({
+    state,
+    canEnsure: true,
+    text,
+    updatedAt: 1,
+  });
+  const row = (
+    key = "agent:main:notes",
+    overrides: Partial<GatewaySessionRow> = {},
+  ): GatewaySessionRow => ({
+    key,
+    agentId: "main",
+    sessionId: key,
+    kind: "direct",
+    updatedAt: 1,
+    activitySummary: { state: "stale", canEnsure: true },
+    ...overrides,
+  });
+  const listing = (sessions: GatewaySessionRow[]) =>
+    sessionActivityListing(sessions, { totalCount: sessions.length });
+  const updating = (...sessions: GatewaySessionRow[]) => ({
+    sessions: sessions.map(({ key, agentId, activitySummary }) => ({
+      key,
+      agentId,
+      activitySummary: { ...activitySummary, state: "updating" as const, canEnsure: true },
+    })),
+  });
+  const waitForSummary = (index: number, value: string) =>
+    vi.waitFor(() =>
+      expect(controller.result?.sessions[index]?.activitySummary?.state).toBe(value),
+    );
+  const startBackfill = async (sessions: GatewaySessionRow[], ...responses: BackfillResponse[]) => {
+    request.mockResolvedValueOnce(listing(sessions)).mockReturnValueOnce(held.promise);
+    for (const response of responses) {
+      request.mockResolvedValueOnce(response);
+    }
+    void controller.load(client, filters, "query", true);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+  };
+  const expectEnsure = (session: GatewaySessionRow) =>
+    expect(request).toHaveBeenLastCalledWith(
+      ACTIVITY_SUMMARY_ENSURE_METHOD,
+      { sessions: [{ key: session.key, agentId: session.agentId }] },
+      expect.anything(),
+    );
+  beforeEach(() => {
+    vi.useRealTimers();
+    request.mockRestore();
+    request = vi.spyOn(client, "request");
+  });
+
+  it("rechecks latest row permissions before queued batches and does not consume skipped attempts", async () => {
+    const sessions = Array.from({ length: 22 }, (_, index) => row(`agent:main:notes-${index}`));
+    let currentRows = sessions;
+    const batches: string[][] = [];
+    request.mockImplementation(async (method, params) => {
+      if (method === "sessions.list") {
+        return listing(currentRows);
+      }
+      const batch = (params as { sessions: Array<{ key: string }> }).sessions;
+      batches.push(batch.map(({ key }) => key));
+      if (batches.length === 1) {
+        return held.promise;
+      }
+      return updating(...batch.map(({ key }) => row(key)));
+    });
+    void controller.load(client, filters, "query", true);
+    await vi.waitFor(() => expect(batches).toHaveLength(1));
+    expect(batches[0]).toHaveLength(20);
+    const staleRow = sessions[20]!;
+    currentRows = sessions.map((session, index) => ({
+      ...session,
+      activitySummary: {
+        state: index < 20 ? ("updating" as const) : ("stale" as const),
+        canEnsure: index !== 20,
+      },
+    }));
+    void controller.load(client, filters, "refresh");
+    await vi.waitFor(() => expect(controller.result?.sessions[20]).toEqual(currentRows[20]));
+    controller.retrySummary(staleRow);
+    controller.retrySummary(controller.result!.sessions[20]!);
+    held.resolve({ sessions: [] });
+    await vi.waitFor(() => expect(batches).toHaveLength(2));
+    expect(batches[1]).toEqual([sessions[21]!.key]);
+    currentRows = controller.result!.sessions.map((session) =>
+      Object.assign({}, session, {
+        activitySummary: Object.assign({}, session.activitySummary, { canEnsure: true }),
+      }),
+    );
+    void controller.load(client, filters, "refresh");
+    await vi.waitFor(() => expect(batches).toHaveLength(3));
+    expect(batches[2]).toEqual([staleRow.key]);
+    expect(request).toHaveBeenCalledTimes(6);
+  });
+
+  it("does not let a delayed backfill response overwrite a newer session-list recap", async () => {
+    const oldRow = row();
+    const newRow = row(oldRow.key, {
+      updatedAt: 2,
+      activitySummary: { state: "current", text: "The repair is now merged.", updatedAt: 2 },
+    });
+    await startBackfill([oldRow], listing([newRow]));
+    void controller.load(client, filters, "refresh");
+    await vi.waitFor(() => expect(controller.result?.sessions[0]).toEqual(newRow));
+    held.resolve(updating(oldRow));
+    await held.promise;
+    await Promise.resolve();
+    expect(controller.result?.sessions[0]).toEqual(newRow);
+  });
+
+  it("backfills newly visible sessions after the current batch settles", async () => {
+    const first = row();
+    const added = row("agent:main:newly-visible");
+    await startBackfill([first], listing([first, added]), updating(added));
+    void controller.load(client, filters, "refresh");
+    await vi.waitFor(() => expect(controller.result?.sessions).toEqual([first, added]));
+    held.resolve(updating(first));
+    await waitForSummary(1, "updating");
+    expectEnsure(added);
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
+  it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
+    "resumes recap generation after %s finishes in a hidden tab",
+    async (heldMethod) => {
+      const documentEvents = new EventTarget();
+      const pageEvents = new EventTarget();
+      let visibilityState = heldMethod === "sessions.list" ? "hidden" : "visible";
+      Object.defineProperty(documentEvents, "visibilityState", { get: () => visibilityState });
+      vi.stubGlobal("document", documentEvents);
+      vi.stubGlobal("addEventListener", pageEvents.addEventListener.bind(pageEvents));
+      vi.stubGlobal("removeEventListener", pageEvents.removeEventListener.bind(pageEvents));
+      const source = row();
+      const response = (method: string) =>
+        method === "sessions.list" ? listing([source]) : updating(source);
+      let intercepted = false;
+      request.mockImplementation(async (method) => {
+        if (method === heldMethod && !intercepted) {
+          intercepted = true;
+          return held.promise;
+        }
+        return response(method);
+      });
+      controller.dispose();
+      controller = createSessionActivity(() => {});
+      void controller.load(client, filters, "query", true);
+      await vi.waitFor(() => expect(intercepted).toBe(true));
+      if (visibilityState !== "hidden") {
+        visibilityState = "hidden";
+        documentEvents.dispatchEvent(new Event("visibilitychange"));
+      }
+      held.resolve(response(heldMethod));
+      await vi.waitFor(() => expect(controller.loading).toBe(false));
+      const requestsWhileHidden = heldMethod === "sessions.list" ? 1 : 2;
+      expect(request).toHaveBeenCalledTimes(requestsWhileHidden);
+      expect(controller.result?.sessions[0]?.activitySummary?.state).toBe("stale");
+      visibilityState = "visible";
+      documentEvents.dispatchEvent(new Event("visibilitychange"));
+      await waitForSummary(0, "updating");
+    },
+  );
+
+  it("retains a failed recap and retries it without turning the session list into an error", async () => {
+    const source = row(undefined, {
+      activitySummary: recap("Found the failure; verification remains."),
+    });
+    request
+      .mockResolvedValueOnce(listing([source]))
+      .mockRejectedValueOnce(new Error("Network interrupted"))
+      .mockResolvedValueOnce(updating(source));
+    void controller.load(client, filters, "query", true);
+    await waitForSummary(0, "unavailable");
+    expect(controller.result?.sessions[0]?.activitySummary?.text).toBe(
+      source.activitySummary?.text,
+    );
+    expect(controller.error).toBeUndefined();
+    controller.retrySummary(controller.result!.sessions[0]!);
+    await waitForSummary(0, "updating");
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops queued backfill batches when write access is revoked", async () => {
+    const sessions = Array.from({ length: 25 }, (_, index) => row(`agent:main:notes-${index}`));
+    await startBackfill(sessions);
+    void controller.load(client, filters, "query", false);
+    controller.retrySummary(sessions[0]!);
+    held.resolve(updating(...sessions.slice(0, 20)));
+    await held.promise;
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(controller.result?.sessions).toEqual(sessions);
+  });
+
+  it("keeps an explicit retry queued while another visible batch is pending", async () => {
+    const retryRow = row("agent:main:retry", {
+      activitySummary: recap("Previous recap", "unavailable"),
+    });
+    const pendingRow = row();
+    await startBackfill([retryRow, pendingRow], updating(retryRow));
+    controller.retrySummary(controller.result!.sessions[0]!);
+    held.resolve(updating(pendingRow));
+    await waitForSummary(0, "updating");
+    expectEnsure(retryRow);
+  });
 });

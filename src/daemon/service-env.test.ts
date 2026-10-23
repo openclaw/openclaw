@@ -217,6 +217,16 @@ describe("service environment", () => {
   it("does not apply the Gateway heap policy to node services", () => {
     expect(buildNodeServiceEnvironment({ env: { HOME: home } }).NODE_OPTIONS).toBeUndefined();
   });
+  it("retains the selected profile in the installed node environment", () => {
+    expect(
+      buildNodeServiceEnvironment({ env: { HOME: home, OPENCLAW_PROFILE: "work" } }),
+    ).toMatchObject({
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node.work",
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-node-work",
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node (work)",
+    });
+  });
   it("fences inherited Node compile cache in macOS node LaunchAgents", () => {
     const environment = buildNodeServiceEnvironment({
       env: { HOME: "/Users/u", NODE_COMPILE_CACHE: "/tmp/ambient-cache" },

@@ -14,6 +14,8 @@ import {
   releaseMarkdownTables,
 } from "./markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { SessionLinkTitler } from "./session-link-titling.ts";
+import { installSessionTitleRegistrar } from "./session-title-target-registration.ts";
 
 const writeText = vi.fn(async (_text: string) => undefined);
 
@@ -197,6 +199,31 @@ describe("Markdown table interactions", () => {
     expect(copy.getAttribute("aria-label")).toBe("Copied!");
     await vi.advanceTimersByTimeAsync(1000);
     expectCopy(copy, "Copy table");
+  });
+
+  it("decorates cloned session links and retires their registrations on close", async () => {
+    const titler = new SessionLinkTitler();
+    installSessionTitleRegistrar((target, label) => titler.register(target, label));
+    const { owner } = interactiveOwner("| Task |\n| --- |\n| agent:main:research |");
+    const source = owner.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
+    expect(source.hasAttribute("href")).toBe(false);
+
+    try {
+      const { modal } = await openTable(owner);
+      const clone = modal.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
+      expect(clone).not.toBe(source);
+      await expect.poll(() => clone.getAttribute("href")).toBe("/chat/main/research");
+
+      modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
+      expect(modal.isConnected).toBe(false);
+      clone.removeAttribute("href");
+      titler.refresh();
+      await Promise.resolve();
+      expect(clone.hasAttribute("href")).toBe(false);
+    } finally {
+      titler.disconnect();
+      releaseMarkdownTables(owner);
+    }
   });
 
   it("cancels a pending expansion when its owner disconnects and reconnects", async () => {

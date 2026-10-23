@@ -215,6 +215,9 @@ describe("CommandPalette pending searches", () => {
     const list = vi.fn(async () => null);
     const { palette, query } = await mountSearch({ request }, list);
     palette.onSelectSession = undefined;
+    await enterQuery(palette, "");
+    expect(findPaletteOption(palette, "Plugins")).toBeDefined();
+    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
     await enterQuery(palette, "zzcatalog");
     expect(palette.textContent).not.toContain("Searching commands");
     await vi.advanceTimersByTimeAsync(200);
@@ -236,6 +239,44 @@ describe("CommandPalette pending searches", () => {
     expect(request).toHaveBeenCalledOnce();
     expect(list).not.toHaveBeenCalled();
   });
+
+  it.each(["catalog", "models"])(
+    "keeps static commands visible when reopened over a pending catalog: %s",
+    async (source) => {
+      const catalog = createDeferred<{ models: never[]; plugins: never[] }>();
+      const { palette, query } = await mountSearch(
+        {
+          methods: ["plugins.list"],
+          request: (method) =>
+            method === (source === "models" ? "models.list" : "plugins.list")
+              ? catalog.promise
+              : { models: [], plugins: [] },
+        },
+        async () => null,
+      );
+      await searchPalette(palette, "plugins");
+      palette.togglePalette();
+      await palette.updateComplete;
+      palette.openPalette({
+        value: "plugins",
+        selectionStart: 7,
+        selectionEnd: 7,
+        selectionDirection: "none",
+      });
+      await settlePalette(palette);
+      try {
+        expect(paletteInput(palette).value).toBe("plugins");
+        expect(findPaletteOption(palette, "Plugins")).toBeDefined();
+        expect(findPaletteOption(palette, "New session", true)).toBeUndefined();
+        expect(palette.textContent).toContain("Searching commands");
+        expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
+      } finally {
+        catalog.resolve({ models: [], plugins: [] });
+      }
+      await settlePalette(palette);
+      expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    },
+  );
 
   it("waits for the transcript source after metadata settles", async () => {
     const transcript = createDeferred<SessionsSearchResult>();

@@ -7,9 +7,11 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 import { operatorMcpOAuthIdentity, requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { readMcpOAuthStore } from "./mcp-oauth-store.js";
+import * as oauthStore from "./mcp-oauth-store.js";
 import { clearMcpOAuthCredentials, resolveMcpOAuthAccessToken } from "./mcp-oauth.js";
 import { withMcpOAuthProviderForTest, withMcpOAuthTestLease } from "./mcp-oauth.test-support.js";
 
@@ -93,7 +95,7 @@ describe("MCP OAuth provider", () => {
     );
   });
 
-  it("reads a fresh stored access token while another flow holds the store lease", async () => {
+  it("does not send a bearer when the caller cancels during the stored token read", async () => {
     await withTempHome(
       async () => {
         await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
@@ -105,21 +107,32 @@ describe("MCP OAuth provider", () => {
           });
         });
 
-        await withMcpOAuthTestLease(IDENTITY.storeKey, async () => {
-          // A leased read would wait for this holder and abort instead of resolving.
+        const controller = new AbortController();
+        const read = oauthStore.readMcpOAuthStoreReadOnly;
+        const reading = vi
+          .spyOn(oauthStore, "readMcpOAuthStoreReadOnly")
+          .mockImplementationOnce(async (...args) => {
+            const store = await read(...args);
+            controller.abort();
+            return store;
+          });
+        const resourceFetch = vi.fn<FetchLike>(async () => new Response("ok"));
+        try {
           await expect(
-            resolveMcpOAuthAccessToken({
+            withMcpOAuthBearer({
               identity: IDENTITY,
-              acceptUnknownExpiry: true,
-              allowMissingToken: true,
-              signal: AbortSignal.timeout(2_000),
-            }),
-          ).resolves.toBe(FRESH_ACCESS);
-        });
+              fetchFn: resourceFetch,
+              authFetchFn: resourceFetch,
+            })(IDENTITY.serverUrl, { signal: controller.signal }),
+          ).rejects.toMatchObject({ name: "AbortError" });
+          expect(resourceFetch).not.toHaveBeenCalled();
+        } finally {
+          reading.mockRestore();
+        }
         expect(authMock).not.toHaveBeenCalled();
       },
       {
-        prefix: "openclaw-mcp-oauth-fresh-token-held-lease-",
+        prefix: "openclaw-mcp-oauth-cancelled-read-",
         skipSessionCleanup: true,
         env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
       },
@@ -150,12 +163,21 @@ describe("MCP OAuth provider", () => {
         const send = (identity: typeof IDENTITY) =>
           withMcpOAuthBearer({ fetchFn: resourceFetch, authFetchFn: resourceFetch, identity })(
             IDENTITY.serverUrl,
-            { method: "POST", body: "{}", signal: AbortSignal.timeout(2_000) },
+            { method: "POST", body: "{}" },
           );
 
         await withMcpOAuthTestLease(IDENTITY.storeKey, async () => {
-          await expect(send(IDENTITY)).resolves.toMatchObject({ status: 200 });
-          await expect(send(requester)).resolves.toMatchObject({ status: 200 });
+          // The real held lease fails immediately if a fresh-token request tries to acquire it.
+          const acquire = leaseAcquisition.acquireOpenClawStateLease;
+          const acquisition = vi
+            .spyOn(leaseAcquisition, "acquireOpenClawStateLease")
+            .mockImplementation((params) => acquire({ ...params, waitMs: 0 }));
+          try {
+            await expect(send(IDENTITY)).resolves.toMatchObject({ status: 200 });
+            await expect(send(requester)).resolves.toMatchObject({ status: 200 });
+          } finally {
+            acquisition.mockRestore();
+          }
         });
         await save(IDENTITY, ROTATED_ACCESS);
         await expect(send(IDENTITY)).resolves.toMatchObject({ status: 200 });

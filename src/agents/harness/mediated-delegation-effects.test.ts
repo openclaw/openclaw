@@ -76,7 +76,7 @@ beforeAll(async () => {
     { agentId: "intake", sessionKey: requester },
     { sessionId: "intake", updatedAt: 1 },
   );
-  await ensureMcpLoopbackServer(0);
+  await ensureMcpLoopbackServer();
 });
 beforeEach(() => setRuntimeConfigSnapshot(config));
 afterEach(() => {

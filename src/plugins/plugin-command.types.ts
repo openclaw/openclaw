@@ -86,6 +86,8 @@ export type PluginCommandContext = {
     llm?: Pick<import("./runtime/types-core.js").PluginRuntimeCore["llm"], "complete">;
     /** Native helpers bound to this authenticated command invocation. */
     subagents?: import("./runtime/types-native-subagent.js").NativeSubagentRuntime;
+    /** Bounded native schedules admitted by this external requester invocation only. */
+    scheduledTurns?: import("./runtime/types-scheduled-turns.js").PluginCommandScheduledTurns;
     compactCurrent?: () => Promise<{
       compacted: boolean;
       reason?: string;
@@ -137,7 +139,7 @@ export type AgentPromptGuidanceEntry = {
 export type AgentPromptGuidance = string | AgentPromptGuidanceEntry;
 
 /** Opt-in command runtime families; future families extend this union. */
-export type PluginCommandRuntimeCapability = "subagents" | "models";
+export type PluginCommandRuntimeCapability = "subagents" | "models" | "scheduledTurns";
 
 export type OpenClawPluginCommandDefinition = {
   /** Command name without leading slash (e.g., "tts") */

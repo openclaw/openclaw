@@ -9,7 +9,6 @@ import {
   isSessionsCleanupPartialResult,
   runSessionsCleanup,
   serializeSessionCleanupResult,
-  type SessionCleanupSummary,
   type SessionsCleanupOptions,
   type SessionsCleanupResult,
 } from "../config/sessions.js";
@@ -104,15 +103,6 @@ function buildLabelSummaries(actionRows: SessionCleanupActionRow[]): SessionClea
   return [...summaryByLabel.values()].toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
-function toDisplayedCleanupSummary(summary: SessionCleanupSummary): SessionCleanupSummary {
-  return {
-    ...summary,
-    storePath: resolveSqliteTargetFromSessionStorePath(summary.storePath, {
-      agentId: summary.agentId,
-    }).path,
-  };
-}
-
 function renderAppliedResult(
   result: SessionsCleanupResult,
   runtime: RuntimeEnv,
@@ -123,29 +113,25 @@ function renderAppliedResult(
     writeRuntimeJson(runtime, result);
   } else {
     const summaries = "stores" in result ? result.stores : [result];
-    renderAppliedSummaries(summaries, runtime);
+    for (const [i, summary] of summaries.entries()) {
+      if (i > 0) {
+        runtime.log("");
+      }
+      if (summaries.length > 1) {
+        runtime.log(`Agent: ${summary.agentId}`);
+      }
+      runtime.log(`Session store: ${summary.storePath}`);
+      runtime.log(`Applied maintenance. Current entries: ${summary.appliedCount ?? 0}`);
+      if (summary.unreferencedArtifacts?.removedFiles) {
+        runtime.log(`Pruned unreferenced artifacts: ${summary.unreferencedArtifacts.removedFiles}`);
+      }
+    }
     if (partialError) {
       runtime.error(`[error] ${partialError.message}`);
     }
   }
   if (partialError) {
     process.exitCode = 1;
-  }
-}
-
-function renderAppliedSummaries(summaries: SessionCleanupSummary[], runtime: RuntimeEnv) {
-  for (const [i, summary] of summaries.entries()) {
-    if (i > 0) {
-      runtime.log("");
-    }
-    if (summaries.length > 1) {
-      runtime.log(`Agent: ${summary.agentId}`);
-    }
-    runtime.log(`Session store: ${summary.storePath}`);
-    runtime.log(`Applied maintenance. Current entries: ${summary.appliedCount ?? 0}`);
-    if (summary.unreferencedArtifacts?.removedFiles) {
-      runtime.log(`Pruned unreferenced artifacts: ${summary.unreferencedArtifacts.removedFiles}`);
-    }
   }
 }
 
@@ -234,11 +220,13 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
       const actionRows = buildActionRows(result);
       const showAgentHeader = previewResults.length > 1;
       const rich = isRich();
-      const displaySummary = toDisplayedCleanupSummary(storeSummary);
+      const displayStorePath = resolveSqliteTargetFromSessionStorePath(storeSummary.storePath, {
+        agentId: storeSummary.agentId,
+      }).path;
       if (showAgentHeader) {
         runtime.log(`Agent: ${storeSummary.agentId}`);
       }
-      runtime.log(`Session store: ${displaySummary.storePath}`);
+      runtime.log(`Session store: ${displayStorePath}`);
       runtime.log(`Maintenance mode: ${storeSummary.mode}`);
       runtime.log(
         `Entries: ${storeSummary.beforeCount} -> ${storeSummary.afterCount} (remove ${storeSummary.beforeCount - storeSummary.afterCount})`,

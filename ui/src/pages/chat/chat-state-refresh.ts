@@ -11,6 +11,10 @@ import {
   loadChatMetadataRefresh,
   retireChatMetadataRefresh,
 } from "../../lib/chat/chat-metadata-store.ts";
+import {
+  applyRemoteSlashCommandsResult,
+  refreshSlashCommands,
+} from "../../lib/chat/slash-command-catalog.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
@@ -23,7 +27,6 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { isPersistedSessionRow } from "../../lib/sessions/session-row-reconcile.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
-import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -370,20 +373,22 @@ function refreshChatSessionFacts(host: ChatPageHost, binding: ChatMetadataBindin
   return promise;
 }
 
-export async function refreshChatModelAuthStatus(host: ChatPageHost) {
+export async function refreshChatModelAuthStatus(host: ChatPageHost, runId?: string) {
   if (!host.client || !host.connected) {
     return;
   }
   const client = host.client;
   const connectionIsCurrent = captureChatConnectionOwner(host);
   const agentId = resolveChatAgentId(host);
+  const sessionKey = host.sessionKey;
   const requestVersion = ++host.modelAuthStatusRequestVersion;
   const ownsRequest = () =>
     connectionIsCurrent() &&
     host.modelAuthStatusRequestVersion === requestVersion &&
+    host.sessionKey === sessionKey &&
     resolveChatAgentId(host) === agentId;
   try {
-    const result = await loadModelAuthStatus(client, { agentId });
+    const result = await loadModelAuthStatus(client, { agentId, refreshUsage: Boolean(runId) });
     if (!ownsRequest()) {
       return;
     }
@@ -392,7 +397,10 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost) {
     if (!ownsRequest()) {
       return;
     }
-    host.modelAuthStatusResult = { ts: 0, providers: [] };
+    // Auxiliary post-run failures must not erase the last displayed usage.
+    if (!runId) {
+      host.modelAuthStatusResult = { ts: 0, providers: [] };
+    }
   }
 }
 

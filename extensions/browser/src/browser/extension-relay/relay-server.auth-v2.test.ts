@@ -24,7 +24,12 @@ import {
   invalidateBrowserRelayAuthV2Authority,
   parseRelayAuthHello,
 } from "./auth-v2.js";
-import { RawHttpConnection } from "./relay-http.test-support.js";
+import {
+  authenticateExtension,
+  authenticateRelayHttp,
+  maskedFrame,
+  RawHttpConnection,
+} from "./relay-http.test-support.js";
 import {
   authenticateExtensionWebSocket,
   startExtensionRelayServer,
@@ -75,30 +80,6 @@ function sendJson(socket: Pick<WebSocket, "send">, value: unknown) {
   socket.send(JSON.stringify(value));
 }
 
-async function authenticate(connection: RawHttpConnection, flow: "cdp" | "json-list") {
-  const post = async (pathname: string, body: unknown): Promise<unknown> => {
-    const response = await connection.request("POST", pathname, JSON.stringify(body), {
-      "Content-Type": "application/json",
-    });
-    expect(response.status).toBe(200);
-    return JSON.parse(response.body);
-  };
-  const binding =
-    flow === "cdp"
-      ? { method: "SEQUENCE", resource: "/json/version -> /cdp" }
-      : { method: "GET", resource: "/json/list" };
-  const challenge = (await post(CHALLENGE_PATH, {
-    ...httpHello(),
-    ...binding,
-    flow,
-  })) as BrowserRelayAuthChallenge;
-  expect(await post(COMPLETE_PATH, completion(challenge))).toMatchObject({
-    type: "auth.ok",
-    v: 2,
-    sessionId: challenge.sessionId,
-  });
-}
-
 function attachTestExtension(handle: ExtensionRelayHandle): void {
   const handlers = handle.bridge.attachExtensionSocket({ send: () => {}, close: () => {} });
   handlers.onMessage(JSON.stringify(hello()));
@@ -125,18 +106,7 @@ async function openExtensionSocket(
 
 async function authenticateV2Extension(handle: ExtensionRelayHandle): Promise<WebSocket> {
   const ws = await openExtensionSocket(handle, EXTENSION_PROTOCOL);
-  const challengeMessage = once(ws, "message");
-  sendJson(ws, authHello());
-  const [challengeData] = (await challengeMessage) as [RawData];
-  const challenge = JSON.parse(rawDataToString(challengeData)) as BrowserRelayAuthChallenge;
-  const okMessage = once(ws, "message");
-  sendJson(ws, authResponse(challenge));
-  const [okData] = (await okMessage) as [RawData];
-  expect(JSON.parse(rawDataToString(okData))).toMatchObject({
-    type: "auth.ok",
-    v: 2,
-    sessionId: challenge.sessionId,
-  });
+  await authenticateExtension(ws, KEY);
   return ws;
 }
 
@@ -166,24 +136,6 @@ function createWebSocketAuthHarness(
     removePreAuthGuard: options.removePreAuthGuard,
   });
   return { authority, close, issueChallenge, prepareAuthenticated, send, socket };
-}
-
-function maskedFrame(payload: Buffer, options: { fin: boolean; opcode: number }): Buffer {
-  const lengthBytes = payload.length < 126 ? 0 : 2;
-  const header = Buffer.alloc(2 + lengthBytes + 4);
-  header[0] = (options.fin ? 0x80 : 0) | options.opcode;
-  header[1] = 0x80 | (lengthBytes === 0 ? payload.length : 126);
-  if (lengthBytes === 2) {
-    header.writeUInt16BE(payload.length, 2);
-  }
-  const maskOffset = 2 + lengthBytes;
-  const mask = Buffer.from([0x12, 0x34, 0x56, 0x78]);
-  mask.copy(header, maskOffset);
-  const masked = Buffer.allocUnsafe(payload.length);
-  for (let index = 0; index < payload.length; index += 1) {
-    masked[index] = payload[index]! ^ mask[index % 4]!;
-  }
-  return Buffer.concat([header, masked]);
 }
 
 async function sendRawV2Frames(params: {
@@ -335,7 +287,7 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
     handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: false });
     attachTestExtension(handle);
     const connection = await connect();
-    await authenticate(connection, "cdp");
+    await authenticateRelayHttp(connection, KEY, "cdp");
     const version = await connection.request("GET", "/json/version");
     expect(version.status).toBe(200);
     expect(JSON.parse(version.body).webSocketDebuggerUrl).toBe(`ws://127.0.0.1:${handle.port}/cdp`);
@@ -569,7 +521,7 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
     handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: false });
     attachTestExtension(handle);
     const connection = await connect();
-    await authenticate(connection, "json-list");
+    await authenticateRelayHttp(connection, KEY, "json-list");
     const list = await connection.request("GET", "/json/list");
     expect(list.status).toBe(200);
     expect(JSON.parse(list.body)).toEqual([]);

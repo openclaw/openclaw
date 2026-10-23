@@ -1,3 +1,5 @@
+import { mapErrorCauseChain } from "@openclaw/normalization-core/error-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { redactSensitiveText, stringifyNonErrorCause } from "../error-format.js";
 
 export const ACP_ERROR_CODES = [
@@ -59,11 +61,8 @@ function readAcpRequestErrorDetails(value: Error): string | undefined {
   if (typeof code !== "number") {
     return undefined;
   }
-  const data = (value as { data?: unknown }).data;
-  if (!data || typeof data !== "object") {
-    return undefined;
-  }
-  const details = (data as { details?: unknown }).details;
+  const data = asOptionalObjectRecord((value as { data?: unknown }).data);
+  const details = data?.details;
   if (details === undefined || details === null) {
     return undefined;
   }
@@ -117,20 +116,7 @@ export function formatAcpErrorChain(error: unknown): string {
   if (!(error instanceof Error)) {
     return redactSensitiveText(String(error));
   }
-  const segments: string[] = [renderSingleError(error)];
-  let current: unknown = error.cause;
-  let depth = 0;
-  while (current !== undefined && current !== null && depth < 8) {
-    if (current instanceof Error) {
-      segments.push(renderSingleError(current));
-      current = current.cause;
-    } else {
-      segments.push(stringifyNonErrorCause(current));
-      current = undefined;
-    }
-    depth += 1;
-  }
-  return redactSensitiveText(segments.join(" <- "));
+  return redactSensitiveText(mapErrorCauseChain(error, renderSingleError).join(" <- "));
 }
 
 function renderSingleError(error: Error): string {

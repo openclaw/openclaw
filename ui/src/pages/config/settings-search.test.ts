@@ -122,6 +122,33 @@ it("opens every Memory schema match on the merged Settings tab", () => {
   );
 });
 
+it("hides the curated locale search leaf without mutating the source schema or sibling hits", () => {
+  const schema = section("ui", {
+    seamColor: field("Seam color"),
+    prefs: object({
+      locale: field("Interface language"),
+      chatShowToolCalls: { type: "boolean", title: "Chat show tool calls" },
+    }),
+  });
+  const original = JSON.stringify(schema);
+  const uiHints = {
+    "ui.seamColor": { advanced: false },
+    "ui.prefs.locale": { advanced: false },
+    "ui.prefs.chatShowToolCalls": { advanced: false },
+  };
+  const params = { schema, value: { ui: { prefs: { locale: "en" } } }, uiHints };
+
+  expect(
+    search("interface language", params).some((block) => block.hash === "#config-section-ui"),
+  ).toBe(false);
+  for (const query of ["chat show tool calls", "seam color"]) {
+    expect(search(query, params)).toContainEqual(
+      expect.objectContaining({ hash: "#config-section-ui" }),
+    );
+  }
+  expect(JSON.stringify(schema)).toBe(original);
+});
+
 it("refreshes prepared schema tiers while searching current draft keys and access", () => {
   const schema = section("mcp", {
     servers: object({}, { additionalProperties: object({ command: field() }) }),

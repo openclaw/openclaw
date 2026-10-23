@@ -267,9 +267,9 @@ describe("packNpmSpecToArchive", () => {
     ]);
   });
 
-  it("returns explicit error when npm pack produces no archive name", async () => {
+  it.each([" \n\n", "[broken"])("rejects npm output without a cwd archive: %s", async (stdout) => {
     const cwd = await createFixtureDir();
-    mockPackCommandResult({ stdout: " \n\n" });
+    mockPackCommandResult({ stdout });
     expect(await runPack(packMetadata.resolvedSpec, cwd, 5000)).toEqual({
       ok: false,
       error: "npm pack produced no archive",

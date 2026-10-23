@@ -1,16 +1,21 @@
 export const MODEL_FIELD_HELP: Record<string, string> = {
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
+  "models.usage": "Provider-reported plan usage cache settings.",
+  "models.usage.cacheTtlMs":
+    "Reuse provider usage snapshots for this many milliseconds (default: 60000). Applies to ordinary and post-run reads; 0 disables reuse. Does not enable idle polling.",
   "models.mode":
     'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json baseUrl values, while apiKey values are preserved only when the provider is not SecretRef-managed in current config/auth-profile context; SecretRef-managed providers refresh apiKey from current source markers, and matching model contextWindow/maxTokens use the higher value between explicit and implicit entries.',
   "models.providers":
-    "Provider map keyed by provider ID containing connection/auth settings and concrete model definitions. Built-in providers may be tuned with provider-level overlays; custom providers must include baseUrl and models. Use stable provider keys so references from agents and tooling remain portable across environments.",
+    "Model endpoint configurations keyed by provider ID. Choose a new ID, such as gpu-a or my-lab, for an independent custom endpoint. Built-in and extension-owned IDs and aliases retain their integration semantics; configuring one overlays that integration. The ID does not select the wire protocol: api does. Multiple custom IDs may use the same adapter with different base URLs, credentials, and models. Use a distinct ID for an independent server rather than repurposing openai merely because it is OpenAI-compatible. Custom entries must include baseUrl and models.",
   "models.catalogRefresh":
     "Controls background updates to the bundled model catalog. Remote rows can update model metadata but cannot change provider endpoints or headers.",
   "models.catalogRefresh.enabled":
     "Fetch hosted model catalog updates in the background (default: true). Set to false to disable all remote model catalog traffic.",
   "models.catalogRefresh.url":
     "Override the hosted model catalog URL for a self-hosted HTTPS mirror (localhost HTTP is allowed for testing). A running Gateway stops using the previous source's catalog and adopts the mirror's at its next catalog check, without restarting.",
+  "models.providers.*":
+    "One named provider configuration. Replace * with your chosen ID, or an existing integration ID you intentionally want to override. Schema lookup works before a custom ID is configured.",
   "models.providers.*.baseUrl":
     "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
   "models.providers.*.apiKey":
@@ -18,7 +23,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.providers.*.auth":
     'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, "aws-sdk" for AWS credential resolution, and "none" for custom openai-completions endpoints that do not enforce auth. Explicit "none" skips credentials and sends no Authorization header; other effective adapters are rejected.',
   "models.providers.*.api":
-    "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
+    "Wire protocol adapter, independent of the provider ID. Chat Completions: openai-completions; Responses: openai-responses; Messages: anthropic-messages. Choose other adapters from the allowed values to match your upstream protocol.",
   "models.providers.*.maxTokens":
     "Default maximum output token budget applied to models under this provider when a model entry does not set maxTokens.",
   "models.providers.*.timeoutSeconds":

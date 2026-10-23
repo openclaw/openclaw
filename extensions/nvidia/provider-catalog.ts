@@ -1,4 +1,3 @@
-import type { LookupOptions } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
 import {
   fetchLiveProviderModelRows,
@@ -51,15 +50,8 @@ const NVIDIA_ULTRA_DEFAULT_PARAMS = {
   },
 } as const;
 
-const lookupNvidiaFeaturedModelHostname = (async (
-  hostname: string,
-  options?: number | LookupOptions,
-) => {
-  if (typeof options === "object" && options !== null) {
-    return await dnsLookup(hostname, { ...options, family: 4 });
-  }
-  return await dnsLookup(hostname, { family: 4 });
-}) as LookupFn;
+const lookupNvidiaFeaturedModelHostname: LookupFn = async (hostname, options) =>
+  await dnsLookup(hostname, { ...options, family: 4 });
 
 export function buildNvidiaProvider(): ModelProviderConfig {
   const provider = buildManifestModelProviderConfig({

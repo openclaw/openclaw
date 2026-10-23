@@ -54,19 +54,6 @@ function writeCompletionRegistrationWarning(message: string): void {
   process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message: diagnostic })}\n`);
 }
 
-async function registerSubcommandsForCompletion(program: Command): Promise<void> {
-  for (const { name, entry } of getSubCliCompletionGroups()) {
-    try {
-      removeCommandGroupNames(program, entry);
-      await entry.register(program);
-    } catch (error) {
-      writeCompletionRegistrationWarning(
-        `skipping subcommand \`${name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
-}
-
 export function registerCompletionCli(program: Command) {
   program
     .command("completion")
@@ -113,7 +100,16 @@ export function registerCompletionCli(program: Command) {
         }
       }
 
-      await registerSubcommandsForCompletion(program);
+      for (const { name, entry } of getSubCliCompletionGroups()) {
+        try {
+          removeCommandGroupNames(program, entry);
+          await entry.register(program);
+        } catch (error) {
+          writeCompletionRegistrationWarning(
+            `skipping subcommand \`${name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
 
       if (process.env[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV] !== "1") {
         const { registerPluginCliCommandsFromValidatedConfig } = await import("../plugins/cli.js");
@@ -218,16 +214,6 @@ function escapeZshCompletionChoice(choice: string): string {
   return escapeZshDoubleQuotedDescription(choice.replace(/([\\\s:()[\]{}*?!|&;<>"'$`])/g, "\\$1"));
 }
 
-function generateZshSubcmdList(cmd: Command): string {
-  const list = visibleCompletionCommands(cmd)
-    .flatMap((c) => {
-      const desc = escapeZshDoubleQuotedDescription(c.description()).replace(/'/g, "'\\''");
-      return commandNameVariants(c).map((name) => `'${name}[${desc}]'`);
-    })
-    .join(" ");
-  return `"1: :_values 'command' ${list}"`;
-}
-
 function escapeZshDoubleQuotedDescription(description: string): string {
   return description.replace(/[\\$"`[\]]/g, "\\$&");
 }
@@ -237,13 +223,20 @@ function generateZshCommandGroup(
   functionName: string,
   childPrefix = functionName,
 ): string {
+  const args = generateZshArgs(command);
+  const list = visibleCompletionCommands(command)
+    .flatMap((c) => {
+      const desc = escapeZshDoubleQuotedDescription(c.description()).replace(/'/g, "'\\''");
+      return commandNameVariants(c).map((name) => `'${name}[${desc}]'`);
+    })
+    .join(" ");
   return `${functionName}() {
   local -a commands
   local -a options
   
   _arguments -s -C \\
-    ${generateZshArgs(command)} \\
-    ${generateZshSubcmdList(command)} \\
+    ${args} \\
+    "1: :_values 'command' ${list}" \\
     "*::arg:->args"
 
   case $state in
@@ -380,7 +373,11 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     }
 
     for ($i = 1; $i -lt $commandElements.Count; $i++) {
-        $element = $commandElements[$i].Extent.Text
+        $element = if ($commandElements[$i] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            $commandElements[$i].Value
+        } else {
+            $commandElements[$i].Extent.Text
+        }
         if ($i -eq $commandElements.Count - 1 -and $wordToComplete -ne "") { break }
         if ($element -like "-*") {
             $flag = ($element -split '=', 2)[0]

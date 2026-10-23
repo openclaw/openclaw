@@ -133,6 +133,19 @@ describe("legacy node-host Doctor migration", () => {
     expect((await loadNodeHostConfig(env))?.gateway?.contextPath).toBeUndefined();
   });
 
+  it("retains malformed UTF-8 without importing replacement characters", async () => {
+    const { env, sourcePath, migrate } = await legacyFixture({ displayName: "utf8-marker" });
+    const bytes = await fsp.readFile(sourcePath);
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    await fsp.writeFile(sourcePath, bytes);
+    const result = await migrate();
+    expect(result.changes).toEqual([]);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+    expect(await fsp.readFile(sourcePath)).toEqual(bytes);
+    expect(readCanonicalRow(env)).toBeUndefined();
+  });
+
   it("requires exclusive state ownership", async () => {
     const { env, sourcePath, migrate } = await legacyFixture();
     const gatewayLock = await acquireGatewayLock({

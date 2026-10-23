@@ -297,7 +297,7 @@ describe("restart sentinel", () => {
         stats: null,
       });
 
-      expect(written.payload).toEqual({ kind: "restart", status: "ok", ts: 1 });
+      expect(written.payload).toStrictEqual({ kind: "restart", status: "ok", ts: 1 });
       await expect(readRestartSentinel()).resolves.toEqual(written);
       expect(readSentinelRow()?.payload_json).toBe(
         JSON.stringify({ kind: "restart", status: "ok", ts: 1 }),

@@ -25,7 +25,6 @@ import {
 import type {
   LegacyStateMigrationStepReceipt,
   MigrationMessages,
-  MigrationLogger,
 } from "../infra/state-migrations.types.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -53,7 +52,6 @@ export function createDoctorPluginMigrationPreparation(params: {
   runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner;
   doctorOnlyStateMigrations: boolean;
   integrityCheck?: "quick" | "full";
-  log?: MigrationLogger;
 }) {
   const shouldDeferInstallation = () =>
     Boolean(resolveUpdateRehearsalRoot(params.env())) ||
@@ -231,7 +229,6 @@ export function createDoctorPluginMigrationPreparation(params: {
             autoMigrateLegacyPluginDoctorState({
               config,
               env: params.env(),
-              log: params.log,
               integrityCheck: params.integrityCheck,
               ...(params.doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
             }),
@@ -390,8 +387,9 @@ export function createDoctorPluginMigrationPreparation(params: {
           deferredPluginMigrations: expectedPending,
           shellEnvFallback: "defer",
         }).readConfigFileSnapshotForWrite();
+        // Legacy keys can remain invalid until the following Doctor config repair.
         if (
-          !snapshot.valid ||
+          snapshot.readError ||
           describeConfigSnapshotInputChange(sourceSnapshot, snapshot, {
             compareResolvedConfig: false,
           })

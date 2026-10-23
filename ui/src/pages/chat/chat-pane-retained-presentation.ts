@@ -46,7 +46,6 @@ import { refreshChatMetadata } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import type { ChatDetailsOutputsIcons } from "./components/chat-details-types.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation-view.tsx";
 import {
   clearSessionWorkspacePreviews,
@@ -70,7 +69,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   private detailsOutputsBinding?: DetailsOutputsBinding;
 
   /** The Details host consumes this binding; native workspace/board projections already subscribe the pane. */
-  protected captureDetailsOutputs(icons: ChatDetailsOutputsIcons) {
+  protected captureDetailsOutputs() {
     const state = this.state;
     if (!state || !this.presented || !this.isConnected) {
       this.detailsOutputsBinding?.stop();
@@ -80,12 +79,15 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     const workspace = getSessionWorkspace(state);
     const board = this.resolveBoardView();
     const scope = gatewayPresentationScope(this.context.gateway);
+    const boardReady =
+      this.boardProvider !== undefined || this.boardProviderLease?.provider === board.provider;
     let binding = this.detailsOutputsBinding;
     if (
       !binding ||
       binding.state !== state ||
       binding.workspace !== workspace ||
       binding.provider !== board.provider ||
+      binding.boardReady !== boardReady ||
       binding.client !== state.client ||
       binding.connected !== state.connected ||
       binding.sessionId !== state.currentSessionId ||
@@ -105,15 +107,10 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         state,
         workspace,
         board.provider,
+        boardReady,
       );
     }
-    return projectDetailsOutputs(
-      binding,
-      workspace,
-      board,
-      this.boardProvider !== undefined || this.boardProviderLease?.provider === board.provider,
-      icons,
-    );
+    return projectDetailsOutputs(binding, workspace, board);
   }
 
   override dispose(): void {
@@ -544,6 +541,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
 
   protected override presentedChanged(presented: boolean): void {
     if (!presented) {
+      // The hidden frame is parked; retire feedback without releasing its admitted publication.
+      this.publication.binding?.sync(null);
       this.detailsOutputsBinding?.stop();
       this.detailsOutputsBinding = undefined;
       this.retireHeaderSessionMutations();

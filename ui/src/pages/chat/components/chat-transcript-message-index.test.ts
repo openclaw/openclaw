@@ -369,8 +369,8 @@ it("reuses transcript structure for scroll renders and rebuilds for its inputs",
 });
 
 const work = vi.hoisted(() => ({ chainCalls: 0, chainItems: 0, positionItems: 0 }));
-vi.mock("../chat-thread.ts", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../chat-thread.ts")>();
+vi.mock("../chat-turn-presentation.ts", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../chat-turn-presentation.ts")>();
   return {
     ...original,
     coalesceStreamRuns: (...args: Parameters<typeof original.coalesceStreamRuns>) => {

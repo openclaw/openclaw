@@ -1,8 +1,7 @@
-import { createEffect, createSignal, onSettled } from "solid-js";
+import { createEffect, createSignal, latest, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SystemAgentSetupActivateParams,
-  SystemAgentSetupActivateResult,
   SystemAgentSetupDetectResult,
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -20,24 +19,19 @@ import {
   FirstRunSetup,
   type ModelSetupRouteData,
 } from "./first-run-setup.ts";
+import { completeModelSetupWizard } from "./model-setup-completion.ts";
 import { createModelSetupIconLoader } from "./model-setup-icon-loader.tsx";
+import { createModelSetupSaving } from "./model-setup-saving.ts";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
 import { createNativeModelSetup } from "./native-model-setup.tsx";
-import {
-  candidateActivation,
-  findPreparedModelCandidate,
-  type ModelSetupPrepareOption,
-  preparedModelActivation,
-} from "./prepare-options.ts";
+import { candidateActivation, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import { manualProviderActivation } from "./provider-picker.tsx";
 import type { ModelSetupDetection } from "./rpc.ts";
 import { createModelSetupDetectRequest, createModelSetupVerifyRequest } from "./rpc.ts";
 import {
   activationTargetId,
   createModelSetupState,
-  preparedModelPageState,
   updateModelSetupWizardDraft,
-  mapActivationResult,
   type ModelSetupActivationState,
 } from "./state.ts";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
@@ -54,6 +48,8 @@ export function createModelSetup(
   props: ModelSetupPageProps & { host: HTMLElement },
   context: ApplicationContext,
 ) {
+  // Leaving setup retires its owner even while a saving action holds the displayed frame.
+  const routeData = () => latest(() => props.routeData);
   const projection = observeState(createModelSetupState());
   const state = projection.state;
   let connected = false;
@@ -65,7 +61,7 @@ export function createModelSetup(
   };
   const actionsDisabled = (): boolean =>
     login.busy ||
-    nativeModels.saving ||
+    nativeModels.active ||
     state.activationState.phase === "testing" ||
     state.verifyState.phase === "checking" ||
     wizardMutationActive ||
@@ -73,8 +69,8 @@ export function createModelSetup(
       state.wizardState.phase !== "error" &&
       state.wizardState.phase !== "cancelled");
 
-  function agentSelection() {
-    return modelSetupAgentSelection(context, props.routeData?.firstRun === true);
+  function agentSelection(currentRoute = routeData()) {
+    return modelSetupAgentSelection(context, currentRoute?.firstRun === true);
   }
 
   let observedConnection: ReturnType<typeof captureModelSetupConnection> | null = null;
@@ -86,9 +82,14 @@ export function createModelSetup(
   let manualInput: HTMLInputElement | undefined;
   let feedback: HTMLElement | undefined;
   let wizardDialog: import("../../components/modal-dialog.tsx").OpenClawModalDialog | undefined;
+  const readConnection = () => {
+    projection.revision();
+    return observedConnection;
+  };
+  const wizardSaving = createModelSetupSaving(readConnection);
   const firstRun = new FirstRunSetup({
     context: () => context,
-    routeData: () => props.routeData,
+    routeData,
     pageState: () => state.pageState,
     activationState: () => state.activationState,
     actionsDisabled: () => actionsDisabled() || state.detectionRequest !== null,
@@ -107,13 +108,14 @@ export function createModelSetup(
   });
   const nativeModels = createNativeModelSetup({
     getContext: () => context,
-    getConnection: () => observedConnection,
+    getConnection: readConnection,
     canUseSetup,
     blocked: () => {
       projection.read();
       return activationBlocked();
     },
     onSelected: () => (props.embedded ? props.onClose?.() : context.navigate("chat")),
+    onChange: notify,
   });
   const iconLoader = createModelSetupIconLoader(
     () => context,
@@ -121,7 +123,11 @@ export function createModelSetup(
     (urls) => (state.iconUrls = urls),
   );
   const login = createModelProviderLogin({
-    getScope: () => ({ context, agentId: agentSelection().state.selectedId }),
+    getScope: () => ({
+      context,
+      agentId: agentSelection().state.selectedId,
+      connectionEpoch: context.gateway.connectionRevision,
+    }),
     getManualProviders: () =>
       state.pageState.phase === "ready" ? state.pageState.result.manualProviders : [],
     onManualProvider: (authChoice) => {
@@ -131,17 +137,18 @@ export function createModelSetup(
     canStart: () =>
       canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved && !actionsDisabled(),
     canContinue: () => canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved,
-    refresh: detect,
+    refresh: () => detect(),
   });
   const wizard = new ModelSetupWizardRunner({
     getClient: () => context.gateway.snapshot.client,
     getAgentId: () => agentSelection().state.selectedId,
     onChange: (next) => {
+      // Show the next server step while the admitted write still reconciles config.
+      wizardSaving.retire();
       if (next.phase !== "starting" && next.phase !== "done") {
         state.activationState = { phase: "idle" };
       }
-      state.wizardState =
-        next.phase === "step" && wizardMutationActive ? { ...next, busy: true } : next;
+      state.wizardState = next;
       state.wizardDraft = updateModelSetupWizardDraft(state.wizardDraft, next);
       if (next.phase === "idle") {
         state.cancellationNotice = null;
@@ -225,15 +232,15 @@ export function createModelSetup(
     firstRun.start();
   }
 
-  function synchronizeGateway(routeData: ModelSetupPageProps["routeData"]): void {
-    if (!connected || !routeData) {
+  function synchronizeGateway(currentRoute: ModelSetupPageProps["routeData"]): void {
+    if (!connected || !currentRoute) {
       return;
     }
     const snapshot = context.gateway.snapshot;
     const previous = observedConnection;
     const observation = reconcileModelSetupConnection(
       previous,
-      captureModelSetupConnection(context, routeData.firstRun, previous?.recoveryScope),
+      captureModelSetupConnection(context, currentRoute.firstRun, previous?.recoveryScope),
     );
     if (observation.kind === "unchanged") {
       return;
@@ -247,6 +254,7 @@ export function createModelSetup(
         ? t("modelSetup.wizard.gatewayReconnecting")
         : undefined;
     if (observation.kind === "pending") {
+      retireWizardMutation();
       if (!wizard.hasAdmittedSession) {
         state.pageState = { phase: "loading" };
         setDetectionRequest(undefined);
@@ -281,7 +289,7 @@ export function createModelSetup(
     // The router refreshes cached loader objects during the same visit. Only
     // a mode change or mounted/connection lifecycle can retire setup ownership.
     if (connection.firstRun !== previous?.firstRun) {
-      firstRun.routeChanged();
+      firstRun.routeChanged(currentRoute.firstRun);
     } else {
       firstRun.connectionChanged(connection);
     }
@@ -297,25 +305,28 @@ export function createModelSetup(
     pendingPrepareOption = null;
     void wizard.cancel();
     state.pageState = { phase: "loading" };
-    if (canUseSetup(connection.client)) {
-      void detect();
+    if (canUseSetup(connection.client, currentRoute)) {
+      void detect(currentRoute);
     }
   }
 
-  function canUseSetup(client: GatewayBrowserClient | null): client is GatewayBrowserClient {
+  function canUseSetup(
+    client: GatewayBrowserClient | null,
+    currentRoute = routeData(),
+  ): client is GatewayBrowserClient {
     const snapshot = context.gateway.snapshot;
     return Boolean(
       client &&
-      (props.routeData?.firstRun === true || agentSelection().state.selectedId !== null) &&
+      (currentRoute?.firstRun === true || agentSelection(currentRoute).state.selectedId !== null) &&
       snapshot.phase === "connected" &&
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") === true,
     );
   }
 
-  async function detect(): Promise<SystemAgentSetupDetectResult | null> {
+  async function detect(currentRoute = routeData()): Promise<SystemAgentSetupDetectResult | null> {
     const client = context.gateway.snapshot.client;
-    if (!canUseSetup(client) || state.detectionRequest) {
+    if (!canUseSetup(client, currentRoute) || state.detectionRequest) {
       return null;
     }
     resetVerify();
@@ -326,7 +337,7 @@ export function createModelSetup(
     }
     const token = {};
     state.detectionRequest = token;
-    const completion = runDetection([client, agentSelection().state.selectedId, token]);
+    const completion = runDetection([client, agentSelection(currentRoute).state.selectedId, token]);
     setDetectionRequest({ completion });
     const outcome = await completion;
     return outcome?.token === token && "value" in outcome ? outcome.value : null;
@@ -399,77 +410,8 @@ export function createModelSetup(
     state.manualError = null;
   }
 
-  async function handleWizardDone({
-    startMethod,
-    preparedModelRef,
-    activationTargetId: targetId,
-    modelActivation,
-    isCurrent,
-  }: ModelSetupWizardCompletion): Promise<void> {
-    const prepareOption =
-      startMethod === "openclaw.setup.prepare.start" ? pendingPrepareOption : null;
-    const catalogPreference = nativeSessionCatalogPreference();
-    pendingPrepareOption = null;
-    if (startMethod !== "openclaw.setup.prepare.start") {
-      if (isCurrent?.() === false) {
-        wizard.close();
-        return;
-      }
-      if (!modelActivation) {
-        wizard.fail(
-          t(
-            startMethod === "openclaw.setup.activate.start"
-              ? "modelSetup.errors.activationFailed"
-              : "modelSetup.wizard.notComplete",
-          ),
-        );
-        return;
-      }
-      wizard.close();
-      const result: SystemAgentSetupActivateResult = { ok: true, ...modelActivation };
-      const activationTarget = targetId ?? "provider-auth";
-      state.activationState = mapActivationResult({
-        result,
-        targetId: activationTarget,
-        fallbackError: t("modelSetup.errors.activationFailed"),
-        restartWarning: t("labsPage.restartRequired"),
-        refreshWarning: state.setupRefreshWarning,
-      });
-      if (state.activationState.phase === "success") {
-        state.manualApiKey = "";
-      }
-      firstRun.finishActivation(result, activationTarget, state.setupRefreshWarning);
-      return;
-    }
-    let activation: ReturnType<typeof candidateActivation> | undefined;
-    if (prepareOption && preparedModelRef) {
-      activation = preparedModelActivation(prepareOption, preparedModelRef);
-    } else {
-      const result = await detect();
-      if (!result) {
-        wizard.fail(t("modelSetup.errors.requestFailed"));
-        return;
-      }
-      if (prepareOption) {
-        state.pageState = preparedModelPageState(result, prepareOption.modelTarget);
-        const candidate = findPreparedModelCandidate(result, prepareOption.id);
-        if (!candidate) {
-          wizard.fail(t("modelSetup.prepare.providerNotReady", { provider: prepareOption.label }));
-          return;
-        }
-        activation = candidateActivation(candidate);
-      }
-    }
-    wizard.close();
-    if (activation) {
-      void activate(
-        { ...activation, ...catalogPreference },
-        activationTargetId(activation.kind, activation.modelRef),
-      );
-    }
-  }
-
   function retireWizardMutation(): void {
+    wizardSaving.retire();
     wizardMutationGeneration += 1;
     wizardMutationActive = false;
   }
@@ -502,7 +444,7 @@ export function createModelSetup(
     wizardMutationActive = true;
     notify();
     try {
-      const mutation = await context.runtimeConfig.runExternalMutation(
+      const pending = context.runtimeConfig.runExternalMutation(
         async (mutationClient) => {
           if (mutationClient !== client) {
             throw new Error("Connection changed before model setup continued.");
@@ -517,6 +459,8 @@ export function createModelSetup(
           dispatchError: t("modelSetup.errors.requestFailed"),
         },
       );
+      await wizardSaving.present(pending, () => generation === wizardMutationGeneration);
+      const mutation = await pending;
       if (generation !== wizardMutationGeneration) {
         if (mutation.ok && !mutation.refresh.ok && connected) {
           state.setupRefreshWarning = mutation.refresh.error;
@@ -536,7 +480,16 @@ export function createModelSetup(
         // The coordinated wizard action has settled; follow-up activation owns
         // its own mutation lane and must not be blocked by the prior busy flag.
         wizardMutationActive = false;
-        await handleWizardDone(completion);
+        wizardSaving.retire();
+        const prepareOption = pendingPrepareOption;
+        const catalogPreference = nativeSessionCatalogPreference();
+        pendingPrepareOption = null;
+        await completeModelSetupWizard(
+          { state, firstRun, wizard, detect, activate },
+          completion,
+          prepareOption,
+          catalogPreference,
+        );
       } else if (state.wizardState.phase === "step" && state.wizardState.busy) {
         state.wizardState = { ...state.wizardState, busy: false };
       }
@@ -556,7 +509,9 @@ export function createModelSetup(
     const generation = wizardMutationGeneration;
     state.cancellationNotice = null;
     try {
-      const outcome = await wizard.requestCancellation();
+      const pending = wizard.requestCancellation();
+      await wizardSaving.present(pending, () => generation === wizardMutationGeneration);
+      const outcome = await pending;
       if (generation !== wizardMutationGeneration) {
         return;
       }
@@ -618,7 +573,10 @@ export function createModelSetup(
       activation: state.activationState,
       verify: state.verifyState,
       connection: props.embedded ? undefined : login.pageActions,
-      wizard: state.wizardState,
+      wizard:
+        state.wizardState.phase === "step" && wizardMutationActive
+          ? { ...state.wizardState, busy: true }
+          : state.wizardState,
       wizardMode: state.wizardMode,
       wizardValue: state.wizardDraft.value,
       canAdmin,
@@ -644,7 +602,7 @@ export function createModelSetup(
       onNativeSessionCatalogsChange: (enabled: boolean) => {
         state.nativeSessionCatalogsEnabled = enabled;
       },
-      firstRun: props.routeData?.firstRun === true,
+      firstRun: routeData()?.firstRun === true,
       iconUrls: state.iconUrls,
       onDetect: () => {
         if (!state.detectionRequest && firstRun.retryDetection()) {
@@ -705,15 +663,22 @@ export function createModelSetup(
     };
   };
   const synchronizeCurrentGateway = () => {
-    synchronizeGateway(props.routeData);
+    synchronizeGateway(routeData());
+    login.synchronizePresentation();
     notify();
   };
   createEffect(
-    () => [props.routeData, agentSelection()],
-    ([routeData, selection]) => {
+    () => {
+      const currentRoute = routeData();
+      return [
+        currentRoute ? { firstRun: currentRoute.firstRun } : undefined,
+        agentSelection(currentRoute),
+      ] as const;
+    },
+    ([currentRoute, selection]) => {
       // Selection receipts retire wizard ownership before another setup action can run.
       const stop = selection.subscribe(synchronizeCurrentGateway);
-      synchronizeGateway(routeData);
+      synchronizeGateway(currentRoute);
       notify();
       return stop;
     },
@@ -741,6 +706,7 @@ export function createModelSetup(
   return {
     view,
     login,
+    wizardSaving: wizardSaving.saving,
     revision: projection.revision,
   };
 }

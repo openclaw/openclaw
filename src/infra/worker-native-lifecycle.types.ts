@@ -19,7 +19,7 @@ export type NativeWorkerRuntime = {
   service(): void;
   post(message: NativeWorkerRequest, transfers?: readonly Transferable[]): void;
   refreshReference(): void;
-  resourceBroker(): SpawnBrokerHost;
+  resourceBroker(): Pick<SpawnBrokerHost, "captureNativeResource" | "sealNativeResources">;
 };
 
 type NativeWorkerOptions = Omit<WorkerOptions, "env" | "transferList"> & {

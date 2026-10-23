@@ -7,6 +7,7 @@ import {
   readChatOutboxRecovery as recovery,
   restoreChatOutboxRecovery as restore,
 } from "../../lib/chat/outbox-recovery.ts";
+import { listStoredChatOutboxes as outboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission as capture,
   storageTargetForGateway,
@@ -21,12 +22,11 @@ import {
   retryQueuedChatMessage as retry,
 } from "./chat-send-actions.ts";
 import {
-  ChatComposerPersistence,
-  admitStoredChatComposerQueueItemResult as admit,
-  listStoredChatOutboxes as outboxes,
   loadChatComposerState,
   persistChatComposerState as persist,
-} from "./composer-persistence.ts";
+} from "./composer-draft-storage.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
+import { admitStoredChatComposerQueueItemResult as admit } from "./composer-queue-persistence.ts";
 
 beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
 afterEach(() => {

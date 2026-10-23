@@ -30,6 +30,7 @@ import {
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const sourcePolicyTest = "src/infra/fs-safe-import-boundary.test.ts";
+const lintSuppressionInventory = "test/scripts/lint-suppressions.test.ts";
 
 function writeFiles(cwd: string, files: Record<string, string>) {
   for (const [file, source] of Object.entries(files)) {
@@ -215,6 +216,7 @@ describe("CI changed Node test plan", () => {
         "src/agents/command/delivery.settle-reset.integration.test.ts",
         "src/auto-reply/reply/commands-acp.owner.test.ts",
         "src/auto-reply/reply/commands-allowlist.owner.test.ts",
+        "src/auto-reply/reply/commands-plugin.channel-native.test.ts",
         "src/auto-reply/reply/commands-plugin.native-subagents.test.ts",
         "src/gateway/operator-run-recovery.test.ts",
         "src/gateway/server.mcp-session-owner.test.ts",
@@ -551,6 +553,7 @@ describe("CI changed Node test plan", () => {
       "test/scripts/update-restart-module-outcome.test.ts",
       "test/scripts/type-suppression-inventory.test.ts",
       "test/scripts/plugin-sdk-surface-report.test.ts",
+      lintSuppressionInventory,
     ];
     expect(resolvePolicyTestTargets([source])).toEqual([
       ...sourceInventories,
@@ -562,6 +565,30 @@ describe("CI changed Node test plan", () => {
       ...sourceInventories,
       gatewayCallsitesGuard,
     ]);
+  });
+
+  it.each([
+    "scripts/perf/idle-gateway-measure-preload.mjs",
+    "src/example.test.js",
+    "src/.hidden.ts",
+    "extensions/xai/.boundary-stubs/example.d.ts",
+    "extensions/example/.one/.two/file.ts",
+  ])("retains the lint inventory through the actual PR-exempt planner for %s", (changedPath) => {
+    const shards = createChangedNodeTestShards([changedPath], {
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    });
+    expect(shards).not.toBeNull();
+    expect(selectedFiles(shards)).toContain(lintSuppressionInventory);
+  });
+
+  it.each([
+    "scripts/perf/example.mts",
+    "scripts/perf/example.cts",
+    "packages/example/index.js",
+    "docs/example.js",
+  ])("keeps the lint inventory outside unsupported path %s", (changedPath) => {
+    expect(resolvePolicyTestTargets([changedPath])).not.toContain(lintSuppressionInventory);
   });
 
   it("keeps erased-source owner selection independent of history", () => {

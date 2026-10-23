@@ -5,11 +5,11 @@ import { createStoredChatOutboxReader } from "../../lib/chat/outbox-store-projec
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { chatOutboxOwner, listChatOutboxAttention } from "./chat-outbox-owner.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
 import {
-  admitStoredChatComposerQueueItem,
-  loadChatComposerState,
+  admitStoredChatComposerQueueItemResult,
   updateStoredChatComposerQueueItems,
-} from "./composer-persistence.ts";
+} from "./composer-queue-persistence.ts";
 
 const scope = { sessionKey: "agent:writer:review", agentId: "writer" };
 function hostFor(recoveryScope = "owner-a") {
@@ -52,12 +52,12 @@ it("projects only actionable submissions, without message or diagnostic content"
   ] as const) {
     const row = { ...item(String(state), state), sendError: "private diagnostic" };
     expect(
-      admitStoredChatComposerQueueItem(
+      admitStoredChatComposerQueueItemResult(
         host,
         captureChatOutboxAdmission(host, host.sessionKey),
         row,
       ),
-    ).toBe(true);
+    ).toBe("admitted");
   }
   const attention = listChatOutboxAttention(host);
   expect(attention.map((row) => row.id)).toEqual(["failed", "unconfirmed", "held"]);
@@ -123,12 +123,12 @@ it("retains incidents through failed removal and clears them only after canonica
   const host = hostFor();
   const input = item("review", "unconfirmed");
   expect(
-    admitStoredChatComposerQueueItem(
+    admitStoredChatComposerQueueItemResult(
       host,
       captureChatOutboxAdmission(host, host.sessionKey),
       input,
     ),
-  ).toBe(true);
+  ).toBe("admitted");
   const row = loadChatComposerState(host, host.sessionKey).snapshot!.queue[0]!;
   expect(listChatOutboxAttention(host)).toHaveLength(1);
   const write = vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
@@ -156,7 +156,7 @@ it("preserves existing attachment ownership and remembered offline access withou
     attachmentPayload: { key: "payload-a", tabId: "tab-a", recoveryScope: "owner-a" },
     attachments: [{ id: "file", mimeType: "text/plain", fileName: "private.txt" }],
   };
-  admitStoredChatComposerQueueItem(
+  admitStoredChatComposerQueueItemResult(
     host,
     captureChatOutboxAdmission(host, host.sessionKey),
     attachment,

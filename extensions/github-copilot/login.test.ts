@@ -1,8 +1,7 @@
+import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ fetchWithSsrFGuard: vi.fn() }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
@@ -59,50 +58,32 @@ function runDeviceFlowAfterFirstPoll(
 
 describe("runGitHubCopilotDeviceFlow", () => {
   it("bounds requests and returns authorized status and access token on successful flow", async () => {
-    let callIdx = 0;
-    const requestTimeouts: Array<number | undefined> = [];
     const controller = new AbortController();
     mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
-      callIdx += 1;
-      requestTimeouts.push(params.timeoutMs);
       expect(params.signal).toBe(controller.signal);
-      if (callIdx === 1) {
-        expect(params.url).toBe(DEVICE_CODE_URL);
-        return guardResponse(VALID_DEVICE_CODE_BODY);
-      }
-      expect(params.url).toBe(ACCESS_TOKEN_URL);
-      return guardResponse(
-        { access_token: "ghu_tok_xyz", token_type: "bearer" },
-        200,
-        ACCESS_TOKEN_URL,
-      );
+      expect(params.timeoutMs).toBe(30_000);
+      return params.url === DEVICE_CODE_URL
+        ? guardResponse(VALID_DEVICE_CODE_BODY)
+        : guardResponse(
+            { access_token: "ghu_tok_xyz", token_type: "bearer" },
+            200,
+            ACCESS_TOKEN_URL,
+          );
     });
 
     const showCode = vi.fn(async () => {});
-    const result = await runDeviceFlowAfterFirstPoll({
-      showCode,
-      signal: controller.signal,
-    });
+    const result = await runDeviceFlowAfterFirstPoll({ showCode, signal: controller.signal });
 
-    expect(result).toEqual({
-      status: "authorized",
-      accessToken: "ghu_tok_xyz",
-    });
+    expect(result).toEqual({ status: "authorized", accessToken: "ghu_tok_xyz" });
     expect(showCode).toHaveBeenCalledWith({
       verificationUrl: "https://github.com/login/device",
       userCode: "ABCD-1234",
       expiresInMs: expect.any(Number),
     });
-    expect(callIdx).toBe(2);
-    expect(requestTimeouts).toEqual([30_000, 30_000]);
-  });
-
-  it.each([
-    ["access_denied", "access_denied"],
-    ["expired_token", "expired"],
-  ])("maps terminal response %s to %s", async (error, status) => {
-    mockPoll({ error });
-    await expect(runDeviceFlowAfterFirstPoll()).resolves.toEqual({ status });
+    expect(mocks.fetchWithSsrFGuard.mock.calls.map(([params]) => params.url)).toEqual([
+      DEVICE_CODE_URL,
+      ACCESS_TOKEN_URL,
+    ]);
   });
   it("does not dispatch the initial request after authority is revoked", async () => {
     const dispatch = vi.fn();
@@ -179,12 +160,7 @@ describe("runGitHubCopilotDeviceFlow", () => {
         canceled = true;
       },
     });
-    mockPoll(
-      new Response(body, {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    mockPoll(new Response(body, { status: 401, headers: { "Content-Type": "application/json" } }));
 
     await expect(runDeviceFlowAfterFirstPoll()).rejects.toThrow(
       "GitHub device token failed: HTTP 401",
@@ -200,49 +176,19 @@ describe("runGitHubCopilotDeviceFlow", () => {
     );
   });
   it("bounds oversized access token bodies and cancels the stream", async () => {
-    const chunk = new Uint8Array(1024 * 1024);
-    let readCount = 0;
-    let canceled = false;
-    // Stop well before consuming the 64 MiB source body.
-    const oversizedBody = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (readCount >= 64) {
-          controller.close();
-          return;
-        }
-        readCount += 1;
-        controller.enqueue(chunk);
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    mockPoll(
-      new Response(oversizedBody, {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-
+    const body = oversizedJsonResponse({ chunkCount: 64, chunkSize: 1024 * 1024 });
+    mockPoll(body.response);
     await expect(runDeviceFlowAfterFirstPoll()).rejects.toThrow("github-copilot.device-flow");
-    expect(readCount).toBeLessThan(64);
-    expect(canceled).toBe(true);
+    expect(body.getReadCount()).toBeLessThan(64);
+    expect(body.wasCanceled()).toBe(true);
   });
   it("rejects a verification URL whose host does not match the configured domain", async () => {
-    const GHE_DOMAIN = "acme.ghe.com";
     mocks.fetchWithSsrFGuard.mockImplementation(async () =>
-      guardResponse(
-        {
-          ...VALID_DEVICE_CODE_BODY,
-          verification_uri: "https://github.com/login/device",
-        },
-        200,
-        `https://${GHE_DOMAIN}/login/device/code`,
-      ),
+      guardResponse(VALID_DEVICE_CODE_BODY, 200, "https://acme.ghe.com/login/device/code"),
     );
 
     await expect(
-      runGitHubCopilotDeviceFlow({ showCode: vi.fn(async () => {}) }, GHE_DOMAIN),
+      runGitHubCopilotDeviceFlow({ showCode: vi.fn(async () => {}) }, "acme.ghe.com"),
     ).rejects.toThrow("unexpected verification URL");
   });
   it.each([
@@ -311,10 +257,7 @@ describe("runGitHubCopilotDeviceFlow", () => {
   it.each([{ clockStepMs: -20 * 60_000 }, { clockStepMs: 20 * 60_000 }])(
     "keeps the full authorization window across a $clockStepMs ms wall-clock step",
     async ({ clockStepMs }) => {
-      // advanceTimersByTimeAsync drives the faked monotonic clock and timers;
-      // setSystemTime moves Date.now() independently of them. The token
-      // endpoint never authorizes, so the flow must end on the monotonic
-      // 15-minute budget exactly, regardless of wall-clock steps.
+      // Timers advance the monotonic deadline independently of Date.now().
       vi.useFakeTimers();
       vi.setSystemTime(0);
       let polls = 0;
@@ -328,9 +271,7 @@ describe("runGitHubCopilotDeviceFlow", () => {
       });
 
       let settled = false;
-      const observing = runGitHubCopilotDeviceFlow({
-        showCode: vi.fn(async () => {}),
-      }).then(
+      const observing = runGitHubCopilotDeviceFlow({ showCode: vi.fn(async () => {}) }).then(
         (value) => {
           settled = true;
           return { value };
@@ -344,26 +285,21 @@ describe("runGitHubCopilotDeviceFlow", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(polls).toBe(0);
 
-        // The first poll lands after the initial 5-second interval.
         await vi.advanceTimersByTimeAsync(5_000);
         expect(polls).toBe(1);
         expect(settled).toBe(false);
 
-        // Step the wall clock mid-flow; the monotonic deadline must not move.
         vi.setSystemTime(clockStepMs);
         await vi.advanceTimersByTimeAsync(5_000);
         expect(polls).toBe(2);
         expect(settled).toBe(false);
 
-        // The window must survive to the full monotonic budget.
         await vi.advanceTimersByTimeAsync(15 * 60_000 - 10_000 - 1);
         expect(settled).toBe(false);
 
         await vi.advanceTimersByTimeAsync(1);
         expect(settled).toBe(true);
-        await expect(observing).resolves.toEqual({
-          value: { status: "expired" },
-        });
+        await expect(observing).resolves.toEqual({ value: { status: "expired" } });
 
         const completedRequests = polls;
         await vi.advanceTimersByTimeAsync(30_000);

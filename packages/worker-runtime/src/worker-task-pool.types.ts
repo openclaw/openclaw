@@ -82,6 +82,8 @@ export type WorkerTaskOptions<Input> = {
 export type OwnedWorkerTaskOptions<Input> = Omit<WorkerTaskOptions<Input>, "onRequest"> & {
   /** Host diagnostics classify this operation before publishing bounded labels. */
   diagnosticOperation?: string;
+  /** Optional shared sequence word; wakeups are hints, never task receipts. */
+  progressSignal?: Int32Array<SharedArrayBuffer>;
 } & (
     | { onRequest?: WorkerTaskOptions<Input>["onRequest"]; onRequestSync?: never }
     | {

@@ -200,38 +200,6 @@ export function adoptStartedChatRun(
   }
 }
 
-/** The run sessions.create acknowledged for the retained first prompt. Read it
- *  before transcript hydration or admission: a cached receipt retires the prompt. */
-export function readAcknowledgedInitialRun(host: Parameters<typeof adoptStartedChatRun>[0]) {
-  const initial = host.chatSubmissions?.readInitial(
-    host.sessionKey,
-    host.client ?? null,
-    host.currentSessionId,
-  );
-  return initial?.pending
-    ? {
-        id: initial.pendingRunId,
-        startedAt: initial.message.timestamp,
-        sessionId: initial.sessionId,
-      }
-    : undefined;
-}
-
-/** Adopt it like a chat.send ACK so the working claw never waits for roster events.
- *  Hydration may bind the pane to a replacement physical session; skip that run then. */
-export function adoptAcknowledgedInitialRun(
-  host: Parameters<typeof adoptStartedChatRun>[0],
-  run: ReturnType<typeof readAcknowledgedInitialRun>,
-): void {
-  if (
-    run &&
-    !host.chatRunId &&
-    (!run.sessionId || !host.currentSessionId || run.sessionId === host.currentSessionId)
-  ) {
-    adoptStartedChatRun(host, run.id, run.startedAt);
-  }
-}
-
 export function setChatRunError(
   state: { chatRunError?: ChatRunError | null },
   summary: string,

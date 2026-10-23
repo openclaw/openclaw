@@ -4,13 +4,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
+import { bootstrapSizeCheck as check } from "./doctor-core-bootstrap-size-check.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import type { HealthFinding } from "./health-checks.js";
 
 const runtime = { log() {}, error() {}, exit() {} };
 
-const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/bootstrap-size")!;
 function expectFinding(findings: readonly HealthFinding[], fields: Partial<HealthFinding>) {
   expect(findings).toContainEqual(
     expect.objectContaining({ checkId: "core/doctor/bootstrap-size", ...fields }),
@@ -68,6 +68,9 @@ describe("core/doctor/bootstrap-size", () => {
       message: expect.stringContaining("AGENTS.md"),
       path: join(root, "packages", "core", "AGENTS.md"),
     });
+    expectFinding(findings, {
+      message: expect.stringContaining("No content from this file reaches the model."),
+    });
   });
 
   it("honors the per-agent bootstrapMaxChars override in health findings", async () => {
@@ -81,7 +84,9 @@ describe("core/doctor/bootstrap-size", () => {
 
     expectFinding(findings, {
       severity: "warning",
-      message: expect.stringContaining("AGENTS.md"),
+      message: expect.stringContaining(
+        "The model receives start/end excerpts as space permits, plus a bounded policy digest when available; other middle text is omitted.",
+      ),
       fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
     });
     await expect(

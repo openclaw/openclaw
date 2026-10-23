@@ -347,6 +347,10 @@ when the last bridge progress looked terminal (for example a raw response
 item or response-completion event) but the Gateway still considers the
 embedded run active.
 
+A stalled-session warning is an observation, not permission to stop a run.
+Recovery events follow the captured session controller's decision; diagnostic
+thresholds cannot shorten its provider, tool, retry, backend, or cleanup allowances.
+
 Inspect the live recorder:
 
 ```bash

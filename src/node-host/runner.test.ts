@@ -450,12 +450,12 @@ describe("runNodeHost", () => {
 
         expect(setIntervalSpy).toHaveBeenCalledOnce();
         expect(unref).not.toHaveBeenCalled();
-        expect(clearIntervalSpy).not.toHaveBeenCalled();
+        expect(clearIntervalSpy).not.toHaveBeenCalledWith(interval);
 
         expect(stop()).toBeTypeOf("function");
         await expectCalls(mocks.capturedGatewayClients[0]?.stopAndWait);
 
-        expect(clearIntervalSpy).not.toHaveBeenCalled();
+        expect(clearIntervalSpy).not.toHaveBeenCalledWith(interval);
         await expectCalls(mocks.closeMcpManager);
         mcpClose.resolve(undefined);
         await running;

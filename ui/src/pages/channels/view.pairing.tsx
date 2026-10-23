@@ -353,7 +353,9 @@ function PairingPromptContent(params: {
   props: ChannelsProps;
 }) {
   const request = () => params.prompt.request;
-  const busy = () => params.props.channels.pairingBusyRequestId === request().requestId;
+  const busy = () =>
+    params.props.mutationBusy?.pairing ||
+    params.props.channels.pairingBusyRequestId === request().requestId;
   const approving = () => params.prompt.kind === "approve";
   const ownerMissing = () =>
     params.props.channels.pairingSnapshot?.commandOwnerConfigured === false;

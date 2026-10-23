@@ -487,24 +487,44 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
   }
 }
 
-.shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
-  --shell-controls-width: var(--shell-chrome-control-size);
-  --shell-nav-width: var(--shell-nav-rail-width);
-  grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
+/* Resize the content once; reveal the fixed-width navigation on the compositor. */
+.shell--navigation-rail:not(.shell--mobile-nav) {
+  transition-property: grid-template-rows;
+
+  .shell-nav {
+    width: var(--shell-nav-expanded-width);
+    clip-path: inset(0);
+  }
+
+  &.shell--nav-collapsed {
+    --shell-controls-width: var(--shell-chrome-control-size);
+    --shell-nav-width: var(--shell-nav-rail-width);
+    grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
+
+    .shell-nav {
+      clip-path: inset(0 calc(100% - var(--shell-nav-rail-width)) 0 0);
+
+      &:dir(rtl) {
+        clip-path: inset(0 0 0 calc(100% - var(--shell-nav-rail-width)));
+      }
+    }
+
+    .sidebar-shell {
+      display: none;
+    }
+  }
+
+  /* Connection controls may extend past the rail while it is collapsed. */
+  .shell-nav:has(.sidebar-connection-flag[data-open]) {
+    width: auto;
+    clip-path: none;
+  }
 }
 
 /* Legacy Mac hosts retain the expand + search cluster. */
 html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
   --shell-controls-width: 68px;
-}
-
-.shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) .shell-nav {
-  display: flex;
-}
-
-.shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) .sidebar-shell {
-  display: none;
 }
 
 /* Keep identity and command access in the persistent rail. */

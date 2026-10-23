@@ -186,7 +186,6 @@ async function mountMobileHost(value: ChatDetailsProps) {
     resize() {},
     keyboardVisible: false,
     onComposerEditingChange() {},
-    onViewportChange() {},
   };
   const element = document.createElement("openclaw-chat-details-mobile-host-content");
   element.details = value;

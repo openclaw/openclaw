@@ -6,7 +6,7 @@ export type SettingsMediaDeviceState = {
   permissionRequired: boolean;
   selectedDeviceId: string;
   discovery: Promise<string | null> | null;
-  error: string | null;
+  selection: Promise<void> | null;
 };
 
 export type ConfigFormMode = "form" | "raw";
@@ -40,7 +40,7 @@ export function createMediaDeviceState(): Omit<SettingsMediaDeviceState, "select
     permissionRequired: true,
     discovery: null,
     activeDiscovery: null,
-    error: null,
+    selection: null,
     loaded: false,
     requestsPermission: false,
   };

@@ -101,14 +101,13 @@ export function registerExecApprovalFollowupRuntimeHandoff(params: {
   sessionKey: string;
   bashElevated?: ExecElevatedDefaults;
   resultText?: string;
-  nowMs?: number;
 }): ExecApprovalFollowupRuntimeHandoffRegistration | undefined {
   const approvalId = normalizeOptionalString(params.approvalId);
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!approvalId || !sessionKey || (!params.bashElevated && params.resultText === undefined)) {
     return undefined;
   }
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = Date.now();
   pruneExpiredExecApprovalFollowupRuntimeHandoffs(nowMs);
   const expiresAtMs = resolveExpiresAtMsFromDurationMs(
     EXEC_APPROVAL_FOLLOWUP_RUNTIME_HANDOFF_TTL_MS,
@@ -143,7 +142,6 @@ export function claimExecApprovalFollowupRuntimeHandoff(params: {
   idempotencyKey?: string;
   sessionKey?: string;
   claimId?: string;
-  nowMs?: number;
 }): ExecApprovalFollowupRuntimeHandoff | undefined {
   const handoffId = normalizeOptionalString(params.handoffId);
   const approvalId = normalizeOptionalString(params.approvalId);
@@ -152,7 +150,7 @@ export function claimExecApprovalFollowupRuntimeHandoff(params: {
   if (!handoffId || !approvalId || !idempotencyKey || !claimId) {
     return undefined;
   }
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = Date.now();
   pruneExpiredExecApprovalFollowupRuntimeHandoffs(nowMs);
   const entry = execApprovalFollowupRuntimeHandoffs.get(handoffId);
   if (!entry) {
@@ -179,7 +177,6 @@ export function claimExecApprovalFollowupRuntimeHandoff(params: {
 export function finalizeExecApprovalFollowupRuntimeHandoff(params: {
   handoffId?: string;
   claimId?: string;
-  nowMs?: number;
 }): boolean {
   const handoffId = normalizeOptionalString(params.handoffId);
   const claimId = normalizeOptionalString(params.claimId);
@@ -187,8 +184,7 @@ export function finalizeExecApprovalFollowupRuntimeHandoff(params: {
     return false;
   }
   const entry = execApprovalFollowupRuntimeHandoffs.get(handoffId);
-  const nowMs = params.nowMs ?? Date.now();
-  if (entry && !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })) {
+  if (entry && !isFutureDateTimestampMs(entry.expiresAtMs)) {
     execApprovalFollowupRuntimeHandoffs.delete(handoffId);
     return false;
   }

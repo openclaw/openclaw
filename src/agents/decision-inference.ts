@@ -123,7 +123,6 @@ export async function executePreparedDecision(params: {
   registration: PluginProviderRegistration;
   batch: DecisionBatchV2;
   modelId: string;
-  profileId?: string;
   config: OpenClawConfig;
   options: DecisionEvaluateOptionsV2;
   signal: AbortSignal;
@@ -140,7 +139,7 @@ export async function executePreparedDecision(params: {
   }
   const selected = splitTrailingAuthProfile(params.modelId);
   const modelId = selected.model;
-  const profileId = params.profileId ?? selected.profile;
+  const profileId = selected.profile;
   return withPreparedModelInference<ProviderDecisionOutcomeV2>(
     { cfg: params.config, agentId: params.options.agentId, signal: params.signal },
     { provider: params.registration.provider.id, modelId },

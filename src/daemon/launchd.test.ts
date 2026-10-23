@@ -333,52 +333,46 @@ describe("launchd uninstall", () => {
 });
 
 describe("launchd install", () => {
-  it.each(["ambiguous supervision", "missing loaded definition"] as const)(
-    "aborts before mutation with %s",
+  it("aborts before mutation with ambiguous supervision", async () => {
+    const previous = setGatewayPlist(PREVIOUS_ARGS);
+    state.printError = "launchctl print permission denied";
+    state.printFailuresRemaining = 2;
+
+    await expect(install()).rejects.toMatchObject({ reason: "service-membership-unverified" });
+
+    expect(state.files.get(PLIST)).toBe(previous);
+    expect(state.fileWrites).toEqual([]);
+    expectCommands("print");
+  });
+
+  it.each(["fresh install", "deleted plist"])(
+    "restores absent artifacts after failed activation (%s)",
     async (scenario) => {
-      const previous =
-        scenario === "ambiguous supervision" ? setGatewayPlist(PREVIOUS_ARGS) : undefined;
-      if (scenario === "ambiguous supervision") {
-        state.printError = "launchctl print permission denied";
-        // A denied membership probe must refuse before any native mutation.
-        state.printFailuresRemaining = 2;
+      state.serviceLoaded = false;
+      state.serviceRunning = false;
+      if (scenario === "deleted plist") {
+        state.serviceStates.set(SERVICE_ID, "running");
       } else {
-        state.serviceStates.set(`${DOMAIN}/ai.openclaw.gateway`, "running");
+        state.bootoutError = "Boot-out failed: 5: Input/output error";
+        state.bootoutCode = 5;
       }
-
-      const operation = install();
-      if (scenario === "ambiguous supervision") {
-        await expect(operation).rejects.toMatchObject({ reason: "service-membership-unverified" });
-      } else {
-        await expect(operation).rejects.toThrow("is loaded but its plist is missing");
-        expect(state).toMatchObject({ serviceLoaded: true, serviceRunning: true });
+      state.bootstrapError = "Operation not permitted";
+      state.bootstrapTransient = true;
+      const operation = install({ environment: { OPENCLAW_GATEWAY_PORT: "19000" } });
+      await expect(operation).rejects.toThrow(
+        "launchctl bootstrap failed: Operation not permitted",
+      );
+      for (const path of [PLIST, ENV_FILE, WRAPPER]) {
+        expect(state.files.has(path)).toBe(false);
       }
-
-      expect(state.files.get(PLIST)).toBe(previous);
-      expect(state.fileWrites).toEqual([]);
-      expect(launchctlCommandNames()).toEqual(
-        scenario === "ambiguous supervision" ? ["print"] : ["print", "print"],
+      expect(state).toMatchObject({ serviceLoaded: false, serviceRunning: false });
+      expectCommands(
+        scenario === "deleted plist"
+          ? "print print bootout enable bootstrap print bootout"
+          : "print print enable bootstrap print",
       );
     },
   );
-
-  it("restores absent artifacts after a failed fresh install", async () => {
-    state.serviceLoaded = false;
-    state.serviceRunning = false;
-    state.bootstrapError = "Operation not permitted";
-    state.bootstrapTransient = true;
-    state.bootoutError = "Boot-out failed: 5: Input/output error";
-    state.bootoutCode = 5;
-    const operation = install({ environment: { OPENCLAW_GATEWAY_PORT: "19000" } });
-    await expect(operation).rejects.toMatchObject({
-      message: "launchctl bootstrap failed: Operation not permitted",
-    });
-    await expect(operation).rejects.toBeInstanceOf(Error);
-    for (const path of [PLIST, ENV_FILE, WRAPPER]) {
-      expect(state.files.has(path)).toBe(false);
-    }
-    expectCommands("print print enable bootstrap print");
-  });
 
   it("fails closed when rollback cannot determine the replacement state", async () => {
     // Membership and the prior snapshot see absence; rollback sees the error.
@@ -420,7 +414,7 @@ describe("launchd install", () => {
       [WRAPPER, previousWrapper, 0o700],
     );
     expect(state).toMatchObject({ serviceLoaded: true, serviceRunning: true });
-    expectCommands("print print-disabled print bootout unload bootstrap print bootstrap");
+    expectCommands("print print-disabled print bootout bootstrap print bootstrap");
   });
 
   it("preserves disabled policy and supervision after bootstrap failure", async () => {
@@ -464,7 +458,7 @@ describe("launchd install", () => {
     state.bootoutCode = 5;
 
     await expect(install()).rejects.toThrow(
-      "launchctl bootout failed during LaunchAgent install: Boot-out failed: 5: Input/output error",
+      "launchctl bootout failed: Boot-out failed: 5: Input/output error",
     );
 
     expectCommands("print print bootout print bootout");

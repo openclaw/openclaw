@@ -37,7 +37,6 @@ export function ModelProvidersContent(props: { controller: ModelProvidersOwner }
       body={
         <ModelProviders
           {...current().props}
-          apiKeySaving={props.controller.mutations.apiKeySaving()}
           defaultsSaving={props.controller.mutations.defaultsSaving()}
           logoutSaving={props.controller.logoutSaving()}
           providerDetailsReady={showProviderDetails()}

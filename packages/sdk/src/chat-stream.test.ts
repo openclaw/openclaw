@@ -1,6 +1,7 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, onTestFinished } from "vitest";
 import {
+  collectUntil,
   createAgentEvent,
   createChatEvent,
   createClientFixture,
@@ -40,6 +41,8 @@ const assistant = (seq: number, data: Record<string, unknown>) =>
   createAgentEvent("run", seq, seq, "assistant", data);
 type Expected = { type: OpenClawEvent["type"]; data?: Record<string, unknown>; raw?: number };
 const projected = (data: Record<string, unknown>): Expected => ({ type: "assistant.delta", data });
+const expectedDelta = (text: string, chunk = text, replace?: true) =>
+  projected({ text, delta: chunk, ...(replace ? { replace } : {}) });
 
 async function readEvent(
   pending: Promise<IteratorResult<OpenClawEvent>>,
@@ -47,11 +50,10 @@ async function readEvent(
   raw?: GatewayEvent,
 ) {
   const next = await pending;
-  expect(next.done).toBe(false);
+  expect(next).toMatchObject({ done: false, value: { type: expected.type } });
   if (next.done) {
     throw new Error("Expected projected output");
   }
-  expect(next.value.type).toBe(expected.type);
   if (expected.data !== undefined) {
     expect(next.value.data).toEqual(expected.data);
   }
@@ -98,9 +100,9 @@ describe("SDK streaming projections", () => {
         { event: "custom.debug", seq: 5, payload: { runId: "run", ts: 5, data: { ok: true } } },
       ],
       [
-        projected({ text: "hello", delta: "hello" }),
-        projected({ text: "hello again", delta: " again" }),
-        projected({ text: replacement, delta: replacement, replace: true }),
+        expectedDelta("hello"),
+        expectedDelta("hello again", " again"),
+        expectedDelta(replacement, replacement, true),
         { type: "run.completed" as const, data: { phase: "end", outputText: replacement } },
       ],
     ]),
@@ -108,9 +110,9 @@ describe("SDK streaming projections", () => {
       "chat reconnect and replacement snapshots",
       [chat(1, "hello", "hello"), chat(2, "hello again", "in"), chat(3, "rewritten", "ten")],
       [
-        projected({ text: "hello", delta: "hello" }),
-        projected({ text: "hello again", delta: " again" }),
-        projected({ text: "rewritten", delta: "rewritten", replace: true }),
+        expectedDelta("hello"),
+        expectedDelta("hello again", " again"),
+        expectedDelta("rewritten", "rewritten", true),
       ],
     ],
     assistantScenario(),
@@ -179,10 +181,7 @@ describe("SDK streaming projections", () => {
         }
         expect((await rawEvents(1001).next()).value).toBe(frames[500]);
       } else {
-        const first = await readEvent(
-          iterator.next(),
-          projected({ text: "hello 1", delta: "hello 1" }),
-        );
+        const first = await readEvent(iterator.next(), expectedDelta("hello 1"));
         const observedLive = observeGatewaySequence(oc, 502);
         text += " 501";
         transport.emit(chat(502, undefined, " 501"));
@@ -218,13 +217,9 @@ describe("SDK streaming projections", () => {
         Array.from({ length: 101 }, (_, i) => streamFrame(stream, i + 1, i + 1, "prefix")),
       );
       const iterator = events("run-1");
-      await expect(iterator.next()).resolves.toMatchObject({
-        value: { data: { text: "prefix", delta: "prefix" } },
-      });
+      await readEvent(iterator.next(), expectedDelta("prefix"));
       transport.emit(streamFrame(stream, 1, 102, undefined, " suffix"));
-      await expect(iterator.next()).resolves.toMatchObject({
-        value: { data: { text: "prefix suffix", delta: " suffix" } },
-      });
+      await readEvent(iterator.next(), expectedDelta("prefix suffix", " suffix"));
       await iterator.return?.();
       await publish(
         203,
@@ -292,3 +287,135 @@ function assistantScenario(): Scenario {
     true,
   ];
 }
+
+describe("SDK terminal carriers", () => {
+  const runId = "sdk-observed-run";
+
+  async function collectSdkRunFixture(
+    mode: "live" | "replay",
+    frames: readonly [GatewayEvent, ...GatewayEvent[]],
+  ) {
+    const expectedRaw = structuredClone(frames);
+    const { oc, transport, events } = fixture();
+    transport.request = async () => {
+      throw new Error("This stream test must not issue RPC requests");
+    };
+    const iterator = events(runId);
+    const isMarker = (event: { raw?: GatewayEvent }) => event.raw?.event === "custom.debug";
+    const observed: OpenClawEvent[] = [];
+
+    await oc.connect();
+    if (mode === "replay") {
+      const drained = collectUntil(oc.events(), isMarker);
+      frames.forEach(transport.emit);
+      await drained;
+    } else {
+      const firstEvent = iterator.next();
+      transport.emit(frames[0]);
+      const first = await firstEvent;
+      if (first.done) {
+        throw new Error("SDK stream closed before its start event");
+      }
+      observed.push(first.value);
+    }
+    const pending = collectUntil({ [Symbol.asyncIterator]: () => iterator }, isMarker);
+    if (mode === "live") {
+      frames.slice(1).forEach(transport.emit);
+    }
+    observed.push(...(await pending));
+
+    await expect(
+      collectUntil(oc.rawEvents(), (event) => event.event === "custom.debug"),
+    ).resolves.toEqual(expectedRaw);
+    return observed;
+  }
+
+  const agent = (seq: number, stream: string, data: Record<string, unknown>) =>
+    createAgentEvent(runId, seq, seq, stream, data);
+  const terminalChat = (seq: number, payload: Record<string, unknown>): GatewayEvent => ({
+    event: "chat",
+    seq,
+    payload: { runId, ts: seq, ...payload },
+  });
+  const start = agent(1, "lifecycle", { phase: "start" });
+  const marker: GatewayEvent = { event: "custom.debug", seq: 6, payload: { runId, ts: 6 } };
+
+  const terminalCases = [
+    [
+      {
+        state: "final",
+        message: { role: "assistant", content: [{ type: "text", text: "successful fallback" }] },
+      },
+      "run.completed",
+      { phase: "end", outputText: "successful fallback" },
+    ],
+    [
+      { state: "error", errorMessage: "fallback exhausted" },
+      "run.failed",
+      { phase: "error", error: "fallback exhausted" },
+    ],
+    [
+      { state: "error", errorKind: "timeout", errorMessage: "provider timed out" },
+      "run.timed_out",
+      { phase: "error", error: "provider timed out" },
+    ],
+    [
+      { state: "aborted", stopReason: "rpc" },
+      "run.cancelled",
+      { phase: "end", aborted: true, stopReason: "rpc" },
+    ],
+    [
+      { state: "aborted", stopReason: "timeout" },
+      "run.timed_out",
+      { phase: "end", aborted: true, stopReason: "timeout" },
+    ],
+  ] as const;
+
+  it.each([
+    ...terminalCases.map((entry) => ["live", ...entry] as const),
+    ["replay", ...terminalCases[0]] as const,
+  ])(
+    "preserves %s %j ordering and raw events",
+    async (mode, terminal, terminalType, terminalData) => {
+      const frames = [
+        start,
+        agent(2, "error", { reason: "seq gap", expected: 2, received: 3 }),
+        agent(3, "lifecycle", { phase: "error", endedAt: 3, error: "retryable provider failure" }),
+        terminalChat(4, {
+          state: "delta",
+          message: { role: "assistant", content: "partial fallback" },
+        }),
+        terminalChat(5, terminal),
+        marker,
+      ] as const;
+      const observed = await collectSdkRunFixture(mode, frames);
+
+      expect(observed.map((event) => event.type)).toEqual([
+        "run.started",
+        "raw",
+        "raw",
+        "assistant.delta",
+        terminalType,
+        "raw",
+      ]);
+      expect(observed.at(-2)?.data).toEqual(terminalData);
+    },
+  );
+  it.each([
+    { stopReason: "rpc", terminalType: "run.cancelled", mode: "live" },
+    { stopReason: "timeout", terminalType: "run.timed_out", mode: "replay" },
+  ] as const)(
+    "emits one $mode $stopReason terminal across both carriers",
+    async ({ mode, stopReason, terminalType }) => {
+      const frames = [
+        start,
+        terminalChat(2, { state: "aborted", stopReason }),
+        agent(3, "lifecycle", { phase: "end", status: "cancelled", aborted: true, stopReason }),
+        marker,
+      ] as const;
+      const observed = await collectSdkRunFixture(mode, frames);
+
+      expect(observed.map((event) => event.type)).toEqual(["run.started", terminalType, "raw"]);
+    },
+  );
+});

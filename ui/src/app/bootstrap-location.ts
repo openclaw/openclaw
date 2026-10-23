@@ -5,7 +5,7 @@ import type {
   SessionsResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsListResult } from "../api/types.ts";
-import { isSessionRouteId, pathForRoute, pluginSlugCandidate } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { routeIdFromPath, type ApplicationRouter } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
@@ -31,10 +31,8 @@ import { loadGatewaySessionSelection } from "./settings.ts";
 // candidates remain explicit, even before Gateway hello registers plugin tabs.
 function isPersistedSessionLanding(location: RouteLocation, basePath: string): boolean {
   return (
-    !new URLSearchParams(location.search + "&" + location.hash.slice(1)).has("session") &&
-    !pluginSlugCandidate(location.pathname, basePath) &&
-    (routeIdFromPath(location.pathname, basePath) === null ||
-      /^\/chat\/?$/u.test(location.pathname.slice(basePath.length)))
+    isDefaultChatLanding(location, basePath, routeIdFromPath) &&
+    !/^\/chat\/main\/?$/u.test(location.pathname.slice(basePath.length))
   );
 }
 
@@ -191,29 +189,24 @@ export async function resolveInitialApplicationLocation(params: {
   }
   const client = await waitForGatewayClient(params.gateway, params.signal);
   const hello = params.gateway.snapshot.hello;
-  let agentsList = params.agentsList();
-  let sessionKey = params.sessionKey.trim() || params.gateway.snapshot.sessionKey;
-
-  agentsList = (await params.ensureAgentsList?.()) ?? agentsList;
+  const agentsList = (await params.ensureAgentsList?.()) ?? params.agentsList();
   params.signal.throwIfAborted();
   if (params.gateway.snapshot.client !== client || params.gateway.snapshot.hello !== hello) {
     return resolveInitialApplicationLocation(params);
   }
-  const defaults = { agentsList, hello: params.gateway.snapshot.hello };
+  const defaults = { agentsList, hello };
+  const mainKey = resolveUiConfiguredMainKey(defaults);
   const defaultAgentId = resolveUiDefaultAgentId(defaults);
+  let sessionKey = params.sessionKey.trim() || params.gateway.snapshot.sessionKey;
   let agentId =
     parseAgentSessionKey(sessionKey)?.agentId ??
     resolvePersistedAgentId(params.selectedAgentId, agentsList) ??
     defaultAgentId;
   if (agentsList && !resolvePersistedAgentId(agentId, agentsList)) {
     agentId = resolvePersistedAgentId(params.selectedAgentId, agentsList) ?? defaultAgentId;
-    sessionKey = buildAgentMainSessionKey({
-      agentId,
-      mainKey: resolveUiConfiguredMainKey(defaults),
-    });
+    sessionKey = buildAgentMainSessionKey({ agentId, mainKey });
   }
 
-  const mainKey = resolveUiConfiguredMainKey(defaults);
   const identity = resolveUiConversationIdentity(defaults, sessionKey, agentId);
   sessionKey = identity.sessionKey;
   agentId = identity.agentId ?? agentId;

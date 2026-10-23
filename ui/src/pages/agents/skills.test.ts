@@ -8,6 +8,7 @@ import {
 } from "../../lib/config/runtime-config-capability.ts";
 import { createSkill } from "../skills/view.test-support.ts";
 import { createAgentConfigActions } from "./agent-config-actions.ts";
+import { createAgentsPageLifetime } from "./agents-page-lifetime.ts";
 import { createAgentSkillsReset, type AgentSkillsState } from "./skills.ts";
 
 describe("createAgentSkillActions", () => {
@@ -66,6 +67,7 @@ describe("createAgentSkillsReset", () => {
     };
     const onUpdated = vi.fn();
     const reset = createAgentSkillsReset({
+      retired: createAgentsPageLifetime().retired,
       state,
       context: { agents, runtimeConfig },
       canReset: () => true,
@@ -111,6 +113,7 @@ describe("createAgentSkillsReset", () => {
     };
     const isCurrent = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
     const reset = createAgentSkillsReset({
+      retired: createAgentsPageLifetime().retired,
       state,
       context: { agents, runtimeConfig },
       canReset: () => true,

@@ -7,6 +7,7 @@ import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { buildHttpError } from "../sdk/event-helpers.js";
 import { editMatrixMessage, readMatrixMessages } from "./messages.js";
+import type { MatrixMessageSummary } from "./types.js";
 
 const ROOM = "!room:example.org";
 
@@ -59,30 +60,29 @@ function createPollStartEvent(params?: {
   };
 }
 
-function createHistoryMessage(
+function message(
   eventId: string,
   body: string,
   timestamp: number,
   params: { sender?: string; threadId?: string; replaces?: string; omitNewContent?: boolean } = {},
 ): Record<string, unknown> {
+  const content: Record<string, unknown> = { msgtype: "m.text", body };
+  if (params.threadId) {
+    content["m.relates_to"] = { rel_type: "m.thread", event_id: params.threadId };
+  }
+  if (params.replaces) {
+    content.body = `* ${body}`;
+    content["m.relates_to"] = { rel_type: "m.replace", event_id: params.replaces };
+    if (!params.omitNewContent) {
+      content["m.new_content"] = { msgtype: "m.text", body };
+    }
+  }
   return {
     event_id: eventId,
     sender: params.sender ?? "@alice:example.org",
     type: "m.room.message",
     origin_server_ts: timestamp,
-    content: {
-      msgtype: "m.text",
-      body: params.replaces ? `* ${body}` : body,
-      ...(params.threadId
-        ? { "m.relates_to": { rel_type: "m.thread", event_id: params.threadId } }
-        : {}),
-      ...(params.replaces
-        ? {
-            "m.relates_to": { rel_type: "m.replace", event_id: params.replaces },
-            ...(params.omitNewContent ? {} : { "m.new_content": { msgtype: "m.text", body } }),
-          }
-        : {}),
-    },
+    content,
   };
 }
 
@@ -162,12 +162,19 @@ const readHistory = (opts: Parameters<typeof readMatrixMessages>[1]) =>
 const readThread = (client: MatrixClient, before?: string) =>
   readHistory({ client, threadId: "$thread-root", limit: 1, before });
 
-function threadPage(root = createHistoryMessage("$thread-root", "thread root", 10)) {
+async function expectHistory(
+  chunk: Array<Record<string, unknown>>,
+  expected: MatrixMessageSummary[],
+  opts: Parameters<typeof readHistory>[0] = {},
+) {
+  const { client } = createMessagesClient({ chunk });
+  expect((await readHistory({ client, ...opts })).messages).toMatchObject(expected);
+}
+
+function threadPage(root = message("$thread-root", "thread root", 10)) {
   return createMessagesClient({
     pollRoot: root,
-    threadRelations: [
-      createHistoryMessage("$thread-reply", "thread reply", 20, { threadId: "$thread-root" }),
-    ],
+    threadRelations: [message("$thread-reply", "thread reply", 20, { threadId: "$thread-root" })],
   });
 }
 
@@ -305,9 +312,9 @@ describe("matrix message actions", () => {
     { direction: "forward", after: "previous-page" },
   ])("collapses valid Matrix replacements in $direction history", async ({ after }) => {
     const chronological = [
-      createHistoryMessage("$original", "original text", 10),
-      createHistoryMessage("$edit-old", "intermediate text", 20, { replaces: "$original" }),
-      createHistoryMessage("$edit-new", "final text", 30, { replaces: "$original" }),
+      message("$original", "original text", 10),
+      message("$edit-old", "intermediate text", 20, { replaces: "$original" }),
+      message("$edit-new", "final text", 30, { replaces: "$original" }),
     ];
     const chunk = after ? chronological : chronological.toReversed();
     const { client } = createMessagesClient({ chunk });
@@ -328,73 +335,58 @@ describe("matrix message actions", () => {
   });
 
   it("uses the Matrix event-id tie-break for equally timed replacements", async () => {
-    const winner = createHistoryMessage("$edit-z", "winning tie", 20, { replaces: "$original" });
+    const winner = message("$edit-z", "winning tie", 20, { replaces: "$original" });
     const content = winner.content as Record<string, unknown>;
     (content["m.new_content"] as Record<string, unknown>)["m.relates_to"] = {
       rel_type: "m.thread",
       event_id: "$forged-thread",
     };
-    const { client } = createMessagesClient({
-      chunk: [
-        createHistoryMessage("$edit-a", "earlier tie", 20, { replaces: "$original" }),
+    await expectHistory(
+      [
+        message("$edit-a", "earlier tie", 20, { replaces: "$original" }),
         winner,
-        createHistoryMessage("$original", "original text", 10),
+        message("$original", "original text", 10),
       ],
-    });
-
-    const result = await readHistory({ client });
-
-    expect(result.messages).toMatchObject([
-      { eventId: "$original", body: "winning tie", relatesTo: undefined },
-    ]);
+      [{ eventId: "$original", body: "winning tie", relatesTo: undefined }],
+    );
   });
 
   it("ignores malformed and cross-sender Matrix replacements", async () => {
-    const { client } = createMessagesClient({
-      chunk: [
-        createHistoryMessage("$forged", "forged text", 40, {
+    await expectHistory(
+      [
+        message("$forged", "forged text", 40, {
           replaces: "$original",
           sender: "@mallory:example.org",
         }),
-        createHistoryMessage("$malformed", "malformed text", 30, {
+        message("$malformed", "malformed text", 30, {
           replaces: "$original",
           omitNewContent: true,
         }),
-        createHistoryMessage("$original", "original text", 10),
+        message("$original", "original text", 10),
       ],
-    });
-
-    const result = await readHistory({ client });
-
-    expect(result.messages).toMatchObject([{ eventId: "$original", body: "original text" }]);
+      [{ eventId: "$original", body: "original text" }],
+    );
   });
 
   it("preserves a valid edit when its original is on another history page", async () => {
-    const { client } = createMessagesClient({
-      chunk: [
-        createHistoryMessage("$edit", "cross-page final text", 20, { replaces: "$original" }),
+    await expectHistory(
+      [message("$edit", "cross-page final text", 20, { replaces: "$original" })],
+      [
+        {
+          eventId: "$edit",
+          body: "cross-page final text",
+          relatesTo: { relType: "m.replace", eventId: "$original" },
+        },
       ],
-    });
-
-    const result = await readHistory({ client, after: "previous-page" });
-
-    expect(result.messages).toMatchObject([
-      {
-        eventId: "$edit",
-        body: "cross-page final text",
-        relatesTo: { relType: "m.replace", eventId: "$original" },
-      },
-    ]);
+      { after: "previous-page" },
+    );
   });
 
   it("does not revive a redacted original through a replacement event", async () => {
-    const redactedOriginal = createHistoryMessage("$original", "redacted original", 10);
+    const redactedOriginal = message("$original", "redacted original", 10);
     redactedOriginal.unsigned = { redacted_because: {} };
     const { client } = createMessagesClient({
-      chunk: [
-        createHistoryMessage("$edit", "redacted edit", 20, { replaces: "$original" }),
-        redactedOriginal,
-      ],
+      chunk: [message("$edit", "redacted edit", 20, { replaces: "$original" }), redactedOriginal],
     });
 
     const result = await readHistory({ client });
@@ -403,10 +395,10 @@ describe("matrix message actions", () => {
   });
 
   it("applies bundled Matrix replacements to first-page thread roots", async () => {
-    const threadRoot = createHistoryMessage("$thread-root", "original root", 10);
+    const threadRoot = message("$thread-root", "original root", 10);
     threadRoot.unsigned = {
       "m.relations": {
-        "m.replace": createHistoryMessage("$thread-edit", "edited root", 20, {
+        "m.replace": message("$thread-edit", "edited root", 20, {
           replaces: "$thread-root",
         }),
       },
@@ -421,14 +413,14 @@ describe("matrix message actions", () => {
   it("filters Matrix thread events out of main-room reads", async () => {
     const { client } = createMessagesClient({
       chunk: [
-        createHistoryMessage("$thread-reply", "thread reply", 20, { threadId: "$thread-root" }),
-        createHistoryMessage("$main", "main room", 10),
+        message("$thread-reply", "thread reply", 20, { threadId: "$thread-root" }),
+        message("$main", "main room", 10),
       ],
     });
 
     const result = await readHistory({ client });
 
-    expect(result.messages.map((message) => message.eventId)).toEqual(["$main"]);
+    expect(result.messages.map((event) => event.eventId)).toEqual(["$main"]);
   });
 
   it("filters threaded poll roots out of main-room reads", async () => {
@@ -473,15 +465,13 @@ describe("matrix message actions", () => {
   it("does not summarize non-start poll events as thread roots", async () => {
     const { client, getRelations } = createMessagesClient({
       pollRoot: createPollResponseEvent(),
-      threadRelations: [
-        createHistoryMessage("$thread-reply", "thread reply", 20, { threadId: "$vote" }),
-      ],
+      threadRelations: [message("$thread-reply", "thread reply", 20, { threadId: "$vote" })],
     });
 
     const result = await readHistory({ client, threadId: "$vote", limit: 5 });
 
     expect(getRelations).toHaveBeenCalledWith(...threadRequest("$vote", 5));
-    expect(result.messages.map((message) => message.eventId)).toEqual(["$thread-reply"]);
+    expect(result.messages.map((event) => event.eventId)).toEqual(["$thread-reply"]);
   });
 
   it("counts the thread root toward the requested first-page limit", async () => {
@@ -492,7 +482,7 @@ describe("matrix message actions", () => {
     expect(getRelations).toHaveBeenLastCalledWith(...threadRequest("$thread-root", 1));
     expect(doRequest).not.toHaveBeenCalled();
     expect(getEvent).toHaveBeenCalledWith(ROOM, "$thread-root");
-    expect(result.messages.map((message) => message.eventId)).toEqual(["$thread-root"]);
+    expect(result.messages.map((event) => event.eventId)).toEqual(["$thread-root"]);
     expect(result.nextBatch).toEqual(
       expect.stringContaining("openclaw.matrix.thread-relations-start:"),
     );
@@ -500,7 +490,7 @@ describe("matrix message actions", () => {
     const next = await readThread(client, result.nextBatch ?? undefined);
 
     expect(getRelations).toHaveBeenLastCalledWith(...threadRequest("$thread-root", 1));
-    expect(next.messages.map((message) => message.eventId)).toEqual(["$thread-reply"]);
+    expect(next.messages.map((event) => event.eventId)).toEqual(["$thread-reply"]);
   });
 
   it("forwards a noncanonical synthetic thread cursor as an opaque Matrix token", async () => {
@@ -522,7 +512,7 @@ describe("matrix message actions", () => {
 
   it("does not reserve first-page thread capacity for a redacted root", async () => {
     const { client, doRequest, getEvent, getRelations } = threadPage({
-      ...createHistoryMessage("$thread-root", "", 10),
+      ...message("$thread-root", "", 10),
       unsigned: { redacted_because: {} },
       content: {},
     });
@@ -532,7 +522,7 @@ describe("matrix message actions", () => {
     expect(getRelations).toHaveBeenLastCalledWith(...threadRequest("$thread-root", 1));
     expect(doRequest).not.toHaveBeenCalled();
     expect(getEvent).toHaveBeenCalledWith(ROOM, "$thread-root");
-    expect(result.messages.map((message) => message.eventId)).toEqual(["$thread-reply"]);
+    expect(result.messages.map((event) => event.eventId)).toEqual(["$thread-reply"]);
     expect(result.nextBatch).toBeNull();
   });
 

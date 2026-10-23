@@ -381,7 +381,6 @@ type RemoteNodeBinRefreshParams = {
   deviceFamily?: string;
   commands?: string[];
   cfg: OpenClawConfig;
-  timeoutMs?: number;
   readinessDelayMs?: number;
   readinessSignal?: AbortSignal;
 };
@@ -480,7 +479,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
   }
 
   const binsList = [...requiredBins];
-  const timeoutMs = params.timeoutMs ?? 15_000;
+  const timeoutMs = 15_000;
   const command = canWhich ? "system.which" : "system.run";
   const probeSignature = JSON.stringify([
     command,
@@ -541,17 +540,16 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
       bumpSkillsSnapshotVersion({ reason: "remote-node" });
     }
   };
-  const connectivityTimeoutMs = Math.min(timeoutMs, 2_000);
   if (typeof remoteRegistry.checkConnectivity === "function") {
     const preflightContext = {
       command: "websocket.ping",
-      timeoutMs: connectivityTimeoutMs,
+      timeoutMs: 2_000,
       requiredBinCount: binsList.length,
     };
     const preflightConnId = remoteRegistry.get(params.nodeId)?.connId;
     let connectivity: Awaited<ReturnType<typeof remoteRegistry.checkConnectivity>>;
     try {
-      connectivity = await remoteRegistry.checkConnectivity(params.nodeId, connectivityTimeoutMs);
+      connectivity = await remoteRegistry.checkConnectivity(params.nodeId, 2_000);
     } catch (err) {
       recordFailure(err, preflightContext, "preflight");
       return;
@@ -565,7 +563,6 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
           deviceFamily: latestSession.deviceFamily,
           commands: latestSession.commands,
           cfg: params.cfg,
-          timeoutMs: params.timeoutMs,
         });
         return;
       }

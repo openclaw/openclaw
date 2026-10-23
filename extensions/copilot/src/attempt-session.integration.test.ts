@@ -4,6 +4,7 @@ import type {
   AgentHarnessAttemptParamsV2,
   AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import * as runtimeConfig from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useSqliteWorkerFault } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -67,6 +68,66 @@ describe("Copilot canonical session persistence", () => {
     transcriptAppendControl.beforeAppend = undefined;
     runtimeConfig.clearRuntimeConfigSnapshot();
     selectors.resetCopilotAttemptOverrides();
+  });
+
+  it("answers a detached setup probe through its caller-owned in-memory transcript", async () => {
+    const { attempt, tempDir, bridge } = await journal.createFixture();
+    bridge.detach();
+    const manager = SessionManager.inMemory(tempDir);
+    const sdk = copilot.makeFakeSdk((session) => {
+      session.sendAndWait = vi.fn(async () => {
+        session.emit("user.message", { content: attempt.prompt });
+        session.emit("assistant.message", { content: "OK", messageId: "probe-answer" });
+        session.emit("session.idle", {});
+        return copilot.makeAssistantMessageEvent("OK", { messageId: "probe-answer" });
+      });
+    });
+    const params = {
+      ...makeParams(attempt, tempDir),
+      sessionTarget: undefined,
+      sessionManager: manager,
+      sessionPersistence: "detached" as const,
+    };
+    selectors.copilotAttemptOverrides.createToolBridge = async () => ({
+      sourceTools: [],
+      promptToolPolicy: { apply: () => ({ tools: [], callableToolNames: [] }) },
+    });
+    const result = await copilot.runCopilotAttempt(params, { pool: copilot.makeFakePool(sdk) });
+
+    expect(result.terminal).toEqual({ kind: "ok" });
+    expect(result.lastAssistant).toMatchObject({ content: [{ type: "text", text: "OK" }] });
+    expect(sdk.sessions[0]?.sendAndWait).toHaveBeenCalledOnce();
+    expect(journal.transcriptMessages(manager.getEntries()).map((row) => row.message.role)).toEqual(
+      ["user", "assistant"],
+    );
+    expect(manager.getSessionTarget()).toBeUndefined();
+  });
+
+  it("requires an exact durable target even when a persistent manager is supplied", async () => {
+    const { attempt, target, tempDir, bridge } = await journal.createFixture();
+    bridge.detach();
+    const manager = await SessionManager.openAsync(target, tempDir);
+    const sdk = copilot.makeFakeSdk();
+    const result = await copilot.runCopilotAttempt(
+      {
+        ...makeParams(attempt, tempDir),
+        sessionTarget: undefined,
+        sessionManager: manager,
+      },
+      { pool: copilot.makeFakePool(sdk) },
+    );
+
+    expect(result.terminal).toMatchObject({
+      kind: "failed",
+      source: "prompt",
+      error: {
+        code: "transcript_persistence_failed",
+        message:
+          "[copilot-attempt] saved transcript persistence requires an exact runtime session target",
+      },
+    });
+    expect(sdk.sessions[0]?.sendAndWait).not.toHaveBeenCalled();
+    expect(journal.transcriptMessages(await readSessionTranscriptEvents(target))).toEqual([]);
   });
 
   it.each(["commit", "rollback"] as const)(
@@ -187,11 +248,18 @@ describe("Copilot canonical session persistence", () => {
           );
           expect(result.replayMetadata.replaySafe).toBe(false);
         }
-        expect(execute).toHaveBeenCalledExactlyOnceWith("call-boundary", {}, signal, undefined);
+        const toolSignal = expectDefined(execute.mock.calls[0]?.[2], "tool execution signal");
+        expect(execute).toHaveBeenCalledExactlyOnceWith("call-boundary", {}, toolSignal, undefined);
         const session = expectDefined(sdk.sessions[0], "SDK session");
         expect(session.abort).toHaveBeenCalledTimes(outcome === "rollback" ? 1 : 0);
         expect(session.disconnect).toHaveBeenCalledOnce();
         expect(pool.release).toHaveBeenCalledOnce();
+        // Host admission composes cancellation; the caller signal need not retain identity.
+        expect(toolSignal.aborted).toBe(false);
+        const cancellation = new Error("caller cancelled the fixture");
+        controller.abort(cancellation);
+        expect(toolSignal.aborted).toBe(true);
+        expect(toolSignal.reason).toBe(cancellation);
       } finally {
         append.release();
         if (!attemptSettled) {
