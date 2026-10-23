@@ -32,6 +32,7 @@ import {
   type ChatAttachment,
 } from "../chat-attachments.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import { respondError } from "../server-methods/response.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
@@ -94,13 +95,10 @@ export async function prepareAgentContentPhase(params: {
   for (const rawChannel of channelHints) {
     const normalized = normalizeMessageChannel(rawChannel);
     if (normalized && normalized !== "last" && !isKnownGatewayChannel(normalized)) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid agent params: unknown channel: ${normalized}`,
-        ),
+      respondError(
+        params.respond,
+        ErrorCodes.INVALID_REQUEST,
+        `invalid agent params: unknown channel: ${normalized}`,
       );
       return undefined;
     }
