@@ -276,8 +276,12 @@ export function useMenuMachine(
         "data-valuetext": label,
         tabIndex: -1,
         ...current()?.item(value, disabled, type, checked, label),
-        // Preserve native entry focus even if focus leaves the row before navigation loads.
-        onFocusIn: () => setHighlightedValue(value),
+        // Preserve cold entry focus without echoing machine-owned focus into its queue.
+        onFocusIn: () => {
+          if (runtime?.service.context.get("highlightedValue") !== value) {
+            setHighlightedValue(value);
+          }
+        },
         onClick: (event: MouseEvent) => {
           if (disabled || !overlay.open) {
             event.preventDefault();
