@@ -207,7 +207,10 @@ are the limited exceptions. Runtime access still using them is migration debt.
 For engine stores, the synchronous `withEngineStoreAdmission` scope is lexical:
 it cannot return a Promise, and a retained connection does not extend it.
 PostgreSQL rejects construction and SQL on the Gateway main thread outside that
-scope. The CLI entry records an immutable process role before state access;
+scope. Native lease verification, renewal, and release use this scope only for their
+storage primitive. Lifecycle callbacks remain outside it, and ownership checks
+still read the current owner and expiry before permitting an effect.
+The CLI entry records an immutable process role before state access;
 one-shot CLI and Doctor processes may use the synchronous PostgreSQL bridge.
 An unset role still refuses main-thread access. Interactive onboarding and
 `setup` (including `crestodian`) keep the CLI role through their prompts and

@@ -42,13 +42,6 @@
   stroke-linejoin: round;
 }
 
-.device-entry__heading {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
 .device-entry__status {
   display: inline-flex;
   padding: 1px var(--space-2);

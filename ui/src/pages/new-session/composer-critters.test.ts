@@ -37,8 +37,8 @@ afterEach(() => {
 });
 
 describe("new-session composer critter visits", () => {
-  it("keeps the composer editable before the pet is admitted at idle", async () => {
-    const { composer } = renderComposer();
+  it("keeps the composer editable before idle and renders warm pets without waiting again", async () => {
+    const { composer, unmount } = renderComposer();
     expect(visitor(composer)).toBeNull();
     const input = composer.querySelector("textarea")!;
     input.value = "Typed before idle";
@@ -48,6 +48,10 @@ describe("new-session composer critter visits", () => {
     const pet = await loadPet(composer);
     expect(pet.floorEnabled).toBe(false);
     expect(composer.querySelector("textarea")).toBe(input);
+    unmount();
+    const reopened = renderComposer();
+    await waitForSolid(() => expect(visitor(reopened.composer)).not.toBeNull());
+    expect(visitor(reopened.composer).seed).not.toBe(pet.seed);
   });
 
   it("keeps visitor preferences and dismissal refresh connected to Appearance", async () => {

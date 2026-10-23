@@ -331,20 +331,21 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
   };
 }
 
+// Only the first visit waits for idle; later composers reuse the loaded pet.
+const idleAdmission = Promise.withResolvers<void>();
+const LobsterPet = lazy(
+  async () => {
+    await idleAdmission.promise;
+    return import("../../components/lobster-pet.tsx");
+  },
+  { export: "LobsterPet" },
+);
+
 export function NewSessionComposer(props: {
   options: NewSessionComposerOptions;
   surroundings?: () => Pick<LobsterComposerElements, "root" | "obstacles"> | undefined;
 }) {
   const textarea = useContext(NewSessionComposerTextareaContext);
-  // Reading the lazy child must still wait for the composer's first idle turn.
-  const idleAdmission = Promise.withResolvers<void>();
-  const LobsterPet = lazy(
-    async () => {
-      await idleAdmission.promise;
-      return import("../../components/lobster-pet.tsx");
-    },
-    { export: "LobsterPet" },
-  );
   const petLoader = createSidebarRendererLoader(async () => {
     idleAdmission.resolve();
     await LobsterPet.preload();

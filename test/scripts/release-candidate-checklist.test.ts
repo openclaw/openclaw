@@ -2659,10 +2659,10 @@ describe("release candidate checklist", () => {
       status: "passed",
     },
     {
-      name: "waived Telegram does not count as package Telegram proof",
+      name: "FRV Telegram waiver is disclosed without supplementary validation",
       coveragePolicy: "npm-stable-v1",
       waived: true,
-      status: "passed",
+      status: "waived",
     },
     { name: "missing Q transport", transport: "missing", error: "qualification ref" },
     { name: "moved Q transport", transport: "moved", error: "qualification ref" },
@@ -2761,7 +2761,16 @@ describe("release candidate checklist", () => {
             current: {
               manifest: {
                 releaseProfile: options.releaseProfile,
-                validationInputs: { telegramWaiver: scenario.waived ? "reviewed waiver" : "" },
+                waivers: scenario.waived
+                  ? [
+                      {
+                        childRole: "releaseChecksCandidate",
+                        jobName:
+                          "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+                        reason: "reviewed fixture outage",
+                      },
+                    ]
+                  : [],
               },
             },
           },

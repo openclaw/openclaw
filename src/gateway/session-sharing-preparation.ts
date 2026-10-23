@@ -28,6 +28,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
   isSessionStoreTopologyChange,
+  sessionChangeScopeAffectsStoredRows,
   sessionChanges,
   type SessionRowChange,
 } from "../sessions/session-row-changes.js";
@@ -161,19 +162,10 @@ export async function prepareSessionMutationFacts(
         return;
       }
       if (
-        typeof change.scope === "string" &&
-        [
-          "profiles",
-          "catalog",
-          "acp",
-          "agent-runs",
-          "subagent-runs",
-          "worker-placements",
-          "worker-environments",
-          "config",
-          "config-presentation",
-          "config-profiles",
-        ].includes(change.scope)
+        // Runtime and automation still invalidate this retained authority.
+        !sessionChangeScopeAffectsStoredRows(change) &&
+        change.scope !== "runtime" &&
+        change.scope !== "automation"
       ) {
         return;
       }

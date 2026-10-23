@@ -109,6 +109,10 @@ const repositoryScriptEntries = [
   "scripts/perf/worker-task-metrics-measure.ts!",
   // scripts/perf/README.md invokes this cold usage-cache measurement CLI by path.
   "scripts/perf/chat-metadata-burst-measure.ts!",
+  // scripts/perf/README.md invokes this model-prompt statistics measurement CLI by path.
+  "scripts/perf/model-prompt-stats-measure.ts!",
+  // scripts/perf/README.md invokes this main-thread stall measurement CLI by path.
+  "scripts/perf/main-thread-stall-measure.mjs!",
   // scripts/perf/README.md invokes this synthetic reload fixture by path.
   "scripts/perf/control-ui-reload-fixture.ts!",
   // docs/ci/checkout.md invokes this checkout materialization benchmark by path.
@@ -906,6 +910,8 @@ const config = {
     // MCP compatibility tests launch these subprocess fixtures by path; the full-tree scan owns them.
     "extensions/browser/src/browser/chrome-mcp.v1-peer.fixture.mjs",
     "extensions/qa-lab/src/suite-runtime-agent-tools.v1-peer.fixture.mjs",
+    // The Telegram context test loads this Worker by URL; the full-tree test scan owns it.
+    bundledPluginFile("telegram", "src/telegram-ingress-worker.context.test-support.mjs"),
     "**/live-*.ts",
     // This worker-thread proof entry is loaded from its test with new URL(),
     // which Knip cannot discover as a static import.

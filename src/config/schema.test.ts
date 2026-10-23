@@ -417,6 +417,31 @@ describe("config schema", () => {
     }
   });
 
+  it("validates Tool Search selector fields and requires a nonempty selector", () => {
+    for (const key of ["include", "exclude"]) {
+      const selectors = [{ source: "mcp" }, { name: "github_*" }, { source: "client", name: "*" }];
+      expect(ToolsSchema.parse({ toolSearch: { [key]: selectors } })?.toolSearch).toEqual({
+        [key]: selectors,
+      });
+      expect(ToolsSchema.safeParse({ toolSearch: { [key]: [] } }).success).toBe(true);
+      for (const selector of [
+        {},
+        { source: "plugin" },
+        { name: "" },
+        { name: "   " },
+        { name: 1 },
+        { source: "mcp", server: "github" },
+        { source: null },
+      ]) {
+        expect(ToolsSchema.safeParse({ toolSearch: { [key]: [selector] } }).success).toBe(false);
+      }
+      expect(() => ToolsSchema.parse({ toolSearch: { [key]: [{}] } })).toThrow(
+        "Tool Search selectors must specify source, name, or both.",
+      );
+      expect(ToolsSchema.safeParse({ toolSearch: { [key]: "mcp" } }).success).toBe(false);
+    }
+  });
+
   it("looks up root config schema children without returning the full schema tree", () => {
     const lookup = lookupConfigSchema(baseSchema, ".");
     expect(lookup?.path).toBe(".");
