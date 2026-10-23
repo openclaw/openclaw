@@ -10,6 +10,7 @@ import type {
   Utf8InputError,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readLegacySessionIndex,
   resolveLegacySessionFileLocator,
@@ -148,7 +149,7 @@ export function tryResolveLegacyBindingOwnerAgentId(params: {
         ...(storeAgentId ? { agentId: storeAgentId } : fallbackAgentId ? { fallbackAgentId } : {}),
       }).sessionAgentId;
     } catch (error) {
-      if ((error as { code?: unknown }).code !== "AGENT_SELECTION_REQUIRED") {
+      if (!isRecord(error) || error.code !== "AGENT_SELECTION_REQUIRED") {
         throw error;
       }
     }
