@@ -1,3 +1,4 @@
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page, Locator } from "playwright";
 import { assert, expect, it } from "vitest";
@@ -12,6 +13,16 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI chat error details" });
+async function captureDiagnosticProof(page: Page, name: string) {
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+    await page.screenshot({
+      path: path.join(suite.artifactDir, `${name}.png`),
+      fullPage: false,
+      animations: "disabled",
+    });
+  }
+}
+
 const sessionKey = "agent:main:main";
 
 const diagnosticContext = {
@@ -50,6 +61,147 @@ async function expectMobileFit(page: Page, alert: Locator) {
 }
 
 suite.define(() => {
+  it("keeps restored startup diagnostics behind details", async () => {
+    await suite.withPage(
+      {
+        viewport: { height: 900, width: 1280 },
+        permissions: ["clipboard-read", "clipboard-write"],
+      },
+      async ({ page }) => {
+        const content =
+          "Couldn't resume this conversation. Start a new conversation and send your request again.";
+        const diagnostic = "thread not loaded: synthetic-thread";
+        await installMockGateway(page, {
+          sessionKey,
+          historyMessages: [
+            {
+              role: "custom",
+              customType: "run-failed-before-reply",
+              content,
+              details: { diagnostic },
+              openclawRunError: { runId: "failed-run", summary: `${content}\n\n${diagnostic}` },
+              __openclaw: { id: "failure-notice", seq: 1, runId: "failed-run" },
+            },
+          ],
+          sessionInfo: {
+            key: sessionKey,
+            kind: "direct",
+            status: "failed",
+            hasActiveRun: false,
+            lastRunId: "failed-run",
+            lastRunError: content,
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const alert = page.locator(".chat-run-failure");
+        await alert.waitFor();
+        await expect.poll(() => alert.locator(".chat-run-failure__summary").isVisible()).toBe(true);
+        expect(await alert.getByLabel("Error details", { exact: true }).isVisible()).toBe(false);
+        await alert.locator("summary").click();
+        expect(await alert.getByLabel("Error details", { exact: true }).textContent()).toContain(
+          diagnostic,
+        );
+        await alert.getByRole("button", { name: "Copy error", exact: true }).click();
+        await expect
+          .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+          .toContain(diagnostic);
+        await captureDiagnosticProof(page, "restored-startup-canonical-details");
+      },
+    );
+  });
+
+  it("keeps startup recovery visible for request errors in the topbar", async () => {
+    await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
+      await installMockGateway(page, { sessionKey });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await page.locator(".agent-chat__input textarea").waitFor();
+      // Inject the notice state to verify the topbar's production CSS, independently
+      // of which request owner reports the startup failure.
+      await page.locator(".chat-pane-cache__pane--visible").evaluate((element) => {
+        const pane = element as HTMLElement & {
+          state?: { lastError: string | null };
+        };
+        if (!pane.state) {
+          throw new Error("Expected the visible chat pane's state");
+        }
+        pane.state.lastError = "thread not loaded: synthetic-thread";
+      });
+      const alert = page.locator(".chat-topbar-notices .chat-error");
+      await alert.waitFor();
+      const guidance = alert.getByText("Start a new conversation and send your request again.", {
+        exact: false,
+      });
+      await expect.poll(() => guidance.isVisible()).toBe(true);
+      await captureDiagnosticProof(page, "startup-request-context");
+    });
+  });
+
+  it.each([
+    [
+      "thread not loaded: synthetic-thread",
+      "Couldn't resume this conversation.",
+      "Start a new conversation and send your request again.",
+    ],
+    [
+      "managed worktree allocation lease core:managed-worktrees:create/capacity was lost",
+      "Couldn't finish preparing the code workspace.",
+      "Send your request again to retry workspace setup.",
+    ],
+  ])(
+    "shows recovery before opening details for startup failure: %s",
+    async (diagnostic, title, guidance) => {
+      await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
+        const gateway = await installMockGateway(page, { sessionKey });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const input = page.locator(".agent-chat__input textarea");
+        await input.fill("Continue the example project");
+        await page.getByRole("button", { name: "Send message" }).click();
+        const send = await gateway.waitForRequest("chat.send");
+        assert(isRecord(send.params) && typeof send.params.idempotencyKey === "string");
+        await gateway.emitGatewayEvent("chat", {
+          sessionKey,
+          runId: send.params.idempotencyKey,
+          state: "error",
+          errorMessage: diagnostic,
+        });
+        const alert = page.locator(".chat-error");
+        await alert.waitFor();
+        await captureDiagnosticProof(
+          page,
+          title.includes("resume") ? "startup-context" : "startup-workspace",
+        );
+        expect(await alert.textContent()).toContain(title);
+        await expect.poll(() => alert.getByText(guidance, { exact: false }).isVisible()).toBe(true);
+        expect(await alert.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
+        await alert.locator("summary").click();
+        expect(await alert.getByLabel("Error details", { exact: true }).textContent()).toContain(
+          diagnostic,
+        );
+        await alert.locator("summary").click();
+        await expectMobileFit(page, alert);
+        await expect.poll(() => alert.getByText(guidance, { exact: false }).isVisible()).toBe(true);
+        await expect
+          .poll(() =>
+            alert
+              .getByText(guidance, { exact: false })
+              .evaluate((node) => node.scrollWidth <= node.clientWidth),
+          )
+          .toBe(true);
+        expect(await alert.getByLabel("Error details", { exact: true }).isVisible()).toBe(false);
+        await captureDiagnosticProof(
+          page,
+          title.includes("resume") ? "startup-context-mobile" : "startup-workspace-mobile",
+        );
+        await input.fill("Keep this draft");
+        const historyCount = (await gateway.getRequests("chat.history")).length;
+        await alert.getByRole("button", { name: "Refresh", exact: true }).click();
+        await gateway.waitForRequest("chat.history", { after: historyCount });
+        expect(await input.inputValue()).toBe("Keep this draft");
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      });
+    },
+  );
+
   it.each(["failed", "timeout"] as const)(
     "shows a %s diagnostic when only the terminal session update arrives",
     async (status) => {

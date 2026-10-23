@@ -81,6 +81,12 @@
   animation: none;
 }
 
+.chat-error__recovery {
+  padding: 0 12px 9px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .chat-error__mobile-header {
   display: flex;
   align-items: center;

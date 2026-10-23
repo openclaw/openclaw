@@ -1,4 +1,5 @@
 import { createMemo, Show } from "solid-js";
+import { resolveSessionStartupErrorPresentation } from "../../../../../src/shared/session-startup-error-presentation.js";
 import { formatWebUiIconErrorText } from "../../../components/error-presentation.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -11,8 +12,13 @@ type ChatRunFailureNoticeProps = {
 
 /** One terminal notice, separate from assistant prose and preserved partial output. */
 export function ChatRunFailureNotice(props: ChatRunFailureNoticeProps) {
+  const startup = createMemo(() => resolveSessionStartupErrorPresentation(props.summary));
   const detail = createMemo(() => formatWebUiIconErrorText(props.summary).trim());
   const concise = createMemo(() => {
+    const presentation = startup();
+    if (presentation) {
+      return presentation.recovery;
+    }
     const firstLine = detail().split(/\r?\n/u)[0] ?? "";
     return firstLine.length <= 240 ? firstLine : t("chat.recovery.failedHelp");
   });
@@ -25,7 +31,9 @@ export function ChatRunFailureNotice(props: ChatRunFailureNoticeProps) {
         <div class="chat-run-failure__content">
           <div class="chat-run-failure__header">
             <div class="chat-run-failure__heading">
-              <strong class="chat-run-failure__title">{t("chat.recovery.failedTitle")}</strong>
+              <strong class="chat-run-failure__title">
+                {startup()?.title ?? t("chat.recovery.failedTitle")}
+              </strong>
               <span class="chat-run-failure__copy">
                 <CopyButton text={props.summary} idleLabel={t("chat.copyError")} bare />
               </span>

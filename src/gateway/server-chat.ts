@@ -18,7 +18,6 @@ import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-term
 import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.types.js";
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
-import { renderCodexAppServerFailureCopy } from "../agents/failover/user-copy.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
@@ -38,6 +37,7 @@ import {
   appendChatCanvasBlocksToMessage,
   extractChatToolResultCanvasPreview,
 } from "./chat-display-projection.canvas.js";
+import { renderChatRunError } from "./chat-error-presentation.js";
 import { shouldSuppressAssistantEventForLiveChat } from "./live-chat-projector.js";
 import type {
   GatewayBroadcastFn,
@@ -79,7 +79,6 @@ import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.j
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
-import { formatForLog } from "./ws-log.js";
 
 export {
   createChatAbortMarker,
@@ -836,7 +835,6 @@ export function createAgentEventHandler({
         return;
       }
       const errorDetail = projectChatErrorDetail(opts?.errorObservation);
-      const errorMessage = error ? formatForLog(error) : undefined;
       const payload = {
         ...terminalPayload,
         state: "error" as const,
@@ -845,9 +843,7 @@ export function createAgentEventHandler({
               message,
             }
           : {}),
-        errorMessage: errorMessage
-          ? (renderCodexAppServerFailureCopy(errorMessage) ?? errorMessage)
-          : undefined,
+        errorMessage: renderChatRunError(error),
         ...(errorKind && { errorKind }),
         ...(opts?.suppressErrorNotice ? { suppressErrorNotice: true } : {}),
         ...(errorDetail ? { errorDetail } : {}),
