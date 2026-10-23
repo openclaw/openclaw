@@ -297,6 +297,7 @@ type SummaryScenario = {
   prepared?: boolean;
   priorCount?: number;
   hidden?: boolean;
+  promptSuppressed?: boolean;
   live?: boolean;
 };
 
@@ -631,18 +632,24 @@ it.skipIf(process.platform === "win32")(
   }),
 );
 
-it
-  .skipIf(process.platform === "win32")
-  .for<SummaryScenario>([
-    { label: "ordinary prepared API key" },
-    { label: "preserveNativeModel-only host profile", preserveNativeModel: true, prepared: false },
-    { label: "ordinary user-home private host profile", homeScope: "user", prepared: false },
-    { label: "long conversation", priorCount: 201 },
-    { label: "hidden background notification", hidden: true },
-    ...(LIVE
-      ? [{ label: "hidden background notification with live provider", hidden: true, live: true }]
-      : []),
-  ])(
+it.skipIf(process.platform === "win32").for<SummaryScenario>([
+  { label: "ordinary prepared API key" },
+  { label: "preserveNativeModel-only host profile", preserveNativeModel: true, prepared: false },
+  { label: "ordinary user-home private host profile", homeScope: "user", prepared: false },
+  { label: "long conversation", priorCount: 201 },
+  { label: "hidden background notification", hidden: true },
+  { label: "prompt-less stranded-reply retry", promptSuppressed: true },
+  ...(LIVE
+    ? [
+        { label: "hidden background notification with live provider", hidden: true, live: true },
+        {
+          label: "prompt-less stranded-reply retry with live provider",
+          promptSuppressed: true,
+          live: true,
+        },
+      ]
+    : []),
+])(
   "persists a host-authorized summary with the actual native selection ($label)",
   { timeout: LIVE ? 360_000 : 60_000 },
   (scenario) =>
@@ -663,6 +670,7 @@ async function runSummary(
     priorCount = 0,
     live = false,
     hidden = false,
+    promptSuppressed = false,
   }: SummaryScenario,
 ) {
   const pluginConfig = {
@@ -721,11 +729,18 @@ async function runSummary(
   }
   fixture.setPhase("action");
   params.runId = "run-settled-action";
-  if (hidden) {
+  if (hidden || promptSuppressed) {
     params.prompt =
       "Background task completed. Use exec_command exactly once to run " +
       "`printf 'completed-once\\n' >> completed-actions.txt; cat completed-actions.txt`, " +
       "then report the command output. Do not run any other command.";
+  }
+  if (promptSuppressed) {
+    // A stranded-reply retry suppresses its system prompt and carries no transcript recorder
+    // (src/auto-reply/reply/stranded-reply-recovery.ts), so the turn mirrors no prompt row.
+    params.suppressNextUserMessagePersistence = true;
+  }
+  if (hidden) {
     const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
     params.userTurnTranscriptRecorder = createRecorder({
       input: {
@@ -766,6 +781,12 @@ async function runSummary(
       display: false,
       __openclaw: { mirrorIdentity: expect.any(String) },
     });
+  }
+  if (promptSuppressed) {
+    expect(context.data).toEqual(
+      containsObject({ type: "function_call" }, { type: "function_call_output" }),
+    );
+    expect(JSON.stringify(context.data)).not.toContain("Background task completed.");
   }
   expect(() => params.hostCapabilities.assertActive()).not.toThrow();
   closeHost();
