@@ -512,7 +512,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel !== undefined && !requestedChannel) {
     throw new Error(
-      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got ${JSON.stringify(opts.channel)})`,
     );
   }
   const devTarget = requestedChannel === "dev" ? readDevUpdateTarget() : undefined;

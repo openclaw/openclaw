@@ -111,7 +111,7 @@ export async function updateFinalizeCommand(
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel !== undefined && !requestedChannel) {
     throwExpectedCliError(
-      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got ${JSON.stringify(opts.channel)})`,
     );
   }
 
