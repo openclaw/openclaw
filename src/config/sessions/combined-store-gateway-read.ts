@@ -314,8 +314,7 @@ async function loadCombinedSessionStore(
             ...selectedRows.map(({ entry }) => entry.sessionId.trim()).filter(Boolean),
           ]),
         ];
-        // Complete affected aliases and key collisions across the retained physical stores.
-        // Multiple stores reread only this bounded selection; one-store reads finish above.
+        // Complete aliases across retained stores; one-store reads finish above.
         await Promise.all(
           prepared.reads.map(async ({ storeTarget }, index) => {
             const result = await expectDefined(
@@ -324,6 +323,25 @@ async function loadCombinedSessionStore(
             ).readExactEntries({
               sessionKeys,
               selection: { kind: "transcript-aliases", sessionIds },
+              projection: "list",
+              env: transferEnv,
+            });
+            entries.set(storeTargetKey(storeTarget), result.entries);
+          }),
+        );
+        // Newly discovered aliases can collide with a different ID in an earlier store.
+        const aliasKeys = [
+          ...new Set(
+            [...entries.values()].flatMap((selected) => selected.map((row) => row.sessionKey)),
+          ),
+        ];
+        await Promise.all(
+          prepared.reads.map(async ({ storeTarget }, index) => {
+            const result = await expectDefined(
+              owners[index],
+              "retained session store",
+            ).readExactEntries({
+              sessionKeys: aliasKeys,
               projection: "list",
               env: transferEnv,
             });
