@@ -1,9 +1,12 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Match, Show, Switch, createMemo, onSettled } from "solid-js";
 import type { BoardDocumentProps } from "../components/board/board-document.tsx";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerSessionNavigationEnglish } from "../i18n/locales/en-session-navigation.ts";
+import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import type { FocusDashboardRouteState } from "./app-root-focus.ts";
 import type { ApplicationGatewaySnapshot } from "./context.ts";
+
+registerEnglishCatalog(registerSessionNavigationEnglish);
 
 type FocusDashboardProps = {
   route: Promise<FocusDashboardRouteState>;

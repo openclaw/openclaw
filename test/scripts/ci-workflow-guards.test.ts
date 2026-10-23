@@ -738,79 +738,32 @@ AFTER_CD
     },
   );
 
-  it("routes stale bug issues through ClawSweeper instead of Barnacle closure", () => {
-    const staleWorkflow = readWorkflow(".github/workflows/stale.yml");
-    const staleSteps = staleWorkflow.jobs.stale.steps as WorkflowStep[];
-    const stepNamed = (name: string) =>
-      expectDefined(
-        staleSteps.find((step) => step.name === name),
-        name,
-      );
-
-    for (const name of [
-      "Mark stale unassigned issues (primary)",
-      "Mark stale assigned issues (primary)",
-      "Mark stale unassigned issues (fallback)",
-      "Mark stale assigned issues (fallback)",
-    ]) {
-      const exemptLabels = String(stepNamed(name).with?.["exempt-issue-labels"])
-        .split(",")
-        .map((label) => label.trim());
-      expect(exemptLabels, name).toContain("bug");
-      expect(String(stepNamed(name).with?.["days-before-pr-stale"]), name).toBe("-1");
-      expect(String(stepNamed(name).with?.["days-before-pr-close"]), name).toBe("-1");
-      expect(String(stepNamed(name).with?.["remove-pr-stale-when-updated"]), name).toBe("false");
-    }
-
-    const bugJob = staleWorkflow.jobs["stale-bug-verification"];
-    expect(bugJob.permissions).toEqual({ issues: "write" });
-    expect(evaluateWorkflowRunner(bugJob["runs-on"])).toBe("ubuntu-24.04");
-    const bugScript = String(
-      requiredWorkflowStep(bugJob.steps, "Mark inactive bugs for ClawSweeper verification").with
-        ?.script,
+  it("uses one authenticated issue/PR lifecycle including administrative bug grace", () => {
+    const workflow = readWorkflow(".github/workflows/stale.yml");
+    expect(Object.keys(workflow.jobs)).toEqual(["stale-lifecycle"]);
+    const job = workflow.jobs["stale-lifecycle"];
+    const script = String(
+      requiredWorkflowStep(job.steps, "Evaluate issue/PR inactivity").with?.script,
     );
-    expectIncludes(bugScript, [
-      "const maxMarks = 25;",
-      'labels: "bug"',
-      "github.rest.issues.addLabels",
-      "github.rest.issues.removeLabel",
-      "Inactivity alone will not close a bug report.",
-      "requires separate backfill approval",
-      "slice(staleEventIndex + 1)",
-      "updatedAtMs > lastAutomationAtMs",
-      'item.state !== "open"',
+    expectIncludes(script, [
+      "runStaleLifecycle",
+      "auditRecentBugClosures",
+      'targetKind: "auto"',
+      'includeIssues: process.env.INCLUDE_ISSUES === "true"',
+      'includePrs: process.env.INCLUDE_PRS === "true"',
     ]);
-    expectExcludes(bugScript, ["15_000", "github.rest.issues.update"]);
-
-    const backfillScript = String(
-      (staleWorkflow.jobs["backfill-stale-closures"].steps as WorkflowStep[]).find(
-        (step) => step.name === "Backfill stale closures",
-      )?.with?.script,
-    );
-    expect(backfillScript).toMatch(/issueExemptLabels[\s\S]*"bug"/);
-
-    const dispatchWorkflow = readWorkflow(".github/workflows/clawsweeper-dispatch.yml");
-    const dispatchCondition = String(dispatchWorkflow.jobs.dispatch.if);
-    expectIncludes(dispatchCondition, [
+    expectExcludes(JSON.stringify(workflow), [
+      "actions/stale@",
+      "Lock closed issues after 48h",
+      "Inactivity alone will not close",
+    ]);
+    const dispatch = readWorkflow(".github/workflows/clawsweeper-dispatch.yml");
+    expectIncludes(String(dispatch.jobs.dispatch.if), [
       "github.event.label.name == 'stale'",
       "contains(github.event.issue.labels.*.name, 'bug')",
       "github.actor_id == '257215752'",
       "github.actor_id == '264559031'",
     ]);
-
-    const auditJob = staleWorkflow.jobs["audit-bug-closure-reasons"];
-    expect(auditJob.permissions).toEqual({ issues: "read" });
-    const auditScript = String((auditJob.steps as WorkflowStep[])[0]?.with?.script);
-    expectIncludes(auditScript, [
-      'item.state_reason !== "not_planned"',
-      "github.rest.issues.listEventsForTimeline",
-      "github.paginate.iterator(",
-      "new Set([257215752, 264559031])",
-      "escapeSummaryCell(violation.title)",
-      '.replaceAll("<", "&lt;")',
-      "core.setFailed(",
-    ]);
-    expectExcludes(auditScript, ["github.rest.issues.update", "github.rest.issues.createComment"]);
   });
 
   it("restricts hosted release gates to the exact pull request head", () => {
@@ -2797,19 +2750,19 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       /(?:^|\n)\s*(?:\.artifacts\/build-all-cache|dist\/|dist-runtime\/|packages\/\*\/dist\/|extensions\/\*\/dist\/|~\/\.cache\/ms-playwright|~\/\.local\/share\/pnpm|~\/\.cache\/pnpm|node_modules)(?:\n|$)/u;
     for (const { file, step, jobId, jobCondition } of directCaches) {
       if (step.uses?.startsWith("actions/cache/save@")) {
-        if (step.with?.path === ".cache/barnacle-pr-scan.json") {
+        if (step.with?.path === ".cache/barnacle-lifecycle-scan.json") {
           expect(file).toBe(".github/workflows/stale.yml");
-          expect(jobId).toBe("stale-pull-requests");
+          expect(jobId).toBe("stale-lifecycle");
           expect(step.with).toEqual({
-            path: ".cache/barnacle-pr-scan.json",
-            key: "barnacle-pr-scan-v1-${{ github.run_id }}-${{ github.run_attempt }}",
+            path: ".cache/barnacle-lifecycle-scan.json",
+            key: "barnacle-lifecycle-scan-v2-${{ github.run_id }}-${{ github.run_attempt }}",
           });
           expect(step.if).toBe(
-            "${{ !cancelled() && steps.evaluate.outputs.checkpoint-written == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run == false) && inputs.pr_numbers == '' }}",
+            "${{ !cancelled() && steps.evaluate.outputs.checkpoint-written == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run == false) && inputs.item_numbers == '' }}",
           );
           const workflow = readWorkflow(file);
-          expect(workflow.jobs["stale-pull-requests"].concurrency).toEqual({
-            group: "barnacle-stale-pr-lifecycle",
+          expect(workflow.jobs["stale-lifecycle"].concurrency).toEqual({
+            group: "barnacle-stale-lifecycle",
             "cancel-in-progress": false,
           });
           continue;

@@ -1,10 +1,12 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Match, Show, Switch, createMemo, onCleanup, refresh } from "solid-js";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import "./chat-audio-player.tsx";
 import "./chat-svg-attachment.tsx";
 import "./chat-video-player.tsx";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import {
   isCrossOriginHttpSource,
   safeAttachmentHref,
@@ -38,6 +40,10 @@ import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import { SentCommentAttachments } from "./chat-sent-comments.tsx";
 import type { AttachmentSidebarState, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { videoLightboxItem } from "./chat-video-lightbox-source.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 type CustomElementProps<T extends HTMLElement> = SolidJSX.HTMLAttributes<T> & {
   [K in keyof T as `prop:${Extract<K, string>}`]?: T[K];

@@ -118,6 +118,10 @@ export function createCronPresentation(deps: CronPresentationDeps) {
       setSaving,
     };
   });
+  const [toggle, setToggle] = createSignal<{
+    view: ReturnType<typeof presentation>;
+    jobId: string;
+  } | null>(null);
   const isCurrentPresentation = (view: ReturnType<typeof presentation>) =>
     view.state === deps.currentState() && view.epoch === deps.connection.epoch;
   async function runCronTask<T>(task: (cronState: CronState) => Promise<T>): Promise<T> {
@@ -179,6 +183,7 @@ export function createCronPresentation(deps: CronPresentationDeps) {
     // the synchronous scope owner so old work cannot hold its successor.
     presentationLifetime.resolve();
     presentationLifetime = Promise.withResolvers<void>();
+    setToggle(null);
   }
 
   function reportActionError(view: ReturnType<typeof presentation>, error: unknown) {
@@ -279,12 +284,25 @@ export function createCronPresentation(deps: CronPresentationDeps) {
       expected?: Pick<CronJob, "id" | "enabled">,
     ) {
       const retired = presentationLifetime.promise;
-      // Let the owner's synchronous publication land before opening an action.
-      await Promise.resolve();
-      return presentMutation(view, pending, retired, expected);
+      // Record the accepted toggle before owner publication renders native disabled.
+      // The optimistic action still waits for that publication before joining it.
+      const intent = expected ? { view, jobId: expected.id } : null;
+      if (intent && isCurrentPresentation(view)) {
+        setToggle(intent);
+      }
+      try {
+        await Promise.resolve();
+        return await presentMutation(view, pending, retired, expected);
+      } finally {
+        setToggle((current) => (current === intent ? null : current));
+      }
     },
     reportError: reportActionError,
     saving: () => presentation().saving(),
+    toggleSavingJobId: () => {
+      const intent = toggle();
+      return intent?.view === presentation() ? intent.jobId : null;
+    },
     reads: {
       models: modelRead,
       modelRequest: modelReceipt,

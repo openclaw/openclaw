@@ -350,7 +350,7 @@ it("keeps Public confirmed until its owner publishes and preserves membership fo
   setSource((current) => ({ ...current, session: { ...current.session, sharingRole: "member" } }));
   flush();
   expect(adapter.available).toBe(false);
-  expect(toggle.getAttribute("aria-disabled")).toBe("true");
+  expect(toggle.hasAttribute("disabled")).toBe(true);
   permission.click();
   expect(member).toHaveBeenCalledTimes(1);
 });

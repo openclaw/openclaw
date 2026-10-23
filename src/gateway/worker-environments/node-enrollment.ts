@@ -374,7 +374,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         `Worker node ${deviceId} is still owned by environment ${sharedOwner.environmentId}`,
       );
     }
-    await removePairedDeviceRole({ deviceId, role: "node" });
+    await removePairedDeviceRole({ deviceId });
   };
 
   return {

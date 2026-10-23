@@ -1,17 +1,11 @@
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
-type GatewayHealthRpcOpts = Parameters<
-  typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport
->[1];
-
-type GatewayHealthJsonRouteArgs = {
-  rpc: GatewayHealthRpcOpts;
-  localPortOverride?: number;
-};
-
 /** Run the successful JSON path without loading text presentation modules. */
 export async function runGatewayHealthJsonRoute(
-  args: GatewayHealthJsonRouteArgs,
+  args: {
+    rpc: Parameters<typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport>[1];
+    localPortOverride?: number;
+  },
   runtime: RuntimeEnv,
 ): Promise<void> {
   let rpc = args.rpc;

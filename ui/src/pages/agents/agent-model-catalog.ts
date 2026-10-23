@@ -4,17 +4,15 @@ import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { ModelCatalogReader } from "../../lib/model-catalog-reader.ts";
 import { modelCatalogRefreshError, readAgentModelCatalog } from "../../lib/model-catalog-store.ts";
 
-type AgentModelCatalogState = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  agentsSelectedId: string | null;
-  chatModelCatalogRead: Promise<void> | null;
-};
-
 /** Owns the selected agent's catalog receipt and recovery after Gateway suspension. */
 export function createAgentModelCatalog(
   context: Pick<ApplicationContext, "gateway">,
-  state: AgentModelCatalogState,
+  state: {
+    client: GatewayBrowserClient | null;
+    connected: boolean;
+    agentsSelectedId: string | null;
+    chatModelCatalogRead: Promise<void> | null;
+  },
   publish: () => void,
 ) {
   let recoveryPending = false;

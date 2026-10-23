@@ -19,6 +19,7 @@ const CHANNELS = [
   "openclaw.git.operation",
   "openclaw.gateway.rpc",
   "openclaw.benchmark.broadcast",
+  "openclaw.benchmark.session-projection",
 ] as const;
 const sources = CHANNELS.map((name) => [name, channel(name)] as const);
 const METRICS = [
@@ -54,6 +55,11 @@ const METRICS = [
   "transferMs",
   "pendingTasks",
   "pendingBytes",
+  "publications",
+  "audienceCacheMisses",
+  "payloadCacheMisses",
+  "projectedRecipients",
+  "wirePayloads",
 ] as const;
 const PHASES = [
   "setup",
@@ -177,7 +183,8 @@ export function startGatewayBenchDiagnostics() {
         const outcome =
           name === "openclaw.gateway.request.stages" ||
           name === "openclaw.gateway.rpc" ||
-          name === "openclaw.benchmark.broadcast"
+          name === "openclaw.benchmark.broadcast" ||
+          name === "openclaw.benchmark.session-projection"
             ? "observed"
             : message.outcome === "ok" ||
                 message.outcome === "error" ||

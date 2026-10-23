@@ -80,7 +80,7 @@ function findMatchingSqliteTranscriptArchive(
   } catch {
     return null;
   }
-  const prefix = `${params.sessionId}.jsonl.${params.reason}.`;
+  const prefix = `${params.sessionId}.jsonl.deleted.`;
   for (const entry of entries) {
     if (!entry.startsWith(prefix) || !isSessionArchiveArtifactName(entry)) {
       continue;
@@ -109,7 +109,6 @@ function findMatchingSqliteTranscriptArchive(
 export function writeTranscriptArchive(params: {
   archiveDirectory: string;
   content: string;
-  reason: SessionArchiveReason;
   sessionId: string;
 }): string {
   fs.mkdirSync(params.archiveDirectory, { recursive: true });
@@ -124,7 +123,7 @@ export function writeTranscriptArchive(params: {
     const archivePath = `${resolveSqliteTranscriptArchivePath({
       archiveDirectory: params.archiveDirectory,
       identityOwner: "filename",
-      reason: params.reason,
+      reason: "deleted",
       sessionId: params.sessionId,
       nowMs: Date.now() + attempt,
     })}${encoded.suffix}`;

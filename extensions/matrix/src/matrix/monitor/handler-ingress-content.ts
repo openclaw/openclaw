@@ -270,7 +270,6 @@ export async function resolveMatrixIngressContent(config: {
   });
   const hasControlCommandInMessage = core.channel.text.hasControlCommand(commandCheckText, cfg);
   const commandAccess = await resolveMatrixMonitorCommandAccess(accessState, {
-    useAccessGroups: true,
     allowTextCommands,
     hasControlCommand: hasControlCommandInMessage,
   });

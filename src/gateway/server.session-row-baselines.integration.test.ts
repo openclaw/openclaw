@@ -1,5 +1,6 @@
 import { assert, expect, onTestFinished, test, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { GatewayChatEvents } from "../../ui/src/api/gateway-chat-events.ts";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
@@ -30,6 +31,7 @@ installGatewayTestHooks({
     kernel = await captureGatewayKernel(async () => {
       harness = await startGatewayServerHarness();
     });
+    await waitForGatewayStartup(harness.port);
   },
   cleanup: async () => harness?.close(),
 });

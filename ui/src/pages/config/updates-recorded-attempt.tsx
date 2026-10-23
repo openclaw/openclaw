@@ -3,7 +3,7 @@ import { isAcknowledgedAbandonedUpdateRun } from "../../../../src/infra/update-r
 import {
   classifyUpdateOutcome,
   isReportableUpdateRun,
-} from "../../../../src/shared/update-outcome.ts";
+} from "../../../../src/shared/update-outcome-classification.ts";
 import type { UpdateFailureReportNotice } from "../../app/overlays-types.ts";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { UpdateRunView } from "../../components/update-run-view.tsx";

@@ -379,10 +379,7 @@ export function withGatewayToolOperatorContinuation<T>(
 
 export function resolveGatewayPersonalToolParticipant(
   runtimeIdentity?: AgentRuntimeIdentity,
-  options?: {
-    requireSingleParticipant?: boolean;
-    allowMissingRegistry?: boolean;
-  },
+  options?: { requireSingleParticipant?: boolean },
 ) {
   const caller = getGatewayToolCallerIdentity();
   if (caller?.personalToolParticipants) {
@@ -394,7 +391,7 @@ export function resolveGatewayPersonalToolParticipant(
     throw new Error("Selecting user requires an active personal-tool turn.");
   }
   if (runtimeIdentity) {
-    const registered = captureActiveEmbeddedRunPersonalToolParticipants(runtimeIdentity, options);
+    const registered = captureActiveEmbeddedRunPersonalToolParticipants(runtimeIdentity);
     if (!registered) {
       return undefined;
     }

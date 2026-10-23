@@ -903,14 +903,11 @@ function runBasicAgentCommand(overrides: Partial<Parameters<typeof agentCommand>
 }
 
 async function runSystemAgentCommand() {
-  await agentCommandFromSystem(
-    {
-      message: "boot",
-      sessionKey: "agent:main:boot",
-      deliver: false,
-    },
-    { boundary: "gateway.boot" },
-  );
+  await agentCommandFromSystem({
+    message: "boot",
+    sessionKey: "agent:main:boot",
+    deliver: false,
+  });
 }
 
 function runDiscordDelivery(overrides: Partial<Parameters<typeof agentCommand>[0]> = {}) {

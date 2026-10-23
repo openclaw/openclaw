@@ -60,6 +60,7 @@ const { values } = parseArgs({
     "worker-allocations": { type: "boolean", default: false },
     diagnostics: { type: "boolean", default: false },
     "broadcast-timing": { type: "boolean", default: false },
+    "session-projection-counts": { type: "boolean", default: false },
     "session-projection-source": { type: "string" },
     "transport-counts": { type: "boolean", default: false },
     compressed: { type: "boolean", default: false },
@@ -484,6 +485,26 @@ if (
   path.resolve(values.entry) !== path.resolve("src/entry.ts")
 ) {
   throw new Error("--session-projection-source requires --entry src/entry.ts");
+}
+if (values["session-projection-counts"]) {
+  if (path.resolve(values.entry) !== path.resolve("src/entry.ts")) {
+    throw new Error("--session-projection-counts requires --entry src/entry.ts");
+  }
+  if (
+    values.allocations ||
+    values["worker-allocations"] ||
+    values["cpu-profile"] ||
+    values["workload-cpu-profile"] ||
+    values["broadcast-timing"] ||
+    values["transport-counts"] ||
+    values["stream-start-allocations"] ||
+    values["trace-gc"] ||
+    (soakScenario && retainedProfileMs > 0)
+  ) {
+    throw new Error(
+      "--session-projection-counts needs a separate pass without profiling or timing",
+    );
+  }
 }
 const sessionProjectionSource = values["session-projection-source"]
   ? realpathSync(path.resolve(values["session-projection-source"]))
@@ -1779,6 +1800,7 @@ const env = {
   ...(process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1"
     ? { OPENCLAW_BENCH_WORKER_ATTRIBUTION: "1" }
     : {}),
+  ...(values["session-projection-counts"] ? { OPENCLAW_BENCH_SESSION_PROJECTION_COUNTS: "1" } : {}),
   ...(sessionProjectionSource
     ? { OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE: sessionProjectionSource }
     : {}),
@@ -3427,6 +3449,12 @@ try {
   for (let index = 0; index < clientCount; index++) {
     const client = await connectClient(index);
     if (index === 0) {
+      // Operator-created roots parent to main; a missing root suppresses ancestor envelopes.
+      await rpc(client, "sessions.create", {
+        key: "agent:main:main",
+        visibility: "shared",
+        displayName: "Synthetic broadcast root",
+      });
       if (!historyTurns) {
         const created = await rpc(client, "sessions.create", {
           key: parentKey,
@@ -3972,7 +4000,7 @@ try {
     recapPhase = undefined;
     activeWorkCounts = undefined;
     const finishGatewayDiagnostics =
-      values.diagnostics || values["transport-counts"]
+      values.diagnostics || values["transport-counts"] || values["session-projection-counts"]
         ? await startGatewayDiagnostics(gateway)
         : undefined;
     const finishControllerDiagnostics = values.diagnostics
@@ -4276,6 +4304,12 @@ try {
     if (values["broadcast-timing"] && !broadcastTimings?.length) {
       throw new Error("Broadcast timing observed no calls in the measured window");
     }
+    const projectionCounts = diagnostics?.gateway.groups.filter(
+      (group) => group.channel === "openclaw.benchmark.session-projection",
+    );
+    if (values["session-projection-counts"] && !projectionCounts?.length) {
+      throw new Error("Session projection counts observed no publications in the measured window");
+    }
     assertGatewayAlive();
     if (clients.some((client) => client.ws.readyState !== client.ws.OPEN)) {
       throw new Error("a subscriber was lost during the measured round");
@@ -4416,6 +4450,39 @@ try {
         ? { allocatedMbPerTurn: allocation.estimatedAllocatedBytesPerOperation / 1_000_000 }
         : {}),
       diagnostics,
+      ...(values["session-projection-counts"]
+        ? {
+            sessionProjectionCounts: Object.fromEntries(
+              (projectionCounts ?? []).map((group) => {
+                const publications = group.metrics.publications?.total ?? 0;
+                const audienceCacheMisses = group.metrics.audienceCacheMisses?.total ?? 0;
+                const payloadCacheMisses = group.metrics.payloadCacheMisses?.total ?? 0;
+                const projectedRecipients = group.metrics.projectedRecipients?.total ?? 0;
+                const wirePayloads = group.metrics.wirePayloads?.total ?? 0;
+                return [
+                  group.operation,
+                  {
+                    publications,
+                    audienceCacheMisses,
+                    payloadCacheMisses,
+                    projectedRecipients,
+                    wirePayloads,
+                    audienceCacheMissesPerPublication: publications
+                      ? audienceCacheMisses / publications
+                      : null,
+                    payloadCacheMissesPerPublication: publications
+                      ? payloadCacheMisses / publications
+                      : null,
+                    projectedRecipientsPerPublication: publications
+                      ? projectedRecipients / publications
+                      : null,
+                    wirePayloadsPerPublication: publications ? wirePayloads / publications : null,
+                  },
+                ];
+              }),
+            ),
+          }
+        : {}),
       ...(values["broadcast-timing"]
         ? {
             broadcastLatencyMs: Object.fromEntries(
@@ -4879,6 +4946,7 @@ try {
     diagnostics: values.diagnostics,
     broadcastTiming: values["broadcast-timing"],
     workerAttribution: process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1",
+    sessionProjectionCounts: values["session-projection-counts"],
     sessionProjectionSource,
     transportCounts: values["transport-counts"],
     compressed: proxyViewers,

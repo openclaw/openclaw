@@ -32,12 +32,17 @@ import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import * as childAuthority from "./subagent-child-owner-match.js";
 import {
   attachActiveEmbeddedRun,
   detachActiveEmbeddedRun,
 } from "./subagent-control-native.test-support.js";
 import { prepareSubagentKillSession } from "./subagent-control-session.js";
-import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
+import {
+  getSubagentRunsForChildSession,
+  immutableSubagentRun,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import { registerSubagentSweepKillCustodyTests } from "./subagent-registry-sweeper-kill-custody.test-support.js";
 import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
@@ -135,6 +140,31 @@ describe("subagent registry recovery scheduling", () => {
   });
 
   registerSubagentSweepRetainedAuthorityTests(recoverRow, killSessionEntry);
+
+  it("does not rederive recorded authority while sweeping unchanged retained runs", async () => {
+    const retained = immutableSubagentRun(
+      archivedRun({
+        cleanup: "keep",
+        archiveAtMs: undefined,
+        cleanupCompletedAt: Date.now(),
+        delivery: { status: "delivered" },
+      }),
+    );
+    const { sweeper, callGateway } = createHarness({}, retained, subagentRuns);
+    onTestFinished(() => subagentRuns.clear());
+    const active = immutableSubagentRun({ ...run(), runId: "active" });
+    subagentRuns.set(active.runId, active);
+    getAgentRunContext.mockReturnValue({});
+    using authority = vi.spyOn(childAuthority, "resolveSubagentChildAuthority");
+
+    await sweeper.sweepOnce();
+    await sweeper.sweepOnce();
+
+    expect(authority).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(subagentRuns.get(retained.runId)).toBe(retained);
+    expect(subagentRuns.get(active.runId)).toBe(active);
+  });
 
   it.each(["terminal", "running"] as const)(
     "only gives ended %s children requester-wake priority over suspended delivery cleanup",

@@ -1,7 +1,7 @@
-import { createSignal, flush } from "solid-js";
+import { flush } from "solid-js";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { ChatSessionSharingProps } from "./chat-session-sharing-shared.tsx";
 import { ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
@@ -72,28 +72,19 @@ afterEach(() => {
   container = undefined;
 });
 
-const updates = new WeakMap<HTMLElement, (props: ChatSessionSharingProps) => void>();
+const updates = new WeakMap<HTMLElement, ReturnType<typeof mountSolid<ChatSessionSharingProps>>>();
 const part = (root: HTMLElement, name: string) =>
   root.querySelector<HTMLElement>(`.chat-pane__${name}`);
 const item = (root: HTMLElement, value: string) =>
   root.querySelector<HTMLButtonElement>(`button[data-value="${value}"]`);
 
 function render(props: ChatSessionSharingProps, root: HTMLElement) {
-  const update = updates.get(root);
-  if (update) {
-    update(props);
-    flush();
-    return;
+  const view = updates.get(root);
+  if (view) {
+    view.update(props);
+  } else {
+    updates.set(root, mountSolid(ChatSessionSharing, props, root));
   }
-  mountSolid(
-    () => {
-      const [current, setCurrent] = createSignal(props);
-      updates.set(root, setCurrent);
-      return <ChatSessionSharing {...current()} />;
-    },
-    { container: root },
-  );
-  flush();
 }
 
 async function openMenu(root: HTMLElement) {

@@ -1326,7 +1326,7 @@ jobs:
     name: Resolve Windows-node release artifacts
     needs: [resolve_target]
     if: needs.resolve_target.outputs.windows_node_scheduled == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 5
     permissions:
       contents: read
@@ -1474,7 +1474,7 @@ jobs:
     name: Resolve Windows-node main source
     needs: [resolve_target]
     if: needs.resolve_target.outputs.windows_node_scheduled == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 5
     permissions:
       contents: read

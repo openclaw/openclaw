@@ -592,110 +592,74 @@ describe("Memory plugin mutation ownership", () => {
     }
   });
 
-  it("keeps the replacement add-on busy after an older connection finishes", async () => {
-    const firstMutation = createMemoryTestDeferred<unknown>();
-    const secondMutation = createMemoryTestDeferred<unknown>();
-    let mutationCalls = 0;
-    const setEnabled = vi.fn(() =>
-      mutationCalls++ === 0 ? firstMutation.promise : secondMutation.promise,
-    );
-    const { element, request, runExternalMutation, setPhase } = createMemoryPage({
-      configObject: {},
-      catalog: [createMemoryTestAddon("active-memory", true)],
-      setEnabled,
-    });
-    mountMemoryPage(element);
-    try {
-      await waitForSolid(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
-      toggleAddon(element, "Active memory", false);
-      await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
-
-      setPhase("disconnected");
-      setPhase("connected");
-      await waitForSolid(() =>
-        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2),
+  it.each(["add-on", "engine"] as const)(
+    "keeps the replacement %s busy after an older connection finishes",
+    async (kind) => {
+      const firstMutation = createMemoryTestDeferred<unknown>();
+      const secondMutation = createMemoryTestDeferred<unknown>();
+      let mutationCalls = 0;
+      const setEnabled = vi.fn(() =>
+        mutationCalls++ === 0 ? firstMutation.promise : secondMutation.promise,
       );
-      await waitForSolid(() => {
-        expect(addonSwitch(element, "Active memory")).not.toBeNull();
+      const isEngine = kind === "engine";
+      const pluginId = isEngine ? "other" : "active-memory";
+      const { element, request, runExternalMutation, setPhase } = createMemoryPage({
+        configObject: {},
+        catalog: isEngine
+          ? [createMemoryTestEngine("memory-core", true), createMemoryTestEngine("other", false)]
+          : [createMemoryTestAddon("active-memory", true)],
+        setEnabled,
       });
-      toggleAddon(element, "Active memory", false);
-      await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+      const expectReady = () => {
+        if (isEngine) {
+          expect(activeEngine(element)).toBe("memory-core");
+        } else {
+          expect(addonSwitch(element, "Active memory")).not.toBeNull();
+        }
+      };
+      const change = () =>
+        isEngine ? selectEngine(element, "other") : toggleAddon(element, "Active memory", false);
+      const control = () =>
+        isEngine
+          ? element.querySelector(".settings-segmented__input")
+          : addonSwitch(element, "Active memory");
+      mountMemoryPage(element);
+      try {
+        await waitForSolid(expectReady);
+        change();
+        await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
 
-      firstMutation.resolve(committed("active-memory", false));
-      await waitForSolid(() => expect(setEnabled).toHaveBeenCalledTimes(2));
-      await waitForSolid(() =>
-        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
-      );
-      flush();
-      expect(addonSwitch(element, "Active memory")?.hasAttribute("aria-disabled")).toBe(true);
+        setPhase("disconnected");
+        setPhase("connected");
+        await waitForSolid(() =>
+          expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(
+            2,
+          ),
+        );
+        await waitForSolid(expectReady);
+        change();
+        await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
 
-      secondMutation.resolve(committed("active-memory", false));
-      await waitForSolid(() =>
-        expect(addonSwitch(element, "Active memory")?.hasAttribute("aria-disabled")).toBe(false),
-      );
-    } finally {
-      firstMutation.resolve(committed("active-memory", false));
-      secondMutation.resolve(committed("active-memory", false));
-      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
-      element.remove();
-    }
-  });
+        firstMutation.resolve(committed(pluginId, isEngine));
+        await waitForSolid(() => expect(setEnabled).toHaveBeenCalledTimes(2));
+        await waitForSolid(() =>
+          expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(
+            3,
+          ),
+        );
+        flush();
+        expect(control()?.hasAttribute("aria-disabled")).toBe(true);
 
-  it("keeps the replacement engine busy after an older connection finishes", async () => {
-    const firstMutation = createMemoryTestDeferred<unknown>();
-    const secondMutation = createMemoryTestDeferred<unknown>();
-    let mutationCalls = 0;
-    const setEnabled = vi.fn(() =>
-      mutationCalls++ === 0 ? firstMutation.promise : secondMutation.promise,
-    );
-    const { element, request, runExternalMutation, setPhase } = createMemoryPage({
-      configObject: {},
-      catalog: [
-        createMemoryTestEngine("memory-core", true),
-        createMemoryTestEngine("other", false),
-      ],
-      setEnabled,
-    });
-    mountMemoryPage(element);
-    try {
-      await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
-      selectEngine(element, "other");
-      await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
-
-      setPhase("disconnected");
-      setPhase("connected");
-      await waitForSolid(() =>
-        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2),
-      );
-      await waitForSolid(() => {
-        expect(activeEngine(element)).toBe("memory-core");
-      });
-      selectEngine(element, "other");
-      await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
-
-      firstMutation.resolve(committed("other", true));
-      await waitForSolid(() => expect(setEnabled).toHaveBeenCalledTimes(2));
-      await waitForSolid(() =>
-        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
-      );
-      flush();
-      expect(
-        element.querySelector(".settings-segmented__input")?.hasAttribute("aria-disabled"),
-      ).toBe(true);
-
-      secondMutation.resolve(committed("other", true));
-      await waitForSolid(() =>
-        expect(
-          element.querySelector(".settings-segmented__input")?.hasAttribute("aria-disabled"),
-        ).toBe(false),
-      );
-    } finally {
-      firstMutation.resolve(committed("other", true));
-      secondMutation.resolve(committed("other", true));
-      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
-      element.remove();
-    }
-  });
+        secondMutation.resolve(committed(pluginId, isEngine));
+        await waitForSolid(() => expect(control()?.hasAttribute("aria-disabled")).toBe(false));
+      } finally {
+        firstMutation.resolve(committed(pluginId, isEngine));
+        secondMutation.resolve(committed(pluginId, isEngine));
+        await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
+        element.remove();
+      }
+    },
+  );
 
   it("clears a runtime warning after a newer successful mutation of the same add-on", async () => {
     let enabled = true;

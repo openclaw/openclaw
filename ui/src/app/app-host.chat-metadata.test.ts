@@ -541,22 +541,6 @@ it.each([
     .mockImplementation(() => fresh.promise);
   const client = gateway.snapshot.client;
   assert.ok(client);
-  const context = {
-    config: createShellConfigFixture(),
-    gateway,
-    connectionBootstrap: {
-      reset: vi.fn(),
-      run: (_key: string, task: () => Promise<unknown>) => task(),
-      synchronize: vi.fn(),
-    },
-    runtimeConfig: {
-      state: { configFormDirty: false, configSnapshot: null },
-      ensureLoaded: vi.fn(async () => null),
-      refresh: vi.fn(async () => null),
-    },
-  } as unknown as ApplicationContext;
-  const shell = createShellOwner() as unknown as ChatMetadataShell;
-  shell.runtime = { context };
   const read = () =>
     kind === "auth"
       ? loadModelAuthStatus(client, { agentId: "main" })
@@ -565,7 +549,7 @@ it.each([
   if (transition === "same-client reconnect") {
     current().testOptions.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
     current().testOptions.onHello?.({ ...hello });
-  } else if (transition === "same-client identity") {
+  } else {
     current().testOptions.onEvent?.({
       type: "event",
       event: "presence",
@@ -576,12 +560,10 @@ it.each([
         presence: [{ ts: 1, instanceId: current().instanceId, user: { id: "replacement" } }],
       },
     });
-  } else {
-    shell.handleGatewayEvent({ event: transition, payload: {} });
   }
   const replacement = read();
   stale.resolve(staleResult);
-  if (kind === "catalog" && transition !== "chat.metadata.changed") {
+  if (kind === "catalog") {
     expect(await before).toHaveProperty("name", "AbortError");
   } else {
     expect(await before).toEqual(staleResult);

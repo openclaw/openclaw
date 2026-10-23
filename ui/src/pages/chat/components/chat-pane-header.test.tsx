@@ -11,6 +11,7 @@ import {
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import {
   activePlacementSession,
@@ -900,25 +901,7 @@ it("publishes the active header while retaining mobile chrome across desktop tra
     false,
     null,
   ).header;
-  const mobileHost: ChatMobileHost = {
-    scopeKey: "header-registration",
-    open: false,
-    suspended: false,
-    mode: "dock",
-    height: undefined,
-    reservedHeight: 0,
-    destination: { area: "panels" },
-    detailsMount: null,
-    setDetailsMount: vi.fn(),
-    navigate: vi.fn(),
-    reveal: vi.fn(),
-    close: vi.fn(),
-    back: vi.fn(),
-    toggleExpanded: vi.fn(),
-    resize: vi.fn(),
-    keyboardVisible: false,
-    onComposerEditingChange: vi.fn(),
-  };
+  const mobileHost: ChatMobileHost = createChatMobileHostFixture("header-registration");
   const mounted = mountHeader({
     mergedChrome: false,
     onHeaderRef: nativeHeader.onHeaderRef,

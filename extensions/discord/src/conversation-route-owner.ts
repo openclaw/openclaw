@@ -52,7 +52,6 @@ export async function prepareDiscordConversationRouteOwnersAsync(
       runtimeConversationId,
       configuredConversationId: threadConversationId ?? nativeConversationId,
       parentConversationId: params.conversation.context?.parentPeerId,
-      touchBinding: false,
     };
     return {
       conversation: {

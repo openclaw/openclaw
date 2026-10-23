@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, onSettled, refresh, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
@@ -19,6 +20,8 @@ import type {
   TranscriptAttachments,
 } from "./chat-sidebar-content-types.ts";
 import { transcriptAttachmentMatches } from "./chat-transcript-attachments.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 registerEnglishCatalog(registerChatSessionEnglish);
 

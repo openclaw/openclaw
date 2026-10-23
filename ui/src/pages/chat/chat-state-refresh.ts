@@ -18,7 +18,11 @@ import {
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
-import { loadModelCatalog, peekModelCatalog } from "../../lib/model-catalog-store.ts";
+import {
+  loadModelCatalog,
+  peekModelCatalog,
+  resolveModelCatalogState,
+} from "../../lib/model-catalog-store.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import {
@@ -455,6 +459,24 @@ async function loadChatModelCatalog(
     });
   binding.catalogRequest = { version, controller, promise };
   return promise;
+}
+
+export function readChatModelCatalogState(host: ChatPageHost) {
+  return resolveModelCatalogState(
+    {
+      models: host.chatModelCatalog,
+      refreshFailed: host.chatModelCatalogRefreshFailed,
+      pendingProviders: host.chatModelCatalogPendingProviders,
+      modelSelectionPolicy: host.chatModelSelectionPolicy,
+    },
+    {
+      connected: host.connected,
+      loading: host.chatModelsLoading,
+      error: host.chatModelCatalogError,
+      retired: host.chatModelCatalogRetired,
+      initialized: host.chatModelCatalogInitialized,
+    },
+  );
 }
 
 function applyChatModelCatalog(host: ChatPageHost, result?: ModelCatalogResult) {

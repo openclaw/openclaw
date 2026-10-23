@@ -5,6 +5,7 @@ import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-u
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { createSkillFileHovercard } from "../../components/skill-file-hovercard.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -12,7 +13,7 @@ import {
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
 import { connectedElementRef, elementRef } from "../../lib/reactive/element-ref.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { projectPresentation } from "../../lib/reactive/presentation.ts";
 import { orderSessionPullRequests } from "../../lib/session-pull-request-presentation.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
@@ -48,9 +49,12 @@ import {
   getTranscriptState,
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
+import "../../components/resizable-divider.ts";
 import { ChatThread } from "./components/chat-thread-view.tsx";
 import { TranscriptSearch } from "./components/chat-transcript-search.tsx";
-import "../../components/resizable-divider.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
+
 export type { ChatProps } from "./chat-view-frame.ts";
 
 const ExecApprovalCard = lazy(() => import("../../components/exec-approval-card-solid.tsx"), {

@@ -195,21 +195,35 @@ export function createSidebarNarration() {
     if (!enabled || !connected) {
       return;
     }
-    if (event.event === "chat") {
-      handleChatEvent(event.payload);
-      return;
-    }
     if (event.event === "session.narration") {
       handleNarrationEvent(event.payload);
       return;
     }
-    if (event.event === "session.observer") {
-      handleObserverEvent(event.payload);
+    if (
+      event.event !== "chat" &&
+      event.event !== "session.observer" &&
+      event.event !== "agent" &&
+      event.event !== "session.tool"
+    ) {
       return;
     }
-    if (event.event === "agent" || event.event === "session.tool") {
-      handleAgentEvent(event.payload);
+    if (!event.payload || typeof event.payload !== "object") {
+      return;
     }
+    const record = event.payload as Record<string, unknown>;
+    const key = matchingDesiredKey(record.sessionKey, record.agentId);
+    if (!key) {
+      return;
+    }
+    if (event.event === "chat") {
+      handleChatEvent(record, key);
+      return;
+    }
+    if (event.event === "session.observer") {
+      handleObserverEvent(record, key);
+      return;
+    }
+    handleAgentEvent(record, key);
   }
 
   function disconnect(): void {
@@ -335,15 +349,7 @@ export function createSidebarNarration() {
     return null;
   }
 
-  function handleChatEvent(payload: unknown): void {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const record = payload as Record<string, unknown>;
-    const key = matchingDesiredKey(record.sessionKey, record.agentId);
-    if (!key) {
-      return;
-    }
+  function handleChatEvent(record: Record<string, unknown>, key: string): void {
     observeRun(key, record.runId);
     if (observerDigests.has(key)) {
       return;
@@ -470,15 +476,7 @@ export function createSidebarNarration() {
     }
   }
 
-  function handleAgentEvent(payload: unknown): void {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const record = payload as Record<string, unknown>;
-    const key = matchingDesiredKey(record.sessionKey, record.agentId);
-    if (!key) {
-      return;
-    }
+  function handleAgentEvent(record: Record<string, unknown>, key: string): void {
     if (record.stream === "lifecycle") {
       observeRun(key, record.runId);
       return;
@@ -515,14 +513,9 @@ export function createSidebarNarration() {
     }
   }
 
-  function handleObserverEvent(payload: unknown): void {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    const record = payload as Record<string, unknown>;
-    const key = matchingDesiredKey(record.sessionKey, record.agentId);
+  function handleObserverEvent(record: Record<string, unknown>, key: string): void {
     const runId = typeof record.runId === "string" ? record.runId.trim() : "";
-    if (!key || !runId) {
+    if (!runId) {
       return;
     }
     const digest = { ...record, runId };

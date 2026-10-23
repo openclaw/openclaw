@@ -9,10 +9,13 @@ import {
   onSettled,
   Show,
 } from "solid-js";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { AttachmentPreviewSkeleton, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 const PDF_PREVIEW_MAX_BYTES = 16 * 1024 * 1024;
 const PDF_PREVIEW_TIMEOUT_MS = 10_000;

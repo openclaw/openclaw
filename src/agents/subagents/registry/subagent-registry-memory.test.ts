@@ -9,6 +9,8 @@ import {
   compactSubagentRunForMemory,
   getSubagentChildSessionCandidates,
   getSubagentActivationRuns,
+  getSubagentSweepRuns,
+  getRecordedSubagentChildAuthority,
   getSubagentRunsForChildSession,
   getSubagentRunsForCollectorGroup,
   getSubagentSessionReadLookup,
@@ -122,6 +124,56 @@ describe("completed subagent payload residency", () => {
 });
 
 describe("subagent run memory indexes", () => {
+  it("selects unfinished work and due retention across replacement, deletion, and reset", () => {
+    const history = createRun("history", {
+      execution: { status: "terminal", endedAt: 2 },
+      cleanupCompletedAt: 3,
+      delivery: { status: "delivered" },
+    });
+    const archive = { ...history, runId: "archive", archiveAtMs: 100 };
+    const session = { ...history, runId: "session", spawnMode: "session" as const };
+    const pending = { ...history, runId: "pending", delivery: { status: "pending" as const } };
+    for (const entry of [history, archive, session, pending]) {
+      subagentRuns.set(entry.runId, immutableSubagentRun(entry));
+    }
+    const candidates = (now: number) =>
+      [...getSubagentSweepRuns(subagentRuns, now)].map((entry) => entry.runId);
+    expect(candidates(99)).toEqual(["pending"]);
+    expect(candidates(100)).toEqual(["pending", "archive"]);
+    subagentRuns.set("archive", immutableSubagentRun({ ...archive, archiveAtMs: 200 }));
+    expect(candidates(150)).toEqual(["pending"]);
+    subagentRuns.set("archive", immutableSubagentRun({ ...archive, archiveAtMs: 151 }));
+    expect(candidates(151)).toEqual(["pending", "archive"]);
+    subagentRuns.delete("archive");
+    subagentRuns.set("pending", immutableSubagentRun({ ...history, runId: "pending" }));
+    expect(candidates(300_003)).toEqual([]);
+    expect(candidates(300_004)).toEqual(["session"]);
+    subagentRuns.set(
+      "history",
+      immutableSubagentRun({ ...history, execution: { status: "running" } }),
+    );
+    expect(candidates(300_005)).toEqual(["session", "history"]);
+    subagentRuns.clear();
+    expect(candidates(Infinity)).toEqual([]);
+  });
+
+  it("prepares child identity per immutable row without carrying it into changed ownership", () => {
+    const entry = immutableSubagentRun(
+      createRun("identity", {
+        childSessionIdentity: { sessionId: "child", lifecycleRevision: "revision" },
+      }),
+    );
+    expect(getRecordedSubagentChildAuthority(entry)).toEqual({
+      status: "verified",
+      childAgentId: "main",
+      requesterAgentId: "main",
+      sessionIdentity: { sessionId: "child", lifecycleRevision: "revision" },
+    });
+    const changed = immutableSubagentRun({ ...entry, childAgentId: "other" });
+    expect(getRecordedSubagentChildAuthority(changed).status).toBe("mismatch");
+    expect(getRecordedSubagentChildAuthority(entry).status).toBe("verified");
+  });
+
   it("tracks activation obligations across settlement, reactivation, deletion, and reset", () => {
     const finished = createRun("history", {
       execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },

@@ -30,10 +30,15 @@ suite.define(() => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         if (mode === "volatile") {
           await page.addInitScript(() => {
+            let quotaFailures = 0;
+            Object.defineProperty(window, "composerQuotaFailures", {
+              get: () => quotaFailures,
+            });
             // oxlint-disable-next-line typescript/unbound-method -- call(this, key, value) preserves each Storage receiver.
             const setItem = Storage.prototype.setItem;
             Storage.prototype.setItem = function (key: string, value: string) {
-              if (key.startsWith("openclaw.control.chatComposer.v2:")) {
+              if (key.startsWith("openclaw.control.chatComposer.")) {
+                quotaFailures++;
                 throw new DOMException("Quota exceeded", "QuotaExceededError");
               }
               return setItem.call(this, key, value);
@@ -93,11 +98,20 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}new`);
         await page.locator(".new-session-page__message").fill(message);
+        const quotaFailuresBeforeStart =
+          mode === "volatile"
+            ? await page.evaluate(() => Reflect.get(window, "composerQuotaFailures"))
+            : 0;
         await exactButton(page, "Start session").click();
         const modal = page.locator("openclaw-modal-dialog");
         await modal.waitFor();
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        if (mode === "volatile") {
+          expect(
+            await page.evaluate(() => Reflect.get(window, "composerQuotaFailures")),
+          ).toBeGreaterThan(quotaFailuresBeforeStart);
+        }
         if (mode === "cancel") {
           await exactButton(modal, "Cancel").click();
           await modal.waitFor({ state: "hidden" });

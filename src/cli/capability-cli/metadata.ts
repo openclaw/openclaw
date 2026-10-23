@@ -1,13 +1,5 @@
 export type CapabilityTransport = "local" | "gateway";
 
-type CapabilityMetadata = {
-  id: string;
-  description: string;
-  transports: Array<CapabilityTransport>;
-  flags: string[];
-  resultShape: string;
-};
-
 export type CapabilityEnvelope = {
   ok: boolean;
   capability: string;
@@ -39,7 +31,13 @@ const IMAGE_GENERATION_FLAGS = [
   "--json",
 ];
 
-export const CAPABILITY_METADATA: CapabilityMetadata[] = [
+export const CAPABILITY_METADATA: {
+  id: string;
+  description: string;
+  transports: Array<CapabilityTransport>;
+  flags: string[];
+  resultShape: string;
+}[] = [
   {
     id: "model.run",
     description: "Run a one-shot inference turn through the selected model provider.",

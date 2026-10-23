@@ -5,9 +5,12 @@ import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import type { BoardWidgetCellCallbacks } from "./board-widget-cell-options.ts";
+import {
+  callbacks,
+  cleanupCells,
+  mountElement as mount,
+} from "./board-widget-cell.test-support.ts";
 import "./board-widget-cell.solid.tsx";
 
 const reportLoad = vi.hoisted(() => ({
@@ -30,38 +33,7 @@ vi.mock("../../lib/board/widgets/report.tsx", async (importOriginal) => {
   };
 });
 
-const disposers: Array<() => void> = [];
-function mount(element: HTMLElement): void {
-  disposers.push(mountSolid(() => element, { container: document.body }).unmount);
-}
-
-function callbacks(): BoardWidgetCellCallbacks {
-  const noAction = vi.fn(async () => undefined);
-  return {
-    appViewGeneration: () => 0,
-    grant: noAction,
-    movePointerDown: vi.fn(),
-    resizePointerDown: vi.fn(),
-    moveToTab: noAction,
-    resizeTo: noAction,
-    setHeightMode: noAction,
-    reportContentHeight: vi.fn(),
-    remove: noAction,
-    nudge: noAction,
-    focus: vi.fn(),
-    focusChanged: vi.fn(),
-    frameLoadFailed: noAction,
-    widgetAppView: vi.fn(async () => ({ status: "stale" as const })),
-    refreshWidgetAppView: vi.fn(async () => ({ status: "stale" as const })),
-  };
-}
-
-afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
-  document.body.replaceChildren();
-});
+afterEach(cleanupCells);
 
 // The session progress element arrives via a lazy chunk; a cold transform can
 // exceed vi.waitFor's 1s default on loaded machines, so these waits get a
@@ -319,57 +291,37 @@ describe("plugin board widget cells", () => {
 
     for (const [index, scenario] of responses.entries()) {
       const request = vi.fn(async () => scenario.response);
+      const result = {
+        sessions: [
+          { key: "global", agentId: "main", status: "failed", startedAt: 0, endedAt: 2 },
+          { key: "global", agentId: "research", status: "done", startedAt: 0, endedAt: 2 },
+          {
+            key: "agent:main:notes",
+            agentId: "main",
+            status: "failed",
+            startedAt: 0,
+            endedAt: 2,
+          },
+          {
+            key: "agent:research:notes",
+            agentId: "research",
+            status: "done",
+            startedAt: 0,
+            endedAt: 2,
+          },
+        ],
+      };
       const context = {
         agentSelection: {
           state: { scopeId: null },
           subscribe: () => () => undefined,
         },
         sessions: {
-          state: {
-            result: {
-              sessions: [
-                { key: "global", agentId: "main", status: "failed", startedAt: 0, endedAt: 2 },
-                { key: "global", agentId: "research", status: "done", startedAt: 0, endedAt: 2 },
-                {
-                  key: "agent:main:notes",
-                  agentId: "main",
-                  status: "failed",
-                  startedAt: 0,
-                  endedAt: 2,
-                },
-                {
-                  key: "agent:research:notes",
-                  agentId: "research",
-                  status: "done",
-                  startedAt: 0,
-                  endedAt: 2,
-                },
-              ],
-            },
-          },
+          state: { result },
           subscribe: () => () => undefined,
           subscribeList: () => () => undefined,
           listSnapshot: () => ({
-            result: {
-              sessions: [
-                { key: "global", agentId: "main", status: "failed", startedAt: 0, endedAt: 2 },
-                { key: "global", agentId: "research", status: "done", startedAt: 0, endedAt: 2 },
-                {
-                  key: "agent:main:notes",
-                  agentId: "main",
-                  status: "failed",
-                  startedAt: 0,
-                  endedAt: 2,
-                },
-                {
-                  key: "agent:research:notes",
-                  agentId: "research",
-                  status: "done",
-                  startedAt: 0,
-                  endedAt: 2,
-                },
-              ],
-            },
+            result,
             agentId: null,
             loading: false,
             error: null,

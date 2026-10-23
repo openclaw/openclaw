@@ -55,25 +55,23 @@ function resolveRunWaitDeadlineAtMs(params: { deadlineAtMs?: number; timeoutMs?:
   );
 }
 
-type RawAgentWaitResponse = {
-  status?: string;
-  error?: string;
-  startedAt?: unknown;
-  endedAt?: unknown;
-  stopReason?: unknown;
-  livenessState?: unknown;
-  yielded?: unknown;
-  pendingError?: unknown;
-  timeoutPhase?: unknown;
-  providerStarted?: unknown;
-  terminalReply?: unknown;
-  terminalReceipt?: unknown;
-};
-
 function normalizeAgentWaitResult(
   status: AgentWaitResult["status"],
   runId: string,
-  wait?: RawAgentWaitResponse,
+  wait?: {
+    status?: string;
+    error?: string;
+    startedAt?: unknown;
+    endedAt?: unknown;
+    stopReason?: unknown;
+    livenessState?: unknown;
+    yielded?: unknown;
+    pendingError?: unknown;
+    timeoutPhase?: unknown;
+    providerStarted?: unknown;
+    terminalReply?: unknown;
+    terminalReceipt?: unknown;
+  },
 ): AgentWaitResult {
   const receipt = normalizeAgentRunTerminalReceipt(wait?.terminalReceipt);
   const stopReason = typeof wait?.stopReason === "string" ? wait.stopReason : undefined;

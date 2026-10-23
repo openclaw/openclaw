@@ -5,10 +5,13 @@
 import { resolveChatAttachmentFrameBudgetBytes } from "../../../../../src/shared/chat-attachment-frame-budget.ts";
 import type { GatewayHelloOk } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { getChatAttachmentDataUrl } from "../attachment-payload-store.ts";
 import { canResizeChatAttachment } from "./chat-attachment-image.ts";
+
+registerChatComposerEnglish();
 
 export type ChatAttachmentLimits = {
   maxBytes: number;

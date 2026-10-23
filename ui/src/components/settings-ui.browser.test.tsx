@@ -79,15 +79,11 @@ it("animates Applying before lazy settings styles load", async () => {
 it("restores segmented controls after fieldset busy state while preserving disabled options", () => {
   const onChange = vi.fn();
   const { container, draw } = mountRadioGroups(onChange);
-  const disabledStates = (
-    busy: boolean,
-    disabled = false,
-    selector = ':disabled, [aria-disabled="true"]',
-  ) => {
+  const disabledStates = (busy: boolean, disabled = false) => {
     draw({ busy, disabled });
     return [
       ...container.querySelector('[role="radiogroup"]')!.querySelectorAll("input[type=radio]"),
-    ].map((radio) => radio.matches(selector));
+    ].map((radio) => radio.matches(":disabled"));
   };
   expect(disabledStates(false)).toEqual([false, false, true]);
   expect(disabledStates(true)).toEqual([true, true, true]);
@@ -100,7 +96,6 @@ it("restores segmented controls after fieldset busy state while preserving disab
   onChange.mockClear();
   expect(disabledStates(true, true)).toEqual([true, true, true]);
   expect(disabledStates(false, true)).toEqual([true, true, true]);
-  expect(disabledStates(false, true, ":disabled")).toEqual([false, false, true]);
   container.querySelector<HTMLElement>('input[type=radio][value="second"]')?.click();
   expect(onChange).not.toHaveBeenCalled();
   expect(disabledStates(false)).toEqual([false, false, true]);
@@ -122,6 +117,7 @@ it("keeps externally updated radio selections checked and independent as options
 
 function mountBusyControls() {
   const [busy, setBusy] = createSignal(false);
+  const [disabled, setDisabled] = createSignal(false);
   const [checked, setChecked] = createSignal(false);
   const [mode, setMode] = createSignal("first");
   const [size, setSize] = createSignal("small");
@@ -138,13 +134,15 @@ function mountBusyControls() {
       <SettingsToggleRow
         title="Audit log"
         checked={checked()}
-        disabled={busy()}
+        saving={busy()}
+        disabled={disabled()}
         onChange={onToggle}
       />
       <SettingsSegmented
         ariaLabel="Mode"
         value={mode()}
-        disabled={busy()}
+        saving={busy()}
+        disabled={disabled()}
         options={[
           { value: "first", label: "First" },
           { value: "second", label: "Second" },
@@ -155,7 +153,8 @@ function mountBusyControls() {
         mode="buttons"
         ariaLabel="Size"
         value={size()}
-        disabled={busy()}
+        saving={busy()}
+        disabled={disabled()}
         options={[
           { value: "small", label: "Small" },
           { value: "large", label: "Large" },
@@ -168,7 +167,7 @@ function mountBusyControls() {
     setBusy(false);
     flush();
   };
-  return { ...view, onToggle, onMode, onSize, settle };
+  return { ...view, onToggle, onMode, onSize, settle, setDisabled };
 }
 
 const unavailable = (element: Element) => element.matches(':disabled, [aria-disabled="true"]');
@@ -190,6 +189,8 @@ it("keeps a busy switch focused and ignores Space until the save settles", async
     await userEvent.keyboard(" ");
     await expectFocusKeptWhileBusy(toggle);
     await userEvent.keyboard(" ");
+    view.container.querySelector<HTMLElement>(".settings-row__title")!.click();
+    toggle.click();
     expect(view.onToggle).toHaveBeenCalledExactlyOnceWith(true);
     expect(toggle.checked).toBe(true);
     view.settle();
@@ -211,6 +212,7 @@ it("keeps a busy radio focused and ignores arrow keys until the save settles", a
     await userEvent.keyboard("{ArrowRight}");
     await expectFocusKeptWhileBusy(radio("second"));
     await userEvent.keyboard("{ArrowRight}");
+    radio("first").click();
     expect(view.onMode).toHaveBeenCalledExactlyOnceWith("second", expect.any(HTMLElement));
     expect(document.activeElement).toBe(radio("second"));
     expect(radio("second").checked).toBe(true);
@@ -235,6 +237,7 @@ it("keeps a busy segmented button focused and ignores Enter until the save settl
     await userEvent.keyboard("{Enter}");
     await expectFocusKeptWhileBusy(button("Large"));
     await userEvent.keyboard("{Enter}");
+    button("Small").click();
     expect(view.onSize).toHaveBeenCalledExactlyOnceWith("large");
     expect(button("Large").getAttribute("aria-pressed")).toBe("true");
     view.settle();
@@ -247,7 +250,40 @@ it("keeps a busy segmented button focused and ignores Enter until the save settl
   }
 });
 
-it("keeps a locked switch reachable with Tab but ignores Space", async () => {
+it("keeps non-saving restrictions native when they arrive during a save", async () => {
+  const view = mountBusyControls();
+  try {
+    const controls = [
+      ...view.container.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button"),
+    ];
+    const toggle = controls[0]!;
+    toggle.focus();
+    await userEvent.keyboard(" ");
+    await expectFocusKeptWhileBusy(toggle);
+    view.setDisabled(true);
+    flush();
+    await nextFrame();
+    await nextFrame();
+    for (const control of controls) {
+      expect(control.disabled).toBe(true);
+      control.focus();
+      expect(document.activeElement).not.toBe(control);
+      control.click();
+    }
+    expect(view.onToggle).toHaveBeenCalledExactlyOnceWith(true);
+    expect(view.onMode).not.toHaveBeenCalled();
+    expect(view.onSize).not.toHaveBeenCalled();
+    view.settle();
+    expect(controls.every((control) => control.disabled)).toBe(true);
+    view.setDisabled(false);
+    flush();
+    expect(controls.every((control) => !control.disabled)).toBe(true);
+  } finally {
+    view.unmount();
+  }
+});
+
+it("keeps a non-saving disabled switch out of keyboard navigation", async () => {
   const onChange = vi.fn();
   const view = mountSolid(() => (
     <SettingsToggleRow title="Audit log" checked={false} disabled onChange={onChange} />
@@ -255,8 +291,8 @@ it("keeps a locked switch reachable with Tab but ignores Space", async () => {
   try {
     const toggle = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
     await userEvent.tab();
-    expect(document.activeElement).toBe(toggle);
-    expect(toggle.getAttribute("aria-disabled")).toBe("true");
+    expect(toggle.disabled).toBe(true);
+    expect(document.activeElement).not.toBe(toggle);
     await userEvent.keyboard(" ");
     expect(onChange).not.toHaveBeenCalled();
     expect(toggle.checked).toBe(false);

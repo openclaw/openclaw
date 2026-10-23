@@ -225,11 +225,6 @@ export function appendCoalescedClaudeCliToolMessage(
   messages.push(message);
 }
 
-type ClaudeCliPromptTextCandidate = {
-  text: string;
-  blockIndex?: number;
-};
-
 // Claude keeps compact summaries and transcript-only rows as visible harness
 // context. isMeta rows are private injections and never reach this projection.
 function isClaudeCliVisibleHarnessContext(entry: ClaudeCliProjectEntry): boolean {
@@ -293,7 +288,7 @@ function readClaudeCliInterSessionProvenance(
 export function resolveClaudeCliPromptTextCandidates(
   entry: ClaudeCliProjectEntry,
   content: string | unknown[],
-): ClaudeCliPromptTextCandidate[] {
+): { text: string; blockIndex?: number }[] {
   if (entry.isMeta === true || isClaudeCliVisibleHarnessContext(entry)) {
     return [];
   }

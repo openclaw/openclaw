@@ -171,15 +171,10 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         if (drift) {
           const { formatGatewayServiceInstallationDrift } =
             await import("../cli/daemon-cli/shared.js");
-          const message = formatGatewayServiceInstallationDrift(
-            drift,
-            undefined,
-            before.serviceEnv,
-            {
-              stopped: true,
-              port: before.servicePort,
-            },
-          );
+          const message = formatGatewayServiceInstallationDrift(drift, before.serviceEnv, {
+            stopped: true,
+            port: before.servicePort,
+          });
           warn(message);
           return;
         }

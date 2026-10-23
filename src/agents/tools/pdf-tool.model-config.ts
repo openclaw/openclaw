@@ -77,7 +77,6 @@ function resolveImageCandidateRefs(
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
         providerId,
-        document: "pdf",
         mode: "image",
       });
       if (documentImageModel === false) {
@@ -123,7 +122,6 @@ export function resolvePdfModelConfigForTool(
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       providerId: activeProvider,
-      document: "pdf",
       mode: "image",
     }) !== false &&
     hasProviderAuthForTool({ ...params, provider: activeProvider })
@@ -175,7 +173,6 @@ export function resolvePdfModelConfigForTool(
       cfg: textExtractionParams.cfg,
       workspaceDir: textExtractionParams.workspaceDir,
       providerId,
-      document: "pdf",
       mode: "textExtraction",
     });
     if (!documentTextModel) {
@@ -185,7 +182,6 @@ export function resolvePdfModelConfigForTool(
       cfg: textExtractionParams.cfg,
       workspaceDir: textExtractionParams.workspaceDir,
       providerId,
-      document: "pdf",
       mode: "image",
     });
     const preferredTextModel =
@@ -231,7 +227,6 @@ export function resolvePdfModelConfigForTool(
             cfg: params.cfg,
             workspaceDir: params.workspaceDir,
             providerId,
-            document: "pdf",
             mode: "image",
           })
         : undefined;

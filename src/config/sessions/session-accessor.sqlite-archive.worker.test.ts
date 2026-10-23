@@ -155,7 +155,6 @@ describe("SQLite transcript archive worker", () => {
     const archivedPath = writeTranscriptArchive({
       archiveDirectory,
       content,
-      reason: "deleted",
       sessionId,
     });
     expect(archivedPath).not.toBe(stagedPath);
