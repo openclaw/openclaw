@@ -207,7 +207,6 @@ async function writeFile(filePath: string, content: string): Promise<void> {
 }
 
 async function renderRevision(
-  repoRoot: string,
   revisionRoot: string,
   outputPath: string,
   signal: AbortSignal,
@@ -342,7 +341,7 @@ export async function renderPluginSdkApiRevisions(
         const renderPath = path.join(temporaryRoot, `${commit}.json`);
         const renderStartedAt = performance.now();
         console.error(`[plugin-sdk-api-diff] ${commit} render started`);
-        await renderRevision(repoRoot, worktree, renderPath, abortController.signal);
+        await renderRevision(worktree, renderPath, abortController.signal);
         console.error(
           `[plugin-sdk-api-diff] ${commit} render completed in ${Math.round(performance.now() - renderStartedAt)}ms`,
         );
