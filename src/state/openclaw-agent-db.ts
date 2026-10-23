@@ -1,6 +1,5 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { isMainThread } from "node:worker_threads";
 import { resolveStateDir } from "../config/paths.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
@@ -85,6 +84,7 @@ import {
   revokePendingAgentDatabaseOpen,
   type PendingAgentDatabaseOpen,
 } from "./openclaw-agent-db-lifecycle.js";
+import { classifyAgentDatabaseOpeningRefusal } from "./openclaw-agent-db-opening-refusal.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import { closeIdleOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-scope.js";
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
@@ -579,9 +579,7 @@ function* openOpenClawAgentDatabaseSteps(
     releaseCreationAdmission?.();
     return database;
   } catch (error) {
-    // The host releases a refused prepared worker's lease after native exit.
-    const deferLeaseRelease =
-      preparedLease !== undefined && !isMainThread && error instanceof SqliteWorkerOpenRefusedError;
+    const refusal = classifyAgentDatabaseOpeningRefusal(error, preparedLease);
     let closeError: unknown;
     if (openedDatabase) {
       try {
@@ -631,13 +629,12 @@ function* openOpenClawAgentDatabaseSteps(
         closeMaintenanceAgentDatabase(retainedDatabase),
       );
       cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
-    } else if (!deferLeaseRelease) {
-      const closeOutcome = error instanceof SqliteWorkerOpenRefusedError ? "read-only" : undefined;
+    } else if (!refusal.deferLeaseRelease) {
       try {
-        releaseOpenClawAgentDatabaseLease(leaseId, releaseOptions, closeOutcome);
+        releaseOpenClawAgentDatabaseLease(leaseId, releaseOptions, refusal.closeOutcome);
       } catch (releaseError) {
         retainFailedAgentDatabaseClose(agentId, pathname, () =>
-          releaseOpenClawAgentDatabaseLease(leaseId, releaseOptions, closeOutcome),
+          releaseOpenClawAgentDatabaseLease(leaseId, releaseOptions, refusal.closeOutcome),
         );
         throw releaseError;
       }

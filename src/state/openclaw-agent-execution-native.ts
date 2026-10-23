@@ -17,7 +17,7 @@ import {
   type SqliteWorkerAdmissionFactory,
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
-import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
+import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-operation-settlement.js";
 import {
   closeUnclaimedSharedStateSqliteWorkers,
   isSqliteWorkerStoreAvailable,
@@ -88,16 +88,16 @@ export function createAgentDatabaseNativeGeneration(
     ...(creatingIdentity ? { creatingIdentity } : {}),
     ...(creationClaim ? { creationClaim } : {}),
   };
-  let retiring = false;
+  let retiring = false,
+    preparationPublished = false;
   let opening: Promise<Store | undefined> | undefined;
   let openedStore: Store | undefined;
   let openingFailure: "open-refused" | "native" | undefined;
   let closedOpeningRefusal: Error | undefined;
   let openingAdmission:
-    | {
+    | (RetainedWorkerTransactionAdmission & {
         admission: ReturnType<SqliteWorkerAdmissionFactory>["admission"];
-        settled: Promise<SqliteWorkerOperationSettlement>;
-      }
+      })
     | undefined;
   let closing: Promise<void> | undefined;
   let nativeIdentity: AgentDatabaseFileExecutionIdentity | undefined;
@@ -106,7 +106,6 @@ export function createAgentDatabaseNativeGeneration(
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
   let integrityCheckPending: "quick" | "full" | undefined;
   let assertIntegrityVerifierCurrent: (() => void) | undefined;
-  let preparationPublished = false;
 
   const assertCurrent = () => {
     assertLogicalCurrent();
