@@ -13,6 +13,7 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { CoreBoardWidget } from "./core-board-widget.tsx";
 
 const staleError = vi.hoisted(() => new TypeError("Failed to fetch dynamically imported module"));
+// mock-isolation: Fail the lazy renderer without starting its real report host or subscriptions.
 vi.mock("../../lib/board/widgets/report.tsx", () => ({
   ReportWidget: () => {
     throw staleError;
