@@ -5,10 +5,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
 import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
-import {
-  resolveOpenClawAgentSqlitePath,
-  runOpenClawAgentWriteTransaction,
-} from "../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
@@ -17,11 +14,13 @@ import type {
 import { captureOpenClawAgentDatabasePreparationExecution } from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
 import {
   retireLegacySessionCostUsageCacheInDatabase,
   type SessionCostUsageRollupSnapshot,
 } from "./session-cost-usage-cache.kernel.js";
 import { isSessionActorUsageRefreshRunning } from "./session-cost-usage-memory.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { readDatabasePathIdentitySync, resolveDatabasePathKey } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
@@ -148,13 +147,25 @@ export async function retireLegacySessionCostUsageCache(params: {
     env: params.env,
     ...(params.databasePath ? { path: params.databasePath } : {}),
   });
-  if (getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance) {
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  if (maintenance?.ownsSchemaMaintenance) {
     // Doctor retains the native owner; ordinary worker admission cannot borrow it.
-    await withOpenClawAgentDatabaseWrite(options, () =>
-      runOpenClawAgentWriteTransaction(
-        ({ db }) => retireLegacySessionCostUsageCacheInDatabase(db),
-        options,
-        { operationLabel: "session-cost-usage.legacy.retire" },
+    await withOpenClawAgentDatabaseWrite(options, ({ db, path }) =>
+      runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          maintenance.assertAdmission();
+          retireLegacySessionCostUsageCacheInDatabase(db);
+        },
+        {
+          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          databaseLabel: path,
+          operationLabel: "session-cost-usage.legacy.retire",
+          withCommit: (commit) => {
+            maintenance.assertAdmission();
+            commit();
+          },
+        },
       ),
     );
     return;
