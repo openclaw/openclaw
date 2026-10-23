@@ -8,6 +8,7 @@ import type {
   UsersAuthConnectStatusResult,
   UsersListAuthLinksResult,
   UsersListModelAccountsResult,
+  UsersRemoveModelAccountResult,
   WizardStep,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -60,7 +61,9 @@ async function mountAccounts(
   handle: (
     method: string,
     params?: unknown,
-  ) => Promise<UsersAuthConnectStatusResult | UsersListAuthLinksResult>,
+  ) => Promise<
+    UsersAuthConnectStatusResult | UsersListAuthLinksResult | UsersRemoveModelAccountResult
+  >,
   {
     expiresInMs = 60_000,
     scopes = ["operator.write"],
@@ -123,6 +126,11 @@ async function mountAccounts(
       return { status: "pending", step: step ?? redirectStep(starts) };
     }
     const result = await handle(method, params);
+    if (method === "users.removeModelAccount" && "sessionCleanup" in result) {
+      savedAccounts = savedAccounts.filter(
+        (account) => account.authProfileId !== result.authProfileId,
+      );
+    }
     if ("links" in result) {
       links = result.links;
       const saved = new Map(savedAccounts.map((account) => [account.authProfileId, account]));
@@ -354,6 +362,84 @@ it("lets a writer choose a retained account for new chats and clear the default 
   expect(
     harness.request.mock.calls.some(([method]) => method.startsWith("users.authConnect.")),
   ).toBe(false);
+});
+
+it("requires confirmation, leaves cancellation untouched and waits for confirmed deletion", async () => {
+  const pending = createDeferred<UsersRemoveModelAccountResult>();
+  const harness = await mountAccounts(async () => pending.promise, {
+    accounts: [connectedAccount, claudeAccount],
+  });
+  button(harness.accounts, ".profile-auth-account-remove").click();
+  flush();
+  expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.removalConfirm"));
+  button(harness.accounts, ".profile-auth-remove-cancel").click();
+  flush();
+  expect(harness.request.mock.calls.some(([method]) => method === "users.removeModelAccount")).toBe(
+    false,
+  );
+  expect(harness.accounts.querySelectorAll(".profile-auth-account-remove")).toHaveLength(2);
+  button(harness.accounts, ".profile-auth-account-remove").click();
+  flush();
+  button(harness.accounts, ".profile-auth-remove-confirm").click();
+  await waitForSolid(() =>
+    expect(harness.request).toHaveBeenCalledWith("users.removeModelAccount", {
+      profileId: "profile-1",
+      authProfileId: connectedAccount.authProfileId,
+    }),
+  );
+  expect(harness.accounts.querySelectorAll(".profile-auth-account-remove")).toHaveLength(2);
+  pending.resolve({
+    authProfileId: connectedAccount.authProfileId,
+    removed: true,
+    sessionCleanup: "complete",
+    links: [{ provider: "anthropic", authProfileId: claudeAccount.authProfileId, updatedAt: 1 }],
+  });
+  await waitForSolid(() =>
+    expect(harness.accounts.querySelectorAll(".profile-auth-account-remove")).toHaveLength(1),
+  );
+  expect(harness.accounts.textContent).toContain(claudeAccount.label);
+  expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
+});
+
+it("keeps a partial removal honest and retries cleanup using the deleted account ID", async () => {
+  const handle = vi
+    .fn()
+    .mockResolvedValueOnce({
+      authProfileId: connectedAccount.authProfileId,
+      removed: true,
+      sessionCleanup: "pending",
+      links: [],
+    })
+    .mockResolvedValueOnce({
+      authProfileId: connectedAccount.authProfileId,
+      removed: false,
+      sessionCleanup: "complete",
+      links: [],
+    });
+  const harness = await mountAccounts(handle, { accounts: [connectedAccount] });
+  button(harness.accounts, ".profile-auth-account-remove").click();
+  flush();
+  button(harness.accounts, ".profile-auth-remove-confirm").click();
+  await waitForSolid(() =>
+    expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.removalPending")),
+  );
+  expect(harness.accounts.querySelector(".profile-auth-account-remove")).toBeNull();
+  expect(harness.accounts.textContent).not.toContain(
+    t("profilePage.modelAccounts.notices.removed"),
+  );
+  await waitForSolid(() =>
+    expect(button(harness.accounts, ".profile-auth-remove-confirm").disabled).toBe(false),
+  );
+  button(harness.accounts, ".profile-auth-remove-confirm").click();
+  await waitForSolid(() =>
+    expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.notices.removed")),
+  );
+  expect(handle.mock.calls).toEqual(
+    Array.from({ length: 2 }, () => [
+      "users.removeModelAccount",
+      { profileId: "profile-1", authProfileId: connectedAccount.authProfileId },
+    ]),
+  );
 });
 
 it("shows a pending default selection and restores the accepted account after rejection", async () => {

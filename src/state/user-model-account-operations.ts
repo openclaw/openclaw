@@ -180,6 +180,26 @@ export function clearUserProfileAuthLinkAsync(
   return mutate("userProfiles.modelAccount.unlink", input, assertCurrent, options);
 }
 
+/** Removing a credential publishes its retirement, not just a new default link. */
+export function removeUserModelAccountAsync(
+  params: {
+    profileId: string;
+    authProfileId: string;
+    assertCurrent: (roles?: readonly ModelAccountRole[]) => void;
+    authorityProfileIds?: readonly string[];
+  },
+  options: AccountOptions = {},
+) {
+  const { assertCurrent, ...input } = params;
+  const context = options.context ?? captureOpenClawStateWorkerContext(options);
+  assertCurrent();
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "userProfiles.modelAccount.remove", input }),
+    mutationAdmission(context, input.profileId, assertCurrent, input.authorityProfileIds, true),
+  );
+}
+
 async function read<
   Key extends "userProfiles.modelAccount.list" | "userProfiles.modelAccount.selected",
 >(type: Key, input: OpenClawStateWorkerOperations[Key]["input"], options: AccountOptions) {

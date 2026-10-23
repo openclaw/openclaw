@@ -13,7 +13,9 @@ export async function clearRemovedSessionAuthProfiles(params: {
   cfg: OpenClawConfig;
   removedByAgent: ReadonlyMap<string, ReadonlySet<string>>;
   rewriteConfig: (cfg: OpenClawConfig) => OpenClawConfig;
+  assertCurrent?: () => void;
 }): Promise<void> {
+  params.assertCurrent?.();
   clearRemovedQueuedAuthProfiles(params);
   if (params.removedByAgent.size === 0) {
     return;
@@ -57,6 +59,7 @@ export async function clearRemovedSessionAuthProfiles(params: {
           { ...database, env: inventory.env },
           async (owner) => {
             const assertCurrent = () => {
+              params.assertCurrent?.();
               discovery.assertCurrent();
               registry.assertCurrent();
               owner.assertCurrent();

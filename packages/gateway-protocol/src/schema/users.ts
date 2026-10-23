@@ -218,6 +218,17 @@ export const UsersSelectModelAccountResultSchema = closedObject({
   links: Type.Array(UserProfileAuthLinkSchema),
 });
 
+export const UsersRemoveModelAccountParamsSchema = closedObject({
+  profileId: Type.Optional(UserProfileIdSchema),
+  authProfileId: ModelAuthProfileIdSchema,
+});
+export const UsersRemoveModelAccountResultSchema = closedObject({
+  authProfileId: ModelAuthProfileIdSchema,
+  removed: Type.Boolean(),
+  links: Type.Array(UserProfileAuthLinkSchema),
+  sessionCleanup: Type.Union([Type.Literal("complete"), Type.Literal("pending")]),
+});
+
 export const UsersListAuthLinksParamsSchema = closedObject({ profileId: UserProfileIdSchema });
 export const UsersListAuthLinksResultSchema = closedObject({
   links: Type.Array(UserProfileAuthLinkSchema),
@@ -370,6 +381,8 @@ export type UsersListModelAccountsParams = Static<typeof UsersListModelAccountsP
 export type UsersListModelAccountsResult = Static<typeof UsersListModelAccountsResultSchema>;
 export type UsersSelectModelAccountParams = Static<typeof UsersSelectModelAccountParamsSchema>;
 export type UsersSelectModelAccountResult = Static<typeof UsersSelectModelAccountResultSchema>;
+export type UsersRemoveModelAccountParams = Static<typeof UsersRemoveModelAccountParamsSchema>;
+export type UsersRemoveModelAccountResult = Static<typeof UsersRemoveModelAccountResultSchema>;
 
 export type UsersAuthConnectStartParams = Static<typeof UsersAuthConnectStartParamsSchema>;
 export type UsersAuthConnectStartResult = Static<typeof UsersAuthConnectStartResultSchema>;

@@ -7,6 +7,7 @@ import type {
   UsersLinkAuthProfileResult,
   UsersListModelAccountsResult,
   UsersSelectModelAccountResult,
+  UsersRemoveModelAccountResult,
   UsersUnlinkAuthProfileResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
@@ -15,6 +16,7 @@ import {
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { listKnownSessionStoreAgentIdsAsync } from "../config/sessions/targets-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { warnModelAccountConnectDeprecation } from "../plugins/compat/model-account-connect-deprecation.js";
@@ -23,6 +25,7 @@ import {
   resolvePersonalAccountAuthMethod,
 } from "../plugins/personal-account-auth.js";
 import { runProviderPluginAuthMethodUnpersisted } from "../plugins/provider-auth-method.js";
+import { clearRemovedSessionAuthProfiles } from "../sessions/auth-profile-removal.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -35,6 +38,7 @@ import {
   readUserModelAccountSummaryAsync,
   readSelectedUserModelAccountAsync,
   setUserProfileAuthLinkAsync,
+  removeUserModelAccountAsync,
 } from "../state/user-model-account-operations.js";
 import * as nativeAccounts from "../state/user-model-accounts.js";
 import { captureUserProfileModelAccountLinksAuthority } from "../state/user-profile-events.js";
@@ -460,6 +464,51 @@ export function createModelAccountConnectService(options: {
       authProfileId: string,
     ): Promise<UsersSelectModelAccountResult> {
       return changeLink(action, "select", authProfileId);
+    },
+    async removeAsync(
+      action: ModelAccountConnectWorkerAction,
+      authProfileId: string,
+    ): Promise<UsersRemoveModelAccountResult> {
+      assertRunning(action);
+      // Admin access to another person's defaults is not authority to delete their credential.
+      if (action.actorProfileId !== action.owner || !isUserModelAuthProfileId(authProfileId)) {
+        throw new ModelAccountConnectAuthorityError();
+      }
+      const context = captureOpenClawStateWorkerContext();
+      const previous = [...operations.values()];
+      return retainWrite(async () => {
+        const result = await removeUserModelAccountAsync(
+          {
+            profileId: action.owner,
+            authProfileId,
+            authorityProfileIds: [action.owner],
+            assertCurrent: action.assertCurrent,
+          },
+          { context },
+        );
+        if (result.provider) {
+          supersede(action.owner, result.provider, previous);
+        }
+        // No rollback of a deleted credential when a separate session store is unavailable.
+        // The same ID remains a valid cleanup retry after deletion.
+        let sessionCleanup: "complete" | "pending" = "pending";
+        try {
+          action.assertCurrent();
+          const cfg = options.getConfig();
+          const agents = await listKnownSessionStoreAgentIdsAsync(cfg);
+          await clearRemovedSessionAuthProfiles({
+            cfg,
+            removedByAgent: new Map(agents.map((agent) => [agent, new Set([authProfileId])])),
+            rewriteConfig: (current) => current,
+            assertCurrent: action.assertCurrent,
+          });
+          sessionCleanup = "complete";
+        } catch {
+          // Return only the committed account result, never store paths or credential details.
+        }
+        options.onChanged?.();
+        return { authProfileId, removed: result.removed, links: result.links, sessionCleanup };
+      });
     },
     async start(
       action: ModelAccountConnectAction,

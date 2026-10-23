@@ -15,7 +15,6 @@ import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
-import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import {
@@ -27,12 +26,15 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 import { personalCredentialPublication } from "./user-model-account-authority.js";
 import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-model-account-id.js";
 import {
+  deleteUserModelAccountCredentialRecord,
+  writeUserModelAccountRecord as writeRecord,
+} from "./user-model-account-record-writes.js";
+import {
   invalidUserModelAccounts as invalidAccounts,
   readSelectedUserModelAccountRecords,
   readUserModelAccountLinksRecord,
   readUserModelAccountRecord as readRecord,
   userModelAccountRecordValue as accountRecordValue,
-  type UserModelAccountRecordName as AccountRecordName,
 } from "./user-model-account-records.kernel.js";
 import {
   captureUserProfileModelAccountLinksAuthority,
@@ -104,42 +106,6 @@ function requireOwner(db: EngineConnection, profileId: string): string {
     throw new Error("Personal model account owner is unavailable; refresh Profile and try again.");
   }
   return owner;
-}
-
-function writeRecord(
-  db: EngineConnection,
-  owner: string,
-  name: AccountRecordName,
-  value: string,
-): void {
-  if (Buffer.byteLength(value, "utf8") > SECRET_STORE_VALUE_MAX_BYTES) {
-    throw new Error("Personal model account entry exceeds the 64 KiB secret-store limit.");
-  }
-  ensureSecretStoreSchema(db);
-  const now = Date.now();
-  const mutable = {
-    value,
-    kind: "secret",
-    allowed_hosts: null,
-    deleted_at_ms: null,
-    updated_at_ms: now,
-    updated_by: null,
-  };
-  executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<Pick<DB, "secret_store_entries">>(db)
-      .insertInto("secret_store_entries")
-      .values({
-        scope_kind: "identity",
-        scope_id: owner,
-        name,
-        created_at_ms: now,
-        ...mutable,
-      })
-      .onConflict((conflict) =>
-        conflict.columns(["scope_kind", "scope_id", "name"]).doUpdateSet(mutable),
-      ),
-  );
 }
 
 function readLinks(db: EngineConnection, owner: string): UserModelLinks {
@@ -481,6 +447,55 @@ export function connectUserModelAccount(
     },
     options,
     { operationLabel: "users.model-accounts.connect" },
+  );
+}
+
+export function removeUserModelAccount(
+  params: {
+    profileId: string;
+    authProfileId: string;
+    assertCurrent: (stage: "transaction" | "commit") => void;
+  },
+  options: OpenClawStateDatabaseOptions = {},
+): { removed: boolean; provider?: string; links: UserProfileAuthLink[] } {
+  params.assertCurrent("transaction");
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const owner = requireOwner(db, params.profileId);
+      if (owner !== params.profileId) {
+        throw new Error("Personal model account owner changed; refresh Profile and try again.");
+      }
+      // Shared identifiers and foreign-owned personal identifiers are rejected;
+      // identifiers minted for merged aliases still resolve to this canonical owner.
+      if (credentialOwner(db, params.authProfileId) !== owner) {
+        throw new Error("Personal model account does not belong to this profile.");
+      }
+      const record = readProfile(db, owner, params.authProfileId);
+      const links = readLinks(db, owner);
+      const matchingProviders = Object.entries(links.links)
+        .filter(([, link]) => link?.authProfileId === params.authProfileId)
+        .map(([provider]) => provider);
+      // Explicit nulls clear only exact matches so merges cannot resurrect them.
+      for (const provider of matchingProviders) {
+        links.links[provider] = null;
+      }
+      if (record) {
+        deleteUserModelAccountCredentialRecord(db, owner, params.authProfileId);
+        personalCredentialPublication.stageDeletions(db, [params.authProfileId]);
+      }
+      // Publish the links revision even when an unselected account was removed.
+      if (record || matchingProviders.length > 0) {
+        writeLinks(db, owner, links);
+      }
+      params.assertCurrent("commit");
+      return {
+        removed: record !== undefined,
+        ...(record ? { provider: record.credential.provider } : {}),
+        links: accountLinks(links),
+      };
+    },
+    options,
+    { operationLabel: "users.model-accounts.remove" },
   );
 }
 

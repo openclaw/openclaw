@@ -106,6 +106,19 @@ function AccountRow(
           >
             {action()}
           </button>
+          <Show when={account()}>
+            {(owned) => (
+              <button
+                type="button"
+                class="btn btn--sm profile-auth-account-remove"
+                aria-label={`${t("profilePage.modelAccounts.removeAction")}: ${provider()} · ${label()}`}
+                disabled={props.pending || props.actions.saving() || state().busy}
+                onClick={() => state().confirmRemoval(owned())}
+              >
+                {t("profilePage.modelAccounts.removeAction")}
+              </button>
+            )}
+          </Show>
         </>
       }
     />
@@ -397,6 +410,43 @@ function ModelAccountActions(props: StateProps) {
   const state = () => props.readState();
   return (
     <>
+      <Show when={state().removal}>
+        {(removal) => (
+          <SettingsRow
+            title={`${t("profilePage.modelAccounts.removeAction")}: ${removal().label}`}
+            description={t(
+              removal().credentialRemoved
+                ? "profilePage.modelAccounts.removalPending"
+                : "profilePage.modelAccounts.removalConfirm",
+            )}
+            stackedOnNarrow
+            control={
+              <div class="wizard-step__actions">
+                <button
+                  type="button"
+                  class="btn btn--sm profile-auth-remove-cancel"
+                  disabled={props.actions.saving() || state().busy}
+                  onClick={() => state().cancelRemoval()}
+                >
+                  {t("profilePage.modelAccounts.cancelAction")}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn--sm profile-auth-remove-confirm"
+                  disabled={props.actions.saving() || state().busy}
+                  onClick={() => void props.actions.removeAccount()}
+                >
+                  {t(
+                    removal().credentialRemoved
+                      ? "profilePage.modelAccounts.retryCleanup"
+                      : "profilePage.modelAccounts.removeConfirmAction",
+                  )}
+                </button>
+              </div>
+            }
+          />
+        )}
+      </Show>
       <SignIn readState={props.readState} actions={props.actions} />
       <Show when={state().target?.canAdmin}>
         <SettingsRow

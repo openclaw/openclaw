@@ -11,6 +11,8 @@ export {
   UsersListModelAccountsResultSchema,
   UsersSelectModelAccountParamsSchema,
   UsersSelectModelAccountResultSchema,
+  UsersRemoveModelAccountParamsSchema,
+  UsersRemoveModelAccountResultSchema,
   ChatAccountSelectionSchema,
   UsersAuthConnectCancelParamsSchema,
   UsersAuthConnectAnswerParamsSchema,
