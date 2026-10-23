@@ -25,6 +25,25 @@ function policyKeys(prefix: string) {
 }
 
 describe("msteamsSetupWizard account-scoped policies", () => {
+  it("lists inherited and selected-account teams and channels in configured order", () => {
+    const cfg = teamsConfig({
+      teams: { inherited: {} },
+      accounts: {
+        "Support Bot": {
+          teams: { whole: {}, scoped: { channels: { first: {}, second: {} } } },
+        },
+        sibling: { teams: { unrelated: {} } },
+      },
+    });
+
+    expect(groups.currentEntries({ cfg, accountId: "support-bot" })).toEqual([
+      "inherited",
+      "whole",
+      "scoped/first",
+      "scoped/second",
+    ]);
+  });
+
   it("keeps resolved channels, teams, and unresolved entries in setup order", async () => {
     resolveMSTeamsChannelAllowlist.mockResolvedValueOnce([
       { input: "unknown/general", resolved: false },

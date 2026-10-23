@@ -1,3 +1,4 @@
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { fetchLiveProviderModelRows } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -63,11 +64,7 @@ function entryToSurfaceModel(entry: DeepInfraAgentModelEntry): DeepInfraDiscover
   if (metadata === null) {
     return null;
   }
-  if (
-    !isRecord(metadata) ||
-    !Array.isArray(metadata.tags) ||
-    metadata.tags.some((tag) => typeof tag !== "string")
-  ) {
+  if (!isRecord(metadata) || !isStringArray(metadata.tags)) {
     throw new Error("DeepInfra model metadata discovery unavailable.");
   }
   return {

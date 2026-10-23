@@ -479,7 +479,14 @@ wait_for_run() {
       break
     fi
     jobs_json="$(gh_read run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs --jq '.jobs' || true)"
-    failed_json="$(jq -c '[.[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]' <<< "${jobs_json}")" || return 1
+    # Job-level continue-on-error preserves the run conclusion, not raw job results.
+    # Only this notification is optional; publication and admission failures still block.
+    failed_json="$(jq -c --arg workflow "$workflow" '
+      [.[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")
+        | select(($workflow == "openclaw-npm-release.yml" and
+          .name == "Notify Windows of published Gateway packages" and
+          (.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled")) | not)]
+    ' <<< "${jobs_json}")" || return 1
     if [[ -n "${failed_json}" ]] && jq -e 'length > 0' <<< "$failed_json" >/dev/null; then
       echo "${workflow} has failed jobs before the workflow completed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
       jq '.[] | {name, conclusion, url}' <<< "$failed_json" >&2 || true

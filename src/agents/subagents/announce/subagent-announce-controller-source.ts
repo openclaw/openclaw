@@ -18,10 +18,12 @@ import {
 import { readInterruptedRunId } from "../../main-session-recovery/main-session-restart-recovery-shared.js";
 import { subagentCompletionSourceId } from "../registry/subagent-controller-inputs.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "../registry/subagent-registry-memory.js";
+import { getLatestLiveSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   buildRequesterSettleWakeIdentity,
   hasRequesterCompletionCohort,
+  isRequesterCompletionCohortCurrent,
   isSubagentObligationRetired,
 } from "../registry/subagent-requester-settle-identity.js";
 import { loadRequesterSessionEntry } from "./subagent-announce-delivery.runtime.js";
@@ -171,9 +173,21 @@ export async function reserveRestoredSubagentControllerSources(
   const selectWakeOwner = (
     batch: readonly SubagentRunRecord[],
     wake: NonNullable<SubagentRunRecord["requesterSettleWake"]>,
-  ) =>
-    batch.find((member) => !isSubagentObligationRetired(member)) ??
-    (wake.requesterYieldBatch === true ? batch[0] : undefined);
+  ) => {
+    // Keep the full frozen cohort's custody, but never park the requester behind
+    // an unprepared reservation whose members live dispatch can no longer use.
+    if (
+      !batch.some((member) =>
+        isRequesterCompletionCohortCurrent(member, getLatestLiveSubagentRunByChildSessionKey),
+      )
+    ) {
+      return undefined;
+    }
+    return (
+      batch.find((member) => !isSubagentObligationRetired(member)) ??
+      (wake.requesterYieldBatch === true ? batch[0] : undefined)
+    );
+  };
   for (const entry of entries) {
     // A retired child no longer owns its own completion delivery.
     if (

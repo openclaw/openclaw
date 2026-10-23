@@ -510,6 +510,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     canInject?: () => boolean,
     currentInboundContext?: CurrentInboundPromptContext,
     prepareInjection?: () => Promise<void>,
+    onAccepted?: () => void,
   ): Promise<void> {
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
@@ -537,6 +538,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
             throw new Error("active session is finalizing");
           }
           notify = this.queueSteer(message, expandedText);
+          onAccepted?.();
         });
       } catch (error) {
         failure = { error };

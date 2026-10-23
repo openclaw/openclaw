@@ -1,4 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import {
   createRuntimeEnv,
@@ -9,6 +10,7 @@ import {
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
+import { buildTokenHubProvider, buildTokenPlanProvider } from "./api.js";
 import tencentPlugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -79,6 +81,46 @@ function capturePayload(
 }
 
 describe("tencent provider plugin", () => {
+  it.each([
+    { providerId: "tencent-tokenhub", choiceId: "tokenhub-api-key", build: buildTokenHubProvider },
+    {
+      providerId: "tencent-tokenplan",
+      choiceId: "tokenplan-api-key",
+      build: buildTokenPlanProvider,
+    },
+  ])(
+    "keeps $providerId generated rows out of merge config",
+    async ({ providerId, choiceId, build }) => {
+      const { providers } = await registerTencentPlugin();
+      const runNonInteractive = resolveProviderPluginChoice({ providers, choice: choiceId })?.method
+        .runNonInteractive;
+      if (!runNonInteractive) {
+        throw new Error("expected Tencent noninteractive auth method");
+      }
+      const toApiKeyCredential = vi.fn(() => null);
+      const apply = (config: OpenClawConfig) =>
+        runNonInteractive({
+          authChoice: choiceId,
+          config,
+          baseConfig: config,
+          opts: {},
+          runtime: createRuntimeEnv(),
+          resolveApiKey: async () => ({ key: "stored-test-key", source: "profile" }),
+          toApiKeyCredential,
+        });
+      expect((await apply({}))?.models?.providers?.[providerId]?.models).toEqual([]);
+      const provider = build();
+      const authored = provider.models.map((model) =>
+        Object.assign({}, model, { id: `operator-${model.id}` }),
+      );
+      const result = await apply({
+        models: { mode: "merge", providers: { [providerId]: { ...provider, models: authored } } },
+      });
+      expect(result?.models?.providers?.[providerId]?.models).toEqual(authored);
+      expect(toApiKeyCredential).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     ["tokenhub", "TokenHub", ["hy4-preview", "hy3", "hy3-preview"]],
     ["tokenplan", "TokenPlan", ["hy4-preview", "hy3"]],
