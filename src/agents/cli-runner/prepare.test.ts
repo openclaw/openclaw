@@ -97,7 +97,9 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../auth-profiles/store-runtime.js";
-import { resolveBootstrapContextForRun } from "../bootstrap-files.js";
+import {
+  resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
+} from "../bootstrap-files.js";
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
@@ -2092,7 +2094,9 @@ describe("prepareCliRunContext", () => {
   it.each([false, true])(
     "keeps agent bootstrap and layers only execution AGENTS (explicit root: %s)",
     async (explicitRoot) => {
-      setCliRunnerPrepareTestDeps({ resolveBootstrapContextForRun });
+      setCliRunnerPrepareTestDeps({
+        resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
+      });
       const { dir } = fixture.session;
       const executionDir = path.join(dir, "execution");
       const bootstrapDir = explicitRoot ? path.join(dir, "bootstrap-override") : dir;
@@ -2124,9 +2128,11 @@ describe("prepareCliRunContext", () => {
       expect(context.systemPrompt).toContain("CANONICAL-SOUL-MARKER");
       expect(context.systemPrompt).toContain("CANONICAL-USER-MARKER");
       expect(context.systemPrompt).toContain("CANONICAL-MEMORY-MARKER");
-      expect(context.systemPrompt.indexOf("EXECUTION-PROJECT-RULE")).toBeGreaterThan(
-        context.systemPrompt.indexOf("CANONICAL-MEMORY-MARKER"),
-      );
+      expect(context.systemPrompt).toContain("EXECUTION-PROJECT-RULE");
+      expect(context.systemPromptReport.injectedWorkspaceFiles.at(-1)).toMatchObject({
+        path: path.join(executionDir, "AGENTS.md"),
+        origin: { kind: "execution-project", rootPath: executionDir },
+      });
       expect(context.systemPrompt).not.toContain("EXECUTION-USER-MUST-NOT-OVERRIDE");
       expect(context.systemPrompt).not.toContain("EXECUTION-MEMORY-MUST-NOT-OVERRIDE");
       expect(context.systemPrompt).not.toContain("UNSELECTED-WORKSPACE");

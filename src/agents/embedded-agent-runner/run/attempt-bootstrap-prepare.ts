@@ -118,7 +118,8 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   let hookAdjustedBootstrapFiles: WorkspaceBootstrapFile[] = [];
   let resolvedContextFiles: EmbeddedContextFile[] = [];
   if (!shouldSkipBootstrapInjection) {
-    hookAdjustedBootstrapFiles = preloadedBootstrapFiles ?? (await resolveWorkspaceBootstrapFiles());
+    hookAdjustedBootstrapFiles =
+      preloadedBootstrapFiles ?? (await resolveWorkspaceBootstrapFiles());
     resolvedContextFiles = buildBootstrapContextForFiles(hookAdjustedBootstrapFiles, {
       config: attempt.config,
       agentId: params.setup.sessionAgentId,
