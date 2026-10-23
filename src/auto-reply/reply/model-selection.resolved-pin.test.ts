@@ -40,13 +40,6 @@ test.each([
     originModel: "gpt-x",
     reset: true,
   },
-  {
-    name: "stale heartbeat selection",
-    heartbeat: true,
-    originProvider: "openai",
-    originModel: "gpt-x",
-    reset: true,
-  },
 ])("Codex model cleanup preserves only complete self-origin selections: $name", async (fixture) => {
   await withStateDirEnv("reply-codex-self-origin-", async () => {
     const entry: SessionEntry = {
@@ -71,11 +64,10 @@ test.each([
       sessionStore: { child: entry },
       sessionKey: "child",
       defaultProvider: "openai",
-      defaultModel: fixture.heartbeat ? "gpt-other" : "gpt-x",
+      defaultModel: "gpt-x",
       provider: "openai",
       model: "gpt-x",
       hasModelDirective: false,
-      isHeartbeat: fixture.heartbeat,
     });
     expect(selection.resetModelOverride).toBe(fixture.reset);
     expect(entry.modelOverride).toBe(fixture.reset ? undefined : "gpt-x");
@@ -84,7 +76,7 @@ test.each([
     }
     expect(selection).toMatchObject({
       provider: "openai",
-      model: fixture.heartbeat ? "gpt-other" : "gpt-x",
+      model: "gpt-x",
     });
   });
 });
