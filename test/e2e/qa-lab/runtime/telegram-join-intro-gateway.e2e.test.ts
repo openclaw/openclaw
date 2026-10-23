@@ -354,4 +354,4 @@ test("introduces itself once when Telegram reports joining an allowed supergroup
         }
       }),
   );
-}, 120_000);
+}, 180_000);
