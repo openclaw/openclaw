@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const sessionsListHandler = vi.hoisted(() =>
   vi.fn(async ({ respond }: GatewayRequestHandlerOptions) => {
@@ -13,189 +14,133 @@ vi.mock("./sessions-read.js", () => ({ sessionsListHandler }));
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
-async function declare(params: {
-  body: Record<string, unknown>;
-  connId?: string;
-  context: GatewayRequestContext;
-}) {
+async function request(
+  method: "sessions.viewers.set" | "sessions.subscribe",
+  params: Record<string, unknown>,
+  context: GatewayRequestContext,
+  connId?: string,
+) {
   const respond = vi.fn();
-  await expectDefined(
-    sessionSubscriptionHandlers["sessions.viewers.set"],
-    'sessionSubscriptionHandlers["sessions.viewers.set"] test invariant',
-  )({
-    req: { id: "req-viewers", method: "sessions.viewers.set" } as never,
-    params: params.body,
+  const handler = expectDefined(sessionSubscriptionHandlers[method], method);
+  await handler({
+    req: { type: "req", id: "req-viewers", method, params },
+    params,
     respond,
-    context: params.context,
-    client: params.connId === undefined ? null : ({ connId: params.connId } as never),
+    context,
+    client: connId === undefined ? null : ({ connId } as never),
     isWebchatConnect: () => false,
   } satisfies GatewayRequestHandlerOptions);
   return respond;
 }
 
-function createContext() {
+function expectError(respond: ReturnType<typeof vi.fn>, code: string) {
+  expectReply(respond, false, undefined, expect.objectContaining({ code }));
+}
+function expectReply(respond: ReturnType<typeof vi.fn>, ...args: unknown[]) {
+  expect(respond).toHaveBeenCalledWith(...args);
+}
+
+function createContext(cfg?: OpenClawConfig) {
+  const config = cfg ?? { agents: { entries: { work: {} } }, session: { mainKey: "home" } };
   const replace = vi.fn((_connId: string, sessionKeys: readonly string[]) =>
     [...new Set(sessionKeys)].toSorted(),
   );
   const context = {
-    getRuntimeConfig: () => ({
-      agents: { entries: { work: {} } },
-      session: { mainKey: "home" },
-    }),
+    getRuntimeConfig: () => config,
     sessionViewerPresence: { replace },
   } as unknown as GatewayRequestContext;
-  return { context, replace };
+  return {
+    replace,
+    declare: (body: Record<string, unknown>, connId = "conn-viewer") =>
+      request("sessions.viewers.set", body, context, connId),
+  };
+}
+
+async function subscribe(params: Record<string, unknown>) {
+  const subscribeSessionEvents = vi.fn();
+  sessionsListHandler.mockClear();
+  const respond = await request(
+    "sessions.subscribe",
+    params,
+    { subscribeSessionEvents } as unknown as GatewayRequestContext,
+    "control-ui-1",
+  );
+  return { respond, subscribeSessionEvents };
 }
 
 describe("sessions.viewers.set", () => {
   it("canonicalizes and atomically replaces the connection set", async () => {
-    const { context, replace } = createContext();
-    const respond = await declare({
-      body: { sessionKeys: [" main ", "agent:work:other", "main"] },
-      connId: " conn-viewer ",
-      context,
-    });
+    const { declare, replace } = createContext();
+    const respond = await declare(
+      { sessionKeys: [" main ", "agent:work:other", "main"] },
+      " conn-viewer ",
+    );
 
     expect(replace).toHaveBeenCalledWith("conn-viewer", [
       "agent:work:home",
       "agent:work:other",
       "agent:work:home",
     ]);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { sessionKeys: ["agent:work:home", "agent:work:other"] },
-      undefined,
-    );
+    expectReply(respond, true, { sessionKeys: ["agent:work:home", "agent:work:other"] }, undefined);
   });
 
   it("accepts an empty declaration and rejects malformed or oversized sets", async () => {
-    const { context, replace } = createContext();
-    const empty = await declare({ body: { sessionKeys: [] }, connId: "conn-viewer", context });
-    expect(empty).toHaveBeenCalledWith(true, { sessionKeys: [] }, undefined);
+    const { declare, replace } = createContext();
+    expectReply(await declare({ sessionKeys: [] }), true, { sessionKeys: [] }, undefined);
 
-    const whitespace = await declare({
-      body: { sessionKeys: [" "] },
-      connId: "conn-viewer",
-      context,
-    });
-    expect(whitespace).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectError(await declare({ sessionKeys: [" "] }), "INVALID_REQUEST");
 
     const oversized = await declare({
-      body: {
-        sessionKeys: Array.from(
-          { length: SESSION_VIEWER_PRESENCE_MAX_KEYS + 1 },
-          (_, index) => `session-${index}`,
-        ),
-      },
-      connId: "conn-viewer",
-      context,
+      sessionKeys: Array.from(
+        { length: SESSION_VIEWER_PRESENCE_MAX_KEYS + 1 },
+        (_, index) => `session-${index}`,
+      ),
     });
-    expect(oversized).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectError(oversized, "INVALID_REQUEST");
     expect(replace).toHaveBeenCalledTimes(1);
   });
 
   it("requires a live connection and declaration owner", async () => {
     const context = { getRuntimeConfig: () => ({}) } as unknown as GatewayRequestContext;
-    const respond = await declare({ body: { sessionKeys: [] }, context });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    expectError(await request("sessions.viewers.set", { sessionKeys: [] }, context), "UNAVAILABLE");
   });
 
   it("scopes bare viewer identities by explicit owner and rejects ambiguity", async () => {
-    const replace = vi.fn((_connId: string, sessionKeys: readonly string[]) => sessionKeys);
-    const context = {
-      getRuntimeConfig: () => ({
-        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
-      }),
-      sessionViewerPresence: { replace },
-    } as unknown as GatewayRequestContext;
-
-    const selected = await declare({
-      body: { sessionKeys: ["global"], agentId: "work" },
-      connId: "conn-viewer",
-      context,
+    const { declare, replace } = createContext({
+      agents: { ownership: "explicit", entries: { main: {}, work: {} } },
     });
+
+    const selected = await declare({ sessionKeys: ["global"], agentId: "work" });
     expect(replace).toHaveBeenCalledWith("conn-viewer", ["agent:work:global"]);
-    expect(selected).toHaveBeenCalledWith(true, { sessionKeys: ["agent:work:global"] }, undefined);
+    expectReply(selected, true, { sessionKeys: ["agent:work:global"] }, undefined);
 
     replace.mockClear();
-    const ambiguous = await declare({
-      body: { sessionKeys: ["global"] },
-      connId: "conn-viewer",
-      context,
-    });
+    const ambiguous = await declare({ sessionKeys: ["global"] });
     expect(replace).not.toHaveBeenCalled();
-    expect(ambiguous).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectError(ambiguous, "INVALID_REQUEST");
   });
 });
 
 describe("sessions.subscribe", () => {
   it("registers events before projecting an atomic bootstrap roster", async () => {
-    const subscribeSessionEvents = vi.fn();
-    const context = { subscribeSessionEvents } as unknown as GatewayRequestContext;
-    const respond = vi.fn();
-    sessionsListHandler.mockClear();
-
-    await expectDefined(
-      sessionSubscriptionHandlers["sessions.subscribe"],
-      'sessionSubscriptionHandlers["sessions.subscribe"] test invariant',
-    )({
-      req: { id: "req-subscribe", method: "sessions.subscribe" } as never,
-      params: { limit: 1, ownerFirst: true },
-      respond,
-      context,
-      client: { connId: "control-ui-1" } as never,
-      isWebchatConnect: () => false,
-    } satisfies GatewayRequestHandlerOptions);
+    const { respond, subscribeSessionEvents } = await subscribe({ limit: 1, ownerFirst: true });
 
     expect(subscribeSessionEvents).toHaveBeenCalledWith("control-ui-1");
     expect(subscribeSessionEvents.mock.invocationCallOrder[0]).toBeLessThan(
       sessionsListHandler.mock.invocationCallOrder[0]!,
     );
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { subscribed: true, list: { count: 1 } },
-      undefined,
-      undefined,
-    );
+    expectReply(respond, true, { subscribed: true, list: { count: 1 } }, undefined, undefined);
   });
 
   it("rejects invalid list params before registering events", async () => {
-    const subscribeSessionEvents = vi.fn();
-    const respond = vi.fn();
-    sessionsListHandler.mockClear();
-
-    await expectDefined(
-      sessionSubscriptionHandlers["sessions.subscribe"],
-      'sessionSubscriptionHandlers["sessions.subscribe"] test invariant',
-    )({
-      req: { id: "req-subscribe-invalid", method: "sessions.subscribe" } as never,
-      params: { activityPulseBoundaries: [1, 1] },
-      respond,
-      context: { subscribeSessionEvents } as unknown as GatewayRequestContext,
-      client: { connId: "control-ui-1" } as never,
-      isWebchatConnect: () => false,
-    } satisfies GatewayRequestHandlerOptions);
+    const { respond, subscribeSessionEvents } = await subscribe({
+      activityPulseBoundaries: [1, 1],
+    });
 
     expect(subscribeSessionEvents).not.toHaveBeenCalled();
     expect(sessionsListHandler).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
+    expectReply(
+      respond,
       false,
       undefined,
       expect.objectContaining({

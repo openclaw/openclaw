@@ -31,7 +31,6 @@ export type IncompleteTurnAttempt = Pick<
   | "currentAttemptCompletedAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
-  | "heartbeatToolResponse"
   | "toolMediaUrls"
   | "toolAudioAsVoice"
   | "toolTrustedLocalMedia"
@@ -224,9 +223,7 @@ export function shouldApplyNonVisibleTurnRetryGuard(params: {
     (GEMINI_INCOMPLETE_TURN_PROVIDER_IDS.has(
       normalizeLowercaseStringOrEmpty(params.provider ?? ""),
     ) &&
-      GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(
-        stripProviderPrefix(typeof params.modelId === "string" ? params.modelId : ""),
-      )) ||
+      GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(params.modelId ?? ""))) ||
     RETRY_GUARD_MODEL_APIS.has(normalizeLowercaseStringOrEmpty(params.modelApi ?? "")) ||
     isOllamaIncompleteTurnProvider(params.provider)
   );

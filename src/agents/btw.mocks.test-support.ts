@@ -325,7 +325,9 @@ vi.mock("./auth-profiles/session-override.js", () => ({
   resolveSessionAuthSelection: (...args: unknown[]) => resolveSessionAuthSelectionMock(...args),
 }));
 
+// mock-isolation: BTW fixtures capture debug output without loading process-wide diagnostic owners.
 vi.mock("../logging/diagnostic.js", () => ({
+  logSessionStateChange: vi.fn(),
   diagnosticLogger: {
     debug: (...args: unknown[]) => diagDebugMock(...args),
   },

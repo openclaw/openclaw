@@ -1,4 +1,7 @@
-import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeSortedUniqueTrimmedStringList,
+  normalizeTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
   errorShape,
@@ -15,7 +18,6 @@ import { fetchClawHubSkillDetail } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
 import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
-import { collectSkillBins } from "../../skills/discovery/bins.js";
 import { parseRequestedClawHubSkillRef } from "../../skills/lifecycle/clawhub-store.js";
 import {
   searchSkillsFromClawHub,
@@ -26,6 +28,7 @@ import {
   collectClawHubVerdictTargets,
   fetchOpenClawSkillSecurityVerdicts,
 } from "../../skills/security/clawhub-verdicts.js";
+import { skillsFilesHandlers } from "./skills-files.js";
 import { handleSkillsInstall } from "./skills-install.js";
 import { skillsLibraryHandlers } from "./skills-library.js";
 import { skillsRetiredHandlers } from "./skills-retired.js";
@@ -37,36 +40,31 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 export const skillsHandlers: GatewayRequestHandlers = {
+  ...skillsFilesHandlers,
   ...skillsLibraryHandlers,
   ...skillsUploadHandlers,
   ...skillsWorkshopHandlers,
   ...skillsRetiredHandlers,
   "skills.status": handleSkillsStatus,
-  "skills.securityVerdicts": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSkillsSecurityVerdictsParams,
-        "skills.securityVerdicts",
-        respond,
-      )
-    ) {
-      return;
-    }
-    const resolved = resolveSkillsAgentWorkspace(params, context);
-    if (!resolved.ok) {
-      respond(false, undefined, resolved.error);
-      return;
-    }
-    try {
-      const { report } = await buildRemoteAwareWorkspaceSkillStatus(resolved);
-      const targets = collectClawHubVerdictTargets(report);
-      const items = targets.length === 0 ? [] : await fetchOpenClawSkillSecurityVerdicts(targets);
-      respond(true, { schema: "openclaw.skills.security-verdicts.v1", items }, undefined);
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-    }
-  },
+  "skills.securityVerdicts": defineValidatedGatewayHandler(
+    "skills.securityVerdicts",
+    validateSkillsSecurityVerdictsParams,
+    async ({ params, respond, context }) => {
+      const resolved = resolveSkillsAgentWorkspace(params, context);
+      if (!resolved.ok) {
+        respond(false, undefined, resolved.error);
+        return;
+      }
+      try {
+        const { report } = await buildRemoteAwareWorkspaceSkillStatus(resolved);
+        const targets = collectClawHubVerdictTargets(report);
+        const items = targets.length === 0 ? [] : await fetchOpenClawSkillSecurityVerdicts(targets);
+        respond(true, { schema: "openclaw.skills.security-verdicts.v1", items }, undefined);
+      } catch (error) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+      }
+    },
+  ),
   "skills.skillCard": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSkillsSkillCardParams, "skills.skillCard", respond)) {
       return;
@@ -125,7 +123,14 @@ export const skillsHandlers: GatewayRequestHandlers = {
           agentSkillFilter: "ignore",
         },
       );
-      for (const bin of collectSkillBins(entries)) {
+      for (const bin of normalizeSortedUniqueTrimmedStringList(
+        entries.flatMap((entry) =>
+          (entry.metadata?.requires?.bins ?? []).concat(
+            entry.metadata?.requires?.anyBins ?? [],
+            (entry.metadata?.install ?? []).flatMap((spec) => spec?.bins ?? []),
+          ),
+        ),
+      )) {
         bins.add(bin);
       }
     }

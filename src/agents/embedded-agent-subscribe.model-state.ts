@@ -1,6 +1,8 @@
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
 import {
+  bindAgentAssistantSource,
+  readAgentAssistantSource,
   emitAgentEvent,
   emitAgentEventForRunContext,
   emitAgentRunOutputTokens,
@@ -201,7 +203,7 @@ export function createEmbeddedModelState(
             recordPendingUsage(message.usage);
           }
           return;
-        case "message_end":
+        case "message_end": {
           recordPendingUsage(message.usage);
           preserveAssistantUsage(message, pending);
           if (pending?.usageReport || hasNonzeroUsage(pending)) {
@@ -220,6 +222,10 @@ export function createEmbeddedModelState(
           pending = undefined;
           // Context-engine projection can later mutate transcript objects; retain this run's result.
           completed = applyAssistantDeliveryDirectives(structuredClone(message));
+          const sourceReceipt = readAgentAssistantSource(message);
+          if (sourceReceipt) {
+            bindAgentAssistantSource(completed, sourceReceipt);
+          }
           // Delivery facts are prepared here, but terminal classification still owns the raw text.
           for (let index = 0; index < message.content.length; index += 1) {
             const source = message.content[index];
@@ -231,12 +237,13 @@ export function createEmbeddedModelState(
           lastUsage ??= message.stopReason === "error" ? retryUsage : undefined;
           retryUsage = undefined;
           recordContextAccounting(message, false);
+        }
       }
     },
     recordAuxiliaryUsage: (usage: Usage) => recordModelUsage(normalizeUsage(usage)),
     getUsageTotals: () => toNormalizedUsage(totals),
     getLastAssistantUsage: () => normalizeUsage(lastUsage),
-    getCurrentAttemptAssistant: () => (completed ? structuredClone(completed) : undefined),
+    getCurrentAttemptAssistant: () => completed,
     hasSuccessfulModelResponse: () => successfulModelResponse,
   };
 }

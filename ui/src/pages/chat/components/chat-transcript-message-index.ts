@@ -1,21 +1,28 @@
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { agentRunFrameActiveStatusParts, chatItemGroups } from "../chat-agent-run-grouping.ts";
 import {
-  assistantGroupCanOwnActiveRunStatus,
-  type buildCachedChatItems,
-  coalesceActivityRuns,
+  agentRunFrameActiveStatusParts,
+  chatItemGroups,
   coalesceAgentRunFrames,
-  coalesceStreamRuns,
-  collapseCompletedTurnWork,
+} from "../chat-agent-run-grouping.ts";
+import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
+import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
+import {
+  type buildCachedChatItems,
   findLiveStreamIndex,
   getExpansionStateVersion,
   getChatItemsGeneration,
-  persistedMessageEntryId,
   setExpansionState,
 } from "../chat-thread.ts";
 import { isInterSessionMessage, isSessionActivityGroup } from "../chat-turn-boundary.ts";
+import {
+  coalesceActivityRuns,
+  coalesceStreamRuns,
+  collapseCompletedTurnWork,
+} from "../chat-turn-presentation.ts";
 import { readLiveTerminalRevision } from "../terminal-message-identity.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
 import type { StreamGroupPart } from "./chat-message-stream-view.tsx";
@@ -24,63 +31,62 @@ import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
+import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
+import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
+import type { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 
-type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+type ChatRenderItem = SystemEventRenderItem;
 
-type TranscriptChain = {
+type TranscriptChain = Readonly<{
   searchActive: boolean;
   workGroups: readonly Extract<ChatRenderItem, { kind: "work-group" }>[];
   collapsedItems: readonly ChatRenderItem[];
   transcriptItems: readonly ChatRenderItem[];
   /** Active status parts shown inside the preceding reply, keyed by that reply's group. */
   continuations: ReadonlyMap<string, StreamGroupPart[]>;
-};
+  /** Content overlay; the structural arrays retain their generation's items. */
+  live?: LiveOwner;
+}>;
 
-type TranscriptIndex = {
+type TranscriptIndex = Readonly<{
   messageRowKeysById: ReadonlyMap<string, string>;
   transcriptMessageKeys: ReadonlyMap<string, string>;
   loadedReplySources: ReadonlyMap<string, LoadedReplySource>;
   positionIndex: ChatPositionIndex;
   rows: readonly TranscriptRow<ChatRenderItem>[];
-};
+  liveItem?: StreamOwner;
+}>;
 
-type TranscriptIndexSource = Pick<TranscriptChain, "searchActive" | "transcriptItems">;
+type TranscriptIndexSource = Pick<TranscriptChain, "searchActive" | "transcriptItems" | "live">;
 
 type LiveStream = Extract<ReturnType<typeof buildCachedChatItems>[number], { kind: "stream" }>;
 type StreamOwner = Extract<ChatRenderItem, { kind: "stream-run" | "agent-run-frame" }>;
-type LiveOwner = {
+type LiveOwner = Readonly<{
   item: StreamOwner;
-  collapsedIndex: number;
   transcriptIndex: number;
-};
+}>;
 type LiveSlot = {
   index: number;
   item: LiveStream;
-  owner?: LiveOwner;
-};
-type LiveProjection = {
-  item: LiveStream;
-  owner: LiveOwner;
-  structuralChain: TranscriptChain;
 };
 type ChainEntry = {
   key: readonly unknown[];
   value: TranscriptChain;
-  structuralChain: TranscriptChain;
   live?: LiveSlot;
-};
-type BaseIndex = {
-  chain: TranscriptIndexSource;
-  index: TranscriptIndex;
-  ownerRowIndex: number;
 };
 
 // Structural inputs and terminal outcomes invalidate the full projection. A live
 // slot replacement derives immutable tail updates from that structural entry.
 const chains = new WeakMap<object, ChainEntry>();
-const liveChains = new WeakMap<TranscriptIndexSource, LiveProjection>();
 const indexes = createTranscriptMemo<TranscriptIndex>();
-const baseIndexes = createTranscriptMemo<BaseIndex>();
+const presentationRows = createTranscriptMemo<readonly TranscriptRow<ChatRenderItem>[]>();
+const baseIndexes = createTranscriptMemo<TranscriptIndex>();
+
+function* transcriptItemsFrom(chain: TranscriptIndexSource, start = 0) {
+  for (let index = start; index < chain.transcriptItems.length; index++) {
+    yield chain.live?.transcriptIndex === index ? chain.live.item : chain.transcriptItems[index]!;
+  }
+}
 
 // Fold only the final presentation, after causal run/turn ownership is settled.
 // Every original message and its reply identity remains in chronological order.
@@ -209,24 +215,15 @@ export function projectTranscriptChain(
       return cached.value;
     }
     const next = chatItems[live.index];
-    if (live.owner && next?.kind === "stream" && sameStreamStructure(live.item, next)) {
-      // Text cannot change grouping or status continuations; only its containing
-      // wrappers change. Previously handed-off chains remain untouched: array
-      // slices are memcpy-cheap, unlike rebuilding history or copying Maps.
-      const owner = replaceOwnerStream(live.owner.item, live.item, next);
-      const collapsedItems = cached.value.collapsedItems.slice();
-      const transcriptItems = cached.value.transcriptItems.slice();
-      collapsedItems[live.owner.collapsedIndex] = owner;
-      transcriptItems[live.owner.transcriptIndex] = owner;
-      const value = { ...cached.value, collapsedItems, transcriptItems };
-      const updatedOwner = { ...live.owner, item: owner };
-      const updatedLive = { ...live, item: next, owner: updatedOwner };
-      liveChains.set(value, {
-        item: next,
-        owner: updatedOwner,
-        structuralChain: cached.structuralChain,
-      });
-      chains.set(chatItems, { ...cached, value, live: updatedLive });
+    const owner = cached.value.live;
+    if (owner && next?.kind === "stream" && sameStreamStructure(live.item, next)) {
+      // Text cannot change grouping or status continuations. Replace only the
+      // live wrapper; readers retain the structural generation and old overlay.
+      const value = {
+        ...cached.value,
+        live: { ...owner, item: replaceOwnerStream(owner.item, live.item, next) },
+      };
+      chains.set(chatItems, { key, value, live: { ...live, item: next } });
       return value;
     }
   }
@@ -237,7 +234,9 @@ export function projectTranscriptChain(
     ),
     options,
   );
-  const collapsedItems = options.searchActive ? frames : coalesceInterSessionUpdates(frames);
+  const collapsedItems = options.searchActive
+    ? frames
+    : coalesceSystemEvents(coalesceInterSessionUpdates(frames));
   const continuations = new Map<string, StreamGroupPart[]>();
   const transcriptItems = collapsedItems.filter((item, index) => {
     // A handoff boundary only shapes the grouping above; it has no row of its own.
@@ -268,35 +267,33 @@ export function projectTranscriptChain(
     continuations.set(previous.key, activeStatusParts);
     return false;
   });
-  const value = {
-    collapsedItems,
-    transcriptItems,
-    workGroups: transcriptItems.filter((item) => item.kind === "work-group"),
-    continuations,
-    searchActive: options.searchActive,
-  };
   const index = findLiveStreamIndex(chatItems);
   const item = chatItems[index];
   let live: LiveSlot | undefined;
+  let liveOwner: LiveOwner | undefined;
   if (item?.kind === "stream") {
-    const owner = value.collapsedItems.findLast((candidate): candidate is StreamOwner =>
+    const owner = collapsedItems.findLast((candidate): candidate is StreamOwner =>
       ownsStream(candidate, item),
     );
-    const transcriptIndex = owner ? value.transcriptItems.lastIndexOf(owner) : -1;
-    const projection =
+    const transcriptIndex = owner ? transcriptItems.lastIndexOf(owner) : -1;
+    liveOwner =
       owner && transcriptIndex >= 0
         ? {
             item: owner,
-            collapsedIndex: value.collapsedItems.lastIndexOf(owner),
             transcriptIndex,
           }
         : undefined;
-    live = { index, item, owner: projection };
-    if (projection) {
-      liveChains.set(value, { item, owner: projection, structuralChain: value });
-    }
+    live = { index, item };
   }
-  chains.set(chatItems, { key, value, structuralChain: value, live });
+  const value: TranscriptChain = {
+    collapsedItems,
+    transcriptItems,
+    workGroups: transcriptItems.filter((candidate) => candidate.kind === "work-group"),
+    continuations,
+    searchActive: options.searchActive,
+    live: liveOwner,
+  };
+  chains.set(chatItems, { key, value, live });
   return value;
 }
 
@@ -313,49 +310,28 @@ export function projectTranscriptIndex(
     props.userName,
   ];
   return indexes(chain, key, () => {
-    const live = liveChains.get(chain);
+    const live = chain.live;
     if (!live) {
       return buildTranscriptIndex(chain, expandedToolCards, props);
     }
     const tail = projectChatPositions(
-      chain.transcriptItems.slice(live.owner.transcriptIndex),
+      transcriptItemsFrom(chain, live.transcriptIndex),
       expandedToolCards,
       new Map(),
       chain.searchActive,
     );
-    const visible = tail.markerIdsByMessageId.has(live.item.key);
-    const base = baseIndexes(live.structuralChain, [...key, visible], () => {
-      const index = buildTranscriptIndex(chain, expandedToolCards, props);
-      const ownerRowIndex = index.rows.findLastIndex((row) => row.key === live.owner.item.key);
-      if (ownerRowIndex < 0) {
-        throw new Error("Missing live stream owner row");
-      }
-      return { chain, index, ownerRowIndex };
-    });
-    if (base.chain === chain) {
-      return base.index;
-    }
-    const rows = base.index.rows.slice();
-    rows[base.ownerRowIndex] = { kind: "item", key: live.owner.item.key, item: live.owner.item };
-    let markers = base.index.positionIndex.markers;
-    for (const marker of tail.markers) {
-      const markerIndex = base.index.positionIndex.markers.findLastIndex(
-        (candidate) => candidate.id === marker.id,
-      );
-      if (markerIndex < 0) {
-        continue;
-      }
-      const baseMarker = base.index.positionIndex.markers[markerIndex]!;
-      if (marker.message !== baseMarker.message) {
-        if (markers === base.index.positionIndex.markers) {
-          markers = markers.slice();
-        }
-        markers[markerIndex] = { ...baseMarker, message: marker.message };
-      }
-    }
-    // These finished Maps are text-independent within one visibility state.
-    // Reusing them avoids copying history and preserves the consumer handoff.
-    return { ...base.index, rows, positionIndex: { ...base.index.positionIndex, markers } };
+    // Only the live stream's visibility can change marker membership. The tail
+    // preserves later same-run continuations that own the marker's preview.
+    const base = baseIndexes(
+      chain.transcriptItems,
+      [...key, ...tail.markerIdsByMessageId.keys()],
+      () => buildTranscriptIndex(chain, expandedToolCards, props),
+    );
+    return {
+      ...base,
+      liveItem: live.item,
+      positionIndex: { ...base.positionIndex, liveMarkers: tail.markers },
+    };
   });
 }
 
@@ -370,7 +346,7 @@ function buildTranscriptIndex(
   // New row keys measure expanded work immediately; existing keys keep their
   // cached height until ResizeObserver reports the changed layout.
   const rows: TranscriptRow<ChatRenderItem>[] = [];
-  for (const item of chain.transcriptItems) {
+  for (const item of transcriptItemsFrom(chain)) {
     rows.push({ kind: "item", key: item.key, item });
     if (item.kind === "work-group" && expandedToolCards.get(item.key)) {
       for (const group of item.groups) {
@@ -414,7 +390,7 @@ function buildTranscriptIndex(
     }
   }
   const positionIndex = projectChatPositions(
-    chain.transcriptItems,
+    transcriptItemsFrom(chain),
     expandedToolCards,
     messageRowKeysById,
     chain.searchActive,
@@ -447,4 +423,30 @@ export function expandReplyTargetWork(
       }
     }
   }
+}
+
+export function projectTranscriptRows(
+  rows: readonly TranscriptRow<ChatRenderItem>[],
+  workPreviews: ReturnType<typeof projectTranscriptWorkPreviews>,
+  contentRows: readonly Extract<TranscriptRow, { kind: "content" }>[],
+): readonly TranscriptRow<ChatRenderItem>[] {
+  return presentationRows(rows, [workPreviews, ...contentRows.map((row) => row.key)], () => {
+    if (!workPreviews.size && !contentRows.length) {
+      return rows;
+    }
+    const result: TranscriptRow<ChatRenderItem>[] = [];
+    for (const row of rows) {
+      result.push(row);
+      const previews = workPreviews.get(row.key);
+      if (previews && !(row.kind === "item" && row.item.kind === "work-group")) {
+        const content: NativeTranscriptView = { kind: "work-previews", previews };
+        result.push({
+          kind: "content",
+          key: `work-previews:${row.key}`,
+          content: new GuardedTranscriptItem([content], content),
+        });
+      }
+    }
+    return result.concat(contentRows);
+  });
 }

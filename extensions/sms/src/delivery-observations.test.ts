@@ -1,7 +1,4 @@
-import type {
-  PluginStateEntry,
-  PluginStateKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -29,9 +26,7 @@ function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
     comparison: JSON.stringify(values.get(key)) ?? "missing",
   });
   return {
-    async register(key, value) {
-      values.set(key, value);
-    },
+    register: async (key, value) => void values.set(key, value),
     async registerIfAbsent(key, value) {
       if (values.has(key)) {
         return false;
@@ -39,9 +34,7 @@ function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
       values.set(key, value);
       return true;
     },
-    async observe(key) {
-      return observe(key);
-    },
+    observe: async (key) => observe(key),
     async compareAndApply(key, comparison, intent) {
       const current = observe(key);
       if (comparison !== current.comparison) {
@@ -56,27 +49,16 @@ function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
       values.set(key, structuredClone(intent.value));
       return { status: "applied" };
     },
-    async lookup(key) {
-      return values.get(key);
-    },
+    lookup: async (key) => values.get(key),
     async consume(key) {
       const value = values.get(key);
       values.delete(key);
       return value;
     },
-    async delete(key) {
-      return values.delete(key);
-    },
-    async entries() {
-      return [...values.entries()].map(([key, value]): PluginStateEntry<SmsDeliveryRecord> => ({
-        key,
-        value,
-        createdAt: value.lastObservedAt,
-      }));
-    },
-    async clear() {
-      values.clear();
-    },
+    delete: async (key) => values.delete(key),
+    entries: async () =>
+      [...values].map(([key, value]) => ({ key, value, createdAt: value.lastObservedAt })),
+    clear: async () => values.clear(),
   };
 }
 
@@ -94,14 +76,19 @@ async function recordApiStatus(
   store: PluginStateKeyedStore<SmsDeliveryRecord>,
   status: string,
   observedAt: number,
+  sid = "SM123",
 ): Promise<SmsDeliveryRecord> {
   await recordInitialSmsDeliveryResult({
     account: createAccount(),
-    result: { sid: "SM123", to: "+15551234567", status },
+    result: { sid, to: "+15551234567", status },
     nowMs: observedAt,
     store,
   });
   return await latestRecord(store);
+}
+
+function statusForm(status: string, fields: Record<string, string> = {}) {
+  return { MessageSid: "SM123", MessageStatus: status, ...fields };
 }
 
 async function recordCallback(
@@ -109,46 +96,36 @@ async function recordCallback(
   form: Record<string, string>,
   observedAt?: number,
 ) {
-  const recorder = createSmsDeliveryRecorder(store);
-  if (observedAt === undefined) {
-    return await recorder.record({ account: createAccount(), form });
-  }
-  const now = vi.spyOn(Date, "now").mockReturnValue(observedAt);
+  const now =
+    observedAt === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(observedAt);
   try {
-    return await recorder.record({ account: createAccount(), form });
+    return await createSmsDeliveryRecorder(store).record({ account: createAccount(), form });
   } finally {
-    now.mockRestore();
+    now?.mockRestore();
   }
 }
 
 describe("SMS delivery observations", () => {
   it("parses current and legacy status fields without retaining message content", async () => {
     const store = createStore();
-    const current = await recordCallback(
-      store,
-      {
-        AccountSid: "AC123",
-        From: "+15557654321",
-        To: "+15551234567",
-        Body: "private message",
-        MessageSid: "SM123",
-        MessageStatus: "undelivered",
-        ErrorCode: "30005",
-        RawDlrDoneDate: "2608021200",
-      },
-      100,
-    );
+    const privateFields = {
+      AccountSid: "AC123",
+      From: "+15557654321",
+      To: "+15551234567",
+      Body: "private message",
+      ErrorCode: "30005",
+      RawDlrDoneDate: "2608021200",
+    };
+    const current = await recordCallback(store, statusForm("undelivered", privateFields), 100);
     const legacy = await recordCallback(
       store,
       {
-        AccountSid: "AC123",
+        ...privateFields,
         From: "+15550000000",
         To: "+15559999999",
         Body: "different private message",
         SmsSid: "SM123",
         SmsStatus: "undelivered",
-        ErrorCode: "30005",
-        RawDlrDoneDate: "2608021200",
       },
       200,
     );
@@ -201,65 +178,35 @@ describe("SMS delivery observations", () => {
     },
   );
 
-  it("allows a scheduled message to be canceled before queueing", async () => {
-    const store = createStore();
-    await recordApiStatus(store, "scheduled", 1);
-    const canceled = await recordApiStatus(store, "canceled", 2);
-
-    expect(canceled.status).toBe("canceled");
-  });
-
-  it("does not regress a terminal state when an older transition arrives late", async () => {
-    const store = createStore();
-    await recordApiStatus(store, "delivered", 200);
-    const lateSent = await recordApiStatus(store, "sent", 300);
-
-    expect(lateSent).toMatchObject({
-      status: "delivered",
-      firstObservedAt: 200,
-      lastObservedAt: 300,
-    });
-    expect(lateSent.observations.map((entry) => entry.status)).toEqual(["delivered", "sent"]);
-  });
-
-  it("fills a missing error from a later observation of the same state", async () => {
-    const store = createStore();
-    await recordCallback(store, { MessageSid: "SM123", MessageStatus: "failed" }, 100);
-    const enriched = await recordCallback(
-      store,
-      {
-        MessageSid: "SM123",
-        MessageStatus: "failed",
-        ErrorCode: "30006",
-      },
+  it.each([
+    ["scheduled", "canceled", 1, 2, { status: "canceled" }],
+    [
+      "delivered",
+      "sent",
       200,
-    );
-
-    expect(enriched.record).toMatchObject({
-      status: "failed",
-      errorCode: "30006",
-      lastObservedAt: 200,
-    });
+      300,
+      {
+        status: "delivered",
+        firstObservedAt: 200,
+        lastObservedAt: 300,
+        observations: [{ status: "delivered" }, { status: "sent" }],
+      },
+    ],
+  ] as const)("reduces API transition %s → %s", async (first, next, start, end, expected) => {
+    const store = createStore();
+    await recordApiStatus(store, first, start);
+    expect(await recordApiStatus(store, next, end)).toMatchObject(expected);
   });
 
-  it("records conflicting terminal observations without choosing a false winner", async () => {
+  it.each([
+    ["failed", { status: "failed", errorCode: "30006", lastObservedAt: 200 }],
+    ["delivered", { status: "conflicted", conflict: true, errorCode: "30006" }],
+  ] as const)("reduces a failed callback after %s", async (first, expected) => {
     const store = createStore();
-    await recordCallback(store, { MessageSid: "SM123", MessageStatus: "delivered" }, 100);
-    const failed = await recordCallback(
-      store,
-      {
-        MessageSid: "SM123",
-        MessageStatus: "failed",
-        ErrorCode: "30006",
-      },
-      200,
-    );
-
-    expect(failed.record).toMatchObject({
-      status: "conflicted",
-      conflict: true,
-      errorCode: "30006",
-    });
+    await recordCallback(store, statusForm(first), 100);
+    expect(
+      (await recordCallback(store, statusForm("failed", { ErrorCode: "30006" }), 200)).record,
+    ).toMatchObject(expected);
   });
 
   it("deduplicates semantic retries despite unrelated form differences", async () => {
@@ -327,68 +274,40 @@ describe("SMS delivery observations", () => {
 
     expect(results.map((result) => result?.duplicate)).toEqual(expected.duplicates);
     const record = await latestRecord(store);
-    expect(record.status).toBe(expected.status);
-    expect(record.firstObservedAt).toBe(100);
-    expect(record.lastObservedAt).toBe(expected.lastObservedAt);
-    expect(record.observations).toMatchObject(expected.observations);
+    expect(record).toMatchObject({
+      status: expected.status,
+      firstObservedAt: 100,
+      lastObservedAt: expected.lastObservedAt,
+      observations: expected.observations,
+    });
   });
 
   it("isolates records by local account and account SID but survives token rotation", async () => {
     const store = createStore();
-    const account = createAccount();
-    const recorder = createSmsDeliveryRecorder(store);
-    await recorder.record({
-      account,
-      form: {
-        MessageSid: "SM123",
-        MessageStatus: "delivered",
-      },
-    });
+    await recordCallback(store, statusForm("delivered"));
 
-    await expect(listRecentSmsDeliveryRecords(createAccount("support"), 5, store)).resolves.toEqual(
-      [],
-    );
-    await expect(
-      listRecentSmsDeliveryRecords(createAccount("default", { accountSid: "AC-other" }), 5, store),
-    ).resolves.toEqual([]);
+    for (const account of [
+      createAccount("support"),
+      createAccount("default", { accountSid: "AC-other" }),
+    ]) {
+      await expect(listRecentSmsDeliveryRecords(account, 5, store)).resolves.toEqual([]);
+    }
     await expect(
       listRecentSmsDeliveryRecords(
         createAccount("default", { authToken: "rotated-secret" }),
         5,
         store,
       ),
-    ).resolves.toMatchObject([
-      {
-        accountId: "default",
-        messageSid: "SM123",
-        status: "delivered",
-      },
-    ]);
+    ).resolves.toMatchObject([{ accountId: "default", messageSid: "SM123", status: "delivered" }]);
   });
 
   it("records each successful API response and lets callbacks advance it", async () => {
     const store = createStore();
     const account = createAccount();
     for (const [index, status] of ["accepted", "scheduled", "queued"].entries()) {
-      await recordInitialSmsDeliveryResult({
-        account,
-        result: {
-          sid: `SM-${status}`,
-          to: "+15551234567",
-          status,
-        },
-        nowMs: index + 1,
-        store,
-      });
+      await recordApiStatus(store, status, index + 1, `SM-${status}`);
     }
-    const recorder = createSmsDeliveryRecorder(store);
-    await recorder.record({
-      account,
-      form: {
-        MessageSid: "SM-queued",
-        MessageStatus: "sent",
-      },
-    });
+    await recordCallback(store, statusForm("sent", { MessageSid: "SM-queued" }));
 
     await expect(listRecentSmsDeliveryRecords(account, 5, store)).resolves.toEqual(
       expect.arrayContaining([
@@ -419,15 +338,7 @@ describe("SMS delivery observations", () => {
   it("bounds retained observations per message", async () => {
     const store = createStore();
     for (let index = 0; index < 25; index += 1) {
-      await recordCallback(
-        store,
-        {
-          MessageSid: "SM123",
-          MessageStatus: "queued",
-          RawDlrDoneDate: String(index),
-        },
-        index,
-      );
+      await recordCallback(store, statusForm("queued", { RawDlrDoneDate: String(index) }), index);
     }
 
     const current = await latestRecord(store);
@@ -442,17 +353,9 @@ describe("SMS delivery observations", () => {
     const secondOpen = vi.fn(() => secondStore);
     const account = createAccount();
 
-    setSmsRuntime(
-      createPluginRuntimeMock({
-        state: { openKeyedStore: firstOpen as never },
-      }),
-    );
+    setSmsRuntime(createPluginRuntimeMock({ state: { openKeyedStore: firstOpen as never } }));
     await listRecentSmsDeliveryRecords(account);
-    setSmsRuntime(
-      createPluginRuntimeMock({
-        state: { openKeyedStore: secondOpen as never },
-      }),
-    );
+    setSmsRuntime(createPluginRuntimeMock({ state: { openKeyedStore: secondOpen as never } }));
     await listRecentSmsDeliveryRecords(account);
 
     const expectedOptions = {

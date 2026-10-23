@@ -1,23 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readResponseTextSnippet } from "./transport-utils.js";
+import { readAnthropicMessagesErrorSnippet } from "./transport-utils.js";
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("readResponseTextSnippet cancellation", () => {
+describe("Anthropic Messages error snippet cancellation", () => {
   it.each(["byte limit", "idle timeout"] as const)(
     "settles the %s outcome without waiting for response cancellation",
     async (boundary) => {
       vi.useFakeTimers();
       const cancellation = Promise.withResolvers<void>();
-      const timeoutError = new Error("provider error body stalled");
+      const timeoutError = new Error(
+        "Anthropic Messages error response stalled: no data received for 10000ms",
+      );
       let cancelStarted = false;
       let cancelReason: unknown;
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
           if (boundary === "byte limit") {
-            controller.enqueue(new TextEncoder().encode("abcdef"));
+            controller.enqueue(new TextEncoder().encode("a".repeat(8194)));
           }
         },
         cancel(reason) {
@@ -28,11 +30,7 @@ describe("readResponseTextSnippet cancellation", () => {
       });
       const response = new Response(body);
       let outcome: { value?: string; error?: unknown } | undefined;
-      const pending = readResponseTextSnippet(response, {
-        maxBytes: 4,
-        chunkTimeoutMs: 10,
-        onIdleTimeout: () => timeoutError,
-      }).then(
+      const pending = readAnthropicMessagesErrorSnippet(response).then(
         (value) => {
           outcome = { value };
         },
@@ -42,14 +40,14 @@ describe("readResponseTextSnippet cancellation", () => {
       );
 
       try {
-        await vi.advanceTimersByTimeAsync(boundary === "idle timeout" ? 10 : 0);
+        await vi.advanceTimersByTimeAsync(boundary === "idle timeout" ? 10_000 : 0);
         expect(outcome).toEqual(
-          boundary === "byte limit" ? { value: "abcd…" } : { error: timeoutError },
+          boundary === "byte limit" ? { value: `${"a".repeat(8192)}…` } : { error: timeoutError },
         );
         expect(cancelStarted).toBe(true);
         expect(response.body?.locked).toBe(false);
         if (boundary === "idle timeout") {
-          expect(cancelReason).toBe(timeoutError);
+          expect(cancelReason).toBe(outcome?.error);
         }
       } finally {
         // Drain the fixture even on the baseline, whose observation still awaits cancellation.

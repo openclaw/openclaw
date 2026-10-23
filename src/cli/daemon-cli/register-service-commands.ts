@@ -4,7 +4,7 @@ import { isGatewayServiceEnv } from "../../daemon/constants.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { resolveGatewayRpcOptionsWithLocalPort } from "../gateway-rpc.js";
-import type { DaemonInstallOptions, DaemonLifecycleOptions } from "./types.js";
+import type { DaemonLifecycleOptions } from "./types.js";
 
 function updateExecutorOption(): Option {
   return new Option("--update-executor <mode>", "Private update executor")
@@ -30,40 +30,6 @@ function resolveJsonOption(cmdOpts: { json?: boolean }, command?: Command): bool
   return Boolean(cmdOpts.json || parentJson);
 }
 
-function resolveInstallOptions(
-  cmdOpts: DaemonInstallOptions,
-  command?: Command,
-): DaemonInstallOptions {
-  const parentForce = inheritOptionFromParent<boolean>(command, "force");
-  const parentPort = inheritOptionFromParent<string>(command, "port");
-  const parentToken = inheritOptionFromParent<string>(command, "token");
-  const parentAllowUnconfigured = inheritOptionFromParent<boolean>(command, "allowUnconfigured");
-  return {
-    ...cmdOpts,
-    force: Boolean(cmdOpts.force || parentForce),
-    port: cmdOpts.port ?? parentPort,
-    token: cmdOpts.token ?? parentToken,
-    allowUnconfigured: cmdOpts.allowUnconfigured ?? parentAllowUnconfigured,
-    json: resolveJsonOption(cmdOpts, command),
-  };
-}
-
-function resolveRestartOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
-  const options = resolveLifecycleOptions(cmdOpts, command);
-  const safeFromGateway =
-    process.platform === "win32" &&
-    isGatewayServiceEnv(process.env) &&
-    !isGatewayExternallySupervised() &&
-    !options.force &&
-    cmdOpts.wait === undefined &&
-    !cmdOpts.preserveDefinition &&
-    !cmdOpts.skipDeferral;
-  return {
-    ...options,
-    safe: cmdOpts.safe || safeFromGateway,
-  };
-}
-
 function resolveLifecycleOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
   const parentForce = inheritOptionFromParent<boolean>(command, "force");
   return {
@@ -73,7 +39,6 @@ function resolveLifecycleOptions(cmdOpts: DaemonLifecycleOptions, command?: Comm
   };
 }
 
-/** Attach Gateway service status/install/lifecycle subcommands to a parent command. */
 export function addGatewayServiceCommands(parent: Command, opts?: { statusDescription?: string }) {
   parent
     .command("status")
@@ -95,7 +60,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     )
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
-      const { runDaemonStatus } = await import("./status.runtime.js");
+      const { runDaemonStatus } = await import("./status.js");
       await runDaemonStatus({
         rpc: resolveGatewayRpcOptionsWithLocalPort(
           {
@@ -136,8 +101,22 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .addOption(updateExecutorOption())
     .action(async (cmdOpts, command) => {
       await runUpdateCommand(cmdOpts.updateExecutor, "install", async () => {
-        const { runDaemonInstall } = await import("./install.runtime.js");
-        await runDaemonInstall(resolveInstallOptions(cmdOpts, command));
+        const { runDaemonInstall } = await import("./install.js");
+        const parentForce = inheritOptionFromParent<boolean>(command, "force");
+        const parentPort = inheritOptionFromParent<string>(command, "port");
+        const parentToken = inheritOptionFromParent<string>(command, "token");
+        const parentAllowUnconfigured = inheritOptionFromParent<boolean>(
+          command,
+          "allowUnconfigured",
+        );
+        await runDaemonInstall({
+          ...cmdOpts,
+          force: Boolean(cmdOpts.force || parentForce),
+          port: cmdOpts.port ?? parentPort,
+          token: cmdOpts.token ?? parentToken,
+          allowUnconfigured: cmdOpts.allowUnconfigured ?? parentAllowUnconfigured,
+          json: resolveJsonOption(cmdOpts, command),
+        });
       });
     });
 
@@ -150,7 +129,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
       .description(`${description} the Gateway service (launchd/systemd/schtasks)`)
       .option("--json", "Output JSON", false)
       .action(async (cmdOpts, command) => {
-        const lifecycle = await import("./lifecycle.runtime.js");
+        const lifecycle = await import("./lifecycle.js");
         await lifecycle[action]({ ...cmdOpts, json: resolveJsonOption(cmdOpts, command) });
       });
   }
@@ -168,7 +147,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     )
     .action(async (cmdOpts, command) => {
       await runUpdateCommand(cmdOpts.updateExecutor, "stop", async () => {
-        const { runDaemonStop } = await import("./lifecycle.runtime.js");
+        const { runDaemonStop } = await import("./lifecycle.js");
         await runDaemonStop(resolveLifecycleOptions(cmdOpts, command));
       });
     });
@@ -198,8 +177,20 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
       await runUpdateCommand(cmdOpts.updateExecutor, "restart", async () => {
-        const { runDaemonRestart } = await import("./lifecycle.runtime.js");
-        await runDaemonRestart(resolveRestartOptions(cmdOpts, command));
+        const { runDaemonRestart } = await import("./lifecycle.js");
+        const options = resolveLifecycleOptions(cmdOpts, command);
+        const safeFromGateway =
+          process.platform === "win32" &&
+          isGatewayServiceEnv(process.env) &&
+          !isGatewayExternallySupervised() &&
+          !options.force &&
+          cmdOpts.wait === undefined &&
+          !cmdOpts.preserveDefinition &&
+          !cmdOpts.skipDeferral;
+        await runDaemonRestart({
+          ...options,
+          safe: cmdOpts.safe || safeFromGateway,
+        });
       });
     });
 }

@@ -46,11 +46,11 @@ it.each([
     onTestFinished(() => view.unmount());
     const rerender = async () => {
       view.render(props);
-      transcript.hostUpdated();
+      transcript.update();
       await flushDeferredRowPrune();
     };
     await rerender();
-    transcript.hostConnected();
+    transcript.start();
     // Navigation ancestry alone also describes human-created forks.
     expect(container.querySelector(".chat-avatar.user")).not.toBeNull();
     props.selectedSession = { ...row, ...metadata };
@@ -65,7 +65,7 @@ it.each([
       "Molty",
     );
     expect(container.textContent).toContain("Workspace inspected");
-    transcript.hostDisconnected();
+    transcript.dispose();
   },
 );
 
@@ -78,8 +78,8 @@ it("hides avatars for a subagent key before its session row loads", async () => 
   const view = createChatThreadHarness(container, transcript);
   onTestFinished(() => view.unmount());
   view.render(props);
-  transcript.hostUpdated();
-  transcript.hostConnected();
+  transcript.update();
+  transcript.start();
   await flushDeferredRowPrune();
   expect(container.querySelectorAll(".chat-group").length).toBeGreaterThan(0);
   expect(container.querySelector(".chat-avatar, .chat-author-avatar")).toBeNull();
@@ -89,5 +89,5 @@ it("hides avatars for a subagent key before its session row loads", async () => 
   expect(container.querySelector(".chat-group.assistant .chat-sender-name")?.textContent).toBe(
     "Molty",
   );
-  transcript.hostDisconnected();
+  transcript.dispose();
 });

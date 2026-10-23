@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import * as markdownDetails from "./markdown-details.ts";
 import { splitStableStreamingMarkdown } from "./markdown-streaming.ts";
 import * as markdownText from "./markdown-text.ts";
@@ -12,6 +13,23 @@ const sanitizedInputLengths = vi.hoisted(() => {
   const lengths: number[] = [];
   return lengths;
 });
+
+const streamHtml = (...args: Parameters<typeof toStreamingMarkdownParts>) =>
+  toStreamingMarkdownParts(...args).join("");
+const streamFragment = (...args: Parameters<typeof toStreamingMarkdownParts>) =>
+  htmlFragment(streamHtml(...args));
+const sanitizedChars = (start = 0) =>
+  sanitizedInputLengths.slice(start).reduce((total, length) => total + length, 0);
+
+function withSanitizerBudget(run: () => void) {
+  sanitizedInputLengths.length = 0;
+  try {
+    run();
+    expect(sanitizedInputLengths.length).toBeGreaterThan(0);
+  } finally {
+    sanitizedInputLengths.length = 0;
+  }
+}
 
 vi.mock(import("dompurify"), async (importOriginal) => {
   const actual = await importOriginal();
@@ -28,137 +46,110 @@ vi.mock(import("dompurify"), async (importOriginal) => {
   return { ...actual, default: Object.assign(createDOMPurify, actual.default) };
 });
 
+beforeAll(async () => {
+  await waitForSolid(() =>
+    expect(toSanitizedMarkdownHtml("```ts\nconst ready = true;\n```")).toContain("hljs-keyword"),
+  );
+});
+
 describe("toStreamingMarkdownParts", () => {
   it("renders completed paragraphs with linear sanitizer input", () => {
-    sanitizedInputLengths.length = 0;
     let source = "";
-    try {
+    withSanitizerBudget(() => {
       for (let index = 0; index < 40; index++) {
-        source += `Stable paragraph ${index} has **formatted** text.\n\n`;
-        const fragment = htmlFragment(
-          toStreamingMarkdownParts(source, {}, "stable-render-budget").join(""),
-        );
+        const paragraph = `Stable paragraph ${index} has **formatted** text.\n\n`;
+        source += paragraph;
+        const previousCalls = sanitizedInputLengths.length;
+        const fragment = streamFragment(source, {}, "stable-render-budget");
         expect(fragment.querySelectorAll("p")).toHaveLength(index + 1);
         expect(fragment.querySelectorAll("strong")).toHaveLength(index + 1);
+        const deltaChars = sanitizedChars(previousCalls);
+        expect(deltaChars).toBeGreaterThan(0);
+        expect(deltaChars).toBeLessThan(paragraph.length * 2);
       }
-      expect(sanitizedInputLengths.length).toBeGreaterThan(0);
-      const sanitizedChars = sanitizedInputLengths.reduce((total, length) => total + length, 0);
-      expect(sanitizedChars).toBeLessThan(source.length * 2);
-    } finally {
-      sanitizedInputLengths.length = 0;
-    }
+      expect(sanitizedChars()).toBeLessThan(source.length * 2);
+    });
   });
 
   it("caches completed lists, code, and tables in the long streamed reply", () => {
-    const sections = Array.from(
-      { length: 28 },
-      (_, index) => `## Section ${index}: measured browser work
-
-A clear explanation with **important details** and an inline \`value\`. The browser should remain responsive as this answer grows. Measure the complete interaction and preserve every message.
-
-- First item with a useful observation
-- Second item with a concrete result
-- Third item with the next action
-
-\`\`\`typescript
-export function sample${index}(value: number): number {
-  const doubled = value < 0 ? 0 : value * 2;
-  return doubled + ${index};
-}
-\`\`\`
-
-| Metric | Value | Meaning |
-| --- | --- | --- |
-| Frames | 60 | Smooth rendering |
-| Input | 16 | Fast feedback |
-
-`,
+    const sections = Array.from({ length: 28 }, (_, index) =>
+      [
+        `## Section ${index}: measured browser work`,
+        "A clear explanation with **important details** and an inline `value`. The browser should remain responsive as this answer grows. Measure the complete interaction and preserve every message.",
+        "- First item with a useful observation\n- Second item with a concrete result\n- Third item with the next action",
+        `\`\`\`typescript\nexport function sample${index}(value: number): number {\n  const doubled = value < 0 ? 0 : value * 2;\n  return doubled + ${index};\n}\n\`\`\``,
+        "| Metric | Value | Meaning |\n| --- | --- | --- |\n| Frames | 60 | Smooth rendering |\n| Input | 16 | Fast feedback |",
+        "",
+      ].join("\n\n"),
     );
     const prefixes = sections.map((_, index) => sections.slice(0, index + 1).join(""));
     const expected = prefixes.map((prefix) => toSanitizedMarkdownHtml(prefix));
-    sanitizedInputLengths.length = 0;
     let offset = 0;
-    try {
+    withSanitizerBudget(() => {
       for (const [index, prefix] of prefixes.entries()) {
         for (; offset < prefix.length; offset += 24) {
           toStreamingMarkdownParts(prefix.slice(0, offset), {}, "rich-stream-budget");
         }
-        expect(toStreamingMarkdownParts(prefix, {}, "rich-stream-budget").join("")).toBe(
-          expected[index],
-        );
+        expect(streamHtml(prefix, {}, "rich-stream-budget")).toBe(expected[index]);
       }
-      expect(sanitizedInputLengths.length).toBeGreaterThan(0);
-      const sanitizedChars = sanitizedInputLengths.reduce((total, length) => total + length, 0);
-      expect(sanitizedChars).toBeLessThan(prefixes.at(-1)!.length * 20);
-    } finally {
-      sanitizedInputLengths.length = 0;
-    }
+      expect(sanitizedChars()).toBeLessThan(prefixes.at(-1)!.length * 20);
+    });
   });
 
   it("retires rendered prefixes when display options, locale, or source change", async () => {
     const key = "rendered-prefix-ownership";
     const source = "![Diagram](https://example.com/image.png)\n\n";
+    expect(streamFragment(source, {}, key).querySelector("img")).toBeNull();
     expect(
-      htmlFragment(toStreamingMarkdownParts(source, {}, key).join("")).querySelector("img"),
-    ).toBeNull();
-    expect(
-      htmlFragment(toStreamingMarkdownParts(source, { remoteImages: true }, key).join(""))
-        .querySelector("img")
-        ?.getAttribute("src"),
+      streamFragment(source, { remoteImages: true }, key).querySelector("img")?.getAttribute("src"),
     ).toBe("https://example.com/image.png");
     i18n.registerTranslation("pt-BR", {
       chat: { externalImage: { notLoaded: "Imagem não carregada", open: "Abrir" } },
     });
     await i18n.setLocale("pt-BR");
     try {
-      expect(toStreamingMarkdownParts(source, {}, key).join("")).toContain("Imagem não carregada");
-      expect(toStreamingMarkdownParts("Replacement\n\n", {}, key).join("")).toBe(
-        "<p>Replacement</p>\n",
-      );
+      expect(streamHtml(source, {}, key)).toContain("Imagem não carregada");
+      expect(streamHtml("Replacement\n\n", {}, key)).toBe("<p>Replacement</p>\n");
     } finally {
       await i18n.setLocale("en");
     }
   });
 
-  it.each(["1. one\n\n   continuation\n"])(
-    "keeps the whole container when later blocks retire %j",
-    (prefix) => {
-      for (const suffix of [
-        "# Heading\n",
-        "---\n",
-        "> quote\n",
-        "> ~~~\n> code\n> ~~~\n> after\n",
-        "> ~~~\n> code\n> ~~~\n> after\n\nFollowing\n",
-        "```\ncode\n```\n",
-        "<details><summary>More</summary>body</details>\n",
-        "+ next\n",
-        "2. next\n",
-        "\nParagraph\n",
-        "▀▀▀▀\n▄▄▄▄\n",
-      ]) {
-        const source = prefix + suffix;
-        const expected = toSanitizedMarkdownHtml(source);
-        for (const chunkSize of [1, 7, 24]) {
-          const key = `retired-container-${source}-${chunkSize}`;
-          for (let end = chunkSize; end < source.length; end += chunkSize) {
-            toStreamingMarkdownParts(source.slice(0, end), {}, key);
-          }
-          expect(toStreamingMarkdownParts(source, {}, key).join(""), key).toBe(expected);
+  it("keeps the whole container when later blocks retire", () => {
+    const prefix = "1. one\n\n   continuation\n";
+    for (const suffix of [
+      "# Heading\n",
+      "---\n",
+      "> quote\n",
+      "> ~~~\n> code\n> ~~~\n> after\n",
+      "> ~~~\n> code\n> ~~~\n> after\n\nFollowing\n",
+      "```\ncode\n```\n",
+      "<details><summary>More</summary>body</details>\n",
+      "+ next\n",
+      "2. next\n",
+      "\nParagraph\n",
+      "▀▀▀▀\n▄▄▄▄\n",
+    ]) {
+      const source = prefix + suffix;
+      const expected = toSanitizedMarkdownHtml(source);
+      for (const chunkSize of [1, 7, 24]) {
+        const key = `retired-container-${source}-${chunkSize}`;
+        for (let end = chunkSize; end < source.length; end += chunkSize) {
+          toStreamingMarkdownParts(source.slice(0, end), {}, key);
         }
+        expect(streamHtml(source, {}, key), key).toBe(expected);
       }
-    },
-  );
+    }
+  });
 
   it("relabels earlier file links when later blocks introduce a basename collision", () => {
     const key = "streamed-file-labels";
     const source = "See src/one/index.ts.\n\n";
     toStreamingMarkdownParts(source, { fileLinks: true }, key);
-    const fragment = htmlFragment(
-      toStreamingMarkdownParts(
-        `${source}Also src/two/index.ts.\n\n`,
-        { fileLinks: true },
-        key,
-      ).join(""),
+    const fragment = streamFragment(
+      `${source}Also src/two/index.ts.\n\n`,
+      { fileLinks: true },
+      key,
     );
     expect(
       [...fragment.querySelectorAll(".markdown-file-link")].map((link) => link.textContent),
@@ -166,11 +157,7 @@ export function sample${index}(value: number): number {
   });
 
   it("keeps tab-indented list fences incomplete until their closer arrives", () => {
-    const fragment = htmlFragment(
-      toStreamingMarkdownParts("- item\n\n\t~~~mermaid\n\tgraph TD;\n", {}, "tab-list-fence").join(
-        "",
-      ),
-    );
+    const fragment = streamFragment("- item\n\n\t~~~mermaid\n\tgraph TD;\n", {}, "tab-list-fence");
     expect(fragment.querySelector(".markdown-mermaid")).toBeNull();
     expect(fragment.querySelector("li code")?.textContent).toBe("graph TD;\n");
   });
@@ -179,12 +166,10 @@ export function sample${index}(value: number): number {
     const key = "disclosure-reference";
     const source = "See [x]\n\n";
     toStreamingMarkdownParts(source, {}, key);
-    const fragment = htmlFragment(
-      toStreamingMarkdownParts(
-        `${source}<details>\n<summary>More</summary>\n\n[x]: https://example.com\n\n</details>\n\n`,
-        {},
-        key,
-      ).join(""),
+    const fragment = streamFragment(
+      `${source}<details>\n<summary>More</summary>\n\n[x]: https://example.com\n\n</details>\n\n`,
+      {},
+      key,
     );
     expect(fragment.querySelector("p a")?.getAttribute("href")).toBe("https://example.com");
   });
@@ -196,7 +181,7 @@ export function sample${index}(value: number): number {
       for (let end = chunkSize; end < source.length; end += chunkSize) {
         toStreamingMarkdownParts(source.slice(0, end), { progressBars: true }, key);
       }
-      expect(toStreamingMarkdownParts(source, { progressBars: true }, key).join("")).toBe(
+      expect(streamHtml(source, { progressBars: true }, key)).toBe(
         "<ul>\n<li>\n<p>one</p>\n</li>\n<li>\n<p>two</p>\n</li>\n</ul>\n",
       );
     }
@@ -212,19 +197,16 @@ export function sample${index}(value: number): number {
     // A full rescan revisits the completed disclosure on every chunk. Observe
     // the real scanner instead of comparing sub-millisecond wall-clock times.
     const scanDisclosure = vi.spyOn(markdownDetails, "scanMarkdownDisclosureLine");
-    try {
-      const fullSplits = prefixes.map((value) => splitStableStreamingMarkdown(value));
-      expect(scanDisclosure).toHaveBeenCalledTimes(prefixes.length);
-      scanDisclosure.mockClear();
+    onTestFinished(() => scanDisclosure.mockRestore());
+    const fullSplits = prefixes.map((value) => splitStableStreamingMarkdown(value));
+    expect(scanDisclosure).toHaveBeenCalledTimes(prefixes.length);
+    scanDisclosure.mockClear();
 
-      const incrementalSplits = prefixes.map((value) =>
-        splitStableStreamingMarkdown(value, "line-scan-regression"),
-      );
-      expect(incrementalSplits).toEqual(fullSplits);
-      expect(scanDisclosure).toHaveBeenCalledTimes(1);
-    } finally {
-      scanDisclosure.mockRestore();
-    }
+    const incrementalSplits = prefixes.map((value) =>
+      splitStableStreamingMarkdown(value, "line-scan-regression"),
+    );
+    expect(incrementalSplits).toEqual(fullSplits);
+    expect(scanDisclosure).toHaveBeenCalledTimes(1);
   });
 
   it("does not reparse a literal container line on each append", () => {
@@ -233,19 +215,16 @@ export function sample${index}(value: number): number {
       (_, index) => `<details>\n> <!--\n> ${"literal ".repeat((index + 1) * 30)}`,
     );
     const findRawRanges = vi.spyOn(markdownDetails, "findMarkdownRawHtmlRanges");
-    try {
-      const fullHtml = prefixes.map((value) => toStreamingMarkdownParts(value).join(""));
-      expect(findRawRanges).toHaveBeenCalledTimes(prefixes.length);
-      findRawRanges.mockClear();
+    onTestFinished(() => findRawRanges.mockRestore());
+    const fullHtml = prefixes.map((value) => streamHtml(value));
+    expect(findRawRanges).toHaveBeenCalledTimes(prefixes.length);
+    findRawRanges.mockClear();
 
-      const incrementalHtml = prefixes.map((value) =>
-        toStreamingMarkdownParts(value, {}, "literal-line-scan-regression").join(""),
-      );
-      expect(incrementalHtml).toEqual(fullHtml);
-      expect(findRawRanges).toHaveBeenCalledTimes(1);
-    } finally {
-      findRawRanges.mockRestore();
-    }
+    const incrementalHtml = prefixes.map((value) =>
+      streamHtml(value, {}, "literal-line-scan-regression"),
+    );
+    expect(incrementalHtml).toEqual(fullHtml);
+    expect(findRawRanges).toHaveBeenCalledTimes(1);
   });
 
   it("keeps chunked-prefix splits identical to full splits", () => {
@@ -293,9 +272,7 @@ export function sample${index}(value: number): number {
           expect(splitStableStreamingMarkdown(prefix, `split-parity-${key}`)).toEqual(
             splitStableStreamingMarkdown(prefix),
           );
-          expect(toStreamingMarkdownParts(prefix, {}, `html-parity-${key}`).join("")).toBe(
-            toStreamingMarkdownParts(prefix).join(""),
-          );
+          expect(streamHtml(prefix, {}, `html-parity-${key}`)).toBe(streamHtml(prefix));
           if (end >= markdown.length) {
             break;
           }
@@ -306,18 +283,15 @@ export function sample${index}(value: number): number {
 
   it("normalizes an appended CRLF boundary without rescanning the prefix", () => {
     const key = "incremental-line-ending-normalization";
-    const expected = toStreamingMarkdownParts("before\r\nafter").join("");
+    const expected = streamHtml("before\r\nafter");
     const normalize = vi.spyOn(markdownText, "normalizeMarkdownLineBreaks");
-    try {
-      toStreamingMarkdownParts("before\r", {}, key);
-      normalize.mockClear();
+    onTestFinished(() => normalize.mockRestore());
+    toStreamingMarkdownParts("before\r", {}, key);
+    normalize.mockClear();
 
-      expect(toStreamingMarkdownParts("before\r\nafter", {}, key).join("")).toBe(expected);
-      expect(normalize).toHaveBeenCalledWith("\nafter");
-      expect(normalize).not.toHaveBeenCalledWith("before\r\nafter");
-    } finally {
-      normalize.mockRestore();
-    }
+    expect(streamHtml("before\r\nafter", {}, key)).toBe(expected);
+    expect(normalize).toHaveBeenCalledWith("\nafter");
+    expect(normalize).not.toHaveBeenCalledWith("before\r\nafter");
   });
 
   it("preserves incremental parity when streamed text grows beyond the truncation cap", () => {
@@ -329,85 +303,58 @@ export function sample${index}(value: number): number {
     for (const end of [139_500, 140_050, 141_000, text.length]) {
       const prefix = text.slice(0, end);
 
-      expect(toStreamingMarkdownParts(prefix, {}, "truncated-stream-parity").join("")).toBe(
-        toStreamingMarkdownParts(prefix).join(""),
-      );
+      expect(streamHtml(prefix, {}, "truncated-stream-parity")).toBe(streamHtml(prefix));
     }
   });
 
   it("marks a completed transcript-role header in the streaming tail", () => {
-    const html = toStreamingMarkdownParts("user[Thu 2026-07-02] question", {
+    const html = streamHtml("user[Thu 2026-07-02] question", {
       assistantTranscriptRoleHeaders: true,
-    }).join("");
+    });
 
     expect(html).toContain('class="assistant-transcript-role"');
   });
 
-  it.each([
-    {
-      name: "accumulated glyph paragraphs",
-      prefix: "▀▀▀▀\n\n",
-      source: "▀▀▀▀\n\n▄▄▄▄\n\nIntro",
-      code: "▀▀▀▀\n\n▄▄▄▄\n\n",
-    },
-  ])("renders block art literally: $name", ({ name, source, prefix, code }) => {
-    if (prefix !== undefined) {
-      toStreamingMarkdownParts(prefix, {}, name);
-    }
-    const fragment = htmlFragment(
-      toStreamingMarkdownParts(source, {}, prefix === undefined ? undefined : name).join(""),
+  it("renders accumulated glyph paragraphs literally", () => {
+    const key = "accumulated glyph paragraphs";
+    toStreamingMarkdownParts("▀▀▀▀\n\n", {}, key);
+    const fragment = streamFragment("▀▀▀▀\n\n▄▄▄▄\n\nIntro", {}, key);
+    expect(fragment.querySelector("pre code.markdown-block-art")?.textContent).toBe(
+      "▀▀▀▀\n\n▄▄▄▄\n\n",
     );
-    expect(fragment.querySelector("pre code.markdown-block-art")?.textContent).toBe(code);
-    if (prefix === undefined) {
-      expect(fragment.querySelector("p")).toBeNull();
-    }
   });
 
   it.each([
-    { locale: "en", notice: "… truncated", limit: "showing first 140000" },
-    { locale: "pt-BR", notice: "… truncado", limit: "exibindo os primeiros 140000" },
-  ] as const)(
-    "truncates oversized block art with a $locale notice",
-    async ({ locale, notice, limit }) => {
-      i18n.registerTranslation("pt-BR", {
-        chat: {
-          markdown: {
-            truncated: "… truncado ({total} caracteres, exibindo os primeiros {shown}).",
-          },
+    ["en", "… truncated", "showing first 140000"],
+    ["pt-BR", "… truncado", "exibindo os primeiros 140000"],
+  ] as const)("localizes oversized block-art truncation: %s", async (locale, notice, limit) => {
+    i18n.registerTranslation("pt-BR", {
+      chat: {
+        markdown: {
+          truncated: "… truncado ({total} caracteres, exibindo os primeiros {shown}).",
         },
-      });
-      await i18n.setLocale(locale);
-      try {
-        const blockArt = Array.from({ length: 20_000 }, () => "  ▀▀▀▀  ").join("\n");
-        const fragment = htmlFragment(toStreamingMarkdownParts(blockArt).join(""));
-        const code = fragment.querySelector("pre code.markdown-block-art");
-        expect(code?.textContent).toContain(notice);
-        expect(code?.textContent).toContain(limit);
-        expect(code?.textContent?.length).toBeLessThan(blockArt.length);
-        expect(fragment.textContent).toContain(notice);
-        expect(fragment.textContent).toContain(limit);
-      } finally {
-        await i18n.setLocale("en");
-      }
-    },
-  );
+      },
+    });
+    await i18n.setLocale(locale);
+    try {
+      const blockArt = Array.from({ length: 20_000 }, () => "  ▀▀▀▀  ").join("\n");
+      const fragment = streamFragment(blockArt);
+      const code = fragment.querySelector("pre code.markdown-block-art");
+      expect(code?.textContent).toContain(notice);
+      expect(code?.textContent).toContain(limit);
+      expect(code?.textContent?.length).toBeLessThan(blockArt.length);
+      expect(fragment.textContent).toContain(notice);
+      expect(fragment.textContent).toContain(limit);
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
 });
 
 describe("indented Markdown source", () => {
-  it.each([
-    {
-      source: "Intro\n\n    a\n\n    b",
-      streaming: true,
-      text: "a\n\nb\n",
-    },
-  ])(
-    "keeps indented source literal: $source (streaming=$streaming)",
-    ({ source, streaming, text }) => {
-      const fragment = htmlFragment(
-        streaming ? toStreamingMarkdownParts(source).join("") : toSanitizedMarkdownHtml(source),
-      );
-      expect(fragment.querySelectorAll("pre code")).toHaveLength(1);
-      expect(fragment.querySelector("pre code")?.textContent).toBe(text);
-    },
-  );
+  it("keeps streaming indented source literal", () => {
+    const fragment = streamFragment("Intro\n\n    a\n\n    b");
+    expect(fragment.querySelectorAll("pre code")).toHaveLength(1);
+    expect(fragment.querySelector("pre code")?.textContent).toBe("a\n\nb\n");
+  });
 });

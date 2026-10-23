@@ -25,6 +25,7 @@ import type { OpenClawRegisteredAgentDatabase } from "../state/openclaw-agent-db
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
 import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   resolveOpenClawRegisteredAgentDatabasePath,
   resolveOpenClawStateSqlitePath,
@@ -41,11 +42,15 @@ import {
   type BackupSqliteSourceGroup,
 } from "./backup-sqlite-source-groups.js";
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
+import type { ClientCredentialDatabase } from "./client-credential-schema.js";
 import { resolveAgentPortRoots } from "./database-engine/agent-port.js";
 import { readEngineAnchor } from "./database-engine/open.js";
 import { listDatabaseEngineStores, selectDatabaseEngine } from "./database-engine/registry.js";
-import { hasErrnoCode } from "./errno.js";
+import { sha256File } from "./directory-durability.js";
+import { hasErrnoCode, ignoreMissingPath as ignoreMissingSource } from "./errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   isAppleDoubleMetadataFile,
@@ -68,12 +73,6 @@ type SqliteBackupAsset = {
   skippedSourcePaths: Set<string>;
 };
 
-function ignoreMissingSource(error: unknown): undefined {
-  if (!hasErrnoCode(error, "ENOENT")) {
-    throw error;
-  }
-}
-
 function findLegacyAuditBackupStateChange(
   error: unknown,
 ): LegacyAuditBackupStateChangedError | undefined {
@@ -89,7 +88,7 @@ type CanonicalSqliteSource = {
   archiveSourcePath: string;
   identity: BigIntStats;
   sourcePath: string;
-} & ({ role: "global" | "quarantine" } | { role: "agent"; agentId: string });
+} & ({ role: "global" | "quarantine" | "client" } | { role: "agent"; agentId: string });
 
 function resolveSqliteBackupDatabasePath(sourcePath: string): string | undefined {
   for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
@@ -313,10 +312,14 @@ export async function createBackupSqliteSnapshotPlan(params: {
 }): Promise<{
   inventory: BackupResourceInventory;
   snapshots: SqliteBackupAsset[];
+  postgresSnapshots: Array<{ sourcePath: string; manifestSha256: string }>;
   discoveredSourcePaths: Set<string>;
+  sharedDatabaseSourcePath?: string;
 }> {
   const capturedSnapshots = new Map<BackupSqliteSourceGroup, string>();
   const snapshots: SqliteBackupAsset[] = [];
+  const postgresSnapshots: Array<{ sourcePath: string; manifestSha256: string }> = [];
+  let sharedDatabaseSourcePath: string | undefined;
   let capturedAgents: Array<{ role: "agent"; agentId: string; sourcePath: string }> = [];
   function captureAgentRegistry(database: DatabaseSync, archiveSourcePath: string) {
     capturedAgents = readOpenClawAgentDatabaseRegistryRows(database, archiveSourcePath).map(
@@ -391,6 +394,17 @@ export async function createBackupSqliteSnapshotPlan(params: {
               rewriteLegacyAuditBackupCheckpoints(database, params.legacyAuditSnapshots);
             } else if (canonicalSource?.role === "agent") {
               sanitizeOpenClawStateLeaseRows(database);
+            } else if (
+              canonicalSource?.role === "client" &&
+              tableExists(database, "native_exec_socket_credentials")
+            ) {
+              // Socket authentication is installation-local and must regenerate on restore.
+              executeSqliteQuerySync(
+                database,
+                getNodeSqliteKysely<ClientCredentialDatabase>(database)
+                  .updateTable("native_exec_socket_credentials")
+                  .set({ socket_token: null }),
+              );
             }
             await embedSessionColdArchivesInSnapshot({
               database,
@@ -447,6 +461,10 @@ export async function createBackupSqliteSnapshotPlan(params: {
         archiveSourcePath,
         skippedSourcePaths: new Set(resolveSqliteDatabaseFilePaths(sourceDatabasePath)),
       });
+      postgresSnapshots.push({
+        sourcePath: archiveSourcePath,
+        manifestSha256: (await sha256File(path.join(directory, "manifest.json"))).digest,
+      });
       return;
     }
     snapshots.push({
@@ -494,6 +512,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
     );
     globalGroup = groups.get(globalSource.sourcePath);
     await captureSource(globalPath, globalGroup, globalSource);
+    sharedDatabaseSourcePath = globalSource.sourcePath;
   } else {
     for (const sidecar of resolveSqliteDatabaseFilePaths(globalPath).slice(1)) {
       const exists = await fs.lstat(sidecar).catch(ignoreMissingSource);
@@ -510,6 +529,12 @@ export async function createBackupSqliteSnapshotPlan(params: {
   const defaultDatabases = await listDefaultAgentDatabasePaths(params.resources.stateDir);
   const discoveredDatabasePaths: string[] = [];
   const candidates: Array<BackupCoreDatabase & { discoveredPath?: string }> = [
+    {
+      role: "client",
+      sourcePath: resolveClientCredentialStorePath({
+        OPENCLAW_STATE_DIR: params.resources.stateDir,
+      }),
+    },
     {
       role: "quarantine" as const,
       sourcePath: resolveQuarantineStorePath({
@@ -579,5 +604,11 @@ export async function createBackupSqliteSnapshotPlan(params: {
       throw new Error(`Canonical SQLite path changed after discovery: ${source.sourcePath}`);
     }
   }
-  return { inventory, snapshots, discoveredSourcePaths: discovery.discoveredSourcePaths };
+  return {
+    inventory,
+    snapshots,
+    postgresSnapshots,
+    discoveredSourcePaths: discovery.discoveredSourcePaths,
+    sharedDatabaseSourcePath,
+  };
 }

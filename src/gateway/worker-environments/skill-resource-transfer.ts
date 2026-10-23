@@ -4,8 +4,10 @@ import {
   prepareSkillBundle,
   SKILL_LIBRARY_MAX_PATH_COMPONENTS,
 } from "../../skills/library/bundle.js";
+import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
+import { clearSkillFileHost } from "../../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
@@ -216,6 +218,7 @@ export async function transferSkillResources(params: {
     const skills = structuredClone(params.snapshot.skills).filter(
       (skill) => !skippedSkillNames.has(skill.name) || retainedSkillNames.has(skill.name),
     );
+    const deliveredSkills: NonNullable<SkillSnapshot["resolvedSkills"]> = [];
     const mounts: Array<{ hostPath: string; containerPath: string }> = [];
     for (const [index, skill] of delivery.skills.entries()) {
       const bundle = prepareSkillBundle(skill.files);
@@ -258,13 +261,32 @@ export async function transferSkillResources(params: {
       }
       const remoteBase = `${params.remoteWorkspaceDir.replaceAll("\\", "/")}/${directory}/${index}`;
       mounts.push({ hostPath: sourceBase, containerPath: remoteBase });
+      const filePath = `${remoteBase}/SKILL.md`;
+      const sourceSkill =
+        selected ??
+        params.snapshot.discoverySkills?.find((candidate) => candidate.name === skill.name);
+      const delivered = clearSkillFileHost({
+        ...sourceSkill,
+        name: skill.name,
+        description: skill.description,
+        disableModelInvocation: sourceSkill?.disableModelInvocation ?? skill.modelVisible === false,
+        filePath,
+        baseDir: remoteBase,
+        source: sourceSkill?.source ?? "openclaw-resources",
+        sourceInfo:
+          sourceSkill?.sourceInfo ??
+          createSyntheticSourceInfo(filePath, {
+            source: "openclaw-resources",
+            baseDir: remoteBase,
+          }),
+        contentHash: bundle.revision,
+        readContent: bundle.files.find((file) => file.path === "SKILL.md")!.bytes.toString("utf8"),
+      });
+      delete delivered.locationNote;
+      deliveredSkills.push(delivered);
       if (selected) {
-        selected.filePath = `${remoteBase}/SKILL.md`;
-        selected.baseDir = remoteBase;
-        // Code Mode reads the same verified instructions even when the node has no filesystem bridge.
-        selected.readContent = bundle.files
-          .find((file) => file.path === "SKILL.md")!
-          .bytes.toString("utf8");
+        Object.assign(selected, delivered);
+        delete selected.fileHost;
         delete selected.locationNote;
       }
     }
@@ -276,6 +298,12 @@ export async function transferSkillResources(params: {
         ...params.snapshot,
         skills,
         resolvedSkills,
+        discoverySkills: [
+          ...deliveredSkills.filter((skill) => !skill.disableModelInvocation),
+          ...(params.snapshot.discoverySkills ?? resolvedSkills).filter(
+            (skill) => skill.filePath.startsWith("node://") && !skill.disableModelInvocation,
+          ),
+        ],
         prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
       },
       mounts,

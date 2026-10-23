@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assertSessionEntryCurrentAdmission } from "../../../config/sessions/session-entry-current-admission.js";
@@ -228,7 +229,8 @@ export async function runSubagentRegistryWorkerWrite<T>(
   try {
     return await runOpenClawStateWorkerOperation(
       context,
-      async (scope) => write.decode(await write.execute(scope)),
+      async (scope) =>
+        write.kind === "registry" ? write.decode(await write.execute(scope)) : write.execute(scope),
       {
         assertCurrent: write.assertCurrent,
         createAdmission: () => {
@@ -290,7 +292,9 @@ export async function runSubagentRegistryWorkerWrite<T>(
     // Broker failure joins native settlement; a lost reply cannot revoke committed work.
     if (admission?.committed) {
       try {
-        return write.decode(admission.committed.facts);
+        return write.kind === "registry"
+          ? write.decode(admission.committed.facts)
+          : write.decodeCommitted(admission.committed.facts);
       } catch (receiptError) {
         throw new SubagentRegistryCommitReceiptError(receiptError);
       }
@@ -309,27 +313,43 @@ export async function runSubagentRegistryWorkerWrite<T>(
   }
 }
 
-function commitRows<T>(
+async function commitRows<T>(
   planned: SubagentRunMutation<T>,
   context: OpenClawStateWorkerContext,
   authority: SubagentRegistryWriteAuthority,
+  runs: ReadonlyMap<string, SubagentRunRecord>,
 ): Promise<SubagentRunMutationReceipt<T>> {
+  const postimages = new Map(
+    [...(planned.postimages ?? [])].map(
+      ([runId, row]) =>
+        [runId, row ? copySubagentRunRuntimeOwner(row, structuredClone(row)) : null] as const,
+    ),
+  );
+  const values = [...postimages.values()].flatMap((row) => {
+    if (!row) {
+      return [];
+    }
+    const value = bindSubagentRunRecord(row);
+    const previous = runs.get(row.runId);
+    // Runtime-only reservations still publish, but need no identical durable write.
+    // Prepared-only and compacted rows cannot prove equality with stored payloads.
+    return previous &&
+      !isSubagentRunPayloadEvicted(previous) &&
+      isDeepStrictEqual(value, bindSubagentRunRecord(previous))
+      ? []
+      : [value];
+  });
+  const write: SubagentRegistryWrite = {
+    writeId: randomUUID(),
+    values,
+    deleteRunIds: [...postimages].flatMap(([id, row]) => (row ? [] : [id])),
+    terminalEvents: planned.terminalEvents?.map(({ input }) => structuredClone(input)),
+  };
+  if (!values.length && !write.deleteRunIds.length && !write.terminalEvents?.length) {
+    authority.assertCurrent();
+    return { value: planned.value, postimages };
+  }
   return runSubagentRegistryWorkerWrite(context, () => {
-    const postimages = new Map(
-      [...(planned.postimages ?? [])].map(
-        ([runId, row]) =>
-          [runId, row ? copySubagentRunRuntimeOwner(row, structuredClone(row)) : null] as const,
-      ),
-    );
-    const values = [...postimages.values()].flatMap((row) =>
-      row ? [bindSubagentRunRecord(row)] : [],
-    );
-    const write: SubagentRegistryWrite = {
-      writeId: randomUUID(),
-      values,
-      deleteRunIds: [...postimages].flatMap(([id, row]) => (row ? [] : [id])),
-      terminalEvents: planned.terminalEvents?.map(({ input }) => structuredClone(input)),
-    };
     let acknowledged = false;
     const decode = (value: unknown): SubagentRunMutationReceipt<T> => {
       const receipt = parseSubagentRegistryWriteReceipt(value, write);
@@ -490,7 +510,7 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
     // Outside writes require exclusive ownership while the Gateway is stopped.
     const committed: SubagentRunMutationReceipt<P["value"]> = options.commit
       ? await options.commit(planned, authority)
-      : await commitRows(planned, context, authority);
+      : await commitRows(planned, context, authority, runs);
     try {
       authority.assertDatabase();
       const postimages = committed.postimages ?? new Map<string, SubagentRunRecord | null>();
@@ -577,7 +597,6 @@ export async function restoreSubagentRunsFromDisk(params: {
         retainSubagentRunRuntimeOwner(params.runs.get(runId), entry);
         params.runs.set(runId, compactSubagentRunForMemory(entry));
         rememberRestoredSubagentRunNotification(entry);
-        subagentRuns.settleCommittedOwnership(entry);
         added += 1;
       }
       publishSubagentRunsAfterAtomicStore(params.runs, undefined, context.admission.databasePath)();

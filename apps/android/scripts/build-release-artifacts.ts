@@ -330,8 +330,9 @@ function verifyApkSignature(path: string): string[] {
   }
 
   const fingerprints: string[] = [];
+  // Build-tools 37 prefixes unrotated signers with the verified signature scheme.
   for (const match of output.matchAll(
-    /^Signer #[0-9]+ certificate SHA-256 digest: ([a-fA-F0-9:]+)$/gmu,
+    /^(?:Signer #[0-9]+|V(?:1|2|3\.0) Signer(?: #[0-9]+)?:) certificate SHA-256 digest: ([a-fA-F0-9:]+)$/gmu,
   )) {
     const fingerprint = match[1];
     if (!fingerprint) {

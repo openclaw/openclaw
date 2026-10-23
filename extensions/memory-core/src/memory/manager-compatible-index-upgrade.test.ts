@@ -1,33 +1,27 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { json } from "node:stream/consumers";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it } from "vitest";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
-import type { MemoryIndexMeta } from "./manager-reindex-state.js";
+import {
+  seedLegacyMemoryIndex,
+  closeCompatibleIndexManagers,
+  readCompatibleIndexChunks,
+} from "./manager-compatible-index.test-support.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
-import "./test-runtime-mocks.js";
 
-const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
-
-it("reads the previous custom-auth identity without re-embedding indexed documents", async () => {
+it("retains the previous custom-auth index and cache after credential rotation", async () => {
+  const { getMemorySearchManager } = await import("./index.js");
   const { acquireTestPortBlock } = await import("openclaw/plugin-sdk/test-env");
   const requests: string[][] = [];
   const claim = await acquireTestPortBlock({ offsets: [0] });
   const server = createServer((req, res) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { input: string[] };
+      const body = (await json(req)) as { input: string[] };
       requests.push(body.input);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
@@ -53,103 +47,94 @@ it("reads the previous custom-auth identity without re-embedding indexed documen
       async (state) => {
         const baseUrl = `http://127.0.0.1:${claim.port}/v1`;
         const model = "fixture-embedding";
-        const cfg = isolateMemoryManagerTestConfig({
-          agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
-          memory: {
-            search: {
-              provider: "openai-compatible",
-              model,
-              fallback: "none",
-              store: { vector: { enabled: false } },
-              query: { minScore: 0 },
-              cache: { enabled: true },
-            },
-          },
-          models: {
-            providers: {
-              "openai-compatible": {
-                baseUrl,
-                headers: { "X-oMLX-Key": "fixture-old-key" },
-                request: {
-                  auth: { mode: "header", headerName: "X-oMLX-Key", value: "fixture-old-key" },
-                },
-                models: [],
+        const configure = (key: string) =>
+          isolateMemoryManagerTestConfig({
+            agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
+            memory: {
+              search: {
+                provider: "openai-compatible",
+                model,
+                fallback: "none",
+                store: { vector: { enabled: false } },
+                query: { minScore: 0 },
+                cache: { enabled: true },
               },
             },
-          },
-        });
+            models: {
+              providers: {
+                "openai-compatible": {
+                  baseUrl,
+                  headers: { "X-oMLX-Key": key },
+                  request: {
+                    auth: { mode: "header", headerName: "X-oMLX-Key", value: key },
+                  },
+                  models: [],
+                },
+              },
+            },
+          });
+        let cfg = configure("fixture-old-key");
         setRuntimeConfigSnapshot(cfg);
+        const notePath = "memory/2026-01-12.md";
+        const noteResult = expect.objectContaining({ path: notePath });
         await fs.mkdir(path.join(state.workspaceDir, "memory"), { recursive: true });
-        await fs.writeFile(
-          path.join(state.workspaceDir, "memory", "2026-01-12.md"),
-          "alpha\nZebra memory line.\n",
-        );
+        await fs.writeFile(path.join(state.workspaceDir, notePath), "alpha\nZebra memory line.\n");
         const openManager = () =>
           getMemorySearchManager({
             cfg,
             agentId: "main",
+            purpose: "cli",
             runInBackgroundContext: runInMemoryTestBackgroundContext,
           });
         try {
           const seeded = (await openManager()).manager;
-          if (!seeded?.sync) {
-            throw new Error("fixture memory index manager is unavailable");
-          }
+          assert(
+            seeded && typeof seeded.sync === "function",
+            "fixture memory index manager is unavailable",
+          );
           await seeded.sync({ reason: "test", force: true });
           const dbPath = seeded.status().dbPath;
-          if (!dbPath) {
-            throw new Error("fixture database path is missing");
-          }
-          await closeAllMemorySearchManagers();
-          await closeOpenClawAgentDatabasesAsync();
-          closeOpenClawAgentDatabasesForTest();
+          assert(dbPath, "fixture database path is missing");
+          await closeCompatibleIndexManagers();
 
           // Before custom auth was excluded, this exact header map formed the persisted key.
-          const legacyProviderKey = hashText(
-            JSON.stringify({
-              provider: "openai-compatible",
-              baseUrl,
-              model,
-              headers: {
-                accept: "application/json",
-                "content-type": "application/json",
-                "x-omlx-key": "fixture-old-key",
-              },
-            }),
-          );
-          const db = new DatabaseSync(dbPath);
-          try {
-            const row = db
-              .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
-              .get();
-            if (typeof row?.value !== "string") {
-              throw new Error("fixture index metadata is missing");
-            }
-            const meta = JSON.parse(row.value) as MemoryIndexMeta;
-            db.prepare(
-              "UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'",
-            ).run(JSON.stringify({ ...meta, providerKey: legacyProviderKey }));
-            db.prepare("UPDATE memory_embedding_cache SET provider_key = ?").run(legacyProviderKey);
-          } finally {
-            db.close();
-          }
+          const indexedChunks = seedLegacyMemoryIndex(dbPath, {
+            provider: "openai-compatible",
+            baseUrl,
+            model,
+            headers: {
+              accept: "application/json",
+              "content-type": "application/json",
+              "x-omlx-key": "fixture-old-key",
+            },
+          });
           const documentRequests = () =>
             requests.flat().filter((text) => text.includes("Zebra memory line.")).length;
           const indexedDocuments = documentRequests();
           expect(indexedDocuments).toBeGreaterThan(0);
           const reopened = (await openManager()).manager;
-          if (!reopened) {
-            throw new Error("fixture memory index manager did not reopen");
-          }
-          expect(await reopened.search("alpha")).toEqual(
-            expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
-          );
+          assert(reopened, "fixture memory index manager did not reopen");
+          expect(await reopened.search("alpha")).toContainEqual(noteResult);
           expect(reopened.status().custom?.indexIdentity).toEqual({ status: "valid" });
           expect(documentRequests()).toBe(indexedDocuments);
+          await closeCompatibleIndexManagers();
+          expect(readCompatibleIndexChunks(dbPath)).toEqual(indexedChunks);
+
+          cfg = configure("fixture-rotated-key");
+          setRuntimeConfigSnapshot(cfg);
+          const rotated = (await openManager()).manager;
+          assert(
+            rotated && typeof rotated.sync === "function",
+            "rotated memory index manager did not reopen",
+          );
+          expect(await rotated.search("alpha")).toContainEqual(noteResult);
+          expect(rotated.status().custom?.indexIdentity).toEqual({ status: "valid" });
+          expect(documentRequests()).toBe(indexedDocuments);
+          // Explicit rebuilding must retain the cache after the credential-dependent key is gone.
+          await rotated.sync({ reason: "test", force: true });
+          expect(documentRequests()).toBe(indexedDocuments);
         } finally {
-          await closeAllMemorySearchManagers();
-          await closeOpenClawAgentDatabasesAsync();
-          closeOpenClawAgentDatabasesForTest();
+          await closeCompatibleIndexManagers();
         }
       },
     );

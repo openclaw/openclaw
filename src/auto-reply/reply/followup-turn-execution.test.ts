@@ -1,26 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import { markReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import {
-  createFollowupTurnTestTypingController,
   createFollowupTurnTestTurn,
   executeFollowupTurnForTest,
   getFollowupTurnTestState,
   resetFollowupTurnTestState,
 } from "./followup-turn-execution.test-support.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import {
   REPLY_OPERATION_RUN_STATE,
-  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { markReplyOperationExecutionStarted } from "./reply-run-registry.state.js";
-import { createMockReplyOperation } from "./test-helpers.js";
+import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
+import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 const state = getFollowupTurnTestState();
-const createTypingController = createFollowupTurnTestTypingController;
 const createTurn = createFollowupTurnTestTurn;
 const executeFollowupTurn = executeFollowupTurnForTest;
 
@@ -37,7 +35,7 @@ function executeTestTurn(
   return executeFollowupTurn({
     ...params,
     defaults: {
-      typing: createTypingController(),
+      typing: createMockTypingController(),
       typingMode: "never",
       defaultModel: "claude",
       ...params.defaults,
@@ -72,7 +70,6 @@ async function runFastAutoProgressCase(params: {
         verboseLevel: params.verboseLevel ?? "on",
       }),
       publish: () => undefined,
-      adopt: () => undefined,
     },
   });
   turn.queued.run.sourceReplyDeliveryMode = params.sourceReplyDeliveryMode;
@@ -122,7 +119,6 @@ describe("executeFollowupTurn", () => {
           owner: { actor: { type: "human", id: "new-owner" } },
         }),
         publish: () => undefined,
-        adopt: () => undefined,
       },
     });
     turn.queued.personalBootstrapEligible = true;
@@ -166,7 +162,7 @@ describe("executeFollowupTurn", () => {
 
   it("normalizes queued route facts into the canonical execution call", async () => {
     const turn = createTurn();
-    const typing = createTypingController();
+    const typing = createMockTypingController();
     const onAgentRunStart = vi.fn();
     turn.queued.runObservers = { onAgentRunStart };
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
@@ -214,7 +210,6 @@ describe("executeFollowupTurn", () => {
         key: "main",
         current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel }),
         publish: () => undefined,
-        adopt: () => undefined,
       },
     });
     const legacy = vi.fn();
@@ -245,7 +240,6 @@ describe("executeFollowupTurn", () => {
         key: "main",
         current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel }),
         publish: () => undefined,
-        adopt: () => undefined,
       },
     });
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
@@ -312,7 +306,6 @@ describe("executeFollowupTurn", () => {
         key: "main",
         current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
         publish: () => undefined,
-        adopt: () => undefined,
       },
     });
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
@@ -377,7 +370,7 @@ describe("executeFollowupTurn", () => {
     const turn = createTurn({
       queued: { ...createTurn().queued, currentInboundEventKind: "room_event" },
     });
-    const typing = createTypingController();
+    const typing = createMockTypingController();
     const onToolResult = vi.fn(async () => {});
     const onCompactionStart = vi.fn(async () => {});
     const onCompactionEnd = vi.fn(async () => {});
@@ -552,7 +545,6 @@ describe("executeFollowupTurn lifecycle", () => {
           resolved: { provider: "anthropic", model: "claude" },
           fallback: { exhausted: false, attempts: [] },
           autoCompactionCount: 0,
-          didLogHeartbeatStrip: false,
         },
       };
       state.execute.mockImplementation(async (params: AgentTurnParams) => {
@@ -565,7 +557,7 @@ describe("executeFollowupTurn lifecycle", () => {
       const pending = executeFollowupTurn({
         turn,
         defaults: {
-          typing: createTypingController(),
+          typing: createMockTypingController(),
           typingMode: "never",
           defaultModel: "claude",
           opts: { abortSignal: sibling.signal },
@@ -603,7 +595,7 @@ describe("executeFollowupTurn lifecycle", () => {
     const result = await executeFollowupTurn({
       turn: createTurn(),
       defaults: {
-        typing: createTypingController(),
+        typing: createMockTypingController(),
         typingMode: "never",
         defaultModel: "claude",
         opts: {
@@ -635,7 +627,7 @@ describe("executeFollowupTurn lifecycle", () => {
     const result = await executeFollowupTurn({
       turn: createTurn(),
       defaults: {
-        typing: createTypingController(),
+        typing: createMockTypingController(),
         typingMode: "never",
         defaultModel: "claude",
         opts: {
@@ -666,7 +658,7 @@ describe("executeFollowupTurn lifecycle", () => {
     const pending = executeFollowupTurn({
       turn,
       defaults: {
-        typing: createTypingController(),
+        typing: createMockTypingController(),
         typingMode: "never",
         defaultModel: "claude",
         opts: {
@@ -693,7 +685,10 @@ describe("executeFollowupTurn lifecycle", () => {
   it.each([
     { expectation: "required", progress: "none", accepted: false, visible: false },
     { expectation: "result-required", progress: "none", accepted: false, visible: false },
+    { expectation: "optional", progress: "none", accepted: false, visible: false },
     { expectation: "optional", progress: "item", accepted: false, visible: false },
+    { expectation: "optional", progress: "item", accepted: true, visible: true },
+    { expectation: "optional", progress: "item", accepted: undefined, visible: true },
     { expectation: "optional", progress: "compaction", accepted: undefined, visible: true },
   ] as const)(
     "settles $expectation failure after $progress progress accepts $accepted",
@@ -723,7 +718,7 @@ describe("executeFollowupTurn lifecycle", () => {
       const pending = executeFollowupTurn({
         turn,
         defaults: {
-          typing: createTypingController(),
+          typing: createMockTypingController(),
           typingMode: "never",
           defaultModel: "claude",
           opts: {
@@ -776,7 +771,11 @@ describe("executeFollowupTurn lifecycle", () => {
     });
     const result = await executeFollowupTurn({
       turn: createTurn(),
-      defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
+      defaults: {
+        typing: createMockTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      },
       onToolResult: vi.fn(async () => {}),
       onCompactionNoticePayload: vi.fn(async () => {}),
     });

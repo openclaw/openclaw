@@ -10,6 +10,8 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForSessionText as waitText } from "./session-ui.test-support.ts";
+import { seedStorage } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI scoped stream delivery",
@@ -18,6 +20,19 @@ const first = "agent:main:foreground";
 const second = "agent:main:split";
 const narrated = "agent:main:narrated";
 const unrelated = "agent:main:unrelated";
+const subscribe = "sessions.messages.subscribe";
+const liveRow = (key: string, index: number, active = true) =>
+  sessionRow(key, `Session ${index}`, 100 - index, {
+    hasActiveRun: active,
+    activeRunIds: active ? [`run-${index}`] : [],
+    status: active ? "running" : "done",
+  });
+const chatDelta = (sessionKey: string, runId: string, text: string) => ({
+  sessionKey,
+  runId,
+  state: "delta",
+  message: { role: "assistant", content: [{ type: "text", text }] },
+});
 
 async function receivedSessions(page: Page): Promise<unknown[]> {
   // Safe observer headlines also reach broad session-list subscribers; raw
@@ -35,49 +50,38 @@ async function receivedSessions(page: Page): Promise<unknown[]> {
 }
 
 suite.define(() => {
-  it.each(["roster", "preview-off"] as const)(
+  // Default rows show observer headlines only with previews on; roster rows
+  // always do.
+  it.each(["roster", "preview-on"] as const)(
     "preserves the visible consumers in %s presentation",
     async (mode) => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-        await page.addInitScript(
-          ({ settingsKey, presentation }) => {
-            localStorage.setItem(
-              "openclaw:sidebar:sessions:show-preview",
-              String(presentation === "roster"),
-            );
-            localStorage.setItem(
-              settingsKey,
-              JSON.stringify({ sidebarAgentsMode: presentation === "roster" ? "roster" : "chip" }),
-            );
-          },
-          {
-            settingsKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-            presentation: mode,
-          },
-        );
         const keys = [
           first,
           ...Array.from({ length: 6 }, (_, index) => `agent:main:background-${index}`),
         ];
+        await seedStorage(page, {
+          [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
+            sidebarAgentsMode: mode === "roster" ? "roster" : "chip",
+          }),
+          "openclaw:sidebar:sessions:show-preview": "true",
+        });
         const gateway = await installMockGateway(page, {
           sessionKey: first,
-          sessions: keys.map((key, index) =>
-            sessionRow(key, `Running ${index}`, 100 - index, {
-              hasActiveRun: true,
-              activeRunIds: [`run-${index}`],
-              status: "running",
-            }),
-          ),
+          sessions: keys.map((key, index) => liveRow(key, index)),
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, first));
-        await page.locator(`[data-session-key="${keys[1]}"]`).first().waitFor();
-        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: first } });
         if (mode === "roster") {
-          const subscriptions = await gateway.getRequests("sessions.messages.subscribe");
-          expect(subscriptions).toHaveLength(1);
+          await page.locator(".sidebar-agent-roster__row").first().waitFor();
+        } else {
+          await page.locator(`[data-session-key="${keys[1]}"]`).first().waitFor();
+        }
+        await gateway.waitForRequest(subscribe, { match: { key: first } });
+        if (mode === "roster") {
+          const subscriptions = await gateway.getRequests(subscribe);
           expect(subscriptions).toMatchObject([{ params: { key: first } }]);
         } else {
-          await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: keys[1] } });
+          await gateway.waitForRequest(subscribe, { match: { key: keys[1] } });
           await gateway.emitGatewayEvent("session.observer", {
             sessionKey: keys[1],
             agentId: "main",
@@ -87,24 +91,18 @@ suite.define(() => {
             health: "waiting-on-user",
             headline: "Waiting for the next instruction",
           });
-          await page
-            .locator(`[data-session-key="${keys[1]}"]`)
-            .getByText("Waiting for the next instruction", { exact: true })
-            .waitFor();
         }
-        await gateway.emitGatewayEvent("chat", {
-          sessionKey: first,
-          runId: "run-0",
-          state: "delta",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "Visible chat stays live" }],
-          },
-        });
-        await page
-          .locator(".chat-thread-inner")
-          .getByText("Visible chat stays live", { exact: true })
-          .waitFor();
+        await gateway.emitGatewayEvent(
+          "chat",
+          chatDelta(first, "run-0", "Visible chat stays live"),
+        );
+        await waitText(page.locator(".chat-thread-inner"), "Visible chat stays live");
+        if (mode === "preview-on") {
+          await waitText(
+            page.locator(`[data-session-key="${keys[1]}"]`),
+            "Waiting for the next instruction",
+          );
+        }
       });
     },
   );
@@ -113,40 +111,26 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", viewport: { width: 1440, height: 900 }, serviceWorkers: "block" },
       async ({ page }) => {
-        await page.addInitScript(
-          ({ settingsKey, first: foregroundKey, second: splitKey }) => {
-            localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
-            localStorage.setItem(
-              settingsKey,
-              JSON.stringify({
-                chatSplitLayout: {
-                  activePaneId: "first",
-                  columns: [
-                    {
-                      id: "left",
-                      panes: [{ id: "first", sessionKey: foregroundKey }],
-                      paneWeights: [1],
-                    },
-                    {
-                      id: "right",
-                      panes: [{ id: "second", sessionKey: splitKey }],
-                      paneWeights: [1],
-                    },
-                  ],
-                  columnWeights: [0.5, 0.5],
-                },
-              }),
-            );
-          },
-          { settingsKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl), first, second },
-        );
         const sessions = [first, second, narrated, unrelated].map((key, index) =>
-          sessionRow(key, key.split(":").at(-1)!, 100 - index, {
-            hasActiveRun: key !== unrelated,
-            activeRunIds: key !== unrelated ? [`run-${index}`] : [],
-            status: key !== unrelated ? "running" : "done",
-          }),
+          liveRow(key, index, key !== unrelated),
         );
+        await seedStorage(page, {
+          "openclaw:sidebar:sessions:show-preview": "true",
+          [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
+            chatSplitLayout: {
+              activePaneId: "first",
+              columns: [
+                ["left", "first", first],
+                ["right", "second", second],
+              ].map(([id, paneId, sessionKey]) => ({
+                id,
+                panes: [{ id: paneId, sessionKey }],
+                paneWeights: [1],
+              })),
+              columnWeights: [0.5, 0.5],
+            },
+          }),
+        });
         const gateway = await installMockGateway(page, {
           sessions,
           sessionKey: first,
@@ -159,27 +143,21 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, first));
         const panes = page.locator(".chat-split-view__cell");
-        await panes.nth(0).getByText("Attached 0", { exact: true }).waitFor();
-        await panes.nth(1).getByText("Attached 1", { exact: true }).waitFor();
+        await waitText(panes.nth(0), "Attached 0");
+        await waitText(panes.nth(1), "Attached 1");
         for (const key of [first, second, narrated]) {
-          await gateway.waitForRequest("sessions.messages.subscribe", { match: { key } });
+          await gateway.waitForRequest(subscribe, { match: { key } });
         }
         await evaluateControlUiContext(page, (context) => {
           // This page-lifetime observer opts the delivery proof into diagnostic capture.
           context.gateway.subscribeEventLog(() => undefined);
         });
-        const send = async (key: string, runId: string, text: string) => {
-          await gateway.emitGatewayEvent("chat", {
-            sessionKey: key,
-            runId,
-            state: "delta",
-            message: { role: "assistant", content: [{ type: "text", text }] },
-          });
-        };
+        const send = (key: string, runId: string, text: string) =>
+          gateway.emitGatewayEvent("chat", chatDelta(key, runId, text));
         await send(first, "run-0", "Foreground is streaming");
         await send(second, "run-1", "Second pane is streaming");
-        await panes.nth(0).getByText("Foreground is streaming", { exact: true }).waitFor();
-        await panes.nth(1).getByText("Second pane is streaming", { exact: true }).waitFor();
+        await waitText(panes.nth(0), "Foreground is streaming");
+        await waitText(panes.nth(1), "Second pane is streaming");
         const narrationRow = page.locator(
           `.sidebar-recent-session[data-session-key="${narrated}"]`,
         );
@@ -236,17 +214,15 @@ suite.define(() => {
             updatedAt: 101,
           },
         });
-        await unrelatedRow.getByText("Unrelated completed work", { exact: true }).waitFor();
+        await waitText(unrelatedRow, "Unrelated completed work");
         await unrelatedRow.locator(".session-unread-dot").waitFor();
         expect(await unrelatedRow.getAttribute("class")).not.toContain("session-row-host--running");
-        expect(
-          await gateway.getRequests("sessions.messages.subscribe", { key: unrelated }),
-        ).toHaveLength(0);
+        expect(await gateway.getRequests(subscribe, { key: unrelated })).toHaveLength(0);
 
-        const subscriptionsBefore = await gateway.getRequests("sessions.messages.subscribe");
+        const subscriptionsBefore = await gateway.getRequests(subscribe);
         await reconnectMockGateway(page, gateway);
         for (const key of [first, second, narrated]) {
-          await gateway.waitForRequest("sessions.messages.subscribe", {
+          await gateway.waitForRequest(subscribe, {
             match: { key },
             after: subscriptionsBefore.filter(
               (request) =>
@@ -259,7 +235,7 @@ suite.define(() => {
         }
         expect(await narrationRow.locator(".sidebar-session-tool").count()).toBe(0);
         await send(second, "run-1", "Second pane resumed");
-        await panes.nth(1).getByText("Second pane resumed", { exact: true }).waitFor();
+        await waitText(panes.nth(1), "Second pane resumed");
         await send(unrelated, "other-run", "Unrelated must stay off the socket");
         const sessionsAfterReconnect = await receivedSessions(page);
         expect(sessionsAfterReconnect).toContain(second);
@@ -292,14 +268,11 @@ suite.define(() => {
       });
       await page.locator(".agent-chat__composer-combobox textarea").fill("Respond immediately");
       await page.getByRole("button", { name: "Send message", exact: true }).click();
-      await page
-        .locator(".chat-thread-inner")
-        .getByText("Fast first token", { exact: true })
-        .waitFor();
+      await waitText(page.locator(".chat-thread-inner"), "Fast first token");
       const requests = await gateway.getRequests();
-      expect(
-        requests.findIndex((request) => request.method === "sessions.messages.subscribe"),
-      ).toBeLessThan(requests.findIndex((request) => request.method === "chat.send"));
+      expect(requests.findIndex((request) => request.method === subscribe)).toBeLessThan(
+        requests.findIndex((request) => request.method === "chat.send"),
+      );
     });
   });
 });

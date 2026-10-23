@@ -16,6 +16,7 @@ import {
   isRetainedPluginStateNamespace,
   PLUGIN_STATE_EXPIRY_BATCH_ROWS,
   resolvePluginStateExpiresAtMs,
+  selectLivePluginStateRows,
   upsertPluginStateEntry,
   type PluginStateCountRow,
   type PluginStateDatabase,
@@ -25,24 +26,10 @@ import type { PluginStateOverflowPolicy } from "./plugin-state-store.types.js";
 type PluginStateCountParams = { pluginId: string; now: number };
 const pluginStateCountQuery = createSqliteQueryCache((db: EngineConnection) =>
   prepareSqliteQuerySync<PluginStateCountParams, PluginStateCountRow>(db, (parameter) =>
-    getPluginStateKysely(db)
-      .selectFrom("plugin_state_entries")
-      .select((eb) => eb.fn.countAll<number | bigint>().as("count"))
-      .where(
-        "plugin_id",
-        "=",
-        parameter((value) => value.pluginId),
-      )
-      .where((eb) =>
-        eb.or([
-          eb("expires_at", "is", null),
-          eb(
-            "expires_at",
-            ">",
-            parameter((value) => value.now),
-          ),
-        ]),
-      ),
+    selectLivePluginStateRows(db, {
+      pluginId: parameter((value) => value.pluginId),
+      now: parameter((value) => value.now),
+    }).select((eb) => eb.fn.countAll<number | bigint>().as("count")),
   ),
 );
 
@@ -152,13 +139,9 @@ export function enforcePostRegisterLimits(params: {
     return [];
   }
   const kysely = getPluginStateKysely(params.store.db);
-  const keys = kysely
-    .selectFrom("plugin_state_entries")
+  const keys = selectLivePluginStateRows(params.store.db, params)
     .select("entry_key")
-    .where("plugin_id", "=", params.pluginId)
-    .where("namespace", "=", params.namespace)
     .where("entry_key", "!=", params.protectedKey)
-    .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
     .orderBy("created_at", "asc")
     .orderBy("entry_key", "asc")
     .limit(namespaceCount - params.maxEntries);

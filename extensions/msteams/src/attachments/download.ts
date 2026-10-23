@@ -1,3 +1,4 @@
+import { lookup } from "node:dns/promises";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed } from "openclaw/plugin-sdk/ssrf-policy";
@@ -26,7 +27,6 @@ import {
   isRedirectStatus,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
-  type MSTeamsAttachmentResolveFn,
   normalizeContentType,
   resolveMSTeamsMediaKind,
   resolveAttachmentFetchPolicy,
@@ -189,20 +189,17 @@ async function resolveInlineDataImageMime(inline: {
 async function fetchWithAuthFallback(params: {
   url: string;
   tokenProvider?: MSTeamsAccessTokenProvider;
-  fetchFn?: typeof fetch;
   requestInit?: RequestInit;
-  resolveFn?: MSTeamsAttachmentResolveFn;
   policy: MSTeamsAttachmentFetchPolicy;
   deadline?: MSTeamsRequestDeadline;
   bearerToken?: string;
 }): Promise<Response> {
-  const fetchAttempt = (fetchFn: typeof fetch | undefined, requestInit?: RequestInit) =>
+  const fetchAttempt = (requestInit?: RequestInit) =>
     safeFetchWithPolicy({
       url: params.url,
       policy: params.policy,
-      fetchFn,
+      resolveFn: lookup,
       requestInit,
-      resolveFn: params.resolveFn,
       timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
     });
   if (params.bearerToken !== undefined) {
@@ -213,9 +210,9 @@ async function fetchWithAuthFallback(params: {
       authAllowHosts: params.policy.authAllowHosts,
       bearerToken: params.bearerToken,
     });
-    return fetchAttempt(params.fetchFn, { ...params.requestInit, headers });
+    return fetchAttempt({ ...params.requestInit, headers });
   }
-  const firstAttempt = await fetchAttempt(params.fetchFn, params.requestInit);
+  const firstAttempt = await fetchAttempt(params.requestInit);
   if (firstAttempt.ok) {
     return firstAttempt;
   }
@@ -231,7 +228,6 @@ async function fetchWithAuthFallback(params: {
   }
   let fallbackAttempt = firstAttempt;
   const scopes = scopeCandidatesForUrl(params.url);
-  const fetchFn = params.fetchFn ?? fetch;
   for (const scope of scopes) {
     try {
       const token = await withMSTeamsRequestDeadline({
@@ -241,7 +237,7 @@ async function fetchWithAuthFallback(params: {
       });
       const authHeaders = new Headers(params.requestInit?.headers);
       authHeaders.set("Authorization", `Bearer ${token}`);
-      const authAttempt = await fetchAttempt(fetchFn, {
+      const authAttempt = await fetchAttempt({
         ...params.requestInit,
         headers: authHeaders,
       });
@@ -265,11 +261,7 @@ export async function downloadMSTeamsAttachments(params: {
   tokenProvider?: MSTeamsAccessTokenProvider;
   allowHosts?: string[];
   authAllowHosts?: string[];
-  fetchFn?: typeof fetch;
-  resolveFn?: MSTeamsAttachmentResolveFn;
   deadline?: MSTeamsRequestDeadline;
-  /** When true, embeds original filename in stored path for later extraction. */
-  preserveFilenames?: boolean;
   logger?: MSTeamsAttachmentDownloadLogger;
   /** Already-acquired Graph token for reference attachments from a Graph message. */
   graphReferenceToken?: string;
@@ -371,16 +363,13 @@ export async function downloadMSTeamsAttachments(params: {
         maxBytes: params.maxBytes,
         contentTypeHint: candidate.contentTypeHint,
         kind: candidate.graphReference ? undefined : candidate.mediaKind,
-        preserveFilenames: params.preserveFilenames,
         // `fetchImpl` below owns Teams auth fallback and enforces the
         // attachment fetch policy through `safeFetchWithPolicy`.
         fetchImpl: (input, init) =>
           fetchWithAuthFallback({
             url: resolveRequestUrl(input),
             tokenProvider: params.tokenProvider,
-            fetchFn: params.fetchFn,
             requestInit: init,
-            resolveFn: params.resolveFn,
             policy,
             deadline: params.deadline,
             bearerToken: candidate.graphReference ? params.graphReferenceToken : undefined,

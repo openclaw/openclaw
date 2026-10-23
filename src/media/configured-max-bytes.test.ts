@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGeneratedMediaMaxBytes } from "../plugin-sdk/media-generation-runtime.js";
+import {
+  resolveGeneratedImageDownloadMaxBytes,
+  resolveGeneratedMediaMaxBytes,
+} from "../plugin-sdk/media-generation-runtime.js";
 import { resolveOutboundMediaMaxBytes } from "./configured-max-bytes.js";
 
 const MB = 1024 * 1024;
@@ -53,12 +56,17 @@ describe("resolveGeneratedMediaMaxBytes", () => {
     expect(resolveGeneratedMediaMaxBytes(undefined, kind)).toBe(expected);
   });
 
-  it.each([
-    { label: "zero", value: 0 },
-    { label: "NaN", value: Number.NaN },
-  ])("uses the per-kind default for $label mediaMaxMb", ({ value }) => {
-    expect(resolveGeneratedMediaMaxBytes(configWithMediaMaxMb(value), "image")).toBe(6 * MB);
-  });
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -1])(
+    "keeps per-kind caps and the image download bound for invalid mediaMaxMb %s",
+    (mediaMaxMb) => {
+      const cfg = configWithMediaMaxMb(mediaMaxMb);
+
+      expect(resolveGeneratedMediaMaxBytes(cfg, "image")).toBe(6 * MB);
+      expect(resolveGeneratedMediaMaxBytes(cfg, "audio")).toBe(16 * MB);
+      expect(resolveGeneratedMediaMaxBytes(cfg, "video")).toBe(16 * MB);
+      expect(resolveGeneratedImageDownloadMaxBytes(cfg)).toBe(64 * MB);
+    },
+  );
 
   it("floors fractional configured megabytes to whole bytes", () => {
     const mediaMaxMb = 1.000_001;
@@ -66,5 +74,15 @@ describe("resolveGeneratedMediaMaxBytes", () => {
     expect(resolveGeneratedMediaMaxBytes(configWithMediaMaxMb(mediaMaxMb), "audio")).toBe(
       Math.floor(mediaMaxMb * MB),
     );
+  });
+});
+
+describe("resolveGeneratedImageDownloadMaxBytes", () => {
+  it("lets providers download images above the default media cap", () => {
+    expect(resolveGeneratedImageDownloadMaxBytes(undefined)).toBe(64 * MB);
+  });
+
+  it("never drops below a larger configured media cap", () => {
+    expect(resolveGeneratedImageDownloadMaxBytes(configWithMediaMaxMb(128))).toBe(128 * MB);
   });
 });

@@ -12,7 +12,6 @@ import {
   isCanvasBoardWidgetName,
 } from "../../../../src/chat/canvas-render.js";
 import { readMessageClientSources } from "../../../../src/chat/message-client-source.js";
-import { readTranscriptSenderIdentity } from "../../../../src/chat/sender-identity.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -26,11 +25,7 @@ import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
 import { projectImportedMessageForDisplay } from "./imported-message-display.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import { normalizeImageContentBlock } from "./message-normalizer-images.ts";
-import { formatSenderLabel, normalizeSenderIdentity, type SenderIdentity } from "./sender-label.ts";
-
-// Keep legacy labels readable without treating their UUID suffix as profile evidence.
-const OPAQUE_ID_LABEL_SUFFIX_RE =
-  /\s+\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/iu;
+import { resolveMessageSender, resolveMessageSenderLabel } from "./sender-label.ts";
 
 type CanvasPreview = Extract<MessageContentItem, { type: "canvas" }>["preview"];
 type MessageDelivery = { audioAsVoice?: true; replyToCurrent?: true; replyToId?: string };
@@ -132,34 +127,6 @@ export function resolveMessageRole(message: unknown): string {
   return hasToolContent || hasToolMessageEnvelope(m)
     ? "toolResult"
     : (readStringField(m, "role") ?? "unknown");
-}
-
-export function resolveMessageSender(
-  metadata: Record<string, unknown> | undefined,
-): SenderIdentity | null {
-  const identity = readTranscriptSenderIdentity(metadata?.senderIdentity);
-  return normalizeSenderIdentity({
-    identity,
-    id: metadata?.senderId,
-    name: metadata?.senderName,
-    username: metadata?.senderUsername,
-    profileAvatarUrl: identity?.type === "profile" ? metadata?.senderProfileAvatarUrl : undefined,
-  });
-}
-
-export function resolveMessageSenderLabel(
-  message: unknown,
-  sender?: SenderIdentity | null,
-): string | null {
-  const m = asOptionalRecord(message);
-  const rawLabel = readStringField(m, "senderLabel")?.trim() ?? "";
-  if (rawLabel) {
-    return rawLabel.replace(OPAQUE_ID_LABEL_SUFFIX_RE, "").trim();
-  }
-  // Full normalization already prepared the sender; null is a known absence.
-  return formatSenderLabel(
-    sender === undefined ? resolveMessageSender(asOptionalRecord(m?.["__openclaw"])) : sender,
-  );
 }
 
 export function isToolResultMessage(message: unknown): boolean {
@@ -274,7 +241,9 @@ function inferAttachmentKind(url: string): {
         const name = parsed.pathname.split("/").pop()?.trim();
         return name || parsed.hostname || url;
       }
-    } catch {}
+    } catch {
+      // Malformed URLs still get a filename label from the original path below.
+    }
     const name = url.split(/[\\/]/).pop()?.trim();
     return name || url;
   })();

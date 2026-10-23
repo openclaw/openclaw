@@ -1,4 +1,3 @@
-// Public speech helpers for bundled or third-party plugins.
 //
 // Keep this surface provider-facing: types, validation, directive parsing, and
 // registry helpers. Runtime synthesis lives on `api.runtime.tts` or narrower

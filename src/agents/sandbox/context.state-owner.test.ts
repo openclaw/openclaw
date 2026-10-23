@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -28,6 +29,7 @@ it("rejects released hosted custody before ordinary sandbox backend provisioning
       databasePath: resolveOpenClawStateSqlitePath(),
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: path.join(root, "openclaw.json"),
         role: "gateway",

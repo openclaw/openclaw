@@ -1,36 +1,40 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createBackupArchive } from "../infra/backup-create.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { backupRestoreCommand } from "./backup-restore.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 describe("mixed-engine archive backup", () => {
-  it.each(["sqlite", "postgres"] as const)(
-    "refuses database snapshots with a %s default before writing the archive",
-    async (engine) => {
-      await withOpenClawTestState(
-        { layout: "state-only", prefix: "openclaw-backup-mixed-", scenario: "minimal" },
-        async (state) => {
-          await state.writeConfig({
-            database: {
-              engine,
-              families: { workboard: { engine: engine === "sqlite" ? "postgres" : "sqlite" } },
-            },
-          });
-          const output = state.path("backups", "backup.tar.gz");
-          await expect(createBackupArchive({ output, includeWorkspace: false })).rejects.toThrow(
-            "backup for mixed-engine installs is not supported yet; use a single engine",
-          );
-          await expect(fs.access(state.path("backups"))).rejects.toMatchObject({
-            code: "ENOENT",
-          });
-
-          // Config-only capture remains the recovery path and opens no databases.
-          const configBackup = await createBackupArchive({ output, onlyConfig: true });
-          expect(configBackup.onlyConfig).toBe(true);
-          expect(configBackup.assets.every((asset) => asset.kind === "config")).toBe(true);
-          await expect(fs.stat(output)).resolves.toMatchObject({ size: expect.any(Number) });
-        },
-      );
-    },
-  );
+  it("retains authored family choices through archive capture and staging restore", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-backup-mixed-", scenario: "minimal" },
+      async (state) => {
+        await state.writeConfig({
+          database: {
+            families: { workboard: { engine: "postgres" } },
+            postgres: { connection: "postgresql://unused-no-existing-workboard" },
+          },
+        });
+        const configBytes = await fs.readFile(state.configPath);
+        const output = state.path("backups", "backup.tar.gz");
+        const backup = await createBackupArchive({ output, includeWorkspace: false });
+        const target = state.path("restored");
+        await backupRestoreCommand(createTestRuntime(), { archive: output, target });
+        const configAsset = backup.assets.find(
+          (asset) =>
+            state.configPath.startsWith(`${asset.sourcePath}${path.sep}`) ||
+            asset.sourcePath === state.configPath,
+        );
+        expect(configAsset).toBeDefined();
+        const restoredConfig = path.join(
+          target,
+          configAsset!.archivePath,
+          path.relative(configAsset!.sourcePath, state.configPath),
+        );
+        expect(await fs.readFile(restoredConfig)).toEqual(configBytes);
+      },
+    );
+  });
 });

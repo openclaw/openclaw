@@ -91,7 +91,6 @@ type WhatsAppMessageDeliveryOptions = {
   debounceMs?: number;
   /** Bounded reconnect window for offline append auto-replies. */
   appendReplyWindow?: WhatsAppAppendReplyWindow;
-  /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
   onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
   durableInboundQueue?: WhatsAppDurableInboundQueue;
@@ -432,7 +431,6 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       msg,
       sock,
       mediaMaxMb: options.mediaMaxMb,
-      logVerbose: (message) => logWhatsAppVerbose(options.verbose, message),
     });
     if (!enriched) {
       await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);

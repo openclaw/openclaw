@@ -1,5 +1,6 @@
 import {
   bucketRelativeTimeMs,
+  formatByteSize,
   formatCompactTokenCount as formatTokenUnits,
   type RelativeTimeUnit,
 } from "@openclaw/normalization-core";
@@ -10,6 +11,15 @@ import { i18n, t } from "../i18n/index.ts";
 import { formatUiError } from "./format-error.ts";
 
 export { formatByteSize } from "@openclaw/normalization-core";
+
+export function formatResourceBytes(bytes: number): string {
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "tera",
+    separator: " ",
+    fractionDigits: (value, unit) => (unit === "tera" || value < 10 ? 1 : 0),
+  });
+}
 
 export function formatCountdown(deadlineMs: number, nowMs: number, padMinutes = false): string {
   const totalSeconds = Math.max(0, Math.ceil((deadlineMs - nowMs) / 1_000));
@@ -23,7 +33,6 @@ type FormatTimeAgoOptions = {
 };
 
 type FormatRelativeTimestampOptions = {
-  dateFallback?: boolean;
   fallback?: string;
   suffix?: boolean;
 };
@@ -102,17 +111,6 @@ export function formatRelativeTimestamp(
       return formatUnit({ value, unit });
     }
     return isPast ? t("common.justNow") : formatRelative(value, unit);
-  }
-
-  if (options.dateFallback && unit === "day" && value > 7) {
-    try {
-      return new Intl.DateTimeFormat(i18n.getLocale(), {
-        month: "short",
-        day: "numeric",
-      }).format(new Date(timestampMs));
-    } catch {
-      // Finite timestamps can still be outside JavaScript's date range.
-    }
   }
 
   const signedValue = isPast ? -value : value;

@@ -21,6 +21,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { markCurrentStateSchemaVersion } from "./openclaw-state-db-maintenance.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
+  assertSupportedStateSchemaVersion,
   CONTENT_VERSION_KEY,
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
@@ -184,6 +185,22 @@ describe("shared-state content version facts", () => {
         expect(
           observation.queries.filter((sql) => /from "config_machine_state"/iu.test(sql)),
         ).toHaveLength(tracking === "outside-operation" ? 1 : 3);
+        for (const userVersion of [7, 0]) {
+          database.exec(`PRAGMA user_version = ${userVersion}`);
+          observation.queries.length = 0;
+          expect(assertSupportedStateSchemaVersion(database, ":memory:")).toBe(userVersion);
+          expect(
+            observation.queries.filter((sql) => /^PRAGMA user_version\b/iu.test(sql)),
+          ).toHaveLength(tracking === "outside-operation" ? 0 : 1);
+        }
+        database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+        observation.queries.length = 0;
+        expect(() => assertSupportedStateSchemaVersion(database, ":memory:")).toThrow(
+          /newer schema version/iu,
+        );
+        expect(
+          observation.queries.filter((sql) => /from "config_machine_state"/iu.test(sql)),
+        ).toEqual([]);
       } finally {
         observation.restore();
       }

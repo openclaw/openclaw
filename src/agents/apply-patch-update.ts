@@ -1,5 +1,4 @@
 /**
- * Update-hunk application for the apply_patch parser.
  * Locates expected old lines with tolerant matching, applies chunks in order,
  * and retains source bytes that the patch does not change.
  */
@@ -36,7 +35,6 @@ type SourceFile = {
 
 type Replacement = [number, number, SourceLine[]];
 
-/** Apply parsed update chunks to one file and return the new file contents. */
 export async function applyUpdateHunk(
   filePath: string,
   chunks: UpdateFileChunk[],
@@ -126,17 +124,48 @@ function computeReplacements(
     }
     const found = search.index;
 
-    replacements.push([
-      found,
-      pattern.length,
-      buildChunkLines({
-        source,
-        matchIndex: found,
-        pattern,
-        newSlice,
-        contextOldIndexes: chunk.contextOldIndexes,
+    const oldCount = pattern.length;
+    const contextOldIndexes = chunk.contextOldIndexes;
+    const replacementLines: SourceLine[] = [];
+    let oldStart = 0;
+    let newStart = 0;
+
+    // Tolerant matching may ignore whitespace or punctuation. Reuse matched
+    // context records so bytes outside each explicit change stay untouched.
+    for (const [newContext, oldContext] of contextOldIndexes.entries()) {
+      if (
+        oldContext === undefined ||
+        oldContext >= pattern.length ||
+        newContext >= newSlice.length
+      ) {
+        continue;
+      }
+      appendLines(
+        replacementLines,
+        buildChangedLines({
+          sourceLines: source.lines,
+          startIndex: found + oldStart,
+          oldCount: oldContext - oldStart,
+          newLines: newSlice.slice(newStart, newContext),
+          preferredEnding: source.preferredEnding,
+        }),
+      );
+      replacementLines.push(source.lines[found + oldContext]!);
+      oldStart = oldContext + 1;
+      newStart = newContext + 1;
+    }
+
+    appendLines(
+      replacementLines,
+      buildChangedLines({
+        sourceLines: source.lines,
+        startIndex: found + oldStart,
+        oldCount: pattern.length - oldStart,
+        newLines: newSlice.slice(newStart),
+        preferredEnding: source.preferredEnding,
       }),
-    ]);
+    );
+    replacements.push([found, oldCount, replacementLines]);
     lineIndex = found + pattern.length;
   }
 
@@ -144,48 +173,11 @@ function computeReplacements(
   return replacements;
 }
 
-function buildChunkLines(params: {
-  source: SourceFile;
-  matchIndex: number;
-  pattern: string[];
-  newSlice: string[];
-  contextOldIndexes: Array<number | undefined>;
-}): SourceLine[] {
-  const { source, matchIndex, pattern, newSlice, contextOldIndexes } = params;
-  const lines: SourceLine[] = [];
-  let oldStart = 0;
-  let newStart = 0;
-
-  // Tolerant matching may ignore whitespace or punctuation. Reuse matched
-  // context records so bytes outside each explicit change stay untouched.
-  for (const [newContext, oldContext] of contextOldIndexes.entries()) {
-    if (oldContext === undefined || oldContext >= pattern.length || newContext >= newSlice.length) {
-      continue;
-    }
-    lines.push(
-      ...buildChangedLines({
-        sourceLines: source.lines,
-        startIndex: matchIndex + oldStart,
-        oldCount: oldContext - oldStart,
-        newLines: newSlice.slice(newStart, newContext),
-        preferredEnding: source.preferredEnding,
-      }),
-      source.lines[matchIndex + oldContext]!,
-    );
-    oldStart = oldContext + 1;
-    newStart = newContext + 1;
+// Spreading a large hunk into push() exceeds the engine's call argument limit.
+function appendLines(target: SourceLine[], items: SourceLine[]) {
+  for (const item of items) {
+    target.push(item);
   }
-
-  lines.push(
-    ...buildChangedLines({
-      sourceLines: source.lines,
-      startIndex: matchIndex + oldStart,
-      oldCount: pattern.length - oldStart,
-      newLines: newSlice.slice(newStart),
-      preferredEnding: source.preferredEnding,
-    }),
-  );
-  return lines;
 }
 
 function buildChangedLines(params: {
@@ -216,11 +208,11 @@ function buildChangedLines(params: {
 }
 
 function applyReplacements(lines: SourceLine[], replacements: Replacement[]): SourceLine[] {
-  const result = [...lines];
+  let result = lines;
   // Apply from the end of the file backward so earlier replacement indexes stay
-  // stable while later replacements mutate the array.
+  // stable while later replacements rebuild the array.
   for (const [startIndex, oldLen, newLines] of replacements.toReversed()) {
-    result.splice(startIndex, oldLen, ...newLines);
+    result = result.slice(0, startIndex).concat(newLines, result.slice(startIndex + oldLen));
   }
   return result;
 }

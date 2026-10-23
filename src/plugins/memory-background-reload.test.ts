@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
+import type { MemorySyncParams } from "../../packages/memory-host-sdk/src/host/types.js";
 import type { MemoryWorkspaceFiles } from "../../packages/memory-host-sdk/src/host/workspace-files.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import {
@@ -30,6 +31,8 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "./runtime/gateway-request-scope.js";
 import { preparePluginLoaderAliases } from "./sdk-alias.js";
+import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "./services.js";
+import { startPluginServices, type PluginServicesHandle } from "./services.test-support.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginDefinition } from "./types.js";
 
@@ -82,7 +85,7 @@ const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = loadNativeHost(
 ) as typeof import("../config/runtime-snapshot.js");
 
 type RegistryHost = ReturnType<typeof createPluginRegistry>;
-type SyncReason = "watch" | "interval" | "session-delta" | "session-startup-catchup";
+type SyncReason = "watch" | "session-delta" | "session-startup-catchup";
 type MemorySearchSettings = NonNullable<NonNullable<OpenClawConfig["memory"]>["search"]>;
 
 function memoryConfig(
@@ -121,16 +124,6 @@ async function openManager(
   return { manager, raw, prototype: Object.getPrototypeOf(raw) as RegisteredMemorySearchManager };
 }
 
-function enableInterval(manager: object) {
-  // Exercise the dormant interval owner without inventing a public config option.
-  const scheduled = manager as {
-    settings: { sync: { intervalMinutes: number } };
-    ensureIntervalSync(): void;
-  };
-  scheduled.settings.sync.intervalMinutes = 1;
-  scheduled.ensureIntervalSync();
-}
-
 function registryHost() {
   return createPluginRegistry({
     logger,
@@ -167,7 +160,32 @@ function loadMemory(host: RegistryHost, config: OpenClawConfig) {
   return { record, instance, runtime };
 }
 
-function registerMemoryWorkspaceWatch(workspace: string) {
+// Watch notifications, startup catch-up and session deltas enter Memory Core's
+// background sync owner, not the public sync() used by search and CLI.
+function observeBackgroundSync(
+  prototype: RegisteredMemorySearchManager,
+  onSync: (
+    manager: RegisteredMemorySearchManager,
+    params: MemorySyncParams,
+    work: Promise<void>,
+  ) => void,
+) {
+  const owner = prototype as RegisteredMemorySearchManager & {
+    syncBackground(params: MemorySyncParams): Promise<void>;
+  };
+  // oxlint-disable-next-line typescript/unbound-method -- The spy forwards the manager receiver with call().
+  const syncBackground = owner.syncBackground;
+  return vi.spyOn(owner, "syncBackground").mockImplementation(function (
+    this: RegisteredMemorySearchManager,
+    params,
+  ) {
+    const work = syncBackground.call(this, params);
+    onSync(this, params, work);
+    return work;
+  });
+}
+
+function registerMemoryWorkspaceWatch(workspace: string, beforeRead?: () => Promise<void>) {
   const subscriptions: Array<{ notify: () => void; signal: AbortSignal }> = [];
   let nextSubscription = createDeferredCore();
   const files: MemoryWorkspaceFiles = {
@@ -175,10 +193,13 @@ function registerMemoryWorkspaceWatch(workspace: string) {
     listFiles: listMemoryFiles,
     inspectFile: buildFileEntry,
     readFile: readMemoryFile,
-    readForIndexing: async (file) => ({
-      content: await fs.readFile(file, "utf8"),
-      canonicalRelativePath: path.relative(workspace, file),
-    }),
+    readForIndexing: async (file) => {
+      await beforeRead?.();
+      return {
+        content: await fs.readFile(file, "utf8"),
+        canonicalRelativePath: path.relative(workspace, file),
+      };
+    },
     buildMultimodalChunk: buildMultimodalChunkForIndexing,
     watch: async (_request, onChange, watchSignal) => {
       subscriptions.push({
@@ -225,18 +246,11 @@ it("retires live watchers and starts successor indexing without a search or turn
     closeInitial = async () => {
       await prototype.close?.call(raw);
     };
-    const sync = prototype.sync;
-    assert(sync);
     const indexedChunks = createDeferredCore<number | undefined>();
-    const observed = vi.spyOn(prototype, "sync").mockImplementation(function (
-      this: RegisteredMemorySearchManager,
-      params,
-    ) {
-      const work = sync.call(this, params);
-      if (params?.reason === "watch") {
-        indexedChunks.resolve(work.then(() => this.status().chunks));
+    const observed = observeBackgroundSync(prototype, (owner, params, work) => {
+      if (params.reason === "watch") {
+        indexedChunks.resolve(work.then(() => owner.status().chunks));
       }
-      return work;
     });
     expect(subscriptions).toHaveLength(1);
     await expect(memory.instance.dispose()).resolves.toEqual({ errors: [] });
@@ -283,6 +297,71 @@ it("retires live watchers and starts successor indexing without a search or turn
     release();
     vi.restoreAllMocks();
     await state.cleanup();
+  }
+});
+
+it("restarts memory watchers after reload waits for active indexing past its stop deadline", async ({
+  signal,
+}) => {
+  const state = await createOpenClawTestState({ label: "memory-indexing-reload-timeout" });
+  const config = memoryConfig(state.workspaceDir, {
+    sources: ["memory"],
+    rememberAcrossConversations: false,
+  });
+  const entered = createDeferredCore();
+  const releaseIndexing = createDeferredCore();
+  let holdIndexing = false;
+  const watch = registerMemoryWorkspaceWatch(state.workspaceDir, async () => {
+    if (holdIndexing) {
+      entered.resolve();
+      await releaseIndexing.promise;
+    }
+  });
+  const host = registryHost();
+  const memory = loadMemory(host, config);
+  const index = host.registry.services.find(({ id }) => id === "memory-core-index");
+  assert(index);
+  // The service lifecycle fixture exercises Memory Core's index, without unrelated sidecars.
+  host.registry.services = [index];
+  let services: PluginServicesHandle | undefined;
+  try {
+    const initiallyWatching = watch.nextSubscription();
+    services = await startPluginServices({ registry: host.registry, config });
+    // A cold service start leaves untouched indexes closed. First use opens and
+    // watches this one, which makes the reload below responsible for restoring it.
+    const { manager } = await openManager(memory, config);
+    await withinTest(initiallyWatching, signal);
+    await manager.sync?.({ reason: "startup-settled" });
+    await fs.mkdir(path.join(state.workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(state.workspaceDir, "memory", "held-indexing.md"),
+      "Violet cranes nest beside the lagoon.",
+    );
+    holdIndexing = true;
+    watch.subscriptions[0]!.notify();
+    await withinTest(entered.promise, signal);
+    const replacementWatching = watch.nextSubscription();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const reloading = services.reload(config, new Set([index.id]));
+    await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+    await reloading;
+    expect(watch.subscriptions).toHaveLength(1);
+    expect(watch.subscriptions[0]!.signal.aborted).toBe(false);
+    vi.useRealTimers();
+    holdIndexing = false;
+    releaseIndexing.resolve();
+    await withinTest(replacementWatching, signal);
+    expect(watch.subscriptions).toHaveLength(2);
+    expect(watch.subscriptions[0]!.signal.aborted).toBe(true);
+    expect(watch.subscriptions[1]!.signal.aborted).toBe(false);
+  } finally {
+    holdIndexing = false;
+    releaseIndexing.resolve();
+    vi.useRealTimers();
+    await services?.stop();
+    await memory.instance.dispose();
+    watch.release();
+    await cleanupState(state);
   }
 });
 
@@ -438,19 +517,12 @@ it.for([false, true])(
       awaitingStage = "initial manager acquisition";
       const boot = await inTurn(() => openManager(memory, config("bootstrap"), "bootstrap", "cli"));
       managers.add(boot.manager);
-      const { raw, prototype } = boot;
-      const sync = prototype.sync;
-      assert(sync);
+      const { prototype } = boot;
       const completions = new Map<string, ReturnType<typeof createDeferredCore<Promise<void>>>>();
-      const syncObserver = vi.spyOn(prototype, "sync").mockImplementation(function (
-        this: RegisteredMemorySearchManager,
-        params,
-      ) {
-        const work = sync.call(this, params);
-        if (params?.reason) {
+      observeBackgroundSync(prototype, (_owner, params, work) => {
+        if (params.reason) {
           completions.get(params.reason)?.resolve(work);
         }
-        return work;
       });
       const startupCompletions = new WeakMap<object, Promise<string[]>>();
       const startupOwner = prototype as RegisteredMemorySearchManager & {
@@ -465,19 +537,9 @@ it.for([false, true])(
         startupCompletions.set(this, work);
         return work;
       });
-      vi.useFakeTimers({
-        toFake: ["setInterval", "clearInterval"],
-        shouldClearNativeTimers: true,
-      });
-      const oldInterval = vi.spyOn(globalThis, "setInterval");
-      memory.instance.run(() => enableInterval(raw));
-      const retiredInterval = oldInterval.mock.calls.at(-1)?.[0];
-      assert(retiredInterval, "Initial manager must install its interval callback");
       awaitingStage = "initial manager close";
       await boot.manager.close?.();
       managers.delete(boot.manager);
-      oldInterval.mockRestore();
-      vi.useRealTimers();
 
       const successor = registryHost();
       addProvider(successor, 2);
@@ -509,22 +571,13 @@ it.for([false, true])(
         prepared?.resume();
       }
       expect(current.instance === memory.instance).toBe(!replaceMemory);
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       // Fake timers do not carry Node's async-resource context on their own.
       const timeout = globalThis.setTimeout;
-      const interval = globalThis.setInterval;
       vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) =>
         timeout(AsyncLocalStorage.bind(callback), delay, ...args),
       );
-      vi.spyOn(globalThis, "setInterval").mockImplementation((callback, delay, ...args) =>
-        interval(AsyncLocalStorage.bind(callback), delay, ...args),
-      );
-      for (const reason of [
-        "session-startup-catchup",
-        "session-delta",
-        "watch",
-        "interval",
-      ] as const) {
+      for (const reason of ["session-startup-catchup", "session-delta", "watch"] as const) {
         awaitingStage = `${reason}: prepare sources`;
         const agentId = reason;
         const cfg = config(agentId, reason);
@@ -536,7 +589,7 @@ it.for([false, true])(
           `Remember the violet ${reason} fact.`,
         );
         let watchedWorkspace: ReturnType<typeof registerMemoryWorkspaceWatch> | undefined;
-        if (reason === "watch" || reason === "interval") {
+        if (reason === "watch") {
           watchedWorkspace = registerMemoryWorkspaceWatch(workspace);
           releases.push(watchedWorkspace.release);
         }
@@ -566,9 +619,6 @@ it.for([false, true])(
           const subscription = watchedWorkspace?.subscriptions.at(-1);
           assert(subscription, "Memory manager must subscribe to its workspace host");
           inTurn(subscription.notify);
-        } else if (reason === "interval") {
-          inTurn(() => enableInterval(opened.raw));
-          await vi.advanceTimersByTimeAsync(60_000);
         }
         awaitingStage = `${reason}: sync completion`;
         await withinTest(completed.promise, signal);
@@ -585,13 +635,6 @@ it.for([false, true])(
         managers.delete(opened.manager);
       }
       if (replaceMemory) {
-        awaitingStage = "retired manager interval callback";
-        // Even a queued, cancelled callback must ask its original owner for admission.
-        const callsBefore = current.instance.ordinaryCallCount;
-        const syncsBefore = syncObserver.mock.calls.length;
-        current.instance.run(() => retiredInterval());
-        expect(current.instance.ordinaryCallCount).toBe(callsBefore);
-        expect(syncObserver).toHaveBeenCalledTimes(syncsBefore);
         await expect(async () =>
           memory.runtime.getMemorySearchManager({ cfg: config("retired"), agentId: "retired" }),
         ).rejects.toThrow("Plugin memory-core was reloaded or disabled");

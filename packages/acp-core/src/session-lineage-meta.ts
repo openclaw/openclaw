@@ -1,3 +1,4 @@
+import { asNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const SUBAGENT_ROLES = ["orchestrator", "leaf"] as const;
@@ -35,13 +36,6 @@ export type AcpSessionLineageRow = {
   spawnedCwd?: string;
 };
 
-function readInteger(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    return undefined;
-  }
-  return value;
-}
-
 function readEnum<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
   const normalized = normalizeOptionalString(value);
   return allowed.find((candidate) => candidate === normalized);
@@ -54,10 +48,9 @@ export function toAcpSessionLineageMeta(row: AcpSessionLineageRow): AcpSessionLi
   const channel = normalizeOptionalString(row.channel);
   // Older rows may only carry spawnedBy; expose it as parentSessionId so ACP clients
   // can follow lineage without knowing which storage-era field populated it.
-  const parentSessionId =
-    normalizeOptionalString(row.parentSessionKey) ?? normalizeOptionalString(row.spawnedBy);
   const spawnedBy = normalizeOptionalString(row.spawnedBy);
-  const spawnDepth = readInteger(row.spawnDepth);
+  const parentSessionId = normalizeOptionalString(row.parentSessionKey) ?? spawnedBy;
+  const spawnDepth = asNonNegativeInteger(row.spawnDepth);
   const subagentRole = readEnum(row.subagentRole, SUBAGENT_ROLES);
   const subagentControlScope = readEnum(row.subagentControlScope, SUBAGENT_CONTROL_SCOPES);
   const spawnedWorkspaceDir = normalizeOptionalString(row.spawnedWorkspaceDir);

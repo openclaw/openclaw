@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { Compilable } from "kysely";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -29,7 +30,10 @@ import {
   resolveSqliteTranscriptArchiveDirectory,
   runExclusiveSqliteSessionWrite,
 } from "./session-accessor.sqlite-scope.js";
-import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
+import type {
+  PublishedSessionTranscriptArchive,
+  SessionArchivePruningOperations,
+} from "./session-history-archive-pruning.types.js";
 
 const deletionFault = useSqliteWorkerFault([
   {
@@ -48,6 +52,20 @@ let state: OpenClawTestState;
 let database: OpenClawAgentDatabase;
 let directory: string;
 const options = () => ({ agentId: "main", path: database.path, env: state.env });
+const db = () => getSessionKysely(database.db);
+const rows = <T>(query: Compilable<T>) => executeSqliteQuerySync(database.db, query).rows;
+const archiveRows = () =>
+  rows(db().selectFrom("session_transcript_archives").selectAll().orderBy("session_id"));
+const retainedIds = () =>
+  rows(
+    db().selectFrom("session_transcript_archives").select("session_id").orderBy("session_id"),
+  ).map((row) => row.session_id);
+const scope = (sessionKey: string) => ({
+  agentId: "main",
+  storePath: database.path,
+  env: state.env,
+  sessionKey,
+});
 const prune = () =>
   prunePublishedSessionArchivesByRetention({
     scope: options(),
@@ -69,9 +87,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   database = openOpenClawAgentDatabase(options());
-  const db = getSessionKysely(database.db);
-  executeSqliteQuerySync(database.db, db.deleteFrom("session_transcript_archives"));
-  executeSqliteQuerySync(database.db, db.deleteFrom("session_nodes"));
+  rows(db().deleteFrom("session_transcript_archives"));
+  rows(db().deleteFrom("session_nodes"));
   for (const name of fs.readdirSync(directory)) {
     if (name.endsWith(".retention-test")) {
       fs.unlinkSync(path.join(directory, name));
@@ -81,7 +98,15 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 afterAll(async () => state.cleanup());
 
-function seed(sessionId: string, overrides: Partial<PublishedSessionTranscriptArchive> = {}) {
+type Archive = Omit<PublishedSessionTranscriptArchive, "published_at"> & {
+  published_at: number | null;
+};
+function updateArchive(sessionId: string, patch: Partial<Archive>) {
+  rows(
+    db().updateTable("session_transcript_archives").set(patch).where("session_id", "=", sessionId),
+  );
+}
+function seed(sessionId: string, overrides: Partial<Archive> = {}) {
   const row = {
     session_id: sessionId,
     session_key: `agent:main:${sessionId}`,
@@ -94,23 +119,26 @@ function seed(sessionId: string, overrides: Partial<PublishedSessionTranscriptAr
     published_at: 1,
     ...overrides,
   };
-  executeSqliteQuerySync(
-    database.db,
-    getSessionKysely(database.db)
+  rows(
+    db()
       .insertInto("session_transcript_archives")
       .values({ ...row, archive_blob: Buffer.from("synthetic history") }),
   );
   return row;
 }
 
-function retainedIds() {
-  return executeSqliteQuerySync(
-    database.db,
-    getSessionKysely(database.db)
-      .selectFrom("session_transcript_archives")
-      .select("session_id")
-      .orderBy("session_id"),
-  ).rows.map((row) => row.session_id);
+function interceptArchives(
+  wrap: (archives: SessionArchivePruningOperations) => Partial<SessionArchivePruningOperations>,
+) {
+  const withPages = pageReclamation.withSqliteSessionPageReclamation;
+  vi.spyOn(pageReclamation, "withSqliteSessionPageReclamation").mockImplementation(
+    <T>(...args: Parameters<typeof withPages<T>>) => {
+      const [input, run] = args;
+      return withPages(input, (reclaim, assertCurrent, prepared, archives) =>
+        run(reclaim, assertCurrent, prepared, { ...archives, ...wrap(archives) }),
+      );
+    },
+  );
 }
 
 it("prunes through the worker while preserving reason, age, path, and file rules", async () => {
@@ -120,14 +148,7 @@ it("prunes through the worker while preserving reason, age, path, and file rules
   seed("outside", { archive_name: ".." });
   const present = seed("present");
   fs.writeFileSync(path.join(directory, present.archive_name), "retained");
-  seed("pending");
-  executeSqliteQuerySync(
-    database.db,
-    getSessionKysely(database.db)
-      .updateTable("session_transcript_archives")
-      .set({ published_at: null })
-      .where("session_id", "=", "pending"),
-  );
+  seed("pending", { published_at: null });
   const prepare = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "prepare");
   expect(await prune()).toBe(1);
   const hostArchiveQueries = prepare.mock.calls.filter(([sql]) =>
@@ -153,26 +174,18 @@ it("rolls back the entire retention batch on a late delete failure and permits r
     seed(`rollback-${String(index).padStart(3, "0")}`);
   }
   seed("retained-reset", { reason: "reset" });
-  const readRows = () =>
-    executeSqliteQuerySync(
-      database.db,
-      getSessionKysely(database.db)
-        .selectFrom("session_transcript_archives")
-        .selectAll()
-        .orderBy("session_id"),
-    ).rows;
-  const before = readRows();
+  const before = archiveRows();
   deletionFault.enable();
   try {
     await expect(prune()).rejects.toThrow("synthetic late archive retention failure");
     database = openOpenClawAgentDatabase(options());
-    expect(readRows()).toEqual(before);
+    expect(archiveRows()).toEqual(before);
   } finally {
     deletionFault.disable();
   }
 
   expect(await prune()).toBe(16);
-  expect(readRows()).toEqual(before.filter((row) => row.session_id === "retained-reset"));
+  expect(archiveRows()).toEqual(before.filter((row) => row.session_id === "retained-reset"));
 });
 
 it("admits foreground writes during retention selection and between deletion batches", async ({
@@ -183,18 +196,13 @@ it("admits foreground writes during retention selection and between deletion bat
   }
   const entered = createDeferred();
   const release = createDeferred();
-  const scope = {
-    agentId: "main",
-    storePath: database.path,
-    env: state.env,
-    sessionKey: "agent:main:retention-owner",
-  };
-  replaceSessionEntrySync(scope, { sessionId: "live-generation", updatedAt: Date.now() });
+  const target = scope("agent:main:retention-owner");
+  replaceSessionEntrySync(target, { sessionId: "live-generation", updatedAt: Date.now() });
   const writeForeground = (previousSessionId?: string) =>
     runExclusiveSqliteSessionWrite(
       options(),
       async () =>
-        replaceSessionEntrySync(scope, {
+        replaceSessionEntrySync(target, {
           sessionId: "live-generation",
           updatedAt: Date.now(),
           label: previousSessionId ?? "selection write",
@@ -202,30 +210,21 @@ it("admits foreground writes during retention selection and between deletion bat
         }),
       "session-entry.patch",
     );
-  const withPages = pageReclamation.withSqliteSessionPageReclamation;
   let selectionWrite: Promise<unknown> | undefined;
   let foreground: Promise<unknown> | undefined;
-  vi.spyOn(pageReclamation, "withSqliteSessionPageReclamation").mockImplementation(
-    <T>(...args: Parameters<typeof withPages<T>>) => {
-      const [input, run] = args;
-      return withPages(input, (reclaim, assertCurrent, prepared, archives) =>
-        run(reclaim, assertCurrent, prepared, {
-          ...archives,
-          readRetentionCandidates: async () => {
-            entered.resolve();
-            await release.promise;
-            return archives.readRetentionCandidates();
-          },
-          pruneRetention: async (retention) => {
-            const removed = await archives.pruneRetention(retention);
-            // Queue the foreground update while the first batch still owns the writer.
-            foreground ??= writeForeground("batch-016");
-            return removed;
-          },
-        }),
-      );
+  interceptArchives((archives) => ({
+    readRetentionCandidates: async () => {
+      entered.resolve();
+      await release.promise;
+      return archives.readRetentionCandidates();
     },
-  );
+    pruneRetention: async (retention) => {
+      const removed = await archives.pruneRetention(retention);
+      // Queue while the first batch still owns the writer.
+      foreground ??= writeForeground("batch-016");
+      return removed;
+    },
+  }));
   const work = prune();
   try {
     await withinTest(
@@ -251,69 +250,44 @@ it.each(["changed", "revoked", "rejected"])(
       outcome === "changed"
         ? ["created", "file", "generation", "name", "publication", "reference"]
         : ["candidate"];
-    const rows = candidates.map((sessionId) => seed(sessionId));
+    const candidatesBefore = candidates.map((sessionId) => seed(sessionId));
     seed("unaffected");
-    replaceSessionEntrySync(
-      { agentId: "main", storePath: database.path, env: state.env, sessionKey: "agent:main:owner" },
-      { sessionId: "live-generation", updatedAt: 1 },
-    );
+    replaceSessionEntrySync(scope("agent:main:owner"), {
+      sessionId: "live-generation",
+      updatedAt: 1,
+    });
     const entered = createDeferred();
     const release = createDeferred();
-    const withPages = pageReclamation.withSqliteSessionPageReclamation;
     let attempts = 0;
-    vi.spyOn(pageReclamation, "withSqliteSessionPageReclamation").mockImplementation(
-      <T>(...args: Parameters<typeof withPages<T>>) => {
-        const [input, run] = args;
-        return withPages(input, (reclaim, assertCurrent, prepared, archives) =>
-          run(reclaim, assertCurrent, prepared, {
-            ...archives,
-            pruneRetention: async (retention) => {
-              attempts += 1;
-              entered.resolve();
-              await release.promise;
-              if (outcome === "rejected") {
-                throw new Error("injected retention rejection");
-              }
-              return archives.pruneRetention(retention);
-            },
-          }),
-        );
+    interceptArchives((archives) => ({
+      pruneRetention: async (retention) => {
+        attempts += 1;
+        entered.resolve();
+        await release.promise;
+        if (outcome === "rejected") {
+          throw new Error("injected retention rejection");
+        }
+        return archives.pruneRetention(retention);
       },
-    );
+    }));
     const work = prune();
     try {
       await awaitGateBeforeSettlement(entered.promise, work, "retention never reached deletion");
       expect(retainedIds()).toEqual([...candidates, "unaffected"]);
-      const db = getSessionKysely(database.db);
       if (outcome === "revoked") {
         closeOpenClawAgentDatabaseByPath(database.path);
       } else if (outcome === "changed") {
-        for (const row of rows) {
-          if (row.session_id === "reference") {
-            executeSqliteQuerySync(
-              database.db,
-              db.updateTable("session_nodes").set({ current_session_id: row.session_id }),
-            );
-          } else if (row.session_id === "file") {
-            fs.writeFileSync(path.join(directory, row.archive_name), "republished");
-          } else {
-            executeSqliteQuerySync(
-              database.db,
-              db
-                .updateTable("session_transcript_archives")
-                .set(
-                  row.session_id === "publication"
-                    ? { published_at: null }
-                    : row.session_id === "generation"
-                      ? { generation: "replacement-generation" }
-                      : row.session_id === "name"
-                        ? { archive_name: "replacement.retention-test" }
-                        : { created_at: 99 },
-                )
-                .where("session_id", "=", row.session_id),
-            );
-          }
+        updateArchive("created", { created_at: 99 });
+        const file = candidatesBefore.find((row) => row.session_id === "file")!;
+        fs.writeFileSync(path.join(directory, file.archive_name), "republished");
+        for (const [id, patch] of [
+          ["generation", { generation: "replacement-generation" }],
+          ["name", { archive_name: "replacement.retention-test" }],
+          ["publication", { published_at: null }],
+        ] as const) {
+          updateArchive(id, patch);
         }
+        rows(db().updateTable("session_nodes").set({ current_session_id: "reference" }));
       }
       release.resolve();
       if (outcome !== "changed") {

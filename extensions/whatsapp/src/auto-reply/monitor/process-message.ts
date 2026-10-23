@@ -27,10 +27,6 @@ import type { WhatsAppInboundAdmission } from "../../inbound/admission.js";
 import { resolveWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { formatError } from "../../session.js";
-import {
-  resolveWhatsAppDirectSystemPrompt,
-  resolveWhatsAppGroupSystemPrompt,
-} from "../../system-prompt.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
@@ -45,7 +41,6 @@ import {
   createWhatsAppReplyPlan,
   prepareWhatsAppInboundContext,
   resolveWhatsAppDmRouteTarget,
-  resolveWhatsAppResponsePrefix,
   updateWhatsAppMainLastRoute,
 } from "./inbound-dispatch.js";
 import { trackBackgroundTask, updateLastRouteInBackground } from "./last-route.js";
@@ -58,6 +53,7 @@ import {
   normalizeE164,
   resolveChannelContextVisibilityMode,
   resolveInboundSessionEnvelopeContextAsync,
+  resolveIdentityNamePrefix,
   resolvePinnedMainDmOwnerFromAllowlist,
   isControlCommandMessage,
   shouldComputeCommandAuthorized,
@@ -340,27 +336,28 @@ export async function processMessage(params: {
     channel: "whatsapp",
     accountId: params.route.accountId,
   });
-  const responsePrefix = resolveWhatsAppResponsePrefix({
-    cfg: params.cfg,
-    agentId: params.route.agentId,
-    isSelfChat: conversationKind !== "group" && inboundPolicy.isSelfChat,
-    pipelineResponsePrefix: replyPipeline.responsePrefix,
-  });
+  const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
+  const responsePrefix =
+    replyPipeline.responsePrefix ??
+    (configuredResponsePrefix === "auto"
+      ? resolveIdentityNamePrefix(params.cfg, params.route.agentId)
+      : configuredResponsePrefix) ??
+    (conversationKind !== "group" && inboundPolicy.isSelfChat
+      ? resolveIdentityNamePrefix(params.cfg, params.route.agentId)
+      : undefined);
   const replyThreading = resolveBatchedReplyThreadingPolicy(
     account.replyToMode ?? "off",
     params.msg.event.isBatched === true,
   );
 
-  const conversationSystemPrompt =
-    conversationKind === "group"
-      ? resolveWhatsAppGroupSystemPrompt({
-          accountConfig: account,
-          groupId: conversationId,
-        })
-      : resolveWhatsAppDirectSystemPrompt({
-          accountConfig: account,
-          peerId: dmRouteTarget ?? conversationId,
-        });
+  const conversationPrompts = conversationKind === "group" ? account.groups : account.direct;
+  const promptTargetId =
+    conversationKind === "group" ? conversationId : (dmRouteTarget ?? conversationId);
+  const selectedPrompt = promptTargetId
+    ? (conversationPrompts?.[promptTargetId]?.systemPrompt ??
+      conversationPrompts?.["*"]?.systemPrompt)
+    : undefined;
+  const conversationSystemPrompt = selectedPrompt?.trim() || undefined;
 
   const prepared = await prepareWhatsAppInboundContext({
     bodyForAgent: msgForAgent.payload.body,

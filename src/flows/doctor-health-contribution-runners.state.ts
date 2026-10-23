@@ -1,13 +1,10 @@
-import { noteBackupDoctorHint } from "../commands/backup-health.js";
-import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
-import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
-import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+import { noteDoctorRepairResult } from "./doctor-health-contribution-utils.js";
 import {
-  noteDoctorRepairResult,
-  resolveDoctorWorkspaceDir,
-} from "./doctor-health-contribution-utils.js";
-import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
+  recordDoctorHealthWarnings,
+  renderStructuredHealthFindings,
+} from "./doctor-health-contribution.js";
 
 export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyPluginManifestContracts } =
@@ -23,83 +20,6 @@ export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext
   }
 }
 
-export async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairPluginRegistryState } = await import("../commands/doctor-plugin-registry.js");
-  const result = await maybeRepairPluginRegistryState({
-    config: ctx.cfg,
-    env: process.env,
-    prompter: ctx.prompter,
-  });
-  ctx.cfg = result.config;
-  if (result.pluginInventoryChanged) {
-    ctx.invalidatePluginMetadataSnapshot?.();
-  }
-}
-
-export async function runLegacyPluginSourceCapturesHealth(
-  ctx: DoctorHealthFlowContext,
-): Promise<void> {
-  const { noteLegacyPluginSourceCaptures } =
-    await import("../commands/doctor-plugin-source-captures.js");
-  await noteLegacyPluginSourceCaptures(ctx.env ?? process.env, ctx.prompter.shouldRepair);
-}
-
-export async function runRetainedUpdateRuntimesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  if (ctx.gatewayMaintenanceActive && ctx.prompter.shouldRepair) {
-    return;
-  }
-  const { prepareRetainedUpdateRuntimeCleanup } =
-    await import("../commands/doctor-retained-runtime.js");
-  const cleanup = await prepareRetainedUpdateRuntimeCleanup(ctx.env ?? process.env);
-  await cleanup(ctx.prompter.shouldRepair);
-}
-
-export async function runReleaseConfiguredPluginInstallsHealth(
-  ctx: DoctorHealthFlowContext,
-): Promise<void> {
-  if (!ctx.sourceConfigValid || !ctx.prompter.shouldRepair) {
-    return;
-  }
-  const { maybeRunConfiguredPluginInstallReleaseStep } =
-    await import("../commands/doctor/shared/release-configured-plugin-installs.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
-  const { VERSION } = await import("../version.js");
-  const result = await maybeRunConfiguredPluginInstallReleaseStep({
-    cfg: ctx.cfg,
-    env: ctx.env ?? process.env,
-    touchedVersion: ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
-  });
-  if (result.pluginInventoryChanged) {
-    ctx.invalidatePluginMetadataSnapshot?.();
-  }
-  if (result.postInstallDoctorResult) {
-    ctx.postInstallDoctorResult = result.postInstallDoctorResult;
-  }
-  noteDoctorRepairResult(result, note);
-  if (!result.touchedConfig) {
-    return;
-  }
-  const lastTouchedVersion = isLegacyParentWritableUpdateDoctorPass(ctx.env ?? process.env)
-    ? ctx.configResult.sourceLastTouchedVersion?.trim() ||
-      ctx.cfg.meta?.lastTouchedVersion ||
-      VERSION
-    : VERSION;
-  const config = { ...ctx.cfg, meta: { ...ctx.cfg.meta, lastTouchedVersion } };
-  copyConfigResolutionFactsThroughRewrite(ctx.cfg, config);
-  ctx.cfg = config;
-  writeConfigMachineState("config.lastTouchedAt", new Date().toISOString());
-}
-
-export async function runDiskSpaceHealth(): Promise<void> {
-  const { noteDiskSpace } = await import("../commands/doctor-disk-space.js");
-  noteDiskSpace();
-}
-
-export async function runDatabaseBloatHealth(): Promise<void> {
-  const { noteSqliteDatabaseBloat } = await import("../commands/doctor-db-bloat.js");
-  await noteSqliteDatabaseBloat();
-}
-
 export async function runAgentMemorySchemaHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteDoctorAgentMemorySchemaHealth } =
     await import("../commands/doctor-agent-memory-schema.js");
@@ -109,35 +29,9 @@ export async function runAgentMemorySchemaHealth(ctx: DoctorHealthFlowContext): 
   });
 }
 
-export async function runChannelIngressDeadLettersHealth(): Promise<void> {
-  const { noteChannelIngressDeadLetters } = await import("../commands/doctor-channel-ingress.js");
-  await noteChannelIngressDeadLetters();
-}
-
-export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteDoctorAgentDatabasePathHealth } =
-    await import("../commands/doctor-agent-database-paths.js");
-  const warnings = noteDoctorAgentDatabasePathHealth({
-    env: ctx.env ?? process.env,
-    shouldRepair: ctx.prompter.shouldRepair,
-  });
-  if (warnings.length > 0) {
-    ctx.updateWarnings ??= [];
-    ctx.updateWarnings.push(...warnings);
-  }
-  const { noteStateIntegrity } = await import("../commands/doctor-state-integrity.js");
-  await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
-    stateDirExistedAtStart: ctx.stateDirExistedAtStart,
-  });
-  await noteBackupDoctorHint(ctx.env ?? process.env, ctx.cfg);
-  const { noteBackupScratchHealth } = await import("../commands/doctor-backup-scratch.js");
-  await noteBackupScratchHealth(ctx.env ?? process.env, ctx.prompter.shouldRepair);
-}
-
 export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairCodexSessionRoutes } =
     await import("../commands/doctor/shared/codex-route-warnings.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
   const result = await maybeRepairCodexSessionRoutes({
     cfg: ctx.cfg,
     ...(ctx.configResult.retiredModelRefConfig
@@ -158,7 +52,7 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
         }
       : {}),
   });
-  noteDoctorRepairResult(result, note);
+  noteDoctorRepairResult(result);
 }
 
 export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -167,7 +61,9 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
+    integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
     onWarnings: (warnings) => recordDoctorHealthWarnings(ctx, [], warnings),
+    onFindings: (findings) => renderStructuredHealthFindings(ctx, findings),
     ...(ctx.configResult.postSessionPluginMigration
       ? { postSessionPluginMigration: ctx.configResult.postSessionPluginMigration }
       : {}),
@@ -181,77 +77,28 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
   });
 }
 
-export async function runSessionTranscriptHeadersHealth(
-  ctx: DoctorHealthFlowContext,
-): Promise<void> {
-  const { noteSessionTranscriptHeaderHealth } =
-    await import("../commands/doctor-session-transcript-headers.js");
-  await noteSessionTranscriptHeaderHealth({
-    cfg: ctx.cfg,
-    env: ctx.env ?? process.env,
-    shouldRepair: ctx.prompter.shouldRepair,
-  });
-}
-
-export async function runSessionTranscriptLabelsHealth(
-  ctx: DoctorHealthFlowContext,
-): Promise<void> {
-  const { noteSessionTranscriptLabelHealth } =
-    await import("../commands/doctor-session-transcript-labels.js");
-  await noteSessionTranscriptLabelHealth({
-    cfg: ctx.cfg,
-    env: ctx.env ?? process.env,
-    shouldRepair: ctx.prompter.shouldRepair,
-  });
-}
-
-export async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteSessionSnapshotHealth } = await import("../commands/doctor-session-snapshots.js");
-  await noteSessionSnapshotHealth({
-    cfg: ctx.cfg,
-    env: ctx.env ?? process.env,
-  });
-}
-
-export async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairLegacyRuntimeFiles } = await import("../commands/doctor-usage-cost-cache.js");
-  const warnings = await maybeRepairLegacyRuntimeFiles(ctx.prompter.shouldRepair, ctx.env);
-  recordDoctorHealthWarnings(ctx, [], warnings);
-}
-
 export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } =
     await import("../commands/doctor/cron/index.js");
-  await noteLegacyWhatsAppCrontabHealthCheck();
-  await maybeRepairLegacyCronStore({
-    cfg: ctx.cfg,
-    options: ctx.options,
-    prompter: ctx.prompter,
-  });
+  await measureGatewayBootstrapStep("doctor.legacy-cron.crontab", () =>
+    noteLegacyWhatsAppCrontabHealthCheck(),
+  );
+  await measureGatewayBootstrapStep("doctor.legacy-cron.store", () =>
+    maybeRepairLegacyCronStore({
+      cfg: ctx.cfg,
+      options: ctx.options,
+      prompter: ctx.prompter,
+    }),
+  );
   const { maybeRepairCronInferenceBindings } =
     await import("../commands/doctor/cron/inference-binding-migration.js");
-  const inference = await maybeRepairCronInferenceBindings({
-    cfg: ctx.cfg,
-    env: ctx.env,
-    shouldRepair: ctx.prompter.shouldRepair,
-  });
-  const { note } = await import("../../packages/terminal-core/src/note.js");
-  noteDoctorRepairResult(inference, note);
+  const inference = await measureGatewayBootstrapStep("doctor.legacy-cron.inference", () =>
+    maybeRepairCronInferenceBindings({
+      cfg: ctx.cfg,
+      env: ctx.env,
+      shouldRepair: ctx.prompter.shouldRepair,
+    }),
+  );
+  noteDoctorRepairResult(inference);
   recordDoctorHealthWarnings(ctx, [], inference.warnings);
-}
-
-export async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles, noteSandboxScopeWarnings } =
-    await import("../commands/doctor-sandbox.js");
-  await maybeRepairSandboxRegistryFiles(ctx.prompter);
-  await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
-  noteSandboxScopeWarnings(ctx.cfg);
-}
-
-export async function runCodexBwrapHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteCodexBwrapNamespaceWarnings } = await import("../commands/doctor-sandbox.js");
-  await noteCodexBwrapNamespaceWarnings(ctx.cfg, {
-    env: ctx.env,
-    cwd: resolveDoctorWorkspaceDir(ctx.cfg, ctx.env),
-  });
 }

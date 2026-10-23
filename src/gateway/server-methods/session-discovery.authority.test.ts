@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -17,6 +18,7 @@ import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import * as sharingPreparation from "../session-sharing-preparation.js";
 import { commandsHandlers } from "./commands.js";
+import { withSessionDiscoveryAccess } from "./session-discovery-access.js";
 import { handleSkillsStatus } from "./skills-status.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -43,6 +45,12 @@ afterEach(() => vi.restoreAllMocks());
 
 const sessionKey = "agent:main:discovery";
 const scope = { agentId: "main", sessionKey };
+const sessionEntry = {
+  sessionId: "discovery",
+  updatedAt: 1,
+  visibility: "read-only",
+  createdActor: { type: "human", source: "profile", id: "owner" },
+} as const;
 const handlers = {
   "commands.list": commandsHandlers["commands.list"]!,
   "skills.status": handleSkillsStatus,
@@ -123,12 +131,7 @@ async function withDiscoveryState(
 }
 
 async function seed() {
-  await upsertSessionEntryCore(scope, {
-    sessionId: "discovery",
-    updatedAt: 1,
-    visibility: "read-only",
-    createdActor: { type: "human", source: "profile", id: "owner" },
-  });
+  await upsertSessionEntryCore(scope, sessionEntry);
   addSessionMember(scope, { identityId: "alice", addedBy: "owner" });
 }
 
@@ -140,9 +143,6 @@ it.each(["commands.list", "skills.status"] as const)(
       const exec = vi.spyOn(DatabaseSync.prototype, "exec");
       try {
         expect((await call(method))[0]).toBe(true);
-        console.log(
-          `${method}: caller SQL prepare=${prepare.mock.calls.length} exec=${exec.mock.calls.length}`,
-        );
         expect.soft(prepare).not.toHaveBeenCalled();
         expect.soft(exec).not.toHaveBeenCalled();
       } finally {
@@ -154,7 +154,7 @@ it.each(["commands.list", "skills.status"] as const)(
 );
 
 it.each(["commands.list", "skills.status"] as const)(
-  "%s refuses authority or selections revoked during discovery",
+  "%s refuses authority revoked during discovery",
   async (method) => {
     await withDiscoveryState(async ({ call, projection, context, setConfig }) => {
       const cfg = context.getRuntimeConfig();
@@ -168,7 +168,6 @@ it.each(["commands.list", "skills.status"] as const)(
         "run",
         "request",
         "session",
-        "selection",
         "route",
       ] as const) {
         setConfig(cfg);
@@ -256,24 +255,11 @@ it.each(["commands.list", "skills.status"] as const)(
               },
             });
           }
-          if (change === "session" || change === "selection") {
+          if (change === "session") {
             replaceSessionEntrySync(scope, {
-              sessionId: change === "session" ? "replacement" : "discovery",
+              ...sessionEntry,
+              sessionId: "replacement",
               updatedAt: 2,
-              visibility: "read-only",
-              createdActor: { type: "human", source: "profile", id: "owner" },
-              ...(change === "selection"
-                ? {
-                    skillLibrarySelections: [
-                      {
-                        skillId: "selected",
-                        revision: "second",
-                        name: "Selected",
-                        ownerProfileId: "owner",
-                      },
-                    ],
-                  }
-                : {}),
             });
           }
         } finally {
@@ -284,6 +270,54 @@ it.each(["commands.list", "skills.status"] as const)(
     });
   },
 );
+
+it("uses captured display selections and observes a committed change on the next discovery", async () => {
+  await withDiscoveryState(async ({ context }) => {
+    const select = (revision: string) =>
+      upsertSessionEntryCore(scope, {
+        skillLibrarySelections: [
+          { skillId: "selected", revision, name: "Selected", ownerProfileId: "owner" },
+        ],
+      });
+    await select("first");
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const responses: Parameters<RespondFn>[] = [];
+    const discoverSelections = (ready = Promise.resolve()) =>
+      withSessionDiscoveryAccess(
+        {
+          client: participant(),
+          context,
+          sessionKey,
+          agentId: "main",
+          changedError: errorShape(ErrorCodes.UNAVAILABLE, "Session changed during discovery"),
+          respond: (...response) => responses.push(response),
+        },
+        async (entry) => {
+          entered.resolve();
+          await ready;
+          return entry?.skillLibrarySelections?.map(({ revision }) => revision);
+        },
+      );
+    const pending = discoverSelections(release.promise);
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        pending,
+        "selection discovery did not start",
+      );
+      await select("second");
+    } finally {
+      release.resolve();
+    }
+    await pending;
+    await discoverSelections();
+    expect(responses).toEqual([
+      [true, ["first"], undefined],
+      [true, ["second"], undefined],
+    ]);
+  });
+});
 
 it.each(["ready", "rejected", "replaced"] as const)(
   "keeps the original target across membership preparation (%s)",

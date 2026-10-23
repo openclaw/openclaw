@@ -107,6 +107,20 @@ function buildMatrixProfileToolSchema(): ChannelMessageToolSchemaContribution {
   };
 }
 
+function buildMatrixReadCursorToolSchema(): ChannelMessageToolSchemaContribution {
+  const cursor =
+    "Matrix read: pagination token from a previous read's nextBatch/prevBatch, not an event id;";
+  return {
+    // The shared before/after parameters keep read valid across channels; this
+    // contribution only adds Matrix cursor guidance for those parameters.
+    actions: [],
+    properties: {
+      before: Type.Optional(Type.String({ description: `${cursor} pages toward older messages.` })),
+      after: Type.Optional(Type.String({ description: `${cursor} pages toward newer messages.` })),
+    },
+  };
+}
+
 function resolveMatrixActionAccount(params: { cfg: CoreConfig; accountId?: string | null }) {
   if (!params.accountId && requiresExplicitMatrixDefaultAccount(params.cfg)) {
     return null;
@@ -133,6 +147,9 @@ function describeMatrixMessageTool(
   });
   const listedActions = Array.from(actions);
   const schema: ChannelMessageToolSchemaContribution[] = [];
+  if (actions.has("read")) {
+    schema.push(buildMatrixReadCursorToolSchema());
+  }
   if (actions.has("set-profile")) {
     schema.push(buildMatrixProfileToolSchema());
   }
@@ -168,7 +185,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     "member-info",
     "channel-info",
   ],
-  /** @deprecated Use describeMessageToolAsync. Final compatibility day: 2026-12-31. */
+  /** @deprecated Use describeMessageToolAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   describeMessageTool: ({ cfg, accountId, senderIsOwner }) => {
     return describeMatrixMessageTool(
       resolveMatrixActionAccount({ cfg: cfg as CoreConfig, accountId }),

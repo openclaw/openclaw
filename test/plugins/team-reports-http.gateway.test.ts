@@ -1,5 +1,4 @@
-import { once } from "node:events";
-import { createServer, request, type Server } from "node:http";
+import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createTeamReportsHttpHandler,
@@ -27,39 +26,35 @@ import { withTempConfig } from "../../src/gateway/test-temp-config.js";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../src/logging/subsystem.js";
 import { sessionChanges } from "../../src/sessions/session-row-changes.js";
-import { trackAsyncWork } from "../../src/shared/async-work-scope.js";
 import {
   setUserProfileRole,
   syncGitHubIdentity,
 } from "../../src/state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
+import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 
-function get(server: Server, path: string, cookie?: string) {
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("HTTP fixture is not listening");
-  }
-  return new Promise<{ status: number; body: string; cookies: string[] }>((resolve, reject) => {
-    const req = request(
-      { host: "127.0.0.1", port: address.port, path, headers: cookie ? { cookie } : {} },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (chunk: Buffer) => chunks.push(chunk));
-        res.on("error", reject);
-        res.on("end", () =>
-          resolve({
-            status: res.statusCode ?? 0,
-            body: Buffer.concat(chunks).toString("utf8"),
-            cookies: res.headers["set-cookie"] ?? [],
-          }),
-        );
-      },
-    );
-    req.on("error", reject);
-    req.end();
+const reportRoute = { pluginId: "team-reports", path: "/reports", match: "prefix" as const };
+
+async function get(baseUrl: string, path: string, cookie?: string) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    headers: cookie ? { cookie } : {},
+    redirect: "manual",
   });
+  return {
+    status: response.status,
+    body: await response.text(),
+    cookies: response.headers.getSetCookie(),
+  };
+}
+
+function expectReport(response: Awaited<ReturnType<typeof get>>, visible: string, hidden: RegExp) {
+  expect(response).toMatchObject({
+    status: 200,
+    body: expect.stringContaining(`REPORT-PROOF-${visible}`),
+  });
+  expect(response.body).not.toMatch(hidden);
 }
 
 async function withReports(
@@ -73,24 +68,19 @@ async function withReports(
     blockViewerAfterDiscovery: () => void;
   }) => Promise<void>,
 ) {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {} } },
-      ...(roles
-        ? {
-            gateway: {
-              roles: {
-                default: "blocked",
-                definitions: {
-                  reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "view" } },
-                  blocked: { agents: "*", scopes: ["operator.read"], sessions: { others: "none" } },
-                },
-              },
-            },
-          }
-        : {}),
-    };
-    await state.writeConfig(cfg);
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    if (roles) {
+      cfg.gateway = {
+        roles: {
+          default: "blocked",
+          definitions: {
+            reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "view" } },
+            blocked: { agents: "*", scopes: ["operator.read"], sessions: { others: "none" } },
+          },
+        },
+      };
+    }
     await withTempConfig({
       cfg,
       run: async () => {
@@ -104,43 +94,34 @@ async function withReports(
           authenticationAlias: { kind: "email", email: "reports-reader@example.test" },
         });
         setUserProfileRole(reader.id, "reader");
-        for (const row of [
-          { name: "own-draft", owner: reader.id, visibility: "draft" as const },
-          { name: "foreign-draft", owner: owner.id, visibility: "draft" as const },
-          { name: "shared", owner: owner.id, visibility: "shared" as const },
-          ...Array.from({ length: 45 }, (_, i) => ({
-            name: `newer-${i}`,
-            owner: reader.id,
-            visibility: "shared" as const,
-          })),
-          { name: "archived", owner: owner.id, visibility: "shared" as const, archivedAt: 1 },
-          { name: "cron:excluded:run:one", owner: owner.id, visibility: "shared" as const },
-          {
-            name: "dashboard:incognito-reports",
-            owner: reader.id,
-            visibility: "shared" as const,
-            incognito: true,
-          },
-        ]) {
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey: "agent:main:" + row.name },
+        const seed = (
+          name: string,
+          profileId = owner.id,
+          entry: Parameters<typeof upsertSessionEntryCore>[1] = {},
+        ) =>
+          upsertSessionEntryCore(
+            { agentId: "main", sessionKey: "agent:main:" + name },
             {
-              sessionId: row.name,
-              label: "REPORT-PROOF-" + row.name,
+              sessionId: name,
+              label: "REPORT-PROOF-" + name,
               updatedAt: Date.now(),
               // Metadata upserts clamp updatedAt to now; activity paging uses its own durable clock.
-              lastActivityAt: row.name === "shared" ? 1 : row.name === "own-draft" ? 100 : 50,
-              ...("archivedAt" in row ? { archivedAt: row.archivedAt } : {}),
-              visibility: row.visibility,
-              ...(row.incognito ? { incognito: true } : {}),
-              createdActor: { type: "human", source: "profile", id: row.owner },
+              lastActivityAt: name === "shared" ? 1 : name === "own-draft" ? 100 : 50,
+              visibility: "shared",
+              createdActor: { type: "human", source: "profile", id: profileId },
+              ...entry,
             },
           );
+        await seed("own-draft", reader.id, { visibility: "draft" });
+        await seed("foreign-draft", owner.id, { visibility: "draft" });
+        await seed("shared");
+        for (let i = 0; i < 45; i++) {
+          await seed(`newer-${i}`, reader.id);
         }
-        const context = createDirectChatContext({
-          getRuntimeConfig: () => cfg,
-          trackExecution: trackAsyncWork,
-        });
+        await seed("archived", owner.id, { archivedAt: 1 });
+        await seed("cron:excluded:run:one");
+        await seed("dashboard:incognito-reports", reader.id, { incognito: true });
+        const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
         let gate: ReturnType<typeof createDeferred<void>> | undefined;
         let entered: ReturnType<typeof createDeferred<void>> | undefined;
         const projection = await createSessionRowProjection({
@@ -177,9 +158,7 @@ async function withReports(
           registry: createGatewayTestRegistry({
             httpRoutes: [
               {
-                pluginId: "team-reports",
-                path: "/reports",
-                match: "prefix",
+                ...reportRoute,
                 auth: "gateway",
                 gatewayMethodDispatchAllowed: true,
                 handler: createTeamReportsHttpHandler({
@@ -213,25 +192,14 @@ async function withReports(
           void (async () => {
             // The fixture issues synthetic identity cookies through the real signer.
             if (req.url === "/fixture-cookie") {
-              setControlUiPluginAuthCookie(
-                res,
-                [
-                  {
-                    pluginId: "team-reports",
-                    path: "/reports",
-                    match: "prefix",
-                    scopes: ["operator.read"],
-                  },
-                ],
-                {
-                  generation: resolveControlUiPluginAuthCookieGeneration(
-                    resolveSharedGatewaySessionGeneration(auth),
-                    cfg,
-                  ),
-                  profileId: reader.id,
-                  nowMs: issuedAt,
-                },
-              );
+              setControlUiPluginAuthCookie(res, [{ ...reportRoute, scopes: ["operator.read"] }], {
+                generation: resolveControlUiPluginAuthCookieGeneration(
+                  resolveSharedGatewaySessionGeneration(auth),
+                  cfg,
+                ),
+                profileId: reader.id,
+                nowMs: issuedAt,
+              });
               res.end();
               return;
             }
@@ -250,19 +218,18 @@ async function withReports(
                 gatewayRequestOperatorScopes: authorized.operatorScopes,
               });
             }
-          })().catch((error: unknown) => {
-            res.destroy(error instanceof Error ? error : new Error(String(error)));
-          });
+          })().catch((error: unknown) =>
+            res.destroy(error instanceof Error ? error : new Error(String(error))),
+          );
         });
         try {
           await projection.ensureMaterialized();
-          server.listen(0, "127.0.0.1");
-          await once(server, "listening");
-          const issued = await get(server, "/fixture-cookie");
+          const baseUrl = await listenLoopback(server);
+          const issued = await get(baseUrl, "/fixture-cookie");
           expect(issued.cookies).toHaveLength(1);
           const cookie = issued.cookies.map((value) => value.split(";", 1)[0]).join("; ");
           await run({
-            read: (path = "/reports/sessions/") => get(server, path, cookie),
+            read: (path = "/reports/sessions/") => get(baseUrl, path, cookie),
             blockDiscovery: () => {
               gate = createDeferred();
               entered = createDeferred();
@@ -286,11 +253,8 @@ async function withReports(
           });
         } finally {
           gate?.resolve();
-          server.closeAllConnections();
           if (server.listening) {
-            await new Promise<void>((resolve) => {
-              server.close(() => resolve());
-            });
+            await closeHttpServer(server);
           }
           await projection.ensureMaterialized();
           projection.dispose();
@@ -310,21 +274,18 @@ describe("Reports HTTP disclosure with production cookie auth and sessions.list"
     async (roles) => {
       await withReports(roles, async ({ read, blockViewer }) => {
         for (const path of ["/reports/", "/reports/sessions/"]) {
-          const response = await read(path);
-          expect(response.status).toBe(200);
-          expect(response.body).toContain("REPORT-PROOF-own-draft");
-          expect(response.body).not.toContain("REPORT-PROOF-shared");
-          expect(response.body).not.toContain("REPORT-PROOF-foreign-draft");
-          expect(response.body).not.toContain("REPORT-PROOF-dashboard:incognito-reports");
+          expectReport(
+            await read(path),
+            "own-draft",
+            /REPORT-PROOF-(shared|foreign-draft|dashboard:incognito-reports)/,
+          );
         }
         for (const path of ["/reports/people/owner/", "/reports/sessions/?person=OWNER-ALIAS"]) {
-          const response = await read(path);
-          expect(response.status).toBe(200);
-          expect(response.body).toContain("REPORT-PROOF-shared");
-          expect(response.body).not.toContain("REPORT-PROOF-foreign-draft");
-          expect(response.body).not.toContain("REPORT-PROOF-own-draft");
-          expect(response.body).not.toContain("REPORT-PROOF-archived");
-          expect(response.body).not.toContain("REPORT-PROOF-cron:");
+          expectReport(
+            await read(path),
+            "shared",
+            /REPORT-PROOF-(foreign-draft|own-draft|archived|cron:)/,
+          );
         }
         const own = await read("/reports/people/reader/");
         expect(own.body).not.toContain("REPORT-PROOF-dashboard:incognito-reports");
@@ -333,10 +294,7 @@ describe("Reports HTTP disclosure with production cookie auth and sessions.list"
           const owned = await read("/reports/people/owner/");
           expect(owned.body).not.toContain("REPORT-PROOF-shared");
           expect(owned.body).toContain("No work sessions are visible to you.");
-          const response = await read();
-          expect(response.status).toBe(200);
-          expect(response.body).toContain("REPORT-PROOF-own-draft");
-          expect(response.body).not.toContain("REPORT-PROOF-shared");
+          expectReport(await read(), "own-draft", /REPORT-PROOF-shared/);
         }
       });
     },

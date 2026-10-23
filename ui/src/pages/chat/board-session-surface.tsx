@@ -1,13 +1,22 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { createEffect, createSignal, Show } from "solid-js";
+import { lazy, type Element } from "solid-js";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
-import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../lib/presentation.ts";
+import type { PresentationValue } from "../../lib/presentation.ts";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { usePanePresentation } from "./chat-pane-presentation.ts";
+import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
+
+const BoardView = lazy(() => import("../../components/board/board-view.tsx"), {
+  export: "BoardView",
+});
 
 export type BoardSessionSurfaceProps = {
+  onViewRef?: (element: HTMLElementTagNameMap["openclaw-board-view"]) => void | (() => void);
+  controls?: Element;
   active: PresentationValue;
   session: BoardGetParams;
   snapshot: BoardSnapshot | undefined;
@@ -19,56 +28,31 @@ export type BoardSessionSurfaceProps = {
   widgetFrameUrl: BoardWidgetFrameUrl;
 };
 
-let boardViewLoad: Promise<unknown> | null = null;
-
-export async function ensureBoardViewElement(): Promise<boolean> {
-  if (customElements.get("openclaw-board-view")) {
-    return false;
-  }
-  boardViewLoad ??= import("../../components/board/board-view.ts");
-  await boardViewLoad;
-  return true;
-}
-
-export function BoardSessionSurface(props: BoardSessionSurfaceProps & { elementReady?: boolean }) {
-  const [revision, setRevision] = createSignal(0);
-  createEffect(
-    () => props.active,
-    (binding) => {
-      if (typeof binding === "boolean") {
-        return undefined;
-      }
-      const changed = () => {
-        // Reveals wait for the parent's new props unless navigation explicitly previews the retained board.
-        if (!binding.isPresented() || binding.preview?.()) {
-          setRevision((value) => value + 1);
-        }
-      };
-      binding.owner.addEventListener(PRESENTATION_CHANGED_EVENT, changed);
-      return () => binding.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, changed);
-    },
+export function BoardSessionSurface(props: BoardSessionSurfaceProps) {
+  const active = usePanePresentation(() => props.active);
+  const boardRef = elementRef((element: HTMLElementTagNameMap["openclaw-board-view"]) =>
+    props.onViewRef?.(element),
   );
-  const active = () => {
-    revision();
-    return typeof props.active === "boolean" ? props.active : props.active.isPresented();
-  };
   return (
     <div class="board-session-surface" hidden={!active()} inert={!active()}>
+      {props.controls}
       <div class="board-session-surface__board">
-        <openclaw-board-view
-          prop:active={active()}
-          prop:session={props.session}
-          prop:snapshot={props.snapshot}
-          prop:activeTabId={props.activeTabId}
-          prop:pageWidgetName={props.pageWidgetName ?? ""}
-          prop:widgetFrameUrl={props.widgetFrameUrl}
-          prop:callbacks={props.callbacks}
-          prop:canMutate={props.canMutate}
-          prop:canGrant={props.canGrant}
-        />
-        <Show when={!(props.elementReady ?? Boolean(customElements.get("openclaw-board-view")))}>
-          <PanelLoadingSkeleton variant="board" label={t("common.loading")} overlay />
-        </Show>
+        <ChatLazyBoundary
+          fallback={<PanelLoadingSkeleton variant="board" label={t("common.loading")} overlay />}
+        >
+          <BoardView
+            ref={[boardRef]}
+            active={active()}
+            session={props.session}
+            snapshot={props.snapshot}
+            activeTabId={props.activeTabId}
+            pageWidgetName={props.pageWidgetName ?? ""}
+            widgetFrameUrl={props.widgetFrameUrl}
+            callbacks={props.callbacks}
+            canMutate={props.canMutate}
+            canGrant={props.canGrant}
+          />
+        </ChatLazyBoundary>
       </div>
     </div>
   );

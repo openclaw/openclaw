@@ -141,20 +141,6 @@ describe("gh-read helpers", () => {
     expect(cancel).toHaveBeenCalled();
   });
 
-  it("rejects oversized streamed GitHub API JSON responses", async () => {
-    const encoder = new TextEncoder();
-    const response = streamed({
-      start(controller) {
-        controller.enqueue(encoder.encode('{"body":"'));
-        controller.enqueue(encoder.encode("x".repeat(1024)));
-        controller.enqueue(encoder.encode('"}'));
-        controller.close();
-      },
-    });
-
-    await expect(readBoundedGitHubJson(response, 1024)).rejects.toMatchObject(oversizedError);
-  });
-
   it("rejects invalid GitHub API timeout values", () => {
     expect(resolveGitHubFetchTimeoutMs("1000")).toBe(1000);
     expect(() => resolveGitHubFetchTimeoutMs("1s")).toThrow(

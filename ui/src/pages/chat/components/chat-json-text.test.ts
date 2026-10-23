@@ -6,11 +6,11 @@ import { TOOL_OUTPUT_PREVIEW_CHARS } from "../../../lib/chat/tool-output.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { MessageGroup } from "./chat-message-group-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
-import { ChatToolOutput } from "./chat-tool-output.ts";
+import { ChatToolOutput } from "./chat-tool-output-view.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 // Keep these as literal source text: parsing expected values would repeat the

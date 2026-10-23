@@ -180,6 +180,8 @@ type HarnessContextEngineAssemblyParams = Omit<
   availableTools?: Set<string>;
   citationsMode?: MemoryCitationsMode;
   sandboxed?: boolean;
+  /** Current repository identity passed to memory prompt sections. */
+  memoryProjectKey?: string;
   modelId: string;
   prompt?: string;
   runtimeContext?: ContextEngineRuntimeContext;
@@ -203,7 +205,11 @@ export async function assembleHarnessContextEngine(params: HarnessContextEngineA
     const assembly = await assembleHarnessContextEngineWithinSourceScope(params, contextEngine);
     const bounded = boundContextEngineAssembly(
       assembly.result,
-      resolveContextEngineTranscriptByteLimit(contextEngine),
+      params.contextEngineHostSupport?.id === "codex-app-server" &&
+        params.runtimeId === "codex" &&
+        !contextEngine.info.ownsCompaction
+        ? undefined
+        : resolveContextEngineTranscriptByteLimit(contextEngine),
       resolveAssemblyHistoryTokenBudget(params),
     );
     return { result: bounded, snapshot: assembly.snapshot };
@@ -294,6 +300,7 @@ async function assembleHarnessContextEngineWithinSourceScope(
             agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
             agentSessionKey: params.sessionKey,
             sandboxed: params.sandboxed,
+            projectKey: params.memoryProjectKey,
           },
           assemble,
         );
@@ -426,8 +433,6 @@ export async function finalizeHarnessContextEngineTurn(
     sessionManager?: unknown;
     config?: OpenClawConfig;
     warn: (message: string) => void;
-    /** True when this turn belongs to a heartbeat run. */
-    isHeartbeat?: boolean;
     modelContextWindow?: number;
     turnCandidate?: {
       admission?: UserTurnTranscriptAdmissionReceipt;
@@ -458,7 +463,6 @@ export async function finalizeHarnessContextEngineTurn(
           promptError: params.promptError,
           aborted: params.aborted,
           yieldAborted: params.yieldAborted,
-          isHeartbeat: params.isHeartbeat,
           runtimeContext: {
             provider: params.providerId ?? undefined,
             modelId: params.modelId ?? undefined,
@@ -497,7 +501,6 @@ export async function finalizeHarnessContextEngineTurn(
         tokenBudget: params.tokenBudget,
         runtimeSettings,
         runtimeContext,
-        isHeartbeat: params.isHeartbeat,
       });
     } catch (afterTurnErr) {
       postTurnFinalizationSucceeded = false;
@@ -514,7 +517,6 @@ export async function finalizeHarnessContextEngineTurn(
             sessionId: params.sessionIdUsed,
             sessionKey: params.sessionKey,
             messages: newMessages,
-            isHeartbeat: params.isHeartbeat,
           });
         } catch (ingestErr) {
           postTurnFinalizationSucceeded = false;
@@ -527,7 +529,6 @@ export async function finalizeHarnessContextEngineTurn(
               sessionId: params.sessionIdUsed,
               sessionKey: params.sessionKey,
               message: msg,
-              isHeartbeat: params.isHeartbeat,
             });
           } catch (ingestErr) {
             postTurnFinalizationSucceeded = false;

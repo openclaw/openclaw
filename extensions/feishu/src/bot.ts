@@ -414,7 +414,7 @@ export async function handleFeishuMessage(params: {
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
   // Optimization: skip if disabled to save API quota (Feishu free tier limit).
   let permissionErrorForAgent: FeishuPermissionError | undefined;
-  if (feishuCfg?.resolveSenderNames ?? true) {
+  if (feishuCfg.resolveSenderNames) {
     if (ctx.senderType === "bot") {
       const senderName = await resolveFeishuBotName({
         account,
@@ -511,7 +511,7 @@ export async function handleFeishuMessage(params: {
   const isTopicSession =
     isGroup && isFeishuTopicSessionScope(groupSession?.groupSessionScope ?? "group");
   const groupHistoryKey = isGroup ? (groupSession?.peerId ?? ctx.chatId) : undefined;
-  const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
+  const dmPolicy = feishuCfg.dmPolicy;
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const rawBroadcastAgents = isGroup ? resolveBroadcastAgents(cfg, ctx.chatId) : null;
   const broadcastAgents = rawBroadcastAgents
@@ -571,7 +571,6 @@ export async function handleFeishuMessage(params: {
     }
 
     ({ requireMention } = resolveFeishuReplyPolicy({
-      isDirectMessage: false,
       cfg,
       accountId: account.accountId,
       groupId: ctx.chatId,
@@ -669,7 +668,7 @@ export async function handleFeishuMessage(params: {
         cfg: candidateCfg,
         accountId: account.accountId,
       });
-      const candidateDmPolicy = candidateAccount.config.dmPolicy ?? "pairing";
+      const candidateDmPolicy = candidateAccount.config.dmPolicy;
       const candidateConfigAllowFrom = candidateAccount.config.allowFrom ?? [];
       const ingress = await resolveFeishuDmIngressAccess({
         cfg: candidateCfg,
@@ -1336,7 +1335,6 @@ export async function handleFeishuMessage(params: {
       });
     };
 
-    // Determine reply target based on group session mode:
     // - Topic-mode groups (group_topic / group_topic_sender): reply to the topic
     //   root so the bot stays in the same thread.
     // - Groups with explicit replyInThread config: reply to the root so the bot

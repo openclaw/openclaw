@@ -1,12 +1,7 @@
 import { once } from "node:events";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { WebSocket, WebSocketServer } from "ws";
-import type {
-  QuestionRequestParams,
-  QuestionResolveParams,
-  QuestionWaitAnswerParams,
-  RequestFrame,
-} from "../../../packages/gateway-protocol/src/index.js";
+import type * as Protocol from "../../../packages/gateway-protocol/src/index.js";
 import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
@@ -21,6 +16,19 @@ import {
 // Collect the real transport before test deadlines; production still imports it lazily.
 export { callGatewayTool } from "../tools/gateway.js";
 
+type Held = { entered: Deferred; release: Deferred<boolean> };
+type Holds = Partial<Record<"hello" | "registration" | "answer", Held>>;
+function hold(holds: Holds, key: keyof Holds) {
+  const gate = { entered: deferred(), release: deferred<boolean>() };
+  holds[key] = gate;
+  return {
+    entered: gate.entered.promise,
+    release: () => gate.release.resolve(true),
+    fail: () => gate.release.resolve(false),
+  };
+}
+type HoldControl = ReturnType<typeof hold>;
+
 // Only the peer is synthetic: question claims use the production tool, one-shot
 // call, client, and WebSocket send, with real QuestionManager terminal state.
 export async function withQuestionGateway(
@@ -28,17 +36,13 @@ export async function withQuestionGateway(
     manager: QuestionManager;
     clock: ReturnType<typeof createGatewaySchedulerClock>;
     backingRun: AbortController;
-    requests: RequestFrame[];
+    requests: Protocol.RequestFrame[];
     waitStarted: Promise<void>;
-    holdNextHello: () => { entered: Promise<void>; release: () => void; fail: () => void };
+    holdNextHello: () => HoldControl;
     onResolved: (callback: () => void) => void;
     dropNextResolveResponse: () => void;
     holdRegistration: () => { entered: Promise<void>; release: () => void };
-    holdWaitAnswerResponse: () => {
-      entered: Promise<void>;
-      release: () => void;
-      fail: () => void;
-    };
+    holdWaitAnswerResponse: () => HoldControl;
   }) => Promise<void>,
 ) {
   await withEnvAsync(
@@ -65,69 +69,58 @@ export async function withQuestionGateway(
       const clock = createGatewaySchedulerClock(Date.now());
       const manager = new QuestionManager(createTestGatewayScheduler(clock.clock));
       const backingRun = new AbortController();
-      const requests: RequestFrame[] = [];
+      const requests: Protocol.RequestFrame[] = [];
       const waitStarted = deferred();
-      let nextHello: { entered: Deferred; release: Deferred<"allow" | "close"> } | undefined;
+      const holds: Holds = {};
       let onResolved = () => {};
       let dropResolveResponse = false;
-      let registrationHold: { entered: Deferred; release: Deferred } | undefined;
-      let answerHold: { entered: Deferred; release: Deferred<boolean> } | undefined;
       server.on("connection", (socket) => {
-        socket.send(
-          JSON.stringify({
-            type: "event",
-            event: "connect.challenge",
-            payload: { nonce: "synthetic-question-nonce", ts: Date.now() },
-          }),
-        );
+        const send = (frame: object) => socket.send(JSON.stringify(frame));
+        send({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "synthetic-question-nonce", ts: Date.now() },
+        });
         socket.on("message", (raw) => {
-          const frame = JSON.parse(rawDataToString(raw)) as RequestFrame;
+          const frame = JSON.parse(rawDataToString(raw)) as Protocol.RequestFrame;
           const respond = (payload: unknown) => {
             if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({ type: "res", id: frame.id, ok: true, payload }));
+              send({ type: "res", id: frame.id, ok: true, payload });
             }
           };
+          const respondAfter = (gate: Held | undefined, payload: unknown) => {
+            gate?.entered.resolve();
+            return (gate?.release.promise ?? Promise.resolve(true)).then((allowed) =>
+              allowed ? respond(payload) : socket.terminate(),
+            );
+          };
           if (frame.method === "connect") {
-            const hold = nextHello;
-            nextHello = undefined;
-            hold?.entered.resolve();
-            void (hold?.release.promise ?? Promise.resolve("allow")).then((outcome) => {
-              if (outcome === "close") {
-                socket.terminate();
-              } else {
-                respond({ type: "hello-ok" });
-              }
-            });
+            const gate = holds.hello;
+            delete holds.hello;
+            void respondAfter(gate, { type: "hello-ok" });
             return;
           }
           requests.push(frame);
           try {
             if (frame.method === "question.request") {
-              const request = frame.params as QuestionRequestParams;
+              const request = frame.params as Protocol.QuestionRequestParams;
               const record = manager.request({
                 ...request,
                 timeoutMs: request.timeoutMs ?? 60_000,
                 isRequesterActive: () => !backingRun.signal.aborted,
               });
-              registrationHold?.entered.resolve();
-              void (registrationHold?.release.promise ?? Promise.resolve()).then(() =>
+              holds.registration?.entered.resolve();
+              void (holds.registration?.release.promise ?? Promise.resolve()).then(() =>
                 respond(record),
               );
             } else if (frame.method === "question.waitAnswer") {
-              const request = frame.params as QuestionWaitAnswerParams;
+              const request = frame.params as Protocol.QuestionWaitAnswerParams;
               void manager
                 .waitAnswer(request.id, undefined, request.includeResolutionId)
-                .then(async (result) => {
-                  answerHold?.entered.resolve();
-                  if ((await answerHold?.release.promise) === false) {
-                    socket.terminate();
-                  } else {
-                    respond(result);
-                  }
-                });
+                .then((result) => respondAfter(holds.answer, result));
               waitStarted.resolve();
             } else if (frame.method === "question.resolve") {
-              const request = frame.params as QuestionResolveParams;
+              const request = frame.params as Protocol.QuestionResolveParams;
               const result =
                 "cancel" in request
                   ? manager.cancel(request.id, request.resolvedBy)
@@ -150,18 +143,16 @@ export async function withQuestionGateway(
             if (!(error instanceof QuestionManagerError)) {
               throw error;
             }
-            socket.send(
-              JSON.stringify({
-                type: "res",
-                id: frame.id,
-                ok: false,
-                error: {
-                  code: "INVALID_REQUEST",
-                  message: error.message,
-                  details: { reason: error.code },
-                },
-              }),
-            );
+            send({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                message: error.message,
+                details: { reason: error.code },
+              },
+            });
           }
         });
       });
@@ -172,29 +163,9 @@ export async function withQuestionGateway(
           backingRun,
           requests,
           waitStarted: waitStarted.promise,
-          holdNextHello: () => {
-            const hold = { entered: deferred(), release: deferred<"allow" | "close">() };
-            nextHello = hold;
-            return {
-              entered: hold.entered.promise,
-              release: () => hold.release.resolve("allow"),
-              fail: () => hold.release.resolve("close"),
-            };
-          },
-          holdRegistration: () => {
-            const hold = { entered: deferred(), release: deferred() };
-            registrationHold = hold;
-            return { entered: hold.entered.promise, release: () => hold.release.resolve() };
-          },
-          holdWaitAnswerResponse: () => {
-            const hold = { entered: deferred(), release: deferred<boolean>() };
-            answerHold = hold;
-            return {
-              entered: hold.entered.promise,
-              release: () => hold.release.resolve(true),
-              fail: () => hold.release.resolve(false),
-            };
-          },
+          holdNextHello: () => hold(holds, "hello"),
+          holdRegistration: () => hold(holds, "registration"),
+          holdWaitAnswerResponse: () => hold(holds, "answer"),
           onResolved: (callback) => {
             onResolved = callback;
           },

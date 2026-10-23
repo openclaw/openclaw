@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { readResponseWithLimit } from "../../src/infra/http-response-body.js";
 import type { ManagedRun } from "../../src/process/supervisor/types.js";
 import type { CodeModeMatrixCellResult, RunCellParams } from "../code-mode-model-matrix.ts";
+import { createBuildSmokeEnv } from "./build-smoke-env.mts";
 import { createGatewayMatrixConfig } from "./code-mode-matrix-config.ts";
 import {
   createGatewayMatrixFixture,
@@ -1436,9 +1437,7 @@ export async function runGatewayMatrixCell(
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
     SystemRoot: process.env.SystemRoot,
-    HOME: path.join(root, "home"),
-    USERPROFILE: path.join(root, "home"),
-    OPENCLAW_HOME: path.join(root, "home"),
+    ...createBuildSmokeEnv(path.join(root, "home"), {}),
     TMPDIR: path.join(root, "tmp"),
     TEMP: path.join(root, "tmp"),
     TMP: path.join(root, "tmp"),

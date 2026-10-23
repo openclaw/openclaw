@@ -12,9 +12,10 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import type { FollowupRun } from "./queue.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const state = vi.hoisted(() => ({
   account: vi.fn(),
@@ -39,8 +40,19 @@ vi.mock("./agent-runner-result-accounting.js", () => ({
   accountFollowupTurn: (...args: unknown[]) => state.account(...args),
 }));
 
-vi.mock("./followup-turn-admission.js", () => ({
-  admitFollowupTurn: (...args: unknown[]) => state.admit(...args),
+vi.mock("./reply-agent-turn-preparation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-agent-turn-preparation.js")>()),
+  prepareReplyAgentTurn: (...args: unknown[]) => state.admit(...args),
+}));
+
+// mock-isolation: Presentation tests use synthetic operations; real owner admission is
+// exercised by followup-runner.queue-custody.test.ts through the production runner.
+vi.mock("./reply-turn-admission-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-turn-admission-lifecycle.js")>()),
+  runWithReplyOperationLifecycleAdmission: async (
+    _operation: unknown,
+    run: () => Promise<unknown>,
+  ) => await run(),
 }));
 
 vi.mock("./followup-turn-execution.js", () => ({
@@ -52,15 +64,14 @@ vi.mock("./followup-delivery.js", () => ({
   resolveFollowupDeliveryDecision: (...args: unknown[]) => state.resolveDecision(...args),
 }));
 
-vi.mock("./queue.js", () => ({
+vi.mock("./queue.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./queue.js")>()),
   completeFollowupRunLifecycle: (...args: unknown[]) => state.completeLifecycle(...args),
-  FollowupRunDeferredError: class FollowupRunDeferredError extends Error {},
 }));
 
 vi.mock("../../runtime.js", () => ({ defaultRuntime: { error: vi.fn() } }));
 
 const { createFollowupRunner } = await import("./followup-runner.js");
-const { FollowupRunDeferredError } = await import("./queue.js");
 
 function createQueuedRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
   return {
@@ -80,19 +91,6 @@ function createQueuedRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
       blockReplyBreak: "message_end",
     },
     ...overrides,
-  };
-}
-
-function createTypingController() {
-  return {
-    onReplyStart: vi.fn(async () => {}),
-    startTypingLoop: vi.fn(async () => {}),
-    startTypingOnText: vi.fn(async () => {}),
-    refreshTypingTtl: vi.fn(),
-    isActive: vi.fn(() => false),
-    markRunComplete: vi.fn(),
-    markDispatchIdle: vi.fn(),
-    cleanup: vi.fn(),
   };
 }
 
@@ -151,7 +149,6 @@ function createSettledExecution(): FollowupExecutionResult {
         resolved: { provider: "anthropic", model: "claude" },
         fallback: { exhausted: false, attempts: [] },
         autoCompactionCount: 0,
-        didLogHeartbeatStrip: false,
       },
     },
   };
@@ -184,7 +181,7 @@ describe("createFollowupRunner", () => {
       state.deliver.mockResolvedValue({ kind, payloads: [] });
 
       await createFollowupRunner({
-        typing: createTypingController(),
+        typing: createMockTypingController(),
         typingMode: "never",
         defaultModel: "claude",
       })(turn.queued);
@@ -229,7 +226,7 @@ describe("createFollowupRunner", () => {
     state.account.mockResolvedValue(undefined);
     await runWithSessionTranscriptReadFence(admission, async () => {
       await createFollowupRunner({
-        typing: createTypingController(),
+        typing: createMockTypingController(),
         typingMode: "never",
         defaultModel: "claude",
       })(turn.queued);
@@ -252,13 +249,19 @@ describe("createFollowupRunner", () => {
       turn.queued.originatingChannel = "webchat";
       turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: source.deliver };
       const failure = new Error("session generation changed after compaction");
-      const notice = { text: "Context compacted", mediaUrl: "https://example.test/status.png" };
+      const notice = {
+        text: "Context compacted",
+        replyToCurrent: true,
+        isCompactionNotice: true,
+      };
       const order: string[] = [];
       state.admit.mockImplementation(
         async (
-          params: Parameters<typeof import("./followup-turn-admission.js").admitFollowupTurn>[0],
+          params: Parameters<
+            typeof import("./reply-agent-turn-preparation.js").prepareReplyAgentTurn
+          >[0],
         ) => {
-          await params.onCompactionNoticePayload?.(notice, turn);
+          await params.onCompactionNotice?.("end", notice.text, turn);
           if (!succeeds) {
             throw failure;
           }
@@ -275,7 +278,7 @@ describe("createFollowupRunner", () => {
         return { kind: "completed", payloads: [] };
       });
       const run = createFollowupRunner({
-        typing: createTypingController(),
+        typing: createMockTypingController(),
         typingMode: "never",
         defaultModel: "claude",
       });
@@ -305,9 +308,11 @@ describe("createFollowupRunner", () => {
     const order: string[] = [];
     state.admit.mockImplementation(
       async (
-        params: Parameters<typeof import("./followup-turn-admission.js").admitFollowupTurn>[0],
+        params: Parameters<
+          typeof import("./reply-agent-turn-preparation.js").prepareReplyAgentTurn
+        >[0],
       ) => {
-        await params.onCompactionNoticePayload?.({ text: "Compacting context" }, turn);
+        await params.onCompactionNotice?.("start", "Compacting context", turn);
         order.push("compaction-finished");
         return { kind: "admitted", turn };
       },
@@ -322,7 +327,7 @@ describe("createFollowupRunner", () => {
       return { kind: "completed", payloads: [] };
     });
     await createFollowupRunner({
-      typing: createTypingController(),
+      typing: createMockTypingController(),
       typingMode: "never",
       defaultModel: "claude",
     })(turn.queued);
@@ -350,7 +355,7 @@ describe("createFollowupRunner", () => {
     state.deliver.mockResolvedValue({ kind: "source-retry" });
 
     await createFollowupRunner({
-      typing: createTypingController(),
+      typing: createMockTypingController(),
       typingMode: "never",
       defaultModel: "claude",
     })(turn.queued);
@@ -380,7 +385,7 @@ describe("createFollowupRunner", () => {
       state.deliver.mockResolvedValue({ kind: "completed", payloads: [] });
 
       await createFollowupRunner({
-        typing: createTypingController(),
+        typing: createMockTypingController(),
         typingMode: "never",
         defaultModel: "claude",
       })(turn.queued);
@@ -434,7 +439,7 @@ describe("createFollowupRunner", () => {
       state.deliver.mockResolvedValue({ kind: "completed", payloads: [] });
 
       await createFollowupRunner({
-        typing: createTypingController(),
+        typing: createMockTypingController(),
         typingMode: "never",
         defaultModel: "claude",
       })(turn.queued);
@@ -485,7 +490,7 @@ describe("createFollowupRunner", () => {
       );
     const run = createFollowupRunner({
       resolveGatewayContext,
-      typing: createTypingController(),
+      typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "claude",
     });
@@ -511,7 +516,7 @@ describe("createFollowupRunner", () => {
   });
 
   it("completes lifecycle and both typing signals for an already-aborted item", async () => {
-    const typing = createTypingController();
+    const typing = createMockTypingController();
     const controller = new AbortController();
     controller.abort();
     const endCorrelation = vi.fn();
@@ -533,27 +538,32 @@ describe("createFollowupRunner", () => {
     });
   });
 
-  it("turns active-lane deferral into a restorable queue error", async () => {
-    const typing = createTypingController();
+  it("settles invalidated claimed input without executing or replaying", async () => {
+    const typing = createMockTypingController();
     const endCorrelation = vi.fn();
     const queued = createQueuedRun({ deliveryCorrelations: [{ begin: () => endCorrelation }] });
-    state.admit.mockResolvedValue({ kind: "deferred", reason: "active-run" });
+    state.admit.mockResolvedValue({ kind: "skipped", reason: "lifecycle-invalidated" });
 
     await expect(
       createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(queued),
-    ).rejects.toBeInstanceOf(FollowupRunDeferredError);
+    ).resolves.toBeUndefined();
 
-    expect(state.completeLifecycle).not.toHaveBeenCalled();
+    expect(state.completeLifecycle).toHaveBeenCalledWith(queued);
     expect(typing.markRunComplete).toHaveBeenCalledOnce();
     expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
-    expect(endCorrelation).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(state.execute).not.toHaveBeenCalled();
+    expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
+      visibleReplySent: false,
+      failed: true,
+      completed: false,
+    });
   });
 
   it.each(["aborted", "lifecycle-invalidated", "goal-inactive"])(
     "settles a terminal admission skip (%s) and releases its operation",
     async (reason) => {
       const order: string[] = [];
-      const typing = createTypingController();
+      const typing = createMockTypingController();
       const turn = createTurn(order);
       const endCorrelation = vi.fn();
       turn.queued.deliveryCorrelations = [{ begin: () => endCorrelation }];
@@ -579,7 +589,7 @@ describe("createFollowupRunner", () => {
 
   it("restores unexpected execution failures after releasing the admitted operation", async () => {
     const order: string[] = [];
-    const typing = createTypingController();
+    const typing = createMockTypingController();
     const turn = createTurn(order);
     const failure = new Error("candidate failed before settlement");
     state.admit.mockResolvedValue({ kind: "admitted", turn });
@@ -597,7 +607,7 @@ describe("createFollowupRunner", () => {
   });
 
   it("consumes a user abort before execution starts", async () => {
-    const typing = createTypingController();
+    const typing = createMockTypingController();
     const turn = createTurn([], { kind: "aborted", code: "aborted_by_user" });
     const deliver = vi.fn(async () => {});
     turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
@@ -620,7 +630,7 @@ describe("createFollowupRunner", () => {
   });
 
   it("consumes revoked operator input instead of retrying a pre-execution refusal", async () => {
-    const typing = createTypingController();
+    const typing = createMockTypingController();
     const turn = createTurn();
     const failure = new Error("original operator role changed");
     turn.queued.operatorAuthority = createAdmittedRunOperatorAuthority({
@@ -642,7 +652,7 @@ describe("createFollowupRunner", () => {
   });
 
   it("does not replay a returned execution when terminal delivery fails", async () => {
-    const typing = createTypingController();
+    const typing = createMockTypingController();
     const turn = createTurn();
     const execution = createRejectedExecution();
     const failure = new Error("terminal delivery failed");
@@ -677,7 +687,7 @@ describe("createFollowupRunner", () => {
 
   it("holds the reply operation through progress drain, accounting, and delivery", async () => {
     const order: string[] = [];
-    const typing = createTypingController();
+    const typing = createMockTypingController();
     const turn = createTurn(order);
     const execution = createRejectedExecution(order);
     const sourceDelivery = vi.fn(async () => {
@@ -814,7 +824,7 @@ describe("createFollowupRunner", () => {
       });
 
       await createFollowupRunner({
-        typing: createTypingController(),
+        typing: createMockTypingController(),
         typingMode: "never",
         defaultModel: "claude",
         opts: {
@@ -837,7 +847,7 @@ describe("createFollowupRunner", () => {
   it.each([true, false])(
     "projects queued commentary with the refreshed durable owner when enabled is %s",
     async (commentaryPayloadsEnabled) => {
-      const typing = createTypingController();
+      const typing = createMockTypingController();
       const turn = createTurn();
       const execution = Object.assign(createRejectedExecution(), {
         commentaryPayloadsEnabled,
@@ -863,7 +873,7 @@ describe("createFollowupRunner", () => {
   );
 
   it("does not replay a settled turn when progress presentation fails", async () => {
-    const typing = createTypingController();
+    const typing = createMockTypingController();
     const turn = createTurn();
     const execution = createSettledExecution();
     const deliver = vi.fn(async () => {});
@@ -896,7 +906,7 @@ describe("createFollowupRunner", () => {
   it.each([true, false])(
     "settles source delivery correlations with visible=%s",
     async (visible) => {
-      const typing = createTypingController();
+      const typing = createMockTypingController();
       const onObservedReplyDelivery = vi.fn(async () => {});
       const turn = createTurn();
       const endCorrelation = vi.fn();

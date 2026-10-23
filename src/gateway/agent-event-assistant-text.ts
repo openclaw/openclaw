@@ -46,10 +46,16 @@ export function createAssistantTextStream(holdOutput: boolean) {
     get streamedText() {
       return streamed.text;
     },
-    update(data: unknown): { delta?: string; replacement?: "representable" | "unrepresentable" } {
-      const input = resolveAssistantTextInput(data);
+    update(
+      data: unknown,
+      rawDelta?: string,
+    ): { delta?: string; replacement?: "representable" | "unrepresentable" } {
+      let input = resolveAssistantTextInput(data);
       if (!input) {
         return {};
+      }
+      if (rawDelta !== undefined) {
+        input = { ...input, text: undefined, delta: rawDelta };
       }
       // Hold provisional replacements and their terminal echoes until the run result settles.
       if (input.replaceable || pending) {

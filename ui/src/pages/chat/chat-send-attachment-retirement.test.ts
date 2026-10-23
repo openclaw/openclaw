@@ -5,6 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import * as outboxPayloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -20,11 +21,8 @@ import { handleSendChat } from "./chat-send-submit.ts";
 import * as chatSendSupport from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import {
-  listStoredChatOutboxes,
-  loadChatComposerState,
-  updateStoredChatComposerQueueItems,
-} from "./composer-persistence.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
+import { updateStoredChatComposerQueueItems } from "./composer-queue-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
@@ -157,7 +155,6 @@ describe("chat attachment terminal retirement", () => {
           chatMessagesBySession: new Map(),
           connectionEpoch: 1,
           pendingSessionMessageReloadSessionKey: null,
-          requestUpdate: vi.fn(),
         });
       }
       cacheChatSessionSnapshot(

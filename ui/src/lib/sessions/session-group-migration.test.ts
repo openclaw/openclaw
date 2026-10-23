@@ -1,469 +1,259 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createSessionCapability } from "./index.ts";
-import { createTestSessionCapability, sessionsResult } from "./session-capability.test-support.ts";
+import {
+  createGatewayHarness as sharedGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 import type { SessionGateway } from "./session-capability.ts";
+import { sessionRpc as groupRequests, sessionChanged } from "./session-rpc.test-support.ts";
 
-function createGateway(request: ReturnType<typeof vi.fn>, scopes: string[]): SessionGateway {
-  const client = { request } as unknown as GatewayBrowserClient;
-  return {
-    snapshot: {
-      client,
-      phase: "connected",
-      sessionKey: "agent:main:main",
-      assistantAgentId: "main",
-      hello: {
-        auth: { role: "operator", scopes },
-        features: {
-          methods: [
-            "sessions.groups.list",
-            "sessions.groups.defaults",
-            "sessions.groups.put",
-            "sessions.groups.rename",
-          ],
-        },
-      } as GatewayHelloOk,
-    },
-    subscribe: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-  };
+const legacyKey = "openclaw:sessions:custom-groups";
+const clientGroup = { name: "Client", position: 0 };
+const clientDefaults = { name: "Client", cwd: "/repos/client", worktree: true };
+const expectedClient = [{ ...clientGroup, ...clientDefaults }];
+type Groups = { groups: { name: string; position: number }[] };
+type Defaults = { defaults: (typeof clientDefaults)[] };
+
+function legacyGroups() {
+  vi.stubGlobal("localStorage", createStorageMock());
+  const legacy = JSON.stringify(["Research"]);
+  localStorage.setItem(legacyKey, legacy);
+  return legacy;
 }
 
 function createGatewayHarness(request: ReturnType<typeof vi.fn>, scopes: string[]) {
-  const gateway = createGateway(request, scopes);
-  let snapshot = gateway.snapshot;
-  const listeners = new Set<(next: SessionGateway["snapshot"]) => void>();
-  const events = new Set<(event: GatewayEventFrame) => void>();
-  return {
-    gateway: {
-      get snapshot() {
-        return snapshot;
-      },
-      subscribe(listener: (next: SessionGateway["snapshot"]) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      subscribeEvents(listener) {
-        events.add(listener);
-        return () => events.delete(listener);
-      },
-    } satisfies SessionGateway,
-    emitEvent: (event: GatewayEventFrame) => {
-      events.forEach((listener) => listener(event));
-    },
-    publish(connected: boolean) {
-      snapshot = { ...snapshot, phase: connected ? "connected" : "stopped" };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
-  };
+  const harness = sharedGatewayHarness({ request } as unknown as GatewayBrowserClient, [
+    "sessions.groups.list",
+    "sessions.groups.defaults",
+    "sessions.groups.put",
+    "sessions.groups.rename",
+  ]);
+  harness.gateway.snapshot.hello = {
+    ...harness.gateway.snapshot.hello,
+    auth: { role: "operator", scopes },
+  } as GatewayHelloOk;
+  return harness;
+}
+function createGateway(request: ReturnType<typeof vi.fn>, scopes: string[]): SessionGateway {
+  return createGatewayHarness(request, scopes).gateway;
 }
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("legacy session group migration", () => {
-  it.each(["current", "disconnected", "disposed"] as const)(
-    "settles overlapping automatic group invalidations for a %s owner",
-    async (boundary) => {
-      const stale = createDeferred<{ groups: { name: string }[] }>();
-      let reads = 0;
-      const request = vi.fn(async (method: string) => {
-        if (method === "sessions.groups.list") {
-          return ++reads === 1 ? stale.promise : { groups: [{ name: "Current" }] };
-        }
-        if (method === "sessions.groups.defaults") {
-          return { defaults: [{ name: "Current", cwd: "/workspace/current", worktree: true }] };
-        }
-        return sessionsResult([], 1);
-      });
-      const harness = createGatewayHarness(request, ["operator.write"]);
-      const bootstrap = createConnectionBootstrapCoordinator();
-      bootstrap.synchronize({ client: harness.gateway.snapshot.client, connected: true });
-      const sessions = createSessionCapability(
-        harness.gateway,
-        {
-          state: { selectedId: "main" },
-          subscribe: () => () => {},
-        },
-        { connectionBootstrap: bootstrap },
-      );
-      const invalidate = () =>
-        harness.emitEvent({
-          type: "event",
-          event: "sessions.changed",
-          payload: { reason: "groups" },
-        });
-      try {
-        invalidate();
-        await vi.waitFor(() => expect(reads).toBe(1));
-        const completion = bootstrap.run(sessions.groupsLoad, async () => {});
-        invalidate();
-        if (boundary === "disconnected") {
-          harness.publish(false);
-        } else if (boundary === "disposed") {
-          sessions.dispose();
-        }
-        stale.resolve({ groups: [{ name: "Stale" }] });
-        await completion;
-        if (boundary === "current") {
-          expect({
-            reads,
-            settings: sessions.state.groupSettings,
-            status: sessions.groupsStatus(),
-          }).toEqual({
-            reads: 2,
-            settings: [{ name: "Current", position: 0, cwd: "/workspace/current", worktree: true }],
-            status: "ready",
-          });
-        } else {
-          expect(reads).toBe(1);
-        }
-      } finally {
-        stale.resolve({ groups: [] });
-        sessions.dispose();
-        bootstrap.reset();
-      }
-    },
-  );
-
-  it("does not migrate browser groups without operator.write", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    localStorage.setItem("openclaw:sessions:custom-groups", JSON.stringify(["Research"]));
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.groups.list") {
-        return { groups: [] };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const sessions = createTestSessionCapability(createGateway(request, ["operator.read"]));
-
-    await sessions.groupsLoad();
-
-    expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith("sessions.groups.list", {});
-    expect(localStorage.getItem("openclaw:sessions:custom-groups")).toBe(
-      JSON.stringify(["Research"]),
-    );
-    sessions.dispose();
-  });
-
-  it("migrates browser groups with operator.write", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    localStorage.setItem("openclaw:sessions:custom-groups", JSON.stringify(["Research"]));
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.groups.list") {
-        return { groups: [] };
-      }
-      if (method === "sessions.groups.put") {
-        return { groups: [{ name: "Research" }] };
-      }
-      if (method === "sessions.groups.defaults") {
-        return { defaults: [{ name: "Research" }] };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
-
-    await sessions.groupsLoad();
-
-    expect(request).toHaveBeenCalledWith("sessions.groups.put", { names: ["Research"] });
-    expect(sessions.state.groups).toEqual(["Research"]);
-    expect(localStorage.getItem("openclaw:sessions:custom-groups")).toBeNull();
-    sessions.dispose();
-  });
-
-  it("does not replace saved groups from an invalidated legacy import", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    const legacy = JSON.stringify(["Research"]);
-    localStorage.setItem("openclaw:sessions:custom-groups", legacy);
-    const stale = createDeferred<{ groups: { name: string }[] }>();
-    const current = createDeferred<{ groups: { name: string }[] }>();
+it.each(["disconnected", "disposed"] as const)(
+  "retires automatic group loads for a %s owner",
+  async (boundary) => {
+    const stale = createDeferred<{ groups: { name: string; position: number }[] }>();
     let reads = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.groups.list") {
-        return ++reads === 1 ? stale.promise : current.promise;
-      }
-      if (method === "sessions.groups.put") {
-        return { groups: [{ name: "Research" }] };
+        return ++reads === 1 ? stale.promise : { groups: [{ name: "Current", position: 0 }] };
       }
       if (method === "sessions.groups.defaults") {
-        return { defaults: [{ name: "Client", cwd: "/repos/client", worktree: true }] };
+        return { defaults: [{ name: "Current", cwd: "/workspace/current", worktree: true }] };
       }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
-    try {
-      const staleLoad = sessions.groupsLoad();
-      sessions.groupsInvalidate();
-      const currentLoad = sessions.groupsLoad();
-      stale.resolve({ groups: [] });
-      await staleLoad;
-
-      expect(request).not.toHaveBeenCalledWith("sessions.groups.put", expect.anything());
-      expect(localStorage.getItem("openclaw:sessions:custom-groups")).toBe(legacy);
-      current.resolve({ groups: [{ name: "Client" }] });
-      await currentLoad;
-      expect(sessions.state.groupSettings).toEqual([
-        { name: "Client", position: 0, cwd: "/repos/client", worktree: true },
-      ]);
-    } finally {
-      current.resolve({ groups: [{ name: "Client" }] });
-      sessions.dispose();
-    }
-  });
-});
-
-describe("session group catalog loading", () => {
-  it.each(["success", "failure"] as const)(
-    "keeps a renamed group after an older defaults read settles with %s",
-    async (outcome) => {
-      const oldDefaults = createDeferred<{
-        defaults: Array<{ name: string; cwd: string; worktree: boolean }>;
-      }>();
-      const oldDefaultsStarted = createDeferred();
-      let name = "Old";
-      let defaultsReads = 0;
-      const currentDefaults = () => ({
-        defaults: [{ name, cwd: "/workspace/current", worktree: true }],
-      });
-      const request = vi.fn(async (method: string) => {
-        if (method === "sessions.groups.list") {
-          return { groups: [{ name, position: 0 }] };
-        }
-        if (method === "sessions.groups.defaults") {
-          if (++defaultsReads === 1) {
-            oldDefaultsStarted.resolve();
-            return oldDefaults.promise;
-          }
-          return currentDefaults();
-        }
-        if (method === "sessions.groups.rename") {
-          name = "New";
-          return { ok: true, groups: [{ name, position: 0 }] };
-        }
-        if (method === "sessions.subscribe") {
-          return { subscribed: true };
-        }
-        if (method === "sessions.list") {
-          return sessionsResult([], 1);
-        }
-        throw new Error(`Unexpected request: ${method}`);
-      });
-      const harness = createGatewayHarness(request, ["operator.write"]);
-      const bootstrap = createConnectionBootstrapCoordinator();
-      bootstrap.synchronize({ client: harness.gateway.snapshot.client, connected: true });
-      const sessions = createSessionCapability(
-        harness.gateway,
-        { state: { selectedId: "main" }, subscribe: () => () => {} },
-        { connectionBootstrap: bootstrap },
-      );
-      // Group routes load directly while automatic catalog refreshes use the coordinator.
-      const original = sessions.groupsLoad();
-      try {
-        await oldDefaultsStarted.promise;
-        await expect(sessions.groupsRename("Old", "New")).resolves.toBe("completed");
-        harness.emitEvent({
-          type: "event",
-          event: "sessions.changed",
-          payload: { reason: "groups" },
-        });
-        await bootstrap.run(sessions.groupsLoad, async () => {});
-        const expected = [{ name: "New", position: 0, cwd: "/workspace/current", worktree: true }];
-        await expect(sessions.groupsLoad()).resolves.toEqual(expected);
-        expect(sessions.state.groupSettings).toEqual(expected);
-        // Even a current defaults payload must not re-admit the old load's catalog names.
-        if (outcome === "success") {
-          oldDefaults.resolve(currentDefaults());
-        } else {
-          oldDefaults.reject(new Error("old defaults unavailable"));
-        }
-        await original;
-        const reads = request.mock.calls.length;
-        const reloaded = await sessions.groupsLoad();
-        expect(request.mock.calls).toHaveLength(reads);
-        expect(reloaded).toEqual(expected);
-        expect(sessions.state.groupSettings).toEqual(expected);
-        expect(sessions.groupsStatus()).toBe("ready");
-      } finally {
-        oldDefaults.resolve(currentDefaults());
-        await original;
-        sessions.dispose();
-        bootstrap.reset();
-      }
-    },
-  );
-
-  it("clears cached cwd when a defaults update omits the removed value", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.groups.list") {
-        return { groups: [{ name: "Client", position: 0 }] };
-      }
-      if (method === "sessions.groups.defaults") {
-        return { defaults: [{ name: "Client", cwd: "/repos/client", worktree: true }] };
-      }
-      if (method === "sessions.groups.update") {
-        return { defaults: [{ name: "Client", worktree: false }] };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const gateway = createGateway(request, ["operator.write"]);
-    gateway.snapshot.hello = {
-      ...gateway.snapshot.hello,
-      features: {
-        methods: ["sessions.groups.list", "sessions.groups.defaults", "sessions.groups.update"],
-      },
-    } as GatewayHelloOk;
-    const sessions = createTestSessionCapability(gateway);
-
-    await sessions.groupsLoad();
-    expect(sessions.state.groupSettings).toEqual([
-      { name: "Client", position: 0, cwd: "/repos/client", worktree: true },
-    ]);
-
-    await expect(sessions.groupsUpdate("Client", { cwd: null, worktree: false })).resolves.toBe(
-      "completed",
-    );
-    expect(sessions.state.groupSettings).toEqual([
-      { name: "Client", position: 0, worktree: false },
-    ]);
-    sessions.dispose();
-  });
-
-  it("keeps path-free mutations pending until fresh defaults arrive", async () => {
-    const refreshedDefaults = createDeferred<{
-      defaults: Array<{ name: string; cwd: string; worktree: boolean }>;
-    }>();
-    let defaultsCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.groups.list") {
-        return { groups: [{ name: "Client", position: 0 }] };
-      }
-      if (method === "sessions.groups.defaults") {
-        defaultsCalls += 1;
-        if (defaultsCalls === 1) {
-          throw new Error("defaults unavailable");
-        }
-        return await refreshedDefaults.promise;
-      }
-      if (method === "sessions.groups.put") {
-        return { groups: [{ name: "Client", position: 0 }] };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
-
-    await expect(sessions.groupsLoad()).resolves.toBeNull();
-    expect(sessions.groupsStatus()).toBe("unavailable");
-
-    await expect(sessions.groupsPut(["Client"])).resolves.toBe("completed");
-    await vi.waitFor(() => expect(defaultsCalls).toBe(2));
-    expect(sessions.state.groups).toEqual(["Client"]);
-    expect(sessions.groupsStatus()).toBe("loading");
-
-    refreshedDefaults.resolve({
-      defaults: [{ name: "Client", cwd: "/repos/client", worktree: true }],
-    });
-    await vi.waitFor(() => expect(sessions.groupsStatus()).toBe("ready"));
-    expect(sessions.state.groupSettings).toEqual([
-      { name: "Client", position: 0, cwd: "/repos/client", worktree: true },
-    ]);
-    sessions.dispose();
-  });
-
-  it("joins an in-flight load so route consumers see current defaults", async () => {
-    const defaults = createDeferred<{
-      defaults: Array<{ name: string; cwd: string; worktree: boolean }>;
-    }>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.groups.list") {
-        return { groups: [{ name: "Client", position: 0 }] };
-      }
-      if (method === "sessions.groups.defaults") {
-        return await defaults.promise;
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
-
-    const backgroundLoad = sessions.groupsLoad();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("sessions.groups.defaults", {}));
-    let joined = false;
-    const routeLoad = sessions.groupsLoad().then(() => {
-      joined = true;
-    });
-    await Promise.resolve();
-    expect(joined).toBe(false);
-
-    defaults.resolve({
-      defaults: [{ name: "Client", cwd: "/repos/client", worktree: true }],
-    });
-    await Promise.all([backgroundLoad, routeLoad]);
-    expect(sessions.state.groupSettings).toEqual([
-      { name: "Client", position: 0, cwd: "/repos/client", worktree: true },
-    ]);
-    sessions.dispose();
-  });
-
-  it("returns only defaults owned by the current same-client connection", async () => {
-    const stale = createDeferred<{
-      defaults: Array<{ name: string; cwd: string; worktree: boolean }>;
-    }>();
-    const current = createDeferred<{
-      defaults: Array<{ name: string; cwd: string; worktree: boolean }>;
-    }>();
-    let calls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return {
-          ts: 1,
-          path: "",
-          count: 0,
-          defaults: { modelProvider: null, model: null, contextTokens: null },
-          sessions: [],
-        };
-      }
-      if (method === "sessions.groups.list") {
-        return { groups: [{ name: "Client", position: 0 }] };
-      }
-      if (method === "sessions.groups.defaults") {
-        calls += 1;
-        return await (calls === 1 ? stale.promise : current.promise);
-      }
-      throw new Error(`Unexpected request: ${method}`);
+      return sessionsResult([], 1);
     });
     const harness = createGatewayHarness(request, ["operator.write"]);
-    const sessions = createTestSessionCapability(harness.gateway);
+    const bootstrap = createConnectionBootstrapCoordinator();
+    bootstrap.synchronize({ client: harness.gateway.snapshot.client, connected: true });
+    const sessions = createSessionCapability(
+      harness.gateway,
+      {
+        state: { selectedId: "main" },
+        subscribe: () => () => {},
+      },
+      { connectionBootstrap: bootstrap },
+    );
+    const invalidate = () => harness.emitEvent(sessionChanged({ reason: "groups" }));
+    try {
+      invalidate();
+      await vi.waitFor(() => expect(reads).toBe(1));
+      const completion = bootstrap.run(sessions.groupsLoad, async () => {});
+      invalidate();
+      if (boundary === "disconnected") {
+        harness.publish(false);
+      } else if (boundary === "disposed") {
+        sessions.dispose();
+      }
+      stale.resolve({ groups: [{ name: "Stale", position: 0 }] });
+      await completion;
+      expect(reads).toBe(1);
+      expect(sessions.state.groupSettings).not.toContainEqual({ name: "Stale", position: 0 });
+    } finally {
+      stale.resolve({ groups: [] });
+      sessions.dispose();
+      bootstrap.reset();
+    }
+  },
+);
 
-    const staleLoad = sessions.groupsLoad();
-    await vi.waitFor(() => expect(calls).toBe(1));
-    harness.publish(false);
-    harness.publish(true);
-    const currentLoad = sessions.groupsLoad();
-    await vi.waitFor(() => expect(calls).toBe(2));
+it("does not migrate browser groups without operator.write", async () => {
+  const legacy = legacyGroups();
+  const request = groupRequests({ "sessions.groups.list": () => ({ groups: [] }) });
+  const sessions = createTestSessionCapability(createGateway(request, ["operator.read"]));
 
-    stale.resolve({
-      defaults: [{ name: "Client", cwd: "/gateway-a", worktree: true }],
-    });
-    await expect(staleLoad).resolves.toBeNull();
-    current.resolve({
-      defaults: [{ name: "Client", cwd: "/gateway-b", worktree: false }],
-    });
-    await expect(currentLoad).resolves.toEqual([
-      { name: "Client", position: 0, cwd: "/gateway-b", worktree: false },
-    ]);
-    expect(sessions.state.groupSettings).toEqual([
-      { name: "Client", position: 0, cwd: "/gateway-b", worktree: false },
-    ]);
-    sessions.dispose();
+  await sessions.groupsLoad();
+
+  expect(request).toHaveBeenCalledOnce();
+  expect(request).toHaveBeenCalledWith("sessions.groups.list", {});
+  expect(localStorage.getItem(legacyKey)).toBe(legacy);
+});
+
+it("migrates browser groups with operator.write", async () => {
+  legacyGroups();
+  const request = groupRequests({
+    "sessions.groups.list": () => ({ groups: [] }),
+    "sessions.groups.put": () => ({ groups: [{ name: "Research", position: 0 }] }),
+    "sessions.groups.defaults": () => ({ defaults: [{ name: "Research" }] }),
   });
+  const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
+
+  await sessions.groupsLoad();
+
+  expect(request).toHaveBeenCalledWith("sessions.groups.put", { names: ["Research"] });
+  expect(sessions.state.groups).toEqual(["Research"]);
+  expect(localStorage.getItem(legacyKey)).toBeNull();
+});
+
+it("does not replace saved groups from an invalidated legacy import", async () => {
+  const legacy = legacyGroups();
+  const stale = createDeferred<Groups>();
+  const current = createDeferred<Groups>();
+  let reads = 0;
+  const request = groupRequests({
+    "sessions.groups.list": () => (++reads === 1 ? stale.promise : current.promise),
+    "sessions.groups.put": () => ({ groups: [{ name: "Research", position: 0 }] }),
+    "sessions.groups.defaults": () => ({ defaults: [clientDefaults] }),
+  });
+  const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
+  onTestFinished(() => current.resolve({ groups: [clientGroup] }));
+  const staleLoad = sessions.groupsLoad();
+  sessions.groupsInvalidate();
+  const currentLoad = sessions.groupsLoad();
+  stale.resolve({ groups: [] });
+  await staleLoad;
+  expect(request).not.toHaveBeenCalledWith("sessions.groups.put", expect.anything());
+  expect(localStorage.getItem(legacyKey)).toBe(legacy);
+  current.resolve({ groups: [clientGroup] });
+  await currentLoad;
+  expect(sessions.state.groupSettings).toEqual(expectedClient);
+});
+
+it("clears cached cwd when a defaults update omits the removed value", async () => {
+  const request = groupRequests({
+    "sessions.groups.list": () => ({ groups: [clientGroup] }),
+    "sessions.groups.defaults": () => ({ defaults: [clientDefaults] }),
+    "sessions.groups.update": () => ({ defaults: [{ name: "Client", worktree: false }] }),
+  });
+  const gateway = createGateway(request, ["operator.write"]);
+  gateway.snapshot.hello = {
+    ...gateway.snapshot.hello,
+    features: {
+      methods: ["sessions.groups.list", "sessions.groups.defaults", "sessions.groups.update"],
+    },
+  } as GatewayHelloOk;
+  const sessions = createTestSessionCapability(gateway);
+
+  await sessions.groupsLoad();
+  expect(sessions.state.groupSettings).toEqual(expectedClient);
+
+  await expect(sessions.groupsUpdate("Client", { cwd: null, worktree: false })).resolves.toBe(
+    "completed",
+  );
+  expect(sessions.state.groupSettings).toEqual([{ name: "Client", position: 0, worktree: false }]);
+});
+
+it("keeps path-free mutations pending until fresh defaults arrive", async () => {
+  const refreshedDefaults = createDeferred<Defaults>();
+  let defaultsCalls = 0;
+  const request = groupRequests({
+    "sessions.groups.list": () => ({ groups: [clientGroup] }),
+    "sessions.groups.defaults": () => {
+      defaultsCalls += 1;
+      if (defaultsCalls === 1) {
+        throw new Error("defaults unavailable");
+      }
+      return refreshedDefaults.promise;
+    },
+    "sessions.groups.put": () => ({ groups: [clientGroup] }),
+  });
+  const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
+
+  await expect(sessions.groupsLoad()).resolves.toBeNull();
+  expect(sessions.groupsStatus()).toBe("unavailable");
+
+  await expect(sessions.groupsPut(["Client"])).resolves.toBe("completed");
+  await vi.waitFor(() => expect(defaultsCalls).toBe(2));
+  expect(sessions.state.groups).toEqual(["Client"]);
+  expect(sessions.groupsStatus()).toBe("loading");
+
+  refreshedDefaults.resolve({ defaults: [clientDefaults] });
+  await vi.waitFor(() => expect(sessions.groupsStatus()).toBe("ready"));
+  expect(sessions.state.groupSettings).toEqual(expectedClient);
+});
+
+it("joins an in-flight load so route consumers see current defaults", async () => {
+  const defaults = createDeferred<Defaults>();
+  const request = groupRequests({
+    "sessions.groups.list": () => ({ groups: [clientGroup] }),
+    "sessions.groups.defaults": () => defaults.promise,
+  });
+  const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
+
+  const backgroundLoad = sessions.groupsLoad();
+  await vi.waitFor(() => expect(request).toHaveBeenCalledWith("sessions.groups.defaults", {}));
+  let joined = false;
+  const routeLoad = sessions.groupsLoad().then(() => {
+    joined = true;
+  });
+  await Promise.resolve();
+  expect(joined).toBe(false);
+
+  defaults.resolve({ defaults: [clientDefaults] });
+  await Promise.all([backgroundLoad, routeLoad]);
+  expect(sessions.state.groupSettings).toEqual(expectedClient);
+});
+
+it("returns only defaults owned by the current same-client connection", async () => {
+  const stale = createDeferred<Defaults>();
+  const current = createDeferred<Defaults>();
+  let calls = 0;
+  const request = groupRequests({
+    "sessions.subscribe": () => ({ subscribed: true }),
+    "sessions.list": () => sessionsResult([], 1),
+    "sessions.groups.list": () => ({ groups: [clientGroup] }),
+    "sessions.groups.defaults": () => (++calls === 1 ? stale.promise : current.promise),
+  });
+  const harness = createGatewayHarness(request, ["operator.write"]);
+  const sessions = createTestSessionCapability(harness.gateway);
+
+  const staleLoad = sessions.groupsLoad();
+  await vi.waitFor(() => expect(calls).toBe(1));
+  harness.publish(false);
+  harness.publish(true);
+  const currentLoad = sessions.groupsLoad();
+  await vi.waitFor(() => expect(calls).toBe(2));
+
+  stale.resolve({
+    defaults: [{ name: "Client", cwd: "/gateway-a", worktree: true }],
+  });
+  await expect(staleLoad).resolves.toBeNull();
+  current.resolve({
+    defaults: [{ name: "Client", cwd: "/gateway-b", worktree: false }],
+  });
+  await expect(currentLoad).resolves.toEqual([
+    { name: "Client", position: 0, cwd: "/gateway-b", worktree: false },
+  ]);
+  expect(sessions.state.groupSettings).toEqual([
+    { name: "Client", position: 0, cwd: "/gateway-b", worktree: false },
+  ]);
 });

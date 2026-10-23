@@ -105,7 +105,7 @@ export function runIsolatedModuleScript(
 export function createSourceRuntime(root: string): string {
   const runtimeRoot = path.join(root, "runtime");
   fs.mkdirSync(path.join(runtimeRoot, "dist"), { recursive: true });
-  for (const dirname of ["node_modules", "packages", "scripts", "src"]) {
+  for (const dirname of ["node_modules", "packages", "scripts", "src", "docs"]) {
     fs.symlinkSync(
       path.resolve(dirname),
       path.join(runtimeRoot, dirname),

@@ -44,29 +44,37 @@ const stoppedAfterFirst = [
   { to: "second", ...notAttempted },
   { to: "third", ...notAttempted },
 ];
-function registerPlugin(overrides: Pick<ChannelPlugin, "outbound" | "actions">) {
+function setPlugin(plugin: ChannelPlugin) {
+  setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]));
+}
+function registerPlugin(outbound: ChannelPlugin["outbound"], actions?: ChannelPlugin["actions"]) {
   const plugin: ChannelPlugin = {
     ...createChannelTestPluginBase({ id: channel }),
     messaging: { targetResolver: { looksLikeId: () => true } },
-    ...overrides,
+    outbound,
+    actions,
   };
-  setActivePluginRegistry(createTestRegistry([{ pluginId: channel, plugin, source: "test" }]));
+  setPlugin(plugin);
 }
 type Actions = NonNullable<ChannelPlugin["actions"]>;
-function registerNative(actions: Omit<Actions, "describeMessageTool">) {
-  registerPlugin({
-    outbound: {
+function registerNative(
+  handleAction: Actions["handleAction"],
+  actions: Partial<Omit<Actions, "describeMessageTool" | "handleAction">> = {},
+) {
+  registerPlugin(
+    {
       deliveryMode: "direct",
       sendText: async () => {
         throw new Error("native action bypassed");
       },
     },
-    actions: {
+    {
       describeMessageTool: () => ({ actions: ["send"] }),
       supportsAction: ({ action }) => action === "send",
+      handleAction,
       ...actions,
     },
-  });
+  );
 }
 function broadcast(input: Omit<Partial<MessageActionInput>, "cfg" | "action"> = {}) {
   return runMessageAction({
@@ -108,6 +116,14 @@ function cancellationGate(sentBeforeError?: true) {
   };
   return gate;
 }
+async function canceledBroadcast(
+  gate: ReturnType<typeof cancellationGate>,
+  input: Parameters<typeof broadcast>[0] = {},
+) {
+  const pending = broadcast({ ...input, assertDirectAdapterHandoff: gate.assertCurrent });
+  await gate.cancel();
+  return pending;
+}
 
 describe("broadcast send outcomes through native actions", () => {
   const messageToolConfig: OpenClawConfig = {};
@@ -116,9 +132,7 @@ describe("broadcast send outcomes through native actions", () => {
     tempHome = await createTempHomeEnv("openclaw-broadcast-outcomes-");
     setRuntimeConfigSnapshot(messageToolConfig);
   });
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-  });
+  afterEach(resetPluginRuntimeStateForTest);
   afterAll(async () => {
     await tempHome.restore();
     clearRuntimeConfigSnapshot();
@@ -132,37 +146,28 @@ describe("broadcast send outcomes through native actions", () => {
     const handled: string[] = [],
       dispatched: string[] = [],
       denied: string[] = [];
-    registerNative({
-      handleAction: async ({ params, assertDirectAdapterHandoff, onPlatformSendDispatch }) => {
-        const target = String(params.to);
-        handled.push(target);
-        if (target === "first" || scenario.sentBeforeError) {
-          await onPlatformSendDispatch?.();
-          dispatched.push(target);
-        }
-        if (target === "first") {
-          return jsonResult({ ok: true, messageId: "sent-first" });
-        }
-        await gate.wait();
-        if (!scenario.sentBeforeError) {
-          throw new MessageActionDeniedError(
-            scenario.error,
-            "target_policy_denied",
-            "target:policy",
-          );
-        }
-        assertDirectAdapterHandoff?.();
+    registerNative(async ({ params, assertDirectAdapterHandoff, onPlatformSendDispatch }) => {
+      const target = String(params.to);
+      handled.push(target);
+      if (target === "first" || scenario.sentBeforeError) {
         await onPlatformSendDispatch?.();
         dispatched.push(target);
-        return jsonResult({ ok: true, messageId: `sent-${target}` });
-      },
+      }
+      if (target === "first") {
+        return jsonResult({ ok: true, messageId: "sent-first" });
+      }
+      await gate.wait();
+      if (!scenario.sentBeforeError) {
+        throw new MessageActionDeniedError(scenario.error, "target_policy_denied", "target:policy");
+      }
+      assertDirectAdapterHandoff?.();
+      await onPlatformSendDispatch?.();
+      dispatched.push(target);
+      return jsonResult({ ok: true, messageId: `sent-${target}` });
     });
-    const pending = broadcast({
-      assertDirectAdapterHandoff: gate.assertCurrent,
+    const result = await canceledBroadcast(gate, {
       onActionDenied: (err) => denied.push(err.message),
     });
-    await gate.cancel();
-    const result = await pending;
     expect(resolveMessageActionOutcome(result).ok).toBe(false);
     expect(handled).toEqual(["first", "second"]);
     expect(dispatched).toEqual(scenario.sentBeforeError ? ["first", "second"] : ["first"]);
@@ -187,8 +192,8 @@ describe("broadcast send outcomes through native actions", () => {
   it("fences the final core Gateway handoff", async () => {
     const gate = cancellationGate();
     const targets: string[] = [];
-    registerPlugin({ outbound: { deliveryMode: "gateway" } });
-    const pending = broadcast({
+    registerPlugin({ deliveryMode: "gateway" });
+    const result = await canceledBroadcast(gate, {
       gateway: {
         ...gateway,
         request: async <T>(request: OutboundGatewayRequest): Promise<T> => {
@@ -205,10 +210,8 @@ describe("broadcast send outcomes through native actions", () => {
           await gate.wait();
         }
       },
-      assertDirectAdapterHandoff: gate.assertCurrent,
     });
-    await gate.cancel();
-    expectResults(await pending, stoppedAfterFirst);
+    expectResults(result, stoppedAfterFirst);
     expect(targets).toEqual(["first"]);
   });
 
@@ -220,8 +223,15 @@ describe("broadcast send outcomes through native actions", () => {
         gate.current = false;
       }
     };
-    registerNative({
-      ...(mode === "local"
+    registerNative(
+      async ({ params }) => {
+        if (mode === "gateway") {
+          throw new Error("Gateway action ran locally");
+        }
+        handled.push(String(params.to));
+        return jsonResult({ ok: true, messageId: `sent-${String(params.to)}` });
+      },
+      mode === "local"
         ? {
             supportsAction: ({ action }) => {
               retireAfterFirst();
@@ -233,15 +243,8 @@ describe("broadcast send outcomes through native actions", () => {
               retireAfterFirst();
               return action === "send" ? "gateway" : "local";
             },
-          }),
-      handleAction: async ({ params }) => {
-        if (mode === "gateway") {
-          throw new Error("Gateway action ran locally");
-        }
-        handled.push(String(params.to));
-        return jsonResult({ ok: true, messageId: `sent-${String(params.to)}` });
-      },
-    });
+          },
+    );
     const result = await broadcast({
       ...(mode === "gateway"
         ? {
@@ -265,28 +268,24 @@ describe("broadcast send outcomes through native actions", () => {
     let insideAdapter = false;
     const transported: string[] = [];
     registerPlugin({
-      outbound: {
-        deliveryMode: "direct",
-        ...(partial ? { chunker: chunkText, chunkerMode: "text" as const, textChunkLimit: 2 } : {}),
-        sendText: async (context) => {
-          insideAdapter = true;
-          try {
-            await context.onPlatformSendDispatch?.();
-            transported.push(context.to);
-            return {
-              channel,
-              messageId:
-                partial && context.to === "second"
-                  ? "unknown"
-                  : `sent-${context.to}-${context.text}`,
-            };
-          } finally {
-            insideAdapter = false;
-          }
-        },
+      deliveryMode: "direct",
+      ...(partial ? { chunker: chunkText, chunkerMode: "text" as const, textChunkLimit: 2 } : {}),
+      sendText: async (context) => {
+        insideAdapter = true;
+        try {
+          await context.onPlatformSendDispatch?.();
+          transported.push(context.to);
+          return {
+            channel,
+            messageId:
+              partial && context.to === "second" ? "unknown" : `sent-${context.to}-${context.text}`,
+          };
+        } finally {
+          insideAdapter = false;
+        }
       },
     });
-    const pending = broadcast({
+    const result = await canceledBroadcast(gate, {
       params: {
         message: partial ? "abcd" : "hello",
         bestEffort: partial ? undefined : true,
@@ -301,10 +300,8 @@ describe("broadcast send outcomes through native actions", () => {
           await gate.wait();
         }
       },
-      assertDirectAdapterHandoff: gate.assertCurrent,
     });
-    await gate.cancel();
-    expectResults(await pending, [
+    expectResults(result, [
       { to: "first", ok: true },
       {
         to: "second",
@@ -320,22 +317,18 @@ describe("broadcast send outcomes through native actions", () => {
     const gate = cancellationGate();
     const attempted: string[] = [];
     registerPlugin({
-      outbound: {
-        deliveryMode: "direct",
-        sendText: async (context) => {
-          attempted.push(context.to);
-          await context.onPlatformSendDispatch?.();
-          await gate.wait();
-          throw new Error("provider result unknown");
-        },
+      deliveryMode: "direct",
+      sendText: async (context) => {
+        attempted.push(context.to);
+        await context.onPlatformSendDispatch?.();
+        await gate.wait();
+        throw new Error("provider result unknown");
       },
     });
-    const pending = broadcast({
+    const result = await canceledBroadcast(gate, {
       params: { targets: ["first", "second"], bestEffort: true },
-      assertDirectAdapterHandoff: gate.assertCurrent,
     });
-    await gate.cancel();
-    expectResults(await pending, [
+    expectResults(result, [
       { to: "first", ok: false, error: "provider result unknown", sentBeforeError: true },
       { to: "second", ...notAttempted },
     ]);
@@ -345,18 +338,14 @@ describe("broadcast send outcomes through native actions", () => {
   it("rejects cancellation with no accepted targets", async () => {
     const gate = cancellationGate();
     const handled: string[] = [];
-    registerNative({
-      handleAction: async ({ params }) => {
-        handled.push(String(params.to));
-        await gate.wait();
-        return jsonResult({ ok: false, error: "provider rejected message" });
-      },
+    registerNative(async ({ params }) => {
+      handled.push(String(params.to));
+      await gate.wait();
+      return jsonResult({ ok: false, error: "provider rejected message" });
     });
-    const pending = broadcast({
+    const pending = canceledBroadcast(gate, {
       params: { targets: ["first", "second"] },
-      assertDirectAdapterHandoff: gate.assertCurrent,
     });
-    await gate.cancel();
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(handled).toEqual(["first"]);
   });
@@ -364,16 +353,14 @@ describe("broadcast send outcomes through native actions", () => {
   it("retains accepted message-tool results after cancellation", async () => {
     const entered = createDeferred(),
       release = createDeferred();
-    registerNative({
-      handleAction: async ({ params, onPlatformSendDispatch }) => {
-        const target = String(params.to);
-        await onPlatformSendDispatch?.();
-        if (target === "second") {
-          entered.resolve();
-          await release.promise;
-        }
-        return jsonResult({ ok: true, messageId: `sent-${target}` });
-      },
+    registerNative(async ({ params, onPlatformSendDispatch }) => {
+      const target = String(params.to);
+      await onPlatformSendDispatch?.();
+      if (target === "second") {
+        entered.resolve();
+        await release.promise;
+      }
+      return jsonResult({ ok: true, messageId: `sent-${target}` });
     });
     const identity = {
       agentId: "main",
@@ -414,11 +401,9 @@ describe("broadcast send outcomes through native actions", () => {
   it("keeps per-target idempotency keys stable", async () => {
     const attempts: string[][] = [[], []];
     let invocation = 0;
-    registerNative({
-      handleAction: async ({ params }) => {
-        attempts[invocation]?.push(String(params.idempotencyKey));
-        return jsonResult({ ok: true, messageId: params.to });
-      },
+    registerNative(async ({ params }) => {
+      attempts[invocation]?.push(String(params.idempotencyKey));
+      return jsonResult({ ok: true, messageId: params.to });
     });
     const send = () =>
       broadcast({
@@ -444,7 +429,7 @@ describe("broadcast send outcomes through native actions", () => {
         sendMedia,
       },
     });
-    setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
+    setPlugin(plugin);
     await runMessageAction({
       cfg: { channels: { testchat: { enabled: true } } } as OpenClawConfig,
       action: "send",
@@ -472,6 +457,18 @@ describe("broadcast send outcomes through native actions", () => {
     sessionKey: "agent:main:telegram:direct:123456789",
     sourceReplyDeliveryMode: "message_tool_only",
   } as const;
+  const explicitRoute = (allowAcrossProviders = true, options: Partial<MessageActionInput> = {}) =>
+    runMessageAction({
+      ...sourceInput,
+      cfg: {
+        ...workspaceConfig,
+        tools: { message: { crossContext: { allowAcrossProviders } } },
+      },
+      params: { channel: "workspace", target: "#C12345678", message: "hello from codex" },
+      toolContext: { currentChannelProvider: "webchat" },
+      sessionKey: "agent:main:main",
+      ...options,
+    });
   function expectInternalReply(result: MessageActionResult, text: string) {
     expect(result).toMatchObject({
       kind: "send",
@@ -499,11 +496,7 @@ describe("broadcast send outcomes through native actions", () => {
   }
   describe("runMessageAction send validation", () => {
     beforeEach(() => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          { pluginId: "workspace", source: "test", plugin: workspaceTestPlugin },
-        ]),
-      );
+      setPlugin(workspaceTestPlugin);
     });
 
     it.each([
@@ -545,28 +538,6 @@ describe("broadcast send outcomes through native actions", () => {
           text: "Recorded reply in the current session transcript via internal-ui. This send did not deliver it to an external channel.",
         },
       ]);
-    });
-
-    it("sends an explicit target from a route-less run through the channel", async () => {
-      const result = await runMessageAction({
-        cfg: {
-          ...workspaceConfig,
-          tools: { message: { crossContext: { allowAcrossProviders: true } } },
-        },
-        action: "send",
-        params: { channel: "workspace", target: "#C12345678", message: "hello from codex" },
-        toolContext: { currentChannelProvider: "webchat" },
-        sessionKey: "agent:main:main",
-        sourceReplyDeliveryMode: "message_tool_only",
-        sourceReplyTranscriptOnly: true,
-      });
-
-      expect(result).toMatchObject({
-        kind: "send",
-        channel: "workspace",
-        handledBy: "core",
-        dryRun: false,
-      });
     });
 
     it.each([
@@ -618,27 +589,14 @@ describe("broadcast send outcomes through native actions", () => {
       }
     });
 
-    it.each([false, true])(
-      "checks explicit-route provider policy (allowed=%s)",
-      async (allowAcrossProviders) => {
-        const send = runMessageAction({
-          cfg: {
-            ...workspaceConfig,
-            tools: { message: { crossContext: { allowAcrossProviders } } },
-          },
-          action: "send",
-          params: {
-            channel: "workspace",
-            target: "#C12345678",
-            message: "hello from codex",
-          },
-          toolContext: {
-            currentChannelProvider: "webchat",
-          },
-          sessionKey: "agent:main:main",
-          sourceReplyDeliveryMode: "message_tool_only",
-          dryRun: true,
-        });
+    it.each([
+      [true, { sourceReplyTranscriptOnly: true }, false],
+      [false, { dryRun: true }, true],
+      [true, { dryRun: true }, true],
+    ] as const)(
+      "checks explicit-route delivery (allowed=%s, options=%j)",
+      async (allowAcrossProviders, options, dryRun) => {
+        const send = explicitRoute(allowAcrossProviders, options);
 
         if (!allowAcrossProviders) {
           await expect(send).rejects.toMatchObject({
@@ -652,7 +610,7 @@ describe("broadcast send outcomes through native actions", () => {
           kind: "send",
           channel: "workspace",
           handledBy: "core",
-          dryRun: true,
+          dryRun,
         });
       },
     );

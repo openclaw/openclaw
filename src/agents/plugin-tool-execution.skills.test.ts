@@ -8,7 +8,7 @@ import type { OpenClawPluginToolFactory } from "../plugins/tool-types.js";
 import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
 import { readWorkspaceSkillSources } from "../skills/loading/workspace-skill-source-reader.js";
 import { syncWorkspaceSkills } from "../skills/loading/workspace-skill-sync.runtime.js";
-import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
+import { closeSkillsWatchers, refreshSkillsDiscovery } from "../skills/runtime/refresh.js";
 import { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -43,21 +43,28 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-it.each([
-  { location: "workspace", access: "rw", admitted: false },
-  { location: "workspace", access: "ro-instructions", admitted: false },
-  { location: "host", access: "unmounted", admitted: true },
-  { location: "host", access: "ro", admitted: true },
-  { location: "host", access: "rw", admitted: false },
-  { location: "host", access: "scripts-rw", admitted: false },
-])(
-  "binds a managed installer symlink at $location with $access access: $admitted",
-  async ({ location, access, admitted }) => {
+it.each(
+  [
+    { location: "workspace", access: "rw", admitted: false },
+    { location: "workspace", access: "ro-instructions", admitted: false },
+    { location: "host", access: "unmounted", admitted: true },
+    { location: "host", access: "ro", admitted: true },
+    { location: "host", access: "rw", admitted: false },
+    { location: "host", access: "scripts-rw", admitted: false },
+  ].flatMap(({ location, access, admitted }) =>
+    ["managed", "personal"].map((source) => ({ location, access, admitted, source })),
+  ),
+)(
+  "binds a $source installer symlink at $location with $access access: $admitted",
+  async ({ location, access, admitted, source }) => {
     const home = tempDirs.make("autoreview-managed-");
     const environment = setMockSkillsHomeEnv(home);
     const workspace = path.join(home, "workspace");
     const sandboxDir = path.join(home, "sandbox");
-    const installation = path.join(home, "managed", "autoreview");
+    const installation =
+      source === "personal"
+        ? path.join(home, ".agents", "skills", "autoreview")
+        : path.join(home, "managed", "autoreview");
     const original = path.join(location === "workspace" ? workspace : home, "review-helper");
     const options = {
       config: { plugins: { enabled: false }, skills: { load: { watch: false } } },
@@ -66,9 +73,7 @@ it.each([
     };
     const sandbox = createAgentToolsSandboxContext({
       workspaceDir: workspace,
-      agentWorkspaceDir: workspace,
       skillsWorkspaceDir: sandboxDir,
-      workspaceAccess: "rw",
       containerWorkdir: "/guest/repo",
     });
     sandbox.backend = {
@@ -124,14 +129,13 @@ it.each([
       };
     };
     try {
+      const helperPath = path.join("scripts", "autoreview");
+      const helperText = "# protected helper fixture\n";
       await writeSkill({ dir: original, name: "autoreview", description: "Installed reviewer" });
       await fs.mkdir(path.dirname(installation), { recursive: true });
       await fs.symlink(original, installation, "dir");
       await fs.mkdir(path.join(installation, "scripts"));
-      await fs.writeFile(
-        path.join(installation, "scripts", "autoreview"),
-        "# protected helper fixture\n",
-      );
+      await fs.writeFile(path.join(installation, helperPath), helperText);
       if (access === "ro-instructions") {
         const metadata = path.join(original, "metadata");
         await fs.mkdir(metadata);
@@ -145,11 +149,14 @@ it.each([
         await fs.symlink(mountedSource, alias, "dir");
         sandbox.docker.binds = [`${alias}:/installed-source:${access === "ro" ? "ro" : "rw"}`];
       }
-      const installed = await bind();
-      expect(installed.snapshot.discoverySkills).toEqual([
-        expect.objectContaining({ source: "openclaw-managed", fileHost: "gateway" }),
+      const { snapshot, capabilities, tool } = await bind();
+      expect(snapshot.discoverySkills).toEqual([
+        expect.objectContaining({
+          source: source === "personal" ? "agents-skills-personal" : "openclaw-managed",
+          fileHost: "gateway",
+        }),
       ]);
-      expect(installed.snapshot.skills[0]?.source).toEqual({
+      expect(snapshot.skills[0]?.source).toEqual({
         filePath: path.join(await fs.realpath(installation), "SKILL.md"),
         fileHost: "gateway",
       });
@@ -164,20 +171,26 @@ it.each([
           }).writable,
         ).toBe(access !== "ro");
       }
-      expect(installed.capabilities.sandbox?.installedSkillRoots).toEqual(
+      expect(capabilities.sandbox?.installedSkillRoots).toEqual(
         admitted ? { autoreview: "/guest/repo/.openclaw/sandbox-skills/skills/autoreview" } : {},
       );
-      if (admitted) {
-        expect(installed.tool).not.toBeNull();
-      } else {
-        expect(installed.tool).toBeNull();
+      expect(tool === null).toBe(!admitted);
+      const syncedHelper = path.join(sandboxDir, "skills", "autoreview", helperPath);
+      expect(await fs.readFile(syncedHelper, "utf8")).toBe(helperText);
+      if (source === "personal" && access === "unmounted") {
+        await writeSkill({
+          dir: path.join(workspace, ".agents", "skills", "autoreview"),
+          name: "autoreview",
+          description: "Project replacement",
+        });
+        await refreshSkillsDiscovery({ workspaceDir: workspace });
+        const project = await bind();
+        expect(project.snapshot.discoverySkills).toEqual([
+          expect.objectContaining({ source: "agents-skills-project", fileHost: "workspace" }),
+        ]);
+        expect(project.capabilities.sandbox?.installedSkillRoots).toEqual({});
+        expect(project.tool).toBeNull();
       }
-      expect(
-        await fs.readFile(
-          path.join(sandboxDir, "skills", "autoreview", "scripts", "autoreview"),
-          "utf8",
-        ),
-      ).toBe("# protected helper fixture\n");
     } finally {
       release();
       await closeSkillsWatchers(true);

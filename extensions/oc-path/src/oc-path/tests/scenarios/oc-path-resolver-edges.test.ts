@@ -11,7 +11,7 @@ name: github
 `;
 
 describe("oc-path-resolver-edges", () => {
-  const { ast } = parseMd(SAMPLE);
+  const ast = parseMd(SAMPLE);
 
   it("field that does not match kv.key returns null", () => {
     const m = resolveOcPath(ast, {

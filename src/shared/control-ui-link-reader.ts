@@ -1,6 +1,13 @@
 import type { Static } from "typebox";
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { ControlUiLinkReaderDescriptorSchema } from "../../packages/gateway-protocol/src/schema/control-ui-link-reader.js";
+export const LINK_READER_BADGE_TONES = [
+  "neutral",
+  "positive",
+  "negative",
+  "attention",
+  "accent",
+] as const;
 
 /** Passive link-reader models shared by plugins and the Control UI. */
 export type ControlUiLinkReaderMetadata = ControlUiLinkReaderDescriptor["linkReader"];
@@ -16,9 +23,15 @@ export type ControlUiLinkReaderPreviewParams = {
   agentId?: string;
   /** Present only for a descriptor opting into the foreground session context. */
   sessionKey?: string;
-};
-export type ControlUiLinkReaderDetailParams = ControlUiLinkReaderPreviewParams & {
+  /** Wait for a fresh response instead of returning last-known cached metadata. */
   refresh?: boolean;
+};
+export type ControlUiLinkReaderDeferredSection = "checks" | "files" | "discussion";
+export type ControlUiLinkReaderSection = "overview" | ControlUiLinkReaderDeferredSection;
+
+export type ControlUiLinkReaderDetailParams = ControlUiLinkReaderPreviewParams & {
+  /** Omit for the complete document; supported only by progressive readers. */
+  section?: ControlUiLinkReaderSection;
 };
 export type ControlUiLinkReaderImage = {
   /** Echo the validated requested image URL. */
@@ -36,7 +49,7 @@ export type ControlUiLinkReaderPreview = {
   subtitle?: string;
   badge?: {
     label: string;
-    tone: "neutral" | "positive" | "negative" | "attention" | "accent";
+    tone: (typeof LINK_READER_BADGE_TONES)[number];
     /** Timestamp of the event represented by the badge, displayed instead of creation time. */
     timestamp?: string;
   };
@@ -55,6 +68,10 @@ export type ControlUiLinkReaderPreview = {
 export type ControlUiLinkReaderDocument = ControlUiLinkReaderPreview & {
   /** Markdown rendered through the host's safe passive Markdown renderer. */
   body: string;
+  /** Source revision shared by independently loaded sections. */
+  revision?: string;
+  /** Sections intentionally omitted from an overview, not incomplete upstream data. */
+  deferredSections?: ControlUiLinkReaderDeferredSection[];
   bodyTruncated?: boolean;
   partial?: boolean;
   /** Passive provider-reported checks, not a mergeability or approval decision. */

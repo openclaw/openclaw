@@ -4,7 +4,8 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import "./test-helpers/schtasks-base-mocks.js";
-import { resolveTaskScriptPath, restartScheduledTask } from "./schtasks.js";
+import { restartScheduledTask } from "./schtasks-control.js";
+import { resolveTaskScriptPath } from "./schtasks-layout.js";
 import {
   inspectPortUsageMock,
   killProcessTreeMock,

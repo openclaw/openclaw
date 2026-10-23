@@ -123,7 +123,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
 
 jobs:
   resolve_release_target:
@@ -681,9 +681,16 @@ jobs:
           }
           const archivesDir = join(env.RUNNER_TEMP, 'openclaw-npm-preflight-archives');
           mkdirSync(archivesDir, { recursive: true });
-          for (const [artifact, directory, expectedEntries] of [
-            [preflight[0], 'openclaw-npm-preflight-manifest', undefined],
-            [sdk[0], 'openclaw-plugin-sdk-api-evidence', ['plugin-sdk-api-release-diff.json', 'plugin-sdk-api-release-evidence.json']],
+          const sdkRequiredEntries = ['plugin-sdk-api-release-diff.json', 'plugin-sdk-api-release-evidence.json'];
+          // Preflights also upload the readable diff summary; older ones carry only the JSON pair.
+          const sdkAllowedEntries = new Set([...sdkRequiredEntries, 'plugin-sdk-api-release-diff.md']);
+          for (const [artifact, directory, entryPolicy] of [
+            [preflight[0], 'openclaw-npm-preflight-manifest', { minEntries: 1, maxEntries: 1024, allowPath: () => true }],
+            [sdk[0], 'openclaw-plugin-sdk-api-evidence', {
+              minEntries: sdkRequiredEntries.length,
+              maxEntries: sdkAllowedEntries.size,
+              allowPath: (name) => sdkAllowedEntries.has(name),
+            }],
           ]) {
             const outputDir = join(env.RUNNER_TEMP, directory);
             const archivePath = join(archivesDir, `${artifact.id}.zip`);
@@ -723,10 +730,7 @@ jobs:
                 runStatePolicy: 'completed-success',
               },
               archivePolicy: {
-                expectedEntries,
-                minEntries: 1,
-                maxEntries: 1024,
-                allowPath: () => true,
+                ...entryPolicy,
                 maxEntryBytes: () => 256 * 1024 * 1024,
               },
             };
@@ -735,6 +739,13 @@ jobs:
             const files = qualified
               ? inspectActionsArtifactZipWithPolicy((await downloadExactActionsArtifactArchive(download)).archiveBytes, download.archivePolicy)
               : (await readPublicationArtifactArchive(download)).files;
+            if (artifact === sdk[0]) {
+              const names = new Set([...files].map(([name]) => name));
+              const missing = sdkRequiredEntries.filter((name) => !names.has(name));
+              if (missing.length > 0) {
+                throw new Error(`${artifact.name} is missing ${missing.join(', ')}.`);
+              }
+            }
             rmSync(outputDir, { recursive: true, force: true });
             mkdirSync(outputDir, { recursive: true });
             for (const [name, bytes] of files) {
@@ -1931,7 +1942,7 @@ jobs:
         id: ledger_token
         if: ${{ !cancelled() && inputs.publish_openclaw_npm && inputs.npm_dist_tag == 'latest' && steps.core_start.outcome == 'success' }}
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -2494,7 +2505,7 @@ jobs:
 
       - name: Create Linux release request token
         id: linux_request_token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}

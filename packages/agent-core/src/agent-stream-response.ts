@@ -272,7 +272,9 @@ export async function streamAgentResponse(
       apiKey: resolvedApiKey,
       signal: requestSignal,
       onActiveResponse: steering.onActiveResponse,
-      asyncToolExecution: true,
+      // Async results reach the model only when it calls sessions_yield, the result
+      // collector. Without it (cron runs) the model would answer before any result.
+      asyncToolExecution: llmContext.tools?.some((tool) => tool.name === "sessions_yield") === true,
     });
 
     return await runAgentCoreStream(
@@ -329,6 +331,15 @@ export async function streamAgentResponse(
             case "toolcall_delta":
             case "toolcall_end":
               if (partialMessage) {
+                // Only updates assembled here prove appends; provider snapshots can correct text.
+                const priorBlock = partialMessage.content[event.contentIndex];
+                const append =
+                  repetitionGuard && event.type === "text_delta" && event.partial === undefined
+                    ? {
+                        offset: priorBlock?.type === "text" ? priorBlock.text.length : 0,
+                        delta: event.delta,
+                      }
+                    : undefined;
                 const message = resolveAssistantMessageUpdate(event, partialMessage);
                 partialMessage = message;
                 if (event.contentIndex < committedContentCount) {
@@ -338,6 +349,7 @@ export async function streamAgentResponse(
                   message,
                   committedContentCount,
                   event.type === "toolcall_end" ? undefined : event.contentIndex,
+                  append,
                 );
                 if (stopped) {
                   modelAbort.abort(new Error(REPETITIVE_OUTPUT_ERROR_MESSAGE));

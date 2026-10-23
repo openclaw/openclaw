@@ -1,4 +1,4 @@
-import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import { resolveImageSourceUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
@@ -11,16 +11,14 @@ import {
   postJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderApiKeyHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   asSafeIntegerInRange,
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  VideoGenerationProvider,
-  VideoGenerationRequest,
-} from "openclaw/plugin-sdk/video-generation";
+import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import { BYTEPLUS_BASE_URL } from "./models.js";
 
 const DEFAULT_BYTEPLUS_VIDEO_MODEL = "seedance-1-0-pro-250528";
@@ -62,43 +60,6 @@ function readBytePlusTaskStatus(payload: BytePlusTaskResponse): BytePlusTaskStat
 
 function readBytePlusErrorMessage(error: unknown): string | undefined {
   return isRecord(error) ? normalizeOptionalString(error.message) : undefined;
-}
-
-function readBytePlusVideoUrl(payload: BytePlusTaskResponse): string {
-  const content = payload.content;
-  if (content !== undefined && !isRecord(content)) {
-    throw new Error("BytePlus video generation completed with malformed content");
-  }
-  const videoUrl = normalizeOptionalString(content?.video_url);
-  if (!videoUrl) {
-    throw new Error("BytePlus video generation completed without a video URL");
-  }
-  return videoUrl;
-}
-
-function resolveBytePlusImageUrl(req: VideoGenerationRequest): string | undefined {
-  const input = req.inputImages?.[0];
-  if (!input) {
-    return undefined;
-  }
-  const inputUrl = normalizeOptionalString(input.url);
-  if (inputUrl) {
-    return inputUrl;
-  }
-  if (!input.buffer) {
-    throw new Error("BytePlus reference image is missing image data.");
-  }
-  return toImageDataUrl({ ...input, buffer: input.buffer, defaultMimeType: "image/png" });
-}
-
-function resolveBytePlusDurationSeconds(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return asSafeIntegerInRange(Math.round(value), {
-    min: BYTEPLUS_MIN_DURATION_SECONDS,
-    max: BYTEPLUS_MAX_DURATION_SECONDS,
-  });
 }
 
 export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider {
@@ -145,10 +106,11 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         await resolveProviderApiKeyHttpRequestConfig({
           req,
           missingApiKeyMessage: "BytePlus API key missing",
-          baseUrl:
-            normalizeOptionalString(req.cfg?.models?.providers?.byteplus?.baseUrl) ??
-            BYTEPLUS_BASE_URL,
+          baseUrl: req.cfg?.models?.providers?.byteplus?.baseUrl,
           defaultBaseUrl: BYTEPLUS_BASE_URL,
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.byteplus?.request,
+          ),
           allowPrivateNetwork: false,
           provider: "byteplus",
           capability: "video",
@@ -160,7 +122,10 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
       const resolvedModel = normalizeOptionalString(req.model) || DEFAULT_BYTEPLUS_VIDEO_MODEL;
 
       const content: Array<Record<string, unknown>> = [{ type: "text", text: req.prompt }];
-      const imageUrl = resolveBytePlusImageUrl(req);
+      const imageUrl = resolveImageSourceUrl(
+        req.inputImages?.[0],
+        "BytePlus reference image is missing image data.",
+      );
       if (imageUrl) {
         content.push({
           type: "image_url",
@@ -182,9 +147,15 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
       if (resolution) {
         body.resolution = resolution;
       }
-      const duration = resolveBytePlusDurationSeconds(req.durationSeconds);
-      if (duration !== undefined) {
-        body.duration = duration;
+      const requestedDuration = req.durationSeconds;
+      if (typeof requestedDuration === "number" && Number.isFinite(requestedDuration)) {
+        const duration = asSafeIntegerInRange(Math.round(requestedDuration), {
+          min: BYTEPLUS_MIN_DURATION_SECONDS,
+          max: BYTEPLUS_MAX_DURATION_SECONDS,
+        });
+        if (duration !== undefined) {
+          body.duration = duration;
+        }
       }
       if (req.audio !== undefined) {
         body.generate_audio = req.audio;
@@ -239,6 +210,8 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         fetchFn,
         maxAttempts: MAX_POLL_ATTEMPTS,
+        ssrfPolicy: { allowPrivateNetwork },
+        dispatcherPolicy,
         pollIntervalMs: POLL_INTERVAL_MS,
         requestFailedMessage: "BytePlus video status request failed",
         timeoutMessage: `BytePlus video generation task ${taskId} did not finish in time`,
@@ -250,7 +223,14 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
             : undefined;
         },
       });
-      const videoUrl = readBytePlusVideoUrl(completed);
+      const completedContent = completed.content;
+      if (completedContent !== undefined && !isRecord(completedContent)) {
+        throw new Error("BytePlus video generation completed with malformed content");
+      }
+      const videoUrl = normalizeOptionalString(completedContent?.video_url);
+      if (!videoUrl) {
+        throw new Error("BytePlus video generation completed without a video URL");
+      }
       const video = await downloadGeneratedVideoAsset({
         url: videoUrl,
         timeoutMs: createProviderOperationTimeoutResolver({

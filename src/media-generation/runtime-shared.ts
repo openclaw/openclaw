@@ -154,7 +154,7 @@ export function resolveMediaProviderRequestTimeoutMs(params: {
 }
 
 type CapabilityProviderCandidate = CapabilityModelProviderCandidate & {
-  /** @deprecated Implement isConfiguredAsync so credential reads use the worker. Final compatibility day: 2026-12-31. */
+  /** @deprecated Implement isConfiguredAsync so credential reads use the worker. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
   isConfiguredAsync?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => Promise<boolean>;
 };
@@ -304,7 +304,7 @@ function prepareCapabilityModelCandidates(params: CapabilityModelCandidatesParam
   };
 }
 
-/** @deprecated Use resolveCapabilityModelCandidatesAsync for worker-backed credential reads. Final compatibility day: 2026-12-31. */
+/** @deprecated Use resolveCapabilityModelCandidatesAsync for worker-backed credential reads. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveCapabilityModelCandidates(
   params: CapabilityModelCandidatesParams,
 ): ParsedProviderModelRef[] {
@@ -432,7 +432,7 @@ function parsePositiveDimensionPair(
   return { width, height };
 }
 
-function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
+export function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
   const pair = parsePositiveDimensionPair(raw, /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
   if (!pair) {
     return null;

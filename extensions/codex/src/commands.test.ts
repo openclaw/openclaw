@@ -32,13 +32,14 @@ import {
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
 import { createClientHarness } from "./app-server/test-support.js";
-import { handleCodexCommand as dispatchCodexCommand } from "./command-dispatch.js";
 import type { CodexPluginsConfigBlock, CodexPluginsManagementIO } from "./command-plugin-config.js";
-import type { CodexControlRequestOptions, SafeCodexControlRequestFn } from "./command-rpc.js";
+import type { CodexControlRequestOptions } from "./command-rpc.js";
 import {
   createContext,
   createCodexRuntimeContextOverrides,
   createDeps,
+  dispatchCodexCommandForTest as handleCodexCommand,
+  type SafeCodexControlRequestFn,
   createThreadResumeResponse,
   holdCodexThreadQueue,
   expectedDiagnosticsTargetBlock,
@@ -93,8 +94,6 @@ function nodeExecContext(
     ...overrides,
   };
 }
-
-const handleCodexCommand = dispatchCodexCommand;
 
 function createResumeControlRequest(
   response:
@@ -2443,6 +2442,7 @@ describe("codex command", () => {
         ...testCodexAppServerBindingStore,
         read: readBinding,
         readAsync: async () => readBinding(),
+        prepareRead: async () => ({ read: readBinding, release() {} }),
       },
       safeCodexControlRequest,
     });
@@ -3190,6 +3190,28 @@ describe("codex command", () => {
     });
   });
 
+  it.each([
+    { label: "trailing space", input: "/tmp/job " },
+    { label: "leading space", input: " /tmp/job" },
+    { label: "both sides", input: " /tmp/job " },
+  ])(
+    "preserves significant whitespace in bind --cwd ($label) through command dispatch",
+    async ({ input }) => {
+      let requestedData: Record<string, unknown> | undefined;
+      const requestConversationBinding = vi.fn(
+        async (request?: { data?: Record<string, unknown> }) => {
+          requestedData = request?.data;
+          return { status: "bound" as const, binding: publicConversationBinding() };
+        },
+      );
+
+      await runCommand(`bind --cwd "${input}"`, {}, { requestConversationBinding });
+
+      expect(requestConversationBinding).toHaveBeenCalledTimes(1);
+      expect(requestedData?.workspaceDir).toBe(input);
+    },
+  );
+
   it("reuses the existing owner for a lazy Codex rebind", async () => {
     await writeTestBinding(
       { kind: "conversation", bindingId: "binding-data-1" },
@@ -3698,16 +3720,8 @@ function computerUseReadyStatus(): CodexComputerUseStatus {
     mcpServerName: "computer-use",
     marketplaceName: "desktop-tools",
     tools: ["list_apps"],
-    installation: {
-      status: "installed",
-      ok: true,
-      message: "Computer Use plugin is installed and enabled.",
-    },
-    exposure: {
-      status: "available",
-      ok: true,
-      message: "Computer Use MCP server computer-use exposes 1 tools.",
-    },
+    installation: "installed",
+    exposure: "available",
     liveTest: {
       status: "passed",
       ok: true,

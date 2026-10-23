@@ -31,14 +31,13 @@ export function createTranscriptStoreOperation(
       consume: (chunk: TranscriptExportChunk, signal: AbortSignal) => Promise<void>,
       signal?: AbortSignal,
     ) {
-      const input = structuredClone(command);
       // Existing canonical schema already includes meeting tables. Only an absent store needs creation.
       if (!context.admission.identity.key.startsWith("file:") && !readOnly) {
         await runOpenClawStateWorkerOperation(context, async () => undefined, { assertCurrent });
       }
       const reply = await executeExistingOpenClawStateRead(
         { path: context.admission.databasePath, env: context.environment },
-        input,
+        command,
         {
           context,
           signal,
@@ -66,7 +65,7 @@ export function createTranscriptStoreOperation(
       request: TranscriptWriteOperations[Key]["input"],
       lease: OpenClawStateLeaseContext,
     ): Promise<void> {
-      const input = { ...structuredClone(request), readOnly };
+      const input = { ...request, readOnly };
       assertCurrent();
       await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
         scope.execute<Key>({ type, input: { ...input, lease: identity } }),
@@ -76,8 +75,7 @@ export function createTranscriptStoreOperation(
       type: Key,
       request: OpenClawStateWorkerOperations[Key]["input"],
     ): Promise<TranscriptReadRequests[Key]["output"]> {
-      const input = structuredClone(request);
-      input.readOnly = readOnly;
+      const input = { ...request, readOnly };
       const result = await runOpenClawStateWorkerOperation(
         context,
         (scope) => scope.execute<Key>({ type, input }),
@@ -98,7 +96,7 @@ export function createTranscriptStoreOperation(
       request: TranscriptWriteOperations[Key]["input"],
       assertWriteOwner?: () => void,
     ): Promise<TranscriptWriteOperations[Key]["output"]> {
-      const input = { ...structuredClone(request), readOnly };
+      const input = { ...request, readOnly };
       const assertWriteCurrent = () => {
         assertCurrent();
         assertWriteOwner?.();

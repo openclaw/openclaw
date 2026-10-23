@@ -368,6 +368,25 @@ describe("personal publication authority and recovery", () => {
     expect((await rpc("sessions.github.options"))[1].pendingPersonal).toBeNull();
   });
 
+  it.each([false, true])(
+    "retains personal draft choice %s through admission and replay",
+    async (draft) => {
+      await persistPublicationTestSession();
+      const response = await rpc("sessions.github.publish", { ...request(), draft });
+      expect(response[0], JSON.stringify(response[2])).toBe(true);
+      expect(readReceipt(response[1].requestId)).toMatchObject({ draft: Number(draft) });
+      const post = commandCalls.find(
+        ({ argv }) => argv.includes("POST") && argv.some((arg) => arg.endsWith("/pulls")),
+      );
+      expect(JSON.parse(post?.input ?? "null")).toMatchObject({ draft });
+      const replay = await rpc("sessions.github.publish", { ...request(), draft });
+      expect(replay[1]).toEqual(response[1]);
+      expect((await rpc("sessions.github.publish", { ...request(), draft: !draft }))[0]).toBe(
+        false,
+      );
+    },
+  );
+
   it("creates its private table only on admission, publishes the exact account and snapshot, and replays only for its owner", async () => {
     await persistPublicationTestSession();
     action = await preparePersonalPublicationFixtureV2({ client, context });
@@ -513,7 +532,7 @@ describe("personal publication authority and recovery", () => {
           runId: "later-run",
           owner: { kind: "local" },
         }),
-      ).rejects.toThrow("being published");
+      ).rejects.toThrow("workspace is busy");
       await expect(acquireWorktreeRunLease("worktree-1")).rejects.toThrow("in use");
       await expect(
         coordinator.requestPersonalForSessionV2(

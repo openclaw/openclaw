@@ -19,6 +19,31 @@ import { verifyBackupArchive } from "./backup-verify.js";
 import { backupCreateCommand } from "./backup.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
+const markerName = ".openclaw-private-update-capture";
+const validMarker = "openclaw-private-update-capture-v1\n";
+
+async function linkDirectory(target: string, alias: string) {
+  await fs.symlink(target, alias, process.platform === "win32" ? "junction" : "dir");
+}
+
+async function writeFiles(directory: string, files: Record<string, string>) {
+  await fs.mkdir(directory, { recursive: true });
+  for (const [name, contents] of Object.entries(files)) {
+    await fs.writeFile(path.join(directory, name), contents);
+  }
+}
+
+function createDatabase(databasePath: string, role: "global" | "agent" = "global") {
+  const version = role === "global" ? OPENCLAW_STATE_SCHEMA_VERSION : OPENCLAW_AGENT_SCHEMA_VERSION;
+  const db = new DatabaseSync(databasePath);
+  db.exec(role === "global" ? OPENCLAW_STATE_SCHEMA_SQL : OPENCLAW_AGENT_SCHEMA_SQL);
+  db.exec(`PRAGMA user_version=${version}`);
+  db.prepare(
+    "INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,created_at,updated_at) VALUES('primary',?,?,?,1,1)",
+  ).run(role, version, role === "agent" ? "main" : null);
+  db.close();
+}
+
 async function listArchiveEntries(archivePath: string): Promise<string[]> {
   const entries: string[] = [];
   await tar.t({
@@ -53,13 +78,8 @@ describe("private update capture exclusion", () => {
     output = path.join(path.dirname(home.home), `${path.basename(home.home)}.tar.gz`);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
-    await fs.mkdir(path.join(captureRoot, "completed"), { recursive: true });
-    await fs.writeFile(path.join(captureRoot, "completed", "private.txt"), "retained raw bytes");
-    await fs.mkdir(`${captureRoot}-notes`);
-    await fs.writeFile(
-      path.join(`${captureRoot}-notes`, "healthy.txt"),
-      "ordinary workspace bytes",
-    );
+    await writeFiles(path.join(captureRoot, "completed"), { "private.txt": "retained raw bytes" });
+    await writeFiles(`${captureRoot}-notes`, { "healthy.txt": "ordinary workspace bytes" });
   });
   afterEach(async () => {
     resetConfigRuntimeState();
@@ -81,11 +101,7 @@ describe("private update capture exclusion", () => {
       await fs.mkdir(directory, { recursive: true });
     }
     await fs.rename(otherState, otherState + "-target");
-    await fs.symlink(
-      otherState + "-target",
-      otherState,
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    await linkDirectory(otherState + "-target", otherState);
     const privateFile = path.join(otherCapture, "run", "private-b.txt");
     await fs.writeFile(privateFile, "synthetic private B bytes");
     await fs.writeFile(path.join(otherCapture, "run", "config.json"), '{"synthetic":"raw B"}');
@@ -128,7 +144,7 @@ describe("private update capture exclusion", () => {
     const configPath = path.join(target, "config.json");
     await fs.writeFile(configPath, "{}");
     const captureAlias = owner + ".update-captures";
-    await fs.symlink(target, captureAlias, process.platform === "win32" ? "junction" : "dir");
+    await linkDirectory(target, captureAlias);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(captureAlias, "config.json"));
     await expect(
       backupCreateCommand(createTestRuntime(), { output, onlyConfig: true, verify: true }),
@@ -136,6 +152,36 @@ describe("private update capture exclusion", () => {
     await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.readFile(configPath, "utf8")).toBe("{}");
   });
+
+  it.each(["configured", "canonical"])(
+    "excludes an unmarked %s capture target when the state directory is linked",
+    async (rootKind) => {
+      const canonicalState = path.join(home.home, "canonical-state");
+      await fs.rename(stateDir, canonicalState);
+      await fs.symlink(canonicalState, stateDir, process.platform === "win32" ? "junction" : "dir");
+      const selectedCapture = `${rootKind === "configured" ? stateDir : canonicalState}.update-captures`;
+      if (rootKind === "configured") {
+        await fs.rm(selectedCapture, { recursive: true });
+      }
+      const privateTarget = path.join(home.home, "legacy-retained-data");
+      await fs.mkdir(privateTarget);
+      await fs.writeFile(path.join(privateTarget, "raw-private.txt"), "synthetic raw bytes");
+      await fs.symlink(
+        privateTarget,
+        selectedCapture,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      await configureAgents({ main: { workspace: home.home } });
+      const result = await createBackupArchive({ output });
+      const entries = await listArchiveEntries(result.archivePath);
+      expect(entries.some((entry) => entry.endsWith("/raw-private.txt"))).toBe(false);
+      expect(entries.some((entry) => entry.endsWith("/healthy.txt"))).toBe(true);
+      await verifyBackupArchive(result.archivePath);
+      expect(await fs.readFile(path.join(privateTarget, "raw-private.txt"), "utf8")).toBe(
+        "synthetic raw bytes",
+      );
+    },
+  );
 
   it("excludes marked orphaned and relocated artifacts from a parent workspace", async () => {
     const otherState = path.join(home.home, "profile-b");
@@ -148,20 +194,18 @@ describe("private update capture exclusion", () => {
     }
     // Fixed producer contract, independent of the implementation's constants.
     for (const directory of [orphanedRoot, moved, movedRoot]) {
-      await fs.writeFile(
-        path.join(directory, ".openclaw-private-update-capture"),
-        "openclaw-private-update-capture-v1\n",
-      );
-      await fs.writeFile(path.join(directory, "raw.txt"), "synthetic retained bytes");
+      await writeFiles(directory, {
+        [markerName]: validMarker,
+        "raw.txt": "synthetic retained bytes",
+      });
     }
     await fs.rename(otherState, `${otherState}-renamed`);
-    await fs.writeFile(path.join(healthy, "healthy.txt"), "ordinary workspace bytes");
-    await fs.writeFile(
-      path.join(healthy, "manifest.json"),
-      '{"schema":"openclaw.update-capture.v1"}',
-    );
+    await writeFiles(healthy, {
+      "healthy.txt": "ordinary workspace bytes",
+      "manifest.json": '{"schema":"openclaw.update-capture.v1"}',
+    });
     const alias = path.join(home.home, "artifact-alias");
-    await fs.symlink(moved, alias, process.platform === "win32" ? "junction" : "dir");
+    await linkDirectory(moved, alias);
     await configureAgents({
       main: { workspace: home.home },
       healthy: { workspace: healthy },
@@ -184,15 +228,11 @@ describe("private update capture exclusion", () => {
     const external = path.join(home.home, "external-skill");
     await fs.mkdir(skills);
     await fs.mkdir(external);
-    const marker = path.join(skills, ".openclaw-private-update-capture");
-    await fs.writeFile(marker, "openclaw-private-update-capture-v1\n");
+    const marker = path.join(skills, markerName);
+    await fs.writeFile(marker, validMarker);
     const skill = "---\nname: demo\ndescription: Synthetic private skill\n---\n";
     await fs.writeFile(path.join(external, "SKILL.md"), skill);
-    await fs.symlink(
-      external,
-      path.join(skills, "demo"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    await linkDirectory(external, path.join(skills, "demo"));
     await configureAgents({ main: { workspace: `${captureRoot}-notes` } });
     const result = await createBackupArchive({ output });
     const entries = await listArchiveEntries(result.archivePath);
@@ -200,7 +240,7 @@ describe("private update capture exclusion", () => {
     expect(entries.some((entry) => entry.endsWith("/healthy.txt"))).toBe(true);
     await verifyBackupArchive(result.archivePath);
     expect(await fs.readFile(path.join(external, "SKILL.md"), "utf8")).toBe(skill);
-    expect(await fs.readFile(marker, "utf8")).toBe("openclaw-private-update-capture-v1\n");
+    expect(await fs.readFile(marker, "utf8")).toBe(validMarker);
   });
 
   it.each(["invalid with duplicate", "valid with duplicate", "valid via alias"])(
@@ -210,18 +250,16 @@ describe("private update capture exclusion", () => {
       const marked = path.join(home.home, "marked-parent");
       await fs.mkdir(outside);
       await fs.mkdir(marked);
-      const marker = path.join(marked, ".openclaw-private-update-capture");
-      const markerBytes = mode.startsWith("invalid")
-        ? "incomplete"
-        : "openclaw-private-update-capture-v1\n";
+      const marker = path.join(marked, markerName);
+      const markerBytes = mode.startsWith("invalid") ? "incomplete" : validMarker;
       await fs.writeFile(marker, markerBytes);
       const raw = path.join(outside, "outward.txt");
       await fs.writeFile(raw, "synthetic outward bytes");
       let alias = path.join(marked, "workspace");
-      await fs.symlink(outside, alias, process.platform === "win32" ? "junction" : "dir");
+      await linkDirectory(outside, alias);
       if (mode.endsWith("via alias")) {
         const markedAlias = path.join(home.home, "marked-alias");
-        await fs.symlink(marked, markedAlias, process.platform === "win32" ? "junction" : "dir");
+        await linkDirectory(marked, markedAlias);
         alias = path.join(markedAlias, "workspace");
       }
       await configureAgents({
@@ -253,7 +291,7 @@ describe("private update capture exclusion", () => {
   );
 
   it("refuses publication for an invalid marker even in a known capture directory", async () => {
-    await fs.writeFile(path.join(captureRoot, ".openclaw-private-update-capture"), "incomplete");
+    await fs.writeFile(path.join(captureRoot, markerName), "incomplete");
     await fs.writeFile(path.join(captureRoot, "raw.txt"), "synthetic incomplete bytes");
     await configureAgents({ main: { workspace: home.home } });
     await expect(createBackupArchive({ output })).rejects.toThrow("Private update capture marker");
@@ -267,21 +305,10 @@ describe("private update capture exclusion", () => {
     const selectedRoot = path.join(home.home, "profile-b.update-captures");
     const moved = path.join(home.home, "relocated");
     await fs.mkdir(path.join(moved, "completed"), { recursive: true });
-    await fs.writeFile(
-      path.join(moved, ".openclaw-private-update-capture"),
-      "openclaw-private-update-capture-v1\n",
-    );
-    await fs.symlink(moved, selectedRoot, process.platform === "win32" ? "junction" : "dir");
+    await fs.writeFile(path.join(moved, markerName), validMarker);
+    await linkDirectory(moved, selectedRoot);
     const databasePath = path.join(selectedRoot, "completed", "database.sqlite");
-    const source = new DatabaseSync(databasePath);
-    source.exec(OPENCLAW_STATE_SCHEMA_SQL);
-    source.exec(`PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION}`);
-    source
-      .prepare(
-        "INSERT INTO schema_meta(meta_key,role,schema_version,created_at,updated_at) VALUES('primary','global',?,1,1)",
-      )
-      .run(OPENCLAW_STATE_SCHEMA_VERSION);
-    source.close();
+    createDatabase(databasePath);
     const before = await fs.readFile(databasePath);
     const database = { path: databasePath, identity: { role: "global" as const } };
     const repositoryPath = path.join(home.home, "backup-repository");
@@ -292,13 +319,6 @@ describe("private update capture exclusion", () => {
             repositoryPath,
             stateDir,
             databases: [database],
-            gitEnv: {
-              ...process.env,
-              GIT_AUTHOR_NAME: "OpenClaw Test",
-              GIT_AUTHOR_EMAIL: "test@example.invalid",
-              GIT_COMMITTER_NAME: "OpenClaw Test",
-              GIT_COMMITTER_EMAIL: "test@example.invalid",
-            },
           });
     await expect(create).rejects.toThrow("Private update captures are excluded");
     expect(await fs.readFile(databasePath)).toEqual(before);
@@ -309,19 +329,18 @@ describe("private update capture exclusion", () => {
     const target = path.join(home.home, "external-agent");
     await fs.mkdir(marked);
     await fs.mkdir(target);
-    const marker = path.join(marked, ".openclaw-private-update-capture");
-    const markerBytes = "openclaw-private-update-capture-v1\n";
-    await fs.writeFile(marker, markerBytes);
+    const marker = path.join(marked, markerName);
+    await fs.writeFile(marker, validMarker);
     await fs.writeFile(path.join(target, "agent-private.txt"), "synthetic private agent bytes");
     const alias = path.join(marked, "agent");
-    await fs.symlink(target, alias, process.platform === "win32" ? "junction" : "dir");
+    await linkDirectory(target, alias);
     await configureAgents({ main: { agentDir: alias, workspace: `${captureRoot}-notes` } });
     await expect(createBackupArchive({ output })).rejects.toThrow("Private update capture");
     await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.readFile(path.join(target, "agent-private.txt"), "utf8")).toBe(
       "synthetic private agent bytes",
     );
-    expect(await fs.readFile(marker, "utf8")).toBe(markerBytes);
+    expect(await fs.readFile(marker, "utf8")).toBe(validMarker);
   });
 
   it.each([
@@ -339,20 +358,12 @@ describe("private update capture exclusion", () => {
           ? path.join(stateDir, "state")
           : path.join(home.home, "marked-agent-parent");
       await fs.mkdir(marked, { recursive: true });
-      const marker = path.join(marked, ".openclaw-private-update-capture");
+      const marker = path.join(marked, markerName);
       const databasePath = path.join(
         target,
         role === "global" ? "openclaw.sqlite" : "openclaw-agent.sqlite",
       );
-      const version =
-        role === "global" ? OPENCLAW_STATE_SCHEMA_VERSION : OPENCLAW_AGENT_SCHEMA_VERSION;
-      const db = new DatabaseSync(databasePath);
-      db.exec(role === "global" ? OPENCLAW_STATE_SCHEMA_SQL : OPENCLAW_AGENT_SCHEMA_SQL);
-      db.exec(`PRAGMA user_version=${version}`);
-      db.prepare(
-        "INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,created_at,updated_at) VALUES('primary',?,?,?,1,1)",
-      ).run(role, version, role === "agent" ? "main" : null);
-      db.close();
+      createDatabase(databasePath, role === "global" ? "global" : "agent");
       const alias =
         role === "global" ? path.join(marked, "openclaw.sqlite") : path.join(marked, "agent");
       await fs.symlink(
@@ -385,7 +396,7 @@ describe("private update capture exclusion", () => {
               ...(role === "global" ? { global: true } : { agents: ["main"] }),
             });
       const before = await fs.readFile(databasePath);
-      for (const bytes of ["incomplete", "openclaw-private-update-capture-v1\n"]) {
+      for (const bytes of ["incomplete", validMarker]) {
         await fs.writeFile(marker, bytes);
         await expect(create()).rejects.toThrow("Private update capture");
         await expect(fs.stat(repository)).rejects.toMatchObject({ code: "ENOENT" });

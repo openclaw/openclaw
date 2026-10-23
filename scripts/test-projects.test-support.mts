@@ -123,6 +123,7 @@ import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestCacheRoot, resolveVitestCacheSlotPath } from "./lib/vitest-cache-slots.mts";
 import {
   collectVitestFileFilters,
+  replaceVitestFileFilters,
   resolveBooleanModeFlag,
   vitestOptionConsumesNextArg,
 } from "./lib/vitest-cli-mode.mts";
@@ -775,7 +776,6 @@ const MARKDOWN_RENDER_CHUNKING_TEST_TARGETS = [
   "packages/markdown-core/src/ir.test.ts",
   "packages/markdown-core/src/render-aware-chunking.test.ts",
   "packages/markdown-core/src/render.annotations.test.ts",
-  "packages/markdown-core/src/render.crossing.test.ts",
   "src/plugin-sdk/format-capabilities.test.ts",
   "src/plugin-sdk/text-chunking.test.ts",
   "extensions/googlechat/src/format.test.ts",
@@ -797,6 +797,10 @@ const SOURCE_TEST_TARGETS = new Map([
       "src/agents/live-target-matcher.test.ts",
       "src/agents/model-compat.test.ts",
     ],
+  ],
+  [
+    "src/plugin-sdk/lazy-value.ts",
+    ["src/plugin-sdk/core.test.ts", "src/plugin-sdk/channel-entry-contract.test.ts"],
   ],
   ["src/plugin-sdk/memory-host-events.ts", ["src/plugin-sdk/memory-host-events.test.ts"]],
   ["src/plugin-sdk/persistent-dedupe.ts", ["src/plugin-sdk/memory-host-events.test.ts"]],
@@ -916,10 +920,6 @@ const SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
-    "extensions/google-meet/src/cli-artifact-commands.ts",
-    ["extensions/google-meet/src/cli-artifacts.test.ts"],
-  ],
-  [
     "extensions/google-meet/src/cli-export.ts",
     ["extensions/google-meet/src/cli-artifacts.test.ts"],
   ],
@@ -927,11 +927,6 @@ const SOURCE_TEST_TARGETS = new Map([
     "extensions/google-meet/src/cli-space-commands.ts",
     ["extensions/google-meet/src/cli-artifacts.test.ts"],
   ],
-  [
-    "extensions/google-meet/src/cli-runtime-commands.ts",
-    ["extensions/google-meet/src/cli-runtime.test.ts"],
-  ],
-  ["extensions/google-meet/src/cli-doctor.ts", ["extensions/google-meet/src/cli.test.ts"]],
   [
     "extensions/google-meet/src/cli-command-context.ts",
     [
@@ -1344,7 +1339,7 @@ function createBoundedExtensionPlans(
   const chunks = createExtensionTestProcessTargetChunks(
     config,
     config === EXTENSION_DATABASE_WORKERS_VITEST_CONFIG && plan.includePatterns
-      ? plan.includePatterns
+      ? expandVitestIncludePatterns(plan.includePatterns, cwd)
       : roots,
     forwardedArgs,
     cwd,
@@ -3243,6 +3238,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [
     "scripts/lib/release-context.mjs",
     ["full-release-validation-at-sha", "release-candidate-checklist", packageAcceptance],
+  ],
+  [
+    "scripts/lib/release-candidate-changelog.mts",
+    ["full-release-validation-at-sha", "release-candidate-checklist"],
   ],
   [
     "scripts/lib/clawhub-bootstrap-artifact.mjs",
@@ -6043,7 +6042,7 @@ export function createVitestRunSpecs(
   )
     ? loadIncludePatternsForSpecFilter(baseEnv)
     : null;
-  return plans.flatMap((originalPlan, index) => {
+  const scopedPlans = plans.flatMap((originalPlan) => {
     const plan =
       originalPlan.includePatterns && inheritedIncludes
         ? {
@@ -6055,9 +6054,28 @@ export function createVitestRunSpecs(
             ),
           }
         : originalPlan;
-    if (inheritedIncludes && plan.includePatterns?.length === 0) {
-      return [];
+    return inheritedIncludes && plan.includePatterns?.length === 0 ? [] : [plan];
+  });
+  const boundedPlans = scopedPlans.flatMap((plan) => {
+    if (plan.watchMode || plan.config !== GATEWAY_SERVER_VITEST_CONFIG) {
+      return [plan];
     }
+    const chunks = createGatewayServerTestTargetChunks(
+      cwd,
+      plan.forwardedArgs,
+      baseEnv,
+      plan.includePatterns ?? undefined,
+    );
+    return chunks.length > 1
+      ? chunks.map((targets) =>
+          Object.assign({}, plan, {
+            forwardedArgs: replaceVitestFileFilters(plan.forwardedArgs, targets),
+            timingTargets: targets,
+          }),
+        )
+      : [plan];
+  });
+  return boundedPlans.map((plan, index) => {
     const includeFilePath = plan.includePatterns
       ? path.join(os.tmpdir(), `openclaw-vitest-include-${randomUUID()}-${index}.json`)
       : null;

@@ -1,6 +1,3 @@
-/**
- * Runtime SDK type surface for plugin-scoped keyed state stores.
- */
 import { capturePluginStateNativeBindingStore } from "../plugin-state/plugin-state-store.native-binding.js";
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";

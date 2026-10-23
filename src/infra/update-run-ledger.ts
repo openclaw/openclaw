@@ -9,7 +9,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import type { EngineConnection } from "./sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
@@ -494,15 +494,17 @@ export function finishInterruptedUpdateBeforeActivation(
       // Older targets can omit recovery storage and predate STRICT metadata.
       // The existing writer validates metadata ownership/version; present recovery
       // storage must still match its canonical shape before excluding recovery.
-      const recoveryObject = executeSqliteQueryTakeFirstSync(
-        db,
-        getNodeSqliteKysely<{ "main.sqlite_schema": { name: string } }>(db)
-          .selectFrom("main.sqlite_schema")
-          .select("name")
-          .where("name", "=", recoveryTable),
-      );
-      if (recoveryObject) {
-        assertSqliteSchemaContains(db, pathname, recoverySchema);
+      if (!isPostgresSqlConnection(db)) {
+        const recoveryObject = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<{ "main.sqlite_schema": { name: string } }>(db)
+            .selectFrom("main.sqlite_schema")
+            .select("name")
+            .where("name", "=", recoveryTable),
+        );
+        if (recoveryObject) {
+          assertSqliteSchemaContains(db, pathname, recoverySchema);
+        }
       }
       finishInterruptedRunInTransaction(db, expected, "failed", options);
       assertCurrent();

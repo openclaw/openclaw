@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -13,7 +14,10 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { assertDatabasePortPluginMigrationsComplete } from "./doctor-database-port-migrations.js";
 import { doctorDatabasePort } from "./doctor-database-port.js";
 
@@ -27,6 +31,31 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => ({
 afterEach(() => {
   controls.entries = [];
 });
+
+function portGate(state: OpenClawTestState, config: OpenClawConfig) {
+  return (
+    options: Partial<Parameters<typeof assertDatabasePortPluginMigrationsComplete>[0]> = {},
+  ) =>
+    assertDatabasePortPluginMigrationsComplete({
+      config,
+      env: state.env,
+      stateDir: state.stateDir,
+      to: "postgres",
+      ...options,
+    });
+}
+
+const sqlitePortConfig = (): OpenClawConfig => ({
+  database: { engine: "sqlite", postgres: { connection: "postgres://unused.invalid/test" } },
+  plugins: { enabled: false },
+});
+
+function migrationEntry(
+  pluginId: string,
+  migration: PluginDoctorStateMigration,
+): PluginDoctorStateMigrationEntry {
+  return { pluginId, channelIds: pluginId === "matrix" ? ["matrix"] : [], migration };
+}
 
 describe("database port legacy import preflight", () => {
   it.each([
@@ -43,20 +72,9 @@ describe("database port legacy import preflight", () => {
           ).href
         )) as { stateMigrations: PluginDoctorStateMigration[] };
         const migration = stateMigrations.find((entry) => entry.id === id);
-        expect(migration).toBeDefined();
-        if (!migration) {
-          throw new Error(`Missing ${id}`);
-        }
-        controls.entries = [
-          { pluginId, channelIds: pluginId === "matrix" ? ["matrix"] : [], migration },
-        ];
-        const config: OpenClawConfig = {
-          database: {
-            engine: "sqlite",
-            postgres: { connection: "postgres://unused.invalid/test" },
-          },
-          plugins: { enabled: false },
-        };
+        assert(migration, `Missing ${id}`);
+        controls.entries = [migrationEntry(pluginId, migration)];
+        const config = sqlitePortConfig();
         await state.writeConfig(config);
         let source: string;
         if (pluginId === "codex") {
@@ -82,13 +100,7 @@ describe("database port legacy import preflight", () => {
           source = state.statePath("state", "openclaw.sqlite");
         } else {
           source = state.statePath(
-            "matrix",
-            "accounts",
-            "default",
-            "matrix.example.org__bot",
-            "0123456789abcdef",
-            "state",
-            "openclaw.sqlite",
+            "matrix/accounts/default/matrix.example.org__bot/0123456789abcdef/state/openclaw.sqlite",
           );
           await fs.mkdir(path.dirname(source), { recursive: true });
           const roomId = "!room:example.org",
@@ -106,39 +118,28 @@ describe("database port legacy import preflight", () => {
           ).run(key, JSON.stringify({ roomId, eventId, ts }), ts);
         }
         const before = await fs.readFile(source);
-        const gate = () =>
-          assertDatabasePortPluginMigrationsComplete({
-            config,
-            env: state.env,
-            stateDir: state.stateDir,
-            to: "postgres",
-          });
+        const gate = portGate(state, config);
         await expect(gate()).rejects.toThrow(`${pluginId}/${id}`);
         expect(await fs.readFile(source)).toEqual(before);
-        const skipped = await runPluginDoctorStateMigrationPlans({
-          detected: {
-            stateDir: state.stateDir,
-            oauthDir: state.statePath("oauth"),
-            doctorOnlyStateMigrations: true,
-          },
-          config: { ...config, database: { ...config.database, engine: "postgres" } },
-          env: state.env,
+        const migrate = (engine: "sqlite" | "postgres") =>
+          runPluginDoctorStateMigrationPlans({
+            detected: {
+              stateDir: state.stateDir,
+              oauthDir: state.statePath("oauth"),
+              doctorOnlyStateMigrations: true,
+            },
+            config: { ...config, database: { ...config.database, engine } },
+            env: state.env,
+          });
+        expect(await migrate("postgres")).toMatchObject({
+          changes: [],
+          warnings: [],
+          notices: [
+            `${migration.label}: legacy SQLite migration not applicable on PostgreSQL; legacy data is migrated before port.`,
+          ],
         });
-        expect(skipped.changes).toEqual([]);
-        expect(skipped.warnings).toEqual([]);
-        expect(skipped.notices).toEqual([
-          `${migration.label}: legacy SQLite migration not applicable on PostgreSQL; legacy data is migrated before port.`,
-        ]);
         expect(await fs.readFile(source)).toEqual(before);
-        const repaired = await runPluginDoctorStateMigrationPlans({
-          detected: {
-            stateDir: state.stateDir,
-            oauthDir: state.statePath("oauth"),
-            doctorOnlyStateMigrations: true,
-          },
-          config,
-          env: state.env,
-        });
+        const repaired = await migrate("sqlite");
         expect(repaired.warnings).toEqual([]);
         expect(repaired.changes.length).toBeGreaterThan(0);
         await expect(gate()).resolves.toBeUndefined();
@@ -149,10 +150,7 @@ describe("database port legacy import preflight", () => {
 
   it("refuses before port preparation and permits retry after the source migration completes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const config: OpenClawConfig = {
-        database: { engine: "sqlite", postgres: { connection: "postgres://unused.invalid/test" } },
-        plugins: { enabled: false },
-      };
+      const config = sqlitePortConfig();
       await state.writeConfig(config);
       const source = state.path("legacy.sqlite");
       {
@@ -161,30 +159,31 @@ describe("database port legacy import preflight", () => {
       }
       const migrateLegacyState = vi.fn(() => ({ changes: [], warnings: [] }));
       controls.entries = [
-        {
-          pluginId: "legacy-owner",
-          channelIds: [],
-          migration: {
-            id: "legacy-import",
-            label: "Legacy data",
-            sqliteOnly: { family: "agent" },
-            doctorOnly: true,
-            phase: "after-session-repair",
-            detectLegacyState: () => {
-              using db = new DatabaseSync(source, { readOnly: true });
-              return db.prepare("SELECT 1 FROM legacy").get()
-                ? { preview: ["Legacy data needs import"] }
-                : null;
-            },
-            migrateLegacyState,
+        migrationEntry("legacy-owner", {
+          id: "legacy-import",
+          label: "Legacy data",
+          sqliteOnly: { family: "workboard" },
+          doctorOnly: true,
+          phase: "after-session-repair",
+          detectLegacyState: () => {
+            using db = new DatabaseSync(source, { readOnly: true });
+            return db.prepare("SELECT 1 FROM legacy").get()
+              ? { preview: ["Legacy data needs import"] }
+              : null;
           },
-        },
+          migrateLegacyState,
+        }),
       ];
       const before = await fs.readFile(source);
       const configBefore = await fs.readFile(state.configPath);
-      await expect(doctorDatabasePort({ to: "postgres" })).rejects.toThrow(
-        "legacy-owner/legacy-import (Legacy data). Run openclaw doctor --fix first, then retry port.",
-      );
+      for (const family of [undefined, "workboard"] as const) {
+        await expect(doctorDatabasePort({ family, to: "postgres" })).rejects.toThrow(
+          "legacy-owner/legacy-import (Legacy data). Run openclaw doctor --fix first, then retry port.",
+        );
+      }
+      await expect(
+        doctorDatabasePort({ family: "state", to: "postgres", dryRun: true }),
+      ).resolves.toMatchObject({ phase: "preflight" });
       expect(await fs.readFile(source)).toEqual(before);
       expect(await fs.readFile(state.configPath)).toEqual(configBefore);
       await expect(
@@ -197,14 +196,7 @@ describe("database port legacy import preflight", () => {
         using db = new DatabaseSync(source);
         db.exec("DELETE FROM legacy");
       }
-      await expect(
-        assertDatabasePortPluginMigrationsComplete({
-          config,
-          env: state.env,
-          stateDir: state.stateDir,
-          to: "postgres",
-        }),
-      ).resolves.toBeUndefined();
+      await expect(portGate(state, config)()).resolves.toBeUndefined();
     });
   });
 
@@ -212,10 +204,8 @@ describe("database port legacy import preflight", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const detected: string[] = [];
       controls.entries = (["state", "agent", "workboard", "logbook", "team-reports"] as const).map(
-        (family) => ({
-          pluginId: family,
-          channelIds: [],
-          migration: {
+        (family) =>
+          migrationEntry(family, {
             id: `${family}-import`,
             label: family,
             sqliteOnly: { family },
@@ -226,28 +216,23 @@ describe("database port legacy import preflight", () => {
             migrateLegacyState: () => {
               throw new Error("port must never run Doctor migrations");
             },
-          },
-        }),
+          }),
       );
-      await assertDatabasePortPluginMigrationsComplete({
+      const gate = portGate(state, { database: { engine: "sqlite" } });
+      await gate({
         config: {
           database: {
             engine: "sqlite",
             families: { state: { engine: "postgres" }, agent: { engine: "sqlite" } },
           },
         },
-        env: state.env,
-        stateDir: state.stateDir,
-        to: "postgres",
       });
       expect(detected).toEqual(["workboard", "logbook", "team-reports"]);
       detected.length = 0;
-      await assertDatabasePortPluginMigrationsComplete({
-        config: { database: { engine: "postgres" } },
-        env: state.env,
-        stateDir: state.stateDir,
-        to: "sqlite",
-      });
+      await gate({ family: "workboard" });
+      expect(detected).toEqual(["workboard"]);
+      detected.length = 0;
+      await gate({ config: { database: { engine: "postgres" } }, to: "sqlite" });
       expect(detected).toEqual([]);
     });
   });
@@ -255,28 +240,17 @@ describe("database port legacy import preflight", () => {
   it("fails closed without exposing detector errors", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       controls.entries = [
-        {
-          pluginId: "source-owner",
-          channelIds: [],
-          migration: {
-            id: "unreadable-import",
-            label: "Unreadable legacy data",
-            sqliteOnly: { family: "state" },
-            detectLegacyState: () => {
-              throw new Error("private legacy payload");
-            },
-            migrateLegacyState: () => ({ changes: [], warnings: [] }),
+        migrationEntry("source-owner", {
+          id: "unreadable-import",
+          label: "Unreadable legacy data",
+          sqliteOnly: { family: "state" },
+          detectLegacyState: () => {
+            throw new Error("private legacy payload");
           },
-        },
-      ];
-      await expect(
-        assertDatabasePortPluginMigrationsComplete({
-          config: {},
-          env: state.env,
-          stateDir: state.stateDir,
-          to: "postgres",
+          migrateLegacyState: () => ({ changes: [], warnings: [] }),
         }),
-      ).rejects.toThrow(
+      ];
+      await expect(portGate(state, {})()).rejects.toThrow(
         "Database port could not inspect SQLite migration source-owner/unreadable-import (Unreadable legacy data). Run openclaw doctor --fix first, then retry port.",
       );
     });

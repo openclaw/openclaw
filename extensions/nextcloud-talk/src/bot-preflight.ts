@@ -1,11 +1,11 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
 import { readNextcloudTalkErrorBody } from "./guarded-response.js";
-import { ssrfPolicyFromPrivateNetworkOptIn } from "./send.runtime.js";
 
 const BOT_FEATURE_RESPONSE = 2;
 

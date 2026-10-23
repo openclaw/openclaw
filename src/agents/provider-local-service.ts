@@ -192,7 +192,7 @@ async function acquireProviderLocalService(
       return;
     }
     released = true;
-    managed.active = Math.max(0, managed.active - 1);
+    managed.active -= 1;
     scheduleIdleStop(key, managed, service);
   };
 
@@ -409,10 +409,7 @@ async function startAndWaitForLocalService(params: {
 
   const startedAt = Date.now();
   const diagnostics: LocalServiceDiagnostics = {
-    providerId: provider,
     healthUrl,
-    startedAt,
-    stdoutTail: "",
     stderrTail: "",
   };
   managed.diagnostics = diagnostics;
@@ -434,26 +431,21 @@ async function startAndWaitForLocalService(params: {
   managed.process = owned;
   diagnostics.pid = child.pid;
   managed.lastExit = undefined;
-  for (const [stream, tail] of [
-    [child.stdout, "stdoutTail"],
-    [child.stderr, "stderrTail"],
-  ] as const) {
-    stream?.setEncoding("utf8");
-    stream?.on("data", (chunk: string) => {
-      diagnostics[tail] = appendLocalServiceOutputTail(
-        diagnostics[tail],
-        chunk,
-        service.env,
-        process.env,
-        service.args,
-        healthHeaders,
-      );
-    });
-  }
+  child.stdout?.resume();
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk: string) => {
+    diagnostics.stderrTail = appendLocalServiceOutputTail(
+      diagnostics.stderrTail,
+      chunk,
+      service.env,
+      process.env,
+      service.args,
+      healthHeaders,
+    );
+  });
   child.unref();
   child.once("exit", (code, signalLocal) => {
     const exit = { code, signal: signalLocal };
-    diagnostics.lastExit = exit;
     log.info(
       `${provider} local service exited: ${signalLocal ? `signal=${signalLocal}` : `code=${code ?? 0}`}`,
     );
@@ -477,9 +469,7 @@ async function startAndWaitForLocalService(params: {
   for (;;) {
     if (await probeHealth(healthUrl, healthHeaders, signal, assertAuthCurrent)) {
       diagnostics.readyAt = Date.now();
-      diagnostics.lastHealthyAt = diagnostics.readyAt;
       // Drain readiness diagnostics so pipes cannot pin one-shot hosts.
-      diagnostics.stdoutTail = "";
       diagnostics.stderrTail = "";
       drainLocalServiceOutput(child);
       log.info(
@@ -568,7 +558,7 @@ function stopManagedService(
       }
       // Startup reports its error to its caller; shutdown must still join its tail.
       await starting?.catch(() => {});
-      await stopManagedProcess(managed, new AbortController().signal);
+      await stopManagedProcess(managed);
       if (services.get(key) === managed) {
         services.delete(key);
       }
@@ -585,7 +575,7 @@ function stopManagedService(
   return pending;
 }
 
-async function stopManagedProcess(managed: ManagedLocalService, signal: AbortSignal) {
+async function stopManagedProcess(managed: ManagedLocalService, signal?: AbortSignal) {
   throwIfAborted(signal);
   const owned = managed.process;
   managed.lastExit = undefined;
@@ -660,9 +650,7 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
   if (!signal) {
     return promise;
   }
-  return racePromiseWithAbortSignal(promise, signal, toAbortError).catch((error: unknown) => {
-    throw toErrorObject(error, "Non-Error rejection");
-  });
+  return racePromiseWithAbortSignal(promise, signal, toAbortError);
 }
 
 function waitForSpawnResult(

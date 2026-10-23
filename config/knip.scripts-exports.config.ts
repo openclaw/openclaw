@@ -23,6 +23,10 @@ const scriptEntries = productionConfig.workspaces["."].entry.filter(
 );
 
 const repositoryToolEntries = [
+  // Knip loads this configuration, which consumes the Vite runnerImport compiler.
+  "config/knip.config.ts!",
+  // ui/config/control-ui-locales.ts invokes the catalogue through Vite's runnerImport.
+  "config/knip-vite-consumers.mjs!",
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/workflows/labeler.yml!",
   ".github/workflows/openclaw-release-publish.yml!",
@@ -45,7 +49,12 @@ const config = {
       .map((name) => `packages/${name}`),
     "ui",
   ],
-  ignore: ["scripts/**/*.d.{mts,cts,ts}", "scripts/**/*.test-support.{js,mjs,cjs,ts,mts,cts}"],
+  ignore: [
+    "scripts/**/*.d.{mts,cts,ts}",
+    "scripts/**/*.test-support.{js,mjs,cjs,ts,mts,cts}",
+    // Generated declaration companion; application scans own its executable validator.
+    "packages/gateway-protocol/src/compiled/sender-identity.d.ts",
+  ],
   // Script entrypoints import core and Plugin SDK APIs. Those owners are
   // checked by the application scans; this pass owns only scripts/** exports.
   ignoreIssues: {

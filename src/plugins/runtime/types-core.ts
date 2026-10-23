@@ -3,7 +3,6 @@ import type { CreateChannelIngressDrainOptions } from "../../channels/message/in
 import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.types.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
 import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
-import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
 import type { OpenAsyncKeyedStoreOptions } from "../../plugin-state/plugin-state-store.types.js";
@@ -15,13 +14,6 @@ type PrepareTtsRequest = TtsRuntimeApi["prepareTtsRequest"];
 type TextToSpeech = typeof import("../../tts/tts.js").textToSpeech;
 type TextToSpeechStream = TtsRuntimeApi["textToSpeechStream"];
 type TextToSpeechTelephony = TtsRuntimeApi["textToSpeechTelephony"];
-
-type RuntimeRequestHeartbeatOptions = Parameters<
-  typeof import("../../infra/heartbeat-wake.js").requestHeartbeat
->[0];
-
-type RuntimeRequestHeartbeatNowOptions = Omit<RuntimeRequestHeartbeatOptions, "source" | "intent"> &
-  Partial<Pick<RuntimeRequestHeartbeatOptions, "source" | "intent">>;
 
 type RuntimeWriteConfigOptions = {
   /** Revalidate caller authority at guarded publication; accepted writes still settle. */
@@ -218,14 +210,6 @@ export type RuntimeLogger = {
   error: (message: string, meta?: Record<string, unknown>) => void;
 };
 
-export type RunHeartbeatOnceOptions = {
-  reason?: string;
-  agentId?: string;
-  sessionKey?: string;
-  /** Override heartbeat config (e.g. `{ target: "last" }` to deliver to the last active channel). */
-  heartbeat?: { target?: string };
-};
-
 type LlmCompleteMessage = {
   role: "system" | "user" | "assistant";
   content: string;
@@ -294,6 +278,8 @@ export type LlmCompleteErrorCode =
   | "LLM_ISOLATED_INPUT_REJECTED"
   | "LLM_ISOLATED_UNSUPPORTED"
   | "LLM_RUNTIME_UNAVAILABLE"
+  /** The plugin or model runtime is reloading or retired; retry from a fresh plugin operation. */
+  | "LLM_RUNTIME_LIFECYCLE"
   | "LLM_COMPLETION_ABORTED"
   | "LLM_COMPLETION_TIMEOUT"
   | "LLM_COMPLETION_OUTPUT_REJECTED"
@@ -441,7 +427,7 @@ export type PluginRuntimeCore = {
           assertCurrent: () => void;
         }>
       >;
-      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. */
+      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
       patchSessionEntry: (
         params: RuntimeSessionStoreEntryPatchParams,
       ) => Promise<RuntimeSessionEntry | null>;
@@ -451,7 +437,7 @@ export type PluginRuntimeCore = {
         params: RuntimeSessionWorkAdmissionParams,
         run: (signal: AbortSignal) => Promise<T>,
       ) => Promise<T>;
-      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. */
+      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
       updateSessionStoreEntry: (
         params: RuntimeSessionStoreEntryUpdateParams,
       ) => Promise<RuntimeSessionEntry | null>;
@@ -473,19 +459,9 @@ export type PluginRuntimeCore = {
     }) => Promise<{ ok: true; runId: string } | { ok: false; reason: string }>;
   };
   system: {
+    captureSessionEventTarget: typeof import("./runtime-session-events.js").captureSessionEventTarget;
+    enqueueSessionEvent: typeof import("./runtime-session-events.js").enqueueSessionEvent;
     enqueueSystemEvent: typeof import("./system-events.js").enqueueSystemEventFromSdk;
-    requestHeartbeat: typeof import("../../infra/heartbeat-wake.js").requestHeartbeat;
-    /**
-     * @deprecated Use `requestHeartbeat({ source, intent, reason })` so wake producers declare
-     * scheduler intent explicitly.
-     */
-    requestHeartbeatNow: (opts?: RuntimeRequestHeartbeatNowOptions) => void;
-    /**
-     * Run a single heartbeat cycle immediately (bypassing the coalesce timer).
-     * Accepts an optional `heartbeat` config override so callers can choose
-     * an explicit destination or opt into internal-only `target: "none"` runs.
-     */
-    runHeartbeatOnce: (opts?: RunHeartbeatOnceOptions) => Promise<HeartbeatRunResult>;
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
   };
@@ -540,7 +516,7 @@ export type PluginRuntimeCore = {
     ) => import("../../music-generation/types.js").MusicGenerationProvider[];
   };
   webSearch: {
-    /** @deprecated Await listProvidersAsync so discovery policy is prepared off-thread. Final compatibility day: 2026-12-31. */
+    /** @deprecated Await listProvidersAsync so discovery policy is prepared off-thread. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
     listProviders: (
       params?: RuntimeProviderListParams,
     ) => import("../web-provider-types.js").PluginWebSearchProviderEntry[];

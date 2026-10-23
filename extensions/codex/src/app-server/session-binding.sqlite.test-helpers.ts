@@ -1,5 +1,8 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  preparePluginStateRead,
+  type OpenKeyedStoreOptions,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -24,6 +27,7 @@ export function createCodexSqliteTestBindingStateStore(
   return {
     ...state,
     asyncReads: mutations,
+    prepareRead: (key: string) => preparePluginStateRead(mutations, key),
     withCurrent: mutations.withCurrent.bind(mutations),
   };
 }
@@ -38,6 +42,7 @@ export function createCodexRuntimeTestBindingStateStore(
   return {
     ...state,
     asyncReads: mutations,
+    prepareRead: (key: string) => preparePluginStateRead(mutations, key),
     withCurrent: (authority: Parameters<CodexBindingStateStore["withCurrent"]>[0]) =>
       runtime.state.openKeyedStoreV2<StoredCodexAppServerBinding>(options, authority),
   };

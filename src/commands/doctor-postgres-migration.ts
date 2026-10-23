@@ -1,25 +1,33 @@
 import { randomUUID } from "node:crypto";
-import { capturePostgresBackup } from "../snapshot/database-backup.js";
-import { stateEngineInput } from "../state/openclaw-state-db-engine.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { DatabaseEngineInput } from "../infra/database-engine/types.js";
+import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
+import { capturePostgresBackup, fingerprintPostgresBackup } from "../snapshot/database-backup.js";
 
 /** Retain the exact predecessor under the same custody as the version runner. */
 export async function backupDoctorPostgresMigration(
-  env: NodeJS.ProcessEnv,
+  sourcePath: string,
+  input: NonNullable<DatabaseEngineInput>,
   maintenance: { assertAdmission(): void },
-): Promise<string[]> {
-  const sourcePath = resolveOpenClawStateSqlitePath(env);
-  const input = stateEngineInput();
-  if (!input) {
-    throw new Error("PostgreSQL migration backup requires the selected database engine");
-  }
+): Promise<{ changes: string[]; generation?: string }> {
   const directory = `${sourcePath}.pre-startup-migration-${randomUUID()}.postgres.bak`;
+  const config = { database: { engine: "postgres" as const, postgres: input } };
+  maintenance.assertAdmission();
+  const before = hasUpdateDoctorMigrationCapture()
+    ? undefined
+    : await fingerprintPostgresBackup(sourcePath, config);
+  maintenance.assertAdmission();
   await capturePostgresBackup({
     sourcePath,
     directory,
     profile: "exact",
-    config: { database: { engine: "postgres", postgres: input } },
+    config,
     assertCurrent: () => maintenance.assertAdmission(),
   });
-  return [`Saved pre-migration PostgreSQL backup: ${directory}`];
+  const generation =
+    before === undefined ? undefined : await fingerprintPostgresBackup(sourcePath, config);
+  maintenance.assertAdmission();
+  if (before !== undefined && before !== generation) {
+    throw new Error(`PostgreSQL changed during its pre-migration backup: ${sourcePath}`);
+  }
+  return { changes: [`Saved pre-migration PostgreSQL backup: ${directory}`], generation };
 }

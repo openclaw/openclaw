@@ -69,8 +69,6 @@ type GatewayRequestContextRuntime = Pick<
   | "validateAgentRuntimeApprovalAuthority"
   | "terminalSessions"
   | "agentRunSeq"
-  | "chatAbortControllers"
-  | "chatQueuedTurns"
   | "chatRunState"
   | "addChatRun"
   | "removeChatRun"
@@ -101,6 +99,7 @@ type GatewayRequestContextRuntime = Pick<
     | "resolveSharedGatewaySessionGenerationForRuntimeSnapshot"
     | "workerPlacementControlAvailable"
     | "getAttachedGatewayMethodRegistry"
+    | "getReadiness"
   > & {
     sessionObserver: NonNullable<GatewayRequestContext["sessionObserver"]>;
     sessionActivitySummaries?: GatewayRequestContext["sessionActivitySummaries"];
@@ -148,7 +147,12 @@ type GatewayRequestContextRuntime = Pick<
     kernel: Pick<
       GatewayCoreRuntime["kernel"],
       "applyPluginLifecycleChange" | "getConfigReloaderHotReloadStatus"
-    >;
+    > & {
+      pluginRuntimeGeneration: Pick<
+        GatewayCoreRuntime["kernel"]["pluginRuntimeGeneration"],
+        "getReloadStatus"
+      >;
+    };
     workerEnvironmentStartup:
       | Pick<NonNullable<GatewayCoreRuntime["workerEnvironmentStartup"]>, "placementStore">
       | undefined;
@@ -338,6 +342,7 @@ export function createGatewayRequestContext(
       ? { readChatStartupProjection: params.chatMetadataLifecycle.readStartup }
       : {}),
     getHealthCache,
+    getReadiness: runtime.getReadiness,
     refreshHealthSnapshot: runtime.refreshGatewayHealthSnapshotWithRuntime,
     logHealth: params.logHealth,
     logGateway: params.log,
@@ -533,8 +538,6 @@ export function createGatewayRequestContext(
       : {}),
     terminalSessions: runtime.terminalSessions,
     agentRunSeq: runtime.agentRunSeq,
-    chatAbortControllers: runtime.chatAbortControllers,
-    chatQueuedTurns: runtime.chatQueuedTurns,
     chatRunState: runtime.chatRunState,
     addChatRun: runtime.addChatRun,
     removeChatRun: runtime.removeChatRun,
@@ -563,6 +566,7 @@ export function createGatewayRequestContext(
     getRuntimeSnapshot: runtime.getRuntimeSnapshot,
     getEventLoopHealth: runtime.readinessEventLoopHealth.snapshot,
     getConfigReloaderHotReloadStatus: runtime.kernel.getConfigReloaderHotReloadStatus,
+    getPluginReloadStatus: runtime.kernel.pluginRuntimeGeneration.getReloadStatus,
     startChannel: runtime.startChannel,
     stopChannel: runtime.stopChannel,
     markChannelLoggedOut: runtime.markChannelLoggedOut,

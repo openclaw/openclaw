@@ -577,6 +577,7 @@ describe("native hook relay registry", () => {
         },
         ...(cause === "abort" ? { signal: controller.signal } : { ttlMs: 5 }),
       });
+      await relay.ready;
 
       closeAdmittedRunDelegatedAuthority(admittedRunContext);
       expect(validateAgentRunDelegatedAuthority(delegatedAuthority)).toBe(false);
@@ -595,6 +596,8 @@ describe("native hook relay registry", () => {
         await vi.advanceTimersByTimeAsync(6);
       }
       expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+      // Authority closes synchronously; locator removal completes with the bridge work.
+      await relay.drain();
       expect(await testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeUndefined();
       await expect(
         invokeRelay(relay.relayId, "pre_tool_use", {
@@ -603,6 +606,23 @@ describe("native hook relay registry", () => {
           tool_input: {},
         }),
       ).rejects.toThrow("native hook relay not found");
+    },
+  );
+
+  it.each([-300_000, 300_000] as const)(
+    "rearms relay expiry on monotonic time despite a wall-clock %s ms jump",
+    async (wallClockDeltaMs) => {
+      vi.useFakeTimers();
+      const ttlMs = 10_000;
+      const relay = registerOwnedRelay({
+        relayId: uniqueNativeHookRelayIdForTests(`expiry-jump-${wallClockDeltaMs}`),
+        ttlMs,
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      vi.setSystemTime(Date.now() + wallClockDeltaMs);
+      expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeDefined();
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
     },
   );
 
@@ -1480,16 +1500,17 @@ describe("native hook relay registry", () => {
   });
 
   it("rejects expired relay ids", async () => {
-    const relay = registerRelay({
+    const relay = registerOwnedRelay({
       ttlMs: 5_000,
     });
-    await waitForNativeHookRelayBridgeRecord(relay.relayId);
+    await relay.ready;
 
     vi.useFakeTimers();
     vi.setSystemTime(new Date(relay.expiresAtMs + 1));
 
     await expect(invokeRelay(relay.relayId, "pre_tool_use", {})).rejects.toThrow("expired");
     expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+    await relay.drain();
     expect(await testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeUndefined();
     relay.unregister();
     expect(await testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeUndefined();

@@ -27,6 +27,7 @@ export const configSnapshotOperations = {
           input.updatedAtMs,
         ),
       { ...stateOptions(), database: open() },
+      { singleStatement: true },
     ),
   "config.snapshot.upsert": (
     input: Parameters<typeof upsertConfigSnapshotAuditRecordInDatabase>[1],

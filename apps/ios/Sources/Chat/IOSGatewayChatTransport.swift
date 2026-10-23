@@ -634,13 +634,10 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
 
         do {
             let request = OpenClawChatGatewayRequests.agentWait(runID: runId, timeoutMs: timeoutMs)
-            GatewayDiagnostics.log("agent.wait start runId=\(runId)")
             let res = try await gateway.request(
                 request,
                 ifCurrentRoute: expectedRoute)
-            let observation = try OpenClawChatGatewayPayloadCodec.decodeAgentWaitObservation(res)
-            GatewayDiagnostics.log("agent.wait completed runId=\(runId) observation=\(observation)")
-            return observation
+            return try OpenClawChatGatewayPayloadCodec.decodeAgentWaitObservation(res)
         } catch {
             Self.logger.warning("agent.wait failed \(error.localizedDescription, privacy: .public)")
             GatewayDiagnostics.log("agent.wait failed runId=\(runId) error=\(error.localizedDescription)")

@@ -266,7 +266,10 @@ passes CLI arguments directly to the executable, including root options such as
 `--profile`; it does not prepend a script path or interpreter flags. A loose
 Node or Bun invocation retains its runtime flags and entry script. Standalone
 identity comes from the embedded runtime location or the adjacent manifest,
-not the executable's filename.
+not the executable's filename. Parent-bound startup respawns retain cancellation
+when their launcher exits: loose runtimes use a self-removing preload, while the
+compiled child consumes a private parent-PID environment marker. Neither signal
+is inherited by later detached update workers.
 
 ## Qualify an artifact before packaging
 

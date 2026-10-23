@@ -1,10 +1,9 @@
-// Parallels Npm Update Smoke tests cover parallels npm update smoke script behavior.
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi, type TestContext } from "vitest";
 import { runWindowsBackgroundPowerShell } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { run as hostCommandRun } from "../../scripts/e2e/parallels/host-command.ts";
 import {
@@ -43,6 +42,12 @@ const TEST_AUTH = {
   apiKeyValue: "test-key",
   modelId: "gpt-5.4",
 };
+const updateInput = (version = "2026.5.3-beta.2") => ({
+  auth: TEST_AUTH,
+  expectedNeedle: version,
+  updateTarget: version,
+});
+
 const tempDirs = createTempDirTracker();
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
@@ -144,9 +149,99 @@ async function runAfterFixtureReady(
   return command;
 }
 
+function processFixture(onTestFinished: TestContext["onTestFinished"], graceful: boolean) {
+  let command: Promise<number> | undefined;
+  // Join the aborted body before releasing files still used by process cleanup.
+  const dirs = useAutoCleanupTempDirTracker((removeDirs) => {
+    onTestFinished(async () => {
+      await command?.catch(() => {});
+      removeDirs();
+    });
+  });
+  const root = dirs.make("openclaw-parallels-npm-update-");
+  const logPath = path.join(root, "fresh.log");
+  const scriptPath = path.join(root, "lane.mjs");
+  const readyPath = path.join(root, "ready");
+  const donePath = path.join(root, "done");
+  const descendantScript = [
+    "import { writeFileSync } from 'node:fs';",
+    fixtureReceiptClientSource(receipts.endpoint),
+    graceful
+      ? `process.on('SIGTERM', () => {\n  setTimeout(() => { writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);\n});`
+      : "process.on('SIGTERM', () => {});",
+    `writeFileSync(${JSON.stringify(readyPath)}, ${graceful ? "'ready'" : "String(process.pid)"});`,
+    `sendReceipt(${JSON.stringify(readyPath)}, "ready");`,
+    "setInterval(() => {}, 1000);",
+  ].join("\n");
+  writeFileSync(
+    scriptPath,
+    [
+      "import { spawn } from 'node:child_process';",
+      `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+      "process.on('SIGTERM', () => process.exit(0));",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return {
+    logPath,
+    scriptPath,
+    readyPath,
+    donePath,
+    run: (start: () => Promise<number>, timeout: number, label: string, signal: AbortSignal) =>
+      (command = runAfterFixtureReady(start, readyPath, timeout, label, signal)),
+  };
+}
+
 function decodePowerShellFromArgs(args: string[]): string {
   const encoded = args[args.indexOf("-EncodedCommand") + 1];
   return encoded ? Buffer.from(encoded, "base64").toString("utf16le") : "";
+}
+
+const commandResult = (stdout = "", status = 0) => ({ status, stderr: "", stdout });
+type WindowsJob = Parameters<typeof runWindowsBackgroundPowerShell>[0];
+
+function windowsFixture(
+  options: {
+    launch?: () => ReturnType<typeof hostCommandRun>;
+    input?: () => void;
+    poll?: (command: string) => ReturnType<typeof hostCommandRun>;
+  } = {},
+) {
+  const commands: string[] = [];
+  const inputs: string[] = [];
+  const runCommand: typeof hostCommandRun = (_command, args, runOptions) => {
+    if (runOptions?.input) {
+      inputs.push(runOptions.input);
+      if (options.input) {
+        options.input();
+        return commandResult();
+      }
+    }
+    const decoded = decodePowerShellFromArgs(args);
+    commands.push(decoded);
+    if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
+      return options.launch?.() ?? commandResult("started\n");
+    }
+    return args.includes("cmd.exe")
+      ? (options.poll?.(args.at(-1) ?? "") ?? commandResult())
+      : commandResult();
+  };
+  return {
+    commands,
+    inputs,
+    run: (label: string, overrides: Partial<WindowsJob> = {}) =>
+      runWindowsBackgroundPowerShell({
+        pollIntervalMs: 1,
+        script: "Write-Output done",
+        timeoutMs: 5,
+        vmName: "Windows Test",
+        ...overrides,
+        label,
+        runCommand,
+      }),
+  };
 }
 
 function extractWindowsBackgroundControlMarkers(decoded: string): {
@@ -198,187 +293,177 @@ afterEach(() => {
   tempDirs.cleanup();
 });
 
-describe("parallels npm update smoke", () => {
-  it("reports exact ready prerequisites for default and explicit providers", () => {
-    const defaultSecret = "sentinel-default-provider-secret";
-    const defaultResult = runPrerequisiteCli(["--prerequisite-check", "--json"], {
-      OPENAI_API_KEY: defaultSecret,
+it.each(["default", "explicit"] as const)(
+  "reports exact ready prerequisites for the %s provider",
+  (mode) => {
+    const secret = `sentinel-${mode}-provider-secret`;
+    const args =
+      mode === "explicit"
+        ? [
+            "--",
+            "--prerequisite-check",
+            "--only",
+            "linux",
+            "--provider",
+            "anthropic",
+            "--model",
+            "anthropic/custom",
+            "--api-key-env",
+            "CUSTOM_ANTHROPIC_KEY",
+          ]
+        : ["--prerequisite-check"];
+    const env = mode === "explicit" ? { CUSTOM_ANTHROPIC_KEY: secret } : { OPENAI_API_KEY: secret };
+    const result = runPrerequisiteCli([...args, "--json"], env);
+    expect(result).toMatchObject({
+      status: 0,
+      stderr: "",
+      stdout: '{"schema":"openclaw.parallels-prerequisite.v1","status":"ready","reason":null}\n',
     });
-    expect(defaultResult.status).toBe(0);
-    expect(defaultResult.stdout).toBe(
-      '{"schema":"openclaw.parallels-prerequisite.v1","status":"ready","reason":null}\n',
-    );
-    expect(defaultResult.stderr).toBe("");
-    expect(defaultResult.stdout).not.toContain(defaultSecret);
-
-    const explicitSecret = "sentinel-explicit-provider-secret";
-    const explicitResult = runPrerequisiteCli(
-      [
-        "--",
-        "--prerequisite-check",
-        "--only",
-        "linux",
-        "--provider",
-        "anthropic",
-        "--model",
-        "anthropic/custom",
-        "--api-key-env",
-        "CUSTOM_ANTHROPIC_KEY",
-        "--json",
-      ],
-      { CUSTOM_ANTHROPIC_KEY: explicitSecret },
-    );
-    expect(explicitResult.status).toBe(0);
-    expect(explicitResult.stdout).toBe(defaultResult.stdout);
-    expect(explicitResult.stderr).toBe("");
-    expect(`${explicitResult.stdout}${explicitResult.stderr}`).not.toContain(explicitSecret);
-    expect(explicitResult.stdout).not.toContain("CUSTOM_ANTHROPIC_KEY");
-    expect(explicitResult.stdout).not.toContain("anthropic/custom");
-  });
-
-  it("blocks missing credentials before smoke-only validation or side effects", () => {
-    const root = tempDirs.make("openclaw-parallels-prerequisite-");
-    const binDir = path.join(root, "bin");
-    const marker = path.join(root, "side-effect");
-    mkdirSync(binDir);
-    for (const command of ["bash", "git", "npm", "prlctl"]) {
-      const commandPath = path.join(binDir, command);
-      writeFileSync(
-        commandPath,
-        `#!/bin/sh\nprintf invoked >>${JSON.stringify(marker)}\nexit 99\n`,
-      );
-      chmodSync(commandPath, 0o755);
+    for (const value of [secret, "CUSTOM_ANTHROPIC_KEY", "anthropic/custom"]) {
+      expect(`${result.stdout}${result.stderr}`).not.toContain(value);
     }
-    const result = runPrerequisiteCli(
-      [
-        "--prerequisite-check",
-        "--provider",
-        "minimax",
-        "--api-key-env",
-        "CUSTOM_MISSING_KEY",
-        "--json",
-      ],
-      {
-        CUSTOM_MISSING_KEY: "",
-        OPENAI_API_KEY: "sentinel-unselected-provider-secret",
-        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
-    );
+  },
+);
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe(
+it("blocks missing credentials before smoke-only validation or side effects", () => {
+  const root = tempDirs.make("openclaw-parallels-prerequisite-");
+  const binDir = path.join(root, "bin");
+  const marker = path.join(root, "side-effect");
+  mkdirSync(binDir);
+  for (const command of ["bash", "git", "npm", "prlctl"]) {
+    const commandPath = path.join(binDir, command);
+    writeFileSync(commandPath, `#!/bin/sh\nprintf invoked >>${JSON.stringify(marker)}\nexit 99\n`, {
+      mode: 0o755,
+    });
+  }
+  const result = runPrerequisiteCli(
+    [
+      "--prerequisite-check",
+      "--provider",
+      "minimax",
+      "--api-key-env",
+      "CUSTOM_MISSING_KEY",
+      "--json",
+    ],
+    {
+      CUSTOM_MISSING_KEY: "",
+      OPENAI_API_KEY: "sentinel-unselected-provider-secret",
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
+  );
+
+  expect(result).toMatchObject({
+    status: 1,
+    stdout:
       '{"schema":"openclaw.parallels-prerequisite.v1","status":"blocked","reason":"credential_missing"}\n',
-    );
-    expect(result.stderr).toBe("");
-    expect(result.stdout).not.toContain("CUSTOM_MISSING_KEY");
-    expect(result.stdout).not.toContain("sentinel-unselected-provider-secret");
-    expect(existsSync(marker)).toBe(false);
+    stderr: "",
   });
+  expect(result.stdout).not.toContain("CUSTOM_MISSING_KEY");
+  expect(result.stdout).not.toContain("sentinel-unselected-provider-secret");
+  expect(existsSync(marker)).toBe(false);
+});
 
-  it("accepts one prepared tarball target for update and fresh install", () => {
-    expect(
-      parseArgs([
-        "--target-tarball",
-        "/tmp/openclaw-candidate.tgz",
-        "--dependency-tarball",
-        "/tmp/openclaw-ai-candidate.tgz",
-        "--registry-package-tarball",
-        "/tmp/openclaw-codex-candidate.tgz",
-      ]),
-    ).toMatchObject({
-      dependencyTarballs: ["/tmp/openclaw-ai-candidate.tgz"],
-      registryPackageTarballs: ["/tmp/openclaw-codex-candidate.tgz"],
-      targetTarball: "/tmp/openclaw-candidate.tgz",
-      updateTarget: "",
-      freshTargetSpec: undefined,
-    });
-    expect(() =>
-      parseArgs(["--target-tarball", "/tmp/openclaw-candidate.tgz", "--update-target", "beta"]),
-    ).toThrow("--target-tarball cannot be combined");
-    expect(() => parseArgs(["--dependency-tarball", "/tmp/openclaw-ai-candidate.tgz"])).toThrow(
-      "--dependency-tarball requires --target-tarball",
-    );
-    expect(() =>
-      parseArgs(["--registry-package-tarball", "/tmp/openclaw-codex-candidate.tgz"]),
-    ).toThrow("--registry-package-tarball requires --target-tarball");
+it("accepts one prepared tarball target for update and fresh install", () => {
+  expect(
+    parseArgs([
+      "--target-tarball",
+      "/tmp/openclaw-candidate.tgz",
+      "--dependency-tarball",
+      "/tmp/openclaw-ai-candidate.tgz",
+      "--registry-package-tarball",
+      "/tmp/openclaw-codex-candidate.tgz",
+    ]),
+  ).toMatchObject({
+    dependencyTarballs: ["/tmp/openclaw-ai-candidate.tgz"],
+    registryPackageTarballs: ["/tmp/openclaw-codex-candidate.tgz"],
+    targetTarball: "/tmp/openclaw-candidate.tgz",
+    updateTarget: "",
+    freshTargetSpec: undefined,
   });
+  expect(() =>
+    parseArgs(["--target-tarball", "/tmp/openclaw-candidate.tgz", "--update-target", "beta"]),
+  ).toThrow("--target-tarball cannot be combined");
+  expect(() => parseArgs(["--dependency-tarball", "/tmp/openclaw-ai-candidate.tgz"])).toThrow(
+    "--dependency-tarball requires --target-tarball",
+  );
+  expect(() =>
+    parseArgs(["--registry-package-tarball", "/tmp/openclaw-codex-candidate.tgz"]),
+  ).toThrow("--registry-package-tarball requires --target-tarball");
+});
 
-  it("passes an explicit macOS snapshot hint through fresh lanes", () => {
-    expect(
-      parseArgs(["--platform", "macos", "--macos-snapshot-hint", "macOS 26.5 Node 24"]),
-    ).toMatchObject({
-      macosSnapshotHint: "macOS 26.5 Node 24",
-      platforms: new Set(["macos"]),
-    });
+it("passes an explicit macOS snapshot hint through fresh lanes", () => {
+  expect(
+    parseArgs(["--platform", "macos", "--macos-snapshot-hint", "macOS 26.5 Node 24"]),
+  ).toMatchObject({
+    macosSnapshotHint: "macOS 26.5 Node 24",
+    platforms: new Set(["macos"]),
   });
+});
 
-  it("accepts an explicit Windows VM at the aggregate CLI", () => {
-    const result = hostCommandRun(
-      process.execPath,
-      ["--import", "tsx", SCRIPT_PATH, "--windows-vm", "Windows Test Guest", "--help"],
-      { check: false },
-    );
-    expect(result.status, result.stderr).toBe(0);
-  });
+it("accepts an explicit Windows VM at the aggregate CLI", () => {
+  const result = hostCommandRun(
+    process.execPath,
+    ["--import", "tsx", SCRIPT_PATH, "--windows-vm", "Windows Test Guest", "--help"],
+    { check: false },
+  );
+  expect(result.status, result.stderr).toBe(0);
+});
 
-  it("stops the host artifact server when the wrapper fails mid-run", async () => {
-    let stopCalls = 0;
-    const server: HostServer = {
-      hostIp: "127.0.0.1",
-      port: 48123,
-      stop: async () => {
-        stopCalls += 1;
-      },
-      urlFor: (filePath) => `http://127.0.0.1:48123/${path.basename(filePath)}`,
-    };
+it("stops the host artifact server when the wrapper fails mid-run", async () => {
+  const stop = vi.fn(async () => {});
+  const server: HostServer = {
+    hostIp: "127.0.0.1",
+    port: 48123,
+    stop,
+    urlFor: (filePath) => `http://127.0.0.1:48123/${path.basename(filePath)}`,
+  };
 
-    class FailingNpmUpdateSmoke extends NpmUpdateSmoke {
-      protected override async makeRunTempDir(prefix: string): Promise<string> {
-        void prefix;
-        return tempDirs.make("openclaw-parallels-npm-update-");
-      }
-
-      protected override async runSteps(): Promise<void> {
-        this.server = server;
-        throw new Error("forced wrapper failure");
-      }
+  class FailingNpmUpdateSmoke extends NpmUpdateSmoke {
+    protected override async makeRunTempDir(_prefix: string): Promise<string> {
+      return tempDirs.make("openclaw-parallels-npm-update-");
     }
 
-    await withEnvAsync({ OPENAI_API_KEY: "test-key" }, async () => {
-      const smoke = new FailingNpmUpdateSmoke(smokeOptions());
+    protected override async runSteps(): Promise<void> {
+      this.server = server;
+      throw new Error("forced wrapper failure");
+    }
+  }
 
-      await expect(smoke.run()).rejects.toThrow("forced wrapper failure");
-    });
+  await withEnvAsync({ OPENAI_API_KEY: "test-key" }, async () => {
+    const smoke = new FailingNpmUpdateSmoke(smokeOptions());
 
-    expect(stopCalls).toBe(1);
+    await expect(smoke.run()).rejects.toThrow("forced wrapper failure");
   });
 
-  it.runIf(process.platform !== "win32").each([
-    ["macos", macosUpdateScript],
-    ["linux", linuxUpdateScript],
-  ] as const)(
-    "keeps the %s candidate registry available through gateway shutdown and the local turn",
-    (platform, buildScript) => {
-      const root = tempDirs.make("openclaw-parallels-update-registry-");
-      const logPath = path.join(root, "registry.log");
-      const lifecycleLog = path.join(root, "lifecycle.log");
-      const gatewayOwner = path.join(root, "gateway-owner");
-      const gatewayTitle = platform === "macos" ? "openclaw-gateway        " : "openclaw-gateway";
-      const registry = "http://192.0.2.2:48123";
-      const script = buildScript({
-        auth: TEST_AUTH,
-        expectedNeedle: "2026.7.1-beta.3",
-        npmRegistry: registry,
-        updateTarget: "2026.7.1-beta.3",
-      }).replaceAll(
-        `/tmp/openclaw-parallels-${platform}-gateway.log`,
-        path.join(root, "gateway.log"),
-      );
-      const result = hostCommandRun(
-        "bash",
-        [
-          "-c",
-          `
+  expect(stop).toHaveBeenCalledOnce();
+});
+
+it.runIf(process.platform !== "win32").each([
+  ["macos", macosUpdateScript],
+  ["linux", linuxUpdateScript],
+] as const)(
+  "keeps the %s candidate registry available through gateway shutdown and the local turn",
+  (platform, buildScript) => {
+    const root = tempDirs.make("openclaw-parallels-update-registry-");
+    const logPath = path.join(root, "registry.log");
+    const lifecycleLog = path.join(root, "lifecycle.log");
+    const gatewayOwner = path.join(root, "gateway-owner");
+    const gatewayTitle = platform === "macos" ? "openclaw-gateway        " : "openclaw-gateway";
+    const registry = "http://192.0.2.2:48123";
+    const script = buildScript({
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.1-beta.3",
+      npmRegistry: registry,
+      updateTarget: "2026.7.1-beta.3",
+    }).replaceAll(
+      `/tmp/openclaw-parallels-${platform}-gateway.log`,
+      path.join(root, "gateway.log"),
+    );
+    const result = hostCommandRun(
+      "bash",
+      [
+        "-c",
+        `
 export HOME='${root}'
 unset OPENCLAW_WORKSPACE_DIR
 node() { cat >/dev/null; }
@@ -422,776 +507,477 @@ openclaw() {
   esac
 }
 ${script}`,
-        ],
-        { check: false, timeoutMs: 5000 },
-      );
+      ],
+      { check: false, timeoutMs: 5000 },
+    );
 
-      expect(result.status, result.stderr || result.stdout).toBe(0);
-      expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
-        `update|${registry}|${registry}`,
-        `--version|${registry}|${registry}`,
-        `gateway|${registry}|${registry}`,
-        `agent|${registry}|${registry}`,
-      ]);
-      expect(readFileSync(lifecycleLog, "utf8").trim().split("\n")).toEqual([
-        "ready",
-        "stop",
-        "local-turn",
-      ]);
-    },
-  );
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
+      `update|${registry}|${registry}`,
+      `--version|${registry}|${registry}`,
+      `gateway|${registry}|${registry}`,
+      `agent|${registry}|${registry}`,
+    ]);
+    expect(readFileSync(lifecycleLog, "utf8").trim().split("\n")).toEqual([
+      "ready",
+      "stop",
+      "local-turn",
+    ]);
+  },
+);
 
-  it("restarts POSIX gateways only after an exact current-launch migration refusal", () => {
-    const input = {
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.7.2-beta.5",
-      updateTarget: "2026.7.2-beta.5",
-    };
+it("restarts POSIX gateways only after an exact current-launch migration refusal", () => {
+  const input = updateInput("2026.7.2-beta.5");
 
-    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
-      expect(script).toContain(
-        "OpenClaw plugin migration inputs changed during startup convergence;",
-      );
-      expect(script).toContain("gateway_launch_log_offset=");
-      expect(script).toContain("gateway_pid=$!");
-      expect(script).toContain('if ! kill -0 "$gateway_pid" 2>/dev/null; then');
-      expect(script).toContain('tail -c +"$((gateway_launch_log_offset + 1))" "$gateway_log"');
-      expect(script).toContain(
-        'if [ "$gateway_exit_status" -le 128 ] && [ "$gateway_restart_count" -eq 0 ]; then',
-      );
-      expect(script).toContain("gateway_restart_count=1");
-      expect(script).not.toContain('if [ "$attempt" -eq 4 ]');
-    }
-  });
-
-  it("restarts the Windows gateway only after its current launch exits with the exact refusal", () => {
-    const script = windowsUpdateScript({
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.7.2-beta.5",
-      updateTarget: "2026.7.2-beta.5",
-    });
-
+  for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
     expect(script).toContain(
       "OpenClaw plugin migration inputs changed during startup convergence;",
     );
-    expect(script).toContain("$script:gatewayProcess.HasExited");
-    expect(script).toContain("$script:gatewayProcess.WaitForExit()");
-    expect(script).toContain("$script:gatewayRestartCount -eq 0");
-    expect(script).toContain("Test-CurrentGatewayStartupMigrationRefusal");
-    expect(script).toContain("Select-String -Path $script:gatewayLogPath -SimpleMatch");
-    expect(script).toContain("$script:gatewayRestartCount = 1");
-    expect(script).not.toContain("$attempt -eq 4");
-    expect(script).not.toContain("Invoke-OpenClaw gateway restart");
-  });
-
-  it("keeps POSIX provider secrets out of executable command lines", () => {
-    const input = {
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.7.2-beta.5",
-      updateTarget: "2026.7.2-beta.5",
-    };
-    const exportLine = `  export ${TEST_AUTH.apiKeyEnv}='${TEST_AUTH.apiKeyValue}'`;
-
-    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
-      expect(script.split("\n").filter((line) => line.includes(TEST_AUTH.apiKeyValue))).toEqual([
-        exportLine,
-      ]);
-      expect(script).toMatch(/with_provider_api_key [^\n]*gateway run/u);
-      expect(script).toMatch(/with_provider_api_key [^\n]*agent --local/u);
-      expect(script).toContain(`unset ${TEST_AUTH.apiKeyEnv}`);
-      expect(script.split("\n").find((line) => line.includes(" update --tag "))).not.toContain(
-        "with_provider_api_key",
-      );
-    }
-  });
-
-  it("accepts keyed and nested npm metadata for published update targets", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain("curl -fsSL --connect-timeout 10 --max-time 120 --retry 2");
-    expect(script).toContain("timeoutMs: 150_000");
-
-    expect(
-      parseRegistryPackageMetadata(
-        JSON.stringify({
-          version: "2026.5.20-beta.1",
-          "dist.tarball": "https://registry.example/openclaw-keyed.tgz",
-          gitHead: "abcdef0123456789",
-        }),
-      ),
-    ).toEqual({
-      version: "2026.5.20-beta.1",
-      tarball: "https://registry.example/openclaw-keyed.tgz",
-      gitHead: "abcdef0123456789",
-    });
-
-    expect(
-      parseRegistryPackageMetadata(
-        JSON.stringify({
-          version: "2026.5.20-beta.1",
-          dist: { tarball: "https://registry.example/openclaw-nested.tgz" },
-        }),
-      ),
-    ).toEqual({
-      version: "2026.5.20-beta.1",
-      tarball: "https://registry.example/openclaw-nested.tgz",
-      gitHead: "",
-    });
-  });
-
-  it("guards beta validation against cross-version harness checkouts", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain("assertPublishedTargetMatchesHarnessCheckout");
-    expect(script).toContain("readHarnessCheckoutVersion");
-    expect(script).toContain("openClawVersionFamily");
-    expect(script).toContain("OPENCLAW_PARALLELS_ALLOW_HARNESS_TARGET_MISMATCH");
-    expect(script).toContain("checkout the matching release branch");
-  });
-
-  it("streams aggregate update logs instead of retaining them in memory", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
-    const updateBlock = script.slice(
-      script.indexOf("  private spawnUpdate"),
-      script.indexOf("  private updateScript"),
+    expect(script).toContain("gateway_launch_log_offset=");
+    expect(script).toContain("gateway_pid=$!");
+    expect(script).toContain('if ! kill -0 "$gateway_pid" 2>/dev/null; then');
+    expect(script).toContain('tail -c +"$((gateway_launch_log_offset + 1))" "$gateway_log"');
+    expect(script).toContain(
+      'if [ "$gateway_exit_status" -le 128 ] && [ "$gateway_restart_count" -eq 0 ]; then',
     );
+    expect(script).toContain("gateway_restart_count=1");
+    expect(script).not.toContain('if [ "$attempt" -eq 4 ]');
+  }
+});
 
-    expect(updateBlock).toContain("appendFileSync(logPath, text");
-    expect(updateBlock).not.toContain("log += text");
-  });
+it("restarts the Windows gateway only after its current launch exits with the exact refusal", () => {
+  const script = windowsUpdateScript(updateInput("2026.7.2-beta.5"));
 
-  it("bounds POSIX guest failure logs", () => {
-    const scripts = [
-      macosUpdateScript({
-        auth: TEST_AUTH,
-        expectedNeedle: "2026.5.3-beta.2",
-        updateTarget: "2026.5.3-beta.2",
-      }),
-      linuxUpdateScript({
-        auth: TEST_AUTH,
-        expectedNeedle: "2026.5.3-beta.2",
-        updateTarget: "2026.5.3-beta.2",
-      }),
-    ].join("\n");
+  expect(script).toContain("OpenClaw plugin migration inputs changed during startup convergence;");
+  expect(script).toContain("$script:gatewayProcess.HasExited");
+  expect(script).toContain("$script:gatewayProcess.WaitForExit()");
+  expect(script).toContain("$script:gatewayRestartCount -eq 0");
+  expect(script).toContain("Test-CurrentGatewayStartupMigrationRefusal");
+  expect(script).toContain("Select-String -Path $script:gatewayLogPath -SimpleMatch");
+  expect(script).toContain("$script:gatewayRestartCount = 1");
+  expect(script).not.toContain("$attempt -eq 4");
+  expect(script).not.toContain("Invoke-OpenClaw gateway restart");
+});
 
-    expect(scripts).toContain("print_log_tail()");
-    expect(scripts).toContain("OPENCLAW_PARALLELS_NPM_UPDATE_LOG_TAIL_BYTES");
-    expect(scripts).toContain('print_log_tail "$output_file"');
-    expect(scripts).toContain('print_log_tail "$gateway_log" >&2');
-    expect(scripts).not.toContain('cat "$output_file"');
-    expect(scripts).not.toContain("cat /tmp/openclaw-parallels-");
-  });
+it("keeps POSIX provider secrets out of executable command lines", () => {
+  const input = updateInput("2026.7.2-beta.5");
+  const exportLine = `  export ${TEST_AUTH.apiKeyEnv}='${TEST_AUTH.apiKeyValue}'`;
 
-  it("passes platform model timeouts to POSIX update agent turns", () => {
-    const input = {
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.5.3-beta.2",
-      updateTarget: "2026.5.3-beta.2",
-    };
-    withEnv(
-      {
-        OPENCLAW_PARALLELS_LINUX_MODEL_TIMEOUT_S: undefined,
-        OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S: undefined,
-        OPENCLAW_PARALLELS_MODEL_TIMEOUT_S: undefined,
-      },
-      () => {
-        expect(macosUpdateScript(input)).toContain("--timeout 1800 --json");
-        expect(linuxUpdateScript(input)).toContain("--timeout 900 --json");
-      },
+  for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
+    expect(script.split("\n").filter((line) => line.includes(TEST_AUTH.apiKeyValue))).toEqual([
+      exportLine,
+    ]);
+    expect(script).toMatch(/with_provider_api_key [^\n]*gateway run/u);
+    expect(script).toMatch(/with_provider_api_key [^\n]*agent --local/u);
+    expect(script).toContain(`unset ${TEST_AUTH.apiKeyEnv}`);
+    expect(script.split("\n").find((line) => line.includes(" update --tag "))).not.toContain(
+      "with_provider_api_key",
     );
-    withEnv(
-      {
-        OPENCLAW_PARALLELS_LINUX_MODEL_TIMEOUT_S: "321",
-        OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S: "654",
-      },
-      () => {
-        expect(macosUpdateScript(input)).toContain("--timeout 654 --json");
-        expect(linuxUpdateScript(input)).toContain("--timeout 321 --json");
-      },
-    );
-  });
+  }
+});
 
-  it("streams fresh lane logs instead of retaining them in memory", async () => {
-    const root = tempDirs.make("openclaw-parallels-npm-update-");
-    const logPath = path.join(root, "fresh.log");
+it.each(["keyed", "nested"] as const)("accepts %s npm metadata for published targets", (shape) => {
+  const script = readFileSync(SCRIPT_PATH, "utf8");
+  expect(script).toContain("curl -fsSL --connect-timeout 10 --max-time 120 --retry 2");
+  expect(script).toContain("timeoutMs: 150_000");
+  const version = "2026.5.20-beta.1";
+  const tarball = `https://registry.example/openclaw-${shape}.tgz`;
+  const metadata =
+    shape === "keyed"
+      ? { "dist.tarball": tarball, gitHead: "abcdef0123456789" }
+      : { dist: { tarball } };
+  expect(parseRegistryPackageMetadata(JSON.stringify({ version, ...metadata }))).toEqual({
+    version,
+    tarball,
+    gitHead: shape === "keyed" ? "abcdef0123456789" : "",
+  });
+});
+
+it("guards beta validation against cross-version harness checkouts", () => {
+  const script = readFileSync(SCRIPT_PATH, "utf8");
+
+  expect(script).toContain("assertPublishedTargetMatchesHarnessCheckout");
+  expect(script).toContain("readHarnessCheckoutVersion");
+  expect(script).toContain("openClawVersionFamily");
+  expect(script).toContain("OPENCLAW_PARALLELS_ALLOW_HARNESS_TARGET_MISMATCH");
+  expect(script).toContain("checkout the matching release branch");
+});
+
+it("streams aggregate update logs instead of retaining them in memory", () => {
+  const script = readFileSync(SCRIPT_PATH, "utf8");
+  const updateBlock = script.slice(
+    script.indexOf("  private spawnUpdate"),
+    script.indexOf("  private updateScript"),
+  );
+
+  expect(updateBlock).toContain("appendFileSync(logPath, text");
+  expect(updateBlock).not.toContain("log += text");
+});
+
+it("bounds POSIX guest failure logs", () => {
+  const scripts = [macosUpdateScript, linuxUpdateScript]
+    .map((build) => build(updateInput()))
+    .join("\n");
+
+  expect(scripts).toContain("print_log_tail()");
+  expect(scripts).toContain("OPENCLAW_PARALLELS_NPM_UPDATE_LOG_TAIL_BYTES");
+  expect(scripts).toContain('print_log_tail "$output_file"');
+  expect(scripts).toContain('print_log_tail "$gateway_log" >&2');
+  expect(scripts).not.toContain('cat "$output_file"');
+  expect(scripts).not.toContain("cat /tmp/openclaw-parallels-");
+});
+
+it.each([
+  [undefined, undefined, 900, 1800],
+  ["321", "654", 321, 654],
+] as const)("passes POSIX model timeouts (%s, %s)", (linux, macos, linuxSeconds, macosSeconds) => {
+  withEnv(
+    {
+      OPENCLAW_PARALLELS_LINUX_MODEL_TIMEOUT_S: linux,
+      OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S: macos,
+      OPENCLAW_PARALLELS_MODEL_TIMEOUT_S: undefined,
+    },
+    () => {
+      expect(macosUpdateScript(updateInput())).toContain(`--timeout ${macosSeconds} --json`);
+      expect(linuxUpdateScript(updateInput())).toContain(`--timeout ${linuxSeconds} --json`);
+    },
+  );
+});
+
+it.each(["streaming", "oversized timeout"] as const)(
+  "runs fresh commands with %s",
+  async (mode) => {
+    const streaming = mode === "streaming";
+    const logPath = path.join(tempDirs.make("openclaw-parallels-npm-update-"), "fresh.log");
     const output: string[] = [];
 
     const code = await spawnLoggedCommand(
       process.execPath,
-      ["-e", "process.stdout.write('fresh-out'); process.stderr.write('fresh-err');"],
+      [
+        "-e",
+        streaming
+          ? "process.stdout.write('fresh-out'); process.stderr.write('fresh-err');"
+          : "setTimeout(() => process.exit(0), 25);",
+      ],
       logPath,
       {},
-      (text) => output.push(text),
-      { timeoutMs: 1000 },
+      streaming ? (text) => output.push(text) : undefined,
+      { timeoutMs: streaming ? 1000 : Number.MAX_SAFE_INTEGER },
     );
 
     expect(code).toBe(0);
-    const log = readFileSync(logPath, "utf8");
-    expect(log).toContain("fresh-out");
-    expect(log).toContain("fresh-err");
-    expect(output.join("")).toContain("fresh-out");
-    expect(output.join("")).toContain("fresh-err");
-  });
-
-  it("sets platform-aware fresh lane timeouts", () => {
-    withEnv({ OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: undefined }, () => {
-      expect(freshLaneTimeoutMs("macos")).toBe(75 * 60 * 1000);
-      expect(freshLaneTimeoutMs("linux")).toBe(75 * 60 * 1000);
-      expect(freshLaneTimeoutMs("windows")).toBe(90 * 60 * 1000);
-    });
-
-    withEnv({ OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: "3" }, () => {
-      expect(freshLaneTimeoutMs("macos")).toBe(3000);
-    });
-
-    withEnv(
-      { OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: String(Number.MAX_SAFE_INTEGER) },
-      () => {
-        expect(freshLaneTimeoutMs("linux")).toBe(MAX_TIMER_TIMEOUT_MS);
-      },
-    );
-  });
-
-  it("clamps oversized fresh lane command timeouts before scheduling", async () => {
-    const root = tempDirs.make("openclaw-parallels-npm-update-");
-    const logPath = path.join(root, "fresh.log");
-
-    const code = await spawnLoggedCommand(
-      process.execPath,
-      ["-e", "setTimeout(() => process.exit(0), 25);"],
-      logPath,
-      {},
-      undefined,
-      { timeoutMs: Number.MAX_SAFE_INTEGER },
-    );
-
-    expect(code).toBe(0);
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "times out fresh lane process groups",
-    async ({ signal, onTestFinished }) => {
-      let command: Promise<number> | undefined = undefined;
-      // onTestFinished joins the aborted body before releasing files still used by cleanup.
-      const fixtureDirs = useAutoCleanupTempDirTracker((removeDirs) => {
-        onTestFinished(async () => {
-          await command?.catch(() => {});
-          removeDirs();
-        });
-      });
-      const root = fixtureDirs.make("openclaw-parallels-npm-update-");
-      const logPath = path.join(root, "fresh.log");
-      const scriptPath = path.join(root, "hung-fresh-lane.mjs");
-      const descendantPidPath = path.join(root, "descendant.pid");
-      const descendantScript = [
-        "import { writeFileSync } from 'node:fs';",
-        fixtureReceiptClientSource(receipts.endpoint),
-        "process.on('SIGTERM', () => {});",
-        `writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
-        `sendReceipt(${JSON.stringify(descendantPidPath)}, "ready");`,
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      writeFileSync(
-        scriptPath,
-        [
-          "import { spawn } from 'node:child_process';",
-          `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-            descendantScript,
-          )}], { stdio: "ignore" });`,
-          "process.on('SIGTERM', () => process.exit(0));",
-          "setInterval(() => {}, 1000);",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-
-      command = runAfterFixtureReady(
-        () =>
-          spawnLoggedCommand(process.execPath, [scriptPath], logPath, {}, undefined, {
-            timeoutKillGraceMs: 25,
-            timeoutLabel: "fresh lane test",
-            timeoutMs: 250,
-          }),
-        descendantPidPath,
-        250,
-        "fresh lane descendant readiness",
-        signal,
-      );
-      const code = await command;
-
-      expect(code).toBe(124);
-      expect(readFileSync(logPath, "utf8")).toContain("fresh lane test timed out after 250ms");
-      expect(existsSync(descendantPidPath)).toBe(true);
-      const descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
-      try {
-        await waitForDead(descendantPid, signal);
-      } finally {
-        if (pidIsAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
+    if (streaming) {
+      for (const text of [readFileSync(logPath, "utf8"), output.join("")]) {
+        expect(text).toContain("fresh-out");
+        expect(text).toContain("fresh-err");
       }
+    }
+  },
+);
+
+it("sets platform-aware fresh lane timeouts", () => {
+  withEnv({ OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: undefined }, () => {
+    expect(freshLaneTimeoutMs("macos")).toBe(75 * 60 * 1000);
+    expect(freshLaneTimeoutMs("linux")).toBe(75 * 60 * 1000);
+    expect(freshLaneTimeoutMs("windows")).toBe(90 * 60 * 1000);
+  });
+
+  withEnv({ OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: "3" }, () => {
+    expect(freshLaneTimeoutMs("macos")).toBe(3000);
+  });
+
+  withEnv(
+    { OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: String(Number.MAX_SAFE_INTEGER) },
+    () => {
+      expect(freshLaneTimeoutMs("linux")).toBe(MAX_TIMER_TIMEOUT_MS);
     },
   );
+});
 
-  it.runIf(process.platform !== "win32")(
-    "lets fresh lane descendants exit during timeout kill grace",
-    async ({ signal, onTestFinished }) => {
-      let command: Promise<number> | undefined = undefined;
-      // onTestFinished joins the aborted body before releasing files still used by cleanup.
-      const fixtureDirs = useAutoCleanupTempDirTracker((removeDirs) => {
-        onTestFinished(async () => {
-          await command?.catch(() => {});
-          removeDirs();
-        });
-      });
-      const root = fixtureDirs.make("openclaw-parallels-npm-update-");
-      const logPath = path.join(root, "fresh.log");
-      const scriptPath = path.join(root, "graceful-fresh-lane.mjs");
-      const readyPath = path.join(root, "ready");
-      const donePath = path.join(root, "done");
-      const descendantScript = [
-        "import { writeFileSync } from 'node:fs';",
-        fixtureReceiptClientSource(receipts.endpoint),
-        "process.on('SIGTERM', () => {",
-        `  setTimeout(() => { writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
-        "});",
-        `writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
-        `sendReceipt(${JSON.stringify(readyPath)}, "ready");`,
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      writeFileSync(
-        scriptPath,
-        [
-          "import { spawn } from 'node:child_process';",
-          `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-            descendantScript,
-          )}], { stdio: "ignore" });`,
-          "process.on('SIGTERM', () => process.exit(0));",
-          "setInterval(() => {}, 1000);",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-
-      command = runAfterFixtureReady(
-        () =>
-          spawnLoggedCommand(process.execPath, [scriptPath], logPath, {}, undefined, {
-            timeoutKillGraceMs: 500,
-            timeoutLabel: "fresh lane grace test",
-            timeoutMs: 500,
-          }),
-        readyPath,
-        500,
-        "fresh lane descendant readiness",
-        signal,
-      );
-      const code = await command;
-      expect(code).toBe(124);
-      expect(readFileSync(donePath, "utf8")).toBe("done");
-    },
-  );
-
-  it("clears update stream timers when spawning the guest command fails", async () => {
-    vi.useFakeTimers();
-    const smoke = withEnv({ OPENAI_API_KEY: "test-key" }, () => new NpmUpdateSmoke(smokeOptions()));
-
-    await expect(
-      smoke["runStreamingToJobLog"]("openclaw-definitely-missing-command", [], 60 * 60 * 1000, {
-        append: () => undefined,
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "lets update stream descendants exit during timeout kill grace",
-    async ({ signal, onTestFinished }) => {
-      let command: Promise<number> | undefined = undefined;
-      // onTestFinished joins the aborted body before releasing files still used by cleanup.
-      const fixtureDirs = useAutoCleanupTempDirTracker((removeDirs) => {
-        onTestFinished(async () => {
-          await command?.catch(() => {});
-          removeDirs();
-        });
-      });
-      const root = fixtureDirs.make("openclaw-parallels-npm-update-");
-      const scriptPath = path.join(root, "stream-update-grace.mjs");
-      const readyPath = path.join(root, "stream-ready");
-      const donePath = path.join(root, "stream-done");
-      const smoke = withEnv(
-        { OPENAI_API_KEY: "test-key" },
-        () => new NpmUpdateSmoke(smokeOptions()),
-      );
-      const descendantScript = [
-        "import { writeFileSync } from 'node:fs';",
-        fixtureReceiptClientSource(receipts.endpoint),
-        "process.on('SIGTERM', () => {",
-        `  setTimeout(() => { writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
-        "});",
-        `writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
-        `sendReceipt(${JSON.stringify(readyPath)}, "ready");`,
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      writeFileSync(
-        scriptPath,
-        [
-          "import { spawn } from 'node:child_process';",
-          `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-            descendantScript,
-          )}], { stdio: "ignore" });`,
-          "process.on('SIGTERM', () => process.exit(0));",
-          "setInterval(() => {}, 1000);",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-
-      command = runAfterFixtureReady(
-        () =>
-          smoke["runStreamingToJobLog"](process.execPath, [scriptPath], 500, {
-            append: () => undefined,
-            signal: new AbortController().signal,
-          }),
-        readyPath,
-        500,
-        "update stream descendant readiness",
-        signal,
-      );
-      const code = await command;
-      expect(code).toBe(124);
-      expect(readFileSync(donePath, "utf8")).toBe("done");
-    },
-  );
-
-  it("cleans timed-out Windows background work", async () => {
-    const decodedCommands: string[] = [];
-    const inputs: string[] = [];
-    const fakeRun: typeof hostCommandRun = (_command, args, options) => {
-      const decoded = decodePowerShellFromArgs(args);
-      decodedCommands.push(decoded);
-      if (options?.input) {
-        inputs.push(options.input);
-      }
-      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
-        return { status: 0, stderr: "", stdout: "started\n" };
-      }
-      if (args.includes("cmd.exe")) {
-        return { status: 0, stderr: "", stdout: "wait\n" };
-      }
-      return { status: 0, stderr: "", stdout: "" };
-    };
-
-    await expect(
-      runWindowsBackgroundPowerShell({
-        label: "windows background timeout",
-        pollIntervalMs: 1,
-        runCommand: fakeRun,
-        script: "Start-Sleep -Seconds 60",
-        timeoutMs: 5,
-        vmName: "Windows Test",
-      }),
-    ).rejects.toThrow("windows background timeout timed out");
-
-    const commands = decodedCommands.join("\n---\n");
-    const payloads = inputs.join("\n---\n");
-    expect(commands).toContain("$pidPath");
-    expect(commands).toContain("function Write-OpenClawUtf8File");
-    expect(commands).toContain("[System.Text.UTF8Encoding]::new($false)");
-    expect(payloads).toContain("Write-OpenClawUtf8File $exitPath '0'");
-    expect(payloads).toContain("Write-OpenClawUtf8File $donePath 'done'");
-    expect(payloads).toContain("Write-OpenClawUtf8File $pidPath ([string]$PID)");
-    expect(commands).toContain('cmd.exe /d /s /c start "" /b powershell.exe');
-    expect(commands).toContain("icacls.exe $runDir /inheritance:r");
-    expect(commands).toContain("Stop-OpenClawBackgroundProcessTree ([int]$backgroundPid)");
-    expect(commands).toContain(
-      'Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId"',
+it.runIf(process.platform !== "win32")(
+  "times out fresh lane process groups",
+  async ({ signal, onTestFinished }) => {
+    const f = processFixture(onTestFinished, false);
+    const code = await f.run(
+      () =>
+        spawnLoggedCommand(process.execPath, [f.scriptPath], f.logPath, {}, undefined, {
+          timeoutKillGraceMs: 25,
+          timeoutLabel: "fresh lane test",
+          timeoutMs: 250,
+        }),
+      250,
+      "fresh lane descendant readiness",
+      signal,
     );
-    expect(commands).toContain(
-      "Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath",
-    );
-    expect(`${commands}\n${payloads}`).not.toContain("Set-Content -Path $exitPath");
-    expect(`${commands}\n${payloads}`).not.toContain("Set-Content -Path $donePath");
-    expect(commands).not.toContain("Set-Content -Path $pidPath");
-    expect(commands).not.toContain("ReadAllBytes");
-  });
 
-  it.each([
-    {
-      scenario: "a successfully launched job",
-      launchStatus: 0,
-      launchOutput: "started\n",
-      expectedError: "windows setup deadline timed out",
-    },
-    {
-      scenario: "a launch that never materializes",
-      launchStatus: 0,
-      launchOutput: "",
-      expectedError: "windows setup deadline background launch failed with exit code 0",
-    },
-    {
-      scenario: "a genuine launch failure",
-      launchStatus: 17,
-      launchOutput: "",
-      expectedError: "windows setup deadline background launch failed with exit code 17",
-    },
-  ])("preserves $scenario when Windows setup exhausts its active budget", async (testCase) => {
+    expect(code).toBe(124);
+    expect(readFileSync(f.logPath, "utf8")).toContain("fresh lane test timed out after 250ms");
+    expect(existsSync(f.readyPath)).toBe(true);
+    const descendantPid = Number(readFileSync(f.readyPath, "utf8"));
+    try {
+      await waitForDead(descendantPid, signal);
+    } finally {
+      if (pidIsAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
+    }
+  },
+);
+
+it.runIf(process.platform !== "win32").for(["fresh", "update"] as const)(
+  "lets %s descendants exit during timeout kill grace",
+  async (lane, { signal, onTestFinished }) => {
+    const f = processFixture(onTestFinished, true);
+    const start =
+      lane === "fresh"
+        ? () =>
+            spawnLoggedCommand(process.execPath, [f.scriptPath], f.logPath, {}, undefined, {
+              timeoutKillGraceMs: 500,
+              timeoutLabel: "fresh lane grace test",
+              timeoutMs: 500,
+            })
+        : withEnv({ OPENAI_API_KEY: "test-key" }, () => {
+            const smoke = new NpmUpdateSmoke(smokeOptions());
+            return () =>
+              smoke["runStreamingToJobLog"](process.execPath, [f.scriptPath], 500, {
+                append: () => undefined,
+                signal: new AbortController().signal,
+              });
+          });
+    const label = lane === "fresh" ? "fresh lane" : "update stream";
+    expect(await f.run(start, 500, `${label} descendant readiness`, signal)).toBe(124);
+    expect(readFileSync(f.donePath, "utf8")).toBe("done");
+  },
+);
+
+it("clears update stream timers when spawning the guest command fails", async () => {
+  vi.useFakeTimers();
+  const smoke = withEnv({ OPENAI_API_KEY: "test-key" }, () => new NpmUpdateSmoke(smokeOptions()));
+
+  await expect(
+    smoke["runStreamingToJobLog"]("openclaw-definitely-missing-command", [], 60 * 60 * 1000, {
+      append: () => undefined,
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toMatchObject({ code: "ENOENT" });
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("cleans timed-out Windows background work", async () => {
+  const f = windowsFixture({ poll: () => commandResult("wait\n") });
+
+  await expect(
+    f.run("windows background timeout", { script: "Start-Sleep -Seconds 60" }),
+  ).rejects.toThrow("windows background timeout timed out");
+
+  const commands = f.commands.join("\n---\n");
+  const payloads = f.inputs.join("\n---\n");
+  expect(commands).toContain("$pidPath");
+  expect(commands).toContain("function Write-OpenClawUtf8File");
+  expect(commands).toContain("[System.Text.UTF8Encoding]::new($false)");
+  expect(payloads).toContain("Write-OpenClawUtf8File $exitPath '0'");
+  expect(payloads).toContain("Write-OpenClawUtf8File $donePath 'done'");
+  expect(payloads).toContain("Write-OpenClawUtf8File $pidPath ([string]$PID)");
+  expect(commands).toContain('cmd.exe /d /s /c start "" /b powershell.exe');
+  expect(commands).toContain("icacls.exe $runDir /inheritance:r");
+  expect(commands).toContain("Stop-OpenClawBackgroundProcessTree ([int]$backgroundPid)");
+  expect(commands).toContain('Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId"');
+  expect(commands).toContain(
+    "Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath",
+  );
+  expect(`${commands}\n${payloads}`).not.toContain("Set-Content -Path $exitPath");
+  expect(`${commands}\n${payloads}`).not.toContain("Set-Content -Path $donePath");
+  expect(commands).not.toContain("Set-Content -Path $pidPath");
+  expect(commands).not.toContain("ReadAllBytes");
+});
+
+it.each([
+  [0, "started\n", "timed out"],
+  [0, "", "background launch failed with exit code 0"],
+  [17, "", "background launch failed with exit code 17"],
+] as const)(
+  "preserves launch status %s with output %j when setup exhausts its budget",
+  async (launchStatus, launchOutput, expectedError) => {
     let now = 1_000;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     let launchAttempts = 0;
-    const fakeRun: typeof hostCommandRun = (_command, args, options) => {
-      if (options?.input) {
+    const f = windowsFixture({
+      input: () => {
         now += 2;
-        return { status: 0, stderr: "", stdout: "" };
-      }
-      const decoded = decodePowerShellFromArgs(args);
-      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
+      },
+      launch: () => {
         launchAttempts++;
-        return { status: testCase.launchStatus, stderr: "", stdout: testCase.launchOutput };
-      }
-      return { status: 0, stderr: "", stdout: "" };
-    };
+        return commandResult(launchOutput, launchStatus);
+      },
+    });
 
     try {
       await expect(
-        runWindowsBackgroundPowerShell({
-          label: "windows setup deadline",
-          pollIntervalMs: 1,
-          runCommand: fakeRun,
-          script: "Write-Output test",
-          timeoutMs: 5,
-          vmName: "Windows Test",
-        }),
-      ).rejects.toThrow(testCase.expectedError);
+        f.run("windows setup deadline", { script: "Write-Output test" }),
+      ).rejects.toThrow(`windows setup deadline ${expectedError}`);
       expect(launchAttempts).toBe(1);
     } finally {
       clock.mockRestore();
     }
+  },
+);
+
+it("drains a completed Windows job when setup exhausts the active budget", async () => {
+  let now = 1_000;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  let completionProbes = 0;
+  let logProbes = 0;
+  const f = windowsFixture({
+    input: () => {
+      now += 2;
+    },
+    poll: (command) => {
+      if (command.includes("__OPENCLAW_BACKGROUND_DONE__")) {
+        logProbes++;
+        const markers = extractWindowsBackgroundControlMarkers(command);
+        return commandResult([`${markers.exitPrefix}0`, markers.done, ""].join("\n"));
+      }
+      if (command.includes("(echo done) else (echo wait)")) {
+        completionProbes++;
+        return commandResult("done\n");
+      }
+      return commandResult();
+    },
   });
 
-  it("drains a completed Windows job when setup exhausts the active budget", async () => {
-    let now = 1_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-    let completionProbes = 0;
-    let logProbes = 0;
-    const fakeRun: typeof hostCommandRun = (_command, args, options) => {
-      if (options?.input) {
-        now += 2;
-        return { status: 0, stderr: "", stdout: "" };
-      }
-      const decoded = decodePowerShellFromArgs(args);
-      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
-        return { status: 0, stderr: "", stdout: "started\n" };
-      }
-      if (args.includes("cmd.exe")) {
-        const command = args.at(-1) ?? "";
-        if (command.includes("__OPENCLAW_BACKGROUND_DONE__")) {
-          logProbes++;
-          const markers = extractWindowsBackgroundControlMarkers(command);
-          return {
-            status: 0,
-            stderr: "",
-            stdout: [`${markers.exitPrefix}0`, markers.done, ""].join("\n"),
-          };
-        }
-        if (command.includes("(echo done) else (echo wait)")) {
-          completionProbes++;
-          return { status: 0, stderr: "", stdout: "done\n" };
-        }
-      }
-      return { status: 0, stderr: "", stdout: "" };
-    };
+  try {
+    await expect(f.run("windows completed before first poll")).resolves.toBeUndefined();
+    expect(completionProbes).toBe(1);
+    expect(logProbes).toBe(1);
+  } finally {
+    clock.mockRestore();
+  }
+});
 
-    try {
-      await expect(
-        runWindowsBackgroundPowerShell({
-          label: "windows completed before first poll",
-          pollIntervalMs: 1,
-          runCommand: fakeRun,
-          script: "Write-Output done",
-          timeoutMs: 5,
-          vmName: "Windows Test",
-        }),
-      ).resolves.toBeUndefined();
-      expect(completionProbes).toBe(1);
-      expect(logProbes).toBe(1);
-    } finally {
-      clock.mockRestore();
-    }
+it("does not treat Windows background log text as completion control", async () => {
+  const f = windowsFixture({ poll: () => commandResult("done\n") });
+
+  await expect(
+    f.run("windows background marker smuggle", { completedLogDrainGraceMs: 5 }),
+  ).rejects.toThrow("windows background marker smuggle timed out");
+
+  expect(f.commands.join("\n")).toContain(
+    "Stop-OpenClawBackgroundProcessTree ([int]$backgroundPid)",
+  );
+});
+
+it("drains completed Windows background logs before cleanup", async () => {
+  const output: string[] = [];
+  let pollCount = 0;
+  const f = windowsFixture({
+    poll: (command) => {
+      if (command.includes("type")) {
+        pollCount += 1;
+        const markers = extractWindowsBackgroundControlMarkers(command);
+        return commandResult(
+          ["first chunk", `${markers.exitPrefix}0`, markers.done, ""].join("\n"),
+        );
+      }
+      if (command.includes("if exist")) {
+        return commandResult("done\n");
+      }
+      return commandResult();
+    },
   });
 
-  it("does not treat Windows background log text as completion control", async () => {
-    const decodedCommands: string[] = [];
-    const fakeRun: typeof hostCommandRun = (_command, args) => {
-      const decoded = decodePowerShellFromArgs(args);
-      decodedCommands.push(decoded);
-      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
-        return { status: 0, stderr: "", stdout: "started\n" };
-      }
-      if (args.includes("cmd.exe")) {
-        return { status: 0, stderr: "", stdout: "done\n" };
-      }
-      return { status: 0, stderr: "", stdout: "" };
-    };
+  await expect(
+    f.run("windows background drain", {
+      append: (chunk) => output.push(String(chunk)),
+      completedLogDrainGraceMs: 1000,
+      pollIntervalMs: 5000,
+      timeoutMs: 20,
+    }),
+  ).resolves.toBeUndefined();
 
-    await expect(
-      runWindowsBackgroundPowerShell({
-        label: "windows background marker smuggle",
-        pollIntervalMs: 1,
-        runCommand: fakeRun,
-        script: "Write-Output done",
-        timeoutMs: 5,
-        completedLogDrainGraceMs: 5,
-        vmName: "Windows Test",
-      }),
-    ).rejects.toThrow("windows background marker smuggle timed out");
+  expect(pollCount).toBe(1);
+  expect(output.join("")).toContain("first chunk");
+  expect(f.commands.join("\n")).not.toContain("Stop-OpenClawBackgroundProcessTree");
+  expect(f.commands.join("\n")).toContain(
+    "Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath",
+  );
+});
 
-    expect(decodedCommands.join("\n")).toContain(
-      "Stop-OpenClawBackgroundProcessTree ([int]$backgroundPid)",
-    );
+it("scrubs future plugin entries before invoking old same-guest updaters", () => {
+  const script = readFileSync(UPDATE_SCRIPTS_PATH, "utf8");
+  const windowsScript = windowsUpdateScript(updateInput());
+  const macosScript = macosUpdateScript(updateInput());
+
+  expect(script).toContain("Remove-FuturePluginEntries");
+  expect(script).toContain("scrub_future_plugin_entries");
+  expect(script).toContain("delete plugins.entries.feishu");
+  expect(script).toContain("delete plugins.entries.whatsapp");
+  expect(windowsScript).toContain(
+    'const futurePluginIds = new Set(["feishu", "whatsapp", "openai"])',
+  );
+  expect(windowsScript).toContain('replace(/^\\uFEFF/u, "")');
+  expect(windowsScript).toContain("if (allow.length !== plugins.allow.length)");
+  expect(windowsScript).toContain('JSON.stringify(config, null, 2) + "\\n"');
+  expect(windowsScript).not.toContain("ConvertTo-Json -Depth 100");
+  expect(windowsScript).toContain("& node.exe $nodeScriptPath $configPath");
+  expect(windowsScript).toContain(
+    "Remove-Item $nodeScriptPath -Force -ErrorAction SilentlyContinue",
+  );
+  expect(windowsScript).toContain("Remove-FuturePluginEntries\nStop-OpenClawGatewayProcesses");
+  expect(script).toContain("scrub_future_plugin_entries\nstop_openclaw_gateway_processes");
+  expect(macosScript).toContain('OPENCLAW_BIN="$(resolve_required_command openclaw)"');
+  expect(macosScript).toContain("/usr/local/bin:/usr/local/sbin");
+  expect(macosScript).not.toContain("/opt/homebrew/bin/openclaw");
+});
+
+it("preserves bundled plugin inventory during updates while isolating POSIX gateway stops", () => {
+  const input = updateInput();
+  const windowsScript = windowsUpdateScript(input);
+  const macosScript = macosUpdateScript(input);
+  const linuxScript = linuxUpdateScript(input);
+  const updateLines = [windowsScript, macosScript, linuxScript].map((generatedScript) =>
+    generatedScript.split("\n").find((line) => line.includes(" update --tag ")),
+  );
+
+  expect(updateLines).not.toContain(undefined);
+  for (const updateLine of updateLines) {
+    expect(updateLine).not.toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+  }
+  expect(windowsScript).toContain(
+    "Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'",
+  );
+  expect(windowsScript).not.toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+  expect(macosScript).toContain('OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 "$OPENCLAW_BIN" gateway stop');
+  expect(linuxScript).toContain(
+    "OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 OPENCLAW_ALLOW_ROOT=1 openclaw gateway stop",
+  );
+});
+
+it("generates a .NET-safe Windows stale import regex in the update-failure guard", () => {
+  const script = windowsUpdateScript({
+    auth: TEST_AUTH,
+    expectedNeedle: "2026.4.30",
+    updateTarget: "latest",
   });
+  const staleImportLine = script.match(/\$stalePostSwapImport = [^\n]+/)?.[0];
+  const staleImportMatch = script.match(/\$updateText -match '(node_modules[^']+)'/);
+  const staleImportPattern = staleImportMatch?.[1];
 
-  it("drains completed Windows background logs before cleanup", async () => {
-    const decodedCommands: string[] = [];
-    const output: string[] = [];
-    let pollCount = 0;
-    const fakeRun: typeof hostCommandRun = (_command, args) => {
-      const decoded = decodePowerShellFromArgs(args);
-      decodedCommands.push(decoded);
-      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
-        return { status: 0, stderr: "", stdout: "started\n" };
-      }
-      if (args.includes("cmd.exe")) {
-        const command = args.at(-1) ?? "";
-        if (command.includes("type")) {
-          pollCount += 1;
-          const markers = extractWindowsBackgroundControlMarkers(command);
-          return {
-            status: 0,
-            stderr: "",
-            stdout: ["first chunk", `${markers.exitPrefix}0`, markers.done, ""].join("\n"),
-          };
-        }
-        if (command.includes("if exist")) {
-          return { status: 0, stderr: "", stdout: "done\n" };
-        }
-        return { status: 0, stderr: "", stdout: "" };
-      }
-      return { status: 0, stderr: "", stdout: "" };
-    };
-
-    await expect(
-      runWindowsBackgroundPowerShell({
-        append: (chunk) => output.push(String(chunk)),
-        completedLogDrainGraceMs: 1000,
-        label: "windows background drain",
-        pollIntervalMs: 5000,
-        runCommand: fakeRun,
-        script: "Write-Output done",
-        timeoutMs: 20,
-        vmName: "Windows Test",
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(pollCount).toBe(1);
-    expect(output.join("")).toContain("first chunk");
-    expect(decodedCommands.join("\n")).not.toContain("Stop-OpenClawBackgroundProcessTree");
-    expect(decodedCommands.join("\n")).toContain(
-      "Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath",
+  if (!staleImportLine) {
+    throw new Error("missing generated Windows stale import guard");
+  }
+  if (!staleImportPattern) {
+    throw new Error("missing generated Windows stale import regex");
+  }
+  expect(staleImportLine).toContain("$updateText -match 'ERR_MODULE_NOT_FOUND'");
+  expect(staleImportLine).toContain(`$updateText -match '${staleImportPattern}'`);
+  expect(staleImportPattern).not.toContain("node_modules\\openclaw\\dist\\");
+  expect(staleImportPattern.match(/\\\\/g)).toHaveLength(4);
+  const generatedRegex = new RegExp(staleImportPattern);
+  for (const extension of ["js", "mjs"]) {
+    const representativeUpdateFailure = String.raw`Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\main-a1_B2.${extension}' imported from C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\cli.js`;
+    expect(generatedRegex.test(representativeUpdateFailure)).toBe(true);
+    expect(generatedRegex.test(String.raw`node_modules\openclaw\dist\main.${extension}`)).toBe(
+      false,
     );
-  });
-
-  it("scrubs future plugin entries before invoking old same-guest updaters", () => {
-    const script = readFileSync(UPDATE_SCRIPTS_PATH, "utf8");
-    const windowsScript = windowsUpdateScript({
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.5.3-beta.2",
-      updateTarget: "2026.5.3-beta.2",
-    });
-    const macosScript = macosUpdateScript({
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.5.3-beta.2",
-      updateTarget: "2026.5.3-beta.2",
-    });
-
-    expect(script).toContain("Remove-FuturePluginEntries");
-    expect(script).toContain("scrub_future_plugin_entries");
-    expect(script).toContain("delete plugins.entries.feishu");
-    expect(script).toContain("delete plugins.entries.whatsapp");
-    expect(windowsScript).toContain(
-      'const futurePluginIds = new Set(["feishu", "whatsapp", "openai"])',
-    );
-    expect(windowsScript).toContain('replace(/^\\uFEFF/u, "")');
-    expect(windowsScript).toContain("if (allow.length !== plugins.allow.length)");
-    expect(windowsScript).toContain('JSON.stringify(config, null, 2) + "\\n"');
-    expect(windowsScript).not.toContain("ConvertTo-Json -Depth 100");
-    expect(windowsScript).toContain("& node.exe $nodeScriptPath $configPath");
-    expect(windowsScript).toContain(
-      "Remove-Item $nodeScriptPath -Force -ErrorAction SilentlyContinue",
-    );
-    expect(windowsScript).toContain("Remove-FuturePluginEntries\nStop-OpenClawGatewayProcesses");
-    expect(script).toContain("scrub_future_plugin_entries\nstop_openclaw_gateway_processes");
-    expect(macosScript).toContain('OPENCLAW_BIN="$(resolve_required_command openclaw)"');
-    expect(macosScript).toContain("/usr/local/bin:/usr/local/sbin");
-    expect(macosScript).not.toContain("/opt/homebrew/bin/openclaw");
-  });
-
-  it("preserves bundled plugin inventory during updates while isolating POSIX gateway stops", () => {
-    const input = {
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.5.3-beta.2",
-      updateTarget: "2026.5.3-beta.2",
-    };
-    const windowsScript = windowsUpdateScript(input);
-    const macosScript = macosUpdateScript(input);
-    const linuxScript = linuxUpdateScript(input);
-    const updateLines = [windowsScript, macosScript, linuxScript].map((generatedScript) =>
-      generatedScript.split("\n").find((line) => line.includes(" update --tag ")),
-    );
-
-    expect(updateLines).not.toContain(undefined);
-    for (const updateLine of updateLines) {
-      expect(updateLine).not.toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
-    }
-    expect(windowsScript).toContain(
-      "Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'",
-    );
-    expect(windowsScript).not.toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
-    expect(macosScript).toContain(
-      'OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 "$OPENCLAW_BIN" gateway stop',
-    );
-    expect(linuxScript).toContain(
-      "OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 OPENCLAW_ALLOW_ROOT=1 openclaw gateway stop",
-    );
-  });
-
-  it("generates a .NET-safe Windows stale import regex in the update-failure guard", () => {
-    const script = windowsUpdateScript({
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.4.30",
-      updateTarget: "latest",
-    });
-    const staleImportLine = script.match(/\$stalePostSwapImport = [^\n]+/)?.[0];
-    const staleImportMatch = script.match(/\$updateText -match '(node_modules[^']+)'/);
-    const staleImportPattern = staleImportMatch?.[1];
-
-    if (!staleImportLine) {
-      throw new Error("missing generated Windows stale import guard");
-    }
-    if (!staleImportPattern) {
-      throw new Error("missing generated Windows stale import regex");
-    }
-    expect(staleImportLine).toContain("$updateText -match 'ERR_MODULE_NOT_FOUND'");
-    expect(staleImportLine).toContain(`$updateText -match '${staleImportPattern}'`);
-    expect(staleImportPattern).not.toContain("node_modules\\openclaw\\dist\\");
-    expect(staleImportPattern.match(/\\\\/g)).toHaveLength(4);
-    const generatedRegex = new RegExp(staleImportPattern);
-    for (const extension of ["js", "mjs"]) {
-      const representativeUpdateFailure = String.raw`Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\main-a1_B2.${extension}' imported from C:\Users\runner\AppData\Roaming\npm\node_modules\openclaw\dist\cli.js`;
-      expect(generatedRegex.test(representativeUpdateFailure)).toBe(true);
-      expect(generatedRegex.test(String.raw`node_modules\openclaw\dist\main.${extension}`)).toBe(
-        false,
-      );
-    }
-  });
+  }
 });

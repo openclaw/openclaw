@@ -30,12 +30,7 @@ export type StoreSearchCapabilities = {
   rebuild?: () => void;
 };
 
-export type DatabaseErrorKind =
-  | "constraint"
-  | "busy"
-  | "connection-lost"
-  | "outcome-unknown"
-  | "other";
+type DatabaseErrorKind = "constraint" | "busy" | "connection-lost" | "outcome-unknown" | "other";
 export type PostgresSchemaFragment = {
   id: string;
   tables: readonly string[];
@@ -67,12 +62,15 @@ export type StoreSchema = {
   searchExtensions?: Record<string, SearchSchema>;
 };
 export type AdmittedStore = {
+  reusePostgresConnection?: boolean;
   anchor: DatabaseSync;
   schema: StoreSchema;
   input: DatabaseEngineInput;
   openSqlite: () => void;
   storeId?: string;
   namespace?: string;
+  /** Owner-specific data extraction inside the validated source migration transaction. */
+  beforeMigrate?: (database: EngineConnection, fromVersion: number) => void;
 };
 type TransactionRecipes<Connection extends SqlConnection> = {
   write<T>(connection: Connection, operation: () => T): T;

@@ -71,14 +71,12 @@ export function projectDraftSessionPlacementRecovery(recovery: SessionPlacementR
         : { autoDevice: true }),
     cwd: recovery.createParams?.cwd,
     ...(recovery.createParams?.deviceFolder
-      ? { deviceFolder: { ...recovery.createParams.deviceFolder } }
+      ? { deviceFolder: recovery.createParams.deviceFolder }
       : {}),
     ...(recovery.createParams?.worktreeSource
       ? { worktreeSource: recovery.createParams.worktreeSource }
       : {}),
-    ...(recovery.createParams?.repository
-      ? { repository: { ...recovery.createParams.repository } }
-      : {}),
+    ...(recovery.createParams?.repository ? { repository: recovery.createParams.repository } : {}),
   };
   return {
     placement,

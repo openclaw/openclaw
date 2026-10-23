@@ -1,16 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
+import { SESSIONS_LIST_OWNER_LIMIT } from "../../../../src/shared/session-list-limits.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { compareSessionRowsByUpdatedAt, sessionMatchesArchivedFilter } from "./navigation.ts";
-import type {
-  SessionGateway,
-  SessionListOptions,
-  SessionListScope,
-  SessionListSnapshot,
-  SessionRefreshOptions,
-  SessionRefreshOutcome,
-} from "./session-capability.ts";
 import {
   normalizeAgentId,
   areUiSessionKeysEquivalent,
@@ -26,9 +19,17 @@ import {
   hasSessionChangedAncestorCoverage,
   matchesExistingSession,
   parseSessionChangedEvent,
-  reconcileSessionChangedRow,
+  reconcileParsedSessionChangedRow,
   sessionChangedSnapshots,
 } from "./session-row-reconcile.ts";
+import type {
+  SessionGateway,
+  SessionListOptions,
+  SessionListScope,
+  SessionListSnapshot,
+  SessionRefreshOptions,
+  SessionRefreshOutcome,
+} from "./session-types.ts";
 
 type SessionListRowLookup = (key: string, agentId?: string | null) => GatewaySessionRow | undefined;
 
@@ -155,7 +156,7 @@ export function canApplySessionListSnapshot(
     const excluded =
       !existing &&
       complete &&
-      reconcileSessionChangedRow(observedRow?.(info.key, info.agentId), snapshot, {
+      reconcileParsedSessionChangedRow(observedRow?.(info.key, info.agentId), parsedSnapshot, {
         resultAgentId: options.agentId,
         archivedFilter: "all",
         admitSnapshot: true,
@@ -163,10 +164,10 @@ export function canApplySessionListSnapshot(
     if (
       excluded &&
       ((parent &&
-        Array.isArray(excluded.childOwnerSessionKeys) &&
+        excluded.childOwnerSessionKeys !== undefined &&
         !excluded.childOwnerSessionKeys.includes(parent)) ||
         (options.hasBoard !== undefined &&
-          typeof excluded.hasBoard === "boolean" &&
+          excluded.hasBoard !== undefined &&
           excluded.hasBoard !== options.hasBoard) ||
         (options.boardFace !== undefined && excluded.boardFace !== options.boardFace) ||
         (options.includeGlobal === false && excluded.kind === "global") ||
@@ -180,26 +181,32 @@ export function canApplySessionListSnapshot(
     }
     const windowSize =
       result.nextOffset ?? result.limitApplied ?? options.limit ?? DEFAULT_SESSION_LIST_QUERY.limit;
-    if (
-      excluded &&
-      result.hasMore === true &&
-      sortBy === "updatedAt" &&
-      (options.ownerFirst !== true ||
-        (viewerProfileId &&
-          !(
-            excluded.owner?.actor.identity?.type === "profile" &&
-            excluded.owner.actor.identity.id === viewerProfileId
-          ))) &&
-      result.sessions.filter(
+    if (excluded && result.hasMore === true && sortBy === "updatedAt") {
+      const newerRows = result.sessions.filter(
         (row) =>
           sessionMatchesArchivedFilter(row, options.archivedFilter ?? "active") &&
           compareSessionRowsByUpdatedAt(row, excluded) < 0,
-      ).length >= windowSize
-    ) {
-      covered = true;
-      continue;
+      );
+      if (
+        newerRows.length >= windowSize &&
+        (options.ownerFirst !== true ||
+          (viewerProfileId &&
+            (!(
+              excluded.owner?.actor.identity?.type === "profile" &&
+              excluded.owner.actor.identity.id === viewerProfileId
+            ) ||
+              // Owned ancestors below both bounded windows cannot enter either page.
+              newerRows.filter(
+                (row) =>
+                  row.owner?.actor.identity?.type === "profile" &&
+                  row.owner.actor.identity.id === viewerProfileId,
+              ).length >= Math.min(windowSize, SESSIONS_LIST_OWNER_LIMIT))))
+      ) {
+        covered = true;
+        continue;
+      }
     }
-    const next = reconcileSessionChangedRow(existing, snapshot, {
+    const next = reconcileParsedSessionChangedRow(existing, parsedSnapshot, {
       resultAgentId: options.agentId,
       archivedFilter: "all",
     }).admittedRow;
@@ -302,7 +309,7 @@ export function isForegroundReplacement(options: SessionRefreshOptions): boolean
 
 export function sessionListAgentMatcher(agentId?: string | null) {
   const normalized = agentId ? normalizeAgentId(agentId) : null;
-  return (queryAgentId?: string) =>
+  return (queryAgentId?: string | null) =>
     !normalized || !queryAgentId?.trim() || normalizeAgentId(queryAgentId) === normalized;
 }
 
@@ -437,7 +444,6 @@ export function coalesceSessionRefresh(
 
 export type ManagedSessionListRefresh = {
   append: boolean;
-  immediate?: boolean;
   offset?: number;
   invalidated?: true;
   background?: true;
@@ -635,7 +641,7 @@ export function retainSessionPaginationWindow(
   const ownerFirstPage =
     Boolean(snapshot.selfUser?.id.trim()) && isPrimarySessionListQuery(options);
   const retainedListLimit =
-    ownerFirstPage && result && typeof offset === "number"
+    ownerFirstPage && result && offset !== undefined
       ? offset + result.sessions.length
       : nextResult.sessions.length;
   // Retain the shared pagination window, excluding owner rows merged ahead of it.

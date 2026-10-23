@@ -1,14 +1,17 @@
-// Discord tests cover client plugin behavior.
 import { ApplicationCommandType, ComponentType, Routes } from "discord-api-types/v10";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "./client.js";
-import { Command, type CommandOptions, type DiscordCommand } from "./commands.js";
+import type { DiscordCommand } from "./commands.js";
 import { ComponentRegistry } from "./component-registry.js";
-import { parseCustomId } from "./components.base.js";
-import { Button, StringSelectMenu } from "./components.message.js";
+import { parseCustomId, type BaseMessageInteractiveComponent } from "./components.base.js";
 import { DiscordError } from "./rest.js";
-import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
+import {
+  attachRestMock,
+  createInternalTestClient,
+  createTestCommand,
+  createTestHashStore,
+} from "./test-builders.test-support.js";
 
 type AnyListener = Client["listeners"][number];
 
@@ -17,103 +20,88 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function createTestCommand(params: { name: string; options?: CommandOptions }): DiscordCommand {
-  return new (class extends Command {
-    name = params.name;
-    override description = `${params.name} command`;
-    override options = params.options;
-    run() {}
-  })();
+function liveCommand(options: Record<string, unknown>[], extra: Record<string, unknown> = {}) {
+  return {
+    id: "cmd1",
+    application_id: "app1",
+    type: ApplicationCommandType.ChatInput,
+    name: "one",
+    description: "one command",
+    options,
+    ...extra,
+  };
+}
+
+function existingCommand(command: DiscordCommand, id: string) {
+  return { ...command.serialize(), id, application_id: "app1" };
+}
+
+function wildcardParser(customId: string) {
+  return (id: string) =>
+    id === customId || id.startsWith("occomp:") ? { key: "*", data: {} } : parseCustomId(id);
 }
 
 describe("ComponentRegistry", () => {
   it("preserves digit-only custom id values as strings", () => {
     const parsed = parseCustomId("agent:user=123456789012345678;count=42;enabled=true");
 
-    expect(parsed.data.user).toBe("123456789012345678");
-    expect(parsed.data.count).toBe("42");
-    expect(parsed.data.enabled).toBe(true);
+    expect(parsed.data).toEqual({ user: "123456789012345678", count: "42", enabled: true });
   });
 
   it("resolves wildcard parser entries by component type", () => {
-    const registry = new ComponentRegistry<Button | StringSelectMenu>();
-    class WildcardButton extends Button {
-      label = "button";
-      customId = "__button_wildcard__";
-      override customIdParser = (id: string) =>
-        id === this.customId || id.startsWith("occomp:")
-          ? { key: "*", data: {} }
-          : parseCustomId(id);
+    const registry = new ComponentRegistry<BaseMessageInteractiveComponent>();
+    const components = [ComponentType.Button, ComponentType.StringSelect].map((type) => ({
+      type,
+      customId: `__wildcard_${type}__`,
+      customIdParser: wildcardParser(`__wildcard_${type}__`),
+      run() {},
+    }));
+    for (const component of components) {
+      registry.register(component);
     }
-    class WildcardSelect extends StringSelectMenu {
-      customId = "__select_wildcard__";
-      options = [];
-      override customIdParser = (id: string) =>
-        id === this.customId || id.startsWith("occomp:")
-          ? { key: "*", data: {} }
-          : parseCustomId(id);
+    for (const component of components) {
+      expect(registry.resolve("occomp:cid=one", { componentType: component.type })).toBe(component);
     }
-    const button = new WildcardButton();
-    const select = new WildcardSelect();
-
-    registry.register(button);
-    registry.register(select);
-
-    expect(registry.resolve("occomp:cid=one", { componentType: ComponentType.Button })).toBe(
-      button,
-    );
-    expect(registry.resolve("occomp:cid=one", { componentType: ComponentType.StringSelect })).toBe(
-      select,
-    );
   });
 });
 
 describe("Client.deployCommands", () => {
   it("does not patch live-only command metadata or reordered unordered arrays", async () => {
     const client = createInternalTestClient([
-      createTestCommand({
-        name: "one",
-        options: [
-          {
-            type: 7,
-            name: "value",
-            description: "Value",
-            required: false,
-            channel_types: [1, 0],
-          },
-        ],
-      }),
+      createTestCommand("one", [
+        {
+          type: 7,
+          name: "value",
+          description: "Value",
+          required: false,
+          channel_types: [1, 0],
+        },
+      ]),
     ]);
     const get = vi.fn(async () => [
-      {
-        id: "cmd1",
-        application_id: "app1",
-        type: ApplicationCommandType.ChatInput,
-        name: "one",
-        name_localized: "one",
-        description: "one command",
-        description_localized: "one command",
-        options: [
+      liveCommand(
+        [
           {
-            description: "Value",
-            name: "value",
             type: 7,
+            name: "value",
+            description: "Value",
             description_localized: "Value",
             channel_types: [0, 1],
           },
         ],
-        default_member_permissions: null,
-        dm_permission: true,
-        integration_types: [1, 0],
-        contexts: [2, 1, 0],
-        guild_id: undefined,
-        version: "1",
-      },
+        {
+          name_localized: "one",
+          description_localized: "one command",
+          default_member_permissions: null,
+          dm_permission: true,
+          integration_types: [1, 0],
+          contexts: [2, 1, 0],
+          guild_id: undefined,
+          version: "1",
+        },
+      ),
     ]);
-    const patch = vi.fn(async () => undefined);
-    const post = vi.fn(async () => undefined);
-    const deleteRequest = vi.fn(async () => undefined);
-    attachRestMock(client, { get, patch, post, delete: deleteRequest });
+    const { patch, post, delete: deleteRequest } = attachRestMock(client, { get });
 
     await client.deployCommands();
 
@@ -124,41 +112,23 @@ describe("Client.deployCommands", () => {
 
   it("bulk overwrites when a capped application cannot create a replacement", async () => {
     const retainedCommands = Array.from({ length: 99 }, (_, index) =>
-      createTestCommand({ name: `retained-${index}` }),
+      createTestCommand(`retained-${index}`),
     );
-    const replacement = createTestCommand({ name: "replacement" });
+    const replacement = createTestCommand("replacement");
     const client = createInternalTestClient([...retainedCommands, replacement]);
     const existing = [
-      ...retainedCommands.map((command, index) =>
-        Object.assign(command.serialize(), {
-          id: `retained-id-${index}`,
-          application_id: "app1",
-        }),
-      ),
-      Object.assign(createTestCommand({ name: "stale" }).serialize(), {
-        id: "stale-id",
-        application_id: "app1",
-      }),
+      ...retainedCommands.map((command, index) => existingCommand(command, `retained-id-${index}`)),
+      existingCommand(createTestCommand("stale"), "stale-id"),
     ];
-    let deployedCount = existing.length;
-    const operations: string[] = [];
     const get = vi.fn(async () => existing);
     const post = vi.fn(async () => {
-      if (deployedCount >= 100) {
-        throw new DiscordError(new Response(null, { status: 400 }), {
-          message: "Maximum number of application commands reached (100).",
-          code: 30032,
-        });
-      }
-      deployedCount += 1;
-      operations.push("post");
+      throw new DiscordError(new Response(null, { status: 400 }), {
+        message: "Maximum number of application commands reached (100).",
+        code: 30032,
+      });
     });
-    const put = vi.fn(async () => {
-      deployedCount = 100;
-      operations.push("put");
-    });
-    const deleteRequest = vi.fn(async () => undefined);
-    attachRestMock(client, { get, post, put, delete: deleteRequest });
+    const put = vi.fn(async () => undefined);
+    const { delete: deleteRequest } = attachRestMock(client, { get, post, put });
 
     await client.deployCommands();
 
@@ -166,26 +136,18 @@ describe("Client.deployCommands", () => {
     expect(post).toHaveBeenCalledWith(Routes.applicationCommands("app1"), {
       body: replacement.serialize(),
     });
-    expect(put).toHaveBeenCalledWith(Routes.applicationCommands("app1"), {
+    expect(put).toHaveBeenCalledExactlyOnceWith(Routes.applicationCommands("app1"), {
       body: [...retainedCommands, replacement].map((command) => command.serialize()),
     });
-    expect(operations).toEqual(["put"]);
-    expect(deployedCount).toBe(100);
   });
 
   it("keeps stale commands when a replacement create fails below the cap", async () => {
-    const client = createInternalTestClient([createTestCommand({ name: "replacement" })]);
-    const get = vi.fn(async () => [
-      Object.assign(createTestCommand({ name: "stale" }).serialize(), {
-        id: "stale-id",
-        application_id: "app1",
-      }),
-    ]);
+    const client = createInternalTestClient([createTestCommand("replacement")]);
+    const get = vi.fn(async () => [existingCommand(createTestCommand("stale"), "stale-id")]);
     const post = vi.fn(async () => {
       throw new Error("Discord unavailable");
     });
-    const deleteRequest = vi.fn(async () => undefined);
-    attachRestMock(client, { get, post, delete: deleteRequest });
+    const { delete: deleteRequest } = attachRestMock(client, { get, post });
 
     await expect(client.deployCommands()).rejects.toThrow("Discord unavailable");
 
@@ -193,42 +155,25 @@ describe("Client.deployCommands", () => {
   });
 
   it("patches changed option localization maps", async () => {
-    const client = createInternalTestClient([
-      createTestCommand({
-        name: "one",
-        options: [
-          {
-            type: 3,
-            name: "value",
-            name_localizations: { de: "wert" },
-            description: "Value",
-            description_localizations: { de: "Wert" },
-          },
-        ],
-      }),
-    ]);
+    const option = {
+      type: 3 as const,
+      name: "value",
+      description: "Value",
+      name_localizations: { de: "wert" },
+      description_localizations: { de: "Wert" },
+    };
+    const command = createTestCommand("one", [option]);
+    const client = createInternalTestClient([command]);
     const get = vi.fn(async () => [
-      {
-        id: "cmd1",
-        application_id: "app1",
-        type: ApplicationCommandType.ChatInput,
-        name: "one",
-        description: "one command",
-        options: [
-          {
-            type: 3,
-            name: "value",
-            name_localizations: { de: "alter-wert" },
-            description: "Value",
-            description_localizations: { de: "Alter Wert" },
-          },
-        ],
-      },
+      liveCommand([
+        {
+          ...option,
+          name_localizations: { de: "alter-wert" },
+          description_localizations: { de: "Alter Wert" },
+        },
+      ]),
     ]);
-    const patch = vi.fn(async () => undefined);
-    const post = vi.fn(async () => undefined);
-    const deleteRequest = vi.fn(async () => undefined);
-    attachRestMock(client, { get, patch, post, delete: deleteRequest });
+    const { patch, post, delete: deleteRequest } = attachRestMock(client, { get });
 
     await client.deployCommands();
 
@@ -237,15 +182,7 @@ describe("Client.deployCommands", () => {
         name: "one",
         description: "one command",
         type: ApplicationCommandType.ChatInput,
-        options: [
-          {
-            type: 3,
-            name: "value",
-            name_localizations: { de: "wert" },
-            description: "Value",
-            description_localizations: { de: "Wert" },
-          },
-        ],
+        options: [option],
         integration_types: [0, 1],
         contexts: [0, 1, 2],
         default_member_permissions: null,
@@ -256,35 +193,21 @@ describe("Client.deployCommands", () => {
   });
 
   it("skips unchanged command deploys across client restarts using the hash store", async () => {
-    const hashes = new Map<string, string>();
-    const commandDeployHashStore = {
-      lookup: async (key: string) => hashes.get(key),
-      register: async (key: string, value: string) => {
-        hashes.set(key, value);
-      },
+    const { store: commandDeployHashStore } = createTestHashStore();
+    const deploy = async () => {
+      const client = createInternalTestClient([createTestCommand("one")], {
+        commandDeployHashStore,
+      });
+      const rest = attachRestMock(client, { get: vi.fn(async () => []) });
+      await client.deployCommands();
+      return rest;
     };
-    const first = createInternalTestClient([createTestCommand({ name: "one" })], {
-      commandDeployHashStore,
-    });
-    const firstGet = vi.fn(async () => []);
-    const firstPost = vi.fn(async () => undefined);
-    attachRestMock(first, { get: firstGet, post: firstPost });
-
-    await first.deployCommands();
-
-    const second = createInternalTestClient([createTestCommand({ name: "one" })], {
-      commandDeployHashStore,
-    });
-    const secondGet = vi.fn(async () => []);
-    const secondPost = vi.fn(async () => undefined);
-    attachRestMock(second, { get: secondGet, post: secondPost });
-
-    await second.deployCommands();
-
-    expect(firstGet).toHaveBeenCalledTimes(1);
-    expect(firstPost).toHaveBeenCalledTimes(1);
-    expect(secondGet).not.toHaveBeenCalled();
-    expect(secondPost).not.toHaveBeenCalled();
+    const first = await deploy();
+    const second = await deploy();
+    expect(first.get).toHaveBeenCalledTimes(1);
+    expect(first.post).toHaveBeenCalledTimes(1);
+    expect(second.get).not.toHaveBeenCalled();
+    expect(second.post).not.toHaveBeenCalled();
   });
 
   it("caches REST object fetches briefly and invalidates from gateway updates", async () => {
@@ -303,108 +226,75 @@ describe("Client.deployCommands", () => {
 });
 
 describe("Client gateway event queue", () => {
-  function createQueuedClient(params: {
-    listeners: AnyListener[];
-    eventQueue?: ConstructorParameters<typeof Client>[0]["eventQueue"];
-  }): Client {
-    return new Client(
-      {
-        clientId: "app1",
-        token: "token",
-        eventQueue: params.eventQueue,
-      },
-      { listeners: params.listeners },
-    );
+  function listener(handle: () => Promise<void>) {
+    return { type: "READY" as const, handle: vi.fn(handle) };
   }
 
-  it("holds a timed-out listener slot until its underlying promise resolves", async () => {
-    vi.useFakeTimers();
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  function createQueuedClient(
+    listeners: AnyListener[],
+    eventQueue: ConstructorParameters<typeof Client>[0]["eventQueue"],
+  ): Client {
+    return new Client({ clientId: "app1", token: "token", eventQueue }, { listeners });
+  }
+
+  it("holds a listener slot until its underlying promise resolves", async () => {
+    const firstStarted = createDeferred<void>();
     const firstSettlement = createDeferred<void>();
     const started: string[] = [];
-    const first = {
-      type: "READY",
-      handle: vi.fn(async () => {
-        started.push("first");
-        await firstSettlement.promise;
-      }),
-    } satisfies AnyListener;
-    const second = {
-      type: "READY",
-      handle: vi.fn(async () => {
-        started.push("second");
-      }),
-    } satisfies AnyListener;
-    const client = createQueuedClient({
-      listeners: [first, second],
-      eventQueue: { listenerTimeout: 10, maxConcurrency: 1 },
+    const first = listener(async () => {
+      started.push("first");
+      firstStarted.resolve();
+      await firstSettlement.promise;
     });
+    const second = listener(async () => {
+      started.push("second");
+    });
+    const client = createQueuedClient([first, second], { maxConcurrency: 1 });
 
     const dispatch = client.dispatchGatewayEvent("READY", {});
-    await vi.advanceTimersByTimeAsync(10);
+    await firstStarted.promise;
 
     expect(started).toEqual(["first"]);
 
     firstSettlement.resolve();
-    await vi.advanceTimersByTimeAsync(0);
-
+    await dispatch;
     expect(started).toEqual(["first", "second"]);
     expect(first.handle).toHaveBeenCalledTimes(1);
     expect(second.handle).toHaveBeenCalledTimes(1);
-    await expect(dispatch).resolves.toBeUndefined();
-    expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("logs a listener failure that arrives after its dispatch timeout", async () => {
-    vi.useFakeTimers();
+  it("logs a listener failure when its underlying promise rejects", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const settlement = createDeferred<void>();
-    const lateError = new Error("late listener failure");
-    const listener = {
-      type: "READY",
-      handle: vi.fn(async () => await settlement.promise),
-    } satisfies AnyListener;
-    const client = createQueuedClient({
-      listeners: [listener],
-      eventQueue: { listenerTimeout: 10, maxConcurrency: 1 },
-    });
+    const failure = new Error("listener failure");
+    const waiting = listener(async () => await settlement.promise);
+    const client = createQueuedClient([waiting], { maxConcurrency: 1 });
 
     const dispatch = client.dispatchGatewayEvent("READY", {});
-    await vi.advanceTimersByTimeAsync(10);
+    settlement.reject(failure);
     await expect(dispatch).resolves.toBeUndefined();
 
-    settlement.reject(lateError);
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(errorSpy).toHaveBeenNthCalledWith(
-      1,
-      "[EventQueue] Listener Object timed out after 10ms for event READY",
-    );
-    expect(errorSpy).toHaveBeenNthCalledWith(
-      2,
-      "[EventQueue] Listener Object failed after timeout for event READY:",
-      lateError,
+    expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+      "[EventQueue] Listener Object failed for event READY:",
+      failure,
     );
   });
 
   it("rejects when queued listener work exceeds maxQueueSize", async () => {
     const releases: Array<() => void> = [];
-    const listener = {
-      type: "READY",
-      handle: vi.fn(
-        async () =>
-          await new Promise<void>((resolve) => {
-            releases.push(resolve);
-          }),
-      ),
-    } satisfies AnyListener;
-    const client = createQueuedClient({
-      listeners: [listener],
-      eventQueue: { maxConcurrency: 1, maxQueueSize: 1, listenerTimeout: 1_000 },
+    const waiting = listener(
+      async () =>
+        await new Promise<void>((resolve) => {
+          releases.push(resolve);
+        }),
+    );
+    const client = createQueuedClient([waiting], {
+      maxConcurrency: 1,
+      maxQueueSize: 1,
     });
 
     const first = client.dispatchGatewayEvent("READY", {});
-    await vi.waitFor(() => expect(listener.handle).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(waiting.handle).toHaveBeenCalledTimes(1));
     const second = client.dispatchGatewayEvent("READY", {});
 
     await expect(client.dispatchGatewayEvent("READY", {})).rejects.toThrow(
@@ -412,7 +302,7 @@ describe("Client gateway event queue", () => {
     );
 
     releases.shift()?.();
-    await vi.waitFor(() => expect(listener.handle).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(waiting.handle).toHaveBeenCalledTimes(2));
     releases.shift()?.();
     await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
   });

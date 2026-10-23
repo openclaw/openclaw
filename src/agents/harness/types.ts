@@ -1,5 +1,6 @@
 // Harness contracts depend on the model-ref data shape, not its runtime normalization.
 import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { NativeSubagentsSnapshot } from "../../../packages/gateway-protocol/src/schema/native-subagents.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 /**
@@ -16,6 +17,7 @@ import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
 export type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
+export type AgentHarnessNativeSubagents = NativeSubagentsSnapshot;
 
 /** Private native ownership, not execution authority or credential readiness. */
 export type AgentHarnessSessionRuntimeOwnership = {
@@ -109,7 +111,16 @@ type AgentHarnessAttemptParamsBase = Omit<
   | "trajectoryRecorder"
   | "inputAttachmentMedia"
   | "supportsTurnScopedToolRestrictions"
->;
+  | "onSettledTurn"
+> & {
+  /** Awaited in the original attempt scope; core alone decides whether to capture. */
+  onSettledTurn?: (
+    attempt: AgentHarnessCanonicalAttemptResult,
+    captureContext: () => Promise<
+      AgentHarnessCanonicalAttemptResult["settledTurnFinalizationContext"]
+    >,
+  ) => Promise<void>;
+};
 /**
  * @deprecated Use AgentHarnessAttemptParamsV2. The optional capability keeps
  * existing harness source compatible through 2026-10-12.
@@ -140,7 +151,9 @@ export type AgentHarnessAttemptResult =
   | AgentHarnessLegacyAttemptResult;
 export type AgentHarnessSettledTurnFinalizationAttemptParams<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
-> = Omit<TAttemptParams, "hostCapabilities"> & { hostCapabilities?: never };
+> = Omit<TAttemptParams, "hostCapabilities" | "onSettledTurn"> & {
+  hostCapabilities?: never;
+};
 type AgentHarnessSettledTurnFinalizationParams<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
 > = {
@@ -297,6 +310,10 @@ export type AgentHarnessSideQuestionParams = {
 /** Current side-question contract for hosts that always provide closure-bound authority. */
 export type AgentHarnessSideQuestionParamsV2 = AgentHarnessSideQuestionParams & {
   hostCapabilities: AgentHarnessHostCapabilities;
+  /** Non-authorizing native ownership captured before model and auth preparation. */
+  expectedSessionRuntimeOwnership?: InternalEmbeddedRunAttemptParams["expectedSessionRuntimeOwnership"];
+  /** Core-prepared search policy, bound to the side question's model and requester facts. */
+  preparedWebSearchPolicy?: InternalEmbeddedRunAttemptParams["preparedWebSearchPolicy"];
 };
 export type AgentHarnessSideQuestionResult = {
   text: string;
@@ -544,7 +561,7 @@ type AgentHarnessContract<
   verifySetup?(ctx: AgentHarnessSetupVerificationContext): Promise<void>;
   /**
    * Synchronous private ownership read; no discovery, auth loading, or native connection setup.
-   * @deprecated Implement resolveSessionRuntimeOwnershipAsync. Supported through 2026-12-31.
+   * @deprecated Implement resolveSessionRuntimeOwnershipAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    */
   resolveSessionRuntimeOwnership?(params: {
     config?: OpenClawConfig;
@@ -569,6 +586,15 @@ type AgentHarnessContract<
     /** Revalidate the retained caller after awaited work and before returning ownership. */
     assertCurrent: () => void;
   }): Promise<AgentHarnessSessionRuntimeOwnership | undefined>;
+  /** Read retained native-child observations without starting or adopting native work. */
+  readNativeSubagents?(params: {
+    agentId: string;
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+    storePath: string;
+    assertCurrent: () => void;
+  }): Promise<AgentHarnessNativeSubagents | undefined>;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
   /**

@@ -208,7 +208,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void)
     {
-        self.logger.info("APNs remote notification received keys=\(userInfo.keys.count, privacy: .public)")
         Task { @MainActor in
             if let push = ApprovalNotificationBridge.parseResolvedPush(userInfo: userInfo) {
                 if let appModel = self.resolvedAppModel() {
@@ -229,7 +228,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 return
             }
             let result = await appModel.handleSilentPushWake(userInfo)
-            self.logger.info("APNs wake handled=\(result.handled, privacy: .public)")
             if !result.handled {
                 self.scheduleBackgroundWakeRefresh(afterSeconds: 90, reason: "silent_push_not_applied")
             }
@@ -238,7 +236,6 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     func scenePhaseChanged(_ phase: ScenePhase) {
-        GatewayDiagnostics.log("app delegate: scene phase changed=\(String(describing: phase))")
         if phase == .background {
             self.scheduleBackgroundWakeRefresh(afterSeconds: 120, reason: "scene_background")
         }

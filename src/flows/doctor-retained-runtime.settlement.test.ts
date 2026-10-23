@@ -12,10 +12,12 @@ import {
   readOnlyWorkerScope,
   type SqliteReadOnlyWorkerScope,
 } from "../infra/sqlite-readonly-worker-context.js";
+import type { RetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { runRetainedUpdateRuntimesHealth } from "./doctor-health-contribution-runners.state.js";
+import { initialDoctorHealthContribution } from "./doctor-health-contributions-selection.test-support.js";
+import { createDoctorRuntimeProjection } from "./doctor-health-contributions.test-support.js";
 import { useDoctorHealthFixture } from "./doctor-health.fixture.test-support.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
@@ -38,26 +40,21 @@ vi.mock("../infra/openclaw-process-census.js", () => ({
 }));
 vi.mock("../infra/worker-native-lifecycle.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/worker-native-lifecycle.js")>();
-  type NativeSource = ReturnType<typeof actual.captureRetainedNativeWorkerSource>;
-  const sources = new WeakMap<NativeSource, NativeSource>();
+  const capture = actual.captureRetainedNativeWorkerSource;
+  const sources = new WeakMap<RetainedNativeWorkerSource, RetainedNativeWorkerSource>();
   return {
     ...actual,
-    captureRetainedNativeWorkerSource: (
-      ...args: Parameters<typeof actual.captureRetainedNativeWorkerSource>
-    ) => {
-      const source = actual.captureRetainedNativeWorkerSource(...args);
-      let captured = sources.get(source);
-      if (!captured) {
-        captured = {
-          ...source,
-          retireIdleBroker: () =>
-            custody.actualNativeSource ? source.retireIdleBroker() : custody.retireBroker(),
-          get hasActiveWorkers() {
-            return custody.actualNativeSource ? source.hasActiveWorkers : custody.activeNativeWork;
-          },
-        };
-        sources.set(source, captured);
-      }
+    captureRetainedNativeWorkerSource: (...args: Parameters<typeof capture>) => {
+      const source = capture(...args);
+      const captured = sources.get(source) ?? {
+        ...source,
+        retireIdleBroker: () =>
+          custody.actualNativeSource ? source.retireIdleBroker() : custody.retireBroker(),
+        get hasActiveWorkers() {
+          return custody.actualNativeSource ? source.hasActiveWorkers : custody.activeNativeWork;
+        },
+      };
+      sources.set(source, captured);
       return captured;
     },
   };
@@ -88,19 +85,9 @@ it.each([
       materializeSharedStateDatabase(state.env);
       const root = fs.realpathSync(state.root);
       const packageRoot = path.join(root, "checkout");
-      const artifact = path.join(root, "openclaw-update-runtime-Old001");
-      const base = path.parse(packageRoot).root;
-      const marker = path.join(
-        artifact,
-        "tree",
-        Buffer.from(base).toString("hex"),
-        path.relative(base, packageRoot),
-        "package.json",
-      );
       fs.mkdirSync(packageRoot);
       fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
-      fs.mkdirSync(path.dirname(marker), { recursive: true });
-      fs.writeFileSync(marker, '{"name":"openclaw"}');
+      const artifact = createDoctorRuntimeProjection(root, packageRoot, "Old001");
       vi.spyOn(os, "tmpdir").mockReturnValue(root);
       vi.spyOn(packageRoots, "resolveOpenClawPackageRootsSync").mockReturnValue([packageRoot]);
       mocks.service.mockReturnValue({
@@ -114,9 +101,7 @@ it.each([
       let ownerIdentity: Buffer | undefined;
       let doctorReaders: SqliteReadOnlyWorkerScope | undefined;
       let brokerLive = false;
-      let readSource:
-        | import("../infra/worker-native-lifecycle.js").RetainedNativeWorkerSource
-        | undefined;
+      let readSource: RetainedNativeWorkerSource | undefined;
       let checksFinished = false;
       const assertMaintenanceHeld = () => {
         const competingOwner = tryAcquireGatewayStateOwner(database);
@@ -126,8 +111,7 @@ it.each([
       };
       custody.retireBroker.mockImplementation(async () => {
         assertMaintenanceHeld();
-        expect(checksFinished).toBe(true);
-        expect(doctorReaders?.active).toBe(false);
+        expect([checksFinished, doctorReaders?.active]).toEqual([true, false]);
         if (broker === "settlement-failed") {
           throw new Error("fixture broker could not settle native cleanup");
         }
@@ -170,7 +154,7 @@ it.each([
           readSource = captureRetainedNativeWorkerSource();
           expect(readSource.hasActiveWorkers).toBe(true);
         }
-        await runRetainedUpdateRuntimesHealth(ctx);
+        await initialDoctorHealthContribution("doctor:retained-update-runtimes").run(ctx);
         expect(fs.existsSync(artifact)).toBe(true);
         checksFinished = true;
       });
@@ -186,14 +170,17 @@ it.each([
       await completed;
       const output = custody.note.mock.calls.map(([message]) => String(message)).join("\n");
       expect(custody.census).toHaveBeenCalledOnce();
-      expect(fs.existsSync(artifact)).toBe(broker !== "idle" && broker !== "idle-read-pool");
-      if (broker === "independent-owner") {
-        expect(brokerLive).toBe(true);
-        expect(output).toContain("PIDs: 42422");
-        expect(output).toContain("let these holders finish, then rerun openclaw doctor --fix");
-        expect(output).not.toContain("Removed abandoned updater runtime");
-      } else if (broker === "independent-thread" || broker === "late-independent-thread") {
-        expect(output).toContain(`independent native work in this process (PID: ${process.pid})`);
+      const retained = broker !== "idle" && broker !== "idle-read-pool";
+      expect(fs.existsSync(artifact)).toBe(retained);
+      if (retained) {
+        expect(output).toContain(
+          broker === "independent-owner"
+            ? "PIDs: 42422"
+            : `independent native work in this process (PID: ${process.pid})`,
+        );
+        if (broker === "independent-owner") {
+          expect(brokerLive).toBe(true);
+        }
         expect(output).toContain("let these holders finish, then rerun openclaw doctor --fix");
         expect(output).not.toContain("Removed abandoned updater runtime");
       } else {

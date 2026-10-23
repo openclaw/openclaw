@@ -1,5 +1,6 @@
 import type { Event, Filter, Relay } from "nostr-tools";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isNewerBuzzRevision } from "./event-order.js";
 import { catchUpBuzzRoomHistory } from "./history-catchup.js";
@@ -96,12 +97,7 @@ export async function createBuzzRoomMembershipTracker(params: {
       return false;
     }
     seenEventIds.set(eventId, true);
-    if (seenEventIds.size > MEMBERSHIP_EVENT_CACHE_MAX_ENTRIES) {
-      const oldestEventId = seenEventIds.keys().next().value;
-      if (oldestEventId) {
-        seenEventIds.delete(oldestEventId);
-      }
-    }
+    pruneMapToMaxSize(seenEventIds, MEMBERSHIP_EVENT_CACHE_MAX_ENTRIES);
     return true;
   };
   const reportSystemEventError = (error: unknown) => {

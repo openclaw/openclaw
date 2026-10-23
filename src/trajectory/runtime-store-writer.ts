@@ -286,7 +286,7 @@ function buildSqliteTrajectoryRuntimeSink(
       backgroundFlush ||
       backgroundFailed ||
       unsettledAppend ||
-      (pendingEvents.size < 32 && queuedBytes < 256 * 1024)
+      (pendingEvents.size < 32 && !discardPrevious)
     ) {
       return;
     }
@@ -339,7 +339,7 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
       return (retained) => {
         const admission = createSqliteWorkerOperationAdmission((request, grant) => {
           binding.authorize(request);
-          if (request.stage === "transaction") {
+          if (request.stage === "transaction" || request.stage === "commit") {
             transaction = { admission, retained };
           }
           assertCurrent();

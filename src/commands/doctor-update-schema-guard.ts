@@ -415,7 +415,10 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
 }
 
 /** Complete a private CLI validation before bootstrap can reach any live writer. */
-export async function preflightUpdateDoctorCli(options: { json?: boolean }) {
+export async function preflightUpdateDoctorCli(options: {
+  json?: boolean;
+  fullIntegrityCheck?: boolean;
+}) {
   // Pin the invoking parent before schema admission can yield or reparent us.
   const parent = readUpdateRunDriver(process.ppid);
   if (resolveUpdateRehearsalRoot(process.env)) {
@@ -431,7 +434,12 @@ export async function preflightUpdateDoctorCli(options: { json?: boolean }) {
   }
   const schemas = await guardUpdateDoctorSchemaUpgrade({ ...options, entry: "cli-bootstrap" });
   if (schemas?.updateSchemaRehearsal) {
-    await rehearseDeferredUpdateDoctorSchemaForParent(schemas, defaultRuntime, parent);
+    await rehearseDeferredUpdateDoctorSchemaForParent(
+      schemas,
+      defaultRuntime,
+      parent,
+      options.fullIntegrityCheck,
+    );
     // The existing one-shot owner joins cleanup and drains the warning before exit.
     exitCliAfterOutput(defaultRuntime, 0);
   }
@@ -462,11 +470,13 @@ export async function preflightUpdatePackageLifecycle(): Promise<void> {
 export function rehearseDeferredUpdateDoctorSchema(
   schemas: DoctorDatabasePreflight,
   runtime: RuntimeEnv = defaultRuntime,
+  fullIntegrityCheck?: boolean,
 ): Promise<void> {
   return rehearseDeferredUpdateDoctorSchemaForParent(
     schemas,
     runtime,
     readUpdateRunDriver(process.ppid),
+    fullIntegrityCheck,
   );
 }
 
@@ -474,6 +484,7 @@ async function rehearseDeferredUpdateDoctorSchemaForParent(
   schemas: DoctorDatabasePreflight,
   runtime: RuntimeEnv,
   parent: UpdateRunDriver | undefined,
+  fullIntegrityCheck?: boolean,
 ): Promise<void> {
   const selected = schemas.updateSchemaRehearsal;
   if (!selected) {
@@ -572,6 +583,8 @@ async function rehearseDeferredUpdateDoctorSchemaForParent(
   let resourceWarnings: import("../plugins/doctor-contract-module.js").PluginDoctorMigrationBackupWarning[] =
     [];
   try {
+    // Schema-only legacy admission retains its shipped isolated layout.
+    await rehearsal.prepareRuntime(assertParent);
     const env = { ...rehearsal.env, OPENCLAW_UPDATE_IN_PROGRESS: "0" };
     const { inspectPreparedDoctorRehearsal } =
       await import("./doctor-update-rehearsal-inventory.js");
@@ -596,7 +609,13 @@ async function rehearseDeferredUpdateDoctorSchemaForParent(
     const invocation = resolveOpenClawCliInvocation({
       entryPath: entry,
       execArgv: [],
-      args: ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
+      args: [
+        "doctor",
+        "--fix",
+        "--non-interactive",
+        "--no-workspace-suggestions",
+        ...(fullIntegrityCheck ? ["--full-integrity-check"] : []),
+      ],
     });
     const result = await runUtf8CommandWithTimeout([invocation.command, ...invocation.args], {
       cwd: root,

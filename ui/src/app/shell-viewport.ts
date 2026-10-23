@@ -1,4 +1,35 @@
+import { listen } from "../lib/reactive/listener.ts";
+
 const KEYBOARD_MIN_SHRINK = 80;
+
+export type ShellViewportSnapshot = Readonly<{
+  width: number;
+  layoutHeight: number;
+  height: number;
+  offsetTop: number;
+  nativeScale: boolean;
+  keyboardVisible: boolean;
+  focusHeight: number | null;
+}>;
+
+let snapshot: ShellViewportSnapshot | undefined;
+const listeners = new Set<() => void>();
+
+/** Read-only facts from the existing observer; subscribing never starts a detector. */
+export const shellViewport = {
+  get snapshot(): ShellViewportSnapshot | undefined {
+    return snapshot;
+  },
+  subscribe(notify: () => void): () => void {
+    listeners.add(notify);
+    return () => listeners.delete(notify);
+  },
+};
+
+function publish(next: ShellViewportSnapshot | undefined): void {
+  snapshot = next;
+  listeners.forEach((notify) => notify());
+}
 
 function hasKeyboardFocus(): boolean {
   let target = document.activeElement;
@@ -36,7 +67,6 @@ export function connectShellViewport(): () => void {
     return () => {};
   }
   const root = document.documentElement;
-  const events = new AbortController();
   let frame: number | null = null;
   let focusHeight: number | null = null;
   let width = root.clientWidth || window.innerWidth;
@@ -78,33 +108,40 @@ export function connectShellViewport(): () => void {
     } else {
       root.style.removeProperty("--shell-viewport-height");
     }
+    publish({
+      width,
+      layoutHeight,
+      height: viewport.height,
+      offsetTop: viewport.offsetTop,
+      nativeScale,
+      keyboardVisible: keyboard,
+      focusHeight,
+    });
   };
   const schedule = () => {
     frame ??= requestAnimationFrame(update);
   };
-  const options = { signal: events.signal };
-  viewport.addEventListener("resize", schedule, options);
-  viewport.addEventListener("scroll", schedule, options);
-  window.addEventListener("resize", schedule, options);
-  window.addEventListener("orientationchange", schedule, options);
-  document.addEventListener(
-    "focusin",
-    () => {
+  const stops = [
+    listen(viewport, "resize", schedule),
+    listen(viewport, "scroll", schedule),
+    listen(window, "resize", schedule),
+    listen(window, "orientationchange", schedule),
+    listen(document, "focusin", () => {
       if (hasKeyboardFocus()) {
         focusHeight ??= viewport.height;
       }
       schedule();
-    },
-    options,
-  );
-  document.addEventListener("focusout", schedule, options);
+    }),
+    listen(document, "focusout", schedule),
+  ];
   update();
   return () => {
-    events.abort();
+    stops.forEach((stop) => stop());
     if (frame !== null) {
       cancelAnimationFrame(frame);
     }
     root.style.removeProperty("--shell-viewport-height");
     root.style.removeProperty("--shell-safe-area-bottom");
+    publish(undefined);
   };
 }

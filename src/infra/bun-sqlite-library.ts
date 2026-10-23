@@ -268,41 +268,14 @@ function selectionError(path: string, error: unknown, bundled = false): Error {
   );
 }
 
-function inheritedSelection(): SqliteLibrarySelection | undefined {
-  const value: unknown = getEnvironmentData(WORKER_SELECTION_KEY);
-  if (value === undefined) {
-    return undefined;
-  }
-  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    const source = "source" in value ? value.source : undefined;
-    if (source === "runtime") {
-      return { source: "runtime" };
-    }
-    const path = "path" in value ? value.path : undefined;
-    const version = "version" in value ? value.version : undefined;
-    const extensionLoadingSupported =
-      "extensionLoadingSupported" in value ? value.extensionLoadingSupported : undefined;
-    if (
-      (source === "env" || source === "bundled" || source === "discovered") &&
-      typeof path === "string" &&
-      typeof version === "string" &&
-      extensionLoadingSupported === true
-    ) {
-      return {
-        source,
-        path,
-        version,
-        extensionLoadingSupported: true,
-      };
-    }
-  }
-  throw new Error("Invalid inherited SQLite library selection");
-}
-
 function createRuntimeSelector(): ReturnType<typeof createSelector> {
   const isBun = Boolean(process.versions.bun);
   const sharedLibrary = isBun && process.platform === "darwin";
-  const inherited = sharedLibrary && !isMainThread ? inheritedSelection() : undefined;
+  let inherited: SqliteLibrarySelection | undefined;
+  if (sharedLibrary && !isMainThread) {
+    // SAFETY: Only this selector publishes the chosen fact; workers inherit Node's structured clone.
+    inherited = getEnvironmentData(WORKER_SELECTION_KEY) as SqliteLibrarySelection | undefined;
+  }
   const select = createSelector();
   let published = false;
   return (options?: SelectionOptions) => {

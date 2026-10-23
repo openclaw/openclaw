@@ -1,5 +1,6 @@
 import { flushCompileCache } from "node:module";
 import { fileURLToPath } from "node:url";
+import { resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
 import {
   enableOpenClawCompileCache,
   resolveOpenClawCompileCacheDirectory,
@@ -13,7 +14,14 @@ const directory = resolveOpenClawCompileCacheDirectory({
 const respawnEnv = resolveOpenClawCompileCacheRespawnEnv({ directory });
 if (respawnEnv) {
   const { runRespawnedChild } = await import("./node-runtime-recovery.mjs");
-  await runRespawnedChild(process.execPath, [fileURLToPath(import.meta.url)], respawnEnv);
+  await runRespawnedChild(
+    resolveOpenClawCliRespawn({
+      entryPath: fileURLToPath(import.meta.url),
+      execArgv: [],
+      args: [],
+      env: respawnEnv,
+    }),
+  );
 } else if (directory) {
   enableOpenClawCompileCache({ directory });
   // Import only: do not start a Gateway or read its configuration/state.

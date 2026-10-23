@@ -411,6 +411,13 @@ export function buildBuiltinChatCommands(
         ...freeformArgs("message", "Steering message"),
       },
     ),
+    defineBuiltinCommand(
+      "followup",
+      "Run this message as a new turn without changing queue mode.",
+      "management",
+      "standard",
+      { modelIndependent: "no-args", ...freeformArgs("message", "Followup message") },
+    ),
     definePathCommand(
       "config",
       "Show or set config values.",

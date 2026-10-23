@@ -1,19 +1,15 @@
 import type { JSX } from "@solidjs/web";
-import { onCleanup } from "solid-js";
+import { Errored, Loading, onSettled } from "solid-js";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "../../app/stale-chunk-reload.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import type { CheckoutChipOptions } from "./checkout-chip.ts";
-
-type PickerState = Pick<
-  CheckoutChipOptions,
-  | "submitting"
-  | "pendingPlacement"
-  | "popoverOpen"
-  | "onPopoverShow"
-  | "onPopoverHide"
-  | "onPopoverAfterHide"
->;
+import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 export function SessionPicker(props: {
   kind: "where" | "project" | "checkout";
@@ -25,15 +21,17 @@ export function SessionPicker(props: {
     JSX.HTMLAttributes<HTMLButtonElement>,
     "title" | "aria-label" | "aria-description"
   > & { [name: `data-${string}`]: string | undefined };
-  state: PickerState;
+  params: NewSessionPlaceControlsOptions;
   children: JSX.Element;
+  lazy?: boolean;
+  onBeforeShow?: (event: Event) => void;
   onAfterHide?: () => void;
   ref?: (handle: PopoverHandle) => void;
 }) {
   let trigger!: HTMLButtonElement;
   let popover!: PopoverHandle;
   let cleanup: (() => void) | undefined;
-  onCleanup(() => cleanup?.());
+  onSettled(() => () => cleanup?.());
   return (
     <>
       <span
@@ -53,8 +51,12 @@ export function SessionPicker(props: {
           class="new-session-page__trigger"
           aria-haspopup="dialog"
           aria-controls={`new-session-${props.kind}-popover`}
-          aria-expanded={props.state.popoverOpen ? "true" : "false"}
-          disabled={props.state.submitting || props.state.pendingPlacement}
+          aria-expanded={props.params.place.browser.popoverOpen(props.kind) ? "true" : "false"}
+          disabled={
+            props.params.submitting ||
+            props.params.pendingPlacement ||
+            (props.kind === "where" && props.params.place.suggestedCloudProfile.pending)
+          }
           onClick={() => popover.overlay.request(!popover.overlay.open)}
         >
           <span class="new-session-page__target-icon" aria-hidden="true">
@@ -82,6 +84,8 @@ export function SessionPicker(props: {
         </button>
       </span>
       <Popover
+        lazy={props.lazy}
+        onBeforeShow={props.onBeforeShow}
         id={`new-session-${props.kind}-popover`}
         label={props.label}
         anchor={trigger}
@@ -90,16 +94,23 @@ export function SessionPicker(props: {
           `new-session-page__${props.kind}-popover`,
           "new-session-page__picker-popover",
         ]}
-        open={props.state.popoverOpen}
+        open={props.params.place.browser.popoverOpen(props.kind)}
         placement="bottom-start"
-        onOpenChange={(open) => (open ? props.state.onPopoverShow() : props.state.onPopoverHide())}
+        onOpenChange={(open) => {
+          const callbacks = props.params.place.browser.popoverCallbacks(props.kind);
+          callbacks[open ? "onPopoverShow" : "onPopoverHide"]();
+        }}
         ref={(handle) => {
           popover = handle;
           const surface = handle.overlay.surface;
           const stops = [
             listen(surface, "overlay-after-hide", (event) => {
               if (event.target === surface) {
-                props.state.onPopoverAfterHide();
+                const active = surface.ownerDocument.activeElement;
+                if (!active || active === surface.ownerDocument.body || surface.contains(active)) {
+                  trigger.focus();
+                }
+                props.params.place.browser.popoverCallbacks(props.kind).onPopoverAfterHide();
                 props.onAfterHide?.();
               }
             }),
@@ -117,8 +128,46 @@ export function SessionPicker(props: {
           props.ref?.(handle);
         }}
       >
-        {props.children}
+        <Errored
+          fallback={(error, retry) => (
+            <PickerLoadError
+              error={error()}
+              retry={retry}
+              isOpen={() => props.params.place.browser.popoverOpen(props.kind)}
+            />
+          )}
+        >
+          <Loading fallback={<div role="status">{t("common.loading")}</div>}>
+            {props.children}
+          </Loading>
+        </Errored>
       </Popover>
     </>
+  );
+}
+
+function PickerLoadError(props: { error: unknown; retry: () => void; isOpen: () => boolean }) {
+  let active = true;
+  onSettled(() => () => {
+    active = false;
+  });
+  const retry = async () => {
+    const stale = isStaleChunkImportError(props.error);
+    const reloading =
+      stale &&
+      (await retryStaleChunkReloadWhenReachable({
+        canReload: () => active && props.isOpen(),
+      }));
+    if (active && props.isOpen() && !reloading) {
+      props.retry();
+    }
+  };
+  return (
+    <LazyViewError
+      error={props.error}
+      stale={isStaleChunkImportError(props.error)}
+      onRetry={() => void retry()}
+      inline
+    />
   );
 }

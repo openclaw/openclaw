@@ -7,7 +7,10 @@ import { withinTest } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { withGatewayPersonalToolUser } from "../../agents/tools/gateway-caller-context.js";
 import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { SqliteWorkerReply, SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
@@ -74,7 +77,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-test("users.prefs returns updated preferences when a write commits before read delivery", async () => {
+test("users.prefs returns its captured snapshot when a write commits before read delivery", async () => {
   const state = await createOpenClawTestState({
     layout: "state-only",
     prefix: "prefs-publication-",
@@ -94,7 +97,7 @@ test("users.prefs returns updated preferences when a write commits before read d
       await invokePreferenceMethod("users.prefs.get", { keys: ["ui.accent"] }, profileId),
     ).toEqual({
       ok: true,
-      payload: { status: "ok", entries: { "ui.accent": "#aabbcc" } },
+      payload: { status: "ok", entries: { "ui.accent": "#112233" } },
       error: undefined,
     });
   } finally {
@@ -115,12 +118,17 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
     });
     mergeProfiles(source, target);
     const context = captureOpenClawStateWorkerContext();
-    const readWriterObservation = () =>
+    const recordUnrelatedProvenance = () =>
       executeOpenClawStateWorker(context, {
-        type: "deviceAuth.read",
-        input: { deviceId: "preference-reader-test", role: "operator", readOnly: false },
+        type: "agentProvenance.record",
+        input: {
+          agentId: "preference-reader-test",
+          createdVia: "operator",
+          creatorAgentId: null,
+          createdAtMs: 1,
+        },
       });
-    await readWriterObservation();
+    await recordUnrelatedProvenance();
     const replyReady = createDeferredCore();
     let publish: (() => void) | undefined;
     let selected: { worker: Worker; id: number } | undefined;
@@ -137,9 +145,9 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
         const command: unknown = deserialize(request.input);
         if (
           isRecord(command) &&
-          command.type === "deviceAuth.read" &&
+          command.type === "agentProvenance.record" &&
           isRecord(command.input) &&
-          command.input.deviceId === "preference-reader-test"
+          command.input.agentId === "preference-reader-test"
         ) {
           selected = { worker: this, id: request.id };
         }
@@ -158,7 +166,7 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
       }
       return originalEmit.call(this, event, reply);
     });
-    const pendingWriter = readWriterObservation();
+    const pendingWriter = recordUnrelatedProvenance();
     try {
       await withinTest(replyReady.promise, signal);
       expect(
@@ -222,7 +230,10 @@ async function withPreferenceToolTurn(
       { authenticatedUserProfile: client.authenticatedUserProfile!, scopes },
       () =>
         withPersonalToolTurn(
-          { owner: { profileId: owner.id, senderId: "owner", name: "Owner" } },
+          {
+            owner: { profileId: owner.id, senderId: "owner", name: "Owner" },
+            allowCollaborativeSteering: true,
+          },
           (turn) =>
             run({
               ownerId: owner.id,
@@ -438,6 +449,7 @@ test.each(["current", "read", "scope", "source", "identity", "error-response", "
       }
     } finally {
       releaseProfiles?.();
+      clearRuntimeConfigSnapshot();
       await state.cleanup();
     }
   },
@@ -508,6 +520,7 @@ test("users.prefs.get retains its original scope across the preference read", as
     expect(await original(owner.id)).toMatchObject({ entries: { "ui.theme": "dark" } });
   } finally {
     releaseProfiles?.();
+    clearRuntimeConfigSnapshot();
     await state.cleanup();
   }
 });

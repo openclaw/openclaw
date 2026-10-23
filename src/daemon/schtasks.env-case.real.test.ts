@@ -14,7 +14,7 @@ import { getFreePort } from "../test-utils/ports.js";
 import {
   buildTaskScript,
   encodeWindowsLauncherScript,
-  readScheduledTaskCommand,
+  readScheduledTaskCommand as readCommand,
 } from "./schtasks-layout.js";
 import {
   resolveScheduledTaskOwnedGatewayPids,
@@ -23,10 +23,25 @@ import {
 import { startStartupEntry } from "./schtasks-runtime.js";
 
 type ChildEnvironment = { pid: number; value?: string; control?: string };
+type ExitStatus = { code: number | null; signal: NodeJS.Signals | null };
 type LaunchedChild = {
   child: ChildProcess;
-  closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  closed: Promise<ExitStatus>;
 };
+
+function observeChild(child: ChildProcess, children: LaunchedChild[], rejectErrors = false) {
+  const closed = new Promise<ExitStatus>((resolve, reject) => {
+    if (rejectErrors) {
+      child.once("error", reject);
+    }
+    child.once("close", (code, signal) => resolve({ code, signal }));
+  });
+  const launched = { child, closed };
+  children.push(launched);
+  return launched;
+}
+
+const encodeCmd = (content: string) => encodeWindowsLauncherScript({ format: "cmd", content });
 
 const launchCapture = vi.hoisted(() => ({
   observe: undefined as ((child: ChildProcess, options?: SpawnOptions) => void) | undefined,
@@ -45,24 +60,14 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 describe.skipIf(process.platform !== "win32")("Windows launcher redirection ownership", () => {
   it.each([
-    { message: "a >b & c", normalized: true, extraArgument: "", target: "" },
-    {
-      message: "quoted expansion",
-      normalized: true,
-      extraArgument: "",
-      target: '"%CD%\\gateway output.log"',
-    },
-    { message: 'a "q" >b', normalized: false, extraArgument: "", target: "" },
-    { message: "comma target", normalized: false, extraArgument: ",extra", target: "" },
-    {
-      message: "unquoted expansion",
-      normalized: false,
-      extraArgument: "output.log",
-      target: "%OPENCLAW_TEST_LOG_PATH%",
-    },
-  ])(
-    "checks real cmd and CIM argv for $message",
-    async ({ message, normalized, extraArgument, target }) => {
+    ["a >b & c", true],
+    ["quoted expansion", true, "", '"%CD%\\gateway output.log"'],
+    ['a "q" >b', false],
+    ["comma target", false, ",extra"],
+    ["unquoted expansion", false, "output.log", "%OPENCLAW_TEST_LOG_PATH%"],
+  ] satisfies [string, boolean, string?, string?][])(
+    "checks real cmd and CIM argv for %s",
+    async (message, normalized, extraArgument = "", target = "") => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw launcher proof "));
       const scriptPath = path.join(dir, "gateway.cmd");
       const childPath = path.join(dir, "gateway-child.cjs");
@@ -131,7 +136,7 @@ server.listen(port, "127.0.0.1", () => {
             NODE_OPTIONS: "",
           },
         }).trimEnd() + ` >> ${redirectTarget} 2>&1\r\n`;
-      const originalBytes = encodeWindowsLauncherScript({ format: "cmd", content });
+      const originalBytes = encodeCmd(content);
       await fs.writeFile(scriptPath, originalBytes);
       const env = { OPENCLAW_TASK_SCRIPT: scriptPath };
       const launch = (): LaunchedChild => {
@@ -145,15 +150,7 @@ server.listen(port, "127.0.0.1", () => {
             stdio: "ignore",
           },
         );
-        const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-          (resolve, reject) => {
-            child.once("error", reject);
-            child.once("close", (code, signal) => resolve({ code, signal }));
-          },
-        );
-        const launched = { child, closed };
-        children.push(launched);
-        return launched;
+        return observeChild(child, children, true);
       };
       const { child, closed } = launch();
       await Promise.race([
@@ -180,11 +177,13 @@ server.listen(port, "127.0.0.1", () => {
         ),
       ).toEqual(observed.argv);
       if (!normalized) {
-        await expect(readScheduledTaskCommand(env, { requireEffective: true })).rejects.toThrow(
+        await expect(readCommand(env, { requireEffective: true })).rejects.toThrow(
           "Effective Scheduled Task service command could not be inspected.",
         );
       }
-      const installed = await readScheduledTaskCommand(env, { requireEffective: normalized });
+      const installed = await readCommand(env, {
+        requireEffective: normalized,
+      });
       expect(installed?.workingDirectory).toBe(dir);
       expect(installed?.environment?.OPENCLAW_TEST_LAUNCHER_VALUE).toBe("retained");
       if (normalized) {
@@ -221,13 +220,9 @@ server.listen(port, "127.0.0.1", () => {
         // must never authorize. Restore the real launcher before owned recovery.
         await fs.writeFile(
           scriptPath,
-          encodeWindowsLauncherScript({
-            format: "cmd",
-            content: content.replace(
-              `>> ${redirectTarget} 2>&1`,
-              ">> %OPENCLAW_TEST_LOG_PATH% 2>&1",
-            ),
-          }),
+          encodeCmd(
+            content.replace(`>> ${redirectTarget} 2>&1`, ">> %OPENCLAW_TEST_LOG_PATH% 2>&1"),
+          ),
         );
         await expect(
           terminateScheduledTaskGatewayListeners(env, { port, probeHosts: ["127.0.0.1"] }),
@@ -267,11 +262,12 @@ server.listen(port, "127.0.0.1", () => {
   );
 });
 
-describe("Windows Startup fallback environment", () => {
-  it.for([
-    { name: "different casing", key: "openclaw_test_fallback_case" },
-    { name: "matching casing", key: "OPENCLAW_TEST_FALLBACK_CASE" },
-  ])("preserves the saved override with $name", async ({ key }, context) => {
+it.for([
+  { name: "different casing", key: "openclaw_test_fallback_case" },
+  { name: "matching casing", key: "OPENCLAW_TEST_FALLBACK_CASE" },
+])(
+  "Windows Startup fallback environment preserves the saved override with $name",
+  async ({ key }, context) => {
     if (process.platform !== "win32" && key !== key.toUpperCase()) {
       context.skip("Case-insensitive environment names require Windows");
     }
@@ -327,25 +323,16 @@ fs.renameSync(file + ".tmp", file);
         return;
       }
       // Observe close at spawn, before Startup discards its child handle.
-      const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-        (resolve) => {
-          child.once("close", (code, signal) => resolve({ code, signal }));
-        },
-      );
-      children.push({ child, closed });
+      observeChild(child, children);
     };
     await withEnvAsync({ OPENCLAW_TEST_FALLBACK_CASE: "inherited" }, async () => {
       await startStartupEntry({ OPENCLAW_TASK_SCRIPT: scriptPath }, output);
       expect(children).toHaveLength(1);
       const { child, closed } = expectDefined(children[0], "Startup fixture child");
-      expect(await withinTest(closed, context.signal)).toEqual({
-        code: 0,
-        signal: null,
-      });
+      expect(await withinTest(closed, context.signal)).toEqual({ code: 0, signal: null });
       const observed: ChildEnvironment = JSON.parse(await fs.readFile(reportPath, "utf8"));
-      expect(observed.pid).toBe(child.pid);
-      expect(observed.control).toBe("control");
+      expect(observed).toMatchObject({ pid: child.pid, control: "control" });
       expect(observed.value, "PR122658_ENV_OVERRIDE_LOST").toBe("configured");
     });
-  });
-});
+  },
+);

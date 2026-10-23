@@ -1,10 +1,6 @@
 // Owns the published index state and the isolated lifetime of shadow reindex work.
 import type { DatabaseSync } from "node:sqlite";
-import {
-  createSubsystemLogger,
-  resolveStateDir,
-  resolveUserPath,
-} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   openSqliteWorkerStore,
@@ -35,6 +31,7 @@ import type {
   MemoryEmbeddingCacheMutation,
   MemoryPublicationOperations,
   MemoryPublicationResult,
+  MemoryPublicationSchema,
   MemoryPublicationState,
 } from "./manager-publication-task.js";
 import { MEMORY_INDEX_WRITE_SCOPE } from "./manager-publication-task.js";
@@ -43,7 +40,7 @@ import {
   initializePublishedMemory,
   publishMemoryEmbeddingCache,
   publishMemorySource,
-  retryMemoryPublication,
+  runMemoryPublication,
   withPublishedMemoryExecution,
 } from "./manager-publication.js";
 import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
@@ -56,13 +53,13 @@ import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel
 import type { loadMemorySourceFileState } from "./manager-source-state.js";
 
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
+type CachePruneInput = MemoryPublicationOperations["cache.prune"]["input"];
 const log = createSubsystemLogger("memory");
 type PublicationWorker = {
   store: Pick<
     OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>,
     "execute" | "run" | "close"
   >;
-  busyTimeoutMs: number;
 };
 
 export class MemoryIndexDatabase {
@@ -119,7 +116,6 @@ export class MemoryIndexDatabase {
         database.terminalSignal = initialized.worker.terminalSignal;
         database.publicationWorker = Promise.resolve({
           store: initialized.worker,
-          busyTimeoutMs: 5_000,
         });
       }
       database.fts.enabled = params.schema.ftsEnabled;
@@ -176,9 +172,7 @@ export class MemoryIndexDatabase {
         identity: connection.fileIdentity,
         pragmas: connection.pragmas,
       };
-      database.publicationWorker = Promise.resolve(
-        database.bindShadowWorker(store, connection.pragmas.busy_timeout),
-      );
+      database.publicationWorker = Promise.resolve(database.bindShadowWorker(store));
       return database;
     } catch (error) {
       try {
@@ -188,16 +182,6 @@ export class MemoryIndexDatabase {
       }
       throw error;
     }
-  }
-
-  static captureWriteOptions(agentId: string, databasePath: string, source?: MemoryIndexDatabase) {
-    const env = { ...(source?.writeOptions?.env ?? process.env) };
-    env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-    return {
-      agentId,
-      path: source?.writeOptions?.path ?? resolveUserPath(databasePath),
-      env,
-    };
   }
 
   readonly vector: {
@@ -225,6 +209,7 @@ export class MemoryIndexDatabase {
     hasVectorTable: false,
     vectorState: { state: "empty" },
   };
+  searchSchema: MemoryPublicationSchema = { fts: null, paths: null, vector: null };
   vectorDegradedWriteWarningShown = false;
   closed = false;
 
@@ -245,6 +230,11 @@ export class MemoryIndexDatabase {
 
   get isOpen(): boolean {
     return !this.closed && !this.terminalSignal?.aborted && this.nativeDb?.isOpen !== false;
+  }
+
+  get supportsReindexSuspension(): boolean {
+    // PostgreSQL's TEMP stage cannot outlive its pooled connection lease.
+    return this.admission?.engine !== "postgres";
   }
 
   /** Released synchronous status compatibility; runtime callers use worker reads. */
@@ -303,7 +293,7 @@ export class MemoryIndexDatabase {
     if (this.facts.serialized === JSON.stringify(meta)) {
       return;
     }
-    await this.retryPublication(() =>
+    await this.settlePublication(() =>
       this.executePublication({ type: "index.writeMetadata", input: meta }, () => {
         if (!this.isOpen) {
           throw new Error("Memory database owner closed before writing index metadata");
@@ -413,7 +403,7 @@ export class MemoryIndexDatabase {
           },
         );
         this.terminalSignal = store.terminalSignal;
-        return { store, busyTimeoutMs: 5_000 };
+        return { store };
       }
       const pragmas = this.shadow!.pragmas;
       const worker = {
@@ -440,7 +430,7 @@ export class MemoryIndexDatabase {
       if (!store) {
         throw new Error("Memory shadow disappeared before publication Worker open");
       }
-      return this.bindShadowWorker(store, pragmas.busy_timeout);
+      return this.bindShadowWorker(store);
     })().catch((error: unknown) => {
       // Open failure has already drained its native owner, or retained failed
       // cleanup with the agent lifecycle. It must not poison future attempts.
@@ -452,7 +442,6 @@ export class MemoryIndexDatabase {
 
   private bindShadowWorker(
     store: SqliteWorkerStore<MemoryPublicationOperations>,
-    busyTimeoutMs: number,
   ): PublicationWorker {
     const run = <T>(
       operation: (scope: PublicationScope) => Promise<T>,
@@ -477,7 +466,6 @@ export class MemoryIndexDatabase {
           run((scope) => scope.execute(command, options), assertCurrent),
         close: () => store.close(),
       },
-      busyTimeoutMs,
     };
   }
 
@@ -527,18 +515,14 @@ export class MemoryIndexDatabase {
     );
   }
 
-  async retryPublication<T>(
+  async settlePublication<T>(
     run: () => Promise<MemoryPublicationResult<T>>,
     prepare: () => Promise<boolean> = async () => true,
   ): Promise<T | undefined> {
-    const worker = await this.getPublicationWorker();
-    const result = await retryMemoryPublication({
-      run,
-      busyTimeoutMs: worker.busyTimeoutMs,
-      prepare,
-    });
+    const result = await runMemoryPublication({ run, prepare });
     if (result?.facts) {
       this.installFacts(result.facts, result.writeToken);
+      this.searchSchema = result.searchSchema ?? this.searchSchema;
     }
     return result?.value;
   }
@@ -547,7 +531,7 @@ export class MemoryIndexDatabase {
     command: Command,
     assertCurrent: () => void,
   ): Promise<MemoryIndexReadOperations[Command["type"]]["output"]> {
-    if (this.isShadow || this.admission?.engine === "postgres") {
+    if (this.isShadow || (!this.readOnly && this.admission?.engine === "postgres")) {
       return this.executePublication(command, assertCurrent);
     }
     const target = this.writeOptions;
@@ -559,7 +543,7 @@ export class MemoryIndexDatabase {
   }
 
   admitSchema(input: MemoryPublicationOperations["schema.admit"]["input"]): Promise<void> {
-    this.schemaAdmission ??= this.retryPublication(() =>
+    this.schemaAdmission ??= this.settlePublication(() =>
       this.executePublication({ type: "schema.admit", input }, () => {
         if (!this.isOpen) {
           throw new Error("Memory database owner closed before schema admission");
@@ -592,14 +576,12 @@ export class MemoryIndexDatabase {
     return this.read({ type: "source.state", input: query }, assertCurrent);
   }
 
-  async pruneEmbeddingCache(maxEntries: number, assertCurrent: () => void): Promise<boolean> {
+  async pruneEmbeddingCache(input: CachePruneInput, assertCurrent: () => void): Promise<boolean> {
     assertCurrent();
-    // Each failed BEGIN releases admission before retry; successful batches yield at the caller.
-    return (
-      (await this.retryPublication(() =>
-        this.executePublication({ type: "cache.prune", input: { maxEntries } }, assertCurrent),
-      )) ?? false
+    const pruned = await this.settlePublication(() =>
+      this.executePublication({ type: "cache.prune", input }, assertCurrent),
     );
+    return pruned ?? false;
   }
 
   async mutateEmbeddingCache(
@@ -612,7 +594,7 @@ export class MemoryIndexDatabase {
         scope,
         mutation,
         prepare,
-        retry: (run, prepareRetry) => this.retryPublication(run, prepareRetry),
+        publish: (run, preparePublication) => this.settlePublication(run, preparePublication),
       });
     return mutation.kind === "clear" ||
       memoryEmbeddingCacheFitsInline(mutation.header, mutation.entries)
@@ -631,7 +613,7 @@ export class MemoryIndexDatabase {
         state: () => this.publicationState(),
         execute: (command) => this.executePublication(command, assertCurrent),
         run: (operation) => this.runPublication(operation, assertCurrent),
-        retry: (run, prepareRetry) => this.retryPublication(run, prepareRetry),
+        publish: (run, preparePublication) => this.settlePublication(run, preparePublication),
         prepare,
         assertPublished: this.isShadow ? assertCurrent : undefined,
       }),
@@ -643,7 +625,7 @@ export class MemoryIndexDatabase {
     assertCurrent: () => void,
   ) {
     return this.withSourceMutation(() =>
-      this.retryPublication(() =>
+      this.settlePublication(() =>
         this.executePublication(
           { type: "source.delete", input: { ...input, state: this.publicationState() } },
           assertCurrent,
@@ -657,7 +639,7 @@ export class MemoryIndexDatabase {
     assertCurrent: () => void,
   ) {
     return this.withSourceMutation(() =>
-      this.retryPublication(() =>
+      this.settlePublication(() =>
         this.executePublication({ type: "source.refresh", input }, assertCurrent),
       ),
     );
@@ -666,7 +648,7 @@ export class MemoryIndexDatabase {
   async prepareVector(extensionPath: string | undefined, assertCurrent: () => void) {
     return this.readOnly
       ? runMemoryVectorLoad(this.writeOptions, extensionPath)
-      : this.retryPublication(() =>
+      : this.settlePublication(() =>
           this.executePublication(
             {
               type: "vector.prepare",
@@ -677,11 +659,11 @@ export class MemoryIndexDatabase {
         );
   }
 
-  async updateIndexStructure<Key extends "vector.ensure">(
+  async updateIndexStructure<Key extends "vector.ensure" | "index.upgradeProviderKey">(
     command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
     assertCurrent: () => void,
   ) {
-    return this.retryPublication<boolean | void>(() =>
+    return this.settlePublication<boolean | void>(() =>
       this.executePublication(command, assertCurrent),
     );
   }
@@ -698,7 +680,7 @@ export class MemoryIndexDatabase {
     },
     assertCurrent: () => void,
   ) {
-    await this.retryPublication(() =>
+    await this.settlePublication(() =>
       this.executePublication(
         {
           type: "database.publish",
@@ -706,7 +688,7 @@ export class MemoryIndexDatabase {
             ...input,
             state: {
               ...this.publicationState(),
-              extensionPath: input.sourceHasVectors ? input.extensionPath : undefined,
+              extensionPath: input.sourceSchema.vector ? input.extensionPath : undefined,
             },
           },
         },

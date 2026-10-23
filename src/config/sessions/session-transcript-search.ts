@@ -12,7 +12,7 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
@@ -26,6 +26,7 @@ import {
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 import {
   captureLifecycleDatabaseScope,
+  prepareSqliteScope,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
@@ -97,7 +98,7 @@ export async function searchSessionTranscripts(
           path: preparedDatabase.path,
           env: params.env,
         }
-      : resolveSqliteReadScope(params),
+      : await prepareSqliteScope({ ...params, sessionKey: params.sessionKey ?? "" }),
   );
   const options = toDatabaseOptions(scope);
   const request = {
@@ -180,7 +181,7 @@ export function searchSessionTranscriptsReadOnlySync(
   const databaseOptions = preparedDatabase ?? toDatabaseOptions(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => ({
-      ...runSqliteDeferredTransactionSync(
+      ...runSqliteReadSnapshotSync(
         database.db,
         () => {
           const limit = sessionTranscriptSearchLimit(params.limit);

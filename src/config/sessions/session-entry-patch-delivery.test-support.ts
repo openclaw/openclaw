@@ -1,4 +1,5 @@
 import { afterEach, vi } from "vitest";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 
 // mock-isolation: Entry assertions exclude the maintenance owner's background writes and timers.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -68,4 +69,21 @@ afterEach(() => {
 
 export function getSessionEntryPatchDelivery() {
   return delivery;
+}
+
+export function observeCommitAdmission() {
+  let current: admission.SqliteWorkerOperationAdmission | undefined;
+  const create = admission.createSqliteWorkerOperationAdmission;
+  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+    (callback, attachment) => {
+      const owned = create((request, grant) => {
+        if (request.stage === "commit") {
+          current = owned;
+        }
+        callback(request, grant);
+      }, attachment);
+      return owned;
+    },
+  );
+  return () => current;
 }

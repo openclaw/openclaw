@@ -1,4 +1,3 @@
-import { validateProviderSettings } from "../config/provider-settings.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
 import type { StorageLocationConfig } from "../config/types.storage.js";
@@ -112,10 +111,6 @@ function probeFailure(error: unknown): StorageProbeResult {
 async function prepare(params: StorageLocationParams) {
   params.signal?.throwIfAborted();
   const location = configuredLocation(params);
-  const invalid = validateProviderSettings(location.settings, "Storage location");
-  if (invalid) {
-    throw new StorageLocationError("error", invalid);
-  }
   const acquired = await acquireStorageProvider({
     providerId: location.provider,
     config: params.config,

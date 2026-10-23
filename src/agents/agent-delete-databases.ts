@@ -182,9 +182,6 @@ export async function assertAgentSessionStoreDeletionSafe(
   );
   context.admission.assertCurrent();
   assertAgentSessionStoreDeletionTargetsCurrent(input.targets);
-  if (reply && (!reply.ok || reply.type !== "agentDeletion.sessionStoreBlocker")) {
-    throw new Error("Unexpected agent session-store deletion safety result");
-  }
   let blocker = reply?.blocker;
   if (!reply) {
     const anchor = input.targets.candidates.find(({ identity }) =>

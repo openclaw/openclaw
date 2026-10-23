@@ -4,7 +4,7 @@ import {
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type {
   GitHubPublicationRow,
   RepositoryGitHubPublicationRow,
@@ -96,7 +96,7 @@ function readSharedGitHubPublicationWorkspace(
   return {
     kind: "worktree" as const,
     worktreeId: worktree.id,
-    branch: worktree.branch,
+    branch: entry.worktree.githubPullRequest?.head.branch ?? worktree.branch,
     repositoryFingerprint: worktree.repo_fingerprint,
   };
 }
@@ -108,7 +108,7 @@ export function readSharedGitHubPublicationRequestInDatabase(
   selector: SharedGitHubPublicationReadInput["selector"],
   entry: SharedGitHubPublicationReadInput["entry"],
 ): GitHubPublicationRow | undefined {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     if (!tableExists(db, "github_publication_requests")) {
       return undefined;
     }
@@ -134,6 +134,9 @@ export function readSharedGitHubPublicationRequestInDatabase(
       }
     } else if (selector.idempotencyKey !== undefined) {
       selection = selection.where("idempotency_key", "=", selector.idempotencyKey);
+    }
+    if ("status" in selector && selector.status === "published") {
+      selection = selection.where("github_publication_requests.status", "=", "published");
     }
     // Unbound terminal receipts are history, not evidence of the current workspace.
     if (!tableExists(db, "github_publication_session_lifecycles")) {
@@ -195,7 +198,7 @@ export function readSharedRepositoryGitHubPublicationInDatabase(
   selector: SharedGitHubPublicationReadInput["selector"],
   entry: SharedGitHubPublicationReadInput["entry"],
 ): RepositoryGitHubPublicationRow | undefined {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     if (!tableExists(db, table)) {
       return undefined;
     }
@@ -218,6 +221,9 @@ export function readSharedRepositoryGitHubPublicationInDatabase(
       }
     } else if (selector.idempotencyKey !== undefined) {
       selection = selection.where("idempotency_key", "=", selector.idempotencyKey);
+    }
+    if ("status" in selector && selector.status === "published") {
+      selection = selection.where("status", "=", "published");
     }
     const ordered = selection.orderBy("created_at_ms", "desc").orderBy("request_id", "desc");
     let workspace: ReturnType<typeof readSharedGitHubPublicationWorkspace>;

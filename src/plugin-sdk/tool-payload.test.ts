@@ -1,11 +1,20 @@
-// Tool payload tests cover model tool-call schema conversion and compatibility payloads.
 import { describe, expect, it } from "vitest";
 import {
   extractToolPayload,
-  parseStandalonePlainTextToolCallBlocks,
+  parseStandalonePlainTextToolCallBlocks as parse,
   stripPlainTextToolCallBlocks,
   type ToolPayloadCarrier,
 } from "./tool-payload.js";
+
+function expectStripped(block: string, after = "after") {
+  expect(stripPlainTextToolCallBlocks(`before\n${block}\n${after}`)).toBe(`before\n${after}`);
+}
+const xmlParameter = (name: string, value: string) => `<parameter=${name}>${value}</parameter>`;
+const xmlCall = (name: string, body = "") => `<function=${name}>${body}</function>`;
+function parseAllowed(raw: string, name: string, maxPayloadBytes?: number) {
+  return parse(raw, { allowedToolNames: [name], maxPayloadBytes });
+}
+const image = { type: "image" };
 
 describe("extractToolPayload", () => {
   it("returns undefined for missing results", () => {
@@ -25,25 +34,14 @@ describe("extractToolPayload", () => {
   it("parses JSON text blocks and falls back to raw text, content, or the whole result", () => {
     expect(
       extractToolPayload({
-        content: [
-          { type: "image", url: "https://example.com/a.png" },
-          { type: "text", text: '{"ok":true,"count":2}' },
-        ],
+        content: [image, { type: "text", text: '{"ok":true,"count":2}' }],
       }),
     ).toEqual({ ok: true, count: 2 });
 
-    expect(
-      extractToolPayload({
-        content: [{ type: "text", text: "not json" }],
-      }),
-    ).toBe("not json");
+    expect(extractToolPayload({ content: [{ type: "text", text: "not json" }] })).toBe("not json");
 
-    const content = [{ type: "image", url: "https://example.com/a.png" }];
-    expect(
-      extractToolPayload({
-        content,
-      }),
-    ).toBe(content);
+    const content = [image];
+    expect(extractToolPayload({ content })).toBe(content);
 
     const result = { status: "ok" } as ToolPayloadCarrier & { status: string };
     expect(extractToolPayload(result)).toBe(result);
@@ -51,52 +49,35 @@ describe("extractToolPayload", () => {
 });
 
 describe("parseStandalonePlainTextToolCallBlocks", () => {
-  it.each(["[get_system_info]\n</function>"])(
-    "keeps bracketed opening %s from becoming a zero-argument XML call",
-    (raw) => {
-      expect(parseStandalonePlainTextToolCallBlocks(raw)).toBeNull();
-    },
-  );
+  it("keeps bracketed openings from becoming zero-argument XML calls", () => {
+    expect(parse("[get_system_info]\n</function>")).toBeNull();
+  });
 
   it("counts XML body whitespace against the UTF-8 payload cap", () => {
     const immediate = "<function=get_system_info></function>";
-    expect(
-      parseStandalonePlainTextToolCallBlocks(immediate, {
-        allowedToolNames: ["get_system_info"],
-        maxPayloadBytes: 0,
-      })?.[0]?.arguments,
-    ).toEqual({});
+    expect(parseAllowed(immediate, "get_system_info", 0)?.[0]?.arguments).toEqual({});
 
     const oversizedBody = "\u00a0".repeat(129);
     const oversized = `<function=get_system_info>${oversizedBody}</function>`;
     expect(new TextEncoder().encode(oversizedBody).byteLength).toBe(258);
-    expect(
-      parseStandalonePlainTextToolCallBlocks(oversized, {
-        allowedToolNames: ["get_system_info"],
-        maxPayloadBytes: 256,
-      }),
-    ).toBeNull();
-    expect(stripPlainTextToolCallBlocks(["before", oversized, "after"].join("\n"))).toBe(
-      "before\nafter",
-    );
+    expect(parseAllowed(oversized, "get_system_info", 256)).toBeNull();
+    expectStripped(oversized);
 
     const parameter = "<parameter=value>x</parameter>";
     const trailingBody = "\u00a0".repeat(2);
     const parameterBytes = new TextEncoder().encode(parameter).byteLength;
     expect(
-      parseStandalonePlainTextToolCallBlocks(
-        `<function=get_system_info>${parameter}${trailingBody}</function>`,
-        {
-          allowedToolNames: ["get_system_info"],
-          maxPayloadBytes: parameterBytes + 3,
-        },
+      parseAllowed(
+        xmlCall("get_system_info", parameter + trailingBody),
+        "get_system_info",
+        parameterBytes + 3,
       ),
     ).toBeNull();
   });
 
   it("preserves __proto__ as an own XML argument property", () => {
     const raw = "<function=write><parameter=__proto__>value</parameter></function>";
-    const args = parseStandalonePlainTextToolCallBlocks(raw)?.[0]?.arguments;
+    const args = parse(raw)?.[0]?.arguments;
 
     expect(Object.getPrototypeOf(args)).toBe(Object.prototype);
     expect(Object.hasOwn(args ?? {}, "__proto__")).toBe(true);
@@ -108,28 +89,18 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
       yield "exec";
     }
     const legacy = "[tool:exec]<parameter=command>pwd</parameter>";
-    expect(
-      parseStandalonePlainTextToolCallBlocks(legacy, { allowedToolNames: allowedNames() }),
-    ).toMatchObject([{ name: "exec", arguments: { command: "pwd" } }]);
+    expect(parse(legacy, { allowedToolNames: allowedNames() })).toMatchObject([
+      { name: "exec", arguments: { command: "pwd" } },
+    ]);
 
     const adjacent = "<function=exec></function><function=exec></function>";
-    expect(
-      parseStandalonePlainTextToolCallBlocks(adjacent, { allowedToolNames: allowedNames() }),
-    ).toHaveLength(2);
+    expect(parse(adjacent, { allowedToolNames: allowedNames() })).toHaveLength(2);
   });
 
   it("finds XML parameter close tags without lowercased string offsets", () => {
     const dottedCapitalI = "\u0130";
-    const raw = [
-      "<function=write>",
-      "<parameter=content>",
-      dottedCapitalI,
-      "</parameter>",
-      "</function>",
-    ].join("\n");
-    const blocks = parseStandalonePlainTextToolCallBlocks(raw, {
-      allowedToolNames: ["write"],
-    });
+    const raw = xmlCall("write", `\n${xmlParameter("content", `\n${dottedCapitalI}\n`)}\n`);
+    const blocks = parseAllowed(raw, "write");
 
     expect(blocks?.[0]?.arguments).toEqual({ content: dottedCapitalI });
   });
@@ -140,21 +111,13 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
     expect(payload.length).toBeLessThan(48);
     expect(new TextEncoder().encode(payload).byteLength).toBeGreaterThan(48);
 
-    expect(
-      parseStandalonePlainTextToolCallBlocks(raw, {
-        allowedToolNames: ["write"],
-        maxPayloadBytes: 48,
-      }),
-    ).toBeNull();
+    expect(parseAllowed(raw, "write", 48)).toBeNull();
   });
 
   it("respects allowed tool names for Harmony calls", () => {
-    const blocks = parseStandalonePlainTextToolCallBlocks(
-      'commentary to=write code {"path":"/tmp/file.txt","content":"x"}',
-      { allowedToolNames: ["read"] },
-    );
-
-    expect(blocks).toBeNull();
+    expect(
+      parseAllowed('commentary to=write code {"path":"/tmp/file.txt","content":"x"}', "read"),
+    ).toBeNull();
   });
 });
 
@@ -163,45 +126,29 @@ describe("stripPlainTextToolCallBlocks", () => {
     "strips adjacent same-line calls after an initial XML call: %s",
     (second) => {
       const calls = `<function=read></function>${second}`;
-      expect(stripPlainTextToolCallBlocks(`before\n${calls}\nafter`)).toBe("before\nafter");
+      expectStripped(calls);
     },
   );
 
   it("strips complete JSON payloads over the UTF-8 cap", () => {
     const call = `[tool:read] ${JSON.stringify({ value: "é".repeat(128_001) })}`;
-    expect(stripPlainTextToolCallBlocks(`before\n${call}\nafter`)).toBe("before\nafter");
+    expectStripped(call);
   });
 
-  it.each(["</func"])(
-    "strips a complete optional-close call before an ambiguous %s prefix",
-    (suffix) => {
-      const block = ["[tool:exec]", "<parameter=command>", "pwd", "</parameter>"].join("\n");
-      expect(stripPlainTextToolCallBlocks(["before", block, suffix].join("\n"))).toBe(
-        `before\n${suffix}`,
-      );
-    },
-  );
+  it("strips a complete optional-close call before an ambiguous close prefix", () => {
+    const suffix = "</func";
+    const block = ["[tool:exec]", "<parameter=command>", "pwd", "</parameter>"].join("\n");
+    expectStripped(block, suffix);
+  });
 
   it("strips oversized XML parameter tool calls without promoting them", () => {
     const largeValue = "x".repeat(140_000);
-    const block = [
-      "<function=write>",
-      "<parameter=first>",
-      largeValue,
-      "</parameter>",
-      "<parameter=second>",
-      largeValue,
-      "</parameter>",
-      "</function>",
-    ].join("\n");
-
-    expect(
-      parseStandalonePlainTextToolCallBlocks(block, {
-        allowedToolNames: ["write"],
-      }),
-    ).toBeNull();
-    expect(stripPlainTextToolCallBlocks(["before", block, "after"].join("\n"))).toBe(
-      "before\nafter",
+    const block = xmlCall(
+      "write",
+      ["first", "second"].map((name) => `\n${xmlParameter(name, `\n${largeValue}\n`)}`).join("") +
+        "\n",
     );
+    expect(parseAllowed(block, "write")).toBeNull();
+    expectStripped(block);
   });
 });

@@ -20,6 +20,10 @@ import {
   sessionPlacementRetry,
   sessionPlacementTargetReason,
 } from "./session-placement-action.ts";
+import type {
+  SessionPlacementPresentation,
+  SessionPlacementSource,
+} from "./session-placement-move-dialog.tsx";
 
 registerNewSessionSetupEnglish();
 
@@ -29,9 +33,35 @@ async function selectSessionPlacementTarget(params: {
   mode: "dispatch" | "move" | "restart";
   row: GatewaySessionRow;
   requiredProfile?: string;
+  presentation?: SessionPlacementPresentation;
+  source?: SessionPlacementSource;
 }): Promise<SessionMoveTarget | null> {
   const { showSessionPlacementTargetDialog } = await import("./session-placement-move-dialog.tsx");
   const runtime = params.row.agentRuntime;
+  const placement = params.row.placement;
+  const source: SessionPlacementSource | undefined =
+    params.source ??
+    (placement?.state === "active"
+      ? placement.runner?.deviceId
+        ? {
+            label: placement.runner.deviceId,
+            target: { kind: "device", deviceId: placement.runner.deviceId },
+          }
+        : placement.profileId
+          ? {
+              label: placement.profileId,
+              providerId: placement.providerId,
+              target: {
+                kind: "profile",
+                profileId: placement.profileId,
+                ...(placement.machine?.class ? { machineClass: placement.machine.class } : {}),
+                ...(placement.machine?.os ? { os: placement.machine.os } : {}),
+              },
+            }
+          : { label: placement.environmentId }
+      : placement?.state === "local"
+        ? { label: t("newSession.gateway"), target: { kind: "gateway" } }
+        : undefined);
   const gatewayAccess = readSessionMethodAccess(params.gatewaySnapshot, {
     method: params.mode === "restart" ? "sessions.reclaim" : "sessions.move",
     requiredScope: "operator.write",
@@ -42,6 +72,8 @@ async function selectSessionPlacementTarget(params: {
   });
   return showSessionPlacementTargetDialog({
     mode: params.mode,
+    presentation: params.presentation,
+    source,
     sessionLabel: params.row.label || params.row.key,
     activeRun: params.row.hasActiveRun === true,
     repositoryOnly: repositorySessionNeedsWorker(params.row),
@@ -91,15 +123,17 @@ export async function changeSessionPlacement(params: {
   currentGatewaySnapshot: () => ApplicationGatewaySnapshot;
   requiredProfile: () => string | undefined;
   mode: "move" | "recover";
+  presentation?: SessionPlacementPresentation;
+  source?: SessionPlacementSource;
   pendingKey: string | null;
   row: GatewaySessionRow;
   fallbackAgentId: string;
   isCurrent: () => boolean;
   currentRow: () => GatewaySessionRow | undefined;
+  onAdmittedCommand?: (completion: Promise<void>) => void;
   onPendingChange: (key: string | null) => void;
   publishError: (error: unknown) => void;
   reconcileMutation: SessionCapability["reconcileMutation"];
-  requestUpdate: () => void;
 }): Promise<void> {
   const client = params.client;
   const placement = params.row.placement;
@@ -160,25 +194,34 @@ export async function changeSessionPlacement(params: {
     ? retry.abandonSource === true
     : movingPlacement?.runner?.kind === "device" && movingPlacement.runner.status === "offline";
   let target: SessionMoveTarget | null;
-  if (abandonSource) {
-    const confirmed = await showConfirmDialog({
-      message: t("sessionsView.continueOnGatewayConfirm", {
-        session: params.row.label || params.row.key,
-      }),
-      confirmLabel: t("sessionsView.continueOnGatewayAction"),
-      danger: true,
-    });
-    target = confirmed ? (retry ? { ...retry.target } : { kind: "gateway" }) : null;
-  } else if (retry) {
-    target = { ...retry.target };
-  } else {
-    target = await selectSessionPlacementTarget({
-      client,
-      gatewaySnapshot: params.gatewaySnapshot,
-      mode: movingPlacement ? "move" : restartPlacement ? "restart" : "dispatch",
-      row: params.row,
-      requiredProfile: params.requiredProfile(),
-    });
+  try {
+    if (abandonSource) {
+      const confirmed = await showConfirmDialog({
+        message: t("sessionsView.continueOnGatewayConfirm", {
+          session: params.row.label || params.row.key,
+        }),
+        confirmLabel: t("sessionsView.continueOnGatewayAction"),
+        danger: true,
+      });
+      target = confirmed ? (retry ? { ...retry.target } : { kind: "gateway" }) : null;
+    } else if (retry) {
+      target = { ...retry.target };
+    } else {
+      target = await selectSessionPlacementTarget({
+        client,
+        gatewaySnapshot: params.gatewaySnapshot,
+        mode: movingPlacement ? "move" : restartPlacement ? "restart" : "dispatch",
+        row: params.row,
+        requiredProfile: params.requiredProfile(),
+        presentation: params.presentation,
+        source: params.source,
+      });
+    }
+  } catch (error) {
+    if (params.isCurrent()) {
+      params.publishError(error);
+    }
+    return;
   }
   if (!target) {
     return;
@@ -254,52 +297,55 @@ export async function changeSessionPlacement(params: {
     return;
   }
   const session = { key: params.row.key, ...(agentId ? { agentId } : {}) };
-  params.onPendingChange(params.row.key);
-  try {
-    if (expectedSource) {
-      await client.request("sessions.move", {
-        ...session,
-        expected: expectedSource,
-        target,
-        ...(abandonSource ? { abandonSource: true } : {}),
-      });
-    } else if (target.kind === "gateway") {
-      if (!restartPlacement) {
-        params.publishError(t("sessionsView.actionUnavailable"));
-        return;
+  const completion = (async () => {
+    params.onPendingChange(params.row.key);
+    try {
+      if (expectedSource) {
+        await client.request("sessions.move", {
+          ...session,
+          expected: expectedSource,
+          target,
+          ...(abandonSource ? { abandonSource: true } : {}),
+        });
+      } else if (target.kind === "gateway") {
+        if (!restartPlacement) {
+          params.publishError(t("sessionsView.actionUnavailable"));
+          return;
+        }
+        await client.request(
+          "sessions.reclaim",
+          { ...session, recoverToGateway: { expectedGeneration: restartPlacement.generation } },
+          { timeoutMs: null },
+        );
+      } else {
+        await client.request("sessions.dispatch", {
+          ...session,
+          ...(target.kind === "profile"
+            ? {
+                profileId: target.profileId,
+                ...(target.os ? { os: target.os } : {}),
+                ...(target.machineClass ? { machineClass: target.machineClass } : {}),
+              }
+            : { deviceId: target.deviceId }),
+        });
       }
-      await client.request(
-        "sessions.reclaim",
-        { ...session, recoverToGateway: { expectedGeneration: restartPlacement.generation } },
-        { timeoutMs: null },
-      );
-    } else {
-      await client.request("sessions.dispatch", {
-        ...session,
-        ...(target.kind === "profile"
-          ? {
-              profileId: target.profileId,
-              ...(target.os ? { os: target.os } : {}),
-              ...(target.machineClass ? { machineClass: target.machineClass } : {}),
-            }
-          : { deviceId: target.deviceId }),
-      });
-    }
-    if (params.isCurrent()) {
-      const outcome = await params.reconcileMutation(agentId);
-      if (outcome.status === "failed" && params.isCurrent()) {
-        params.publishError(outcome.error);
-      }
-    }
-  } catch (error) {
-    if (params.isCurrent()) {
-      await params.reconcileMutation(agentId).catch(() => undefined);
       if (params.isCurrent()) {
-        params.publishError(error);
+        const outcome = await params.reconcileMutation(agentId);
+        if (outcome.status === "failed" && params.isCurrent()) {
+          params.publishError(outcome.error);
+        }
       }
+    } catch (error) {
+      if (params.isCurrent()) {
+        await params.reconcileMutation(agentId).catch(() => undefined);
+        if (params.isCurrent()) {
+          params.publishError(error);
+        }
+      }
+    } finally {
+      params.onPendingChange(null);
     }
-  } finally {
-    params.onPendingChange(null);
-    params.requestUpdate();
-  }
+  })();
+  params.onAdmittedCommand?.(completion);
+  await completion;
 }

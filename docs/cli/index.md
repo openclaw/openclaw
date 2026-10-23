@@ -509,27 +509,31 @@ Plugins can add additional top-level commands, such as
 ## Database
 
 `openclaw database` provides schema preflight, preservation verification,
-shared-state ownership, and offline workboard engine porting. See
+shared-state ownership, and offline database-family engine porting. See
 [database schemas](/reference/database-schemas) for compatibility contracts.
 
 ```bash
 openclaw database port --to <postgres|sqlite> [--dry-run] [--json]
+openclaw database port --family <state|agent|workboard|logbook|team-reports> --to <postgres|sqlite> [--dry-run] [--json]
 openclaw database port --resume <manifest> [--json]
 openclaw database port --rollback <manifest> [--json]
 ```
 
-Stop the Gateway and embedded agents first. `--to` selects the destination for
-all existing registered workboard stores; shared state and agent databases remain
-on SQLite. `--dry-run` checks read-only prerequisites without creating migration
+Stop the Gateway and embedded agents first. `--family` selects all existing
+physical stores of one family and changes only that family's override. Omit it
+to port all eligible families when their engines are homogeneous; mixed
+selections require a family. A scoped agent port cannot put agents on a different
+engine from shared state until PR3 mixed-pair conformance. `--dry-run` checks
+read-only prerequisites without creating migration
 artifacts. Recovery requires the active manifest at
 `<stateDir>/recovery/database-port/manifest.json`; `--resume` and `--rollback` are
-mutually exclusive and cannot be combined with `--to` or `--dry-run`.
+mutually exclusive and cannot be combined with `--family`, `--to`, or `--dry-run`.
 
 Completed ports retain exact original captures and an archived manifest under
 `<stateDir>/recovery/database-port/<operation-id>/`. To keep later writes when
 returning to SQLite, run a new `--to sqlite` port; completed manifests are not an
 undo mechanism. Reverse-port before a raw package-manager downgrade. See the
-[port runbook](/reference/database-engines#port-existing-workboard-stores) for
+[port runbook](/reference/database-engines#port-existing-stores) for
 backup contents, interruption recovery, and restart guidance.
 
 ## Chat slash commands

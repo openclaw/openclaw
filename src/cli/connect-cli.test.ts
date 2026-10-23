@@ -1,4 +1,3 @@
-// Connect CLI tests cover accepted targets and handoff to the canonical node runtime.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
@@ -57,6 +56,38 @@ function setupCode(): string {
   return encodePairingSetupCode(payload);
 }
 
+function joinResponse(contentType = "application/json", finalUrl?: string) {
+  const release = vi.fn().mockResolvedValue(undefined);
+  mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    response: new Response(JSON.stringify(payload), { headers: { "content-type": contentType } }),
+    finalUrl,
+    release,
+  });
+  return release;
+}
+
+function expectFailure(message: unknown) {
+  expect(mocks.runtime.error).toHaveBeenCalledWith(message);
+  expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+  expect(mocks.runNodeHost).not.toHaveBeenCalled();
+  expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+  expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+}
+
+function savedAccessGateway(
+  host: string,
+  port: number,
+  tls: boolean,
+  clientId: string,
+  clientSecret: string,
+) {
+  mocks.loadNodeHostConfig.mockResolvedValueOnce({
+    version: 1,
+    nodeId: "node-test",
+    gateway: { host, port, tls, cloudflareAccess: { clientId, clientSecret } },
+  });
+}
+
 async function runConnect(args: string[]): Promise<void> {
   const program = new Command();
   program.exitOverride();
@@ -77,24 +108,29 @@ describe("connect cli", () => {
   });
 
   it.each([
-    {
-      name: "HTTPS join URL",
-      target: () => `https://gateway.example/openclaw-gw/j/${"a".repeat(22)}`,
-      fetched: true,
-    },
-  ])("maps a $name into the existing node foreground runtime", async ({ target, fetched }) => {
-    if (fetched) {
-      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-        response: new Response(JSON.stringify(payload), {
-          status: 200,
-          headers: { "content-type": "application/json; charset=utf-8" },
-        }),
-        finalUrl: target(),
-        release: vi.fn().mockResolvedValue(undefined),
-      });
-    }
+    ["Application/JSON; charset=utf-8", true],
+    ["APPLICATION/JSON", true],
+    ["text/html", false],
+    ["application/json-seq", false],
+  ])("recognizes the join response media type %s", async (contentType, accepted) => {
+    const release = joinResponse(contentType);
 
-    await runConnect([target(), "--display-name", "Build Node"]);
+    await runConnect([`https://gateway.example/j/${"a".repeat(22)}`]);
+
+    if (accepted) {
+      expect(mocks.runNodeHost).toHaveBeenCalledOnce();
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+    } else {
+      expectFailure("Gateway join code was not found or has expired.");
+    }
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("maps an HTTPS join URL into the existing node foreground runtime", async () => {
+    const target = `https://gateway.example/openclaw-gw/j/${"a".repeat(22)}`;
+    joinResponse("application/json; charset=utf-8", target);
+
+    await runConnect([target, "--display-name", "Build Node"]);
 
     expect(mocks.runNodeHost).toHaveBeenCalledWith({
       gatewayHost: "192.168.1.20",
@@ -110,21 +146,14 @@ describe("connect cli", () => {
           tls: true,
           tlsFingerprint: "ab".repeat(32),
         },
-        {
-          host: "gateway.tailnet.example",
-          port: 443,
-          contextPath: "/tailnet-gw",
-          tls: true,
-        },
+        { host: "gateway.tailnet.example", port: 443, contextPath: "/tailnet-gw", tls: true },
       ],
       gatewayBootstrapToken: "bootstrap-token",
       preferGatewayBootstrapToken: true,
       displayName: "Build Node",
     });
-    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(fetched ? 1 : 0);
-    if (fetched) {
-      expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("init");
-    }
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("init");
     expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
   });
 
@@ -166,17 +195,13 @@ describe("connect cli", () => {
         }
       }
 
-      expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expectFailure(
         [
           "Connect target is required. Join URLs and setup codes are single-use.",
           `If this machine is still paired with wss://gateway.example:443, reconnect with the saved pairing: ${reconnect}`,
           `Otherwise, mint a join URL on the Gateway host with ${profile ? `openclaw --profile ${profile}` : "openclaw"} devices join-code, then run: ${pair}`,
         ].join("\n"),
       );
-      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
-      expect(mocks.runNodeHost).not.toHaveBeenCalled();
-      expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-      expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
     },
   );
 
@@ -184,11 +209,9 @@ describe("connect cli", () => {
     await runConnect(["--session-host"]);
 
     expect(mocks.loadResumableNodeHostGateway).toHaveBeenCalledOnce();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
+    expectFailure(
       "Connect target is required. To pair this machine, mint a join URL on the Gateway host with openclaw devices join-code, then run: openclaw connect <join-url> --session-host",
     );
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.runNodeHost).not.toHaveBeenCalled();
   });
 
   it.skipIf(process.platform === "win32").each(["setup-code "])(
@@ -211,77 +234,42 @@ describe("connect cli", () => {
   );
 
   it.each([
-    {
-      name: "empty",
-      contents: Buffer.alloc(0),
-      message: "Connect target file is empty.",
-    },
-    {
-      name: "truncated UTF-8",
-      contents: Buffer.from([0xe2, 0x82]),
-      message: "Connect target file must be valid UTF-8.",
-    },
-    {
-      name: "oversized",
-      contents: Buffer.alloc(64 * 1024 + 1, 0x61),
-      message: "max 65536 bytes",
-    },
-  ])("rejects an $name target file without removing it", async ({ contents, message }) => {
+    ["empty", Buffer.alloc(0), "Connect target file is empty."],
+    ["truncated UTF-8", Buffer.from([0xe2, 0x82]), "Connect target file must be valid UTF-8."],
+    ["oversized", Buffer.alloc(64 * 1024 + 1, 0x61), "max 65536 bytes"],
+  ] as const)("rejects a %s target file without removing it", async (_name, contents, message) => {
     const root = tempDirs.make("openclaw-connect-target-invalid-");
     const targetFile = path.join(root, "setup-code");
     await fs.writeFile(targetFile, contents, { mode: 0o600 });
 
     await runConnect(["--target-file", targetFile, "--ephemeral"]);
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining(message));
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.runNodeHost).not.toHaveBeenCalled();
+    expectFailure(expect.stringContaining(message));
     await expect(fs.readFile(targetFile)).resolves.toEqual(contents);
   });
 
-  it.each([
-    {
-      args: ["--ephemeral", "--service"],
-      message: "--ephemeral cannot be combined with --service.",
-    },
-    {
-      args: ["--ephemeral", "--session-host"],
-      message: "--ephemeral cannot be combined with --session-host.",
-    },
-  ])("rejects incompatible flags: $args", async ({ args, message }) => {
-    await runConnect([setupCode(), ...args]);
-
-    expect(mocks.runtime.error).toHaveBeenCalledWith(message);
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.runNodeHost).not.toHaveBeenCalled();
-    expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-    expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+  it.each(["--service", "--session-host"])("rejects --ephemeral with %s", async (flag) => {
+    await runConnect([setupCode(), "--ephemeral", flag]);
+    expectFailure(`--ephemeral cannot be combined with ${flag}.`);
   });
 
-  it.each([true])(
-    "forwards repeatable command restrictions through connect (service=%s)",
-    async (service) => {
-      await runConnect([
-        setupCode(),
-        ...(service ? ["--service"] : []),
-        "--commands",
-        "fixture.read,fixture.list",
-        "--commands",
-        "fixture.read",
-      ]);
-      const commands = ["fixture.list", "fixture.read"];
-      expect(mocks.runNodeHost).toHaveBeenCalledWith(expect.objectContaining({ commands }));
-      expect(mocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
-      expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-      if (service) {
-        expect(mocks.runNodeDaemonInstall).toHaveBeenCalledWith(
-          expect.objectContaining({ commands, force: true }),
-        );
-      } else {
-        expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
-      }
-    },
-  );
+  it("forwards repeatable command restrictions through service connect", async () => {
+    await runConnect([
+      setupCode(),
+      "--service",
+      "--commands",
+      "fixture.read,fixture.list",
+      "--commands",
+      "fixture.read",
+    ]);
+    const commands = ["fixture.list", "fixture.read"];
+    expect(mocks.runNodeHost).toHaveBeenCalledWith(expect.objectContaining({ commands }));
+    expect(mocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
+    expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+    expect(mocks.runNodeDaemonInstall).toHaveBeenCalledWith(
+      expect.objectContaining({ commands, force: true }),
+    );
+  });
 
   it("rejects --all-commands with --commands before consuming the join target", async () => {
     await expect(
@@ -357,36 +345,16 @@ describe("connect cli", () => {
   it("refuses plain HTTP join URLs for non-loopback gateways", async () => {
     await runConnect([`http://gateway.example/j/${"a".repeat(22)}`]);
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Plain HTTP join URLs are allowed only for loopback gateways.",
-    );
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expectFailure("Plain HTTP join URLs are allowed only for loopback gateways.");
     expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
-    expect(mocks.runNodeHost).not.toHaveBeenCalled();
   });
 
   it("sends Cloudflare Access credentials on the pinned HTTPS join request", async () => {
     const clientId = ["cf", "client", "id"].join("-");
     const clientSecret = ["cf", "client", "secret"].join("-");
-    mocks.loadNodeHostConfig.mockResolvedValueOnce({
-      version: 1,
-      nodeId: "node-test",
-      gateway: {
-        host: "gateway.example",
-        port: 443,
-        tls: true,
-        cloudflareAccess: { clientId, clientSecret },
-      },
-    });
+    savedAccessGateway("gateway.example", 443, true, clientId, clientSecret);
     const target = `https://gateway.example/j/${"a".repeat(22)}`;
-    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-      response: new Response(JSON.stringify(payload), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-      finalUrl: target,
-      release: vi.fn(async () => undefined),
-    });
+    joinResponse("application/json", target);
 
     await runConnect([target]);
 
@@ -405,24 +373,12 @@ describe("connect cli", () => {
 
   it("rejects Cloudflare Access credentials before a plaintext join request", async () => {
     const clientSecret = ["cf", "plaintext", "secret"].join("-");
-    mocks.loadNodeHostConfig.mockResolvedValueOnce({
-      version: 1,
-      nodeId: "node-test",
-      gateway: {
-        host: "127.0.0.1",
-        port: 80,
-        tls: false,
-        cloudflareAccess: { clientId: "cf-plaintext-id", clientSecret },
-      },
-    });
+    savedAccessGateway("127.0.0.1", 80, false, "cf-plaintext-id", clientSecret);
 
     await runConnect([`http://127.0.0.1/j/${"a".repeat(22)}`]);
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Cloudflare Access credentials require an HTTPS join URL.",
-    );
+    expectFailure("Cloudflare Access credentials require an HTTPS join URL.");
     expect(String(mocks.runtime.error.mock.calls[0]?.[0])).not.toContain(clientSecret);
     expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
-    expect(mocks.runNodeHost).not.toHaveBeenCalled();
   });
 });

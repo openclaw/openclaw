@@ -1,5 +1,5 @@
 import { ChildProcess } from "node:child_process";
-import { subscribe, unsubscribe } from "node:diagnostics_channel";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +13,7 @@ import { collectVitestForkOsDiagnostics } from "../../scripts/lib/vitest-fork-os
 
 const POOL_NAME = "openclaw-forks";
 const MAX_REPORT_CHARS = 64 * 1_024;
+const childProcesses = channel("child_process");
 
 class DiagnosticForksPoolWorker extends ForksPoolWorker {
   override readonly name = POOL_NAME;
@@ -59,12 +60,12 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
     // Vitest 5.0.3 + patches/vitest@5.0.3.patch starts
     // forks synchronously and calls stop() after its deadline or joined exit.
     // Recheck that contract on upgrades; the transport remains Vitest-owned.
-    subscribe("child_process", observe);
+    childProcesses.subscribe(observe);
     let started: Promise<void>;
     try {
       started = super.start();
     } finally {
-      unsubscribe("child_process", observe);
+      childProcesses.unsubscribe(observe);
     }
     this.child = children.find((child) => child.spawnargs?.includes(this.entrypoint));
     this.child?.once("exit", () => clearTimeout(this.diagnosticTimer));

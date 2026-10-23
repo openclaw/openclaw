@@ -22,6 +22,11 @@ export function getDatabaseEngineSelection() {
   return maintenance.getStore() ?? state.selection;
 }
 
+/** Config-driven operations reuse only their own captured selection, never a running Gateway's. */
+export function getScopedDatabaseEngineSelection() {
+  return maintenance.getStore();
+}
+
 /** Offline transitions keep source and target work scoped without changing the running Gateway. */
 export function withDatabaseEngineSelection<T>(
   selection: DatabaseEngineSelection,

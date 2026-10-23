@@ -302,10 +302,7 @@ export async function runExtensionBatchPlan(
   const suppliedEnv = params.env ?? process.env;
   const runtimePolicy = resolveCiTestRuntimePolicy(suppliedEnv);
   const allRuntimes = runtimePolicy === "bun-all" || runtimePolicy === "dual-all";
-  const env =
-    runtimePolicy === "dual" || allRuntimes
-      ? { ...suppliedEnv, OPENCLAW_VITEST_RUNTIME: "node" }
-      : suppliedEnv;
+  const env = allRuntimes ? { ...suppliedEnv, OPENCLAW_VITEST_RUNTIME: "node" } : suppliedEnv;
   const vitestArgs = params.vitestArgs ?? [];
   // Single-plugin CLI historically leaves exact exclusions to Vitest.
   const exactExcludePaths =
@@ -336,7 +333,7 @@ export async function runExtensionBatchPlan(
   );
   // Admit the whole selection before report or runtime preparation can import code.
   assertTestHomeSelection(env, homeMode);
-  if (runtimePolicy === "dual" || allRuntimes) {
+  if (allRuntimes) {
     for (const leaf of leafGroups) {
       const selections = leaf.invocations.flatMap((invocation) =>
         resolveCiTestRuntimeSelections(

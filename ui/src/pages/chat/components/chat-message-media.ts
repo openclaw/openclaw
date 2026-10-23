@@ -27,6 +27,17 @@ export type ImageBlock = {
   height?: number;
 } & ({ url: string; artifactId?: string } | { url?: undefined; artifactId: string });
 
+/** Native admission and open actions shared with non-preview catalog rows. */
+export type MessageMediaAction = {
+  onOpen?: () => void;
+  onRetry?: () => void;
+  onAllow?: () => void;
+  onFocus?: () => void;
+  observeElement?: (element: Element | undefined) => void;
+  pending: boolean;
+  reason?: string;
+};
+
 export type ArtifactDownloadResolver = (
   params: {
     sessionKey: string;
@@ -52,7 +63,10 @@ export type ImageRenderOptions = {
   connectionEpoch?: number;
   resourceBasePath?: string;
   authToken?: string | null;
-  onRequestUpdate?: () => void;
+  /** Synchronous cancellation custody, independent of any rendering callback. */
+  mediaOwner?: object;
+  /** A local resource observer; never a pane or page redraw callback. */
+  onMediaChange?: () => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   resolveArtifactDownload?: ArtifactDownloadResolver;
@@ -112,8 +126,9 @@ export type ChatMediaResource<Value> = {
 
 type ChatMediaSubscriber = {
   resources: Map<string, ChatMediaResource<unknown>>;
-  children: Set<() => void>;
-  owner?: () => void;
+  children: Set<object>;
+  owner?: object;
+  subscriber?: () => void;
 };
 
 type ManagedImageBlobUrl = {
@@ -123,16 +138,15 @@ type ManagedImageBlobUrl = {
 };
 
 const chatMediaResources = new Map<string, ChatMediaResource<unknown>>();
-const chatMediaSubscribers = new Map<() => void, ChatMediaSubscriber>();
+const chatMediaSubscribers = new Map<object, ChatMediaSubscriber>();
 const managedImageBlobUrls = new Map<string, ManagedImageBlobUrl>();
 const CHAT_MEDIA_CACHE_MAX_ENTRIES = 64;
-let chatMediaRenderVersion = 0;
 
 function chatMediaResourceKey(kind: ChatMediaResourceKind, cacheKey: string): string {
   return `${kind}\0${cacheKey}`;
 }
 
-function getChatMediaSubscriber(subscriber: () => void): ChatMediaSubscriber {
+function getChatMediaSubscriber(subscriber: object): ChatMediaSubscriber {
   let state = chatMediaSubscribers.get(subscriber);
   if (!state) {
     state = { resources: new Map(), children: new Set() };
@@ -141,13 +155,13 @@ function getChatMediaSubscriber(subscriber: () => void): ChatMediaSubscriber {
   return state;
 }
 
-function pruneChatMediaSubscriber(subscriber: () => void, state: ChatMediaSubscriber): void {
+function pruneChatMediaSubscriber(subscriber: object, state: ChatMediaSubscriber): void {
   if (!state.owner && state.children.size === 0 && state.resources.size === 0) {
     chatMediaSubscribers.delete(subscriber);
   }
 }
 
-function removeChatMediaSubscriberChild(owner: () => void, subscriber: () => void): void {
+function removeChatMediaSubscriberChild(owner: object, subscriber: object): void {
   const state = chatMediaSubscribers.get(owner);
   if (state) {
     state.children.delete(subscriber);
@@ -236,7 +250,9 @@ export function observeChatMediaResource<Value>(
   }
   const newObservation = !subscriber || !resource.subscribers.has(subscriber);
   if (subscriber) {
-    const subscriptions = getChatMediaSubscriber(subscriber).resources;
+    const observation = getChatMediaSubscriber(subscriber);
+    observation.subscriber = subscriber;
+    const subscriptions = observation.resources;
     const subscriptionKey = chatMediaResourceKey(kind, subscriberScope);
     const previous = subscriptions.get(subscriptionKey);
     // Protect the target from idle eviction before releasing the previous resource.
@@ -274,15 +290,10 @@ export function isChatMediaResourceCurrent(resource: ChatMediaResource<unknown>)
   );
 }
 
-export function getChatMediaRenderVersion(): number {
-  return chatMediaRenderVersion;
-}
-
 export function notifyChatMediaResourceSubscribers(resource: ChatMediaResource<unknown>) {
   if (!isChatMediaResourceCurrent(resource)) {
     return;
   }
-  chatMediaRenderVersion += 1;
   // A pane can change its subscription while another pane is being notified.
   // Snapshot the current generation so a replacement never receives stale work.
   for (const subscriber of Array.from(resource.subscribers)) {
@@ -324,7 +335,10 @@ export function scheduleChatMediaResourceRefresh(
   resource.refresh = refresh;
 }
 
-export function observeChatMediaResourceSubscriber(owner: () => void, subscriber: () => void) {
+export function observeChatMediaResourceSubscriber(
+  owner: object | undefined,
+  subscriber: () => void,
+) {
   const state = getChatMediaSubscriber(subscriber);
   if (state.owner === owner) {
     return;
@@ -332,24 +346,28 @@ export function observeChatMediaResourceSubscriber(owner: () => void, subscriber
   if (state.owner) {
     removeChatMediaSubscriberChild(state.owner, subscriber);
   }
-  getChatMediaSubscriber(owner).children.add(subscriber);
+  if (owner) {
+    getChatMediaSubscriber(owner).children.add(subscriber);
+  }
   state.owner = owner;
 }
 
-export function releaseChatMediaResourceSubscriber(subscriber: (() => void) | undefined) {
+export function releaseChatMediaResourceOwner(subscriber: object | undefined) {
   const state = subscriber && chatMediaSubscribers.get(subscriber);
   if (!subscriber || !state) {
     return;
   }
   chatMediaSubscribers.delete(subscriber);
   for (const child of state.children) {
-    releaseChatMediaResourceSubscriber(child);
+    releaseChatMediaResourceOwner(child);
   }
   if (state.owner) {
     removeChatMediaSubscriberChild(state.owner, subscriber);
   }
   for (const resource of new Set(state.resources.values())) {
-    detachChatMediaResourceSubscriber(resource, subscriber);
+    if (state.subscriber) {
+      detachChatMediaResourceSubscriber(resource, state.subscriber);
+    }
   }
 }
 
@@ -465,11 +483,8 @@ export function resolveAttachmentImageKind(
     : "raster";
 }
 
-export function projectMessageMedia(
-  message: unknown,
-  content: readonly MessageContentItem[],
-  nowMs = Date.now(),
-) {
+export function projectMessageMedia(message: unknown, content: readonly MessageContentItem[]) {
+  const nowMs = Date.now();
   const record = asNonArrayRecord(message);
   const images: ImageBlock[] = [];
   const attachments: AssistantAttachmentItem[] = [];
@@ -688,23 +703,23 @@ export function projectMessageMedia(
 export function schedulePairingQrExpiryRefresh(
   messageKey: string,
   refreshAt: number | undefined,
-  onRequestUpdate: (() => void) | undefined,
+  onMediaChange: (() => void) | undefined,
 ) {
-  if (!onRequestUpdate) {
+  if (!onMediaChange) {
     return;
   }
   if (refreshAt === undefined) {
-    const subscriber = chatMediaSubscribers.get(onRequestUpdate);
+    const subscriber = chatMediaSubscribers.get(onMediaChange);
     const resourceKey = chatMediaResourceKey("pairing-qr", messageKey);
     const resource = subscriber?.resources.get(resourceKey);
     if (subscriber && resource) {
       subscriber.resources.delete(resourceKey);
-      detachChatMediaResourceSubscriber(resource, onRequestUpdate);
-      pruneChatMediaSubscriber(onRequestUpdate, subscriber);
+      detachChatMediaResourceSubscriber(resource, onMediaChange);
+      pruneChatMediaSubscriber(onMediaChange, subscriber);
     }
     return;
   }
-  const resource = observeChatMediaResource<void>("pairing-qr", messageKey, onRequestUpdate);
+  const resource = observeChatMediaResource<void>("pairing-qr", messageKey, onMediaChange);
   scheduleChatMediaResourceRefresh(resource, refreshAt, () =>
     notifyChatMediaResourceSubscribers(resource),
   );

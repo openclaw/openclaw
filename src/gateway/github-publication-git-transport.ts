@@ -23,7 +23,7 @@ import {
 type GitCommandOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  input?: string | Buffer;
+  input?: string | Buffer | (() => string | Buffer);
   maxOutputBytes?: number;
   beforeRun?: () => void;
   operation?: GitProcessOperation;
@@ -65,7 +65,10 @@ export async function runPublicationCommand(argv: string[], options: GitCommandO
             GIT_CONFIG_KEY_0: "core.hooksPath",
             GIT_CONFIG_VALUE_0: os.devNull,
           },
-          ...(options.input !== undefined ? { input: options.input } : {}),
+          // Resolve optional disclosure after beforeRun, directly at the transport boundary.
+          ...(options.input !== undefined
+            ? { input: typeof options.input === "function" ? options.input() : options.input }
+            : {}),
           timeoutMs,
           maxOutputBytes: options.maxOutputBytes ?? 256 * 1024,
         }),
@@ -147,31 +150,76 @@ export async function requireGitHubPublicationCommit(
   cwd: string,
   env: NodeJS.ProcessEnv,
   failure: string,
+  options: { contents?: boolean; commitPresent?: boolean } = {},
 ) {
-  const result = await run(
-    [
-      ...GITHUB_CREDENTIAL_ARGS,
-      "-c",
-      `core.hooksPath=${os.devNull}`,
-      "-c",
-      "core.fsmonitor=false",
-      "-c",
-      "maintenance.auto=false",
-      "-c",
-      "gc.auto=0",
-      "fetch",
-      "--no-auto-maintenance",
-      "--no-tags",
-      "--no-write-fetch-head",
-      "--recurse-submodules=no",
-      "--",
-      githubRepositoryUrl(repository, host),
-      sha,
-    ],
-    { cwd, env },
-  );
-  if (result.code !== 0) {
-    throw new Error(failure);
+  const fetch = async (missing?: string[]) => {
+    const result = await run(
+      [
+        ...GITHUB_CREDENTIAL_ARGS,
+        "-c",
+        `core.hooksPath=${os.devNull}`,
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "maintenance.auto=false",
+        "-c",
+        "gc.auto=0",
+        "fetch",
+        "--no-auto-maintenance",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--recurse-submodules=no",
+        ...(missing ? ["--refetch", "--stdin"] : []),
+        "--",
+        githubRepositoryUrl(repository, host),
+        ...(missing ? [] : [sha]),
+      ],
+      { cwd, env, ...(missing ? { input: `${missing.join("\n")}\n` } : {}) },
+    );
+    if (result.code !== 0) {
+      throw new Error(failure);
+    }
+  };
+  if (!options.commitPresent) {
+    await fetch();
+  }
+  if (!options.contents) {
+    return;
+  }
+  const missingObjects = async () => {
+    const result = await run(
+      [
+        "git",
+        "rev-list",
+        "--objects",
+        "--missing=print",
+        "--no-object-names",
+        "--max-count=1",
+        sha,
+      ],
+      {
+        cwd,
+        env: { ...env, GIT_NO_LAZY_FETCH: "1" },
+        maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES,
+      },
+    );
+    if (result.code !== 0) {
+      throw new Error(failure);
+    }
+    return result.stdout
+      .toString("utf8")
+      .split("\n")
+      .filter((line) => line.startsWith("?"))
+      .map((line) => line.slice(1));
+  };
+  const missing = await missingObjects();
+  if (missing.length) {
+    // A known partial-clone commit can still lack its tree contents after fetch.
+    // Hydrate through the selected authenticated URL before any offline snapshots.
+    await fetch(missing);
+    if ((await missingObjects()).length) {
+      throw new Error(failure);
+    }
   }
 }
 
@@ -391,6 +439,19 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   cwd: string;
   assertCurrent?: () => void;
 }): Promise<{ sourceHeadCommit: string; sourceIndexTree: string; workspaceTree: string }> {
+  const pendingMerge = await runPublicationCommand(
+    ["git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD"],
+    { cwd: params.cwd, beforeRun: params.assertCurrent },
+  );
+  params.assertCurrent?.();
+  if (pendingMerge.code === 0) {
+    throw new Error(
+      "Workspace base integration is pending. Use github_publish refresh_base, resolve its reported conflicts, then repeat refresh_base with conflictsResolved and the returned baseCommit before tests, Auto Review, and publication.",
+    );
+  }
+  if (pendingMerge.code !== 1) {
+    throw new Error("Workspace base integration state could not be verified; retry refresh_base.");
+  }
   const context = captureOpenClawStateWorkerContext();
   const { withSettledLocalWorkspacePath } =
     await import("./worker-environments/local-workspace-projection.js");
@@ -431,7 +492,7 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   });
 }
 
-async function captureSettledGitHubPublicationWorkspaceSnapshot(
+export async function captureSettledGitHubPublicationWorkspaceSnapshot(
   params: {
     cwd: string;
     assertCurrent?: () => void;

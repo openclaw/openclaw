@@ -58,10 +58,6 @@ export type ProviderQuotaGroup = {
   budgets: QuotaBudgetSummary[];
 };
 
-function clampPercent(value: number): number {
-  return Math.max(0, Math.min(100, Math.round(value)));
-}
-
 /**
  * Groups provider usage windows and budget billing into per-provider plan
  * summaries. Rows that share one usage payload (the same subscription exposed
@@ -80,7 +76,10 @@ export function collectProviderQuotaGroups(
     }
     const windows: QuotaLimitSummary[] = (usage.windows ?? []).map((limit) =>
       Object.assign(
-        { label: (limit.label || "").trim(), usedPercent: clampPercent(limit.usedPercent) },
+        {
+          label: (limit.label || "").trim(),
+          usedPercent: Math.max(0, Math.min(100, Math.round(limit.usedPercent))),
+        },
         limit.resetAt !== undefined ? { resetAt: limit.resetAt } : {},
       ),
     );

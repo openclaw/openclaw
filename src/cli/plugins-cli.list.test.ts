@@ -18,7 +18,7 @@ import {
   readConfigFileSnapshotMock,
   resetPluginsCliTestState,
   refreshPluginRegistryMock as refreshRegistry,
-  runPluginsCommand,
+  runPluginCli as plugins,
   pluginsCliRuntimeLogs as logs,
 } from "./plugins-cli-test-helpers.js";
 
@@ -91,10 +91,6 @@ function mockPluginDoctorValidationWarnings(warnings: ConfigValidationIssue[]) {
   mockDoctorReport({
     plugins: [createPluginRecord({ id: "google", enabled: false, status: "disabled" })],
   });
-}
-
-function plugins(...args: string[]) {
-  return runPluginsCommand(["plugins", ...args]);
 }
 
 describe("plugins cli list", () => {
@@ -287,7 +283,7 @@ describe("plugins cli list", () => {
   });
 
   it.each([
-    ["codex", "missing", "openclaw plugins install @openclaw/codex"],
+    ["codex", "missing", "openclaw plugins install npm:@openclaw/codex"],
     ["acpx", "blocked", "Set plugins.entries.acpx.enabled=true"],
     ["codex", "enabled", cleanDoctorMessage],
     ["codex", "disabled", 'Enable the "codex" plugin'],
@@ -338,7 +334,7 @@ describe("plugins cli list", () => {
       expect(output).toContain(
         `but "${id}" is ${state === "disabled" ? "disabled" : "blocked by plugin configuration"}`,
       );
-      expect(output).not.toContain(`openclaw plugins install @openclaw/${id}`);
+      expect(output).not.toContain(`openclaw plugins install npm:@openclaw/${id}`);
       expect(output).not.toContain('Run "openclaw doctor --fix" to install');
       if (id === "acpx") {
         expect(output).toContain("disable ACP/acpx in acp config");

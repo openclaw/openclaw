@@ -24,3 +24,11 @@ export function resolveOpenClawCliInvocation(params?: {
   args?: readonly string[];
   execArgv?: readonly string[];
 }): { command: string; args: string[] };
+
+export function resolveOpenClawCliRespawn(params?: {
+  execPath?: string;
+  entryPath?: string | null;
+  args?: readonly string[];
+  execArgv?: readonly string[];
+  env?: NodeJS.ProcessEnv;
+}): { command: string; args: string[]; env: NodeJS.ProcessEnv };

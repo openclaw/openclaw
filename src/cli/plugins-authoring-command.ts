@@ -165,6 +165,7 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
       loadPluginControlUiDeclaration({
         rootDir,
         controlUi: currentManifest?.controlUi,
+        channels: currentManifest?.channels,
         rejectHardlinks: false,
       }),
     );

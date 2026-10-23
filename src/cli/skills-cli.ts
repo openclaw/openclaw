@@ -27,6 +27,7 @@ import {
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
@@ -142,7 +143,11 @@ function normalizeExplicitAgentId(agentId?: string): string | undefined {
   if (agentId !== undefined && !normalizedAgentId) {
     throw new Error("--agent must not be blank");
   }
-  return normalizedAgentId;
+  if (!normalizedAgentId) {
+    return undefined;
+  }
+  const canonical = normalizeAgentIdStrict(normalizedAgentId);
+  return canonical.ok ? canonical.value : normalizedAgentId;
 }
 
 async function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
@@ -385,11 +390,6 @@ export function registerSkillsCli(program: Command) {
               }),
               logger: skillInstallLogger,
             });
-            if (!result.ok) {
-              defaultRuntime.error(result.error);
-              defaultRuntime.exit(1);
-              return;
-            }
             await refreshLocalGatewaySkills(target);
             defaultRuntime.log(
               `Installed ${result.slug} from ${result.source} -> ${result.targetDir}`,
@@ -726,64 +726,56 @@ export function registerSkillsCli(program: Command) {
         ),
     );
 
-  workshop
-    .command("archive")
-    .description("Archive a learned skill so its agent no longer sees it")
-    .argument("<name>", "Skill name")
-    .option("--reason <text>", "Why the skill is archived")
-    .option("--json", "Output as JSON", false)
-    .action(
-      (name: string, opts: { reason?: string; json?: boolean; agent?: string }, command: Command) =>
-        runWorkshopAction(
-          opts,
-          command,
-          (resolved) =>
-            callSkillsWorkshop<SkillsWorkshopChangeResult>(
-              resolved,
-              "archive",
-              { name, ...(opts.reason ? { reason: opts.reason } : {}) },
-              async () => ({
-                change: await archiveWorkshopSkill(
-                  { config: resolved.config, agentId: resolved.agentId, actor: "user" },
-                  { name, reason: opts.reason },
-                ),
-              }),
-            ),
-          ({ change }) =>
-            `Archived ${change.skillName}. Undo with: ${formatCliCommand(`openclaw skills workshop restore ${change.skillName}`)}\n`,
-        ),
-    );
-
-  workshop
-    .command("restore")
-    .description("Restore an archived skill or a saved version")
-    .argument("<name>", "Skill name")
-    .option("--version <id>", "Version to restore (default newest)")
-    .option("--json", "Output as JSON", false)
-    .action(
-      (
-        name: string,
-        opts: { version?: string; json?: boolean; agent?: string },
-        command: Command,
-      ) =>
-        runWorkshopAction(
-          opts,
-          command,
-          (resolved) =>
-            callSkillsWorkshop<SkillsWorkshopChangeResult>(
-              resolved,
-              "restore",
-              { name, ...(opts.version ? { versionId: opts.version } : {}) },
-              async () => ({
-                change: await restoreWorkshopSkill(
-                  { config: resolved.config, agentId: resolved.agentId, actor: "user" },
-                  { name, versionId: opts.version },
-                ),
-              }),
-            ),
-          ({ change }) => `Restored ${change.skillName}.\n`,
-        ),
-    );
+  for (const method of ["archive", "restore"] as const) {
+    const archive = method === "archive";
+    const field = archive ? "reason" : "versionId";
+    const mutate = archive ? archiveWorkshopSkill : restoreWorkshopSkill;
+    workshop
+      .command(method)
+      .description(
+        archive
+          ? "Archive a learned skill so its agent no longer sees it"
+          : "Restore an archived skill or a saved version",
+      )
+      .argument("<name>", "Skill name")
+      .option(
+        archive ? "--reason <text>" : "--version <id>",
+        archive ? "Why the skill is archived" : "Version to restore (default newest)",
+      )
+      .option("--json", "Output as JSON", false)
+      .action(
+        (
+          name: string,
+          opts: { reason?: string; version?: string; json?: boolean; agent?: string },
+          command: Command,
+        ) =>
+          runWorkshopAction(
+            opts,
+            command,
+            (resolved) => {
+              const value = archive ? opts.reason : opts.version;
+              if (!archive && value === "") {
+                throw new Error("--version must not be blank");
+              }
+              return callSkillsWorkshop<SkillsWorkshopChangeResult>(
+                resolved,
+                method,
+                { name, ...(value ? { [field]: value } : {}) },
+                async () => ({
+                  change: await mutate(
+                    { config: resolved.config, agentId: resolved.agentId, actor: "user" },
+                    { name, [field]: value },
+                  ),
+                }),
+              );
+            },
+            ({ change }) =>
+              archive
+                ? `Archived ${change.skillName}. Undo with: ${formatCliCommand(`openclaw skills workshop restore ${change.skillName} --agent ${change.agentId}`)}\n`
+                : `Restored ${change.skillName}.\n`,
+          ),
+      );
+  }
 
   for (const command of workshop.commands) {
     command.option("--agent <id>", "Target agent (defaults to cwd-inferred, then default agent)");

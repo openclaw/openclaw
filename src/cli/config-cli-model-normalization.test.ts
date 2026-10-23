@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
@@ -54,20 +54,49 @@ const catalogConfig = (id = " latest "): OpenClawConfig => ({
     },
   },
 });
+function expectNoDiscovery() {
+  expect(resolvePluginMetadataSnapshotAsync).not.toHaveBeenCalled();
+  expect(prepareBundledDiscoveryMode).not.toHaveBeenCalled();
+}
+function catalogNeedsNormalization(after: OpenClawConfig, path?: string) {
+  return shouldNormalizeConfigMutationProviderCatalogs({
+    before: catalogConfig(),
+    after,
+    touchedPaths: path ? [path.split(".")] : [],
+    env: {
+      HOME: "/isolated-home",
+      OPENCLAW_STATE_DIR: "/isolated-state",
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    },
+  });
+}
+function agentModelFields(ref: string) {
+  const selection = { primary: ref, fallbacks: [ref] };
+  return {
+    model: selection,
+    imageModel: selection,
+    voiceModel: selection,
+    pdfModel: selection,
+    utilityModel: ref,
+    mediaModels: { image: selection, video: selection, music: selection },
+    heartbeat: { model: ref },
+    subagents: { model: selection },
+    compaction: { model: ref, memoryFlush: { model: ref } },
+    models: { [ref]: { alias: "test" } },
+  };
+}
 
 describe("config mutation model normalization", () => {
   beforeEach(() => {
-    vi.mocked(loadPluginMetadataSnapshot)
-      .mockReset()
-      .mockImplementation(() => {
-        throw new Error("Config normalization must prepare metadata asynchronously");
-      });
-    vi.mocked(resolvePluginMetadataSnapshotAsync).mockReset().mockResolvedValue(metadata);
-    vi.mocked(prepareBundledDiscoveryMode)
-      .mockReset()
-      .mockResolvedValue(() => {});
-    vi.mocked(isPluginMetadataSnapshotCompatible).mockReset().mockReturnValue(true);
+    vi.resetAllMocks();
+    vi.mocked(loadPluginMetadataSnapshot).mockImplementation(() => {
+      throw new Error("Config normalization must prepare metadata asynchronously");
+    });
+    vi.mocked(resolvePluginMetadataSnapshotAsync).mockResolvedValue(metadata);
+    vi.mocked(prepareBundledDiscoveryMode).mockResolvedValue(() => {});
+    vi.mocked(isPluginMetadataSnapshotCompatible).mockReturnValue(true);
   });
+  afterEach(() => expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled());
 
   it("keeps core-only mutations independent from plugin discovery", async () => {
     expect(await normalizeConfigMutationModelRefs({ gateway: { mode: "local" } })).toEqual({
@@ -78,9 +107,7 @@ describe("config mutation model normalization", () => {
         models: { providers: { custom: { baseUrl: "https://example.test", models: [] } } },
       }),
     ).toBeDefined();
-    expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(0);
-    expect(resolvePluginMetadataSnapshotAsync).toHaveBeenCalledTimes(0);
-    expect(prepareBundledDiscoveryMode).toHaveBeenCalledTimes(0);
+    expectNoDiscovery();
   });
 
   it("leaves an untouched provider catalog alone while normalizing core agent refs", async () => {
@@ -93,172 +120,76 @@ describe("config mutation model normalization", () => {
     });
     expect(result.models).toBe(config.models);
     expect(result.agents?.defaults?.model).toBe("openai/example");
-    expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(0);
-    expect(resolvePluginMetadataSnapshotAsync).toHaveBeenCalledTimes(0);
-    expect(prepareBundledDiscoveryMode).toHaveBeenCalledTimes(0);
+    expectNoDiscovery();
   });
 
-  it.each([
-    {
-      name: "gateway mode",
-      patch: { gateway: { mode: "local" } },
-      path: ["gateway", "mode"],
-      expected: false,
-    },
-    {
-      name: "agent model",
-      patch: { agents: { defaults: { model: "openai/example" } } },
-      path: ["agents", "defaults", "model"],
-      expected: false,
-    },
-    {
-      name: "agent workspace",
-      patch: { agents: { defaults: { workspace: "/new-workspace" } } },
-      path: ["agents", "defaults", "workspace"],
-      expected: false,
-    },
-    {
-      name: "explicit catalog write",
-      patch: {},
-      path: ["models", "providers", "custom", "models"],
-      expected: true,
-    },
-    { name: "model parent write", patch: {}, path: ["models"], expected: true },
-    {
-      name: "plugin load path",
-      patch: { plugins: { load: { paths: ["/new-plugin-root"] } } },
-      path: ["plugins", "load", "paths"],
-      expected: true,
-    },
-    {
-      name: "plugin activation",
-      patch: { plugins: { entries: { custom: { enabled: false } } } },
-      path: ["plugins", "entries", "custom", "enabled"],
-      expected: true,
-    },
-    {
-      name: "channel activation",
-      patch: { channels: { telegram: { enabled: true } } },
-      path: ["channels", "telegram", "enabled"],
-      expected: true,
-    },
-  ])("selects catalog normalization for $name", ({ patch, path, expected }) => {
-    const before = catalogConfig();
-    const after = { ...before, ...patch } as OpenClawConfig;
-    expect(
-      shouldNormalizeConfigMutationProviderCatalogs({
-        before,
-        after,
-        touchedPaths: [path],
-        env: {
-          HOME: "/isolated-home",
-          OPENCLAW_STATE_DIR: "/isolated-state",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        },
-      }),
-    ).toBe(expected);
-    expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(0);
+  it.each<[string, OpenClawConfig, boolean]>([
+    ["gateway.mode", { gateway: { mode: "local" } }, false],
+    ["agents.defaults.model", { agents: { defaults: { model: "openai/example" } } }, false],
+    ["agents.defaults.workspace", { agents: { defaults: { workspace: "/new-workspace" } } }, false],
+    ["models.providers.custom.models", {}, true],
+    ["models", {}, true],
+    ["plugins.load.paths", { plugins: { load: { paths: ["/new-plugin-root"] } } }, true],
+    [
+      "plugins.entries.custom.enabled",
+      { plugins: { entries: { custom: { enabled: false } } } },
+      true,
+    ],
+    ["channels.telegram.enabled", { channels: { telegram: { enabled: true } } }, true],
+  ])("selects catalog normalization for %s", (path, patch, expected) => {
+    expect(catalogNeedsNormalization({ ...catalogConfig(), ...patch }, path)).toBe(expected);
   });
 
   it("normalizes catalog values changed indirectly by a parent operation", () => {
-    const before = catalogConfig();
-    const after = catalogConfig("changed");
-    expect(
-      shouldNormalizeConfigMutationProviderCatalogs({
-        before,
-        after,
-        touchedPaths: [],
-      }),
-    ).toBe(true);
+    expect(catalogNeedsNormalization(catalogConfig("changed"))).toBe(true);
   });
 
-  it.each(["defaults", "entries", "list"] as const)(
-    "normalizes all %s agent model fields without discovering plugins",
-    async (scope) => {
-      const ref = " together/meta-llama/Llama-3.3-70B-Instruct-Turbo ";
-      const normalized = "together/meta-llama/Llama-3.3-70B-Instruct-Turbo";
-      const selection = { primary: ref, fallbacks: [ref] };
-      const expectedSelection = { primary: normalized, fallbacks: [normalized] };
-      const fields = {
-        model: selection,
-        imageModel: selection,
-        voiceModel: selection,
-        pdfModel: selection,
-        utilityModel: ref,
-        mediaModels: { image: selection, video: selection, music: selection },
-        heartbeat: { model: ref },
-        subagents: { model: selection },
-        compaction: { model: ref, memoryFlush: { model: ref } },
-        models: { [ref]: { alias: "test" } },
-      };
-      const expected = {
-        model: expectedSelection,
-        imageModel: expectedSelection,
-        voiceModel: expectedSelection,
-        pdfModel: expectedSelection,
-        utilityModel: normalized,
-        mediaModels: {
-          image: expectedSelection,
-          video: expectedSelection,
-          music: expectedSelection,
-        },
-        heartbeat: { model: normalized },
-        subagents: { model: expectedSelection },
-        compaction: { model: normalized, memoryFlush: { model: normalized } },
-        models: { [normalized]: { alias: "test" } },
-      };
-      const wrap = (value: unknown) => ({
-        agents: {
-          [scope]: scope === "defaults" ? value : scope === "list" ? [value] : { a: value },
-        },
-      });
-      expect(await normalizeConfigMutationModelRefs(wrap(fields) as OpenClawConfig)).toEqual(
-        wrap(expected),
-      );
-      expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(0);
-    },
-  );
+  it.each(["defaults", "entries", "list"] as const)("normalizes %s model fields", async (scope) => {
+    const model = "together/meta-llama/Llama-3.3-70B-Instruct-Turbo";
+    const wrap = (value: unknown) => ({
+      agents: {
+        [scope]: scope === "defaults" ? value : scope === "list" ? [value] : { a: value },
+      },
+    });
+    expect(
+      await normalizeConfigMutationModelRefs(
+        wrap(agentModelFields(` ${model} `)) as OpenClawConfig,
+      ),
+    ).toEqual(wrap(agentModelFields(model)));
+  });
 
-  it.each([false, true])(
-    "applies provider policies with prepared metadata=%s",
-    async (prepared) => {
-      const config = catalogConfig();
-      const result = await normalizeConfigMutationModelRefs(
-        config,
-        prepared ? { pluginMetadataSnapshot: metadata } : undefined,
-      );
-      expect(result.models?.providers?.custom?.models.map((model) => model.id)).toEqual([
-        "vendor/stable",
-        "vendor/other",
-      ]);
-      expect(resolvePluginMetadataSnapshotAsync).toHaveBeenCalledTimes(prepared ? 0 : 1);
-      expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(0);
-    },
-  );
+  it.each([false, true])("applies policies with prepared=%s", async (prepared) => {
+    const config = catalogConfig();
+    const result = await normalizeConfigMutationModelRefs(
+      config,
+      prepared ? { pluginMetadataSnapshot: metadata } : undefined,
+    );
+    expect(result.models?.providers?.custom?.models.map((model) => model.id)).toEqual([
+      "vendor/stable",
+      "vendor/other",
+    ]);
+    expect(resolvePluginMetadataSnapshotAsync).toHaveBeenCalledTimes(prepared ? 0 : 1);
+  });
 
-  it.each(["single", "merged"] as const)(
-    "keeps %s workspace metadata out of global model normalization",
-    async (scope) => {
-      const scopedMetadata = {
-        ...metadata,
-        index: {
-          ...metadata.index,
-          ...(scope === "single" ? { workspaceDir: "/workspace/old" } : {}),
-          plugins: metadata.index.plugins.map((plugin) => ({
-            ...plugin,
-            origin: "workspace" as const,
-          })),
-        },
-      };
-      const config = { ...catalogConfig(), agents: { defaults: { workspace: "/workspace/new" } } };
-      await normalizeConfigMutationModelRefs(config, {
-        pluginMetadataSnapshot: scopedMetadata,
-      });
-      expect(resolvePluginMetadataSnapshotAsync).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(resolvePluginMetadataSnapshotAsync).mock.calls[0]?.[0].config).toBe(config);
-      expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(0);
-    },
-  );
+  it.each(["single", "merged"] as const)("excludes %s workspace metadata", async (scope) => {
+    const scopedMetadata = {
+      ...metadata,
+      index: {
+        ...metadata.index,
+        ...(scope === "single" ? { workspaceDir: "/workspace/old" } : {}),
+        plugins: metadata.index.plugins.map((plugin) => ({
+          ...plugin,
+          origin: "workspace" as const,
+        })),
+      },
+    };
+    const config = { ...catalogConfig(), agents: { defaults: { workspace: "/workspace/new" } } };
+    await normalizeConfigMutationModelRefs(config, {
+      pluginMetadataSnapshot: scopedMetadata,
+    });
+    expect(resolvePluginMetadataSnapshotAsync).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(resolvePluginMetadataSnapshotAsync).mock.calls[0]?.[0].config).toBe(config);
+  });
 
   it("reloads policies when plugin discovery inputs change", async () => {
     vi.mocked(isPluginMetadataSnapshotCompatible).mockReturnValue(false);
@@ -272,6 +203,5 @@ describe("config mutation model normalization", () => {
     const [loaded] = vi.mocked(resolvePluginMetadataSnapshotAsync).mock.calls;
     expect(loaded?.[0].config).toBe(config);
     expect(loaded?.[0].env).toBe(env);
-    expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(0);
   });
 });

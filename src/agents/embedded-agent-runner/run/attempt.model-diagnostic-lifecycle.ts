@@ -1,4 +1,4 @@
-import { modelRequestBodyState } from "@openclaw/ai/internal/openai";
+import { modelRequestBodyState } from "@openclaw/ai/internal/model-request-body";
 import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -6,12 +6,14 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
+import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import {
   diagnosticErrorCategory,
   diagnosticErrorFailureKind,
   diagnosticHttpStatusCode,
   diagnosticProviderRequestIdHash,
 } from "../../../infra/diagnostic-error-metadata.js";
+import { hasInternalDiagnosticEventInterest } from "../../../infra/diagnostic-event-listener-presence.js";
 import {
   areDiagnosticsEnabledForProcess,
   type DiagnosticEventInput,
@@ -33,6 +35,8 @@ import { formatPropagatedDiagnosticTraceparent } from "../../../infra/diagnostic
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import { withModelTransportContext } from "../../../llm/model-transport-context.js";
 import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
+import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import { recordReasoningSuppressedDiagnostic } from "../../../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -55,6 +59,7 @@ export type ModelCallDiagnosticContext = Omit<PluginHookModelCallStartedEvent, "
   contentCapture?: DiagnosticModelContentCapturePolicy;
   nextCallId: () => string;
   ownerGeneration?: CoreModelRequestOwnerGeneration;
+  diagnosticOwner?: DiagnosticEmbeddedRunOwner;
   onStarted?: (callId: string) => void;
   /** Request observation ended; cleanup settlement and replay admission remain separately owned. */
   onFinished?: (callId: string) => void;
@@ -65,6 +70,7 @@ export type ModelCallDiagnosticContext = Omit<PluginHookModelCallStartedEvent, "
   onAgentEvent?: (event: EmbeddedAgentEvent) => void | Promise<void>;
   suppressPluginHooks?: boolean;
   requestTimeoutMs?: number;
+  priority?: "interactive" | "background";
 };
 
 type ModelCallErrorFields = Pick<
@@ -178,13 +184,75 @@ function dispatchModelCallHook(
   );
 }
 
-function withDiagnosticRequestContext(
-  options: ModelCallStreamOptions,
-  trace: DiagnosticTraceContext,
-  observer: ModelCallObserver,
-  callId: string,
-  ctx: ModelCallDiagnosticContext,
-): NonNullable<ModelCallStreamOptions> {
+export function createModelLifecycle(params: {
+  ctx: ModelCallDiagnosticContext;
+  options: ModelCallStreamOptions;
+  requestTimeoutMs?: number;
+  createObserver: (capturePromptStats: boolean) => ModelCallObserver;
+}) {
+  const callId = params.ctx.nextCallId();
+  const runContext = getAgentRunContext(params.ctx.runId);
+  const transportContext = {
+    sessionKey: params.ctx.sessionKey,
+    runId: params.ctx.runId,
+    requestId: callId,
+    priority: params.ctx.priority,
+    onRateLimitWait: (retryAt: number) => {
+      const delayMs = Math.max(0, retryAt - Date.now());
+      reportStatus({
+        phase: "retrying",
+        reason: "rate_limit",
+        message: `Waiting for rate limit. Retrying in ${Math.ceil(delayMs / 1000)}s.`,
+        delayMs,
+        retryAt,
+      });
+      return () => reportStatus({ phase: "starting_model" });
+    },
+  };
+  const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace));
+  const observer = params.createObserver(
+    areDiagnosticsEnabledForProcess() &&
+      (hasInternalDiagnosticEventInterest("model.call.started", true) ||
+        hasInternalDiagnosticEventInterest("model.call.completed", true) ||
+        hasInternalDiagnosticEventInterest("model.call.error", true)),
+  );
+  const eventBase: ModelCallEventBase = {
+    ...modelCallHookEventBase({ ...params.ctx, callId }),
+    ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+    observationUnit: "request",
+    ...(observer.promptStats ? { promptStats: observer.promptStats } : {}),
+    trace,
+  };
+  const watchdogAttempt = params.ctx.diagnosticOwner?.watchdogAttempt;
+  const reportStreamProgress = createModelCallStreamProgressReporter({
+    config: params.ctx.config,
+    target: eventBase,
+    recordProgress: watchdogAttempt
+      ? () => watchdogAttempt.progress("transport", "model_call:stream_progress")
+      : undefined,
+  });
+  emitCoreModelRequestStartedDiagnosticEvent(
+    eventBase,
+    params.ctx.ownerGeneration,
+    params.requestTimeoutMs,
+    modelContentPrivateData(observer.modelContent),
+  );
+  if (params.ctx.suppressPluginHooks !== true) {
+    dispatchModelCallHook(eventBase);
+  }
+  const startedAt = Date.now();
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "mark",
+      name: "provider.request.started",
+      timestamp: new Date(startedAt).toISOString(),
+      runId: eventBase.runId,
+      spanId: callId,
+    },
+    { config: params.ctx.config },
+  );
+  const options = params.options;
+  const ctx = params.ctx;
   const traceparent = formatPropagatedDiagnosticTraceparent(trace);
   const originalOnPayload = options?.onPayload;
   const originalOnResponse = options?.onResponse;
@@ -243,7 +311,7 @@ function withDiagnosticRequestContext(
       { config: ctx.config },
     );
   };
-  return withProviderAcceptanceObserver(requestOptions, (acceptance) => {
+  const propagatedOptions = withProviderAcceptanceObserver(requestOptions, (acceptance) => {
     if (observer.state.terminalEventEmitted) {
       return;
     }
@@ -253,64 +321,23 @@ function withDiagnosticRequestContext(
       observer.state.responseStatus = acceptance.status;
     }
   });
-}
-
-export function createModelLifecycle(params: {
-  ctx: ModelCallDiagnosticContext;
-  options: ModelCallStreamOptions;
-  requestTimeoutMs?: number;
-  createObserver: (capturePromptStats: boolean) => ModelCallObserver;
-}) {
-  const callId = params.ctx.nextCallId();
-  const transportContext = {
-    sessionKey: params.ctx.sessionKey,
-    runId: params.ctx.runId,
-    requestId: callId,
-  };
-  const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace));
-  const observer = params.createObserver(areDiagnosticsEnabledForProcess());
-  const eventBase: ModelCallEventBase = {
-    ...modelCallHookEventBase({ ...params.ctx, callId }),
-    ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
-    observationUnit: "request",
-    ...(observer.promptStats ? { promptStats: observer.promptStats } : {}),
-    trace,
-  };
-  const reportStreamProgress = createModelCallStreamProgressReporter({
-    config: params.ctx.config,
-    target: eventBase,
-  });
-  emitCoreModelRequestStartedDiagnosticEvent(
-    eventBase,
-    params.ctx.ownerGeneration,
-    params.requestTimeoutMs,
-    modelContentPrivateData(observer.modelContent),
-  );
-  if (params.ctx.suppressPluginHooks !== true) {
-    dispatchModelCallHook(eventBase);
-  }
-  const startedAt = Date.now();
-  emitDiagnosticsTimelineEvent(
-    {
-      type: "mark",
-      name: "provider.request.started",
-      timestamp: new Date(startedAt).toISOString(),
-      runId: eventBase.runId,
-      spanId: callId,
-    },
-    { config: params.ctx.config },
-  );
-  const propagatedOptions = withDiagnosticRequestContext(
-    params.options,
-    trace,
-    observer,
-    callId,
-    params.ctx,
-  );
   let waitReason: "response" | "slot" | null = null;
   let firstEventObserved = false;
   const trackStatusDelivery = captureAsyncWorkTracker();
   const signal = params.options?.signal;
+  function reportStatus(data: Record<string, unknown>) {
+    const event = { stream: "run_status" as const, data };
+    emitAgentEvent({ runId: params.ctx.runId, sessionKey: params.ctx.sessionKey, ...event });
+    if (params.ctx.onAgentEvent) {
+      void trackStatusDelivery(async () => {
+        try {
+          await params.ctx.onAgentEvent?.(event);
+        } catch {
+          log.warn("Provider wait status delivery failed");
+        }
+      });
+    }
+  }
   const reportWait: NonNullable<NonNullable<ModelCallStreamOptions>["onProviderWait"]> = (
     reason,
   ) => {
@@ -322,24 +349,14 @@ export function createModelLifecycle(params: {
       return;
     }
     waitReason = reason;
-    const event = {
-      stream: "run_status" as const,
-      data: reason ? { phase: "waiting_for_model", reason } : { phase: "starting_model" },
-    };
-    emitAgentEvent({
-      runId: params.ctx.runId,
-      sessionKey: params.ctx.sessionKey,
-      ...event,
-    });
-    if (params.ctx.onAgentEvent) {
-      void trackStatusDelivery(async () => {
-        try {
-          await params.ctx.onAgentEvent?.(event);
-        } catch {
-          log.warn("Provider wait status delivery failed");
-        }
-      });
+    if (runContext) {
+      if (reason) {
+        runContext.localModelWait = { requestId: callId };
+      } else if (runContext.localModelWait?.requestId === callId) {
+        delete runContext.localModelWait;
+      }
     }
+    reportStatus(reason ? { phase: "waiting_for_model", reason } : { phase: "starting_model" });
     params.options?.onProviderWait?.(reason);
   };
   const clearWait = () => reportWait(null);
@@ -347,6 +364,19 @@ export function createModelLifecycle(params: {
   signal?.addEventListener("abort", clearWait, { once: true });
   function emitModelCallEnded(failure: { error: unknown } | undefined): void {
     const { ownerGeneration, config } = params.ctx;
+    if (observer.state.reasoningSuppressed) {
+      const warning = recordReasoningSuppressedDiagnostic(
+        {
+          sessionKey: eventBase.sessionKey,
+          sessionId: eventBase.sessionId ?? (eventBase.sessionKey ? undefined : eventBase.runId),
+        },
+        eventBase.provider,
+        eventBase.model,
+      );
+      if (warning) {
+        log.warn(warning);
+      }
+    }
     if (observer.state.terminalEventEmitted) {
       return;
     }

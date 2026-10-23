@@ -103,8 +103,9 @@ The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the
   `codeModeOnly` is a separate native feature that this field does not track.
 - `assistantTurns`: completed assistant/provider round trips across the run.
 - `bridgeCalls`: the run's cumulative inner bridge counts
-  (`{ search, describe, call }`). These calls never reach the provider;
-  provider-visible outer tool calls remain in `meta.toolSummary.calls`.
+  (`{ search, describe, call }`). These are not provider requests. The embedded
+  runtime's `meta.toolSummary.calls` includes outer and nested tool terminals,
+  so bridge counts can overlap it and must not be added to it.
 - `costUsd`: estimated USD cost from the run's accumulated usage and the
   model's cost config (cache read/write tiers included); omitted when the
   model has no cost data.

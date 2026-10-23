@@ -21,6 +21,13 @@ must still check the process exit status: `Doctor complete.` records completion
 of the checks, but a subsequent crash remains a failed candidate-Doctor step
 during an update.
 
+Doctor checks every configured agent. Plugin metadata retained between workspace
+checks is bounded, so adding agents does not retain a full plugin inventory per agent.
+
+SIGINT and SIGTERM cancel Doctor's preparation before it stops a Gateway or
+starts repairs. If repair already owns state, Doctor settles its admitted work
+and restores any service it stopped before exiting.
+
 If a native SQLite snapshot request fails, Doctor exits with an error even when
 an optional check defers its work. Resolve the reported snapshot or filesystem
 failure before retrying; a deferred check does not certify a successful inspection.
@@ -137,6 +144,27 @@ legacy workspace setup, legacy session stores, and exec approvals. Malformed or
 conflicting input is retained and requires the manual action in the diagnostic.
 The updater uses this repair path before accepting the installed target.
 
+Gateway, node, and macOS app startup prepare pending client credentials automatically,
+including profiles that were offline during the update. Preparation keeps existing
+identities and pairing tokens and captures a backup before retiring their old storage.
+Native clients can invoke the same operation with
+`openclaw doctor --client-credentials --repair --non-interactive`. This command only
+prepares the selected root's client credentials and required source schema. It does not
+run health checks or control services. Add `--json` for a completion report.
+
+Migration checks default to whole-database `quick_check`, full integrity checks
+for tables the migration rewrites or re-indexes, and foreign-key checks. Add
+`--full-integrity-check` to check every table and index during migration:
+
+```bash
+openclaw doctor --fix --full-integrity-check
+```
+
+The default can miss an index/table mismatch in an untouched table. Explicit
+verification, recovery, and compaction keep their existing checks. See
+[migration integrity checks](/install/updating#migration-integrity-checks) for
+the coverage and installed-updater boundary.
+
 Update-time Doctor runs startup-required repairs before optional inspections.
 When the installed updater supports post-restart inspections, Doctor moves
 lint-backed, inspection-only checks out of the stopped Gateway window. The
@@ -223,6 +251,10 @@ rows, or infer execution policy. Repeating the same repair invocation cannot
 resolve these conditions. After manual recovery, verify readiness before starting
 the service through its owner.
 
+Doctor prints each check or repair section to stderr when it starts. Sections
+still running after 10 seconds repeat their name with elapsed time every 10
+seconds. JSON output does not include these progress messages.
+
 ## Examples
 
 ```bash
@@ -268,9 +300,11 @@ openclaw channels status --probe
 | `--repair` / `--fix`            | Apply recommended repairs while coordinating maintenance with the matching managed Gateway (`--fix` is an alias). Refresh outdated Linux policy and reconcile eligible running-service installation drift; preserve stopped launchers and stop state. |
 | `--force`                       | Allow aggressive repair choices. Alone, remains guided; with `--fix`, `--repair`, or `--yes`, uses the same policy-refresh and installation-drift rules.                                                                                              |
 | `--non-interactive`             | Run without prompts; safe automatic migrations still apply. Combine with `--fix`, `--repair`, or `--yes` to enter repair maintenance.                                                                                                                 |
+| `--client-credentials`          | Prepare only client credentials and their required source schema. Requires `--repair` or `--fix` with `--non-interactive`; optionally accepts `--json`.                                                                                               |
 | `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                                                                               |
 | `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                                                                                         |
 | `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                                                                                   |
+| `--full-integrity-check`        | Use full database integrity checks during migrations instead of the default quick check plus full checks of affected tables.                                                                                                                          |
 | `--lint`                        | Run the [structured health checks](/cli/doctor/health-contract) in read-only mode and emit diagnostic findings.                                                                                                                                       |
 | `--post-upgrade`                | Run post-upgrade plugin compatibility checks; findings go to stdout; exit code 1 if any error-level finding is present.                                                                                                                               |
 | `--state-sqlite <mode>`         | Run explicit shared state SQLite maintenance. The only mode is `compact`.                                                                                                                                                                             |
@@ -286,3 +320,76 @@ openclaw channels status --probe
 | `--only <id>`                   | With `--lint`: run only the given check id(s). Repeatable.                                                                                                                                                                                            |
 
 `--severity-min`, `--all`, `--only`, and `--skip` are only accepted together with `--lint`. Bare `--json` uses the default read-only lint check selection but keeps Doctor's advisory exit behavior. Both read-only postures reject `--repair`, `--fix`, `--force`, `--yes`, and `--generate-gateway-token`. Explicit `--lint` also rejects `--session-sqlite` modes and their selectors, including `--github-issue`. Other machine modes can still use `--json` for their own output.
+
+## Understanding findings
+
+Normal Doctor output shows unresolved current problems under **Fix now**, with a
+concrete next step and documentation. Blocking errors always appear, including
+failures that require a plugin maintainer's help. Repaired findings disappear
+from the final summary.
+
+Optional improvements, informational results, and historical recovery notices
+stay out of the default summary. Saving, retaining, or retiring a recovery copy
+is bookkeeping, not a new problem. Recovery captures and updater warning receipts
+remain unchanged; hiding a notice does not delete its evidence or acknowledge it.
+
+To see full structured findings and recovery-copy locations during a diagnostic
+run, use `openclaw --log-level debug doctor`. This uses existing debug logging;
+see [Logging](/logging) for file locations and level configuration. For read-only
+structured checks, use `openclaw doctor --lint --all --json --severity-min info`.
+That report covers registered checks; it does not run repair-time migrations.
+
+Successful repairs still appear as changes. Interactive prompts and repair
+progress remain visible. Checks that have not yet adopted structured findings
+retain their individual diagnostic panels.
+
+### Auth and browser findings
+
+Doctor reports unavailable, expired, or malformed credentials under **Fix now**.
+Follow the provider-specific login command or credential correction shown in the
+finding. Tokens that are still valid but nearing expiration are **Recommended
+improvements**; refresh them before expiration to avoid an interruption. After
+an accepted OAuth refresh, Doctor reports the remaining credential state rather
+than the pre-refresh warning. Normal Doctor combines identical credential findings
+across checked stores and names stores only when the finding affects a subset.
+Read-only JSON and lint reports retain each store's path. See [OAuth](/concepts/oauth).
+
+Browser findings distinguish missing executables, launch prerequisites, and
+unsupported Chrome versions from optional setup. Healthy browser and manual
+setup guidance stays informational in lint and does not make it fail; normal
+Doctor omits this routine guidance. For Chrome extension setup,
+Doctor does not inspect personal browser profiles or access the macOS Keychain.
+If extension attach works, an uninspected bootstrap notice needs no action. If
+attach fails, run `openclaw browser extension status --json`, then
+`openclaw browser extension install` if repair is needed. These explicit commands
+may request browser profile access. See [browser setup](/tools/browser/setup) and
+[browser troubleshooting](/tools/browser/troubleshooting).
+
+### Auth migration recovery
+
+Auth imports retain their original warning receipts and recovery copies. The
+final summary distinguishes the remaining work:
+
+- **Fix now:** an auth source or SQLite owner cannot be inspected, an import
+  cannot be verified, OAuth credentials are unavailable, or an alias would
+  overwrite a different account. Follow the named path or account finding.
+  Correct access or source errors before rerunning `openclaw doctor --fix`.
+  For account conflicts, compare `openclaw models status` with your expected
+  accounts and preserve both profiles before changing `auth.profiles` or
+  `auth.order`. Do not delete the credential database to force an import.
+- **Recommended improvements:** plaintext catalog credentials or retired
+  profiles remain after declining a repair. `openclaw doctor --fix` verifies
+  credentials in SQLite and cleans stale references. Native provider login
+  remains unchanged when a retired CLI profile is removed.
+- **Historical recovery notices:** an archive could not be finalized, an
+  unparseable source was archived without import, or a verified catalog's old
+  source could not be removed. Keep these copies. Check expected accounts with
+  `openclaw models status`; if they work, retained data alone requires no
+  credential repair. Correct the reported filesystem issue and rerun Doctor
+  only to complete unfinished archival or cleanup.
+
+A changed recorded account requires comparing the retained archive with the
+current account before retrying migration. Do not overwrite a current account
+or delete recovery data merely to clear a notice. For unavailable credentials,
+use the configured provider's `openclaw models auth login --provider <provider-id>`
+flow. Pre-June `oauth.json` requires the documented [2026.9.5 bridge upgrade](/install/updating#upgrading-very-old-versions).

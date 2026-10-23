@@ -2,18 +2,16 @@ import type { PostgresSqlConnection } from "../sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
-  type SqliteDatabaseAdmissionKey,
+  type SqliteDatabaseFactKey,
 } from "../sqlite-database-admission.js";
 import { DatabaseSearchCapabilityUnavailableError } from "./capability-unavailable.js";
 import type { SearchSchema } from "./contract.js";
 
 export const pgSearchName = (name: string) => `"${name.replaceAll('"', '""')}"`;
 export const searchConfig = "openclaw_simple_unaccent";
-const key: SqliteDatabaseAdmissionKey<string[]> = {
+const key: SqliteDatabaseFactKey<string[]> = {
   name: "database.postgres.search",
   schemaDependent: true,
-  read: (value) =>
-    Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined,
 };
 
 /** Called only by store admission; query paths consume these retained facts. */
@@ -167,8 +165,12 @@ END $$;`);
 CREATE FUNCTION ${pgSearchName(`${index.table}_sync`)}() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'UPDATE' AND OLD.${embedding} IS NOT DISTINCT FROM NEW.${embedding} THEN RETURN NEW; END IF;
-  DELETE FROM ${table} WHERE id = NEW.${id};
-  IF octet_length(NEW.${embedding}) > 0 THEN INSERT INTO ${table}(id, embedding) VALUES (NEW.${id}, openclaw_vector(NEW.${embedding}, ${source.dimensions})); END IF;
+  IF octet_length(NEW.${embedding}) > 0 THEN
+    INSERT INTO ${table}(id, embedding) VALUES (NEW.${id}, openclaw_vector(NEW.${embedding}, ${source.dimensions}))
+    ON CONFLICT (id) DO UPDATE SET embedding = EXCLUDED.embedding;
+  ELSE
+    DELETE FROM ${table} WHERE id = NEW.${id};
+  END IF;
   RETURN NEW;
 END $$;
 CREATE TRIGGER ${pgSearchName(`${index.table}_sync`)} AFTER INSERT OR UPDATE OF ${embedding} ON ${owner} FOR EACH ROW EXECUTE FUNCTION ${pgSearchName(`${index.table}_sync`)}();

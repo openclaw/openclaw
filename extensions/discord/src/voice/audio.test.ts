@@ -93,14 +93,12 @@ describe("discord voice opus codec", () => {
     expect(packets).toHaveLength(1);
     expect(packets[0]?.length).toBeGreaterThan(0);
 
-    const onVerbose = vi.fn();
     const onWarn = vi.fn();
     const onChunk = vi.fn();
-    await decodeOpusStreamChunks(Readable.from(packets), { onVerbose, onWarn, onChunk });
+    await decodeOpusStreamChunks(Readable.from(packets), { onWarn, onChunk });
     expect(onChunk).toHaveBeenCalledOnce();
     expect(onChunk.mock.calls[0]?.[0]).toHaveLength(960 * 2 * 2);
     expect(onChunk.mock.calls[0]?.[1]).toBe(packets[0]);
-    expect(onVerbose).toHaveBeenCalledWith("opus decoder: libopus-wasm");
     expect(onWarn).not.toHaveBeenCalled();
   });
 
@@ -117,7 +115,6 @@ describe("discord voice opus codec", () => {
     await decodeOpusStreamChunks(Readable.from([packet]), {
       onChunk,
       onError,
-      onVerbose: vi.fn(),
       onWarn: vi.fn(),
     });
     expect(onError).not.toHaveBeenCalled();
@@ -135,7 +132,7 @@ describe("discord voice opus codec", () => {
         Buffer.from([0xfb, 0]),
         Buffer.from([0xf8, 0xff, 0xfe]),
       ]),
-      { onChunk, onError, onVerbose: vi.fn(), onWarn: vi.fn() },
+      { onChunk, onError, onWarn: vi.fn() },
     );
     expect(onError).toHaveBeenCalledOnce();
     expect(onChunk).toHaveBeenCalledOnce();

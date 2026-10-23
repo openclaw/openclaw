@@ -86,12 +86,8 @@ function wrapStreamPromoteStandaloneTextToolCalls(
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    const reason =
-      message && typeof message === "object"
-        ? (message as { stopReason?: unknown }).stopReason
-        : undefined;
     return (normalizeTerminalMessage({
-      allowPromotion: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS.has(reason),
+      allowPromotion: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS.has(message.stopReason),
       message,
     })?.message ?? message) as Awaited<ReturnType<typeof originalResult>>;
   };

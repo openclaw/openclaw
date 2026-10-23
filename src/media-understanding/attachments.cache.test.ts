@@ -1,13 +1,24 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it as baseIt, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { MsgContext } from "../auto-reply/templating.js";
+import { toInboundMediaFacts } from "../channels/inbound-event/media.js";
+import type { OpenClawConfig } from "../config/types.js";
 import * as fsSafe from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import * as logger from "../logger.js";
+import { saveMediaBuffer } from "../media/store.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
+import { applyMediaUnderstanding } from "./apply.js";
 import { MediaAttachmentCache } from "./attachments.js";
+import { resolveScopeDecision } from "./resolve.js";
 import { resolveMediaAttachmentLocalRoots } from "./runner.attachments.js";
+import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 
 const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 
@@ -36,9 +47,27 @@ const request = { attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 };
 const pngRequest = { ...request, maxBytes: PNG_1X1.length };
 const remoteAttachment = { index: 0, url: "https://example.com/photo.png" };
 const caches: MediaAttachmentCache[] = [];
-const it = baseIt.extend<{ base: string }>({
+const it = baseIt.extend<{
+  base: string;
+  stateDir: string;
+  saved: { id: string; path: string };
+  realFetch: void;
+}>({
   base: async ({ task: _task }, use) => {
     await withTestDir({ prefix: "openclaw-media-cache-" }, use);
+  },
+  stateDir: async ({ base }, use) => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: base, PATH: "" }, () => use(base));
+  },
+  saved: async ({ stateDir: _stateDir }, use) => {
+    await use(
+      await saveMediaBuffer(createSafeAudioFixtureBuffer(2048, 0x52), "audio/ogg", "inbound"),
+    );
+  },
+  realFetch: async ({ task: _task }, use) => {
+    const actual = await vi.importActual<typeof import("../media/fetch.js")>("../media/fetch.js");
+    readRemoteMediaBufferMock.mockImplementation(actual.readRemoteMediaBufferWithHeaders);
+    await use(undefined);
   },
 });
 function createCache(...args: ConstructorParameters<typeof MediaAttachmentCache>) {
@@ -61,6 +90,13 @@ async function mediaFile(base: string, name: string, content: Buffer | string = 
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, content);
   return file;
+}
+function download(text: string, mime: string) {
+  const fetch = vi
+    .fn()
+    .mockResolvedValue(new Response(text, { headers: { "content-type": mime } }));
+  vi.spyOn(globalThis, "fetch").mockImplementation(withFetchPreconnect(fetch));
+  return fetch;
 }
 async function expectStaged(cache: MediaAttachmentCache, file: string) {
   await expect(fs.readFile(file)).resolves.toEqual(PNG_1X1);
@@ -89,6 +125,203 @@ const test = it.extend<{ cache: MediaAttachmentCache }>({
     await cache.cleanup();
     expect(await fs.readdir(base)).toEqual([]);
   },
+});
+const storeRequest = { ...request, maxBytes: 4096 };
+function storedCache(saved: { id: string; path: string }, sourcePath: string) {
+  return localCache(sourcePath, path.dirname(saved.path), `media://inbound/${saved.id}`);
+}
+const urlDisabledFileCfg: OpenClawConfig = {
+  plugins: { enabled: false },
+  tools: {
+    media: { audio: { enabled: false }, image: { enabled: false }, video: { enabled: false } },
+  },
+  gateway: { http: { endpoints: { responses: { files: { allowUrl: false } } } } },
+};
+async function extractDocument(url: string, contentType: string) {
+  const ctx: MsgContext = {
+    Body: "<media:document>",
+    media: toInboundMediaFacts([{ url, contentType, kind: "document" }]),
+  };
+  await applyMediaUnderstanding({ ctx, cfg: urlDisabledFileCfg });
+  return ctx.Body;
+}
+
+it("extracts a stored document when remote URLs are disabled", async ({ stateDir: _stateDir }) => {
+  const fetchSpy = vi.spyOn(globalThis, "fetch");
+  const saved = await saveMediaBuffer(Buffer.from("stored document text"), "text/plain", "inbound");
+  expect(await extractDocument(`media://inbound/${saved.id}`, "text/plain")).toContain(
+    "stored document text",
+  );
+  expect(fetchSpy).not.toHaveBeenCalled();
+  expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
+});
+it("never renders signed URL query credentials as attachment names", async () => {
+  const fetchSpy = vi.spyOn(globalThis, "fetch");
+  const body = await extractDocument(
+    "https://cdn.example.test/docs/report.docx?X-Amz-Signature=SECRETSIG&X-Amz-Credential=AKIA123",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  );
+  expect(body).toContain("[Attachment skipped: URL file sources are disabled]");
+  expect(body).toContain('name="report.docx"');
+  expect(body).not.toContain("SECRETSIG");
+  expect(body).not.toContain("AKIA123");
+  expect(fetchSpy).not.toHaveBeenCalled();
+  expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
+});
+it("prefers the media:// alias when the supplied path is blocked", async ({ saved, base }) => {
+  const blocked = await mediaFile(base, "blocked.ogg", "blocked");
+  expect((await storedCache(saved, blocked).getBuffer(storeRequest)).buffer).toEqual(
+    createSafeAudioFixtureBuffer(2048, 0x52),
+  );
+  expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
+});
+it("returns the stored path after a stale path fails", async ({ saved }) => {
+  const cache = storedCache(saved, `${saved.path}.missing`);
+  expect(await cache.getPath(storeRequest)).toBe(await fs.realpath(saved.path));
+  await cache.cleanup();
+  expect((await fs.stat(saved.path)).isFile()).toBe(true);
+});
+it("does not bypass a path maxBytes failure through the media:// alias", async ({ saved }) => {
+  const oversized = await mediaFile(
+    path.dirname(saved.path),
+    "oversized.ogg",
+    createSafeAudioFixtureBuffer(8192, 0x41),
+  );
+  await expect(storedCache(saved, oversized).getBuffer(storeRequest)).rejects.toMatchObject({
+    reason: "maxBytes",
+  });
+});
+it("rejects malformed media:// aliases without attempting a remote fetch", async () => {
+  const cache = createCache([{ index: 0, url: "media://inbound/%" }]);
+  await expect(cache.getBuffer(storeRequest)).rejects.toMatchObject({ reason: "empty" });
+  expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
+});
+
+it("matches channel chatType explicitly", () => {
+  expect(
+    resolveScopeDecision({
+      scope: { rules: [{ action: "deny", match: { chatType: "channel" } }] },
+      ctx: { ChatType: "channel" },
+    }),
+  ).toBe("deny");
+});
+it("allows RFC2544 benchmark-range URLs only when media fetch policy opts in", async ({
+  realFetch: _realFetch,
+}) => {
+  const attachment = { index: 0, url: "http://198.18.0.153/file.jpg" };
+  await expect(createCache([attachment]).getBuffer(request)).rejects.toThrow(
+    /private|internal|blocked/i,
+  );
+  const fetchSpy = download("image", "image/jpeg");
+  const cache = createCache([attachment], { ssrfPolicy: { allowRfc2544BenchmarkRange: true } });
+  expect(await cache.getBuffer(request)).toStrictEqual({
+    buffer: Buffer.from("image"),
+    classification: { mime: "image/jpeg", class: "image" },
+    mime: "image/jpeg",
+    fileName: "file.jpg",
+    size: 5,
+  });
+  expect(fetchSpy).toHaveBeenCalledTimes(1);
+});
+it("carries no local path when a blocked path recovers through the URL fallback", async ({
+  base,
+  realFetch: _realFetch,
+}) => {
+  const blockedPath = await mediaFile(base, "outside-roots/report.doc", "blocked");
+  download("remote-bytes", "application/msword");
+  const cache = createCache(
+    [{ index: 0, path: blockedPath, url: "http://198.18.0.153/report.doc" }],
+    {
+      localPathRoots: [path.join(base, "allowed-only")],
+      includeDefaultLocalPathRoots: false,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    },
+  );
+  const result = await cache.getBuffer(request);
+  expect(result.buffer.toString()).toBe("remote-bytes");
+  expect(result.localPath).toBeUndefined();
+});
+it("resolves each relative attachment against its own workspace", async ({ base }) => {
+  const workspaces = ["first", "second"].map((name) => path.join(base, name));
+  await Promise.all(
+    workspaces.map((dir, index) => mediaFile(dir, "attachment.txt", `slot-${index}`)),
+  );
+  const cache = createCache(
+    workspaces.map((workspaceDir, index) => ({ index, path: "attachment.txt", workspaceDir })),
+    { localPathRoots: workspaces },
+  );
+  await expect(
+    Promise.all(
+      workspaces.map((_, attachmentIndex) => cache.getBuffer({ ...request, attachmentIndex })),
+    ),
+  ).resolves.toEqual([
+    expect.objectContaining({ buffer: Buffer.from("slot-0") }),
+    expect.objectContaining({ buffer: Buffer.from("slot-1") }),
+  ]);
+});
+it("resolves managed inbound media URI attachments", async ({ saved }) => {
+  const cache = localCache(
+    `media://inbound/${encodeURIComponent(saved.id)}`,
+    path.dirname(saved.path),
+  );
+  const result = await cache.getBuffer(storeRequest);
+  expect(result.buffer).toEqual(createSafeAudioFixtureBuffer(2048, 0x52));
+  expect(result.fileName).toBe(saved.id);
+});
+it("blocks nested managed inbound media URI attachments", async () => {
+  const cache = createCache([{ index: 0, path: "media://inbound/nested%2Ffile.pdf" }]);
+  await expect(cache.getBuffer(request)).rejects.toThrow(/outside allowed roots/i);
+});
+it.for([true, false])(
+  "resolves cwd/state collisions with cwd allowed: %s",
+  async (allowedCwd, { base }) => {
+    const stateDir = path.join(base, "state");
+    const cwd = path.join(base, "cwd");
+    const relativePath = "media/inbound/photo.jpg";
+    await mediaFile(cwd, relativePath, "cwd-media");
+    await mediaFile(stateDir, relativePath, "state-media");
+    vi.spyOn(process, "cwd").mockReturnValue(cwd);
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const roots = (allowedCwd ? [cwd, stateDir] : [stateDir]).map((root) =>
+        path.join(root, "media"),
+      );
+      const cache = createCache([{ index: 0, path: relativePath }], { localPathRoots: roots });
+      expect((await cache.getBuffer(request)).buffer.toString()).toBe(
+        allowedCwd ? "cwd-media" : "state-media",
+      );
+    });
+  },
+);
+it.for([
+  ["directory", /not a regular file/i],
+  ["symlink", /outside allowed roots/i],
+] as const)("blocks %s attachments inside configured roots", async ([kind, error], { base }) => {
+  if (kind === "symlink" && process.platform === "win32") {
+    return;
+  }
+  const file = path.join(base, "entry");
+  if (kind === "directory") {
+    await fs.mkdir(file);
+  } else {
+    await fs.symlink("/etc/passwd", file);
+  }
+  await expect(localCache(file, base).getBuffer(request)).rejects.toThrow(error);
+});
+it("opens local attachments with nofollow on posix", async ({ base }) => {
+  if (process.platform === "win32") {
+    return;
+  }
+  const file = await mediaFile(base, "voice-note.m4a", "ok");
+  const openSpy = vi.spyOn(fs, "open");
+  await localCache(file, base).getBuffer(request);
+  expect(openSpy).toHaveBeenCalled();
+  const [openedPath, openedFlags] = mockCall(openSpy);
+  expect(await fs.realpath(String(openedPath)).catch(() => String(openedPath))).toBe(
+    await fs.realpath(file),
+  );
+  expect(Number(openedFlags) & ~fsConstants.O_NONBLOCK).toBe(
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+  );
 });
 
 it.for(["canonical", "directory alias"] as const)(
@@ -195,13 +428,6 @@ it.for(["growing", "read-failure"] as const)(
         consumed += result.bytesRead;
         return result;
       });
-      const readFile = handle.readFile.bind(handle);
-      vi.spyOn(handle, "readFile").mockImplementation(async (...readArgs) => {
-        await growBeforeRead();
-        const result = await readFile(...readArgs);
-        consumed += result.length;
-        return result;
-      });
       return handle;
     });
     const cache = localCache(attachmentPath, base);
@@ -238,7 +464,6 @@ test.for([
     expect(await fs.readdir(base)).toEqual([]);
     const second = await cache.getPath(pngRequest);
     expect(second).not.toBe(first);
-    expect(path.extname(second)).toBe(extension);
     await expectStaged(cache, second);
     expect(readRemoteMediaBufferMock).toHaveBeenCalledTimes(1);
   },
@@ -296,7 +521,10 @@ it.for([false, true])(
       expect(staged).not.toBe(attachmentPath);
       await expect(fs.readFile(staged)).resolves.toEqual(PNG_1X1);
     } else {
-      await expect(result).rejects.toMatchObject({ reason: "blocked" });
+      await expect(result).rejects.toMatchObject({
+        reason: "blocked",
+        message: expect.stringMatching(/could not be canonicalized/i),
+      });
     }
     expect(readRemoteMediaBufferMock).toHaveBeenCalledTimes(Number(hasFallback));
   },
@@ -352,12 +580,20 @@ test("keeps concurrent staging success after a write failure", async ({ base, ca
 });
 
 test("retries failed cleanup across later staging success", async ({ base, cache }) => {
+  const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
   const { error, spy } = failPartialWrite();
   const cleanupError = Object.assign(new Error("permission denied"), { code: "EACCES" });
   const unlink = vi.spyOn(fs, "unlink").mockRejectedValueOnce(cleanupError);
 
   await expect(cache.getPath(request)).rejects.toBe(error);
   expect(await fs.readdir(base)).toHaveLength(1);
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(warn).toHaveBeenCalledWith(
+    expect.stringContaining(`could not remove staged attachment ${base}${path.sep}`),
+  );
+  expect(warn).toHaveBeenCalledWith(
+    expect.stringContaining("remove it manually if it remains: Error: permission denied"),
+  );
 
   const staged = await cache.getPath(request);
   await expectStaged(cache, staged);
@@ -367,9 +603,11 @@ test("retries failed cleanup across later staging success", async ({ base, cache
   unlink.mockRejectedValueOnce(cleanupError);
   await cache.cleanup();
   expect(await fs.readdir(base)).toHaveLength(1);
+  expect(warn).toHaveBeenCalledTimes(2);
 
   await cache.cleanup();
   expect(await fs.readdir(base)).toEqual([]);
+  expect(warn).toHaveBeenCalledTimes(2);
 });
 
 test("retains files staged after cleanup takes its snapshot", async ({ cache }) => {

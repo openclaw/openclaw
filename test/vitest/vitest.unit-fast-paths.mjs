@@ -101,12 +101,12 @@ export const forcedUnitFastTestFiles = [
   "src/mcp/openclaw-tools-serve.test.ts",
   "src/media-generation/registry.test.ts",
   "src/node-host/plugin-node-host.test.ts",
+  "src/node-host/invoke-system-run-plan.cwd.test.ts",
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/pairing/setup-code.test.ts",
   "src/plugin-activation-boundary.test.ts",
   "src/proxy-capture/runtime.test.ts",
   "src/proxy-capture/store.sqlite.test.ts",
-  "src/security/audit-config-basics.test.ts",
   "src/security/audit-exec-surface.test.ts",
   "src/security/audit-extra.sync.test.ts",
   "src/security/audit-sandbox-docker-config.test.ts",
@@ -125,7 +125,6 @@ export const forcedUnitFastTestFiles = [
   "src/trajectory/metadata.test.ts",
   "src/tts/openai-compatible-speech-provider.test.ts",
   "src/tts/tts.test.ts",
-  "src/tts/status-config.test.ts",
   "src/tts/tts-config.test.ts",
   "packages/terminal-core/src/restore.test.ts",
   "packages/terminal-core/src/table.test.ts",
@@ -281,7 +280,7 @@ const disqualifyingPatterns = [
 ];
 
 const statefulTestHelperImportPattern =
-  /\bfrom\s+["']([^"']*(?:test-support|\.harness|\.test-mocks|prepared-model-runtime\.test-harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
+  /\bfrom\s+["']([^"']*(?:test-support|\.harness|\.test-mocks|\.test-harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
 const statefulTestHelperByKey = new Map();
 
 function importsStatefulTestHelper(cwd, file, source) {

@@ -24,8 +24,12 @@ import {
   PluginInstallTrustSchema,
   PluginOperatorGrantsSchema,
 } from "./plugin-inspection.js";
+import { PluginJsonValueSchema } from "./plugin-json-value.js";
+import { PluginRuntimeRetentionSchema } from "./plugin-retention.js";
 import { NonEmptyString } from "./primitives.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
+
+export { PluginJsonValueSchema } from "./plugin-json-value.js";
 
 export {
   PLUGIN_UI_CAPABILITIES,
@@ -61,8 +65,6 @@ export {
  * These payloads let the gateway expose plugin-provided UI actions without
  * baking plugin-specific payload shapes into the core protocol.
  */
-/** Arbitrary plugin-owned JSON payload carried opaquely through the gateway. */
-export const PluginJsonValueSchema = Type.Unknown();
 
 export const PluginControlUiDescriptorSchema = closedObject({
   id: NonEmptyString,
@@ -160,11 +162,14 @@ export const PluginsControlUiCatalogSchema = closedObject({
   diagnostics: Type.Array(PluginControlUiDiagnosticSchema, { maxItems: 64 }),
 });
 export const PluginsControlUiChangedEventSchema = closedObject({ revision: NonEmptyString });
-export const PluginsControlUiReportParamsSchema = closedObject({
+const PluginControlUiActivationSchema = closedObject({
   pluginId: NonEmptyString,
   revision: NonEmptyString,
   status: stringLiteralUnion(["activated", "failed"]),
   error: Type.Optional(Type.String({ maxLength: 512 })),
+});
+export const PluginsControlUiReportParamsSchema = closedObject({
+  reports: Type.Array(PluginControlUiActivationSchema, { minItems: 1, maxItems: 64 }),
 });
 export const PluginsControlUiStatusParamsSchema = closedObject({
   pluginId: Type.Optional(NonEmptyString),
@@ -173,7 +178,7 @@ export const PluginsControlUiStatusResultSchema = closedObject({
   clients: Type.Array(
     closedObject({
       connId: NonEmptyString,
-      activations: Type.Array(PluginsControlUiReportParamsSchema, { maxItems: 64 }),
+      activations: Type.Array(PluginControlUiActivationSchema, { maxItems: 64 }),
     }),
     { maxItems: 128 },
   ),
@@ -565,6 +570,8 @@ export const PluginsInspectResultSchema = closedObject({
       }),
     ),
   ),
+  /** Live cross-session acquisition facts; emitted only for current administrators. */
+  runtimeRetention: Type.Optional(Type.Union([PluginRuntimeRetentionSchema, Type.Null()])),
   decisions: Type.Optional(Type.Array(PluginDecisionProviderStatusSchema)),
   plugin: closedObject({
     id: NonEmptyString,
@@ -783,6 +790,6 @@ export type PluginControlUiModule = Static<typeof PluginControlUiModuleSchema>;
 export type PluginControlUiDiagnostic = Static<typeof PluginControlUiDiagnosticSchema>;
 export type PluginsControlUiCatalog = Static<typeof PluginsControlUiCatalogSchema>;
 export type PluginsControlUiReloadParams = Static<typeof PluginsControlUiReloadParamsSchema>;
-export type PluginControlUiActivation = Static<typeof PluginsControlUiReportParamsSchema>;
+export type PluginControlUiActivation = Static<typeof PluginControlUiActivationSchema>;
 export type PluginsSessionActionParams = Static<typeof PluginsSessionActionParamsSchema>;
 export type PluginsSessionActionResult = Static<typeof PluginsSessionActionResultSchema>;

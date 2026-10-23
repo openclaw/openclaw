@@ -12,6 +12,7 @@ import {
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { admitMemoryVectorIndex } from "../memory/manager-search-knn.js";
 
 export type LegacyMemorySidecarSource = {
@@ -309,16 +310,6 @@ function copyLegacyMemoryIndexRows(db: DatabaseSync, copyVectorRows: boolean): v
   }
   if (hasLegacyEmbeddingCacheTable(db)) {
     db.exec(`
-      CREATE TABLE IF NOT EXISTS main.${MEMORY_EMBEDDING_CACHE_TABLE} (
-        provider TEXT NOT NULL,
-        model TEXT NOT NULL,
-        provider_key TEXT NOT NULL,
-        hash TEXT NOT NULL,
-        embedding BLOB NOT NULL,
-        dims INTEGER,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (provider, model, provider_key, hash)
-      ) STRICT;
       INSERT OR IGNORE INTO main.${MEMORY_EMBEDDING_CACHE_TABLE} (
         provider, model, provider_key, hash, embedding, dims, updated_at
       )
@@ -391,6 +382,9 @@ export function importLegacyMemorySidecarIndex(params: {
     params.db.exec("SAVEPOINT import_legacy_sidecar_memory_index");
     try {
       copyLegacyMemoryIndexRows(params.db, params.copyVectorRows);
+      if (counts.sources > 0 || counts.chunks > 0) {
+        advanceMemoryIndexRevision(params.db);
+      }
       params.db.exec("RELEASE import_legacy_sidecar_memory_index");
       return {
         imported: true,

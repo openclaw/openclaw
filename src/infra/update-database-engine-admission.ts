@@ -1,10 +1,7 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  assertHomogeneousDatabaseEngines,
-  resolveDatabaseFamilyEngines,
-} from "./database-engine/registry.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 
 /** Refuse a downgrade that would strand an installed PostgreSQL store. */
@@ -15,19 +12,6 @@ export async function assertUpdateDatabaseEngineContexts(
 ): Promise<void> {
   const supportsPostgres = Array.isArray(targetEngines) && targetEngines.includes("postgres");
   for (const { config } of contexts) {
-    try {
-      assertHomogeneousDatabaseEngines(config, "update");
-      if (config.database?.families) {
-        throw new Error(
-          "Update with database.families overrides is not supported yet; use a matching database.engine default without family overrides, or wait for family-aware update support. Preserve the effective engines when changing configuration.",
-        );
-      }
-    } catch (error) {
-      if (error instanceof Error) {
-        throw new UpdatePreMutationError("database-engine-preflight", error.message);
-      }
-      throw error;
-    }
     if (
       !supportsPostgres &&
       Object.values(resolveDatabaseFamilyEngines(config)).includes("postgres")
@@ -52,7 +36,7 @@ export async function assertUpdateDatabaseEngineContexts(
         .map((store) => store.id),
     );
     // Preserve the SQLite path: a PostgreSQL-capable target needs no source copies.
-    if (supportsPostgres && required.size === 0) {
+    if (supportsPostgres && required.size === 0 && !context.config.database?.families) {
       continue;
     }
     const stateDir = resolveStateDir(context.env);

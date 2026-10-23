@@ -255,7 +255,10 @@ export function projectDiagnosticValue(
       state.changed = true;
       return "[Truncated]";
     }
-    if (!diagnosticRecords.has(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+    if (
+      !Array.isArray(value) &&
+      (!diagnosticRecords.has(value) || Object.getPrototypeOf(value) !== Object.prototype)
+    ) {
       try {
         // Brand-check without provider getters; retain only numeric retry timing.
         Headers.prototype.has.call(value, "retry-after");

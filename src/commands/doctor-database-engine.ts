@@ -1,130 +1,141 @@
-import fs from "node:fs/promises";
-import { isPathInside } from "@openclaw/fs-safe/path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
-import { discoverBackupDatabasePaths } from "../infra/backup-sqlite-snapshot.js";
 import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
-import {
-  listDatabaseEngineStores,
-  resolveDatabaseFamilyEngines,
-  selectDatabaseEngine,
-} from "../infra/database-engine/registry.js";
-import { statePortProvider } from "../infra/database-engine/state-port.js";
-import { hasErrnoCode } from "../infra/errno.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { readBackupEngine, type BackupEngine } from "../snapshot/database-backup.js";
+import { formatDatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics-format.js";
+import { describeDatabaseEngineSelection } from "../infra/database-engine/report.js";
+import { findSqlitePathsOnNetworkFilesystems } from "../infra/sqlite-wal-filesystem.js";
+import type {
+  DoctorDatabaseEngineInspection,
+  ObservedDatabaseEngines,
+} from "./doctor-database-engine-inspection.js";
+type InspectionOptions = { env?: NodeJS.ProcessEnv };
 
-type StateRoot = { path: string; physical: BackupEngine };
-
-async function inspectDatabaseEngines(
+function collectDatabaseEngineHealthFindings(
   cfg: OpenClawConfig,
-  options: { env?: NodeJS.ProcessEnv },
-): Promise<{ stateRoots: StateRoot[]; findings: HealthFinding[] }> {
-  const env = options.env ?? process.env;
-  const context = { config: cfg, stateDir: resolveStateDir(env), env };
-  try {
-    const selected = selectDatabaseEngine({ id: "state", postgres: true }, cfg);
-    const prepared =
-      selected === "postgres"
-        ? await (
-            await import("../infra/backup-database-discovery.js")
-          ).preparePostgresBackupDiscovery(context)
-        : undefined;
-    const paths = prepared?.paths ?? (await discoverBackupDatabasePaths(context));
-    if (paths.length === 0) {
-      return { stateRoots: [], findings: [] };
-    }
-    const roots = await Promise.all(
-      (
-        prepared?.stateRoots ??
-        (await statePortProvider.resolveRoots({
-          ...context,
-          plugins: resolvePluginMetadataSnapshot(context),
-        }))
-      ).map((root) =>
-        fs.realpath(root).catch((error: unknown) => {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return root;
-          }
-          throw error;
-        }),
-      ),
-    );
-    const stateRoots = paths
-      .filter((file) => roots.some((root) => file === root || isPathInside(root, file)))
-      .map((file) => ({ path: file, physical: readBackupEngine(file) }));
-    const findings: HealthFinding[] = stateRoots
-      .filter(({ physical }) => physical.engine !== selected)
-      .map(({ path, physical }) => ({
+  observed: ObservedDatabaseEngines = {},
+): HealthFinding[] {
+  const families = describeDatabaseEngineSelection(cfg);
+  const findings: HealthFinding[] = [];
+  for (const family of families) {
+    if (observed[family.id]?.some((engine) => engine !== family.effective)) {
+      findings.push({
         checkId: "core/doctor/database-engine",
         severity: "warning",
         source: "doctor",
-        path,
-        message: `Shared state root ${path}: physical=${physical.engine}, configured=${selected} (engine mismatch).`,
-        fixHint: `Restore the matching state-family engine setting, or stop the Gateway and use openclaw database port --to ${selected} with a supported engine configuration.`,
-      }));
-    return { stateRoots, findings };
-  } catch {
-    return {
-      stateRoots: [],
-      findings: [
-        {
-          checkId: "core/doctor/database-engine",
-          severity: "warning",
-          source: "doctor",
-          path: "database.families.state.engine",
-          message: "Shared state roots could not be inspected.",
-          fixHint:
-            "Verify the selected database connection and installed plugin inventory, then rerun openclaw doctor.",
-        },
-      ],
-    };
+        path: family.fixedLocal ? "database" : `database.families.${family.id}.engine`,
+        message: `${family.label}: configured ${family.effective}, observed ${observed[family.id]!.join(" and ")}. Changing configuration does not migrate existing data.`,
+        fixHint: family.fixedLocal
+          ? "Restore the local SQLite safety store from its verified backup."
+          : `Keep the Gateway stopped and use openclaw database port --family ${family.id} to migrate this family, or restore its matching engine selection.`,
+      });
+    }
   }
+  return findings;
 }
 
-export function collectDatabaseEngineHealthFindings(cfg: OpenClawConfig): HealthFinding[] {
-  if (!Object.values(resolveDatabaseFamilyEngines(cfg)).includes("postgres")) {
-    return [];
-  }
-  return [
-    {
+function stateRootFindings(
+  cfg: OpenClawConfig,
+  inspection: DoctorDatabaseEngineInspection,
+): HealthFinding[] {
+  const selected = describeDatabaseEngineSelection(cfg).find(
+    (family) => family.id === "state",
+  )!.effective;
+  const findings: HealthFinding[] = inspection.stateRoots
+    .filter(({ physical }) => physical.engine !== selected)
+    .map(({ path, physical }) => ({
       checkId: "core/doctor/database-engine",
       severity: "warning",
       source: "doctor",
-      path: "database.engine",
-      message:
-        "The PostgreSQL database engine is experimental. Stores without a registered PostgreSQL schema remain on SQLite.",
+      path,
+      message: `Shared state root ${path}: physical=${physical.engine}, configured=${selected} (engine mismatch).`,
+      fixHint: `Restore the matching state-family engine setting, or stop the Gateway and use openclaw database port --family state --to ${selected}.`,
+    }));
+  if (inspection.discoveryFailed) {
+    findings.push({
+      checkId: "core/doctor/database-engine",
+      severity: "warning",
+      source: "doctor",
+      path: "database.families.state.engine",
+      message: "Database roots could not all be inspected.",
       fixHint:
-        "Review the store engine selections and https://docs.openclaw.ai/reference/database-engines before using this configuration.",
-    },
+        "Verify the selected database connection and installed plugin inventory, then rerun openclaw doctor.",
+    });
+  }
+  return findings;
+}
+
+async function inspect(cfg: OpenClawConfig, options: InspectionOptions) {
+  const { inspectDoctorDatabaseEngines } = await import("./doctor-database-engine-inspection.js");
+  const env = options.env ?? process.env;
+  return inspectDoctorDatabaseEngines({ config: cfg, stateDir: resolveStateDir(env), env });
+}
+
+function collectInspectionFindings(
+  cfg: OpenClawConfig,
+  inspection: DoctorDatabaseEngineInspection,
+) {
+  // State mismatches retain their precise physical paths instead of a duplicate family warning.
+  const observed = { ...inspection.observed, state: undefined };
+  const sqlitePaths = (inspection.stores ?? []).flatMap((store) =>
+    store.path &&
+    (store.observed === "sqlite" ||
+      (store.observed === "unknown" && store.configured.effective === "sqlite"))
+      ? [store.path]
+      : [],
+  );
+  return [
+    ...collectDatabaseEngineHealthFindings(cfg, observed),
+    ...stateRootFindings(cfg, inspection),
+    ...findSqlitePathsOnNetworkFilesystems(sqlitePaths).map((path): HealthFinding => ({
+      checkId: "core/doctor/database-engine",
+      severity: "warning",
+      source: "doctor",
+      path,
+      message: `SQLite path ${path} is on a network filesystem, where WAL can cause corruption. OpenClaw uses rollback journaling on supported network filesystems.`,
+      fixHint:
+        "Stop the Gateway, back up the state, and move the state directory and any custom database paths to a local disk before restarting.",
+    })),
+    ...(inspection.stores ?? []).map((store): HealthFinding => ({
+      checkId: "core/doctor/database-engine",
+      severity: store.issues.length || store.legacyMigrations.state !== "none" ? "warning" : "info",
+      source: "doctor",
+      target: store.path ?? store.family,
+      path: store.path ?? `database.families.${store.family}`,
+      message: formatDatabaseStoreDiagnostic(store),
+      fixHint: store.nextSteps.join(" ") || undefined,
+      details: { ...store },
+    })),
   ];
 }
 
-export async function collectStateRootDatabaseEngineHealthFindings(
+export async function collectDoctorDatabaseEngineHealthFindings(
   cfg: OpenClawConfig,
-  options: { env?: NodeJS.ProcessEnv } = {},
+  options: InspectionOptions = {},
 ): Promise<HealthFinding[]> {
-  return (await inspectDatabaseEngines(cfg, options)).findings;
+  return collectInspectionFindings(cfg, await inspect(cfg, options));
 }
 
 export async function noteDatabaseEngines(
   cfg: OpenClawConfig,
-  options: { env?: NodeJS.ProcessEnv } = {},
+  options: InspectionOptions = {},
 ): Promise<HealthFinding[]> {
-  const { stateRoots, findings } = await inspectDatabaseEngines(cfg, options);
-  findings.push(...collectDatabaseEngineHealthFindings(cfg));
-  const defaultEngine = cfg.database?.engine ?? "sqlite";
-  const lines = listDatabaseEngineStores().map((store) => {
-    const { id } = store;
-    const local = id === "quarantine" || id === "managed-update" || id === "package-activation";
-    const override = local ? "fixed local" : (cfg.database?.families?.[id]?.engine ?? "inherit");
-    return `${store.label}: default=${defaultEngine}, override=${override}, effective=${selectDatabaseEngine(store, cfg)} (configured)`;
+  const inspection = await inspect(cfg, options);
+  const findings = collectInspectionFindings(cfg, inspection);
+  const lines = describeDatabaseEngineSelection(cfg).map((family) => {
+    const override = family.fixedLocal ? "fixed local" : (family.override ?? "inherit");
+    const physical = inspection.observed[family.id]?.length
+      ? `; observed=${inspection.observed[family.id]!.join(",")}`
+      : "";
+    return `${family.label}: default=${family.default}, override=${override}, effective=${family.effective} (configured)${physical}`;
   });
-  for (const { path, physical } of stateRoots) {
+  for (const { path, physical } of inspection.stateRoots) {
     const namespace = physical.engine === "postgres" ? `, namespace=${physical.namespace}` : "";
     lines.push(`Shared state root: ${path} (physical=${physical.engine}${namespace})`);
+  }
+  for (const store of inspection.stores ?? []) {
+    lines.push(formatDatabaseStoreDiagnostic(store));
   }
   const sqliteLibrary = ensureSqliteLibrarySelected();
   if (sqliteLibrary.source !== "runtime") {
@@ -135,6 +146,9 @@ export async function noteDatabaseEngines(
     lines.push(`SQLite (doctor process): ${sqliteLibrary.ignoredOverride}; override ignored`);
   }
   for (const finding of findings) {
+    if (finding.details) {
+      continue;
+    }
     lines.push("", finding.message, finding.fixHint ?? "");
   }
   note(lines.join("\n"), "Database engines");

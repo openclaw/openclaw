@@ -8,8 +8,8 @@ import { CORE_BOARD_WIDGET_ELEMENTS } from "../../lib/board/widgets/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
-import "./board-widget-cell.ts";
+import type { BoardWidgetCellCallbacks } from "./board-widget-cell-options.ts";
+import "./board-widget-cell.solid.tsx";
 
 const disposers: Array<() => void> = [];
 function mount(element: HTMLElement): void {
@@ -32,8 +32,8 @@ function callbacks(): BoardWidgetCellCallbacks {
     focus: vi.fn(),
     focusChanged: vi.fn(),
     frameLoadFailed: noAction,
-    widgetAppView: vi.fn(async () => ({ status: "stale" as const, error: "unused" })),
-    refreshWidgetAppView: vi.fn(async () => ({ status: "stale" as const, error: "unused" })),
+    widgetAppView: vi.fn(async () => ({ status: "stale" as const })),
+    refreshWidgetAppView: vi.fn(async () => ({ status: "stale" as const })),
   };
 }
 

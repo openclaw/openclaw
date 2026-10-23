@@ -1,5 +1,5 @@
 // Resolves plugin SDK aliases for public package imports.
-import fs from "node:fs";
+import type fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -444,8 +444,6 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[]
   },
 ];
 const BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN = /^(?:api|runtime-api|test-api|.+-api)$/u;
-const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
-  /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(\.{1,2}\/[^"']+)["']/g;
 
 function listRootPackagedWorkspacePackageAliasEntries(params: {
   packageRoot: string;
@@ -506,44 +504,6 @@ export function listWorkspacePackageExportAliasEntries(params: {
     entries.length > 0 ? entries : listRootPackagedWorkspacePackageAliasEntries(params);
   cache.set(key, result);
   return result;
-}
-
-function isUsableDistPluginSdkArtifact(candidate: string): boolean {
-  const cache = getPluginCache().sdk.usableDistArtifacts;
-  const cached = cache.get(candidate);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const usable = checkDistPluginSdkArtifact(candidate);
-  cache.set(candidate, usable);
-  return usable;
-}
-
-function checkDistPluginSdkArtifact(candidate: string): boolean {
-  if (!pluginCacheExistsSync(candidate)) {
-    return false;
-  }
-  switch (normalizeLowercaseStringOrEmpty(path.extname(candidate))) {
-    case ".js":
-    case ".mjs":
-    case ".cjs":
-      break;
-    default:
-      return true;
-  }
-  try {
-    const source = fs.readFileSync(candidate, "utf-8");
-    for (const match of source.matchAll(JS_STATIC_RELATIVE_DEPENDENCY_PATTERN)) {
-      const specifier = match[1];
-      if (!specifier || pluginCacheExistsSync(path.resolve(path.dirname(candidate), specifier))) {
-        continue;
-      }
-      return false;
-    }
-  } catch {
-    return false;
-  }
-  return true;
 }
 
 function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
@@ -856,7 +816,7 @@ function createPluginSdkScopedAliases(context: PluginLoaderAliasContext) {
       if (kind === "dist") {
         distArtifacts ??= listDistPluginSdkArtifactSubpaths(packageRoot);
         const candidate = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
-        if (distArtifacts.has(subpath) && isUsableDistPluginSdkArtifact(candidate)) {
+        if (distArtifacts.has(subpath)) {
           targets.set(subpath, candidate);
           return candidate;
         }
@@ -1027,14 +987,12 @@ export function buildPluginLoaderAliasMap(
 }
 
 export function resolvePluginRuntimeModulePathWithDiagnostics(
-  params: LoaderModuleResolveParams = {},
+  params: Omit<LoaderModuleResolveParams, "cwd" | "moduleUrl"> = {},
 ): PluginRuntimeModuleResolution {
   const cache = getPluginCache().sdk.runtimeModules;
   const key = JSON.stringify([
     params.modulePath,
     params.argv1 ?? process.argv[1],
-    params.cwd,
-    params.moduleUrl,
     resolveDevSourceRootParam(params),
     params.pluginSdkResolution,
     process.cwd(),

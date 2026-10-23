@@ -79,40 +79,37 @@ describe("OpenAI realtime voice bridge connection", () => {
     restoreTestEnvironment();
   });
 
-  it.each([
-    "wss://voice.example.test/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old",
-  ])(
-    "uses the configured realtime endpoint %s without minting a client secret",
-    async (baseUrl) => {
-      const provider = buildOpenAIRealtimeVoiceProvider();
-      const bridge = provider.createBridge({
-        providerConfig: { apiKey: "test-realtime-key", baseUrl, model: "custom/realtime model" },
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
+  it("uses the configured realtime endpoint without minting a client secret", async () => {
+    const baseUrl =
+      "wss://voice.example.test/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old";
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "test-realtime-key", baseUrl, model: "custom/realtime model" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const { connecting, socket } = beginBridgeConnection(bridge);
+    openSocket(socket);
+    emitSessionUpdated(socket);
+    await connecting;
+    try {
+      const url = new URL(String(socket.args[0]));
+      const expected = new URL(baseUrl);
+      expect(url.protocol).toBe(expected.protocol.replace("http", "ws"));
+      expect(url.host).toBe(expected.host);
+      expect(url.pathname).toBe(expected.pathname);
+      expect(url.searchParams.get("realtime")).toBe("true");
+      expect(url.search).toContain("signature=a~b%20c");
+      expect(url.searchParams.getAll("model")).toEqual(["custom/realtime model"]);
+      expect(socket.args[1]).toMatchObject({
+        headers: { Authorization: "Bearer test-realtime-key" },
       });
-      const { connecting, socket } = beginBridgeConnection(bridge);
-      openSocket(socket);
-      emitSessionUpdated(socket);
-      await connecting;
-      try {
-        const url = new URL(String(socket.args[0]));
-        const expected = new URL(baseUrl);
-        expect(url.protocol).toBe(expected.protocol.replace("http", "ws"));
-        expect(url.host).toBe(expected.host);
-        expect(url.pathname).toBe(expected.pathname);
-        expect(url.searchParams.get("realtime")).toBe("true");
-        expect(url.search).toContain("signature=a~b%20c");
-        expect(url.searchParams.getAll("model")).toEqual(["custom/realtime model"]);
-        expect(socket.args[1]).toMatchObject({
-          headers: { Authorization: "Bearer test-realtime-key" },
-        });
-        expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-        expect(bridge.isConnected()).toBe(true);
-      } finally {
-        await bridge.close();
-      }
-    },
-  );
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      expect(bridge.isConnected()).toBe(true);
+    } finally {
+      await bridge.close();
+    }
+  });
 
   it.each([
     "file:///private/voice",
@@ -149,9 +146,8 @@ describe("OpenAI realtime voice bridge connection", () => {
   it.each([true, false])(
     "shares GA policy and retires the gateway binding with throwing callback=%s",
     async (throwingCloseCallback) => {
-      const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture({
-        session: { clientSecret: "gateway-token" },
-      });
+      const { broker, createBrowserSession } =
+        createQuicksilverBrowserBrokerFixture("gateway-token");
       const provider = buildOpenAIRealtimeVoiceProvider({
         quicksilverBrowserSessionBroker: broker,
       });

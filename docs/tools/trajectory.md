@@ -125,7 +125,10 @@ omitted when the session did not capture the corresponding runtime data.
 
 Runtime trajectory events are stored with the session in the per-agent SQLite
 database. Runtime batches carry the captured JSON bytes to the database worker
-for persistence. Cleanup drains the final batch.
+for persistence. Normal turns keep their events together until cleanup drains the
+final batch. Long turns also flush in the background at 32 pending events or when
+the pending queue overflows the session's rolling byte limit. A process crash
+before a flush can lose the pending diagnostic events.
 Queued events follow the same rolling byte limit while the database writer is busy.
 Exporting a trajectory materializes a redacted JSONL support bundle;
 the live runtime capture is not a session-adjacent JSONL sidecar.

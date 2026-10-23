@@ -24,6 +24,8 @@ import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
 import { getLiveCatalogRetainedData } from "../plugins/provider-live-catalog-cache.js";
 import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
+import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import {
   listManifestSyntheticAuthProviderRefs,
@@ -64,7 +66,6 @@ import type {
   PreparedModelWorkerOutcome,
   PreparedModelWorkerRequest,
 } from "./prepared-model-catalog-worker.types.js";
-import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
   ownPreparedPluginGeneration,
   retainPreparedPluginRegistry,
@@ -75,7 +76,7 @@ import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runt
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 type WorkerGeneration = {
-  pluginGeneration: PreparedModelRuntimePluginGeneration;
+  pluginGeneration: PreparedModelRuntimePluginGeneration & { pluginRegistry: PluginRegistry };
   pluginIds: ReadonlySet<string>;
   staticProviderIds: ReadonlySet<string>;
   release: () => void | Promise<void>;
@@ -125,7 +126,6 @@ async function refreshAuthStore(params: {
         env: params.env,
         ...(params.providerIds ? { externalCliProviderIds: params.providerIds } : {}),
         ...(params.profileIds ? { externalCliProfileIds: params.profileIds } : {}),
-        allowKeychainPrompt: false,
       }),
   );
   return { authStore, displayPath };
@@ -186,13 +186,6 @@ async function prepareWorkerGeneration(
     },
     () => {},
   );
-  prepareOwnedPluginLoadContext(
-    value.input,
-    value.input.env,
-    pluginRegistry,
-    metadata,
-    value.preferBuiltPluginArtifacts,
-  );
   const pluginGeneration = Object.freeze({
     ...(previous?.pluginGeneration ?? prepareConfiguredModelFacts(value.input.config, metadata)),
     remoteCatalog: value.remoteCatalog,
@@ -245,15 +238,8 @@ async function runCatalogRequest(
       workspaceDir: value.input.workspaceDir,
     });
     prepared = await prepareGeneration();
-    // Cached registrations retain their code, while request lookups use this clone's
-    // config/environment objects and the synthetic-auth facts restored on them above.
-    prepareOwnedPluginLoadContext(
-      value.input,
-      value.input.env,
-      prepared.pluginGeneration.pluginRegistry,
-      prepared.pluginGeneration.pluginMetadataSnapshot,
-      value.preferBuiltPluginArtifacts,
-    );
+    // The loader owns scoped registration facts. Request config and auth inputs
+    // travel explicitly below; attaching them must not rerun broad auto-enable.
     const pluginGenerationScope = {
       metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
       pluginRegistry: prepared.pluginGeneration.pluginRegistry,
@@ -482,6 +468,13 @@ async function runCatalogRequest(
     work.beginClose();
     await work.runWhenIdle(() => undefined);
     if (acquiredGeneration) {
+      const successor = getPluginRegistryInspectionResources(
+        acquiredGeneration.pluginGeneration.pluginRegistry,
+      );
+      if (!successor) {
+        throw new Error("Catalog scope growth has no inspection resource owner");
+      }
+      successor.adoptRetainedRegistrations(prepared.pluginGeneration.pluginRegistry);
       const releasePrevious = prepared.release;
       Object.assign(prepared, acquiredGeneration);
       acquiredGeneration = undefined;

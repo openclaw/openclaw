@@ -128,7 +128,7 @@ export function canonicalizeLegacyAuthProfileEntries(
   const profileIdMap = new Map<string, string>();
   let changed = false;
 
-  for (const [profileId, rawProfile] of Object.entries({ ...profiles })) {
+  for (const [profileId, rawProfile] of Object.entries(profiles)) {
     if (!isRecord(rawProfile)) {
       continue;
     }
@@ -183,7 +183,7 @@ export function canonicalizeLegacyAuthOrder(
     return false;
   }
   const order = auth.order;
-  const before = structuredClone(order);
+  const before = { ...order };
   const occupied = new Set([
     ...Object.values(order).flatMap((entries) =>
       Array.isArray(entries)
@@ -267,7 +267,7 @@ function canonicalizeLegacyAuthLastGood(
   profileIdMap: Map<string, string>,
   options?: { preserveUnmappedLegacyIds?: boolean },
 ): boolean {
-  const before = structuredClone(record);
+  const before = { ...record };
   for (const [provider, value] of Object.entries(before)) {
     const canonical = canonicalLegacyAuthProvider(provider);
     const mapped = typeof value === "string" ? profileIdMap.get(value) : undefined;
@@ -320,7 +320,7 @@ function canonicalizeLegacyAuthRotationState(
   let usageChanged = false;
   if (isRecord(auth.usageStats)) {
     const usage = auth.usageStats;
-    for (const [key, value] of Object.entries({ ...usage })) {
+    for (const [key, value] of Object.entries(usage)) {
       const nextKey = profileIdMap.get(key);
       if (nextKey && nextKey !== key) {
         delete usage[key];

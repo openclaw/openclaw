@@ -165,7 +165,7 @@ export function collectConfigureProviderChanges(params: {
     if (isDeepStrictEqual(current, nextProviderConfig)) {
       continue;
     }
-    upserts[providerAlias] = structuredClone(nextProviderConfig);
+    upserts[providerAlias] = nextProviderConfig;
   }
 
   for (const providerAlias of Object.keys(originalProviders)) {

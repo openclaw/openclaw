@@ -10,7 +10,7 @@ import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../conf
 import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import { withExecRequestTurn } from "../../../infra/exec-request-context.js";
 import { getProcessSupervisor } from "../../../process/supervisor/index.js";
-import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { isPidDefinitelyDead } from "../../../shared/pid-alive.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { captureExecRequestCancellation } from "../../bash-process-control.js";
@@ -24,21 +24,92 @@ import {
 } from "../../bash-process-registry.js";
 import { createLazyExecTool } from "../../lazy-exec-tool.js";
 import { isAgentRunDirectAbortReason } from "../../run-termination.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import * as killSession from "./subagent-control-session.js";
+import { createControlRunFixture } from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
-import { registerSubagentRun, startQueuedSubagentRun } from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { startQueuedSubagentRun } from "./subagent-registry.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
+const runs = createControlRunFixture(() => fixture.stateDir);
 
 beforeEach(async () => {
   await captureRuntimeConfigAsyncReader()();
 });
+
+function withCommands<T>(
+  commands: ProcessSession[],
+  identity: { runId: string; sessionKey: string; sessionId: string; agentId: string },
+  body: (start: (background?: boolean, callId?: string) => Promise<ProcessSession>) => Promise<T>,
+  abortSignal?: AbortSignal,
+) {
+  return withEnvAsync({ OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" }, () =>
+    withExecRequestTurn({ identity, abortSignal }, async () => {
+      const exec = createLazyExecTool({
+        ...identity,
+        config: getRuntimeConfig(),
+        cwd: fixture.stateDir,
+        scopeKey: identity.sessionKey,
+        host: "gateway",
+        mode: "full",
+        ask: "off",
+        allowBackground: true,
+        notifyOnExit: false,
+        preparedStoreEnvironment: {},
+      });
+      return body(async (background = false, callId = "child-command") => {
+        const result = await exec.execute(
+          callId,
+          {
+            command: `node -e "require('fs').watch('.', () => {})"`,
+            ...(background ? { background: true } : { yieldMs: 10 }),
+            timeoutSeconds: 60,
+          },
+          abortSignal,
+        );
+        const details = asOptionalRecord(result.details);
+        expect(details?.status).toBe("running");
+        if (typeof details?.sessionId !== "string") {
+          throw new Error("Expected a running command's process handle");
+        }
+        const command = expectDefined(getSession(details.sessionId), "child command");
+        commands.push(command);
+        return command;
+      });
+    }),
+  );
+}
+
+function controllerFor(controllerSessionKey: string) {
+  return {
+    controllerSessionKey,
+    controllerAgentId: "main",
+    callerSessionKey: controllerSessionKey,
+    callerIsSubagent: false,
+    controlScope: "children" as const,
+  };
+}
+
+async function writeCommandSession(sessionKey: string, sessionId: string) {
+  return runs.writeSession(sessionId, `${sessionId}-revision`, {
+    sessionKey,
+    defaultSessionId: sessionId,
+  });
+}
+
+async function drainCommands(commands: ProcessSession[]) {
+  for (const command of commands) {
+    getProcessSupervisor().cancel(command.id, "manual-cancel");
+  }
+  await Promise.all(commands.map(waitForExecSession));
+}
 
 it.each([
   "owned",
@@ -60,27 +131,18 @@ it.each([
     const requesterSessionKey = "agent:main:main";
     const childSessionKey = "agent:main:subagent:completed-command";
     const sessionId = "completed-command-session";
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: childSessionKey,
-      defaultSessionId: sessionId,
-      lifecycleRevision: `${sessionId}-revision`,
-    });
+    await writeCommandSession(childSessionKey, sessionId);
     const commands: ProcessSession[] = [];
     let authorized = true;
     let captured = false;
     let injected = false;
     const alternate = selection.startsWith("alternate-");
-    const shouldCancel =
-      selection === "owned" ||
-      selection === "legacy-owned" ||
-      selection === "postaccept-revoked" ||
-      selection === "gateway" ||
-      selection === "gateway-error" ||
-      selection === "channel" ||
-      selection === "nested" ||
-      alternate;
+    const shouldCancel = ![
+      "other-controller",
+      "new-generation",
+      "admin-root",
+      "preaccept-revoked",
+    ].includes(selection);
     const supervisor = getProcessSupervisor();
     const spawn = supervisor.spawn.bind(supervisor);
     const spawnFault = vi.spyOn(supervisor, "spawn").mockImplementation(async (input) => {
@@ -109,48 +171,16 @@ it.each([
       includeService: boolean,
       target = { sessionKey: childSessionKey, sessionId },
     ) =>
-      withEnvAsync({ OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" }, () =>
-        withExecRequestTurn(
-          {
-            identity: { runId, ...target, agentId: "main" },
-          },
-          async () => {
-            const exec = createLazyExecTool({
-              runId,
-              ...target,
-              agentId: "main",
-              config: getRuntimeConfig(),
-              cwd: fixture.stateDir,
-              scopeKey: target.sessionKey,
-              host: "gateway",
-              mode: "full",
-              ask: "off",
-              allowBackground: true,
-              notifyOnExit: false,
-              preparedStoreEnvironment: {},
-            });
-            const started: ProcessSession[] = [];
-            for (const background of includeService ? [false, true] : [false]) {
-              const result = await exec.execute("child-command", {
-                command: `node -e "require('fs').watch('.', () => {})"`,
-                ...(background ? { background: true } : { yieldMs: 10 }),
-                timeoutSeconds: 60,
-              });
-              const details = asOptionalRecord(result.details);
-              expect(details?.status).toBe("running");
-              if (typeof details?.sessionId !== "string") {
-                throw new Error("Expected a running command's process handle");
-              }
-              const command = expectDefined(getSession(details.sessionId), "child command");
-              commands.push(command);
-              started.push(command);
-            }
-            return started;
-          },
-        ),
-      );
+      withCommands(commands, { runId, ...target, agentId: "main" }, async (start) => {
+        const ordinary = await start();
+        return includeService ? [ordinary, await start(true)] : [ordinary];
+      });
     const createdAt = Date.now();
-    const completed = (runId: string, generation: number) =>
+    const completed = (
+      runId: string,
+      generation: number,
+      overrides: Partial<SubagentRunRecordOverrides> = {},
+    ) =>
       createSubagentRunRecord({
         runId,
         generation,
@@ -164,12 +194,7 @@ it.each([
         endedAt: createdAt + generation + 1,
         outcome: { status: "ok" },
         expectsCompletionMessage: false,
-        completion: {
-          required: false,
-          resultText: "Completed child result",
-          capturedAt: createdAt + generation + 1,
-        },
-        delivery: { status: "not_required" },
+        ...overrides,
       });
     const original = completed("completed-command-run", 1);
     if (selection === "legacy-owned") {
@@ -193,35 +218,15 @@ it.each([
       if (selection === "nested") {
         const nestedKey = "agent:main:subagent:nested-completed-command";
         const nestedId = "nested-completed-command-session";
-        await writeSubagentSessionEntry({
-          stateDir: fixture.stateDir,
-          agentId: "main",
-          sessionKey: nestedKey,
-          defaultSessionId: nestedId,
-          lifecycleRevision: `${nestedId}-revision`,
-        });
-        const nested = createSubagentRunRecord({
-          runId: "nested-completed-command",
-          generation: 1,
+        await writeCommandSession(nestedKey, nestedId);
+        const nested = completed("nested-completed-command", 1, {
           childSessionKey: nestedKey,
-          childAgentId: "main",
           childSessionIdentity: {
             sessionId: nestedId,
             lifecycleRevision: `${nestedId}-revision`,
           },
           requesterSessionKey: childSessionKey,
           controllerSessionKey: childSessionKey,
-          requesterAgentId: "main",
-          createdAt,
-          endedAt: createdAt + 1,
-          outcome: { status: "ok" },
-          expectsCompletionMessage: false,
-          completion: {
-            required: false,
-            resultText: "Completed nested result",
-            capturedAt: createdAt + 1,
-          },
-          delivery: { status: "not_required" },
         });
         await publish(nested);
         nestedReceipt = structuredClone(
@@ -323,13 +328,7 @@ it.each([
       } else {
         const result = await killAllControlledSubagentRuns({
           cfg: getRuntimeConfig(),
-          controller: {
-            controllerSessionKey: controllerKey,
-            controllerAgentId: "main",
-            callerSessionKey: controllerKey,
-            callerIsSubagent: false,
-            controlScope: "children",
-          },
+          controller: controllerFor(controllerKey),
           runs: [original],
           suppressTaskDelivery: true,
           assertCurrent: () => {
@@ -392,10 +391,7 @@ it.each([
       }
     } finally {
       spawnFault.mockRestore();
-      for (const command of commands) {
-        getProcessSupervisor().cancel(command.id, "manual-cancel");
-      }
-      await Promise.all(commands.map(waitForExecSession));
+      await drainCommands(commands);
       for (const command of commands) {
         deleteSession(command.id);
       }
@@ -418,18 +414,9 @@ it.each([
     const childSessionKey = "agent:main:subagent:active-command";
     const sessionId = "active-command-session";
     const runId = "active-command-run";
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: childSessionKey,
-      defaultSessionId: sessionId,
-      lifecycleRevision: `${sessionId}-revision`,
-    });
-    await registerSubagentRun({
-      runId,
+    const storePath = await writeCommandSession(childSessionKey, sessionId);
+    await runs.register(runId, storePath, {
       childSessionKey,
-      childAgentId: "main",
-      sessionEntry: { sessionId, lifecycleRevision: `${sessionId}-revision` },
       requesterSessionKey,
       requesterAgentId: "main",
       requesterDisplayKey: requesterSessionKey,
@@ -444,9 +431,10 @@ it.each([
     let callerAuthorized = true;
     const ready = createDeferred();
     const interrupted = createDeferred();
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: [childSessionKey, sessionId],
+      run: { runId, sessionKey: childSessionKey, sessionId, agentId: "main" },
       assertAllowed: () => {},
       onInterrupt: (reason) => {
         // The native kill owner supplies the reason; the admitted command relays it.
@@ -511,80 +499,32 @@ it.each([
           ready.resolve();
           await ownerRequested.promise;
         }
-        return withEnvAsync({ OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" }, () =>
-          withExecRequestTurn(
-            {
-              identity: { runId, sessionKey: childSessionKey, sessionId, agentId: "main" },
-              abortSignal: controller.signal,
-            },
-            async () => {
-              if (lateOwner) {
-                order.push("owner-created");
-              }
-              const exec = createLazyExecTool({
-                runId,
-                sessionKey: childSessionKey,
-                sessionId,
-                agentId: "main",
-                config: getRuntimeConfig(),
-                cwd: fixture.stateDir,
-                scopeKey: childSessionKey,
-                host: "gateway",
-                mode: "full",
-                ask: "off",
-                allowBackground: true,
-                notifyOnExit: false,
-                preparedStoreEnvironment: {},
-              });
-              for (const background of [false, true]) {
-                const result = await exec.execute(
-                  background ? "independent-service" : "ordinary-command",
-                  {
-                    command: `node -e "require('fs').watch('.', () => {})"`,
-                    ...(background ? { background: true } : { yieldMs: 10 }),
-                    timeoutSeconds: 60,
-                  },
-                  controller.signal,
-                );
-                const details = asOptionalRecord(result.details);
-                expect(details?.status).toBe("running");
-                if (typeof details?.sessionId !== "string") {
-                  throw new Error("Expected a running command's process handle");
-                }
-                commands.push(expectDefined(getSession(details.sessionId), "child command"));
-              }
-              if (lateOwner) {
-                lateStarted = true;
-                order.push("registered");
-                ownerCommandsReady.resolve();
-              }
-              const startLateCommand = async () => {
-                lateStarted = true;
-                const result = await exec.execute(
-                  "late-ordinary-command",
-                  {
-                    command: `node -e "require('fs').watch('.', () => {})"`,
-                    yieldMs: 10,
-                    timeoutSeconds: 60,
-                  },
-                  controller.signal,
-                );
-                const details = asOptionalRecord(result.details);
-                if (typeof details?.sessionId !== "string") {
-                  throw new Error("Expected late ordinary process handle");
-                }
-                commands.push(expectDefined(getSession(details.sessionId), "late child command"));
-                order.push("registered");
-              };
-              ready.resolve();
-              if (late) {
-                await lateCommandRequested.promise;
-                await startLateCommand();
-                lateCommandReady.resolve();
-              }
-              await interrupted.promise;
-            },
-          ),
+        return withCommands(
+          commands,
+          { runId, sessionKey: childSessionKey, sessionId, agentId: "main" },
+          async (start) => {
+            if (lateOwner) {
+              order.push("owner-created");
+            }
+            for (const background of [false, true]) {
+              await start(background, background ? "independent-service" : "ordinary-command");
+            }
+            if (lateOwner) {
+              lateStarted = true;
+              order.push("registered");
+              ownerCommandsReady.resolve();
+            }
+            ready.resolve();
+            if (late) {
+              await lateCommandRequested.promise;
+              lateStarted = true;
+              await start(false, "late-ordinary-command");
+              order.push("registered");
+              lateCommandReady.resolve();
+            }
+            await interrupted.promise;
+          },
+          controller.signal,
         );
       })
       .finally(() => {
@@ -654,13 +594,7 @@ it.each([
           : undefined;
       stopping = killAllControlledSubagentRuns({
         cfg: getRuntimeConfig(),
-        controller: {
-          controllerSessionKey: requesterSessionKey,
-          controllerAgentId: "main",
-          callerSessionKey: requesterSessionKey,
-          callerIsSubagent: false,
-          controlScope: "children",
-        },
+        controller: controllerFor(requesterSessionKey),
         runs: [expectDefined(subagentRuns.get(runId), "running child")],
         assertCurrent: () => {
           if (!callerAuthorized) {
@@ -686,18 +620,7 @@ it.each([
       if (faultInjected) {
         expect(rootExitObserved).toBe(true);
       }
-      expect(
-        result,
-        JSON.stringify({
-          result,
-          order,
-          native: {
-            execution: subagentRuns.get(runId)?.execution,
-            killIntent: subagentRuns.get(runId)?.killIntent,
-            killReconciliation: subagentRuns.get(runId)?.killReconciliation,
-          },
-        }),
-      ).toMatchObject({
+      expect(result).toMatchObject({
         status: cleanup === "confirmed" ? "ok" : "error",
         killed: 1,
         ...(cleanup !== "confirmed"
@@ -741,10 +664,7 @@ it.each([
       lateCommandRequested.resolve();
       ownerRequested.resolve();
       interrupted.resolve();
-      for (const command of commands) {
-        getProcessSupervisor().cancel(command.id, "manual-cancel");
-      }
-      await Promise.all(commands.map(waitForExecSession));
+      await drainCommands(commands);
       await execution.catch(() => {});
       admission.release();
       await stopping?.catch(() => {});

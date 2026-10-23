@@ -6,8 +6,7 @@ import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { isMissingPathError } from "../infra/errno.js";
 import { clamp } from "../utils.js";
 import { isSameRollingLogFileFamily } from "./log-file-path.js";
-import "./logger.js";
-import { getResolvedLoggerFileTarget } from "./logger-settings-internal.js";
+import { getResolvedLoggerFileTarget } from "./logger.js";
 import { parseLogLine, type ParsedLogLine } from "./parse-log-line.js";
 import type { ResolvedRedactPattern } from "./redact-pattern-runtime.js";
 import { redactSensitiveLines, resolveLogTailRedactOptions } from "./redact.js";
@@ -337,7 +336,6 @@ export async function readConfiguredLogTail(
 
 /** Reads the canonical configured tail and parses its already-redacted lines. */
 export async function readConfiguredParsedLogTail(params?: {
-  cursor?: number;
   limit?: number;
   maxBytes?: number;
   filter?: (line: Pick<ParsedLogLine, "subsystem" | "module" | "plugin">) => boolean;

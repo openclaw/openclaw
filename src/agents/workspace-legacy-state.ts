@@ -216,11 +216,8 @@ function isOwnedAttestationBuffer(buffer: Buffer): boolean {
 }
 
 /** Capture canonical legacy paths before a destructive workspace removal. */
-export function prepareLegacyWorkspaceStateReset(
-  workspaceDir: string,
-  options?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
-): LegacyWorkspaceResetPlan {
-  const sources = resolveLegacyWorkspaceSourcePaths(workspaceDir, options);
+export function prepareLegacyWorkspaceStateReset(workspaceDir: string): LegacyWorkspaceResetPlan {
+  const sources = resolveLegacyWorkspaceSourcePaths(workspaceDir);
   // Hashed paths are reserved state; sibling markers outside owned roots need a header.
   const groups = [
     [sources.setupStatePaths, "workspace"],

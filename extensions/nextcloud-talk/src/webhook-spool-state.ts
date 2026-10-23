@@ -1,4 +1,3 @@
-// Nextcloud Talk plugin module owns webhook ingress identity and legacy-state migration.
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { PersistentDedupeEntry } from "openclaw/plugin-sdk/persistent-dedupe";
@@ -170,9 +169,8 @@ function parseLegacyReplayKey(key: string): { messageId: string; roomId: string 
 export async function migrateNextcloudTalkLegacyReplayState(params: {
   queue: ChannelIngressQueue<NextcloudTalkIngressPayload>;
   store: NextcloudTalkLegacyReplayStore;
-}): Promise<number> {
+}): Promise<void> {
   const entries = await params.store.entries();
-  let migrated = 0;
   for (const entry of entries) {
     const identity = parseLegacyReplayKey(entry.value.key);
     if (!identity || !Number.isFinite(entry.value.seenAt)) {
@@ -198,9 +196,6 @@ export async function migrateNextcloudTalkLegacyReplayState(params: {
         throw new Error(`Failed to migrate Nextcloud Talk replay key ${entry.value.key}.`);
       }
     }
-    // Any existing ingress row already rejects the retired guard's duplicate.
-    migrated += 1;
   }
   await params.store.clear();
-  return migrated;
 }

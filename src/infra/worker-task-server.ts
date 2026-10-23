@@ -4,8 +4,7 @@ import { MessagePort, type Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   serveOwnedWorkerTasks as serveRuntimeWorkerTasks,
-  type WorkerTaskChannel,
-  type WorkerTaskControl,
+  type WorkerTaskHandler,
 } from "@openclaw/worker-runtime/worker";
 import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import { loggingState } from "../logging/state.js";
@@ -16,7 +15,7 @@ import {
 } from "./agent-database-readers.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
-import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
+import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission-context.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
   exchangeSqliteDatabaseAdmissions,
@@ -28,15 +27,9 @@ import { WORKER_TASK_PORT_MESSAGE, type WorkerTaskContext } from "./worker-task-
 
 export type { WorkerTaskChannel } from "@openclaw/worker-runtime/worker";
 
-type WorkerTaskHandler<Output> = (
-  input: unknown,
-  channel: WorkerTaskChannel | undefined,
-  control: WorkerTaskControl,
-) => Output | Promise<Output>;
-
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
-export function serveWorkerTasks<Output>(
-  handler: WorkerTaskHandler<Output>,
+export function serveWorkerTasks<Output, Input = unknown>(
+  handler: WorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
     retireOnError?: boolean;
@@ -48,8 +41,8 @@ export function serveWorkerTasks<Output>(
 }
 
 /** Every served worker closes its agent database readers by path between tasks; owners may add more. */
-export function serveOwnedWorkerTasks<Output>(
-  handler: WorkerTaskHandler<Output>,
+export function serveOwnedWorkerTasks<Output, Input = unknown>(
+  handler: WorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
     closeResource?: (key?: string) => void | Promise<void>;
@@ -67,7 +60,7 @@ export function serveOwnedWorkerTasks<Output>(
   let databaseAdmissionPort: MessagePort | undefined;
   let databaseAdmissionDeadlineAtMs: number | undefined;
   let databaseEngineSelection: WorkerTaskContext["databaseEngineSelection"];
-  let closeMemorySamples: (() => void) | undefined;
+  let memorySamples: ReturnType<typeof serveWorkerMemorySamples> | undefined;
   const runWithTaskContext = async <T>(operation: () => T | Promise<T>): Promise<T> => {
     const run = async () => {
       const port = databaseAdmissionPort;
@@ -91,7 +84,7 @@ export function serveOwnedWorkerTasks<Output>(
       ? withDatabaseEngineSelection(databaseEngineSelection, run)
       : run();
   };
-  serveRuntimeWorkerTasks<Output, WorkerTaskContext>(
+  serveRuntimeWorkerTasks<Output, WorkerTaskContext, Input>(
     (input, channel, control) =>
       withSqliteDatabaseAdmissionWait(
         {
@@ -136,12 +129,14 @@ export function serveOwnedWorkerTasks<Output>(
         taskPort?.postMessage({ status: "ready" }, []);
       },
       onMessage(sampleMemory) {
-        if (sampleMemory && !closeMemorySamples) {
-          closeMemorySamples = serveWorkerMemorySamples(memoryPort, options.retainedData);
+        if (sampleMemory && !memorySamples) {
+          memorySamples = serveWorkerMemorySamples(memoryPort, options.retainedData);
         }
         cancelWorkerIdleGc();
       },
       installTaskContext(context) {
+        // Carry demand on the task itself so even its first synchronous work is observed.
+        memorySamples?.setTaskMetrics(context.collectWorkerMetrics === true);
         databaseAdmissionDeadlineAtMs = context.databaseAdmissionDeadlineAtMs;
         databaseEngineSelection = context.databaseEngineSelection;
         installDeletedAgentDatabaseFences(context.deletedAgentDatabaseFences);
@@ -157,10 +152,11 @@ export function serveOwnedWorkerTasks<Output>(
           scheduleWorkerIdleGc();
         }
       },
+      collectTaskDiagnostics: () => memorySamples?.collectTask(),
       onRetire() {
         cancelWorkerIdleGc();
         try {
-          closeMemorySamples?.();
+          memorySamples?.close();
         } finally {
           // Exchanges are synchronous; the runtime already joined task cleanup and resource receipts.
           databaseAdmissionPort?.close();

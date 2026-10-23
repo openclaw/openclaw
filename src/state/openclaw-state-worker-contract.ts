@@ -4,7 +4,6 @@ import type { recoverPendingWorktreesInWorker } from "../agents/worktrees/regist
 import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
 import type { ClawAddStateWorkerOperations } from "../claws/add-state-worker-contract.js";
 import type { CronStateWorkerOperations } from "../cron/store/worker-contract.js";
-import type { DeviceIdentity } from "../infra/device-identity-store.js";
 import type { RestartLifecycleWorkerOperations } from "../infra/restart-lifecycle.worker.js";
 import type {
   SqliteWalPeriodicRequest,
@@ -17,22 +16,19 @@ import type { PluginStateWriteOperations } from "../plugin-state/plugin-state-wo
 import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker-contract.js";
 import type { GitHubPublicationSourceOperations } from "./github-publication-source-contract.js";
-import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
+import type {
+  OpenClawAgentDatabaseWorkerLeaseReceipt,
+  releaseExitedOpenClawAgentDatabaseLeaseInDatabase,
+} from "./openclaw-agent-db-lease.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
 import type { StateSchemaPublicationBlocker } from "./openclaw-state-schema-publication.js";
 import type { RegisteredStateWorkerOperations } from "./openclaw-state-worker-registry.js";
-import type { WorkerOperations } from "./worker-operation-registry.js";
-
-export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; identityKey: string };
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = Omit<
   RegisteredStateWorkerOperations,
   keyof SandboxRegistryCleanupOperations
 > &
-  WorkerOperations<
-    typeof import("../infra/device-auth-store.worker.js").deviceAuthWorkerOperations
-  > &
   GitHubPublicationSourceOperations &
   RestartLifecycleWorkerOperations &
   WorktreeTemplateWorkerOperations &
@@ -55,13 +51,7 @@ export type OpenClawStateWorkerOperations = Omit<
       input: undefined;
       output: StateSchemaPublicationBlocker | undefined;
     };
-    "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
   };
-
-/** Internal inspection cannot open canonical state or execute a domain command. */
-export type OpenClawStateWorkerInspectionOperations = {
-  "database.inspectIdle": { input: undefined; output: "healthy" | "retire" };
-};
 
 /** Retiring owners dispatch only exact, physically bound cleanup receipts. */
 export type OpenClawStateWorkerCleanupOperations = Pick<
@@ -71,20 +61,19 @@ export type OpenClawStateWorkerCleanupOperations = Pick<
   Pick<SkillUploadWorkerOperations, "skillUploads.release"> &
   SandboxRegistryCleanupOperations & {
     "agentDatabases.releaseExitedLease": {
-      input: OpenClawAgentDatabaseWorkerLeaseReceipt;
+      input: OpenClawAgentDatabaseWorkerLeaseReceipt & {
+        outcome: Parameters<typeof releaseExitedOpenClawAgentDatabaseLeaseInDatabase>[2];
+      };
       output: void;
     };
   };
 
 export type OpenClawStateWorkerBackend = SqliteWorkerPreparedBackend<
-  OpenClawStateWorkerOperations &
-    OpenClawStateWorkerInspectionOperations &
-    OpenClawStateWorkerCleanupOperations
+  OpenClawStateWorkerOperations & OpenClawStateWorkerCleanupOperations
 >;
 
 /** Host-only admission options; never serialized with a worker command. */
 export type OpenClawStateWorkerOperationOptions = {
-  preparation?: OpenClawStateWorkerOpenPreparation;
   existingOnly?: boolean;
   signal?: AbortSignal;
   assertCurrent?: (commandType?: PropertyKey) => void;

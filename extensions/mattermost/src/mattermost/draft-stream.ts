@@ -2,7 +2,7 @@ import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbou
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import {
   createMattermostPost,
   deleteMattermostPost,
@@ -11,7 +11,7 @@ import {
 } from "./client.js";
 
 const MATTERMOST_STREAM_MAX_CHARS = 4000;
-const DEFAULT_THROTTLE_MS = 1000;
+const THROTTLE_MS = 1200;
 
 type MattermostDraftPublishedPart = {
   messageId: string;
@@ -29,49 +29,14 @@ type MattermostFinalTextResolution =
       publishedParts: readonly MattermostDraftPublishedPart[];
     };
 
-function normalizeMattermostDraftText(text: string, maxChars: number): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed.length <= maxChars) {
-    return trimmed;
-  }
-  return `${sliceUtf16Safe(trimmed, 0, Math.max(0, maxChars - 3)).trimEnd()}...`;
-}
-
-function consumeMattermostPublishedChunk(params: {
-  source: string;
-  offset: number;
-  chunk: string;
-}): number | undefined {
-  const chunk = params.chunk.trim();
-  if (!chunk) {
-    return params.offset;
-  }
-  let offset = params.offset;
-  while (offset < params.source.length && /\s/.test(params.source[offset] ?? "")) {
-    offset += 1;
-  }
-  return params.source.startsWith(chunk, offset) ? offset + chunk.length : undefined;
-}
-
 export function createMattermostDraftStream(params: {
   client: MattermostClient;
   channelId: string;
   rootId?: string;
-  maxChars?: number;
-  throttleMs?: number;
-  renderText?: (text: string) => string;
   chunkText?: (text: string) => string[];
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }) {
-  const maxChars = Math.min(
-    params.maxChars ?? MATTERMOST_STREAM_MAX_CHARS,
-    MATTERMOST_STREAM_MAX_CHARS,
-  );
-  const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const streamState = { stopped: false, final: false };
   let terminalAcceptedDeliveryError: Error | undefined;
   const retainAcceptedDeliveryFailure = (err: unknown) => {
@@ -109,8 +74,14 @@ export function createMattermostDraftStream(params: {
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     const target = currentGeneration;
-    const rendered = params.renderText?.(text) ?? text;
-    const normalized = normalizeMattermostDraftText(rendered, maxChars);
+    const trimmed = text.trim();
+    const normalized = trimmed
+      ? truncateWithMarker(trimmed, MATTERMOST_STREAM_MAX_CHARS, {
+          marker: "...",
+          reserve: 3,
+          trimEnd: true,
+        })
+      : "";
     if (!normalized) {
       return false;
     }
@@ -160,7 +131,7 @@ export function createMattermostDraftStream(params: {
     clearWithStop,
     seal: sealLifecycle,
   } = createFinalizableDraftLifecycle({
-    throttleMs,
+    throttleMs: THROTTLE_MS,
     state: streamState,
     sendOrEditStreamMessage,
     readMessageId: () => currentGeneration.postId,
@@ -193,9 +164,15 @@ export function createMattermostDraftStream(params: {
         return;
       }
       publishedAssistantParts.set(messageId, { messageId, content });
+      const chunk = content.trim();
+      let nextOffset = offset;
+      if (chunk) {
+        while (nextOffset < assistantText.length && /\s/.test(assistantText[nextOffset] ?? "")) {
+          nextOffset += 1;
+        }
+      }
       publishedAssistantOffset =
-        consumeMattermostPublishedChunk({ source: assistantText, offset, chunk: content }) ??
-        offset;
+        !chunk || assistantText.startsWith(chunk, nextOffset) ? nextOffset + chunk.length : offset;
     };
     const boundary = (async () => {
       try {
@@ -207,11 +184,10 @@ export function createMattermostDraftStream(params: {
           return;
         }
         const sourceText = pendingText.trim() ? pendingText : sealed.latestSourceText;
-        const rendered = params.renderText?.(sourceText) ?? sourceText;
-        const finalizedText = rendered.trim();
+        const finalizedText = sourceText.trim();
         const chunks =
           params.chunkText?.(finalizedText) ??
-          chunkMarkdownTextWithMode(finalizedText, maxChars, "length");
+          chunkMarkdownTextWithMode(finalizedText, MATTERMOST_STREAM_MAX_CHARS, "length");
         const firstChunk = chunks[0];
         if (!firstChunk) {
           return;
@@ -358,7 +334,9 @@ export function createMattermostDraftStream(params: {
       : { kind: "already-delivered", publishedParts };
   };
 
-  params.log?.(`mattermost stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
+  params.log?.(
+    `mattermost stream preview ready (maxChars=${MATTERMOST_STREAM_MAX_CHARS}, throttleMs=${THROTTLE_MS})`,
+  );
 
   return {
     update,

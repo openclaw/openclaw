@@ -145,7 +145,10 @@ export interface DecisionRuntimeV1 {
       /** Omit for the default role; agent-owned work supplies its owner agent. */
       readonly agentId?: string;
       readonly purpose: string;
+      /** Defaults to requested; optional work leaves capacity for requested evaluations. */
+      readonly priority?: "requested" | "optional";
       readonly rubricVersion: string;
+      /** Budget includes preparation; provider cleanup remains physically awaited. */
       readonly timeoutMs: number;
       readonly signal: AbortSignal;
     },

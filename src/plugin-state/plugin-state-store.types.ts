@@ -95,6 +95,7 @@ export type PluginStateKeyRange = {
 export type PluginStateKeyRangeParams = {
   pluginId: string;
   namespace: string;
+  valueFilter?: { path: string; equals: string };
 } & PluginStateKeyRange;
 
 export type PluginStateMoveEntries = {

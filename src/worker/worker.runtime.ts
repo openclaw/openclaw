@@ -302,6 +302,7 @@ export async function runWorkerDescriptor(
             turnId: descriptor.assignment.turnId,
             modelRef: descriptor.assignment.modelRef,
             computerContextEpoch,
+            onCancelled: (reason) => abortController.abort(reason),
           });
     options.assertWorkspaceCurrent?.();
     const github = descriptor.assignment.github
@@ -357,11 +358,7 @@ export async function runWorkerDescriptor(
             : {}),
           ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
           inference: { stream },
-          transcript: {
-            commit: async (messages) => {
-              await transcript.commit(messages);
-            },
-          },
+          transcript,
           live: {
             enqueuePreview: (event) => live.enqueuePreview(descriptor.assignment.runId, event),
             emitTerminal: async (event) => {

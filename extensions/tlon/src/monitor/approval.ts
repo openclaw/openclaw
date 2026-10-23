@@ -4,17 +4,12 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { PendingApproval } from "../settings.js";
 
-function generateApprovalId(type: PendingApproval["type"]): string {
-  const timestamp = Date.now();
-  const randomPart = randomBytes(3).toString("hex");
-  return `${type}-${timestamp}-${randomPart}`;
-}
-
 export function createPendingApproval(
   params: Omit<PendingApproval, "id" | "timestamp">,
 ): PendingApproval {
+  const timestamp = Date.now();
   return {
-    id: generateApprovalId(params.type),
+    id: `${params.type}-${timestamp}-${randomBytes(3).toString("hex")}`,
     type: params.type,
     requestingShip: params.requestingShip,
     ...(params.clubId !== undefined ? { clubId: params.clubId } : {}),
@@ -24,7 +19,7 @@ export function createPendingApproval(
     messagePreview:
       params.messagePreview != null ? sliceUtf16Safe(params.messagePreview, 0, 100) : undefined,
     originalMessage: params.originalMessage,
-    timestamp: Date.now(),
+    timestamp,
   };
 }
 

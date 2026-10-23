@@ -25,6 +25,7 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  SESSION_WRITE_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   isOperatorScope,
@@ -125,6 +126,19 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
     return resolveSessionActionLeastPrivilegeScopes(params);
   }
   const record = asOptionalRecord(params);
+  if (method === "sessions.github.action") {
+    return [
+      record?.action === "inspect_pr" ||
+      record?.action === "prepare_pr" ||
+      record?.action === "refresh_base" ||
+      record?.action === "edit" ||
+      record?.action === "request_review" ||
+      record?.action === "upload_evidence" ||
+      (record?.action === "ready" && record.publishingSessionKey === undefined)
+        ? SESSION_WRITE_SCOPE
+        : WRITE_SCOPE,
+    ];
+  }
   if (method === "agent") {
     return isAgentSessionResetCommand(record?.message) ? [ADMIN_SCOPE] : [WRITE_SCOPE];
   }

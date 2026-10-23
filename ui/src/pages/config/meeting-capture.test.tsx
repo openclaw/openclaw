@@ -135,6 +135,20 @@ afterEach(() => {
 });
 
 describe("curated meeting capture", () => {
+  it.each([false, true])(
+    "shows unknown health after disconnect (failed read=%s)",
+    async (failStatus) => {
+      const { page, context, publish } = await mount({ failStatus });
+      publish(false, context.gateway.snapshot.client!, null);
+      await waitForSolid(() => {
+        expect(page.querySelector('[role="alert"]')).toBeNull();
+        expect(page.textContent).not.toContain("Archive unavailable");
+        expect(page.textContent).not.toContain("No saved transcript was reported.");
+        expect(page.querySelectorAll(".settings-status")[0]?.textContent).toContain("Unknown");
+      });
+    },
+  );
+
   it.each<{
     field: string;
     value: string;
@@ -298,6 +312,7 @@ describe("curated meeting capture", () => {
   );
 
   it("retains requirements learned after opening an editor without metadata", async () => {
+    const warnings = vi.spyOn(console, "warn");
     const { page, runtimeConfig, request, original } = await mount({
       source: { providerId: "test-voice", title: "Original", providerOptions: { keep: true } },
       providers: [],
@@ -345,6 +360,11 @@ describe("curated meeting capture", () => {
     click(page, "Edit source 1");
     flush();
     expect([...page.querySelectorAll("input")].some((item) => item.required)).toBe(false);
+    expect(
+      warnings.mock.calls.filter(([message]) =>
+        String(message).includes("UNTRACKED_READ_AFTER_AWAIT"),
+      ),
+    ).toEqual([]);
   });
 
   it.each([
@@ -919,6 +939,32 @@ describe("curated meeting capture", () => {
     );
     click(page, "Save source");
     expect(runtimeConfig.state.configFormDirty).toBe(true);
+  });
+
+  it("keeps the draft and Refresh control through a rejected health read and retry", async () => {
+    const { page, request, respond } = await mount();
+    click(page, "Edit source 1");
+    input(page, "title", "Unsaved meeting title");
+    const title = page.querySelector<HTMLInputElement>('input[name="title"]')!;
+    const failure = createDeferred<TranscriptsStatusResult>();
+    request.mockImplementationOnce(() => failure.promise);
+    const refresh = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (item) => item.textContent?.trim() === "Refresh",
+    )!;
+    title.focus();
+    click(page, "Refresh");
+    failure.reject(new Error("Health read unavailable"));
+    await waitForSolid(() => expect(page.textContent).toContain("Health read unavailable"));
+    expect(title.value).toBe("Unsaved meeting title");
+    expect(refresh.isConnected).toBe(true);
+    expect(document.activeElement).toBe(title);
+
+    request.mockImplementation(respond);
+    expect(click(page, "Refresh")).toBe(refresh);
+    await waitForSolid(() => expect(page.textContent).toContain("Not active"));
+    expect(page.textContent).not.toContain("Health read unavailable");
+    expect(page.querySelector('input[name="title"]')).toBe(title);
+    expect(title.value).toBe("Unsaved meeting title");
   });
 
   it("does not overwrite an authoritative raw config draft with an old source array", async () => {

@@ -7,7 +7,6 @@ import { isAbortError } from "../infra/abort-signal.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sanitizeCompactionMessages } from "./compaction-planning.js";
 import { isTimeoutError } from "./failover-error.js";
 import type {
@@ -20,8 +19,6 @@ import type { SessionModelUsageSink } from "./sessions/compaction/runtime.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { generateSummary } from "./sessions/index.js";
 export { estimateMessagesTokens } from "./compaction-planning.js";
-
-const log = createSubsystemLogger("compaction");
 
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
 const IDENTIFIER_PRESERVATION_INSTRUCTIONS =
@@ -120,7 +117,6 @@ export async function summarizeCompactionHistory(params: CompactionSummaryParams
     if (params.signal.aborted) {
       throw err;
     }
-    log.warn(`Summarization failed: ${formatErrorMessage(err)}`);
     throw new CompactionError(
       "summarization_failed",
       `Summarization failed for ${messages.length} messages: ${formatErrorMessage(err)}`,

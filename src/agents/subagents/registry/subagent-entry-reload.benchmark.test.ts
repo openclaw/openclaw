@@ -3,12 +3,10 @@ import { performance } from "node:perf_hooks";
 import { expect, it, vi } from "vitest";
 import { listSessionEntriesReadOnly } from "../../../config/sessions/session-accessor.sqlite-entry-list.read.js";
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.sqlite-entry.js";
-import { loadExactSessionEntry } from "../../../config/sessions/session-accessor.sqlite-exact-read.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import { runOpenClawAgentWriteTransaction } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { runWithMainSessionRecoveryAdmission } from "../../main-session-recovery/main-session-recovery-admission.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { buildActiveSubagentRuntimeContext } from "./subagent-active-context.js";
 import { buildControlledSubagentRunsReadContext } from "./subagent-control-scope.js";
@@ -168,14 +166,6 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
           });
           return value;
         };
-        const admitted = <T>(run: () => Promise<T>) =>
-          runWithMainSessionRecoveryAdmission({
-            storePath,
-            sessionKey: controllerSessionKey,
-            sessionId: "main-fixture",
-            isCurrent: () => loadExactSessionEntry(mainScope)?.entry.sessionId === "main-fixture",
-            run,
-          });
         // A forwarding wrapper counts parsing without retaining every JSON argument/result.
         JSON.parse = (text, reviver) => {
           if (counters.active && typeof text === "string" && text.includes(metadataPayload)) {
@@ -197,7 +187,6 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
           expect(listed).toHaveLength(rows);
           expect(counters.fullLoads).toBe(1);
           expect(counters.parsedEntries).toBeGreaterThanOrEqual(rows);
-          await measure("main-admission-only", 0, () => admitted(async () => true));
 
           for (let iteration = 0; iteration < turns; iteration++) {
             const childSessionKey = `agent:main:subagent:benchmark-${iteration}`;
@@ -242,8 +231,8 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
               }),
             });
 
-            const prompt = await measure("admitted-turn-prompt", iteration, () =>
-              admitted(() => buildActiveSubagentRuntimeContext({ cfg, controllerSessionKey })),
+            const prompt = await measure("turn-prompt", iteration, () =>
+              buildActiveSubagentRuntimeContext({ cfg, controllerSessionKey }),
             );
             expect(prompt).toContain(`session=${childSessionKey}`);
             expect(prompt).toContain(`taskName_json="fixture_${iteration}"`);

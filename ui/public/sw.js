@@ -361,7 +361,11 @@ self.addEventListener("fetch", (event) => {
       pathname.startsWith("/chat/") &&
       pathname !== "/chat/" &&
       [...url.searchParams.keys()].every(
-        (key) => key === "dashboard" || key === "draft" || key === "openclaw_mount_recovery",
+        (key) =>
+          key === "dashboard" ||
+          key === "draft" ||
+          key === "openclaw_mount_recovery" ||
+          key === "__openclawSessionFacePreference",
       );
     const route = pathname.replace(/\/$/u, "") || "/";
     // Static routes and dedicated dynamic namespaces come from the router.
@@ -418,7 +422,12 @@ self.addEventListener("push", (event) => {
   const title = data.title || "OpenClaw";
   const options = {
     body: data.body || "",
-    icon: "./apple-touch-icon.png",
+    icon:
+      typeof data.icon === "string" &&
+      data.icon.length <= 2400 &&
+      /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(data.icon)
+        ? data.icon
+        : "./apple-touch-icon.png",
     badge: "./favicon-32.png",
     tag: data.tag || "openclaw-notification",
     renotify: data.renotify === true,

@@ -157,6 +157,10 @@ export function scheduleGatewayRequestStart(
       request.method === "chat.history" ||
       request.method === "sessions.list" ||
       request.method === "cron.list" ||
+      request.method === "push.web.vapidPublicKey" ||
+      request.method === "sessions.github.options" ||
+      request.method === "workboard.cards.list" ||
+      request.method === "github.preview" ||
       request.method === "gateway.suspend.status" ||
       request.method === "update.status";
     const control =

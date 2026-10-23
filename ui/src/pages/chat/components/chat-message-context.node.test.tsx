@@ -18,6 +18,22 @@ vi.mock("../../../../../src/media/media-reference.js", () => ({
   },
 }));
 
+function historyMessage(usage: Record<string, unknown>, timestamp = 1000) {
+  return { role: "assistant", content: "The report is ready.", timestamp, usage };
+}
+
+function renderHistory(messages: unknown[]) {
+  const sanitized = sanitizeChatHistoryMessages(messages);
+  const group = createMessageGroup(sanitized[0], "assistant", {
+    messages: sanitized.map((message, index) => ({ key: String(index), message })),
+  });
+  const view = mountSolid(() => (
+    <MessageGroup group={group} options={{ showReasoning: false, contextWindow: 200_000 }} />
+  ));
+  flush();
+  return view.container;
+}
+
 it.each([
   { name: "unavailable context", contextUsage: { state: "unavailable" }, expected: null },
   {
@@ -32,33 +48,22 @@ it.each([
   },
   { name: "legacy usage", contextUsage: undefined, expected: "75% ctx" },
 ])("renders sanitized $name independently from billing", ({ contextUsage, expected }) => {
-  const [message] = sanitizeChatHistoryMessages([
-    {
-      role: "assistant",
-      content: "The report is ready.",
-      timestamp: 1000,
-      usage: {
-        input: 75_000,
-        output: 100,
-        cacheRead: 75_000,
-        cost: { total: 0.25 },
-        contextUsage,
-      },
-    },
+  const container = renderHistory([
+    historyMessage({
+      input: 75_000,
+      output: 100,
+      cacheRead: 75_000,
+      cost: { total: 0.25 },
+      contextUsage,
+    }),
   ]);
-  const view = mountSolid(() => (
-    <MessageGroup
-      group={createMessageGroup(message, "assistant")}
-      options={{ showReasoning: false, contextWindow: 200_000 }}
-    />
-  ));
-  flush();
-  expect(view.container.querySelector(".msg-meta__ctx")?.textContent ?? null).toBe(expected);
-  expect(view.container.querySelector(".msg-meta__cost")?.textContent).toBe("$0.250");
-  expect(
-    [...view.container.querySelectorAll(".msg-meta__tokens")].map((el) => el.textContent),
-  ).toEqual(["↑75k", "↓100"]);
-  expect(view.container.querySelector(".msg-meta__cache")?.textContent).toBe("R75k");
+  expect(container.querySelector(".msg-meta__ctx")?.textContent ?? null).toBe(expected);
+  expect(container.querySelector(".msg-meta__cost")?.textContent).toBe("$0.250");
+  expect([...container.querySelectorAll(".msg-meta__tokens")].map((el) => el.textContent)).toEqual([
+    "↑75k",
+    "↓100",
+  ]);
+  expect(container.querySelector(".msg-meta__cache")?.textContent).toBe("R75k");
 });
 
 it.each([
@@ -69,39 +74,26 @@ it.each([
 ])(
   "prefers context snapshots over legacy billing (reversed: $reversed, unavailable: $unavailable)",
   ({ reversed, unavailable }) => {
-    const messages = sanitizeChatHistoryMessages([
-      {
-        role: "assistant",
-        content: "First reply.",
-        timestamp: 1000,
-        usage: { input: 150_000, output: 10 },
-      },
-      {
-        role: "assistant",
-        content: "Final reply.",
-        timestamp: 2000,
-        usage: {
+    const messages = [
+      historyMessage({ input: 150_000, output: 10 }),
+      historyMessage(
+        {
           input: 100_000,
           output: 20,
           contextUsage: unavailable
             ? { state: "unavailable" }
             : { state: "available", promptTokens: 20_000, totalTokens: 20_020 },
         },
-      },
-    ]);
+        2000,
+      ),
+    ];
     if (reversed) {
       messages.reverse();
     }
-    const group = createMessageGroup(messages[0], "assistant", {
-      messages: messages.map((message, index) => ({ key: String(index), message })),
-    });
-    const view = mountSolid(() => (
-      <MessageGroup group={group} options={{ showReasoning: false, contextWindow: 200_000 }} />
-    ));
-    flush();
-    expect(view.container.querySelector(".msg-meta__ctx")?.textContent ?? null).toBe(
+    const container = renderHistory(messages);
+    expect(container.querySelector(".msg-meta__ctx")?.textContent ?? null).toBe(
       unavailable ? null : "10% ctx",
     );
-    expect(view.container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑250k");
+    expect(container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑250k");
   },
 );

@@ -6,6 +6,7 @@ import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { parseSidebarEntry, serializeSidebarEntry, SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { i18n } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { resolveSessionChannelPresentation } from "../lib/session-channel.ts";
 import {
@@ -16,7 +17,7 @@ import {
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
 import { resolveSessionRenameValue } from "../lib/session-rename.ts";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
@@ -37,7 +38,7 @@ import {
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
-import { pluginTabKey } from "../pages/plugin/route.ts";
+import { pluginTabKey } from "../pages/plugin/route.tsx";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.tsx";
 import {
@@ -47,6 +48,7 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
+import type { SidebarSessionRowProjection } from "./sidebar-projection-cache.ts";
 import { restoreSnapshotSession, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
@@ -120,16 +122,6 @@ function compareSidebarSessionRowsByCreatedAt(
   return byObservedOrder || a.key.localeCompare(b.key);
 }
 
-function isSidebarDraftOwnedBySelf(
-  row: Pick<SessionRow, "createdActor" | "sharingRole" | "visibility">,
-  selfUserId: string | undefined,
-): boolean {
-  return (
-    row.visibility === "draft" &&
-    (row.sharingRole === "owner" || Boolean(selfUserId && row.createdActor?.id === selfUserId))
-  );
-}
-
 export type SidebarSessionNavigationState = {
   routeSessionKey: string;
   selectedAgentId: string;
@@ -149,7 +141,7 @@ export function buildSidebarSessionNavigationState(input: {
   statusFilter: SidebarSessionStatusFilter;
   compareSessions: (a: SessionRow, b: SessionRow) => number;
   highlightCurrentSession: boolean;
-  runtimeSampledAtByRow: WeakMap<GatewaySessionRow, number>;
+  rowProjection: SidebarSessionRowProjection;
   loadingChildSessionKeys: ReadonlySet<string>;
   outboxAttentionCountForSessionKey: (sessionKey: string) => number;
   hasSessionDraft: (sessionKey: string) => boolean;
@@ -175,119 +167,156 @@ export function buildSidebarSessionNavigationState(input: {
     compareSessions: input.compareSessions,
   });
   const toSidebarSession = (row: SessionRow, isChild = false): SidebarRecentSession => {
-    const channelInfo = resolveChannelSessionInfo(row.key, row.channel);
-    let runtimeSampledAt = row.runtimeSampledAt;
-    if (row.runtimeMs != null && runtimeSampledAt == null) {
-      runtimeSampledAt = input.runtimeSampledAtByRow.get(row);
-      if (runtimeSampledAt == null) {
-        runtimeSampledAt = Date.now();
-        input.runtimeSampledAtByRow.set(row, runtimeSampledAt);
-      }
-    }
-    return {
-      key: row.key,
-      agentId: resolveUiSessionRowAgentId(row, defaultAgentId),
-      sessionId: row.sessionId,
-      displayName: row.displayName,
-      titlePending: isSessionTitlePending(row.key, row),
-      incognito: row.incognito === true || isIncognitoSessionKey(row.key),
-      createdActor: row.createdActor,
-      owner: row.owner,
-      participants: row.participants,
-      expandedParticipants: row.expandedParticipants,
-      participantCount: row.participantCount,
-      archivedBy: row.archivedBy,
-      // Parent attention attributes subagent failures with the worker's own label.
-      label: resolveSessionDisplayName(row.key, row),
-      userLabel: row.label,
-      renameValue: resolveSessionRenameValue(row),
-      subtitle: resolveSessionWorkSubtitle(row),
-      workContext: resolveSessionWorkContext(row),
-      active: row.key === navigation.activeRowKey,
-      visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
-      hasActiveRun: row.archived !== true && isSessionRunActive(row),
-      isRunVisuallyActive:
-        row.archived !== true &&
-        (context ? context.sessions.isRunVisuallyActive(row) : isSessionRunActive(row)),
-      gatewayHasActiveRun: row.hasActiveRun,
-      hasActiveSubagentRun: row.hasActiveSubagentRun,
-      activeRunIds: row.archived === true ? undefined : row.activeRunIds,
-      modelSelectionLocked: row.modelSelectionLocked === true,
-      kind: row.kind,
-      pinned: row.pinned === true,
-      pinnable: isPinnableUiSessionRow(row),
-      sidebarRoot: row.sidebarRoot,
-      snoozedUntil: row.snoozedUntil,
-      archived: row.archived === true,
-      visibility: row.visibility,
-      sharingRole: row.sharingRole,
-      communication: row.communication,
-      effectiveCommunication: row.effectiveCommunication,
-      draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
-      category: normalizeOptionalString(row.category),
-      icon: normalizeOptionalString(row.icon),
-      color: normalizeOptionalString(row.color),
-      channelAvatarUrl: normalizeOptionalString(row.channelAvatarUrl),
-      boardFace: row.boardFace,
-      channel: channelInfo.channel,
-      channelSession: channelInfo.channelSession,
-      channelPresentation: resolveSessionChannelPresentation(row),
-      workSession:
-        Boolean(row.worktree || row.repository || row.execNode) ||
-        context?.sessions.isPreparedWorkSession(row.key) === true,
-      acpSession: isAcpSessionKey(row.key),
-      worktreeId: row.worktree?.id,
-      // A cwd or a prepared session does not prove repository identity.
-      workspaceKind: row.worktree ? "worktree" : row.repository ? "checkout" : undefined,
-      execNode: row.execNode,
-      placementState: row.placement?.state,
-      placementProviderId:
-        row.placement && "providerId" in row.placement ? row.placement.providerId : undefined,
-      placementProfileId:
-        row.placement && "profileId" in row.placement ? row.placement.profileId : undefined,
-      placementMachine:
-        row.placement && "machine" in row.placement ? row.placement.machine : undefined,
-      diskSpaceStatus:
-        row.placement?.state === "active" ? row.placement.diskSpace?.status : undefined,
-      workspaceConflictCount:
-        row.placement && "workspaceResultConflict" in row.placement
-          ? Math.max(
-              row.placement.workspaceResultConflict?.paths.length ?? 0,
-              row.placement.workspaceResultConflict?.totalCount ?? 0,
-            ) || undefined
-          : undefined,
-      cloudWorkerStopAction: resolveCloudWorkerStopAction(row.placement),
-      hasAutomation: row.hasAutomation === true,
-      pullRequest: context?.sessions.pullRequestSummary(row.key),
-      outboxAttentionCount: input.outboxAttentionCountForSessionKey(row.key),
-      hasComposerDraft: row.incognito !== true && input.hasSessionDraft(row.key),
-      unread: row.archived !== true && row.unread === true,
-      hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
-      lastMessagePreview: normalizeOptionalString(row.lastMessagePreview),
-      lastReadAt: row.lastReadAt,
-      attention: row.archived === true ? SIDEBAR_SESSION_NO_ATTENTION : input.resolveAttention(row),
-      agentStatusNote: input.resolveAgentStatusNote(row),
-      observerDigest: row.observerDigest,
-      spawnedBy: row.spawnedBy,
-      forkSource: row.forkSource,
-      status: row.status,
-      createdAt: row.createdAt,
-      startedAt: row.startedAt,
-      updatedAt: row.updatedAt,
-      endedAt: row.endedAt,
-      runtimeMs: row.runtimeMs,
-      runtimeSampledAt,
-      childSessionKeys:
-        row.archived === true
-          ? []
-          : (row.childSessions ?? []).filter((key) => !isSubagentSessionKey(key)),
-      children: [],
+    const active = row.key === navigation.activeRowKey;
+    const visuallyActive =
+      input.highlightCurrentSession && row.key === navigation.currentSessionKey;
+    const selfUserId = context?.gateway.snapshot.selfUser?.id;
+    const isRunVisuallyActive =
+      row.archived !== true &&
+      (context ? context.sessions.isRunVisuallyActive(row) : isSessionRunStateActive(row));
+    const workSession =
+      Boolean(row.worktree || row.repository || row.execNode) ||
+      context?.sessions.isPreparedWorkSession(row.key) === true;
+    const pullRequest = context?.sessions.pullRequestSummary(row.key);
+    const outboxAttentionCount = input.outboxAttentionCountForSessionKey(row.key);
+    const hasComposerDraft = row.incognito !== true && input.hasSessionDraft(row.key);
+    const agentStatusNote = input.resolveAgentStatusNote(row);
+    const loadingChildren = input.loadingChildSessionKeys.has(row.key);
+    return input.rowProjection.read(
+      row,
       isChild,
-      loadingChildren: input.loadingChildSessionKeys.has(row.key),
-      containsActiveDescendant: false,
-      runningChildCount: 0,
-      failedChildCount: 0,
-    };
+      [
+        context,
+        defaultAgentId,
+        selfUserId,
+        i18n.getLocale(),
+        active,
+        visuallyActive,
+        isRunVisuallyActive,
+        workSession,
+        pullRequest,
+        outboxAttentionCount,
+        hasComposerDraft,
+        input.resolveAttention,
+        agentStatusNote,
+        loadingChildren,
+      ],
+      () => {
+        const channelInfo = resolveChannelSessionInfo(row.key, row.channel);
+        let runtimeSampledAt = row.runtimeSampledAt;
+        if (row.runtimeMs != null && runtimeSampledAt == null) {
+          runtimeSampledAt = input.rowProjection.runtimeSampledAtByRow.get(row);
+          if (runtimeSampledAt == null) {
+            runtimeSampledAt = Date.now();
+            input.rowProjection.runtimeSampledAtByRow.set(row, runtimeSampledAt);
+          }
+        }
+        return {
+          key: row.key,
+          agentId: resolveUiSessionRowAgentId(row, defaultAgentId),
+          sessionId: row.sessionId,
+          displayName: row.displayName,
+          titlePending: isSessionTitlePending(row.key, row),
+          incognito: row.incognito === true || isIncognitoSessionKey(row.key),
+          createdActor: row.createdActor,
+          owner: row.owner,
+          participants: row.participants,
+          expandedParticipants: row.expandedParticipants,
+          participantCount: row.participantCount,
+          archivedBy: row.archivedBy,
+          // Parent attention attributes subagent failures with the worker's own label.
+          label: resolveSessionDisplayName(row.key, row),
+          userLabel: row.label,
+          renameValue: resolveSessionRenameValue(row),
+          subtitle: resolveSessionWorkSubtitle(row),
+          workContext: resolveSessionWorkContext(row),
+          active,
+          visuallyActive,
+          hasActiveRun: row.archived !== true && isSessionRunStateActive(row),
+          isRunVisuallyActive,
+          gatewayHasActiveRun: row.hasActiveRun,
+          hasActiveSubagentRun: row.hasActiveSubagentRun,
+          activeRunIds: row.archived === true ? undefined : row.activeRunIds,
+          modelSelectionLocked: row.modelSelectionLocked === true,
+          kind: row.kind,
+          pinned: row.pinned === true,
+          pinnable: isPinnableUiSessionRow(row),
+          sidebarRoot: row.sidebarRoot,
+          snoozedUntil: row.snoozedUntil,
+          archived: row.archived === true,
+          visibility: row.visibility,
+          sharingRole: row.sharingRole,
+          communication: row.communication,
+          effectiveCommunication: row.effectiveCommunication,
+          draftOwnedBySelf:
+            row.visibility === "draft" &&
+            (row.sharingRole === "owner" ||
+              Boolean(selfUserId && row.createdActor?.id === selfUserId)),
+          category: normalizeOptionalString(row.category),
+          icon: normalizeOptionalString(row.icon),
+          color: normalizeOptionalString(row.color),
+          channelAvatarUrl: normalizeOptionalString(row.channelAvatarUrl),
+          boardFace: row.boardFace,
+          channel: channelInfo.channel,
+          channelSession: channelInfo.channelSession,
+          channelPresentation: resolveSessionChannelPresentation(row),
+          workSession,
+          acpSession: isAcpSessionKey(row.key),
+          worktreeId: row.worktree?.id,
+          // A cwd or a prepared session does not prove repository identity.
+          workspaceKind: row.worktree ? "worktree" : row.repository ? "checkout" : undefined,
+          execNode: row.execNode,
+          placementState: row.placement?.state,
+          placementProviderId:
+            row.placement && "providerId" in row.placement ? row.placement.providerId : undefined,
+          placementProfileId:
+            row.placement && "profileId" in row.placement ? row.placement.profileId : undefined,
+          placementMachine:
+            row.placement && "machine" in row.placement ? row.placement.machine : undefined,
+          diskSpaceStatus:
+            row.placement?.state === "active" ? row.placement.diskSpace?.status : undefined,
+          workspaceConflictCount:
+            row.placement && "workspaceResultConflict" in row.placement
+              ? Math.max(
+                  row.placement.workspaceResultConflict?.paths.length ?? 0,
+                  row.placement.workspaceResultConflict?.totalCount ?? 0,
+                ) || undefined
+              : undefined,
+          cloudWorkerStopAction: resolveCloudWorkerStopAction(row.placement),
+          hasAutomation: row.hasAutomation === true,
+          pullRequest,
+          outboxAttentionCount,
+          hasComposerDraft,
+          unread: row.archived !== true && row.unread === true,
+          hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
+          lastMessagePreview: normalizeOptionalString(row.lastMessagePreview),
+          lastReadAt: row.lastReadAt,
+          attention:
+            row.archived === true ? SIDEBAR_SESSION_NO_ATTENTION : input.resolveAttention(row),
+          agentStatusNote,
+          observerDigest: row.observerDigest,
+          spawnedBy: row.spawnedBy,
+          forkSource: row.forkSource,
+          status: row.status,
+          createdAt: row.createdAt,
+          startedAt: row.startedAt,
+          updatedAt: row.updatedAt,
+          endedAt: row.endedAt,
+          runtimeMs: row.runtimeMs,
+          runtimeSampledAt,
+          childSessionKeys:
+            row.archived === true
+              ? []
+              : (row.childSessions ?? []).filter((key) => !isSubagentSessionKey(key)),
+          children: [],
+          isChild,
+          loadingChildren,
+          containsActiveDescendant: false,
+          runningChildCount: 0,
+          failedChildCount: 0,
+        };
+      },
+    );
   };
   return {
     routeSessionKey: navigation.currentSessionKey,
@@ -372,41 +401,50 @@ export function buildReconciledSidebarZone(input: {
   return live;
 }
 
-type SidebarSessionSelection = {
-  selectedKeys: ReadonlySet<string>;
-  anchor: string | null;
-};
-
-export function toggleSidebarSessionSelection(
-  selectedKeys: ReadonlySet<string>,
-  key: string,
-): SidebarSessionSelection {
-  const next = new Set(selectedKeys);
-  if (next.has(key)) {
-    next.delete(key);
-  } else {
-    next.add(key);
-  }
-  return { selectedKeys: next, anchor: next.has(key) ? key : null };
-}
-
-export function extendSidebarSessionSelection(input: {
-  rows: readonly SidebarRecentSession[];
-  anchor: string | null;
-  key: string;
-}): SidebarSessionSelection {
-  const anchor =
-    input.anchor ?? input.rows.find((row) => row.visuallyActive || row.active)?.key ?? input.key;
-  const anchorIndex = input.rows.findIndex((row) => row.key === anchor);
-  const targetIndex = input.rows.findIndex((row) => row.key === input.key);
-  if (anchorIndex === -1 || targetIndex === -1) {
-    return { selectedKeys: new Set([input.key]), anchor: input.key };
-  }
-  const [start, end] =
-    anchorIndex <= targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
+/** Menus read selection synchronously; the sidebar projection owns publication and parking. */
+export function createSidebarSessionSelection(
+  readRows: () => readonly SidebarRecentSession[],
+  publish: () => void,
+) {
+  let selectedKeys: ReadonlySet<string> = new Set();
+  let anchor: string | null = null;
   return {
-    selectedKeys: new Set(input.rows.slice(start, end + 1).map((row) => row.key)),
-    anchor,
+    get selectedKeys() {
+      return selectedKeys;
+    },
+    toggle(key: string) {
+      const next = new Set(selectedKeys);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      selectedKeys = next;
+      anchor = next.has(key) ? key : null;
+      publish();
+    },
+    extend(key: string) {
+      const rows = readRows();
+      anchor ??= rows.find((row) => row.visuallyActive || row.active)?.key ?? key;
+      const anchorIndex = rows.findIndex((row) => row.key === anchor);
+      const targetIndex = rows.findIndex((row) => row.key === key);
+      if (anchorIndex === -1 || targetIndex === -1) {
+        selectedKeys = new Set([key]);
+        anchor = key;
+      } else {
+        const [start, end] =
+          anchorIndex <= targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
+        selectedKeys = new Set(rows.slice(start, end + 1).map((row) => row.key));
+      }
+      publish();
+    },
+    clear(this: void) {
+      anchor = null;
+      if (selectedKeys.size > 0) {
+        selectedKeys = new Set();
+        publish();
+      }
+    },
   };
 }
 

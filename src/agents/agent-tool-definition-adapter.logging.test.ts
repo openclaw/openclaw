@@ -29,8 +29,16 @@ function invoke(def: { execute: ToolExecute }, id: string, params: unknown, sign
   return def.execute(id, params, signal, undefined, extensionContext);
 }
 
-function definitionFor(tool: AgentTool) {
-  const [definition] = toToolDefinitions([tool]);
+function definitionFor(
+  name: string,
+  parameters: AgentTool["parameters"],
+  execute: AgentTool["execute"],
+  validate = false,
+) {
+  const tool = { name, label: name, description: name, parameters, execute };
+  const [definition] = toToolDefinitions([
+    validate ? wrapToolParamValidation(tool, REQUIRED_PARAM_GROUPS.edit) : tool,
+  ]);
   if (!definition) {
     throw new Error("missing tool definition");
   }
@@ -38,14 +46,8 @@ function definitionFor(tool: AgentTool) {
 }
 
 function failingExecDefinition(name: string, parameters: AgentTool["parameters"]) {
-  return definitionFor({
-    name,
-    label: name,
-    description: "runs commands",
-    parameters,
-    execute: async () => {
-      throw new Error("exec denied: allowlist miss");
-    },
+  return definitionFor(name, parameters, async () => {
+    throw new Error("exec denied: allowlist miss");
   });
 }
 
@@ -54,24 +56,13 @@ function firstLogErrorMessage(): unknown {
 }
 function expectPrivateExecLog(...secrets: string[]) {
   const message = String(firstLogErrorMessage());
-  expect(message).toBe("[tools] exec failed: exec denied: allowlist miss");
+  expect(message).toBe("[tools] exec failed:");
   for (const secret of [...secrets, "export XAI_API_KEY"]) {
     expect(message).not.toContain(secret);
   }
 }
 function editDefinition(execute: AgentTool["execute"]) {
-  return definitionFor(
-    wrapToolParamValidation(
-      {
-        name: "edit",
-        label: "Edit",
-        description: "edits files",
-        parameters: editParameters,
-        execute,
-      },
-      REQUIRED_PARAM_GROUPS.edit,
-    ),
-  );
+  return definitionFor("edit", editParameters, execute, true);
 }
 
 describe("agent tool definition adapter logging", () => {
@@ -91,40 +82,42 @@ describe("agent tool definition adapter logging", () => {
       details: { ok: true },
     }));
 
-    await invoke(def, "call-edit-1", { path: "private-notes.txt" });
+    const result = await invoke(def, "call-edit-1", { path: "private-notes.txt" });
 
-    expect(firstLogErrorMessage()).toBe(
-      "[tools] edit failed: Missing required parameter: edits (received: path). Supply correct parameters before retrying.",
-    );
+    expect(firstLogErrorMessage()).toBe("[tools] edit failed:");
+    expect(result.details).toEqual({
+      status: "error",
+      tool: "edit",
+      error:
+        "Missing required parameter: edits (received: path). Supply correct parameters before retrying.",
+    });
     expect(
       JSON.stringify([...mocks.logError.mock.calls, ...mocks.logDebug.mock.calls]),
     ).not.toContain("private-notes.txt");
   });
 
   it("logs the operator hint for a contained tool failure without exposing it to the model", async () => {
-    const baseTool = {
-      name: "apply_patch",
-      label: "apply_patch",
-      description: "patches files",
-      parameters: Type.Object({ input: Type.String() }),
-      execute: async () => {
-        throw withToolOperatorHint(
-          new Error("Path escapes sandbox root (~/workspace): /outside/note.md"),
-          "apply_patch is restricted to the workspace by default. Set tools.exec.applyPatch.workspaceOnly to false.",
-        );
-      },
-    } satisfies AgentTool;
-    const result = await invoke(definitionFor(baseTool), "call-hint-1", {
+    const message = "Path escapes sandbox root (~/workspace): /outside/private-tool-message.md";
+    const failure = new Error(message);
+    failure.stack = "Error: private-tool-stack-sentinel";
+    const operatorHint =
+      "apply_patch is restricted to the workspace by default. Set tools.exec.applyPatch.workspaceOnly to false.";
+    const def = definitionFor("apply_patch", Type.Object({ input: Type.String() }), async () => {
+      throw withToolOperatorHint(failure, operatorHint);
+    });
+    const result = await invoke(def, "call-hint-1", {
       input: "*** Begin Patch",
     });
 
-    const logged = String(firstLogErrorMessage());
-    expect(logged).toContain("Path escapes sandbox root");
-    expect(logged).toContain("tools.exec.applyPatch.workspaceOnly");
+    expect(firstLogErrorMessage()).toBe(`[tools] apply_patch failed: ${operatorHint}`);
+    const logs = JSON.stringify([...mocks.logError.mock.calls, ...mocks.logDebug.mock.calls]);
+    expect(logs).not.toContain("private-tool-message");
+    expect(logs).not.toContain("private-tool-stack-sentinel");
 
     // The model-visible result carries the rejection but never the way to lift it.
+    expect(result.details).toEqual({ status: "error", tool: "apply_patch", error: message });
     const modelText = JSON.stringify(result);
-    expect(modelText).toContain("Path escapes sandbox root");
+    expect(modelText).toContain(message);
     expect(modelText).not.toContain("workspaceOnly");
   });
 
@@ -175,27 +168,15 @@ describe("agent tool definition adapter logging", () => {
   );
 
   it("rethrows AbortError failures when the agent run signal was aborted", async () => {
-    const baseTool = {
-      name: "web_search",
-      label: "Web Search",
-      description: "searches",
-      parameters: Type.Object({ query: Type.String() }),
-      execute: async () => {
-        const error = new Error("This operation was aborted");
-        error.name = "AbortError";
-        throw error;
-      },
-    } satisfies AgentTool;
-    const def = definitionFor(baseTool);
+    const def = definitionFor("web_search", Type.Object({ query: Type.String() }), async () => {
+      const error = new Error("This operation was aborted");
+      error.name = "AbortError";
+      throw error;
+    });
     const controller = new AbortController();
     controller.abort();
 
-    const pending = invoke(
-      def,
-      "call-web-search-agent-abort",
-      { query: "OpenClaw" },
-      controller.signal,
-    );
+    const pending = invoke(def, "call-agent-abort", { query: "OpenClaw" }, controller.signal);
     await expect(pending).rejects.toBeInstanceOf(Error);
     await expect(pending).rejects.toBe(controller.signal.reason);
     await expect(pending).rejects.toHaveProperty("name", "AbortError");

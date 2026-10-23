@@ -77,14 +77,8 @@ export async function withPreparedModelInference<Result>(
       params.signal?.throwIfAborted();
       return withPluginRuntimeGenerationScope(context.preparedModelRuntime, async () => {
         captureWorkContext();
-        if (!context.preparedModelRuntime.isCurrent()) {
-          throw new Error("Prepared model inference generation is no longer current.");
-        }
         const result = await execute(context);
         params.signal?.throwIfAborted();
-        if (!context.preparedModelRuntime.isCurrent()) {
-          throw new Error("Prepared model inference generation is no longer current.");
-        }
         return result;
       });
     }),

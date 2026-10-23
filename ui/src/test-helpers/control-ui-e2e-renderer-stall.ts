@@ -161,23 +161,30 @@ export async function captureControlUiE2eRendererStall(
   let pauseRequested = false;
   try {
     const sample = async () => {
-      const { metrics } = await withTimeout(session.send("Performance.getMetrics"), remaining());
+      const { metrics } = await withTimeout(
+        session.send("Performance.getMetrics"),
+        Math.min(RENDERER_STALL_SAMPLE_MS, remaining() / 2),
+      );
       return (name: string) => metrics.find((metric) => metric.name === name)?.value ?? 0;
     };
-    const before = await sample();
-    // Leave at least half of the remaining budget for the stack and cleanup.
-    stall.sampleMs = Math.round(Math.min(RENDERER_STALL_SAMPLE_MS, remaining() / 2));
-    await new Promise((resolve) => {
-      setTimeout(resolve, stall.sampleMs);
-    });
-    const after = await sample();
-    const busy = (name: string) => Math.round((after(name) - before(name)) * 1_000);
-    stall.busyMs = {
-      task: busy("TaskDuration"),
-      script: busy("ScriptDuration"),
-      layout: busy("LayoutDuration"),
-      style: busy("RecalcStyleDuration"),
-    };
+    try {
+      const before = await sample();
+      // Leave at least half of the remaining budget for the stack and cleanup.
+      stall.sampleMs = Math.round(Math.min(RENDERER_STALL_SAMPLE_MS, remaining() / 2));
+      await new Promise((resolve) => {
+        setTimeout(resolve, stall.sampleMs);
+      });
+      const after = await sample();
+      const busy = (name: string) => Math.round((after(name) - before(name)) * 1_000);
+      stall.busyMs = {
+        task: busy("TaskDuration"),
+        script: busy("ScriptDuration"),
+        layout: busy("LayoutDuration"),
+        style: busy("RecalcStyleDuration"),
+      };
+    } catch {
+      // A native renderer stall can block metrics; still try the armed debugger.
+    }
     const paused = new Promise<void>((resolve) => {
       session.on("Debugger.paused", ({ callFrames }) => {
         try {

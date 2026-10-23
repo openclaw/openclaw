@@ -72,7 +72,6 @@ export function createProviderHookRuntime(
     return { ...preparedModel, [MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]: runtimeHandle };
   }
 
-  /** Reads the provider plugin handle attached to a prepared attempt model. */
   function getModelProviderRuntimePluginHandle(
     model: object | undefined,
   ): ProviderRuntimePluginHandle | undefined {
@@ -161,7 +160,7 @@ export function createProviderHookRuntime(
             cfg: params.config,
             provider: params.provider,
             model: modelId,
-          }).modelRefs
+          })
         : undefined,
       registryScope,
       activate: false,

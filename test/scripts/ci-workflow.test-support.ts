@@ -3,6 +3,8 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect } from "vitest";
 import { parse } from "yaml";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
@@ -22,6 +24,33 @@ export const AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC =
   "::error title=ambiguous main push::github.event.before is zero; refusing to infer a diff base for a created or recreated main branch.";
 export const testNodeExecPath = resolveTestNodeExecPath();
 export const TSX_IMPORT = import.meta.resolve("tsx");
+const defaultContext = {
+  eventName: "pull_request" as const,
+  repository: "openclaw/openclaw",
+  runAttempt: 1,
+};
+
+export function expectIncludes(actual: unknown, values: readonly unknown[], message?: string) {
+  for (const value of values) {
+    expect(actual, message).toContain(value);
+  }
+}
+
+export function expectExcludes(actual: unknown, values: readonly unknown[], message?: string) {
+  for (const value of values) {
+    expect(actual, message).not.toContain(value);
+  }
+}
+
+export function evaluateWorkflow(
+  expression: unknown,
+  context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
+) {
+  return evaluateWorkflowExpression(expression, {
+    ...defaultContext,
+    ...context,
+  });
+}
 
 export type WorkflowStep = {
   "continue-on-error"?: boolean;
@@ -37,17 +66,30 @@ export type WorkflowStep = {
 
 export const readCiWorkflow = () => readWorkflow(".github/workflows/ci.yml");
 
-export function evaluateWorkflowExpression(
-  expression: unknown,
-  context: {
-    action?: string;
-    actor?: string;
+export function requiredWorkflowStep<T extends readonly { name?: string }[]>(
+  steps: T,
+  name: string,
+): T[number];
+export function requiredWorkflowStep(steps: readonly { name?: string }[], name: string) {
+  return expectDefined(
+    steps.find((step) => step.name === name),
+    name,
+  );
+}
+
+type Strings<K extends string> = Partial<Record<K, string>>;
+type Flags<K extends string> = Partial<Record<K, boolean>>;
+type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maintainerCommands"> &
+  Strings<"dispatchId" | "headRepository" | "headSha" | "ref" | "sha"> &
+  Strings<"preflightResult" | "failureReportResult" | "releaseScope"> &
+  Strings<"releaseRunnerGroup" | "releasePublishRunId" | "releasePriorityRun" | "runnerGroup"> &
+  Strings<"runnerTemp" | "ciOnPush" | "targetContextRef" | "targetRef"> &
+  Strings<"testRuntimePolicy" | "workflow" | "workflowSha" | "workflowToken"> &
+  Strings<"windowsCiReplay" | "workspace"> &
+  Flags<"cancelled" | "draft" | "failed" | "frozenTarget" | "hostedRunnerProfileContract"> &
+  Flags<"releaseGate" | "runCheck" | "runWindowsCi" | "includeAndroid"> &
+  Flags<"skipDefenderExclusions" | "useGithubHostedRunners"> & {
     githubEvent?: Record<string, unknown>;
-    maintainerCommands?: string;
-    authorAssociation?: string;
-    cancelled?: boolean;
-    dispatchId?: string;
-    draft?: boolean;
     eventName:
       | "pull_request"
       | "pull_request_target"
@@ -60,14 +102,9 @@ export function evaluateWorkflowExpression(
       | "workflow_run"
       | "repository_dispatch"
       | "schedule";
-    failed?: boolean;
     env?: Record<string, string>;
     secrets?: Record<string, string>;
-    frozenTarget?: boolean;
     fileHashes?: Record<string, string>;
-    headRepository?: string;
-    headSha?: string;
-    hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
     preflightOutputs?: Record<string, string>;
     additionalNeeds?: Record<
@@ -78,49 +115,27 @@ export function evaluateWorkflowExpression(
       }
     >;
     jobResults?: Record<string, string>;
-    preflightResult?: string;
     failureReportOutputs?: Record<string, string>;
-    failureReportResult?: string;
     pullRequestNumber?: number;
-    ref?: string;
     resolveTargetOutputs?: Record<string, string>;
-    releaseGate?: boolean;
-    releaseRunnerGroup?: string;
-    releasePublishRunId?: string;
-    runnerGroup?: string;
-    releasePriorityRun?: string;
-    releaseScope?: string;
     validationTier?: "full" | "main";
     repository: string;
-    runCheck?: boolean;
-    runWindowsCi?: boolean;
     runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
     requestedRunnerBackend?: "default" | "hybrid" | "runson";
     ciShape?: "default" | "main";
-    ciOnPush?: string;
-    includeAndroid?: boolean;
+    inputs?: Record<string, unknown>;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
     runId?: number;
     runNumber?: number;
-    sha?: string;
-    skipDefenderExclusions?: boolean;
     steps?: Record<
       string,
       { outputs: Record<string, string>; outcome?: "success" | "failure" | "cancelled" | "skipped" }
     >;
-    targetContextRef?: string;
-    targetRef?: string;
-    testRuntimePolicy?: string;
-    useGithubHostedRunners?: boolean;
-    workflow?: string;
-    workflowSha?: string;
-    workflowToken?: string;
-    windowsCiReplay?: string;
-    workspace?: string;
-  },
-) {
+  };
+
+export function evaluateWorkflowExpression(expression: unknown, context: WorkflowContext) {
   if (typeof expression !== "string") {
     throw new TypeError("workflow expression must be a string");
   }
@@ -165,6 +180,8 @@ export function evaluateWorkflowExpression(
       actor: context.actor ?? "",
       event_name: context.eventName,
       repository: context.repository,
+      repository_owner: context.repository.split("/")[0],
+      server_url: "https://github.com",
       ref: context.ref ?? "refs/heads/main",
       run_attempt: context.runAttempt,
       run_id: context.runId,
@@ -208,17 +225,22 @@ export function evaluateWorkflowExpression(
       run_windows_ci: context.runWindowsCi ?? false,
       skip_defender_exclusions: context.skipDefenderExclusions ?? false,
       windows_ci_replay: context.windowsCiReplay ?? "",
+      ...context.inputs,
     },
     env: context.env ?? {},
     secrets: context.secrets ?? {},
     matrix: context.matrix ?? {},
-    runner: { environment: context.runnerEnvironment ?? "" },
+    runner: { environment: context.runnerEnvironment ?? "", temp: context.runnerTemp ?? "" },
     steps: {
       runner_profile: { outputs: { node_runner_backend: "" } },
       qualification_dispatch: { outputs: { eligible: "false" } },
       ...context.steps,
     },
     needs: {
+      "build-artifacts": {
+        result: context.jobResults?.["build-artifacts"] ?? "success",
+        outputs: {},
+      },
       ...Object.fromEntries(
         Object.entries(context.additionalNeeds ?? {}).map(([name, need]) => [
           name,
@@ -273,9 +295,8 @@ export function evaluateWorkflowRunner(
 ) {
   return typeof selector === "string" && selector.startsWith("${{")
     ? evaluateWorkflowExpression(selector, {
+        ...defaultContext,
         eventName: "workflow_dispatch",
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
         ...context,
       })
     : selector;
@@ -291,9 +312,7 @@ export function evaluateWorkflowCondition(
   );
 }
 
-export function quoteShell(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
+export const quoteShell = (value: string): string => `'${value.replaceAll("'", `'"'"'`)}'`;
 
 let linuxWorkflowBash: string | undefined;
 
@@ -353,21 +372,12 @@ export function runWorkflowShellScript(
   }
 }
 
-export function readAndroidToolchainAction() {
-  return readWorkflow(SETUP_ANDROID_TOOLCHAIN_ACTION);
-}
-
-export function readBuildArtifactsTestboxWorkflow() {
-  return readWorkflow(".github/workflows/ci-build-artifacts-testbox.yml");
-}
-
-export function readMaturityScorecardWorkflow() {
-  return readWorkflow(MATURITY_SCORECARD_WORKFLOW);
-}
-
-export function readReleaseChecksWorkflow() {
-  return readWorkflow(".github/workflows/openclaw-release-checks.yml");
-}
+export const readAndroidToolchainAction = () => readWorkflow(SETUP_ANDROID_TOOLCHAIN_ACTION);
+export const readBuildArtifactsTestboxWorkflow = () =>
+  readWorkflow(".github/workflows/ci-build-artifacts-testbox.yml");
+export const readMaturityScorecardWorkflow = () => readWorkflow(MATURITY_SCORECARD_WORKFLOW);
+export const readReleaseChecksWorkflow = () =>
+  readWorkflow(".github/workflows/openclaw-release-checks.yml");
 
 const parsedWorkflows = new Map<string, { source: string; workflow: ReturnType<typeof parse> }>();
 export function readWorkflow(filePath: string) {
@@ -383,10 +393,9 @@ export function readWorkflow(filePath: string) {
 }
 
 export function readTrackedText(relativePath: string): string {
-  if (existsSync(relativePath)) {
-    return readFileSync(relativePath, "utf8");
-  }
-  return execFileSync("git", ["show", `:${relativePath}`], { encoding: "utf8" });
+  return existsSync(relativePath)
+    ? readFileSync(relativePath, "utf8")
+    : execFileSync("git", ["show", `:${relativePath}`], { encoding: "utf8" });
 }
 
 export function runGit(cwd: string, args: string[]): string {

@@ -1,18 +1,19 @@
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { ComposerMicrophonePicker } from "./composer-microphone-picker.ts";
+import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
 
 const catalog = (ready: boolean) => ({ realtime: { ready }, transcription: { ready } });
 type Request = (method: string) => Promise<unknown>;
-let picker: ComposerMicrophonePicker;
+let picker: ComposerMicrophoneOwner;
 function expectStatus(status: string) {
   expect(picker).toMatchObject({ realtimeStatus: status, dictationStatus: status });
 }
 function connect(request: Request, update: () => void = vi.fn(), sessionKey?: string) {
   const client = { request } as unknown as GatewayBrowserClient;
-  picker = new ComposerMicrophonePicker(update);
+  picker = new ComposerMicrophoneOwner();
+  picker.subscribe(update);
   picker.syncCatalog(client, true, sessionKey);
   return client;
 }
@@ -41,8 +42,12 @@ it.each(["session", "dispose"] as const)(
       method === "talk.config" ? Promise.resolve({}) : readCatalog(),
     );
     let updated = createDeferred();
-    const requestUpdate = vi.fn(() => updated.resolve());
-    const client = connect(request, requestUpdate, session ? "agent:first:main" : undefined);
+    const onCatalogChange = vi.fn(() => {
+      if (picker.realtimeStatus !== "checking") {
+        updated.resolve();
+      }
+    });
+    const client = connect(request, onCatalogChange, session ? "agent:first:main" : undefined);
     await updated.promise;
     expectStatus(session ? "ready" : "unavailable");
     window.dispatchEvent(new Event("focus"));
@@ -63,12 +68,12 @@ it.each(["session", "dispose"] as const)(
     await updated.promise;
     const status = session ? "unavailable" : "ready";
     expectStatus(status);
-    requestUpdate.mockClear();
+    onCatalogChange.mockClear();
     stale.resolve(catalog(session));
     await stale.promise;
     await Promise.resolve();
     expectStatus(status);
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(onCatalogChange).not.toHaveBeenCalled();
     if (session) {
       picker.syncCatalog(client, true, "agent:second:main");
       expect(readCatalog).toHaveBeenCalledTimes(3);
@@ -129,7 +134,11 @@ it.each([
       },
     };
     const request = vi.fn(async (method: string) => responses[method]);
-    connect(request, () => loaded.resolve());
+    connect(request, () => {
+      if (picker.realtimeStatus !== "checking") {
+        loaded.resolve();
+      }
+    });
     await loaded.promise;
     expect(picker).toMatchObject({
       realtimeStatus: ready ? "ready" : "unavailable",
@@ -157,7 +166,7 @@ it.each(["close", "dispose", "replace", "remain open"] as const)(
       mediaDevices: { enumerateDevices, getUserMedia, addEventListener, removeEventListener },
     });
     const discovery = vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs");
-    picker = new ComposerMicrophonePicker(vi.fn());
+    picker = new ComposerMicrophoneOwner();
     picker.handleOpen();
     expect(enumerateDevices).toHaveBeenCalledOnce();
     expect(getUserMedia).not.toHaveBeenCalled();

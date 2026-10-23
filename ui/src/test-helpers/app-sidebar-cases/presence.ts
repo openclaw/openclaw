@@ -14,7 +14,7 @@ import { settleLitElement } from "../lit-settle.ts";
 import { flush } from "../solid-settle.ts";
 import "../../components/app-sidebar.tsx";
 
-await import("../../components/viewer-facepile.ts");
+await import("../../components/solid/viewer-facepile.tsx");
 
 async function mountOnlineSidebar(...args: Parameters<typeof mountSidebar>) {
   const mounted = await mountSidebar(...args);
@@ -25,7 +25,7 @@ async function mountOnlineSidebar(...args: Parameters<typeof mountSidebar>) {
 describe("AppSidebar viewer presence", () => {
   it.each([
     ["profile-bob", "bob"],
-    ["gateway-owner", "Shared owner"],
+    ["gateway-owner", "bob · Shared owner"],
   ])("shows presence and offline owner %s while excluding self", async (ownerId, ownerName) => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gateway = createGatewayHarness(client);
@@ -450,7 +450,6 @@ describe("AppSidebar viewer presence", () => {
         expect(document.querySelector("openclaw-elapsed-time")?.textContent).toBeTruthy(),
       );
       const elapsed = document.querySelector("openclaw-elapsed-time")!;
-      await elapsed.updateComplete;
       const cardIntervals = scheduleInterval.mock.results
         .filter((result) => result.type === "return")
         .map((result) => result.value);
@@ -480,7 +479,7 @@ describe("AppSidebar viewer presence", () => {
       await vi.waitFor(() =>
         expect(document.querySelector(".person-activity-hovercard")).toBeNull(),
       );
-      // The bridge waits one microtask before disposing a disconnected view.
+      // The hovercard waits one microtask before disposing a disconnected view.
       await Promise.resolve();
       expect(elapsed.isConnected).toBe(false);
       for (const interval of cardIntervals) {

@@ -1,21 +1,40 @@
-import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import {
+  asPositiveSafeInteger,
+  floorPositiveFiniteNumber as readPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { resolveProviderTransportSsrFPolicy } from "../agents/provider-network-policy.js";
-import { resolveProviderRequestPolicyConfig } from "../agents/provider-request-config.js";
+import {
+  buildProviderRequestDispatcherPolicy,
+  resolveProviderRequestPolicyConfig,
+  sanitizeConfiguredModelProviderRequest,
+} from "../agents/provider-request-config.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cancelUnreadResponseBody } from "../infra/http-body.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import {
+  fetchWithSsrFGuard,
+  withTrustedEnvProxyGuardedFetchMode,
+} from "../infra/net/fetch-guard.js";
+import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { readParsedField } from "../utils/string-readers.js";
 import { recordLiveServingContextLimit } from "./provider-catalog-expiry.js";
+import type { ProviderCatalogContext } from "./types.js";
 
 const log = createSubsystemLogger("plugins/self-hosted-provider-discovery");
 
@@ -46,13 +65,6 @@ type DiscoveryResponse =
   | { kind: "unreachable"; error: unknown }
   | { kind: "invalid-response"; error: unknown };
 
-function readPositiveInteger(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.trunc(value);
-}
-
 const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
   "context_length",
   "context_window",
@@ -60,25 +72,15 @@ const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
   "max_model_len",
 ] as const;
 
-function readOpenAICompatibleContextWindow(
-  model: Record<string, unknown> | undefined,
-): number | undefined {
-  for (const field of OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS) {
-    const contextWindow = readPositiveInteger(model?.[field]);
-    if (contextWindow !== undefined) {
-      return contextWindow;
-    }
-  }
-  return undefined;
+function readOpenAICompatibleContextWindow(model: Record<string, unknown>): number | undefined {
+  return readParsedField(model, OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS, readPositiveInteger);
 }
 
 function buildSelfHostedDiscoveryHeaders(params: {
   apiKey?: string;
   headers?: Record<string, string>;
-  acceptJson?: boolean;
 }): Record<string, string> | undefined {
   const headers: Record<string, string> = {
-    ...(params.acceptJson ? { Accept: "application/json" } : {}),
     ...params.headers,
   };
   const hasAuthorization = Object.keys(headers).some(
@@ -94,24 +96,35 @@ function buildSelfHostedDiscoveryHeaders(params: {
 async function fetchSelfHostedDiscoveryJson(params: {
   url: string;
   requestPolicy: ReturnType<typeof resolveProviderRequestPolicyConfig>;
-  apiKey?: string;
-  headers?: Record<string, string>;
   acceptJson?: boolean;
   timeoutMs: number;
   signal?: AbortSignal;
+  beforeRequest?: () => void;
   readBody: boolean;
   label: string;
 }): Promise<DiscoveryResponse> {
   let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
   try {
-    guarded = await fetchWithSsrFGuard({
+    const dispatcherPolicy = buildProviderRequestDispatcherPolicy(params.requestPolicy);
+    const request = {
       url: params.url,
-      init: { headers: buildSelfHostedDiscoveryHeaders(params) },
+      init: {
+        headers: params.acceptJson
+          ? { Accept: "application/json", ...params.requestPolicy.headers }
+          : params.requestPolicy.headers,
+      },
       policy: resolveProviderTransportSsrFPolicy({ ...params.requestPolicy, url: params.url }),
+      dispatcherPolicy,
       timeoutMs: params.timeoutMs,
       signal: params.signal,
+      beforeRequest: params.beforeRequest,
       auditContext: "self-hosted-provider-discovery",
-    });
+    };
+    guarded = await fetchWithSsrFGuard(
+      !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(params.url)
+        ? withTrustedEnvProxyGuardedFetchMode(request)
+        : request,
+    );
   } catch (error) {
     return { kind: "unreachable", error };
   }
@@ -157,9 +170,8 @@ function shouldProbeRuntimeProps(model: Record<string, unknown>): boolean {
 
 function resolveRuntimePropsUrl(params: { serverBaseUrl: string; modelId?: string }): string {
   const url = new URL(`${params.serverBaseUrl.replace(/\/+$/, "")}/props`);
-  const modelId = normalizeOptionalString(params.modelId);
-  if (modelId) {
-    url.searchParams.set("model", modelId);
+  if (params.modelId) {
+    url.searchParams.set("model", params.modelId);
     url.searchParams.set("autoload", "false");
   }
   return url.toString();
@@ -173,10 +185,7 @@ async function discoverOpenAICompatibleModelRows(
   const inferredServerBaseUrl = inferenceBaseUrl.replace(/\/v1$/u, "");
   const serverBaseUrl = (params.serverBaseUrl ?? inferredServerBaseUrl).replace(/\/+$/, "");
   const timeoutMs = params.timeoutMs ?? 5_000;
-  const requestPolicy = resolveProviderRequestPolicyConfig({
-    baseUrl: inferenceBaseUrl,
-    allowPrivateNetwork: params.allowPrivateNetwork,
-  });
+  const requestPolicy = await resolveDiscoveryRequestPolicy(params, inferenceBaseUrl);
   const request = {
     ...params,
     requestPolicy,
@@ -295,6 +304,10 @@ async function discoverOpenAICompatibleModelRows(
 
 type OpenAICompatibleLocalModelsParams = {
   baseUrl: string;
+  /** Resolve only this configured provider's headers and transport settings for setup discovery. */
+  configuredProvider?: { config: OpenClawConfig; id: string };
+  /** Revalidate the caller's live authority immediately before each request. */
+  beforeRequest?: () => void;
   allowPrivateNetwork?: boolean;
   serverBaseUrl?: string;
   apiKey?: string;
@@ -312,6 +325,63 @@ type OpenAICompatibleLocalModelsParams = {
   env?: NodeJS.ProcessEnv;
   rawResult?: boolean;
 };
+
+async function resolveDiscoveryRequestPolicy(
+  params: OpenAICompatibleLocalModelsParams,
+  baseUrl: string,
+) {
+  const configured = params.configuredProvider;
+  const source = configured?.config.models?.providers?.[configured.id];
+  let provider: ModelProviderConfig | undefined;
+  if (configured && source) {
+    // Resolve a private transport projection so persisted SecretRefs remain intact.
+    provider = structuredClone({
+      baseUrl,
+      models: [],
+      headers: source.headers,
+      request: source.request,
+    });
+    const projection: OpenClawConfig = { models: { providers: { [configured.id]: provider } } };
+    const [
+      { collectCoreConfigAssignments },
+      { createResolverContext },
+      { resolveAndApplySecretAssignments },
+    ] = await Promise.all([
+      import("../secrets/runtime-config-collectors-core.js"),
+      import("../secrets/runtime-shared.js"),
+      import("../secrets/runtime-owner-assignments.js"),
+    ]);
+    const context = createResolverContext({
+      sourceConfig: configured.config,
+      env: params.env ?? process.env,
+    });
+    collectCoreConfigAssignments({
+      config: projection,
+      defaults: configured.config.secrets?.defaults,
+      context,
+    });
+    await resolveAndApplySecretAssignments({
+      assignments: context.assignments,
+      context,
+      options: { config: configured.config, env: context.env, cache: context.cache },
+    });
+  }
+  const request = sanitizeConfiguredModelProviderRequest(
+    provider
+      ? {
+          ...provider.request,
+          headers: { ...provider.headers, ...provider.request?.headers },
+        }
+      : undefined,
+  );
+  return resolveProviderRequestPolicyConfig({
+    provider: configured?.id,
+    baseUrl,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    providerHeaders: buildSelfHostedDiscoveryHeaders(params),
+    request,
+  });
+}
 
 /** Discovers normalized model configs from a conventional OpenAI-compatible endpoint. */
 export function discoverOpenAICompatibleLocalModels(
@@ -412,4 +482,37 @@ export async function discoverOpenAICompatibleLocalModels(
     };
     return [modelConfig];
   });
+}
+
+export async function discoverOpenAICompatibleSelfHostedProvider<
+  T extends Record<string, unknown>,
+>(params: {
+  ctx: ProviderCatalogContext;
+  providerId: string;
+  buildProvider: (params: { apiKey?: string; baseUrl?: string }) => Promise<T>;
+}): Promise<{ provider: T & { apiKey: string } } | null> {
+  const configuredProvider = findNormalizedProviderValue(
+    params.ctx.config.models?.providers,
+    params.providerId,
+  );
+  const configuredBaseUrl = normalizeOptionalString(configuredProvider?.baseUrl);
+  if (configuredProvider) {
+    const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.ctx.config });
+    if (!visibility.providerWildcards.has(normalizeProviderId(params.providerId))) {
+      return null;
+    }
+  }
+  const { apiKey, discoveryApiKey } = params.ctx.resolveProviderApiKey(params.providerId);
+  if (!apiKey) {
+    return null;
+  }
+  return {
+    provider: {
+      ...(await params.buildProvider({
+        apiKey: discoveryApiKey,
+        ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
+      })),
+      apiKey,
+    },
+  };
 }

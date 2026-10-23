@@ -2,8 +2,6 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-// Release prepare tests cover shadow planning, cutover commands, and candidate manifests.
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   buildReleasePreparationManifest,
@@ -16,15 +14,7 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
 
-function worktreeState(
-  overrides: Partial<{
-    changedFiles: string[];
-    fingerprint: string;
-    head: string;
-    packageVersion: string;
-    status: string;
-  }> = {},
-) {
+function worktreeState(overrides: Partial<Awaited<ReturnType<typeof readWorktreeState>>> = {}) {
   return {
     changedFiles: [],
     fingerprint: "f".repeat(64),
@@ -35,84 +25,57 @@ function worktreeState(
   };
 }
 
-describe("release preparation arguments", () => {
+function prepareSteps(overrides: Partial<Parameters<typeof createReleasePrepareSteps>[0]> = {}) {
+  return createReleasePrepareSteps({
+    android: false,
+    jobs: 4,
+    mode: "shadow",
+    rootDir: "/repo",
+    version: "2026.7.2",
+    ...overrides,
+  });
+}
+
+describe("release preparation", () => {
   it("rejects ambiguous modes and invalid concurrency", () => {
-    expect(() => parseReleasePrepareArgs(["--version", "2026.7.2", "--check", "--write"])).toThrow(
-      "Use only one mode flag",
-    );
-    expect(() => parseReleasePrepareArgs(["--version", "2026.7.2", "--jobs", "17"])).toThrow(
-      "Expected 1 through 16",
-    );
-    expect(() => parseReleasePrepareArgs(["--check", "--check", "--unknown"])).toThrow(
-      "Use only one mode flag; received --check and --check.",
-    );
+    for (const [args, error] of [
+      ["--version 2026.7.2 --check --write", "Use only one mode flag"],
+      ["--version 2026.7.2 --jobs 17", "Expected 1 through 16"],
+      ["--check --check --unknown", "Use only one mode flag; received --check and --check."],
+      ["--help --manifest -h", "Missing value for --manifest."],
+    ] as const) {
+      expect(() => parseReleasePrepareArgs(args.split(" "))).toThrow(error);
+    }
     expect(parseReleasePrepareArgs(["--jobs", "2", "--", "--jobs", "0x4"])).toMatchObject({
       android: false,
       jobs: 4,
       mode: "shadow",
     });
-    expect(() => parseReleasePrepareArgs(["--help", "--manifest", "-h"])).toThrow(
-      "Missing value for --manifest.",
+  });
+  it("rejects alpha preparation before constructing write steps", () => {
+    expect(() => prepareSteps({ version: "2026.9.24-alpha.1", mode: "write", jobs: 2 })).toThrow(
+      "Alpha releases are retired;",
     );
   });
-});
 
-it("rejects alpha preparation before constructing write steps", () => {
-  expect(() =>
-    createReleasePrepareSteps({
-      android: false,
-      version: "2026.9.24-alpha.1",
-      rootDir: "/repo",
-      mode: "write",
-      jobs: 2,
-    }),
-  ).toThrow("Alpha releases are retired;");
-});
-
-describe("release preparation plan", () => {
   it("builds the write cutover from atomic versioning and scoped preflight", () => {
-    const steps = createReleasePrepareSteps({
-      android: true,
-      jobs: 6,
-      mode: "write",
-      rootDir: "/repo",
-      version: "2026.7.2-beta.1",
-    });
+    const version = "2026.7.2-beta.1";
+    const steps = prepareSteps({ android: true, jobs: 6, mode: "write", version });
 
-    expect(expectDefined(steps[0], "release version preparation step").args).toEqual([
-      "--import",
-      "tsx",
-      "scripts/release-version.ts",
-      "--root",
-      "/repo",
-      "--version",
-      "2026.7.2-beta.1",
-      "--android",
-      "--write",
-    ]);
-    expect(expectDefined(steps[1], "release preflight preparation step").args).toEqual([
-      "scripts/release-preflight.mjs",
-      "--fix",
-      "--scope",
-      "version",
-      "--jobs",
-      "6",
+    expect(steps.map(({ args }) => args)).toEqual([
+      `--import tsx scripts/release-version.ts --root /repo --version ${version} --android --write`.split(
+        " ",
+      ),
+      "scripts/release-preflight.mjs --fix --scope version --jobs 6".split(" "),
     ]);
   });
 
   it("stops after a failed prerequisite and records the blocked step", () => {
-    const steps = createReleasePrepareSteps({
-      android: false,
-      jobs: 4,
-      mode: "check",
-      rootDir: "/repo",
-      version: "2026.7.2",
-    });
     const results = runReleasePrepareSteps({
       cwd: "/repo",
       mode: "check",
       runStep: () => 1,
-      steps,
+      steps: prepareSteps({ mode: "check" }),
     });
 
     expect(results.map((result) => result.status)).toEqual(["failed", "skipped"]);
@@ -146,29 +109,28 @@ describe("release preparation plan", () => {
     );
 
     expect(result.error).toBeUndefined();
-    expect(result.status).toBe(23);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("[release-prepare] JSON child");
-    expect(result.stderr).toContain("child stdout begin");
-    expect(result.stderr).toContain("child stdout end");
-    expect(result.stderr).toContain("child stderr sentinel");
+    expect(result).toMatchObject({ status: 23, stdout: "" });
+    for (const text of [
+      "[release-prepare] JSON child",
+      "child stdout begin",
+      "child stdout end",
+      "child stderr sentinel",
+    ]) {
+      expect(result.stderr).toContain(text);
+    }
     expect(Buffer.byteLength(result.stderr)).toBeGreaterThan(2 * 1024 * 1024);
   });
-});
-
-describe("release preparation manifest", () => {
   it("fingerprints complete generated diffs beyond the former capture limit", async () => {
     const rootDir = mkdtempSync(path.join(tmpdir(), "openclaw-release-prepare-"));
+    const git = (args: string[]) => execFileSync("git", args, { cwd: rootDir });
     try {
-      execFileSync("git", ["init", "-q"], { cwd: rootDir });
-      execFileSync("git", ["config", "user.email", "release-test@openclaw.invalid"], {
-        cwd: rootDir,
-      });
-      execFileSync("git", ["config", "user.name", "OpenClaw Release Test"], { cwd: rootDir });
+      git(["init", "-q"]);
+      git(["config", "user.email", "release-test@openclaw.invalid"]);
+      git(["config", "user.name", "OpenClaw Release Test"]);
       writeFileSync(path.join(rootDir, "package.json"), '{"version":"2026.7.2"}\n');
       writeFileSync(path.join(rootDir, "generated.txt"), `${"a".repeat(33 * 1024 * 1024)}\n`);
-      execFileSync("git", ["add", "."], { cwd: rootDir });
-      execFileSync("git", ["commit", "-q", "-m", "test fixture"], { cwd: rootDir });
+      git(["add", "."]);
+      git(["commit", "-q", "-m", "test fixture"]);
       const generated = "b".repeat(33 * 1024 * 1024);
       writeFileSync(path.join(rootDir, "generated.txt"), `${generated}\n`);
 
@@ -188,13 +150,7 @@ describe("release preparation manifest", () => {
     const steps = runReleasePrepareSteps({
       cwd: "/repo",
       mode: "shadow",
-      steps: createReleasePrepareSteps({
-        android: false,
-        jobs: 4,
-        mode: "shadow",
-        rootDir: "/repo",
-        version: "2026.7.2",
-      }),
+      steps: prepareSteps(),
     });
     const manifest = buildReleasePreparationManifest({
       after: worktreeState({

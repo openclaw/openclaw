@@ -25,6 +25,7 @@ import { registerPluginOnlyCallerIdentityCase } from "./agent-tools.caller-ident
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createSandboxedReadTool, wrapReadToolWithSkillContent } from "./agent-tools.read.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
+import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
   createCronCreatorAuthorityCapability,
@@ -34,6 +35,7 @@ import {
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
+import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import {
   expectReadWriteEditTools,
   getTextContent as extractToolText,
@@ -320,17 +322,18 @@ describe("createOpenClawCodingTools", () => {
 
     vi.mocked(createOpenClawTools).mockClear();
     const forgedTools = buildTools(undefined, "forged-run");
-    expect(toolNameList(forgedTools)).not.toContain("automations");
+    await expectOwnerGated(forgedTools, "automations");
     expect(lastCoreOptions().resolveCronCreatorToolAuthority).toBeUndefined();
 
     const capability = createCronCreatorAuthorityCapability("admitted-run")!;
     const activeRun = runWithCronCreatorAuthorityCapability(capability, async () => {
       const wrongRunTools = buildTools(capability, "other-run", "admitted-run");
-      expect(toolNameList(wrongRunTools)).not.toContain("automations");
+      await expectOwnerGated(wrongRunTools, "automations");
       expect(lastCoreOptions().resolveCronCreatorToolAuthority).toBeUndefined();
 
       const admittedTools = buildTools(capability, "admitted-run");
-      expectToolNames(admittedTools, ["automations"], ["gateway", "nodes", "openclaw"]);
+      expectToolNames(admittedTools, ["automations"]);
+      await expectOwnerGated(admittedTools, "gateway", "nodes", "openclaw");
       retainedResolver = lastCoreOptions().resolveCronCreatorToolAuthority;
       expect(retainedResolver).toEqual(expect.any(Function));
       await expect(retainedResolver!()).resolves.toMatchObject({
@@ -344,9 +347,8 @@ describe("createOpenClawCodingTools", () => {
     await expect(retainedResolver!()).rejects.toThrow(
       "Configured MCP cron authority is no longer active for this run",
     );
-    expect(
-      toolNameList(createOpenClawCodingTools({ runId: "admitted-run", senderIsOwner: false })),
-    ).not.toContain("automations");
+    const retired = createOpenClawCodingTools({ runId: "admitted-run", senderIsOwner: false });
+    await expectOwnerGated(retired, "automations");
     expect(resolve).toHaveBeenCalledTimes(1);
   });
 
@@ -365,7 +367,7 @@ describe("createOpenClawCodingTools", () => {
       async () => {
         expect(toolNameList(buildTools(abortedCapability))).toContain("automations");
         abortController.abort(new Error("run cancelled"));
-        expect(toolNameList(buildTools(abortedCapability))).not.toContain("automations");
+        await expectOwnerGated(buildTools(abortedCapability), "automations");
       },
       abortController.signal,
     );
@@ -379,9 +381,8 @@ describe("createOpenClawCodingTools", () => {
       }),
     ).rejects.toThrow("run failed");
     expect(failedCapability.active).toBe(false);
-    expect(
-      toolNameList(createOpenClawCodingTools({ runId: "lifecycle-run", senderIsOwner: false })),
-    ).not.toContain("automations");
+    const settled = createOpenClawCodingTools({ runId: "lifecycle-run", senderIsOwner: false });
+    await expectOwnerGated(settled, "automations");
   });
 
   it("re-wraps existing before_tool_call hooks once with the current context", async () => {
@@ -463,6 +464,27 @@ describe("createOpenClawCodingTools", () => {
 
     expect(tools).toHaveLength(1);
     expect(tools[0]).toMatchObject({ name: "openclaw", description: "trusted ring-zero tool" });
+  });
+
+  it("applies the required ceiling after ring-zero and additive plugin grants", async () => {
+    const config: OpenClawConfig = { tools: { gatewayPolicy: { allow: ["fixture_allowed"] } } };
+    vi.mocked(createOpenClawTools).mockReturnValueOnce([
+      createStubTool("fixture_allowed"),
+      createStubTool("fixture_plugin"),
+    ]);
+    const conversationCapabilityProfile = await prepareConversationCapabilityProfile({
+      config,
+      runtimePluginToolGrant: { pluginId: "fixture", toolNames: ["fixture_plugin"] },
+    });
+    const tools = runWithAgentRingZeroTools([createStubTool("openclaw")], () =>
+      createOpenClawCodingTools({
+        config,
+        conversationCapabilityProfile,
+        senderIsOwner: true,
+        toolConstructionPlan: { ...pluginOnlyPlan, includeOpenClawTools: true },
+      }),
+    );
+    expect(tools.map((tool) => tool.name)).toEqual(["fixture_allowed"]);
   });
 
   it("lets direct callers inherit overlapping globs into subagent spawns", () => {
@@ -855,16 +877,6 @@ describe("createOpenClawCodingTools", () => {
         allowed ? [] : ["browser"],
       );
     }
-  });
-
-  it("enables heartbeat response when visible replies are message-tool-only", () => {
-    expectToolSurface(
-      {
-        config: { messages: { visibleReplies: "message_tool" }, tools: { profile: "coding" } },
-        trigger: "heartbeat",
-      },
-      ["heartbeat_respond"],
-    );
   });
 
   it("can keep message available when a cron route needs it under a provider coding profile", () => {

@@ -24,6 +24,15 @@ export function getAgentRunRegistryState(): AgentRunRegistryState {
   return registryState;
 }
 
+/** Reads the process-local version of the active-run projection inputs. */
+export function readAgentRunIndexVersion(): number {
+  return registryState.version;
+}
+
+export function getAgentRunLifecycleGeneration(): string {
+  return registryState.lifecycleGeneration;
+}
+
 /** Lists registered runs bound to one current session identity. */
 export function listAgentRunsForSession(params: {
   sessionKey: string;
@@ -65,12 +74,20 @@ export function bumpAgentRunIndexVersion(
 ): void {
   getAgentRunRegistryState().version += 1;
   for (const target of previous &&
-  (previous.sessionKey !== context?.sessionKey || previous.agentId !== context?.agentId)
+  (previous.sessionKey !== context?.sessionKey ||
+    (!previous.sessionKey && previous.sessionId !== context?.sessionId) ||
+    previous.agentId !== context?.agentId)
     ? [previous, context]
     : [context]) {
-    const { sessionKey, agentId } = target ?? {};
+    const { sessionKey, sessionId, agentId } = target ?? {};
     sessionChanges.emit(
-      sessionKey ? { sessionKey, agentId, scope: "runtime" } : { all: true, scope: "agent-runs" },
+      sessionKey
+        ? { sessionKey, agentId, scope: "runtime" }
+        : {
+            all: true,
+            scope: "agent-runs",
+            ...(sessionId ? { runtimeSession: { sessionId, agentId } } : {}),
+          },
     );
   }
 }

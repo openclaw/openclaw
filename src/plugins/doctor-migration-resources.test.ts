@@ -7,6 +7,7 @@ import { coercePluginDoctorContractModule } from "./doctor-contract-module.js";
 import type { PluginDoctorStateMigration } from "./doctor-contract-module.js";
 import { preparePluginDoctorMigrationBackupResources } from "./doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
+import { writeDoctorFiles } from "./doctor-contract.test-support.js";
 import {
   type PluginDoctorMigrationResourceCollectionParams,
   preparePluginDoctorMigrationResources,
@@ -15,6 +16,17 @@ import { waitForPluginCacheRetirement } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 let noDataMigrations: { pluginId: string; migration: PluginDoctorStateMigration }[];
+let recoveryMigrations: { pluginId: string; migration: PluginDoctorStateMigration }[];
+async function bundledMigrations(pluginIds: string[]) {
+  const result: typeof noDataMigrations = [];
+  for (const pluginId of pluginIds) {
+    const { stateMigrations } = await loadBundledPluginFacade<{
+      stateMigrations: PluginDoctorStateMigration[];
+    }>({ pluginId, artifactBasename: "doctor-contract-api.ts" });
+    result.push(...stateMigrations.map((migration) => ({ pluginId, migration })));
+  }
+  return result;
+}
 beforeAll(async () => {
   const ids = new Set([
     "crabbox-warm-profile-v3",
@@ -22,17 +34,10 @@ beforeAll(async () => {
     "memory-core-qmd-workspace-retired",
     "memory-core-qmd-file-locks-to-sqlite-leases",
   ]);
-  noDataMigrations = [];
-  for (const pluginId of ["crabbox", "workboard", "memory-core"]) {
-    const { stateMigrations } = await loadBundledPluginFacade<{
-      stateMigrations: PluginDoctorStateMigration[];
-    }>({ pluginId, artifactBasename: "doctor-contract-api.ts" });
-    noDataMigrations.push(
-      ...stateMigrations
-        .filter((migration) => ids.has(migration.id))
-        .map((migration) => ({ pluginId, migration })),
-    );
-  }
+  noDataMigrations = (await bundledMigrations(["crabbox", "workboard", "memory-core"])).filter(
+    ({ migration }) => ids.has(migration.id),
+  );
+  recoveryMigrations = await bundledMigrations(["codex", "voice-call"]);
 });
 
 const tempDirs: string[] = [];
@@ -107,6 +112,51 @@ it("does not claim missing recovery coverage for bundled core-only and disposabl
   expect(result.resources).toEqual([]);
   expect(input.warnings).toEqual([]);
 });
+
+it.each(["absent", "default", "configured"] as const)(
+  "declares Codex sidecars and Voice Call SQLite recovery resources for %s state",
+  async (layout) => {
+    const store = path.join(stateDir, layout === "configured" ? "custom-calls" : "voice-calls");
+    const database = path.join(store, "state", "openclaw.sqlite");
+    const sessions = path.join(stateDir, "agents", "main", "sessions");
+    const sidecar = path.join(sessions, "session.jsonl.codex-app-server.json");
+    const sharedSidecar = path.join(stateDir, "sessions", "old.jsonl.codex-app-server.json");
+    const sources = [database, sidecar, sharedSidecar];
+    if (layout === "configured") {
+      input.config = {
+        plugins: { entries: { "@openclaw/voice-call": { config: { store } } } },
+      };
+    }
+    if (layout !== "absent") {
+      for (const file of sources) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, "original migration input");
+      }
+    }
+    const expected = [
+      { path: path.join(stateDir, "state", "openclaw.sqlite"), kind: "sqlite" },
+      ...(layout === "absent"
+        ? []
+        : [
+            { path: database, kind: "sqlite" },
+            { path: sidecar, kind: "file" },
+            { path: sharedSidecar, kind: "file" },
+          ]),
+    ];
+    for (let run = 0; run < 2; run++) {
+      input.warnings = [];
+      const result = await preparePluginDoctorMigrationResources(recoveryMigrations, input);
+      expect(result.resources).toEqual(expected.toSorted((a, b) => a.path.localeCompare(b.path)));
+      expect(input.warnings).toEqual([]);
+    }
+    for (const file of sources) {
+      expect(fs.existsSync(file)).toBe(layout !== "absent");
+      if (layout !== "absent") {
+        expect(fs.readFileSync(file, "utf8")).toBe("original migration input");
+      }
+    }
+  },
+);
 
 it("warns once per undeclared owner without running its migration", async () => {
   const result = await preparePluginDoctorMigrationResources(
@@ -207,16 +257,14 @@ it.each(["undeclared", "declared", "malformed"] as const)(
     const pluginId = "warning-fixture";
     const pluginRoot = path.join(stateDir, "plugin");
     const resourcePath = path.join(stateDir, "private.sqlite");
-    fs.mkdirSync(pluginRoot);
-    fs.writeFileSync(
-      path.join(pluginRoot, "openclaw.plugin.json"),
-      JSON.stringify({
+    writeDoctorFiles(pluginRoot, {
+      "openclaw.plugin.json": {
         id: pluginId,
         configSchema: {},
         doctorContract: { stateMigrations: true },
-      }),
-    );
-    fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n");
+      },
+      "index.cjs": "module.exports = {};\n",
+    });
     const inventory =
       declaration === "undeclared"
         ? ""

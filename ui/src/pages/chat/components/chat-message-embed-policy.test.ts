@@ -1,15 +1,21 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, getOwner } from "solid-js";
+import { createComponent, flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { ApplicationProvider } from "../../../lib/reactive/context.ts";
+import { createTestSessionCapability } from "../../../lib/sessions/session-capability.test-support.ts";
+import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
+import { createContext } from "../../../test-helpers/app-sidebar.ts";
+import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { buildMessageItems } from "../chat-thread-items.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { MessageGroup, MessageGroupContent } from "./chat-message-group-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { StreamGroupParts, type StreamGroupPart } from "./chat-message-stream-view.tsx";
+import { createCanvasPreview } from "./chat-message.test-support.ts";
 
 function createEmbedHarness(container: HTMLElement, surface: "persisted" | "streaming") {
   type Props = {
@@ -19,58 +25,43 @@ function createEmbedHarness(container: HTMLElement, surface: "persisted" | "stre
       "allowExternalEmbedUrls" | "embedSandboxMode" | "sessionKey"
     >;
   };
-  let root: ReturnType<typeof mountSolid> | undefined;
-  let update: (props: Props) => void;
+  const Content = (props: Props) =>
+    surface === "streaming"
+      ? createComponent(StreamGroupParts, {
+          get parts(): StreamGroupPart[] {
+            return [
+              { kind: "stream", key: "message", text: props.text, startedAt: 1, isStreaming: true },
+            ];
+          },
+          get options() {
+            return props.options;
+          },
+          presentation: "standalone",
+        })
+      : createComponent(GroupedMessage, {
+          get preparation() {
+            return prepareChatMessageRender({
+              role: "assistant",
+              content: [{ type: "text", text: props.text }],
+            });
+          },
+          messageKey: "message",
+          get options() {
+            return { ...props.options, isStreaming: false, showReasoning: false };
+          },
+        });
+  let root: ReturnType<typeof mountSolid<Props>> | undefined;
   return {
     render(text: string, options: Props["options"]) {
       const next = { text, options };
       if (root) {
-        update(next);
+        root.update(next);
       } else {
-        root = mountSolid(
-          () => {
-            const [props, setProps] = createSignal(next);
-            update = setProps;
-            return surface === "streaming"
-              ? createComponent(StreamGroupParts, {
-                  get parts(): StreamGroupPart[] {
-                    return [
-                      {
-                        kind: "stream",
-                        key: "message",
-                        text: props().text,
-                        startedAt: 1,
-                        isStreaming: true,
-                      },
-                    ];
-                  },
-                  get options() {
-                    return props().options;
-                  },
-                  presentation: "standalone",
-                })
-              : createComponent(GroupedMessage, {
-                  get preparation() {
-                    return prepareChatMessageRender({
-                      role: "assistant",
-                      content: [{ type: "text", text: props().text }],
-                    });
-                  },
-                  messageKey: "message",
-                  get options() {
-                    return { ...props().options, isStreaming: false, showReasoning: false };
-                  },
-                });
-          },
-          { container },
-        );
-      }
-      if (!getOwner()) {
-        flush();
+        root = mountSolid(Content, next, container);
       }
     },
     unmount() {
-      root?.unmount();
+      root?.dispose();
     },
   };
 }
@@ -103,18 +94,18 @@ describe("assistant message embed policy", () => {
         const options = { allowExternalEmbedUrls: false, embedSandboxMode, sessionKey };
         preview.render(text, options);
         await vi.dynamicImportSettled();
-        const card = host.querySelector("openclaw-youtube-video");
+        const card = host.querySelector<HTMLElement>("openclaw-youtube-video");
         expect(card).not.toBeNull();
-        await card!.updateComplete;
+        flush();
         return card!;
       };
-      const play = async (card: HTMLElementTagNameMap["openclaw-youtube-video"]) => {
+      const play = async (card: HTMLElement) => {
         const button = card.querySelector<HTMLButtonElement>(
           'button[aria-label="Play Synthetic video"]',
         );
         expect(button).not.toBeNull();
         button!.click();
-        await card.updateComplete;
+        flush();
         const frame = card.querySelector("iframe");
         expect(frame).toBeInstanceOf(HTMLIFrameElement);
         return frame!;
@@ -175,99 +166,106 @@ describe("assistant message embed policy", () => {
   it.each([
     { label: "grouped messages", renderGroup: MessageGroup },
     { label: "run-frame message contents", renderGroup: MessageGroupContent },
-  ])("updates the authenticated widget's script policy when $label rerender", ({ renderGroup }) => {
-    const container = document.createElement("div");
-    type GroupProps = Parameters<typeof MessageGroup>[0];
-    let root: ReturnType<typeof mountSolid> | undefined;
-    let update: (props: GroupProps) => void;
-    onTestFinished(async () => {
-      await vi.dynamicImportSettled();
-      root?.unmount();
-    });
-    let timestamp = 1000;
-    const renderCanvas = (embedSandboxMode: "strict" | "scripts", prepend = false) => {
-      const message = {
-        role: "assistant",
-        id: "assistant-canvas-inline-sandbox-change",
-        timestamp: timestamp++,
-        content: [
-          { type: "text", text: "Inline canvas result." },
-          {
-            type: "canvas",
-            preview: {
-              kind: "canvas",
-              surface: "assistant_message",
-              render: "url",
-              viewId: "cv_inline_sandbox-change",
-              title: "Inline demo",
-              url: "/__openclaw__/canvas/documents/cv_inline_sandbox-change/index.html",
-              preferredHeight: 360,
+  ])(
+    "updates the authenticated widget's script policy when $label rerender",
+    async ({ renderGroup }) => {
+      const container = document.body.appendChild(document.createElement("div"));
+      onTestFinished(() => container.remove());
+      type GroupProps = Parameters<typeof MessageGroup>[0];
+      const { gateway } = createApplicationGateway();
+      const sessions = createTestSessionCapability(gateway);
+      const context = createContext(gateway, sessions);
+      onTestFinished(disposeSidebarContextLifecycles);
+      const CanvasGroup = (props: GroupProps) =>
+        createComponent(ApplicationProvider, {
+          value: context,
+          host: container,
+          get children() {
+            return createComponent(renderGroup, props);
+          },
+        });
+      let root: ReturnType<typeof mountSolid<GroupProps>> | undefined;
+      onTestFinished(async () => {
+        await vi.dynamicImportSettled();
+        root?.dispose();
+      });
+      let timestamp = 1000;
+      const renderCanvas = (embedSandboxMode: "strict" | "scripts", prepend = false) => {
+        const message = {
+          role: "assistant",
+          id: "assistant-canvas-inline-sandbox-change",
+          timestamp: timestamp++,
+          content: [
+            { type: "text", text: "Inline canvas result." },
+            {
+              type: "canvas",
+              preview: createCanvasPreview({
+                viewId: "cv_inline_sandbox-change",
+                title: "Scoped preview",
+                preferredHeight: 320,
+              }),
             },
+          ],
+        };
+        const messages = prepend
+          ? [
+              { role: "assistant", content: "Earlier reply.", id: "earlier", timestamp: 999 },
+              message,
+            ]
+          : [message];
+        // Use production keys and grouping: recreated messages retain source identity
+        // even when their timestamps change or earlier replies are inserted.
+        const [group] = groupMessages(buildMessageItems(messages));
+        if (group?.kind !== "group") {
+          throw new Error("expected a prepared assistant message group");
+        }
+        const next = {
+          group,
+          options: {
+            showReasoning: true,
+            embedSandboxMode,
+            sessionKey: "agent:main:canvas",
+            canvasPluginSurfaceUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
           },
-        ],
+        };
+        if (root) {
+          root.update(next);
+        } else {
+          root = mountSolid(CanvasGroup, next, container);
+        }
       };
-      const messages = prepend
-        ? [{ role: "assistant", content: "Earlier reply.", id: "earlier", timestamp: 999 }, message]
-        : [message];
-      // Use production keys and grouping: recreated messages retain source identity
-      // even when their timestamps change or earlier replies are inserted.
-      const [group] = groupMessages(buildMessageItems(messages));
-      if (group?.kind !== "group") {
-        throw new Error("expected a prepared assistant message group");
-      }
-      const next = { group, options: { showReasoning: true, embedSandboxMode } };
-      if (root) {
-        update(next);
-      } else {
-        root = mountSolid(
-          () => {
-            const [props, setProps] = createSignal<GroupProps>(next);
-            update = setProps;
-            return createComponent(renderGroup, {
-              get group() {
-                return props().group;
-              },
-              get options() {
-                return props().options;
-              },
-            });
-          },
-          { container },
+
+      renderCanvas("strict");
+      await waitForSolid(() =>
+        expect(container.querySelectorAll("openclaw-canvas-widget-view")).toHaveLength(1),
+      );
+      const widget = container.querySelector("openclaw-canvas-widget-view");
+      expect(widget).toBeInstanceOf(HTMLElement);
+      expect(widget).toMatchObject({
+        docId: "cv_inline_sandbox-change",
+        title: "Scoped preview",
+        preferredHeight: 320,
+        sessionKey: "agent:main:canvas",
+        allowScripts: false,
+      });
+      expect(container.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
+
+      for (const [mode, prepend] of [
+        ["scripts", false],
+        ["strict", false],
+        ["scripts", true],
+        ["strict", false],
+      ] as const) {
+        renderCanvas(mode, prepend);
+        expect(container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
+        expect(widget).toMatchObject({ allowScripts: mode === "scripts" });
+        expect(container.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
+        expect(
+          [...container.querySelectorAll(".chat-text")].map((node) => node.textContent?.trim()),
+        ).toEqual(
+          prepend ? ["Earlier reply.", "Inline canvas result."] : ["Inline canvas result."],
         );
       }
-      flush();
-    };
-
-    renderCanvas("strict");
-    expect(container.querySelectorAll("openclaw-canvas-widget-view")).toHaveLength(1);
-    const widget = container.querySelector("openclaw-canvas-widget-view");
-    expect(widget).toBeInstanceOf(HTMLElement);
-    expect(widget).toMatchObject({
-      docId: "cv_inline_sandbox-change",
-      title: "Inline demo",
-      allowScripts: false,
-    });
-    expect(container.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
-
-    renderCanvas("scripts");
-    expect(container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
-    expect(widget).toMatchObject({ allowScripts: true });
-
-    renderCanvas("strict");
-    expect(container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
-    expect(widget).toMatchObject({ allowScripts: false });
-    expect(container.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
-
-    renderCanvas("scripts", true);
-    expect(container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
-    expect(widget).toMatchObject({ allowScripts: true });
-    expect(
-      [...container.querySelectorAll(".chat-text")].map((node) => node.textContent?.trim()),
-    ).toEqual(["Earlier reply.", "Inline canvas result."]);
-
-    renderCanvas("strict");
-    expect(container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
-    expect(widget).toMatchObject({ allowScripts: false });
-    expect(container.querySelectorAll(".chat-text")).toHaveLength(1);
-  });
+    },
+  );
 });

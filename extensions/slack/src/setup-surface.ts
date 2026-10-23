@@ -18,8 +18,7 @@ import { resolveDefaultSlackAccountId, resolveSlackAccountAllowFrom } from "./ac
 import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import { createSlackSetupWizardBase } from "./setup-core.js";
-import { buildSlackAllowFromPrompt } from "./setup-shared.js";
-import { SLACK_CHANNEL as channel } from "./shared.js";
+import { buildSlackAllowFromPrompt, SLACK_CHANNEL as channel } from "./setup-shared.js";
 
 const t = createSetupTranslator();
 

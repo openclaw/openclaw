@@ -1,7 +1,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
-import { PluginJsonValueSchema } from "./plugins.js";
+import { PluginJsonValueSchema } from "./plugin-json-value.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionParticipantSchema } from "./session-participant.js";
 import { SessionCreatedActorSchema } from "./sessions-row.js";

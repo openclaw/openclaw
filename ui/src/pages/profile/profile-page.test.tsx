@@ -9,6 +9,9 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+// These tests own identity loading, not the lazy preference reader; settle that module at setup
+// so its cold transform cannot consume the one-second UI waits on a loaded CI runner.
+import "../../app/user-prefs-request.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
@@ -167,7 +170,7 @@ it("renders identity before Usage statistics and opens the usage page", async ()
   expect(harness.context.navigate).toHaveBeenCalledWith("usage");
 });
 
-it("loads a read-only profile without enabling mutations", async () => {
+it("allows personal profile editing without general write access", async () => {
   const scope = "operator.read";
   const request = vi.fn(async (method: string) =>
     method === "users.self"
@@ -213,15 +216,17 @@ it("loads a read-only profile without enabling mutations", async () => {
     expect(page.querySelector(".identity-name-control input")).not.toBeNull(),
   );
   expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(true);
-  expect(page.textContent).toContain("Your current access does not allow profile editing.");
+  expect(page.textContent).not.toContain("Your current access does not allow profile editing.");
   expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
     scope,
   );
-  expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled).toBe(true);
+  expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled).toBe(
+    false,
+  );
   expect(page.querySelector<HTMLButtonElement>(".identity-name-control button")?.disabled).toBe(
     true,
   );
-  expect(page.querySelector('input[type="file"]')).toBeNull();
+  expect(page.querySelector('input[type="file"]')).not.toBeNull();
   expect(page.querySelector(".profile-refresh")).not.toBeNull();
   expect(
     request.mock.calls.some(
@@ -726,7 +731,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
   flush();
   expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(false);
-  processing.resolve({ mime: "image/png", avatarBase64: "aA==", byteLength: 1 });
+  processing.resolve({ mime: "image/png", avatarBase64: "aA==" });
 });
 
 it("keeps model-account actions usable when identity refresh overlaps ChatGPT completion", async () => {
@@ -853,7 +858,7 @@ it("rechecks avatar upload policy after processing and rerenders on config updat
   );
   await config.refresh();
   await waitForFast(() => expect(page.querySelector('input[type="file"]')).toBeNull());
-  processed.resolve({ mime: "image/png", avatarBase64: "aA==", byteLength: 1 });
+  processed.resolve({ mime: "image/png", avatarBase64: "aA==" });
   await waitForFast(() =>
     expect(page.querySelector(".identity-error")?.textContent).toContain(uploadsDisabledMessage()),
   );
@@ -946,7 +951,7 @@ it("distinguishes unreported permissions from an explicit empty grant", async ()
   );
 });
 
-it("reconnects through the connection owner, retiring grants and preserving the editor", async () => {
+it("reconnects through the connection owner while retaining the last access summary and editor", async () => {
   const scope = "operator.admin";
   const harness = createConnectedContext(
     vi.fn(async () => ({})) as GatewayBrowserClient["request"],
@@ -964,9 +969,10 @@ it("reconnects through the connection owner, retiring grants and preserving the 
   reconnect?.click();
   expect(harness.context.gateway.connect).toHaveBeenCalledExactlyOnceWith();
   flush();
-  expect(page.querySelector("#settings-profile-access")).toBeNull();
-  expect(page.textContent).not.toContain("You have permission to manage this server.");
-  expect(page.querySelector('[role="status"]')?.textContent).toContain("Connecting…");
+  expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
+    scope,
+  );
+  expect(page.textContent).toContain("You have permission to manage this server.");
   expect(page.querySelector("openclaw-personal-instructions")).toBe(personalEditor);
 
   harness.emitHello(gatewayHelloForMethods([], ["operator.read"]));
@@ -974,7 +980,7 @@ it("reconnects through the connection owner, retiring grants and preserving the 
   flush();
   expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.read");
 
-  // Narrow-grant updates do not change the profile editor's broad write permission.
+  // Personal editing remains available when only session reads are granted.
   harness.emitHello(gatewayHelloForMethods([], ["operator.sessions.read"]));
   flush();
   expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.sessions.read");

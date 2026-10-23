@@ -61,8 +61,9 @@ vi.mock("../../infra/update-check.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-check.js")>()),
   resolveNpmChannelTag: async () => ({ tag: "latest", version: "2027.1.0" }),
 }));
-vi.mock("../../infra/update-check-package-target.js", () => ({
-  fetchNpmPackageTargetStatus: async () => ({ version: "2027.1.0", nodeEngine: ">=26.1.0" }),
+vi.mock("../../infra/update-check-package-target.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-check-package-target.js")>()),
+  fetchNpmPackageTargetStatus: async () => ({ version: "2027.1.0", nodeEngine: ">=26.12.1" }),
 }));
 vi.mock("../../../node-sqlite.mjs", async (original) => ({
   ...(await original<typeof import("../../../node-sqlite.mjs")>()),
@@ -156,10 +157,10 @@ it.each(["writable rebind", "protected redirect", "unowned project"] as const)(
   },
 );
 it.each([
-  { service: "Node", node: "24.16.0", sqliteText: true, admitted: false },
-  { service: "Bun", node: "24.16.0", sqliteText: true, admitted: false },
-  { service: "Bun", node: "26.1.0", sqliteText: false, admitted: false },
-  { service: "Bun", node: "26.1.0", sqliteText: true, admitted: true },
+  { service: "Node", node: "24.22.1", sqliteText: true, admitted: false },
+  { service: "Bun", node: "24.22.1", sqliteText: true, admitted: false },
+  { service: "Bun", node: "26.12.1", sqliteText: false, admitted: false },
+  { service: "Bun", node: "26.12.1", sqliteText: true, admitted: true },
 ])(
   "checks $service service runtime from updater Node $node (SQLite text=$sqliteText)",
   async ({ service, node, sqliteText, admitted }) => {
@@ -170,7 +171,7 @@ it.each([
         execPath: "/fixture/bun",
         versions: { ...process.versions, bun: "1.4.3" },
       });
-      vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue(runtimeFixture("24.16.0"));
+      vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue(runtimeFixture("24.22.1"));
     } else {
       vi.stubGlobal(
         "process",
@@ -232,7 +233,7 @@ it.each([
         : {
             ok: false,
             error: expect.stringContaining(
-              `Required: openclaw@2027.1.0 Node >=26.1.0; detected: Node ${node}${nodeService ? " at /old/node" : ""}`,
+              `Required: openclaw@2027.1.0 Node >=26.12.1; detected: Node ${node}${nodeService ? " at /old/node" : ""}`,
             ),
             failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
           },
@@ -241,11 +242,7 @@ it.each([
       nodeService ? ["/old/node"] : [],
     );
     if (!nodeService) {
-      expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(
-        runner,
-        undefined,
-        buildRuntimeProbeEnv(process.env),
-      );
+      expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(runner, buildRuntimeProbeEnv(process.env));
     }
   },
 );

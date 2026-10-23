@@ -16,6 +16,7 @@ import {
   type MemoryForgetLineageResult,
 } from "./memory-entry-origins-task.js";
 import type { ForgetDatabase } from "./memory-forget-index-task.js";
+import { advanceMemoryIndexRevision } from "./memory-index-revision.worker.js";
 import { recordMemorySessionTombstonesInDatabase } from "./memory-session-tombstones.js";
 
 function checkLineage(db: EngineConnection, input: MemoryForgetLineage): MemoryForgetLineageResult {
@@ -42,13 +43,7 @@ export function markMemoryForgotten(
   }
   const recorded = recordMemorySessionTombstonesInDatabase(db, input);
   if (recorded === 0) {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<ForgetDatabase>(db)
-        .updateTable("memory_index_state")
-        .set((expression) => ({ revision: expression("revision", "+", 1) }))
-        .where("id", "=", 1),
-    );
+    advanceMemoryIndexRevision(db);
   }
   return lineage;
 }
@@ -86,6 +81,9 @@ export function purgeForgottenMemory(
   deleteMemoryIndexSources(db, input.sources);
   if (tableExists(db, "memory_embedding_cache")) {
     executeSqliteQuerySync(db, kysely.deleteFrom("memory_embedding_cache"));
+  }
+  if (input.chunkIds.length > 0 || input.sources.length > 0) {
+    advanceMemoryIndexRevision(db);
   }
   return lineage;
 }

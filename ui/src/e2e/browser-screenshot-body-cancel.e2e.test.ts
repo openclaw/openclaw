@@ -1,7 +1,4 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import {
@@ -15,13 +12,12 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let proofDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    proofDir = createControlUiE2eArtifactDir("browser-screenshot-body-cancel");
-  }
-});
+type ScreenshotProof = {
+  cancelCount: number;
+  cancelResolvedCount: number;
+  fetchCount: number;
+  statuses: number[];
+};
 
 suite.define(() => {
   it("keeps the status error visible and cancels the unread media body", async () => {
@@ -31,21 +27,10 @@ suite.define(() => {
         const originalFetch = window.fetch.bind(window);
         window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
           const response = await originalFetch(input, init);
-          const url =
-            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-          if (!url.includes("/__openclaw__/assistant-media")) {
+          const url = input instanceof Request ? input.url : String(input);
+          if (!url.includes("/__openclaw__/assistant-media") || !response.body) {
             return response;
           }
-          const source = response.body;
-          if (!source) {
-            return response;
-          }
-          type ScreenshotProof = {
-            cancelCount: number;
-            cancelResolvedCount: number;
-            fetchCount: number;
-            statuses: number[];
-          };
           const proofWindow = window as Window & { openclawScreenshotProof?: ScreenshotProof };
           const proof = (proofWindow.openclawScreenshotProof ??= {
             cancelCount: 0,
@@ -55,8 +40,8 @@ suite.define(() => {
           });
           proof.fetchCount += 1;
           proof.statuses.push(response.status);
-          const originalCancel = source.cancel.bind(source);
-          source.cancel = async (reason) => {
+          const originalCancel = response.body.cancel.bind(response.body);
+          response.body.cancel = async (reason) => {
             proof.cancelCount += 1;
             await originalCancel(reason);
             proof.cancelResolvedCount += 1;
@@ -77,82 +62,47 @@ suite.define(() => {
           status: 404,
         });
       });
+      const target = { targetId: "target-1", url: "https://example.test/" };
+      const responseCase = (method: string, requestPath: string, response: unknown) => ({
+        match: { method, path: requestPath },
+        response,
+      });
       const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "browser.request"],
         methodResponses: {
           "browser.request": {
             cases: [
-              {
-                match: { method: "GET", path: "/tabs" },
-                response: {
-                  running: true,
-                  tabs: [
-                    {
-                      targetId: "target-1",
-                      tabId: "t1",
-                      title: "Example",
-                      url: "https://example.test/",
-                    },
-                  ],
-                },
-              },
-              {
-                match: { method: "POST", path: "/screenshot" },
-                response: {
-                  path: "/proof/missing.png",
-                  targetId: "target-1",
-                  url: "https://example.test/",
-                },
-              },
+              responseCase("GET", "/tabs", {
+                running: true,
+                tabs: [{ ...target, tabId: "t1", title: "Example" }],
+              }),
+              responseCase("POST", "/screenshot", { ...target, path: "/proof/missing.png" }),
             ],
           },
         },
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}chat`);
-      expect(response?.status()).toBe(200);
+      expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
       await openChatSidePanelType(page, "Files");
       await openChatSidePanelType(page, "Browser");
 
       const panel = page.locator("section.bp");
-      await panel.waitFor();
-      await expect
-        .poll(async () =>
-          (await gateway.getRequests("browser.request")).map((request) => request.params),
-        )
-        .toContainEqual({
-          body: { targetId: "t1", type: "png" },
-          method: "POST",
-          path: "/screenshot",
-          tabScope: { sessionKey: "agent:main:main" },
-        });
-      const alert = panel.getByRole("alert");
-      await alert.waitFor();
-      expect(await alert.textContent()).toBe(
-        "Browser request failed: Screenshot fetch failed (404).",
-      );
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              (
-                window as Window & {
-                  openclawScreenshotProof?: {
-                    cancelCount?: number;
-                    cancelResolvedCount?: number;
-                    fetchCount?: number;
-                    statuses?: number[];
-                  };
-                }
-              ).openclawScreenshotProof,
-          ),
-        )
-        .toEqual({
-          cancelCount: 1,
-          cancelResolvedCount: 1,
-          fetchCount: 1,
-          statuses: [404],
-        });
+      await panel
+        .getByRole("status")
+        .getByText("Browser request failed: Screenshot fetch failed (404).", { exact: true })
+        .waitFor();
+      const readStream = () =>
+        page.evaluate(
+          () =>
+            (window as Window & { openclawScreenshotProof?: ScreenshotProof })
+              .openclawScreenshotProof,
+        );
+      await expect.poll(readStream).toEqual({
+        cancelCount: 1,
+        cancelResolvedCount: 1,
+        fetchCount: 1,
+        statuses: [404],
+      });
 
       const requests = await gateway.getRequests("browser.request");
       const requestParams = requests.map(
@@ -177,37 +127,6 @@ suite.define(() => {
         authorization: "Bearer e2e-device-token",
         source: "/proof/missing.png",
       });
-
-      if (captureUiProofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(proofDir, "failed-screenshot.png"),
-        });
-        const stream = await page.evaluate(
-          () => (window as Window & { openclawScreenshotProof?: unknown }).openclawScreenshotProof,
-        );
-        await writeFile(
-          path.join(proofDir, "proof.json"),
-          `${JSON.stringify(
-            {
-              error: (await alert.textContent())?.trim() ?? "",
-              mediaRequest,
-              requests,
-              stream,
-            },
-            null,
-            2,
-          )}\n`,
-        );
-        console.log(
-          `CONTROL_UI_BROWSER_SCREENSHOT_PROOF=${JSON.stringify({
-            error: (await alert.textContent())?.trim() ?? "",
-            mediaRequest,
-            requests: requests.map((request) => request.params),
-            stream,
-          })}`,
-        );
-      }
     });
   });
 });

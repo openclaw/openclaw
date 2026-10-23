@@ -20,6 +20,7 @@ import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
 } from "../lib/bounded-response.mjs";
+import { createBuildSmokeEnv } from "../lib/build-smoke-env.mts";
 import { reportLimitViolations, type LimitViolation } from "../lib/check-limits.mts";
 import { toErrorObject as coerceKitchenSinkError } from "../lib/error-format.mts";
 import { readGatewayResources } from "../lib/gateway-bench-profile.ts";
@@ -405,12 +406,7 @@ export function makeEnv(baseEnv: ProcessEnv = process.env) {
   return {
     root,
     env: {
-      ...baseEnv,
-      HOME: home,
-      USERPROFILE: home,
-      OPENCLAW_HOME: home,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      ...createBuildSmokeEnv(home, baseEnv),
       OPENCLAW_NO_ONBOARD: "1",
       OPENCLAW_SKIP_PROVIDERS: "0",
       OPENCLAW_KITCHEN_SINK_PERSONALITY: baseEnv.OPENCLAW_KITCHEN_SINK_PERSONALITY || "conformance",

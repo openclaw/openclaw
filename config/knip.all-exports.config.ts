@@ -53,8 +53,13 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
   // The PR artifact Vitest suite launches this standalone Node regression by path.
   "test/scripts/pr-review-artifacts.node.mjs!",
+  // The Gateway profiler tests launch these subprocess fixtures through a computed path.
+  "test/scripts/fixtures/gateway-bench-cpu-usage.mjs!",
+  "test/scripts/fixtures/gateway-bench-profile-startup.mjs!",
   // SHA-pinned dispatch tests load this admission transport by a generated file URL.
   "test/scripts/full-release-validation-at-sha.admission-fixture.mjs!",
+  // The locale finalizer harness preloads this provider through NODE_OPTIONS.
+  "test/scripts/control-ui-locale-provider.fixture.mjs!",
   // The state-reader build test launches this native dependency fixture by path.
   "test/scripts/state-read-worker-dependency.test-support.mts!",
   // tsgo:test:root checks these compile-only contracts without runtime imports.
@@ -75,10 +80,11 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/helpers/openclaw-test-instance.cli.test-support.mjs!",
   // The public QA Gateway child launches this transport proxy by path.
   "test/fixtures/qa-gateway-rpc-proxy.mjs!",
-  // ClawSweeper's paired consumer proof launches this cross-repository fixture by path.
-  "test/fixtures/mantis-request-producer.mts!",
   // Prior-release fixture generation invokes this CLI from the selected release checkout.
   "test/fixtures/state-corpus/generate.mjs!",
+  // The prerelease manifest runs this frozen planner and checks its historical config is present.
+  "test/fixtures/plugin-prerelease-frozen-target/scripts/lib/extension-test-plan.mjs!",
+  "test/fixtures/plugin-prerelease-frozen-target/test/vitest/vitest.extension-telegram.config.mjs!",
   // Vitest loads these by configuration or module alias rather than imports.
   "test/setup*.ts!",
   "test/non-isolated-runner.ts!",
@@ -182,6 +188,10 @@ const workspaces = Object.fromEntries(
               // The plugin README documents this standalone fixture benchmark command.
               ...(workspace === "extensions/team-reports"
                 ? ["src/report-run.benchmark.test-support.ts!"]
+                : []),
+              // extensions/diagnostics-prometheus/benchmarks/README.md invokes this Node benchmark by path.
+              ...(workspace === "extensions/diagnostics-prometheus"
+                ? ["src/metric-store.benchmark.test-support.ts!"]
                 : []),
               // The PostgreSQL fixture resolves this backend through openEngineWorkerStore.
               ...(workspace === "extensions/workboard"

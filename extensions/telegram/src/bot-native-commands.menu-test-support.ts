@@ -20,9 +20,6 @@ type CreateCommandBotResult = {
   deleteMessage: ReturnType<typeof vi.fn>;
   setMyCommands: ReturnType<typeof vi.fn>;
 };
-type CreateCommandBotParams = {
-  api?: Record<string, unknown>;
-};
 
 const nativeCommandMocks = vi.hoisted(() => ({
   getRuntimeConfig:
@@ -125,7 +122,7 @@ export function resetNativeCommandMenuMocks() {
   deliverReplies.mockResolvedValue({ delivered: true });
 }
 
-export function createCommandBot(params: CreateCommandBotParams = {}): CreateCommandBotResult {
+export function createCommandBot(): CreateCommandBotResult {
   const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
   const sendMessage = vi.fn().mockResolvedValue({ message_id: 999 });
   const deleteMessage = vi.fn().mockResolvedValue(true);
@@ -135,7 +132,6 @@ export function createCommandBot(params: CreateCommandBotParams = {}): CreateCom
       setMyCommands,
       sendMessage,
       deleteMessage,
-      ...params.api,
     },
     command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
       commandHandlers.set(name, cb);

@@ -31,7 +31,7 @@ it.each([
   ["dark", 1280],
   ["light", 390],
   ["dark", 390],
-] as const)("keeps plugin steering collapsed and readable in %s at %ipx", async (theme, width) => {
+] as const)("shows plugin steering as a collapsed row in %s at %ipx", async (theme, width) => {
   root.dataset.theme = theme;
   root.dataset.themeMode = theme;
   await page.viewport(width, 900);
@@ -48,38 +48,28 @@ it.each([
     showTimestamp: true,
   };
   const view = mountSolid(() => <ChatNotice item={item} />);
-  const notice = view.container.querySelector<HTMLElement>(".chat-notice")!;
-  const details = notice.querySelector<HTMLDetailsElement>("details")!;
-  const body = notice.querySelector<HTMLElement>(".chat-notice__body")!;
-  const metric = notice.querySelector<HTMLElement>(".chat-divider__metric")!;
-  const header = notice.querySelector<HTMLElement>(".chat-divider__label")!;
-  const toggle = view.getByText("Show content");
+  const row = view.container.querySelector<HTMLDetailsElement>("details.chat-notice-inline")!;
+  const summary = row.querySelector<HTMLElement>("summary")!;
+  const body = row.querySelector<HTMLElement>(".chat-notice__body")!;
+  const time = row.querySelector<HTMLElement>(".chat-notice-inline__time")!;
 
   await expect.element(view.getByText(label)).toBeVisible();
-  await expect.element(metric).toBeVisible();
-  expect(metric.textContent).toBe("2:37 PM");
-  expect(details.open).toBe(false);
+  expect(time.textContent).toBe("2:37 PM");
+  expect(row.open).toBe(false);
   await expect.element(body).not.toBeVisible();
-  expect(notice.scrollWidth).toBeLessThanOrEqual(notice.clientWidth);
+  expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
 
-  toggle.focus();
+  summary.focus();
   await userEvent.keyboard("{Enter}");
-  expect(details.open).toBe(true);
+  expect(row.open).toBe(true);
   await expect.element(body).toBeVisible();
-  await expect.element(view.getByText("Hide content")).toBeVisible();
   expect(body.textContent?.trim()).toBe("Check the rollback path before continuing.");
   expect(body.querySelector("strong")?.textContent).toBe("rollback path");
-  expect(notice.scrollWidth).toBeLessThanOrEqual(notice.clientWidth);
-  const textRange = document.createRange();
-  textRange.selectNodeContents(body.querySelector("p")!);
-  const textBounds = textRange.getBoundingClientRect();
-  const headerBounds = header.getBoundingClientRect();
-  const textCenter = textBounds.left + textBounds.width / 2;
-  const headerCenter = headerBounds.left + headerBounds.width / 2;
-  expect(Math.abs(textCenter - headerCenter)).toBeLessThanOrEqual(1);
+  expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
+  // The row reads as part of the agent's turn: body text starts at the row's left edge, not centered.
+  expect(getComputedStyle(body).textAlign).not.toBe("center");
 
-  await userEvent.click(view.getByText("Hide content"));
-  expect(details.open).toBe(false);
+  await userEvent.click(summary);
+  expect(row.open).toBe(false);
   await expect.element(body).not.toBeVisible();
-  await expect.element(view.getByText("Show content")).toBeVisible();
 });

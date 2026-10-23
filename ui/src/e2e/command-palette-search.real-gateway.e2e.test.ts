@@ -60,6 +60,9 @@ type RpcObservation = {
   resultCount?: number;
   resultKeys?: unknown[];
   sessionKeys?: unknown[];
+  rowsRevision?: unknown;
+  rowsUnchanged?: boolean;
+  rowsDelta?: unknown;
   truncated?: boolean;
   indexing?: boolean;
   archivedTranscriptsExcluded?: number;
@@ -203,7 +206,6 @@ const suite = createControlUiE2eSuite({
             workspace: owner.state.workspaceDir,
             model: "fixture/search-model",
             modelPolicy: { allow: ["fixture/*"] },
-            heartbeat: { every: "0m" },
           },
           entries: Object.fromEntries(
             agentIds.map((id) => [id, { identity: { name: `Synthetic ${id} assistant` } }]),
@@ -393,6 +395,9 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
       if (Array.isArray(body.sessions)) {
         metric.sessionKeys = body.sessions.map((row) => (isRecord(row) ? row.key : null));
       }
+      metric.rowsRevision = body.rowsRevision;
+      metric.rowsUnchanged = body.rowsUnchanged === true;
+      metric.rowsDelta = body.rowsDelta;
       metric.truncated = body.truncated === true;
       metric.indexing = body.indexing === true;
       metric.archivedTranscriptsExcluded =
@@ -525,6 +530,7 @@ suite.define(() => {
           const results = palette.locator(".cmd-palette__results");
           const emptyState = palette.locator(".cmd-palette__no-results");
           await input.waitFor();
+          const metadataReceipts = new Map<string, { revision: string; keys: string[] }>();
           const search = async (
             query: string,
             expectedHits: number,
@@ -579,15 +585,49 @@ suite.define(() => {
             // The query owns one bounded metadata lookup. The scoped transcript
             // request above cannot be limited by any background roster window.
             expect(metadata).toHaveLength(1);
-            expect(metadata[0]?.params).toEqual({
+            const metadataResponse = metadata[0]!;
+            const previous = metadataReceipts.get(query);
+            const { ifRowsRevision: requestedRevision, ...metadataParams } =
+              metadataResponse.params;
+            // Eviction may require a full read; reuse must name this query's last receipt.
+            expect(["", ...(previous ? [`delta:${previous.revision}`] : [])]).toContain(
+              requestedRevision,
+            );
+            expect(metadataParams).toEqual({
               ...scope,
               search: query,
               limit: 10,
               rowMode: "compact",
               source: "command-palette",
             });
-            expect(metadata[0]?.ok).toBe(true);
-            expect(metadata[0]?.sessionKeys).toEqual(metadataKeys);
+            expect(metadataResponse.ok).toBe(true);
+            const revision = metadataResponse.rowsRevision;
+            expect.assert(typeof revision === "string");
+            expect(revision).toMatch(/\S/u);
+            let returnedKeys = metadataResponse.sessionKeys;
+            if (metadataResponse.rowsUnchanged || isRecord(metadataResponse.rowsDelta)) {
+              expect.assert(previous);
+              expect(requestedRevision).toBe(`delta:${previous.revision}`);
+              if (metadataResponse.rowsUnchanged) {
+                expect(revision).toBe(previous.revision);
+                returnedKeys = previous.keys;
+              } else if (isRecord(metadataResponse.rowsDelta)) {
+                const delta = metadataResponse.rowsDelta;
+                expect(delta.baseRevision).toBe(previous.revision);
+                expect(Array.isArray(delta.order)).toBe(true);
+                if (Array.isArray(delta.order)) {
+                  const keys = [...previous.keys, ...(returnedKeys ?? [])];
+                  returnedKeys = delta.order.map((index: unknown) =>
+                    typeof index === "number" ? keys[index] : undefined,
+                  );
+                }
+              }
+            }
+            expect(returnedKeys).toEqual(metadataKeys);
+            metadataReceipts.set(query, {
+              revision,
+              keys: metadataKeys,
+            });
             expect(notices).toEqual(noMatches ? [expect.stringContaining("No results found")] : []);
             expect(
               await palette

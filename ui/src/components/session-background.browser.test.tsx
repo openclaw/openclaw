@@ -65,7 +65,6 @@ it("samples the inherited palette when a Solid-mounted photo first joins the doc
     branding: resolveThemeBranding(undefined),
     mode: "dark",
     resolvedMode: "dark",
-    serverSelection: null,
     appliedPalette: null,
     recordServerSelection: () => undefined,
     setMode: () => undefined,

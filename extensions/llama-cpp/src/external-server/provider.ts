@@ -16,7 +16,6 @@ import { discoverLlamaServer } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
 import { buildLlamaServerProviderConfig } from "./models.js";
 
-/** Discovers external llama-server models for provider runtime resolution. */
 export async function discoverLlamaServerProvider(
   ctx: ProviderCatalogContext,
 ): Promise<ProviderCatalogResult> {
@@ -92,8 +91,5 @@ export async function prepareLlamaServerDynamicModel(
     provider: LLAMA_CPP_PROVIDER_ID,
     api: ctx.providerConfig?.api ?? "openai-completions",
     baseUrl: resolveLlamaServerEndpoint(ctx.providerConfig?.baseUrl).inferenceBaseUrl,
-    input: model.config.input.filter(
-      (entry): entry is "text" | "image" => entry === "text" || entry === "image",
-    ),
   };
 }

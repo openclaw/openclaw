@@ -81,7 +81,6 @@ export function createChatGPTV2CompactionBoundary(params: {
   requestAnchor?: MeasuredRequestContext,
 ) => Promise<AssistantMessage | undefined> {
   let failed = false;
-  let softSkipLogged = false;
   return async (streamFn, model, context, options, requestAnchor) => {
     if (!usesNativeOpenAICodexResponsesBackend(model) || params.session.isCompacting) {
       return undefined;
@@ -132,10 +131,6 @@ export function createChatGPTV2CompactionBoundary(params: {
     const fallback = (reason: string, hardLimit = false) => {
       // The early V2 trigger must not move the client's compaction threshold.
       if (!hardLimit && outgoing.route === "fits") {
-        if (!softSkipLogged) {
-          log.debug(`ChatGPT V2 compaction skipped while the request still fits: ${reason}`);
-          softSkipLogged = true;
-        }
         return undefined;
       }
       log.warn(`ChatGPT V2 compaction unavailable; falling back to client compaction: ${reason}`);

@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { createEffect, createSignal } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
@@ -6,7 +6,7 @@ import {
   selectSessionCommunication,
   type SessionCommunicationMenuAction,
 } from "./session-communication-options.ts";
-import { SessionDetailsOwner } from "./session-details-controller.ts";
+import { createSessionDetails } from "./session-details.ts";
 
 type SessionMenuSettingsOptions = {
   context: () => ApplicationContext | undefined;
@@ -23,9 +23,7 @@ type SessionMenuSettingsOptions = {
 /** Owns the menu observation lifetime; the capability keeps synchronous row admission. */
 export function createSessionMenuSettings(options: SessionMenuSettingsOptions) {
   const [active, setActive] = createSignal(false);
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const notify = () => setRevision((value) => value + 1);
-  const details = new SessionDetailsOwner(notify, {
+  const details = createSessionDetails({
     captureScope: () => {
       const context = options.context();
       const connection = context?.sessions.captureConnectionScope();
@@ -59,27 +57,21 @@ export function createSessionMenuSettings(options: SessionMenuSettingsOptions) {
     },
     ([isActive]) => {
       if (isActive) {
-        // Dependencies are captured above; admission reads the current synchronous owner.
-        untrack(() => details.synchronize());
-        notify();
+        details.synchronize();
       }
     },
   );
-  onCleanup(() => details.reset());
   const communicationState = () => {
-    revision();
     const state = options.readState();
-    return { ...state, session: details.row ?? state.session };
+    return { ...state, session: details.row() ?? state.session };
   };
   return {
     communicationState,
     get communicationAvailable() {
       return Boolean(communicationState().session.effectiveCommunication);
     },
-    get error() {
-      revision();
-      return details.error;
-    },
+    read: details.read,
+    readKey: details.readKey,
     open() {
       setActive(true);
       details.synchronize();
@@ -87,12 +79,10 @@ export function createSessionMenuSettings(options: SessionMenuSettingsOptions) {
     close() {
       setActive(false);
       details.reset();
-      notify();
     },
     handleSelect(value: string) {
       if (value === "reload-settings") {
-        details.reset();
-        details.synchronize();
+        details.retry();
         return true;
       }
       return selectSessionCommunication(value, options.runAction);

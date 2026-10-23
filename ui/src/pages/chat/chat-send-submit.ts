@@ -8,16 +8,18 @@ import { normalizeChatFollowUpModeOverride } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { canSubmitBeforeChatHistory, parseSlashCommand } from "../../lib/chat/commands.ts";
 import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
+import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import {
   dispatchChatSlashCommand,
   requireChatSessionAction,
@@ -44,8 +46,6 @@ import { deliverChatQueueItem } from "./chat-send-delivery.ts";
 import { sendDetachedCommandMessage } from "./chat-send-detached-command.ts";
 import {
   canSendVolatileQueueItem,
-  createPendingSendMessage,
-  publishPendingSendMessage,
   reconnectSafeQueuedSendState,
   waitForPendingChatSettings,
 } from "./chat-send-queue-state.ts";
@@ -72,7 +72,6 @@ import {
   prepareOutboxPayload,
   retireOutboxPayload,
 } from "./outbox-payloads.ts";
-import { controlUiNowMs } from "./performance.ts";
 import { activeQueuedMessageEdit, retireEditedQueuedMessageSource } from "./queued-message-edit.ts";
 import {
   handleAbortChat,
@@ -100,6 +99,9 @@ export async function handleSendChat(
   opts?: ChatSendSubmitOptions,
   submissionAction?: Event,
 ) {
+  if (host.isRouteSessionPending?.()) {
+    return undefined;
+  }
   if (
     chatProviderReviewRow(host)?.providerReview &&
     !isChatStopCommand(messageOverride ?? host.chatMessage)
@@ -116,7 +118,6 @@ export async function handleSendChat(
     return undefined;
   }
   if (opts?.intent && chatProviderReviewRow(host)?.sendDisabledReason) {
-    host.requestUpdate?.();
     return undefined;
   }
   const previousDraft = host.chatMessage;
@@ -128,7 +129,7 @@ export async function handleSendChat(
   const draftMentions = messageOverride == null ? previousMentions : opts?.mentionsOverride;
   const submitted = trimHumanMentions(rawMessage, draftMentions);
   const userMessage = intent ? rawMessage : submitted.text;
-  const submittedAtMs = controlUiNowMs();
+  const submittedAtMs = performance.now();
   const submittedSessionKey = host.sessionKey;
   const submittedConnectionIsCurrent = captureChatConnectionOwner(host, false);
   const submittedOwnerIsCurrent = captureOutboxPayloadOwner(host);
@@ -212,7 +213,14 @@ export async function handleSendChat(
   const message =
     rawParsedCommand || intent
       ? userMessage
-      : composeBrowserAnnotationContext(userMessage, attachmentsToSend);
+      : [
+          ...attachmentsToSend.map(({ browserAnnotation }) =>
+            browserAnnotation?.modelContext.trim(),
+          ),
+          userMessage,
+        ]
+          .filter(Boolean)
+          .join("\n\n");
   // Slash commands may use ordinary files, but annotations belong to the next model prompt.
   const deliveredAttachments = rawParsedCommand
     ? attachmentsToSend.filter(
@@ -314,7 +322,6 @@ export async function handleSendChat(
       (!parsed?.command.executeLocal || forwardModel) &&
       chatProviderReviewRow(host)?.sendDisabledReason
     ) {
-      host.requestUpdate?.();
       return undefined;
     }
     host.chatRunError = null;
@@ -348,7 +355,6 @@ export async function handleSendChat(
     if (parsed?.command.executeLocal && !forwardModel) {
       if (shouldQueueLocalSlashCommand(parsed.command.key)) {
         if (chatSendHoldReason(host, submittedSessionKey)) {
-          host.requestUpdate?.();
           return undefined;
         }
         const submitKey = chatSubmitKey(host, "local", message, attachmentsToSend);
@@ -380,6 +386,7 @@ export async function handleSendChat(
               host.chatMentions = previousMentions ?? [];
               host.chatReplyTarget = previousReplyTarget;
               host.chatAttachments = attachmentsToSend;
+              host.composerDraftChanged?.();
             }
             setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
             return;
@@ -532,8 +539,6 @@ export async function handleSendChat(
         ? chatSendHoldReason(host, submittedSessionKey, false, submittedAgentId)
         : chatSendAdmissionHoldReason(host, submittedSessionKey, submittedAgentId);
     if (admissionHoldReason()) {
-      // The composer owns transient recovery notices, including their removal.
-      host.requestUpdate?.();
       return;
     }
     let pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
@@ -555,25 +560,37 @@ export async function handleSendChat(
     const activeRunQueueMode =
       !intent && applyRunPolicy && followUpMode !== "queue" ? followUpMode : undefined;
     const allowActiveRunSend = Boolean(intent || (applyRunPolicy && followUpMode !== "queue"));
-    const submission = createPendingSendMessage(
-      host,
-      quotedMessage,
-      deliveredAttachments.length ? deliveredAttachments : undefined,
-      Boolean(intent) || isChatResetCommand(message),
-      submittedAtMs,
-      pendingSettings ? "waiting-model" : reconnectSafeQueuedSendState(host),
-      replyToId,
-      resumedEdit?.orderKey,
-      activeRunQueueMode,
-      intent,
-      expectedLeafEntryId,
-      effectiveMentions,
-      workContext,
-    );
-    if (!submission) {
+    const refreshSessions = Boolean(intent) || isChatResetCommand(message);
+    const sendState = pendingSettings ? "waiting-model" : reconnectSafeQueuedSendState(host);
+    const queuedText = trimHumanMentions(quotedMessage, effectiveMentions);
+    if (!queuedText.text && !deliveredAttachments.length) {
       return;
     }
-    let queued = submission.item;
+    const admission = captureChatOutboxAdmission(host, host.sessionKey);
+    const sender = resolveCurrentUserIdentity(host.hello, host.client?.instanceId, host.selfUser);
+    let queued: ChatQueueItem = {
+      storageScope: outboxStorageScope(host),
+      id: generateUUID(),
+      text: intent ? quotedMessage : queuedText.text,
+      ...(queuedText.mentions ? { mentions: queuedText.mentions } : {}),
+      ...(workContext ? { workContext } : {}),
+      createdAt: Date.now(),
+      ...(resumedEdit?.orderKey !== undefined ? { orderKey: resumedEdit.orderKey } : {}),
+      attachments: deliveredAttachments.length ? deliveredAttachments : undefined,
+      refreshSessions,
+      sendAttempts: 0,
+      sendRunId: generateUUID(),
+      sendState,
+      ...(activeRunQueueMode ? { queueMode: activeRunQueueMode } : {}),
+      ...(intent
+        ? { intent, ...(host.currentSessionId ? { sessionId: host.currentSessionId } : {}) }
+        : {}),
+      ...(intent && expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
+      sendSubmittedAtMs: submittedAtMs,
+      ...admission.scope,
+      ...(sender ? { sender } : {}),
+      ...(replyToId ? { replyToId } : {}),
+    };
     queued.asyncQuestionItemId =
       resumedEdit?.source.asyncQuestionItemId ?? opts?.asyncQuestionItemId;
     if (queued.attachments?.length) {
@@ -597,9 +614,7 @@ export async function handleSendChat(
       const hold = admissionHoldReason();
       if (hold || (intent && (isChatBusy(host) || hasDirectSessionRun(host)))) {
         retireOutboxPayload(queued);
-        if (hold) {
-          host.requestUpdate?.();
-        } else {
+        if (!hold) {
           setChatError(host, t("chat.goals.busy"));
         }
         return;
@@ -614,10 +629,11 @@ export async function handleSendChat(
       recordNonTranscriptInputHistory(host, userMessage);
     }
 
-    queued = publishPendingSendMessage(host, queued);
+    queued = chatOutboxOwner(host).keep(host, admission.scope, queued);
+    scheduleChatScroll(host, true, true, { source: "manual" });
     const admissionResult = chatOutboxOwner(host).admit(
       host,
-      submission.admission,
+      admission,
       queued,
       resumedEdit
         ? {
@@ -631,9 +647,13 @@ export async function handleSendChat(
       guard.releaseAttachments();
       if (messageOverride == null && !rawParsedCommand && !intent && submissionOwnerIsCurrent()) {
         // Pending admissions retain their files until their own composer snapshot can settle.
-        host.chatAttachments = host.chatAttachments.filter(
+        const attachments = host.chatAttachments.filter(
           (attachment) => !guard.canRetireAttachment(attachment),
         );
+        if (attachments.length !== host.chatAttachments.length) {
+          host.chatAttachments = attachments;
+          host.composerDraftChanged?.();
+        }
       }
     }
     if (resumedEdit) {

@@ -106,9 +106,7 @@ events publish admission changes immediately. The phase is `accepting`,
 The Control UI's bottom-left connection indicator shows **Suspending…** during
 preparation or draining and **Suspended** while prepared, including in Settings.
 It clears when suspension admission reopens, not when a request succeeds.
-Offline and restart indicators take precedence. Scheduler recovery keeps the
-suspension indicator until admission actually reopens; there is no separate
-resuming phase.
+Offline and restart indicators take precedence; there is no separate resuming phase.
 
 The RPC contract is:
 
@@ -269,12 +267,11 @@ change an older resident's responses. Request lifecycle metadata only once a
 Gateway version supporting it is running. Drivers must still verify their exact
 predecessor and handle transport closure through their lifecycle owner.
 
-A competing request ID or transient scheduler-resume failure returns retryable
-`UNAVAILABLE` with `retryAfterMs`. During scheduler recovery, prepare, status,
-and resume all return that error, the Gateway remains not-ready and
-refuses new work, and the host must not freeze or snapshot it. OpenClaw retries the
-scheduler automatically and reopens admission only after recovery succeeds. A
-mismatched resume ID returns `INVALID_REQUEST`. Prepare is subject to the
+A competing request ID returns retryable `UNAVAILABLE` with `retryAfterMs`.
+Resume and lease expiry request cron scheduling to resume, then reopen admission.
+Cron worker refresh failures are reported in logs; suspension does not add a
+separate fail-closed scheduler recovery loop. A mismatched resume ID returns
+`INVALID_REQUEST`. Prepare is subject to the
 Gateway's control-plane write limit of 30 attempts per minute; honor the
 returned retry delay. WebSocket clients are bucketed by device and IP. Admin HTTP
 controllers are bucketed by resolved client IP, so controllers behind one

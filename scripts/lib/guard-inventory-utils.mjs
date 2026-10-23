@@ -26,7 +26,7 @@ export function writeLine(stream, text) {
 /**
  * Collect module references from a source file owned by the caller's parsing session.
  *
- * @param {import("typescript/unstable/ast").SourceFile} sourceFile
+ * @param {import("typescript/ast").SourceFile} sourceFile
  * @param {{
  *   acceptSpecifier?: (specifier: string) => boolean;
  * }} [options]

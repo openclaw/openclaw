@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -13,6 +14,29 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createToolingDependencyFixture } from "./tooling-dependencies.test-support.mts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const staleSource = 'throw new Error("STALE PACKAGE EXECUTED");';
+const directoryLink = process.platform === "win32" ? "junction" : "dir";
+function writeJson(file: string, value: object) {
+  writeFileSync(file, JSON.stringify(value));
+}
+function rewrite(file: string, transform: (source: string) => string) {
+  writeFileSync(file, transform(readFileSync(file, "utf8")));
+}
+function moveAndLink(from: string, to: string, type: "file" | "dir" | "junction" = directoryLink) {
+  renameSync(from, to);
+  symlinkSync(to, from, type);
+}
+function expectRun(
+  fixture: ReturnType<typeof createToolingDependencyFixture>,
+  status: number,
+  stdout: string,
+  entry?: string,
+) {
+  const result = fixture.run(entry);
+  expect(result, result.stderr).toMatchObject({ status, stdout });
+  expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
+  return result;
+}
 
 function createWorkspaceFixture(root: string) {
   const fixture = createToolingDependencyFixture(root);
@@ -28,7 +52,7 @@ function createWorkspaceFixture(root: string) {
   };
   for (const directory of [source, donor]) {
     mkdirSync(join(directory, "src"), { recursive: true });
-    writeFileSync(join(directory, "package.json"), JSON.stringify(manifest));
+    writeJson(join(directory, "package.json"), manifest);
   }
   writeFileSync(join(source, "src/local.mjs"), 'export default "checkout";');
   writeFileSync(join(donor, "src/local.mjs"), 'throw new Error("FOREIGN SOURCE EXECUTED");');
@@ -58,9 +82,75 @@ console.log(value, privateValue, local, process.env.TOOLING_FIXTURE_PRELOADED);
   fixture.writePackage("private-pkg", 'export default "workspace-private";', "3.0.0", installed);
   mkdirSync(join(donor, "node_modules"));
   const link = join(donor, "node_modules/fixture-pkg");
-  symlinkSync(installed, link, process.platform === "win32" ? "junction" : "dir");
+  symlinkSync(installed, link, directoryLink);
   return { ...fixture, source, donor, entry, wrapper, installed, link, manifest };
 }
+
+it.each(["full", "sparse", "different origin"])(
+  "qualifies a %s donor independently of inherited hook Git context",
+  (donor) => {
+    const root = tempDirs.make("openclaw-tooling-hook-context-");
+    const fixture = createToolingDependencyFixture(root);
+    execFileSync("git", ["-C", fixture.checkout, "config", "core.sparseCheckout", "true"]);
+    if (donor === "sparse") {
+      execFileSync("git", ["-C", fixture.tooling, "config", "core.sparseCheckout", "true"]);
+    } else if (donor === "different origin") {
+      execFileSync("git", [
+        "-C",
+        fixture.tooling,
+        "remote",
+        "set-url",
+        "origin",
+        "https://github.com/fixture/other.git",
+      ]);
+    }
+    writeFileSync(
+      join(fixture.checkout, "scripts/hook-context.mjs"),
+      `import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { toolingDependencyOptions } from "./lib/tooling-dependencies.mjs";
+const checkout = dirname(dirname(fileURLToPath(import.meta.url)));
+const gitDir = join(checkout, ".git");
+const index = join(checkout, "hook-index");
+execFileSync("git", ["-C", checkout, "read-tree", "--empty"], {
+  env: { ...process.env, GIT_INDEX_FILE: index },
+});
+Object.assign(process.env, {
+  GIT_DIR: gitDir,
+  GIT_WORK_TREE: checkout,
+  GIT_COMMON_DIR: gitDir,
+  GIT_INDEX_FILE: index,
+  GIT_PREFIX: "scripts/",
+  GIT_OBJECT_DIRECTORY: join(gitDir, "objects"),
+  GIT_ALTERNATE_OBJECT_DIRECTORIES: join(gitDir, "objects"),
+});
+const before = { ...process.env };
+const indexBefore = readFileSync(index);
+try {
+  assert.ok(toolingDependencyOptions(checkout, "hook-context").execArgv.length);
+} finally {
+  assert.deepEqual({ ...process.env }, before);
+  assert.deepEqual(readFileSync(index), indexBefore);
+}
+await import("./crabbox-wrapper.mjs");
+`,
+    );
+    const result = expectRun(
+      fixture,
+      donor === "full" ? 0 : 1,
+      donor === "full" ? "qualified bootstrap OK\n" : "",
+      "hook-context.mjs",
+    );
+    if (donor !== "full") {
+      expect(result.stderr).toContain(
+        donor === "sparse" ? "Sparse checkout." : "Different repository.",
+      );
+    }
+  },
+);
 
 it.each(["clean", "stale", "missing subpath exports"])(
   "bootstraps qualified dependencies beside a %s ancestor without linking them",
@@ -83,18 +173,13 @@ console.log(copyFileDescriptorSync, watch);
 `,
       );
     }
-    const result = fixture.run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(
+    expectRun(
+      fixture,
+      0,
       ancestor === "missing subpath exports" ? "advanced watch\n" : "qualified bootstrap OK\n",
     );
-    expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
-
-    const ordinary = fixture.run("ordinary.mjs");
-    expect(ordinary.status).toBe(1);
+    const ordinary = expectRun(fixture, 1, "", "ordinary.mjs");
     expect(ordinary.stderr).toContain("Repository dependencies are missing");
-    expect(ordinary.stdout).toBe("");
-    expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
   },
 );
 
@@ -113,8 +198,7 @@ it.each([
     mkdirSync(workspace);
     const installed = join(fixture.tooling, "node_modules", name);
     const external = join(workspace, name);
-    renameSync(installed, external);
-    symlinkSync(external, installed, process.platform === "win32" ? "junction" : "dir");
+    moveAndLink(installed, external);
   }
   const result = fixture.run();
   expect(result.status).toBe(1);
@@ -139,34 +223,25 @@ it.each(["local only", "different root pin", "stale ancestor", "missing subpath 
       const manifestPath = join(fixture.checkout, "package.json");
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
       delete manifest.devDependencies["fixture-pkg"];
-      writeFileSync(manifestPath, JSON.stringify(manifest));
+      writeJson(manifestPath, manifest);
       rmSync(join(fixture.tooling, "node_modules/fixture-pkg"), { recursive: true });
     } else if (scenario === "different root pin") {
-      writeFileSync(
+      rewrite(
         fixture.wrapper,
-        `import assert from "node:assert/strict";
+        (source) => `import assert from "node:assert/strict";
 import rootValue from "fixture-pkg";
 assert.equal(rootValue, "qualified");
-${readFileSync(fixture.wrapper, "utf8")}`,
+${source}`,
       );
     } else {
-      fixture.writePackage(
-        "fixture-pkg",
-        'throw new Error("STALE PACKAGE EXECUTED");',
-        "0.0.0",
-        root,
-      );
+      fixture.writePackage("fixture-pkg", staleSource, "0.0.0", root);
       if (scenario === "missing subpath exports") {
-        writeFileSync(
-          fixture.entry,
-          readFileSync(fixture.entry, "utf8").replace('"fixture-pkg"', '"fixture-pkg/feature"'),
+        rewrite(fixture.entry, (source) =>
+          source.replace('"fixture-pkg"', '"fixture-pkg/feature"'),
         );
       }
     }
-    const result = fixture.run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe("workspace workspace-private checkout 1\n");
-    expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
+    expectRun(fixture, 0, "workspace workspace-private checkout 1\n");
   },
 );
 
@@ -192,50 +267,32 @@ it.each([
     const manifestPath = join(fixture.installed, "package.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     manifest.version = "0.0.0-stale";
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeJson(manifestPath, manifest);
     expected = "requires 2.0.0";
   } else if (scenario === "range pin" || scenario === "undeclared") {
-    writeFileSync(
-      join(fixture.source, "package.json"),
-      JSON.stringify({
-        ...fixture.manifest,
-        dependencies: scenario === "undeclared" ? {} : { "fixture-pkg": "^2.0.0" },
-      }),
-    );
+    writeJson(join(fixture.source, "package.json"), {
+      ...fixture.manifest,
+      dependencies: scenario === "undeclared" ? {} : { "fixture-pkg": "^2.0.0" },
+    });
     expected = `requires ${scenario === "undeclared" ? "undeclared" : "^2.0.0"}`;
   } else if (scenario === "subpath exports") {
-    writeFileSync(
-      fixture.entry,
-      readFileSync(fixture.entry, "utf8").replace('"fixture-pkg"', '"fixture-pkg/private"'),
-    );
+    rewrite(fixture.entry, (source) => source.replace('"fixture-pkg"', '"fixture-pkg/private"'));
     expected = "ERR_PACKAGE_PATH_NOT_EXPORTED";
   } else if (scenario === "entry escape") {
     const external = join(fixture.donor, "src/foreign.mjs");
-    renameSync(join(fixture.installed, "index.mjs"), external);
-    symlinkSync(external, join(fixture.installed, "index.mjs"), "file");
+    moveAndLink(join(fixture.installed, "index.mjs"), external, "file");
   } else if (scenario === "foreign workspace source") {
     const foreign = join(root, "foreign-source");
     mkdirSync(foreign);
-    writeFileSync(
-      join(foreign, "package.json"),
-      JSON.stringify({ type: "module", exports: "./index.mjs" }),
-    );
+    writeJson(join(foreign, "package.json"), { type: "module", exports: "./index.mjs" });
     writeFileSync(join(foreign, "index.mjs"), marker);
     mkdirSync(join(root, "node_modules"));
-    symlinkSync(
-      foreign,
-      join(root, "node_modules/fixture-pkg"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    symlinkSync(foreign, join(root, "node_modules/fixture-pkg"), directoryLink);
   } else {
     const target = scenario === "package escape" ? fixture.installed : fixture.donor;
     const external = join(root, "foreign-owner");
-    renameSync(target, external);
-    symlinkSync(external, target, process.platform === "win32" ? "junction" : "dir");
+    moveAndLink(target, external);
   }
-  const result = fixture.run();
-  expect(result.status, result.stderr).toBe(1);
+  const result = expectRun(fixture, 1, "");
   expect(result.stderr).toContain(expected);
-  expect(result.stdout).toBe("");
-  expect(existsSync(join(fixture.checkout, "node_modules"))).toBe(false);
 });

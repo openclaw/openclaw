@@ -276,6 +276,7 @@ function retireFailedReply(
     observation: { started() {}, completed() {} },
     request,
     bytes: 0,
+    result: completion.promise,
     operationAdmission: {
       admission: {
         get port(): MessagePort {

@@ -3,10 +3,12 @@ import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { CoreTsgoGraph } from "../../scripts/check-tsgo-core-boundary.mts";
 import {
+  expandTsgoExecutionGraphs,
   selectChangedCiTsgoGraphs,
   resolveCiTsgoGraphs,
   TSGO_CI_GRAPHS,
   TSGO_CI_ADDITIONAL_GRAPHS,
+  TSGO_ROOT_TEST_SHARDS,
 } from "../../scripts/lib/tsgo-core-test-shards.mts";
 import { createChangedCiTypeCheckPlan } from "../../scripts/run-tsgo-core-test-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -30,10 +32,17 @@ function workspace(files = [source]) {
   return cwd;
 }
 const fullPlan = { mode: "full", graphs: TSGO_CI_GRAPHS };
-const graphs = (files: (name: string) => string[] = () => []) =>
-  TSGO_CI_GRAPHS.map(({ name, config }) => ({ name, config, roots: [], files: files(name) }));
-const additionalInventory = (files: string[]) =>
-  TSGO_CI_ADDITIONAL_GRAPHS.map((graph) => ({ ...graph, roots: [], files }));
+const graphs = (
+  files: (name: string) => string[] = () => [],
+  scope: Parameters<typeof expandTsgoExecutionGraphs>[0] = TSGO_CI_GRAPHS,
+) =>
+  expandTsgoExecutionGraphs(scope).map(({ name, config }) => ({
+    name,
+    config,
+    roots: [],
+    files: files(name),
+  }));
+const additionalInventory = (files: string[]) => graphs(() => files, TSGO_CI_ADDITIONAL_GRAPHS);
 const noncoreInventory = additionalInventory([extension]);
 type PlanOptions = Parameters<typeof createChangedCiTypeCheckPlan>[1];
 async function expectFull(paths: string[], options: PlanOptions = {}, discovers = false) {
@@ -55,7 +64,19 @@ it("preserves canonical graph order and rejects unowned graphs", () => {
     },
     { name: "ui", config: "tsconfig.ui.json" },
   ]);
-  for (const names of [[], ["core", "core"], ["unknown"], ["core", "../../unowned.json"]]) {
+  expect(resolveCiTsgoGraphs(["test-root-e2e", "test-root-tooling"])).toEqual([
+    TSGO_ROOT_TEST_SHARDS[2],
+    TSGO_ROOT_TEST_SHARDS[0],
+  ]);
+  for (const names of [
+    [],
+    ["core", "core"],
+    ["unknown"],
+    ["core", "../../unowned.json"],
+    ["test-root", "test-root-e2e"],
+    ["test-root-e2e", "test-root"],
+    ["test-root-e2e", "test-root-e2e"],
+  ]) {
     expect(() => resolveCiTsgoGraphs(names)).toThrow("canonical");
   }
 });
@@ -68,7 +89,7 @@ it("keeps type-only consumers in every compiler family", () => {
     "extensions",
     "extensions-test",
     "scripts",
-    "test-root",
+    ...TSGO_ROOT_TEST_SHARDS.map(({ name }) => name),
   ];
   expect(
     selectChangedCiTsgoGraphs(
@@ -110,7 +131,7 @@ it("requires a parallel owner for noncore-only discovery", async () => {
   inspectGraphs.mockResolvedValue(additionalInventory([extension]));
   expect(
     await createChangedCiTypeCheckPlan(paths, { cwd, coreBoundaryOwner: "additional-checks" }),
-  ).toEqual({ mode: "changed", graphs: TSGO_CI_ADDITIONAL_GRAPHS });
+  ).toEqual({ mode: "changed", graphs: expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS) });
   await expectFull(paths, { cwd }, true);
 });
 
@@ -153,4 +174,21 @@ it.each([
   ["mixed", noncoreInventory, [extension, source]],
 ] as const)("rejects incomplete noncore discovery: %s", (_kind, inventory, paths) => {
   expect(selectChangedCiTsgoGraphs(paths, inventory, { scope: "noncore" })).toBeUndefined();
+});
+
+it.each([
+  ["test/scripts/ci-example.test.ts", ["test-root-tooling"]],
+  ["test/helpers/shared-type.ts", ["test-root-tooling", "test-root-e2e"]],
+  ["test/setup.ts", TSGO_ROOT_TEST_SHARDS.map(({ name }) => name)],
+] as const)("checks every root partition consuming %s", async (file, consumers) => {
+  const cwd = workspace([file]);
+  const inventory = graphs((name) =>
+    consumers.some((consumer) => consumer === name) ? [file] : [],
+  );
+  inspectGraphs.mockResolvedValue(inventory);
+  const plan = await createChangedCiTypeCheckPlan([file], { cwd });
+  expect(plan.mode).toBe("changed");
+  expect(plan.graphs.map(({ name }) => name)).toEqual(consumers);
+  inspectGraphs.mockResolvedValue(inventory.slice(0, -1));
+  await expectFull([file], { cwd }, true);
 });

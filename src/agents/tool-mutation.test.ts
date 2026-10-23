@@ -1,10 +1,28 @@
-// Tool mutation tests cover fail-closed mutation and replay-safety classification.
 import { describe, expect, it } from "vitest";
 import {
   buildToolMutationState,
   isMutatingToolCall,
   isReplaySafeToolCall,
 } from "./tool-mutation.js";
+
+const words = (value: string) => value.trim().split(/\s+/);
+function mutation(name: string, args: unknown, expected: boolean) {
+  expect(buildToolMutationState(name, args).mutatingAction, name).toBe(expected);
+}
+function replay(name: string, args: unknown, expected: boolean) {
+  expect(isReplaySafeToolCall(name, args), name).toBe(expected);
+}
+function actions(
+  check: typeof mutation,
+  name: string,
+  values: string,
+  expected: boolean,
+  extra: Record<string, unknown> = {},
+) {
+  for (const action of words(values)) {
+    check(name, { ...extra, action }, expected);
+  }
+}
 
 describe("tool mutation helpers", () => {
   it("classifies presence observations as replay-safe", () => {
@@ -56,120 +74,51 @@ describe("tool mutation helpers", () => {
   });
 
   it("exposes mutation state for downstream payload rendering", () => {
-    expect(
-      buildToolMutationState("message", { action: "send", to: "forum:1" }).mutatingAction,
-    ).toBe(true);
-    expect(buildToolMutationState("browser", { action: "list" }).mutatingAction).toBe(false);
-    for (const action of ["cancel", "kill", "steer"]) {
-      expect(
-        buildToolMutationState("subagents", { action, target: "worker-1" }).mutatingAction,
-      ).toBe(true);
-    }
-    expect(buildToolMutationState("subagents", { action: "list" }).mutatingAction).toBe(false);
-    expect(buildToolMutationState("sessions", { action: "group_list" }).mutatingAction).toBe(false);
-    expect(buildToolMutationState("sessions", { action: "patch" }).mutatingAction).toBe(true);
-    expect(
-      buildToolMutationState("sessions_spawn", { task: "inspect the failure" }).mutatingAction,
-    ).toBe(true);
-    expect(buildToolMutationState("process", { action: "clear" }).mutatingAction).toBe(true);
-    expect(buildToolMutationState("process", { action: "remove" }).mutatingAction).toBe(true);
-    expect(
-      buildToolMutationState("message", { action: "sendAttachment", path: "/tmp/report.pdf" })
-        .mutatingAction,
-    ).toBe(true);
-    expect(
-      buildToolMutationState("message", { action: "upload-file", path: "/tmp/report.pdf" })
-        .mutatingAction,
-    ).toBe(true);
-    for (const action of ["poll", "topic-create", "role-add", "ban", "future-action"]) {
-      expect(buildToolMutationState("message", { action }).mutatingAction, action).toBe(true);
-    }
-    for (const action of [
-      "read",
-      "reactions",
-      "list-pins",
-      "thread-list",
-      "member-info",
-      "channel-list",
-      "voice-status",
-      "event-list",
-    ]) {
-      expect(buildToolMutationState("message", { action }).mutatingAction, action).toBe(false);
-    }
-    expect(buildToolMutationState("message", {}).mutatingAction).toBe(true);
-    expect(buildToolMutationState("cron", { action: "runs" }).mutatingAction).toBe(false);
-    for (const action of ["config.get", "config.schema.lookup"]) {
-      expect(buildToolMutationState("gateway", { action }).mutatingAction, action).toBe(false);
-    }
-    for (const action of ["status", "describe", "pending"]) {
-      expect(buildToolMutationState("nodes", { action }).mutatingAction, action).toBe(false);
-    }
-    expect(buildToolMutationState("gateway", { action: "config.patch" }).mutatingAction).toBe(true);
-    expect(buildToolMutationState("nodes", { action: "approve" }).mutatingAction).toBe(true);
-    expect(buildToolMutationState("get_goal", { sessionKey: "agent:main" }).mutatingAction).toBe(
+    actions(mutation, "message", "send", true, { to: "forum:1" });
+    actions(mutation, "message", "sendAttachment upload-file", true, { path: "/tmp/report.pdf" });
+    actions(mutation, "message", "poll topic-create role-add ban future-action", true);
+    actions(
+      mutation,
+      "message",
+      "read reactions list-pins thread-list member-info channel-list voice-status event-list",
       false,
     );
-    expect(buildToolMutationState("create_goal", { sessionKey: "agent:main" }).mutatingAction).toBe(
-      true,
-    );
-    expect(
-      buildToolMutationState("update_goal", { sessionKey: "agent:main", status: "complete" })
-        .mutatingAction,
-    ).toBe(true);
+    mutation("message", {}, true);
+    actions(mutation, "browser", "list", false);
+    actions(mutation, "subagents", "cancel kill steer", true, { target: "worker-1" });
+    actions(mutation, "subagents", "list", false);
+    actions(mutation, "sessions", "group_list", false);
+    actions(mutation, "sessions", "patch", true);
+    mutation("sessions_spawn", { task: "inspect the failure" }, true);
+    actions(mutation, "process", "clear remove", true);
+    actions(mutation, "cron", "runs", false);
+    actions(mutation, "gateway", "config.get config.schema.lookup", false);
+    actions(mutation, "gateway", "config.patch", true);
+    actions(mutation, "nodes", "status describe pending", false);
+    actions(mutation, "nodes", "approve", true);
+    mutation("get_goal", { sessionKey: "agent:main" }, false);
+    mutation("create_goal", { sessionKey: "agent:main" }, true);
+    mutation("update_goal", { sessionKey: "agent:main", status: "complete" }, true);
   });
 
   it("classifies computer observations as replay-safe and input as mutating", () => {
-    for (const action of [
-      "screenshot",
-      "wait",
-      "list_apps",
-      "list_windows",
-      "get_accessibility_tree",
-      "get_cursor_position",
-      "get_window_state",
-      "zoom",
-      "get_browser_state",
-      "get_recording_state",
-    ]) {
-      const state = buildToolMutationState("computer", { action });
-      expect(state.mutatingAction, action).toBe(false);
-      expect(state.replaySafe, action).toBe(true);
-    }
-    for (const action of [
-      "left_click",
-      "right_click",
-      "middle_click",
-      "double_click",
-      "triple_click",
-      "mouse_move",
-      "left_click_drag",
-      "left_mouse_down",
-      "left_mouse_up",
-      "scroll",
-      "type",
-      "key",
-      "hold_key",
-      "set_value",
-      "invoke_menu",
-      "bring_to_front",
-      "launch_app",
-      "kill_app",
-      "escalate_scope",
-      "browser_prepare",
-      "browser_navigate",
-      "browser_click",
-      "browser_pointer",
-      "browser_type",
-      "browser_set_input_files",
-      "browser_download",
-      "start_recording",
-      "stop_recording",
-      "replay_trajectory",
-      "future_action",
-    ]) {
-      const state = buildToolMutationState("computer", { action });
-      expect(state.mutatingAction, action).toBe(true);
-      expect(state.replaySafe, action).toBe(false);
+    const observations = words(`screenshot wait list_apps list_windows get_accessibility_tree
+      get_cursor_position get_window_state zoom get_browser_state get_recording_state`);
+    const inputs = words(`left_click right_click middle_click double_click triple_click mouse_move
+      left_click_drag left_mouse_down left_mouse_up scroll type key hold_key set_value invoke_menu
+      bring_to_front launch_app kill_app escalate_scope browser_prepare browser_navigate browser_click
+      browser_pointer browser_type browser_set_input_files browser_download start_recording
+      stop_recording replay_trajectory future_action`);
+    for (const [values, mutatingAction, replaySafe] of [
+      [observations, false, true],
+      [inputs, true, false],
+    ] as const) {
+      for (const action of values) {
+        expect(buildToolMutationState("computer", { action }), action).toEqual({
+          mutatingAction,
+          replaySafe,
+        });
+      }
     }
     expect(isMutatingToolCall("computer", {})).toBe(true);
     expect(isReplaySafeToolCall("computer", {})).toBe(false);
@@ -194,60 +143,38 @@ describe("tool mutation helpers", () => {
   });
 
   it("fails closed for replay unless the structured tool contract is read-only", () => {
-    for (const toolName of [
-      "agents_list",
-      "view_image",
-      "pdf",
-      "read",
-      "conversations_list",
-      "sessions_history",
-      "sessions_list",
-      "sessions_search",
-      "tool_describe",
-      "tool_search",
-    ]) {
-      expect(isReplaySafeToolCall(toolName, {}), toolName).toBe(true);
+    for (const name of words(`agents_list view_image pdf read conversations_list sessions_history
+      sessions_list sessions_search tool_describe tool_search`)) {
+      replay(name, {}, true);
     }
-    expect(
-      isReplaySafeToolCall("progress_card", {
-        plan: [{ step: "Inspect", status: "in_progress" }],
-      }),
-    ).toBe(false);
-    expect(isReplaySafeToolCall("memory_get", { path: "memory/notes.md" })).toBe(true);
-    expect(isReplaySafeToolCall("memory_search", { query: "recall" })).toBe(false);
-    expect(isReplaySafeToolCall("memory_recall", { query: "recall" })).toBe(false);
-    expect(isReplaySafeToolCall("automations", { action: "status" })).toBe(true);
+    replay("progress_card", { plan: [{ step: "Inspect", status: "in_progress" }] }, false);
+    replay("memory_get", { path: "memory/notes.md" }, true);
+    replay("memory_search", { query: "recall" }, false);
+    replay("memory_recall", { query: "recall" }, false);
+    actions(replay, "automations", "status", true);
     // Legacy transcript entries predate the rename and must stay classified.
-    expect(isReplaySafeToolCall("cron", { action: "status" })).toBe(true);
-    expect(isReplaySafeToolCall("cron", { action: "add" })).toBe(false);
-    expect(isReplaySafeToolCall("gateway", { action: "config.get" })).toBe(true);
-    expect(isReplaySafeToolCall("gateway", { action: "config.schema.lookup" })).toBe(true);
-    expect(isReplaySafeToolCall("gateway", { action: "config.patch" })).toBe(false);
-    expect(isReplaySafeToolCall("nodes", { action: "status" })).toBe(true);
-    expect(isReplaySafeToolCall("nodes", { action: "describe" })).toBe(true);
-    expect(isReplaySafeToolCall("nodes", { action: "pending" })).toBe(true);
-    expect(isReplaySafeToolCall("nodes", { action: "approve" })).toBe(false);
-    expect(isReplaySafeToolCall("exec", { command: "rg TODO src" })).toBe(false);
-    expect(isReplaySafeToolCall("process", { action: "list" })).toBe(true);
-    expect(isReplaySafeToolCall("process", { action: "log", sessionId: "run-1" })).toBe(true);
-    expect(isReplaySafeToolCall("process", { action: "poll", sessionId: "run-1" })).toBe(false);
-    expect(isReplaySafeToolCall("browser", { action: "tabs" })).toBe(true);
-    expect(isReplaySafeToolCall("browser", { action: "act", kind: "click" })).toBe(false);
-    expect(isReplaySafeToolCall("browser", { action: "open", url: "https://example.com" })).toBe(
-      false,
-    );
-    expect(isReplaySafeToolCall("skill_workshop", { action: "list" })).toBe(true);
-    expect(isReplaySafeToolCall("skill_workshop", { action: "inspect" })).toBe(true);
-    expect(isReplaySafeToolCall("skill_workshop", { action: "read" })).toBe(true);
-    expect(isReplaySafeToolCall("skill_workshop", { action: "create" })).toBe(false);
-    expect(isReplaySafeToolCall("transcripts", { action: "status" })).toBe(true);
-    expect(isReplaySafeToolCall("transcripts", { action: "import" })).toBe(false);
-    expect(isReplaySafeToolCall("subagents", {})).toBe(true);
-    expect(isReplaySafeToolCall("subagents", { action: "list" })).toBe(true);
-    expect(isReplaySafeToolCall("subagents", { action: "kill" })).toBe(false);
-    expect(isReplaySafeToolCall("dispatch_action", { id: "sessions_list" })).toBe(false);
-    expect(isReplaySafeToolCall("unknown_plugin_tool", { action: "list" })).toBe(false);
-    expect(isReplaySafeToolCall("survey_actions", { action: "list" })).toBe(false);
-    expect(isReplaySafeToolCall("survey_actions", { action: "poll" })).toBe(false);
+    actions(replay, "cron", "status", true);
+    actions(replay, "cron", "add", false);
+    actions(replay, "gateway", "config.get config.schema.lookup", true);
+    actions(replay, "gateway", "config.patch", false);
+    actions(replay, "nodes", "status describe pending", true);
+    actions(replay, "nodes", "approve", false);
+    replay("exec", { command: "rg TODO src" }, false);
+    actions(replay, "process", "list", true);
+    actions(replay, "process", "log", true, { sessionId: "run-1" });
+    actions(replay, "process", "poll", false, { sessionId: "run-1" });
+    actions(replay, "browser", "tabs", true);
+    actions(replay, "browser", "act", false, { kind: "click" });
+    actions(replay, "browser", "open", false, { url: "https://example.com" });
+    actions(replay, "skill_workshop", "list inspect read", true);
+    actions(replay, "skill_workshop", "create", false);
+    actions(replay, "transcripts", "status", true);
+    actions(replay, "transcripts", "import", false);
+    replay("subagents", {}, true);
+    actions(replay, "subagents", "list", true);
+    actions(replay, "subagents", "kill", false);
+    replay("dispatch_action", { id: "sessions_list" }, false);
+    actions(replay, "unknown_plugin_tool", "list", false);
+    actions(replay, "survey_actions", "list poll", false);
   });
 });

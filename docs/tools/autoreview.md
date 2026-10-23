@@ -26,9 +26,12 @@ deny rules still apply.
 }
 ```
 
-Install a current canonical Auto Review package through the managed skill
-installation or skill library. The sandbox must provide `/usr/bin/python3` and
-a protected, read-only copy of that selected package. A repository-local skill
+Install a current canonical Auto Review package in the Gateway user’s
+`~/.agents/skills/autoreview`, through the managed skill installation, or in a
+skill library. The personal `~/.agents/skills` directory is discovered only when
+the Gateway uses its default state directory; a custom state directory needs a
+managed installation or skill library. The sandbox must provide `/usr/bin/python3`
+and a protected, read-only copy of the selected package. A repository-local skill
 named `autoreview` does not qualify. The tool is unavailable when those bindings
 or the calling user's model authority are absent.
 The backend must enforce read-only resource mounts; SSH sandbox file uploads do
@@ -54,6 +57,14 @@ OpenClaw release. `mode`, `base`, `commit`, `model`, `thinking`, `maxPriority`,
 and `sourceContextFiles` map to its matching options. File inputs are relative
 to the current sandbox repository. The original session deadline and cancellation
 still apply.
+
+Under Codex, the whole call follows the initiating run's existing execution
+lifetime, covering preparation, every planned pass, and report completion.
+It is not shortened to the generic 90-second tool default or 600-second cap.
+An unlimited initiating run stays unlimited; Stop and authority revocation
+still cancel the review. The helper's timeout remains a per-pass limit, and
+an omitted timeout retains `openclaw agent exec`'s 600-second default for each
+pass. `/btw` retains its separate ten-minute parent deadline.
 
 An allowed configured reviewer model is preserved. If the caller cannot use that
 configured preference, the Gateway selects the caller's existing permitted

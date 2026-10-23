@@ -2,14 +2,17 @@ import { createSessionProjection, reduceSessionProjection } from "@openclaw/gate
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  Errored,
   For,
+  Loading,
   Show,
-  createEffect,
   createMemo,
   createSignal,
+  createStore,
+  isPending,
+  latest,
   onCleanup,
   onSettled,
-  untrack,
 } from "solid-js";
 import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -56,89 +59,117 @@ type SummaryScope = {
   session: BoardGetParams;
 };
 
-function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope }) {
-  const scope = untrack(() => props.scope);
-  const [history, setHistory] = createSignal<ChatHistoryResult | null>(null);
-  const [error, setError] = createSignal(false);
+function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
+  const [read, setRead] = createSignal<Promise<ChatHistoryResult | null> | null>(null);
+  const history = createMemo(() => read() ?? null);
+  // The stable progress card keeps metadata from the last accepted history read.
+  const [metadata, setMetadata] = createStore<{
+    sessionInfo: ChatHistoryResult["sessionInfo"];
+  }>({ sessionInfo: undefined }, { shallow: true });
   let alive = true;
   let snapshot: ChatHistoryResult | null = null;
+  let cursor: string | undefined;
   const current = () =>
-    untrack(
-      () =>
-        alive &&
-        !scope.signal.aborted &&
-        props.presented &&
-        props.gateway === scope.gateway &&
-        scope.gateway.snapshot.phase === "connected" &&
-        scope.gateway.snapshot.client === scope.client &&
-        scope.gateway.connectionRevision === scope.revision &&
-        props.session?.sessionKey === scope.session.sessionKey &&
-        props.session?.agentId === scope.session.agentId,
-    );
-  onCleanup(() => {
-    alive = false;
-  });
+    alive &&
+    !scope.signal.aborted &&
+    props.presented &&
+    props.gateway === scope.gateway &&
+    scope.gateway.snapshot.phase === "connected" &&
+    scope.gateway.snapshot.client === scope.client &&
+    scope.gateway.connectionRevision === scope.revision &&
+    props.session?.sessionKey === scope.session.sessionKey &&
+    props.session?.agentId === scope.session.agentId;
   const store = sessionProgressCardsForGateway(scope.gateway);
-  const progress = projectProgressCard({
+  const progress = projectProgressCard(() => ({
     store,
     target: scope.session,
     options: { admitAutomaticRead: current },
+  }));
+  const progressReceipt = createMemo(() => ({ completion: progress.read().completion }), {
+    equals: (previous, next) => previous.completion === next.completion,
   });
-  const refresh = async () => {
+  const progressReady = createMemo(() => progressReceipt().completion?.then(() => null) ?? null);
+  const ProgressView = () => (
+    <Show
+      when={progress.read().error}
+      fallback={
+        <SessionProgressCard
+          card={progress.read().card}
+          placement="board"
+          sessionStatus={metadata.sessionInfo?.status}
+          startedAt={metadata.sessionInfo?.startedAt}
+          endedAt={metadata.sessionInfo?.endedAt}
+          hasActiveRun={metadata.sessionInfo?.hasActiveRun === true}
+        />
+      }
+    >
+      <p role="alert">{t("sessionProgressCard.widgetUnavailable")}</p>
+    </Show>
+  );
+  const refresh = () => {
     if (!current()) {
-      return;
+      return Promise.resolve();
     }
-    setError(false);
-    const request = (cursor?: string) =>
+    const pending = readHistory();
+    void setRead(pending);
+    // The coordinator serializes admitted reads; the boundary presents their errors.
+    return pending.then(
+      () => undefined,
+      () => undefined,
+    );
+  };
+  const readHistory = async (): Promise<ChatHistoryResult | null> => {
+    let previous = snapshot;
+    const request = (requestCursor?: string) =>
       scope.client.request<ChatHistoryResponse>("chat.history", {
         ...scope.session,
-        cursor,
+        cursor: requestCursor,
         toolResultMaxChars: 2_000,
         limit: 20,
         maxChars: 12000,
       });
-    try {
-      let result = await request(snapshot?.deltaCursor);
+    let result = await request(cursor);
+    if (!current()) {
+      return null;
+    }
+    if ("kind" in result && result.kind === "reset") {
+      // Retire the wire cursor without discarding metadata from the last successful read.
+      cursor = undefined;
+      previous = null;
+      result = await request();
       if (!current()) {
-        return;
-      }
-      if ("kind" in result && result.kind === "reset") {
-        snapshot = null;
-        result = await request();
-        if (!current()) {
-          return;
-        }
-      }
-      if ("kind" in result) {
-        if (result.kind === "reset") {
-          throw new Error("History tail returned a reset");
-        }
-        let projection = createSessionProjection({}, snapshot?.messages ?? []);
-        for (const envelope of result.messages) {
-          if (!isRecord(envelope)) {
-            continue;
-          }
-          projection = reduceSessionProjection(projection, {
-            type: "messagePersisted",
-            message: envelope.message,
-            envelope,
-          });
-        }
-        snapshot = { ...result, messages: projection.messages.slice(-20) };
-      } else {
-        snapshot = { ...result, messages: result.messages?.slice(-20) };
-      }
-      setHistory(snapshot);
-    } catch {
-      if (current()) {
-        setError(true);
+        return null;
       }
     }
+    if ("kind" in result) {
+      if (result.kind === "reset") {
+        throw new Error("History tail returned a reset");
+      }
+      let projection = createSessionProjection({}, previous?.messages ?? []);
+      for (const envelope of result.messages) {
+        if (!isRecord(envelope)) {
+          continue;
+        }
+        projection = reduceSessionProjection(projection, {
+          type: "messagePersisted",
+          message: envelope.message,
+          envelope,
+        });
+      }
+      snapshot = { ...result, messages: projection.messages.slice(-20) };
+    } else {
+      snapshot = { ...result, messages: result.messages?.slice(-20) };
+    }
+    cursor = snapshot.deltaCursor;
+    setMetadata((draft) => {
+      draft.sessionInfo = snapshot?.sessionInfo;
+    });
+    onSettled(hydrateIdentities);
+    return snapshot;
   };
   const refreshes = createSessionEventRefreshCoordinator({ active: true, refresh });
-  onCleanup(() => refreshes.dispose());
-  onCleanup(
-    scope.gateway.subscribeEvents((event) => {
+  onSettled(() => {
+    const stop = scope.gateway.subscribeEvents((event) => {
       if (event.event !== "sessions.changed" && event.event !== "session.message") {
         return;
       }
@@ -158,13 +189,16 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
       ) {
         refreshes.schedule();
       }
-    }),
-  );
-  onSettled(() => {
+    });
     refreshes.scheduleRetry(0);
+    return () => {
+      alive = false;
+      stop();
+      refreshes.dispose();
+    };
   });
-  const messages = createMemo(() =>
-    (history()?.messages ?? []).slice(-20).flatMap((message) => {
+  const summarize = (value: ChatHistoryResult | null) =>
+    (value?.messages ?? []).slice(-20).flatMap((message) => {
       if (!isRecord(message) || (message.role !== "user" && message.role !== "assistant")) {
         return [];
       }
@@ -202,119 +236,137 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
           : null;
       const time = timestamp && Number.isFinite(timestamp.getTime()) ? timestamp : null;
       return [{ text, label, sender, agentId, agent, time, role: message.role }];
-    }),
-  );
+    });
+  const hydrateIdentities = () => {
+    if (current()) {
+      void props.agentIdentity?.ensure(
+        summarize(snapshot).flatMap((message) =>
+          !message.sender && message.agentId ? [message.agentId] : [],
+        ),
+      );
+    }
+  };
   const identity = createMemo(() => props.agentIdentity);
   const identities = createMemo(() => {
     const source = identity();
     return source
       ? projectSource(source, {
           read: (owner) => owner,
-          subscribe: (owner, notify) => owner.subscribe(notify),
+          subscribe: (owner, notify) => {
+            onSettled(hydrateIdentities);
+            return owner.subscribe(() => {
+              notify();
+              onSettled(hydrateIdentities);
+            });
+          },
           equality: "revision",
         })
       : null;
   });
-  createEffect(
-    () => ({
-      owner: identities()?.read(),
-      ids: messages().flatMap((message) =>
-        !message.sender && message.agentId ? [message.agentId] : [],
-      ),
-    }),
-    ({ owner, ids }) => {
-      void owner?.ensure(ids);
-    },
-  );
+  function SummaryView(view: { history: ChatHistoryResult | null; unavailable?: boolean }) {
+    const messages = createMemo(() => summarize(view.history));
+    return (
+      <>
+        <section
+          class="plugin-session-summary__history"
+          aria-label={t("pluginUi.sessionRecentMessages")}
+        >
+          <h3>{t("pluginUi.sessionRecentMessages")}</h3>
+          {view.unavailable ? (
+            <p role="alert">{t("pluginUi.sessionHistoryUnavailable")}</p>
+          ) : !view.history ? (
+            <p>{t("common.loading")}</p>
+          ) : (
+            <For
+              keyed={false}
+              each={messages()}
+              fallback={<p>{t("pluginUi.sessionHistoryEmpty")}</p>}
+            >
+              {(message) => (
+                <article class="plugin-session-summary__message">
+                  <header class="plugin-session-summary__message-header">
+                    <span class="plugin-session-summary__avatar">
+                      {message().sender ? (
+                        <ChatAuthorAvatar sender={message().sender} />
+                      ) : message().agentId ? (
+                        <AgentAvatar
+                          option={{
+                            value: message().agentId!,
+                            label: message().label,
+                            agent: message().agent ?? { id: message().agentId! },
+                          }}
+                          identity={identities()?.read().get(message().agentId) ?? null}
+                        />
+                      ) : (
+                        <span class="plugin-session-summary__unknown" aria-hidden="true">
+                          <Icon name={message().role === "user" ? "users" : "bot"} />
+                        </span>
+                      )}
+                    </span>
+                    <strong class="plugin-session-summary__role">{message().label}</strong>
+                    <Show when={message().time}>
+                      {(time) => (
+                        <time datetime={time().toISOString()} title={time().toLocaleString()}>
+                          {time().toLocaleTimeString(undefined, {
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                        </time>
+                      )}
+                    </Show>
+                  </header>
+                  <SanitizedHtml
+                    tag="div"
+                    class="sidebar-markdown"
+                    html={toSanitizedMarkdownHtml(message().text)}
+                  />
+                </article>
+              )}
+            </For>
+          )}
+        </section>
+        <Show when={view.unavailable || progress.read().error}>
+          <button
+            class="btn"
+            onClick={() => {
+              refreshes.scheduleRetry(0);
+              void store.load(scope.session).catch(() => undefined);
+            }}
+          >
+            {t("common.retry")}
+          </button>
+        </Show>
+      </>
+    );
+  }
   return (
     <div class="plugin-session-summary">
       <Show when={progress.read().error || progress.read().card !== null}>
         <section class="plugin-session-summary__progress">
-          {progress.read().error ? (
-            <p role="alert">{t("sessionProgressCard.widgetUnavailable")}</p>
-          ) : progress.read().card === undefined ? (
-            <p>{t("sessionProgressCard.widgetLoading")}</p>
-          ) : (
-            <SessionProgressCard
-              card={progress.read().card}
-              placement="board"
-              sessionStatus={history()?.sessionInfo?.status}
-              startedAt={history()?.sessionInfo?.startedAt}
-              endedAt={history()?.sessionInfo?.endedAt}
-              hasActiveRun={history()?.sessionInfo?.hasActiveRun === true}
-            />
-          )}
+          <Loading
+            on={progressReceipt()}
+            fallback={
+              progress.read().card === undefined ? (
+                <p>{t("sessionProgressCard.widgetLoading")}</p>
+              ) : (
+                <ProgressView />
+              )
+            }
+          >
+            <Errored fallback={<p role="alert">{t("sessionProgressCard.widgetUnavailable")}</p>}>
+              {progress.read().card === undefined ? progressReady() : latest(progressReady)}
+              <ProgressView />
+            </Errored>
+          </Loading>
         </section>
       </Show>
-      <section
-        class="plugin-session-summary__history"
-        aria-label={t("pluginUi.sessionRecentMessages")}
+      <Errored
+        fallback={() => <SummaryView history={snapshot} unavailable={!isPending(history)} />}
       >
-        <h3>{t("pluginUi.sessionRecentMessages")}</h3>
-        {error() ? (
-          <p role="alert">{t("pluginUi.sessionHistoryUnavailable")}</p>
-        ) : !history() ? (
-          <p>{t("common.loading")}</p>
-        ) : (
-          <For
-            keyed={false}
-            each={messages()}
-            fallback={<p>{t("pluginUi.sessionHistoryEmpty")}</p>}
-          >
-            {(message) => (
-              <article class="plugin-session-summary__message">
-                <header class="plugin-session-summary__message-header">
-                  <span class="plugin-session-summary__avatar">
-                    {message().sender ? (
-                      <ChatAuthorAvatar sender={message().sender} />
-                    ) : message().agentId ? (
-                      <AgentAvatar
-                        option={{
-                          value: message().agentId!,
-                          label: message().label,
-                          agent: message().agent ?? { id: message().agentId! },
-                        }}
-                        identity={identities()?.read().get(message().agentId) ?? null}
-                      />
-                    ) : (
-                      <span class="plugin-session-summary__unknown" aria-hidden="true">
-                        <Icon name={message().role === "user" ? "users" : "bot"} />
-                      </span>
-                    )}
-                  </span>
-                  <strong class="plugin-session-summary__role">{message().label}</strong>
-                  <Show when={message().time}>
-                    {(time) => (
-                      <time datetime={time().toISOString()} title={time().toLocaleString()}>
-                        {time().toLocaleTimeString(undefined, {
-                          hour: "numeric",
-                          minute: "2-digit",
-                        })}
-                      </time>
-                    )}
-                  </Show>
-                </header>
-                <SanitizedHtml
-                  tag="div"
-                  class="sidebar-markdown"
-                  html={toSanitizedMarkdownHtml(message().text)}
-                />
-              </article>
-            )}
-          </For>
-        )}
-      </section>
-      <Show when={error() || progress.read().error}>
-        <button
-          class="btn"
-          onClick={() => {
-            refreshes.scheduleRetry(0);
-            void store.load(scope.session).catch(() => undefined);
-          }}
-        >
-          {t("common.retry")}
-        </button>
-      </Show>
+        <Loading fallback={<SummaryView history={snapshot} />}>
+          <SummaryView history={history()} />
+        </Loading>
+      </Errored>
     </div>
   );
 }
@@ -383,7 +435,7 @@ function PluginSessionSummaryContent(props: PluginSessionSummaryProps) {
         keyed
         fallback={<p role="status">{t("pluginUi.sessionHistoryUnavailable")}</p>}
       >
-        {(current) => <SessionHistory {...props} scope={current} />}
+        {(current) => SessionHistory(props, current)}
       </Show>
     </Show>
   );

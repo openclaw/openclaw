@@ -1,10 +1,11 @@
 import { captureOpenAIResponsesCompaction } from "@openclaw/ai/transports";
-import type { Model } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { testing } from "../../openai-transport-stream.test-support.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { log } from "../logger.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
@@ -23,18 +24,15 @@ const attempt = {
   sessionFile: "/tmp/openclaw-attempt-preflight-test.jsonl",
   sessionId: "session-1",
   sessionKey: "agent:test:main",
-  model: {
+  model: makeProviderModelFixture({
     id: "gpt-5.6-luna",
-    name: "GPT-5.6 Luna",
     provider: "openai",
     api: "openai-responses",
     baseUrl: "https://api.openai.com/v1",
     reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 100_000,
     maxTokens: 8_192,
-  } satisfies Model,
+  }),
 };
 
 const request = {
@@ -46,21 +44,64 @@ const request = {
   effectiveReserveTokens: 20,
 };
 
-function makeToolResultMessage(text: string): AgentMessage {
-  return {
-    role: "toolResult",
-    toolCallId: "call-1",
-    toolName: "read",
-    content: [{ type: "text", text }],
-    isError: false,
-    timestamp: 1,
-  } as AgentMessage;
-}
+const makeToolResult = (text: string) => makeTextToolResult("call-1", "read", text, false, 1);
 
 function createSessionManagerWithMessage(message: AgentMessage): SessionManager {
   const sessionManager = SessionManager.inMemory();
   sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
   return sessionManager;
+}
+
+function preflight(
+  overrides: Partial<Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0]>,
+) {
+  return prepareEmbeddedAttemptPromptPreflight({
+    attempt,
+    compactionReplayEnabled: true,
+    contextEnginePromptAuthority: "assembled",
+    contextTokenBudget: 1_000,
+    hookMessagesForCurrentPrompt: [],
+    includeBoundaryTimestamp: false,
+    promptForPrecheck: "follow-up",
+    reserveTokens: 100,
+    sessionMessageCount: 1,
+    systemPrompt: "",
+    toolResultMaxChars: 1_000,
+    state: {
+      contextBudgetStatus: undefined,
+      preflightRecovery: undefined,
+      promptError: null,
+      promptErrorSource: null,
+      skipPromptSubmission: false,
+    },
+    ...overrides,
+  });
+}
+
+function checkpoint(discarded: boolean, windowText?: string) {
+  const owner = makeAgentAssistantMessage({
+    content: discarded ? [] : [{ type: "text", text: "covered" }],
+    model: attempt.model.id,
+  });
+  const item = {
+    type: "compaction" as const,
+    id: discarded ? "cmp_discarded" : "cmp_test",
+    encrypted_content: discarded ? "discarded opaque" : "opaque",
+  };
+  captureOpenAIResponsesCompaction(
+    owner,
+    item,
+    "retained-users",
+    attempt.model,
+    testing.buildOpenAIResponsesReasoningReplayMetadata(attempt.model, attempt),
+    windowText === undefined
+      ? undefined
+      : [
+          { type: "message", role: "user", content: [{ type: "input_text", text: windowText }] },
+          item,
+        ],
+  );
+  return owner;
 }
 
 describe("attempt prompt preflight", () => {
@@ -84,96 +125,40 @@ describe("attempt prompt preflight", () => {
         description: "result documentation ".repeat(4_000),
       },
     };
-    const owner = makeAgentAssistantMessage({
-      content: [{ type: "text", text: "covered" }],
-      model: attempt.model.id,
-    });
-    const item = { type: "compaction" as const, id: "cmp_test", encrypted_content: "opaque" };
-    captureOpenAIResponsesCompaction(
-      owner,
-      item,
-      "retained-users",
-      attempt.model,
-      testing.buildOpenAIResponsesReasoningReplayMetadata(attempt.model, attempt),
-      variant !== "missing-window" && variant !== "discarded-invalid"
-        ? [
-            {
-              type: "message",
-              role: "user",
-              content: [
-                {
-                  type: "input_text",
-                  text: fitting ? "small retained window" : "retained content ".repeat(8_000),
-                },
-              ],
-            },
-            item,
-          ]
-        : undefined,
+    const owner = checkpoint(
+      false,
+      variant === "missing-window" || discarded
+        ? undefined
+        : fitting
+          ? "small retained window"
+          : "retained content ".repeat(8_000),
     );
-    const discardedInvalid = makeAgentAssistantMessage({
-      content: [],
-      model: attempt.model.id,
-    });
-    captureOpenAIResponsesCompaction(
-      discardedInvalid,
-      { ...item, id: "cmp_discarded", encrypted_content: "discarded opaque" },
-      "retained-users",
-      attempt.model,
-      testing.buildOpenAIResponsesReasoningReplayMetadata(attempt.model, attempt),
-    );
-    const result = await prepareEmbeddedAttemptPromptPreflight({
-      attempt,
-      compactionReplayEnabled: true,
+    const discardedInvalid = checkpoint(true);
+    let unwindowedMessages: AgentMessage[] | undefined;
+    if (discarded) {
+      unwindowedMessages = [owner];
+    } else if (unwindowed) {
+      unwindowedMessages = [
+        makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+        }),
+        makeToolResult("raw tool history ".repeat(40_000)),
+      ];
+    } else if (fitting) {
+      unwindowedMessages = [
+        ...(variant === "fitting-with-discarded-invalid" ? [owner, discardedInvalid] : []),
+        { role: "user", content: "raw history ".repeat(40_000), timestamp: 1 },
+      ];
+    }
+    const result = await preflight({
       contextEnginePromptAuthority:
         unwindowed || discarded || fitting ? "preassembly_may_overflow" : "assembled",
-      ...(unwindowed || discarded || fitting
-        ? {
-            unwindowedContextEngineMessagesForPrecheck: discarded
-              ? [owner]
-              : [
-                  ...(variant === "fitting-with-discarded-invalid"
-                    ? [owner, discardedInvalid]
-                    : []),
-                  ...(variant === "unwindowed-tools"
-                    ? [
-                        makeAgentAssistantMessage({
-                          content: [
-                            { type: "toolCall", id: "call-1", name: "read", arguments: {} },
-                          ],
-                        }),
-                        makeToolResultMessage("raw tool history ".repeat(40_000)),
-                      ]
-                    : [
-                        {
-                          role: "user" as const,
-                          content: "raw history ".repeat(40_000),
-                          timestamp: 1,
-                        },
-                      ]),
-                ],
-          }
-        : {}),
-      contextTokenBudget: 1_000,
+      unwindowedContextEngineMessagesForPrecheck: unwindowedMessages,
       hookMessagesForCurrentPrompt: discarded ? [] : [owner],
-      includeBoundaryTimestamp: false,
-      promptForPrecheck: "follow-up",
-      reserveTokens: 100,
-      sessionMessageCount: 1,
-      systemPrompt: "",
-      toolResultMaxChars: 1_000,
-      ...(variant === "fitting-with-tool-output-schema"
-        ? {
-            toolSchemaTokens: estimateToolSchemaTokenPressure([toolWithOutputSchema]),
-          }
-        : {}),
-      state: {
-        contextBudgetStatus: undefined,
-        preflightRecovery: undefined,
-        promptError: null,
-        promptErrorSource: null,
-        skipPromptSubmission: false,
-      },
+      toolSchemaTokens:
+        variant === "fitting-with-tool-output-schema"
+          ? estimateToolSchemaTokenPressure([toolWithOutputSchema])
+          : undefined,
     });
     if (discarded || fitting) {
       expect(result.skipPromptSubmission).toBe(false);
@@ -197,10 +182,8 @@ describe("attempt prompt preflight", () => {
             replay: { model: attempt.model, sessionId: attempt.sessionId, enabled: true },
           }),
         );
-        if (variant === "unwindowed-tools") {
-          expect(result.contextBudgetStatus?.toolResultReducibleChars).toBeGreaterThan(0);
-          expect(result.contextBudgetStatus?.route).not.toBe("compact_only");
-        }
+        expect(result.contextBudgetStatus?.toolResultReducibleChars).toBeGreaterThan(0);
+        expect(result.contextBudgetStatus?.route).not.toBe("compact_only");
       }
     } else {
       expect(result.preflightRecovery).toBeUndefined();
@@ -208,173 +191,98 @@ describe("attempt prompt preflight", () => {
     }
   });
 
-  it("routes a mid-turn compaction request with its measured budget", async () => {
-    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
-      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
-      attempt,
-      request,
-      sessionAgentId: "test",
-      sessionManager: SessionManager.inMemory(),
-      prePromptMessageCount: 4,
-      replaceSessionMessages: vi.fn(),
-    });
-
-    expect(outcome).toEqual({
-      preflightRecovery: {
-        route: "compact_only",
-        source: "mid-turn",
-        estimatedPromptTokens: 150,
-        promptBudgetBeforeReserve: 100,
-        overflowTokens: 50,
-      },
-      promptError: expect.objectContaining({ message: PREEMPTIVE_OVERFLOW_ERROR_TEXT }),
-    });
-  });
-
-  it("admits a retry without changing history when persisted truncation cannot help", async () => {
-    const toolResult = makeToolResultMessage("already capped tool output");
-    const sessionManager = createSessionManagerWithMessage(toolResult);
-    const messagesBefore = sessionManager.buildSessionContext().messages;
-    const replaceSessionMessages = vi.fn();
-    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
-      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
-      attempt,
-      request: { ...request, route: "truncate_tool_results_only" },
-      sessionAgentId: "test",
-      sessionManager,
-      prePromptMessageCount: 4,
-      replaceSessionMessages,
-    });
-
-    expect(outcome.preflightRecovery).toEqual(
-      expect.objectContaining({
+  it.each([
+    ["compaction", "compact_only", "", undefined, undefined],
+    ["fallback", "truncate_tool_results_only", "", undefined, undefined],
+    ["capped", "truncate_tool_results_only", "already capped tool output", undefined, 0],
+    ["truncation", "truncate_tool_results_only", "large tool output ".repeat(5_000), 100, 1],
+  ] as const)(
+    "handles mid-turn %s",
+    async (_name, route, text, contextTokenBudget, truncatedCount) => {
+      const sessionManager = text
+        ? createSessionManagerWithMessage(makeToolResult(text))
+        : SessionManager.inMemory();
+      const messagesBefore = sessionManager.buildSessionContext().messages;
+      const replaceMessages = vi.fn();
+      const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
+        toolResultPromptProjectionState: createToolResultPromptProjectionState(),
+        attempt: { ...attempt, contextTokenBudget },
+        request: { ...request, route },
+        sessionAgentId: "test",
+        sessionManager,
+        prePromptMessageCount: 4,
+        replaceSessionMessages: replaceMessages,
+      });
+      if (truncatedCount === undefined) {
+        expect(outcome).toEqual({
+          preflightRecovery: {
+            route: "compact_only",
+            source: "mid-turn",
+            estimatedPromptTokens: 150,
+            promptBudgetBeforeReserve: 100,
+            overflowTokens: 50,
+          },
+          promptError: expect.objectContaining({ message: PREEMPTIVE_OVERFLOW_ERROR_TEXT }),
+        });
+        return;
+      }
+      expect(outcome.preflightRecovery).toMatchObject({
         route: "truncate_tool_results_only",
         source: "mid-turn",
         handled: true,
-        truncatedCount: 0,
-      }),
-    );
-    expect(outcome.promptError).toBeUndefined();
-    expect(replaceSessionMessages).not.toHaveBeenCalled();
-    expect(sessionManager.buildSessionContext().messages).toEqual(messagesBefore);
-  });
-
-  it("keeps the compaction fallback when persisted truncation cannot inspect history", async () => {
-    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
-      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
-      attempt,
-      request: { ...request, route: "truncate_tool_results_only" },
-      sessionAgentId: "test",
-      sessionManager: SessionManager.inMemory(),
-      prePromptMessageCount: 4,
-      replaceSessionMessages: vi.fn(),
-    });
-
-    expect(outcome.preflightRecovery.route).toBe("compact_only");
-    expect(outcome.promptError?.message).toBe(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
-  });
-
-  it("handles successful mid-turn tool-result truncation without a prompt error", async () => {
-    const sessionManager = createSessionManagerWithMessage(
-      makeToolResultMessage("large tool output ".repeat(5_000)),
-    );
-    const replaceSessionMessages = vi.fn();
-    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
-      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
-      attempt: { ...attempt, contextTokenBudget: 100 },
-      request: { ...request, route: "truncate_tool_results_only" },
-      sessionAgentId: "test",
-      sessionManager,
-      prePromptMessageCount: 4,
-      replaceSessionMessages,
-    });
-
-    expect(outcome.promptError).toBeUndefined();
-    expect(outcome.preflightRecovery).toEqual(
-      expect.objectContaining({
-        route: "truncate_tool_results_only",
-        source: "mid-turn",
-        handled: true,
-        truncatedCount: 1,
-      }),
-    );
-    expect(replaceSessionMessages).toHaveBeenCalledWith(
-      sessionManager.buildSessionContext().messages,
-    );
-  });
+        truncatedCount,
+      });
+      expect(outcome.promptError).toBeUndefined();
+      if (truncatedCount) {
+        expect(replaceMessages).toHaveBeenCalledWith(sessionManager.buildSessionContext().messages);
+      } else {
+        expect(replaceMessages).not.toHaveBeenCalled();
+        expect(sessionManager.buildSessionContext().messages).toEqual(messagesBefore);
+      }
+    },
+  );
 
   it("warns and keeps client recovery when V2 pending input exceeds the hard budget", async () => {
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    try {
-      const result = await prepareEmbeddedAttemptPromptPreflight({
-        attempt,
-        compactionReplayEnabled: true,
-        providerCompactionAtRequestBoundary: true,
-        contextEnginePromptAuthority: "assembled",
-        contextTokenBudget: 100,
-        pendingInputTokens: 101,
-        hookMessagesForCurrentPrompt: [],
-        includeBoundaryTimestamp: false,
-        promptForPrecheck: "oversized input",
-        reserveTokens: 20,
-        sessionMessageCount: 0,
-        state: {
-          contextBudgetStatus: undefined,
-          preflightRecovery: undefined,
-          promptError: null,
-          promptErrorSource: null,
-          skipPromptSubmission: false,
-        },
-        systemPrompt: "",
-        toolResultMaxChars: 1_000,
-      });
-      expect(result.preflightRecovery).toEqual({ route: "compact_only" });
-      expect(result.skipPromptSubmission).toBe(true);
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("falling back to client compaction: pending input exceeds"),
-      );
-    } finally {
-      warn.mockRestore();
-    }
+    using warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const result = await preflight({
+      providerCompactionAtRequestBoundary: true,
+      contextTokenBudget: 100,
+      pendingInputTokens: 101,
+    });
+    expect(result.preflightRecovery).toEqual({ route: "compact_only" });
+    expect(result.skipPromptSubmission).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("falling back to client compaction: pending input exceeds"),
+    );
   });
 
-  it("does not persist heuristic pre-prompt tool-result truncation", async () => {
-    const toolResult = makeToolResultMessage("alpha beta gamma delta epsilon ".repeat(2_200));
+  it("admits heuristic tool-result pressure without recovery or mutating history", async () => {
+    const toolResult = makeToolResult("alpha beta gamma delta epsilon ".repeat(2_200));
     const messages = [toolResult];
+    const messagesBefore = structuredClone(messages);
     const reserveTokens = 2_000;
+    const prompt = { systemPrompt: "sys", prompt: "hello" };
     const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
       messages,
-      systemPrompt: "sys",
-      prompt: "hello",
+      ...prompt,
     });
-    const contextTokenBudget = estimatedPromptTokens - 200 + reserveTokens;
-    const sessionManager = createSessionManagerWithMessage(toolResult);
 
-    const result = await prepareEmbeddedAttemptPromptPreflight({
-      attempt,
-      compactionReplayEnabled: true,
-      contextEnginePromptAuthority: "assembled",
-      contextTokenBudget,
+    const result = await preflight({
+      contextTokenBudget: estimatedPromptTokens - 200 + reserveTokens,
       hookMessagesForCurrentPrompt: messages,
       includeBoundaryTimestamp: true,
-      promptForPrecheck: "hello",
+      promptForPrecheck: prompt.prompt,
       reserveTokens,
-      sessionMessageCount: messages.length,
-      state: {
-        contextBudgetStatus: undefined,
-        preflightRecovery: undefined,
-        promptError: null,
-        promptErrorSource: null,
-        skipPromptSubmission: false,
-      },
-      systemPrompt: "sys",
-      toolResultMaxChars: 1_000,
+      sessionMessageCount: 1,
+      systemPrompt: prompt.systemPrompt,
     });
 
-    expect(result.skipPromptSubmission).toBe(false);
-    expect(result.promptError).toBeNull();
-    expect(result.promptErrorSource).toBeNull();
-    expect(result.preflightRecovery).toBeUndefined();
-    expect(sessionManager.buildSessionContext().messages).toEqual([toolResult]);
+    expect(result).toMatchObject({
+      skipPromptSubmission: false,
+      promptError: null,
+      promptErrorSource: null,
+      preflightRecovery: undefined,
+    });
+    expect(messages).toEqual(messagesBefore);
   });
 });

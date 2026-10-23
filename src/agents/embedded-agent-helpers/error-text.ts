@@ -37,6 +37,7 @@ import { resolveExecutionApprovalFailureMessage } from "../failover/message-patt
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
+  OAUTH_REFRESH_CONTENTION_USER_TEXT,
   formatBillingErrorMessage,
   formatDiskSpaceErrorCopy,
   isInvalidStreamingEventOrderError,
@@ -62,7 +63,7 @@ const RUNTIME_FAILURE_COPY: Partial<
 > = {
   auth_refresh:
     "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
-  refresh_contention: "Another sign-in is still in progress. Wait a moment, then try again.",
+  refresh_contention: OAUTH_REFRESH_CONTENTION_USER_TEXT,
   refresh_timeout:
     "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the Control UI.",
   callback_timeout:

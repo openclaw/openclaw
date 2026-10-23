@@ -170,22 +170,39 @@ Configure `OPENAI_API_KEY` or an `openai` API-key auth profile, then select
 The account and selected model must have Decisions API access. OpenClaw requires
 a Platform API key for Decisions. It excludes ChatGPT/Codex subscription profiles
 and Sign in with ChatGPT token-sharing grants before credential resolution.
-Requests use the configured OpenAI provider headers
-and transport settings. A custom Platform-compatible `baseUrl` must implement
-`POST /decisions`; ChatGPT backend URLs are rejected.
+The provider selects the Decisions route before credential resolution. A model-level
+`baseUrl` takes precedence over the provider URL, then `OPENAI_BASE_URL`, then
+the Platform default. A custom Platform-compatible endpoint must implement
+the native `POST /decisions` question and image contract; route metadata does not
+validate a custom endpoint's implementation. Declare the supported model under
+`models.providers.openai.models` when using a custom provider URL; implicit
+native model discovery does not advertise models for arbitrary endpoints.
+ChatGPT backend URLs are rejected. Prepared provider, model and request headers
+retain their normal precedence. An explicit `@profile`
+selection remains locked; an incompatible subscription profile does not fall
+through to a different account.
 
 Boolean questions map to predicates; choices retain their string labels; score
-levels use zero-based rubric positions. A batch supports up to 200 questions,
+levels use zero-based rubric positions. A V2 batch supports up to 400 questions,
 with up to 255 alternatives per choice question. Larger requests return
 `unsupported-input` before credential resolution or an API call. Split independent
-questions into separate batches, or reduce the alternatives.
+questions into separate batches, or reduce the alternatives. Legacy V1 callers
+retain the host's 256-question limit; use `contractVersion: 2` for larger batches.
 
-Structured evidence and criteria are
-serialized as JSON text. The current Decision V1 contract carries text/JSON
-evidence, so this adapter does not send image parts. A per-question refusal
-makes the entire batch unavailable with `unsupported-input`; malformed or
-incomplete answers return `invalid-response`. Probabilities, fractional scores,
-provider confidence, and input/output token usage are preserved.
+The prepared V2 adapter accepts tagged text, JSON, or one inline PNG, JPEG, or
+WebP image up to 4 MiB, with optional text. It does not fetch remote image URLs.
+Explicit JSON scalars and strings remain JSON-encoded; text remains literal.
+Omitted reasoning and `reasoning: "auto"` preserve the endpoint default; explicit
+`on` and `off` controls are unsupported.
+Boolean, Choice, and Score questions work with image evidence. OpenClaw's
+image envelope is an integration limit, not a claim about the vendor's maximum.
+
+A per-question refusal becomes an error answer with `providerCode: "refusal"`;
+successful siblings remain available. Malformed or incomplete answers return
+`invalid-response`. Probabilities, fractional scores, confidence, and input/output
+token usage are preserved. Decision cost stays unknown unless reported; chat
+token prices do not price this endpoint. V1 text/JSON callers still use the
+lossless bridge, so a refusal batch cannot be narrowed to V1.
 
 Selecting a Decision model does not replace the primary chat model or enable
 automatic Decision assistance. Explicit evaluations send the supplied evidence

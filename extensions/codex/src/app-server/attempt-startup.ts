@@ -52,8 +52,8 @@ import {
 } from "./sandbox-exec-server.js";
 import type { CodexBindingAuthority, CodexAppServerBindingStore } from "./session-binding.js";
 import {
-  clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
   createIsolatedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient,
   readCodexAppServerClientDesktopGenerationFingerprint,
   releaseLeasedSharedCodexAppServerClient,
   type CodexAppServerClientOptions,
@@ -73,6 +73,7 @@ type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
  */
 export async function startCodexAttemptThread(params: {
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
   authority?: CodexBindingAuthority;
   attemptClientFactory: CodexAppServerClientFactory;
   bindingStore: CodexAppServerBindingStore;
@@ -116,6 +117,8 @@ export async function startCodexAttemptThread(params: {
   sandboxExecServerEnabled: boolean;
   sandbox: CodexSandboxContext;
   contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
+  historyBootstrapItems?: Parameters<typeof startOrResumeThread>[0]["historyBootstrapItems"];
+  historyDeltaItems?: Parameters<typeof startOrResumeThread>[0]["historyDeltaItems"];
   startupTimeoutMs: number;
   signal: AbortSignal;
   onStartupTimeout: () => void | Promise<void>;
@@ -132,6 +135,7 @@ export async function startCodexAttemptThread(params: {
       ? params.clientOptions.preparedAuth.store
       : undefined;
   let releaseSharedClientLease: (() => void) | undefined;
+  let observedStartupClient: CodexAppServerClient | undefined;
   let startupClientForAbandonedRequestCleanup: CodexAppServerClient | undefined;
   let releaseStartupResourcesOnTimeout: (() => Promise<void>) | undefined;
   const startupStartedAt = performance.now();
@@ -158,7 +162,7 @@ export async function startCodexAttemptThread(params: {
         // Capture before abort/retirement settles requests and erases the blocked boundary.
         // Diagnostic failures must not prevent cancellation or resource cleanup.
         try {
-          const client = startupClientForAbandonedRequestCleanup;
+          const client = startupClientForAbandonedRequestCleanup ?? observedStartupClient;
           const now = performance.now();
           embeddedAgentLog.warn("codex app-server startup timed out", {
             ...startupIdentity,
@@ -240,11 +244,13 @@ export async function startCodexAttemptThread(params: {
               agentDir: params.agentDir,
               config: params.config,
               onStartedClient: (client) => {
-                // Timeout cleanup may fire before the client factory resolves;
-                // close any late-arriving client instead of leaking a lease.
-                startupClientForAbandonedRequestCleanup = client;
-                if (startupAbandonController.signal.aborted) {
-                  void closeCodexStartupClientBestEffort(client);
+                observedStartupClient = client;
+                // Shared startup belongs to the service until this attempt acquires a lease.
+                if (params.attemptClientFactory !== getLeasedSharedCodexAppServerClient) {
+                  startupClientForAbandonedRequestCleanup = client;
+                  if (startupAbandonController.signal.aborted) {
+                    void closeCodexStartupClientBestEffort(client);
+                  }
                 }
               },
               abandonSignal: startupAbandonController.signal,
@@ -434,6 +440,7 @@ export async function startCodexAttemptThread(params: {
                 reserveResumeThread,
                 bindingStore: params.bindingStore,
                 assertCurrent: params.assertCurrent,
+                assertCurrentAsync: params.assertCurrentAsync,
                 authority: params.authority,
                 params: params.buildAttemptParams(),
                 runtimeModelId: params.runtimeModelId,
@@ -470,6 +477,8 @@ export async function startCodexAttemptThread(params: {
                 environmentSelection: startupEnvironmentSelection,
                 appServerRuntimeFingerprint,
                 contextEngineProjection: params.contextEngineProjection,
+                historyBootstrapItems: params.historyBootstrapItems,
+                historyDeltaItems: params.historyDeltaItems,
                 signal,
                 pluginThreadConfig: createPluginThreadConfig?.({
                   requestTimeoutMs: params.appServer.requestTimeoutMs,
@@ -550,16 +559,6 @@ export async function startCodexAttemptThread(params: {
             }
           } catch (error) {
             startupAttemptError = error;
-            if (!startupAbandonController.signal.aborted && !startupClient) {
-              const sharedClient = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
-                startupClientForAbandonedRequestCleanup,
-              );
-              if (sharedClient.found && !sharedClient.closed) {
-                // Shared acquisition already released this caller. A peer still
-                // owns the client, so outer cleanup must not retire it.
-                startupClientForAbandonedRequestCleanup = undefined;
-              }
-            }
           } finally {
             if (!startupAttemptSucceeded) {
               if (releaseSharedClientLease === startupClientLease) {

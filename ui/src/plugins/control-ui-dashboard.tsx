@@ -1,6 +1,17 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { Show, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import {
+  Errored,
+  Loading,
+  Show,
+  children,
+  createMemo,
+  createStore,
+  isPending,
+  lazy,
+  onCleanup,
+} from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { Icon } from "../components/solid/icon.tsx";
 import {
   acquireBoardProviderForSession,
@@ -8,10 +19,17 @@ import {
   boardProviderCacheKey,
   type BoardViewCallbacks,
 } from "../lib/board/provider.ts";
-import { projectBoardProvider } from "../lib/reactive/domain-board.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
+import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
 import "./control-ui-dashboard.css";
+
+const DashboardBoard = lazy(() => import("./control-ui-dashboard-board.tsx"), {
+  export: "PluginSessionDashboardBoard",
+});
 
 export type PluginSessionDashboardProps = {
   session: BoardGetParams | null;
@@ -22,21 +40,32 @@ export type PluginSessionDashboardProps = {
   presented: boolean;
 };
 
-function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
-  const [expanded, setExpanded] = createSignal(false);
-  const [activeTabId, setActiveTabId] = createSignal("");
-  const [viewError, setViewError] = createSignal<string | null>(null);
-  const [boardView, setBoardView] =
-    createSignal<typeof import("../components/board/board-view.tsx").BoardView>();
-  const [viewAttempt, setViewAttempt] = createSignal(0);
-  const [expansionInitialized, setExpansionInitialized] = createSignal(false);
+function PluginSessionDashboardContent(
+  props: PluginSessionDashboardProps,
+  host: SolidBridgeElement<PluginSessionDashboardProps>,
+) {
+  const context = useOptionalApplication();
+  const gateway = context ? projectGateway(context.gateway) : undefined;
   const scope = createMemo(
-    () =>
-      props.client && props.session?.sessionKey.trim()
-        ? { client: props.client, cacheKey: boardProviderCacheKey(props.session) }
-        : null,
+    () => {
+      gateway?.revision();
+      return props.client && props.session?.sessionKey.trim()
+        ? {
+            client: props.client,
+            cacheKey: boardProviderCacheKey(props.session),
+            presentationScope: context ? gatewayPresentationScope(context.gateway) : undefined,
+            session: props.session,
+            connected: props.connected,
+            canMutate: props.canMutate,
+            canGrant: props.canGrant,
+          }
+        : null;
+    },
     {
-      equals: (left, right) => left?.client === right?.client && left?.cacheKey === right?.cacheKey,
+      equals: (left, right) =>
+        left?.client === right?.client &&
+        left?.cacheKey === right?.cacheKey &&
+        left?.presentationScope === right?.presentationScope,
     },
   );
   const resource = createMemo(() => {
@@ -44,92 +73,90 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
     if (!current) {
       return null;
     }
-    const lease = untrack(() =>
-      acquireBoardProviderForSession(
-        props.session!,
-        current.client,
-        props.connected,
-        false,
-        false,
-        props.canMutate,
-        props.canGrant,
-      ),
+    const lease = acquireBoardProviderForSession(
+      current.session,
+      current.client,
+      current.connected,
+      false,
+      false,
+      current.canMutate,
+      current.canGrant,
+      current.presentationScope,
     );
     onCleanup(() => lease.release());
-    const projection = projectBoardProvider(lease.provider);
+    const projection = projectSource(lease.provider, {
+      read: (provider) => ({
+        snapshot: provider.snapshot$.value,
+        appViewGeneration: provider.appViewGeneration,
+        hasLoadedSnapshot: provider.hasLoadedSnapshot,
+      }),
+      subscribe: (provider, notify) => {
+        const stopSnapshot = provider.snapshot$.subscribe(notify);
+        const stopError = provider.loadError$.subscribe(notify);
+        return () => {
+          stopSnapshot();
+          stopError();
+        };
+      },
+      equality: "revision",
+    });
     const callbacks: BoardViewCallbacks = {
       get appViewGeneration() {
         return projection.read().appViewGeneration;
       },
       applyOps: (ops) => lease.provider.applyOps(ops),
       grant: (name, decision) => lease.provider.grant(name, decision),
-      selectTab: setActiveTabId,
+      selectTab: (activeTabId) =>
+        setPresentation((draft) => {
+          draft.activeTabId = activeTabId;
+        }),
       frameLoadFailed: (name) => lease.provider.refreshWidgetFrame(name),
       widgetAppView: (name, revision) => lease.provider.widgetAppView(name, revision),
       refreshWidgetAppView: (name, revision) => lease.provider.refreshWidgetAppView(name, revision),
     };
     return { lease, projection, callbacks };
   });
-  createEffect(
-    () => ({
-      resource: resource(),
-      connected: props.connected,
-      canMutate: props.canMutate,
-      canGrant: props.canGrant,
-    }),
-    (current) =>
-      current.resource?.lease.update(props.client!, current.connected, {
-        canPinWidgets: false,
-        canPinMcpApps: false,
-        canMutate: current.canMutate,
-        canGrant: current.canGrant,
-      }),
-  );
-  let reconciledProvider: ReturnType<typeof resource> = null;
-  createEffect(
+  // Keep the shared transport and this lease's mutation authority current.
+  observeSolidBridgeProperties(
+    host,
+    ["session", "client", "connected", "canMutate", "canGrant"],
+    undefined,
     () => {
       const current = resource();
-      return { current, state: current?.projection.read() };
-    },
-    ({ current, state }) => {
-      const replaced = current !== reconciledProvider;
-      reconciledProvider = current;
-      if (replaced) {
-        setExpansionInitialized(false);
-        setActiveTabId("");
-      }
-      if (!state) {
-        return;
-      }
-      setActiveTabId((active) =>
-        !replaced && state.snapshot.tabs.some((tab) => tab.tabId === active)
-          ? active
-          : (state.snapshot.tabs[0]?.tabId ?? ""),
-      );
-      if ((replaced || !expansionInitialized()) && state.hasLoadedSnapshot) {
-        setExpansionInitialized(true);
-        setExpanded(boardExists(state.snapshot));
+      if (current && host.client) {
+        current.lease.update(host.client, host.connected, {
+          canPinWidgets: false,
+          canPinMcpApps: false,
+          canMutate: host.canMutate,
+          canGrant: host.canGrant,
+        });
       }
     },
   );
-  createEffect(viewAttempt, () => {
-    let current = true;
-    setViewError(null);
-    void import("../components/board/board-view.tsx")
-      .then((module) => {
-        if (current) {
-          setBoardView(() => module.BoardView);
-        }
-      })
-      .catch((error: unknown) => {
-        if (current) {
-          setViewError(error instanceof Error ? error.message : String(error));
-        }
-      });
-    return () => {
-      current = false;
-    };
-  });
+  // Preserve manual choices within a scope; a replacement initializes only after its first snapshot.
+  const [presentation, setPresentation] = createStore<{
+    scope: ReturnType<typeof scope>;
+    expanded: boolean;
+    initialized: boolean;
+    activeTabId: string;
+  }>(
+    (draft) => {
+      const current = scope();
+      const state = resource()?.projection.read();
+      const retained = draft.scope === current;
+      const initialize = state?.hasLoadedSnapshot === true && (!retained || !draft.initialized);
+      draft.expanded = initialize ? boardExists(state.snapshot) : draft.expanded;
+      draft.initialized = initialize || (retained && draft.initialized);
+      draft.activeTabId =
+        retained && state?.snapshot.tabs.some((tab) => tab.tabId === draft.activeTabId)
+          ? draft.activeTabId
+          : (state?.snapshot.tabs[0]?.tabId ?? "");
+      draft.scope = current;
+    },
+    { scope: null, expanded: false, initialized: false, activeTabId: "" },
+    // Scope is an immutable identity, not nested presentation state.
+    { shallow: true },
+  );
   const board = createMemo(() => {
     const current = resource();
     const session = props.session;
@@ -138,16 +165,27 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
       ? { ...current, session, snapshot: state.snapshot }
       : null;
   });
+  const content = children(() => (
+    <DashboardBoard
+      board={board()}
+      active={presentation.expanded && props.presented}
+      activeTabId={presentation.activeTabId}
+      canMutate={props.connected && props.canMutate}
+      canGrant={props.connected && props.canGrant}
+    />
+  ));
   return (
     <section class="plugin-session-dashboard">
       <button
         type="button"
         class="plugin-session-dashboard__toggle"
-        aria-expanded={expanded() ? "true" : "false"}
-        onClick={() => {
-          setExpansionInitialized(true);
-          setExpanded((value) => !value);
-        }}
+        aria-expanded={presentation.expanded ? "true" : "false"}
+        onClick={() =>
+          setPresentation((draft) => {
+            draft.initialized = true;
+            draft.expanded = !draft.expanded;
+          })
+        }
       >
         <span class="plugin-session-dashboard__title">
           <Icon name="kanban" />
@@ -157,41 +195,27 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
           <Icon name="arrowDown" />
         </span>
       </button>
-      <div class="plugin-session-dashboard__body" hidden={!expanded()}>
-        {viewError() ? (
-          <>
-            <p role="alert">{viewError()}</p>
-            <button type="button" onClick={() => setViewAttempt((value) => value + 1)}>
-              {t("common.retry")}
-            </button>
-          </>
-        ) : (
-          <Show
-            when={board()}
-            fallback={<p class="plugin-session-dashboard__empty">{t("pluginUi.dashboardEmpty")}</p>}
-          >
-            {(current) => (
-              <Show when={boardView()} keyed>
-                {(BoardView) => (
-                  <BoardView
-                    active={expanded() && props.presented}
-                    session={current().session}
-                    snapshot={current().snapshot}
-                    activeTabId={activeTabId()}
-                    widgetFrameUrl={(name: string, revision: number) =>
-                      current().lease.provider.widgetFrameUrl(name, revision)
-                    }
-                    callbacks={current().callbacks}
-                    canMutate={props.canMutate}
-                    canGrant={props.canGrant}
-                  />
-                )}
+      <div class="plugin-session-dashboard__body" hidden={!presentation.expanded}>
+        <Errored
+          fallback={(error, reset) => {
+            const message = () => {
+              const failure = error();
+              return failure instanceof Error ? failure.message : String(failure);
+            };
+            return (
+              <Show when={!isPending(() => content())}>
+                <p role="alert">{message()}</p>
+                <button type="button" onClick={reset}>
+                  {t("common.retry")}
+                </button>
               </Show>
-            )}
-          </Show>
-        )}
+            );
+          }}
+        >
+          <Loading>{content()}</Loading>
+        </Errored>
       </div>
-      <Show when={!expanded() && expansionInitialized() && !board()}>
+      <Show when={!presentation.expanded && presentation.initialized && !board()}>
         <p class="plugin-session-dashboard__collapsed-empty">{t("pluginUi.dashboardEmpty")}</p>
       </Show>
     </section>

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createGitHubReadIdentity } from "../../agents/github-read-identity.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
@@ -14,6 +15,7 @@ import {
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
+import { prepareRepositoryGitHubIdentity } from "./repository-github-identity.js";
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import {
   stageSessionRepositoryCheckpoint,
@@ -24,13 +26,12 @@ import type {
   WorkerWorkspaceReconcileRequest,
   WorkerWorkspaceSyncResult,
 } from "./tunnel-contract.js";
-import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 
 // mock-isolation: Workspace startup supplies a synthetic identity without credential discovery.
-vi.mock("./worker-github-binding.js", () => ({ prepareGitHubPublicationFact: vi.fn() }));
+vi.mock("./repository-github-identity.js", () => ({ prepareRepositoryGitHubIdentity: vi.fn() }));
 
 const session = {
   sessionId: "repository-session",
@@ -119,17 +120,16 @@ async function fixture(runSetupScript = false, preparedNode = false) {
     runSetupScript,
     assertCurrent,
   });
-  vi.mocked(prepareGitHubPublicationFact)
+  vi.mocked(prepareRepositoryGitHubIdentity)
     .mockReset()
-    .mockResolvedValue({
-      available: true,
-      github: {
+    .mockResolvedValue(
+      createGitHubReadIdentity({
         token,
-        login: "repository-bot",
-        remoteUrl: repository.url,
-        branch: repository.branch,
-      },
-    });
+        selection: { source: "system-configured", accountId: 42 },
+        assertSelected: assertCurrent,
+        readToken: async () => token,
+      }),
+    );
   const syncWorkspace = vi.fn<WorkerTunnelHandle["syncWorkspace"]>(async (request) => {
     if (request.source.kind !== "repository") {
       throw new Error("Expected repository source");
@@ -264,14 +264,9 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
     "repositoryAcceptance",
     "repositoryCleanup",
   ]);
-  expect(prepareGitHubPublicationFact).toHaveBeenCalledWith({
-    sessionId: session.sessionId,
-    sessionKey: session.sessionKey,
-    agentId: session.agentId,
-    assertCurrent: expect.any(Function),
-  });
+  expect(prepareRepositoryGitHubIdentity).toHaveBeenCalledWith(session.agentId, f.assertCurrent);
   expect(f.syncWorkspace).toHaveBeenCalledWith({
-    authorize: f.assertCurrent,
+    authorize: expect.any(Function),
     sessionId: session.sessionId,
     sessionKey: session.sessionKey,
     generation: session.generation,
@@ -310,7 +305,14 @@ it("accepts the initial SQLite and bare Git checkpoint before sync can finish or
 
 it("does not run setup when the repository did not request it", async () => {
   const f = await fixture(false);
-  vi.mocked(prepareGitHubPublicationFact).mockResolvedValue(undefined);
+  vi.mocked(prepareRepositoryGitHubIdentity).mockResolvedValue(
+    createGitHubReadIdentity({
+      token: undefined,
+      selection: { source: "anonymous" },
+      assertSelected: () => {},
+      readToken: async () => undefined,
+    }),
+  );
   await f.start({ runSetupScript: true });
   expect(f.syncWorkspace.mock.calls[0]?.[0].source).toMatchObject({ runSetupScript: false });
   expect(f.syncWorkspace.mock.calls[0]?.[0].source).not.toHaveProperty("gitToken");
@@ -323,7 +325,7 @@ it("does not run setup when the repository did not request it", async () => {
 it("refuses requested setup without fresh authority instead of saving an incomplete initial state", async () => {
   const f = await fixture(true);
   await expect(f.start({ runSetupScript: undefined })).rejects.toThrow("administrator");
-  expect(prepareGitHubPublicationFact).not.toHaveBeenCalled();
+  expect(prepareRepositoryGitHubIdentity).not.toHaveBeenCalled();
   expect(f.syncWorkspace).not.toHaveBeenCalled();
   expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBeNull();
 });
@@ -331,7 +333,7 @@ it("refuses requested setup without fresh authority instead of saving an incompl
 it("refuses interrupted setup recovery before credentials or worker commands are requested", async () => {
   const f = await fixture(true);
   await expect(f.start({ recovery: true, runSetupScript: true })).rejects.toThrow("administrator");
-  expect(prepareGitHubPublicationFact).not.toHaveBeenCalled();
+  expect(prepareRepositoryGitHubIdentity).not.toHaveBeenCalled();
   expect(f.syncWorkspace).not.toHaveBeenCalled();
   expect(await f.store.get(f.repository.workspaceId)).toEqual(f.repository);
 });
@@ -501,7 +503,7 @@ it("adopts completed setup, restores accepted repository edits, and retains the 
   for (const [request] of f.syncWorkspace.mock.calls) {
     expect(request.source).not.toHaveProperty("gitToken");
   }
-  expect(prepareGitHubPublicationFact).not.toHaveBeenCalled();
+  expect(prepareRepositoryGitHubIdentity).not.toHaveBeenCalled();
   expect(await fs.readFile(path.join(f.remote, "setup.txt"), "utf8")).toBe("already prepared\n");
   expect(await f.store.get(f.repository.workspaceId)).toMatchObject({
     baseCommit: f.baseCommit,
@@ -515,7 +517,7 @@ it.each(["commit", "source manifest"] as const)(
   async (change) => {
     const f = await fixture();
     await f.start();
-    vi.mocked(prepareGitHubPublicationFact).mockClear();
+    vi.mocked(prepareRepositoryGitHubIdentity).mockClear();
     f.syncWorkspace.mockClear();
     await expect(
       f.start({
@@ -529,7 +531,7 @@ it.each(["commit", "source manifest"] as const)(
         },
       }),
     ).rejects.toThrow(change === "commit" ? "pinned session commit" : "pinned source manifest");
-    expect(prepareGitHubPublicationFact).not.toHaveBeenCalled();
+    expect(prepareRepositoryGitHubIdentity).not.toHaveBeenCalled();
     expect(f.syncWorkspace).not.toHaveBeenCalled();
   },
 );
@@ -562,9 +564,14 @@ it.each(["identity", "sync", "verification"] as const)(
   async (phase) => {
     const f = await fixture();
     if (phase === "identity") {
-      vi.mocked(prepareGitHubPublicationFact).mockImplementationOnce(async () => {
+      vi.mocked(prepareRepositoryGitHubIdentity).mockImplementationOnce(async () => {
         f.closeAuthority();
-        return undefined;
+        return createGitHubReadIdentity({
+          token: undefined,
+          selection: { source: "anonymous" },
+          assertSelected: f.assertCurrent,
+          readToken: async () => undefined,
+        });
       });
     } else if (phase === "sync") {
       const sync = f.syncWorkspace.getMockImplementation()!;

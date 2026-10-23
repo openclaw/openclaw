@@ -188,9 +188,7 @@ export function getProviderMonitorTestMocks(): typeof providerMonitorTestMocks {
   return providerMonitorTestMocks;
 }
 
-export function resetDiscordProviderMonitorMocks(params?: {
-  nativeCommands?: NativeCommandSpecMock[];
-}) {
+export function resetDiscordProviderMonitorMocks() {
   clientDeployCommandsMock.mockClear().mockResolvedValue(undefined);
   clientFetchUserMock.mockClear().mockResolvedValue({ id: "bot-1" });
   clientGetPluginMock.mockClear().mockReturnValue(undefined);
@@ -228,9 +226,7 @@ export function resetDiscordProviderMonitorMocks(params?: {
   getAcpSessionStatusMock.mockClear().mockResolvedValue({ state: "idle" });
   listNativeCommandSpecsForConfigMock
     .mockClear()
-    .mockReturnValue(
-      params?.nativeCommands ?? [{ name: "cmd", description: "built-in", acceptsArgs: false }],
-    );
+    .mockReturnValue([{ name: "cmd", description: "built-in", acceptsArgs: false }]);
   prepareSkillCommandsForAgentsMock.mockClear().mockResolvedValue([]);
   monitorLifecycleMock.mockClear().mockImplementation(async (monitorParams) => {
     monitorParams.threadBindings.stop();
@@ -269,24 +265,9 @@ export const baseConfig = (): OpenClawConfig =>
 vi.mock("../internal/discord.js", async () => {
   const actual =
     await vi.importActual<typeof import("../internal/discord.js")>("../internal/discord.js");
-  class RateLimitError extends Error {
-    status = 429;
-    discordCode?: number;
-    retryAfter: number;
-    scope: string | null;
-    bucket: string | null;
-    constructor(
-      response: Response,
-      body: { message: string; retry_after: number; global: boolean },
-    ) {
-      super(body.message);
-      this.retryAfter = body.retry_after;
-      this.scope = body.global ? "global" : response.headers.get("X-RateLimit-Scope");
-      this.bucket = response.headers.get("X-RateLimit-Bucket");
-    }
-  }
   class Client {
     listeners: unknown[];
+    plugins: NonNullable<ConstructorParameters<typeof actual.Client>[2]>;
     rest: {
       options: { timeout: number };
       get: ReturnType<typeof vi.fn>;
@@ -296,9 +277,14 @@ vi.mock("../internal/discord.js", async () => {
       delete: ReturnType<typeof vi.fn>;
     };
     options: unknown;
-    constructor(options: unknown, handlers: { listeners?: unknown[] }) {
+    constructor(
+      options: unknown,
+      handlers: { listeners?: unknown[] },
+      plugins: ConstructorParameters<typeof actual.Client>[2] = [],
+    ) {
       this.options = options;
       this.listeners = handlers.listeners ?? [];
+      this.plugins = [...plugins];
       this.rest = {
         options: { timeout: 15_000 },
         get: vi.fn(async () => undefined),
@@ -316,10 +302,10 @@ vi.mock("../internal/discord.js", async () => {
       return await clientFetchUserMock(target);
     }
     getPlugin(name: string) {
-      return clientGetPluginMock(name);
+      return clientGetPluginMock(name) ?? this.plugins.find((plugin) => plugin.id === name);
     }
   }
-  return { ...actual, Client, RateLimitError };
+  return { ...actual, Client };
 });
 
 vi.mock("../internal/gateway.js", () => ({
@@ -543,4 +529,8 @@ vi.mock(buildDiscordSourceModuleId("monitor/thread-bindings.js"), () => ({
   createThreadBindingManager: createThreadBindingManagerMock,
   reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,
   resolveThreadBindingIdleTimeoutMs: vi.fn(() => 24 * 60 * 60 * 1000),
+}));
+
+vi.mock(buildDiscordSourceModuleId("monitor/thread-bindings.manager.js"), () => ({
+  createThreadBindingManager: createThreadBindingManagerMock,
 }));

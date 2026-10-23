@@ -10,7 +10,7 @@ import type {
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseOperations,
 } from "../state/openclaw-agent-execution-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabasePreparationExecution } from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import type { SessionCostUsageRollupSnapshot } from "./session-cost-usage-cache.kernel.js";
 import { isSessionActorUsageRefreshRunning } from "./session-cost-usage-memory.js";
@@ -67,9 +67,9 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
         nativeLocation: observed.canonicalPath,
       }
     : undefined;
-  // Missing stores retain their creation witness; existing stores borrow at writer admission.
+  // Missing stores join their preparation owner; existing stores borrow at writer admission.
   let execution = observed.key.startsWith("path:")
-    ? captureOpenClawAgentDatabaseExecution(options, { expectedCreationIdentity: observed })
+    ? captureOpenClawAgentDatabasePreparationExecution(options)
     : undefined;
   let prepared = false;
   return {
@@ -82,9 +82,7 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
         options,
         async () => {
           source.assertCurrent();
-          execution ??= captureOpenClawAgentDatabaseExecution(options, {
-            expectedIdentity,
-          });
+          execution ??= captureOpenClawAgentDatabasePreparationExecution(options, expectedIdentity);
           if (!prepared) {
             await execution.prepare(source, signal);
             prepared = true;
@@ -107,9 +105,7 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
         options,
         async () => {
           source.assertCurrent();
-          execution ??= captureOpenClawAgentDatabaseExecution(options, {
-            expectedIdentity,
-          });
+          execution ??= captureOpenClawAgentDatabasePreparationExecution(options, expectedIdentity);
           if (!prepared) {
             await execution.prepare(source, signal);
             prepared = true;

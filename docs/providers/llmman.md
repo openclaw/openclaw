@@ -914,7 +914,7 @@ container, or service account.
     }
     ```
 
-    Coming from Ollama? llmman also serves `/api/embed`, so the `ollama` provider works with just a new `remote.baseUrl` (no `/v1`). Pull the same model name, then run `openclaw memory index --force` so every vector comes from one server:
+    Coming from Ollama? llmman also serves `/api/embed`, so the `ollama` provider works with just a new `remote.baseUrl` (no `/v1`). Pull the model, then run `openclaw memory index --force` so every vector comes from one server. Ollama's `nomic-embed-text` and `bge-m3` are not on Docker Hub under those names: pull `nomic-embed-text-v1.5` or `hf.co/ggml-org/bge-m3-Q8_0-GGUF` and use that name as `model`:
 
     ```json5
     {

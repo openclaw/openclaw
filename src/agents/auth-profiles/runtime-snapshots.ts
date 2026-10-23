@@ -283,7 +283,7 @@ export function registerRuntimeAuthProfileStoreMutationListener(
   return registerListener(runtimeAuthStoreMutationListeners, listener);
 }
 
-/** @deprecated Use replaceRuntimeAuthProfileStoreSnapshotsAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Use replaceRuntimeAuthProfileStoreSnapshotsAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function replaceRuntimeAuthProfileStoreSnapshots(
   entries: Array<{ databasePath?: string; agentDir?: string; store: AuthProfileStore }>,
 ): void {

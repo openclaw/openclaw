@@ -6,6 +6,14 @@ import type {
 
 export const KIMI_K3_MODEL_IDS = ["k3", "k3-256k", "kimi-k3"] as const;
 const KIMI_K3_LEGACY_MODEL_IDS = ["k3[1m]"] as const;
+// Kimi Code's K2.8 backend leaks reasoning into visible text when thinking is disabled.
+const KIMI_CODE_ENABLED_ONLY_MODEL_IDS = [
+  "kimi-for-coding",
+  "kimi-for-coding-highspeed",
+  // Legacy aliases of kimi-for-coding.
+  "kimi-code",
+  "k2p5",
+] as const;
 
 export const KIMI_K3_THINKING_EFFORTS = {
   minimal: "low",
@@ -35,6 +43,12 @@ export function isKimiK3ModelId(modelId: string): boolean {
   );
 }
 
+/** Kimi Code K2 models whose backend cannot honor disabled thinking without leaking reasoning. */
+export function isKimiCodeEnabledOnlyModelId(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  return KIMI_CODE_ENABLED_ONLY_MODEL_IDS.some((id) => id === normalized);
+}
+
 export function resolveThinkingProfile({
   modelId,
 }: ProviderDefaultThinkingPolicyContext): ProviderThinkingProfile {
@@ -44,6 +58,9 @@ export function resolveThinkingProfile({
       defaultLevel: modelId.trim().toLowerCase() === "kimi-k3" ? "off" : "high",
       preserveWhenCatalogReasoningFalse: true,
     };
+  }
+  if (isKimiCodeEnabledOnlyModelId(modelId)) {
+    return { levels: [{ id: "low", label: "on" }], defaultLevel: "low" };
   }
   return {
     levels: [
