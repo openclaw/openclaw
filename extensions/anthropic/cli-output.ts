@@ -1,6 +1,7 @@
 import type {
   CliBackendParseJsonlEvent,
   CliBackendParseJsonlLifecycleEvent,
+  CliBackendParsedJsonlLifecycleEvent,
 } from "openclaw/plugin-sdk/cli-backend";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findCodeRegions, isInsideCode, type CodeRegion } from "openclaw/plugin-sdk/text-chunking";
@@ -168,14 +169,44 @@ function parseClaudeJsonlRecord(line: string): Record<string, unknown> | null {
   }
 }
 
+function readTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+/** Claude Code's `compact_metadata`: trigger plus the context size before and after. */
+function readClaudeCompactMetadata(
+  value: unknown,
+): Extract<CliBackendParsedJsonlLifecycleEvent, { phase: "boundary" }> {
+  const metadata = isRecord(value) ? value : {};
+  const tokensBefore = readTokenCount(metadata.pre_tokens);
+  const tokensAfter = readTokenCount(metadata.post_tokens);
+  return {
+    kind: "compaction",
+    phase: "boundary",
+    ...(typeof metadata.trigger === "string" ? { trigger: metadata.trigger } : {}),
+    ...(tokensBefore !== undefined ? { tokensBefore } : {}),
+    ...(tokensAfter !== undefined ? { tokensAfter } : {}),
+  };
+}
+
 /** Project Claude-owned lifecycle records without widening the legacy parser event union. */
 export const parseClaudeCliJsonlLifecycleEvent: CliBackendParseJsonlLifecycleEvent = (line) => {
-  if (!line.includes("compacting") && !line.includes("compact_result")) {
+  if (
+    !line.includes("compacting") &&
+    !line.includes("compact_result") &&
+    !line.includes("compact_boundary")
+  ) {
     return null;
   }
   const parsed = parseClaudeJsonlRecord(line);
   if (!parsed) {
     return null;
+  }
+  if (parsed.type === "system" && parsed.subtype === "compact_boundary") {
+    // Sizes only: the status records above own start/end, so the boundary never ends a compaction.
+    return readClaudeCompactMetadata(parsed.compact_metadata);
   }
   if (parsed.compact_result === "success" || parsed.compact_result === "failed") {
     return {

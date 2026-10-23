@@ -49,9 +49,34 @@ const lifecycleCases = [
     { ...end, completed: false },
   ],
   [{ compact_result: "success" }, { ...end, completed: true }],
-  [{ type: "system", subtype: "compact_boundary" }, null],
+  [
+    {
+      type: "system",
+      subtype: "compact_boundary",
+      compact_metadata: { trigger: "auto", pre_tokens: 473068, post_tokens: 17604 },
+    },
+    {
+      kind: "compaction",
+      phase: "boundary",
+      trigger: "auto",
+      tokensBefore: 473068,
+      tokensAfter: 17604,
+    },
+  ],
+  [
+    { type: "system", subtype: "compact_boundary" },
+    { kind: "compaction", phase: "boundary" },
+  ],
+  [
+    {
+      type: "system",
+      subtype: "compact_boundary",
+      compact_metadata: { trigger: 1, pre_tokens: "473068", post_tokens: -1 },
+    },
+    { kind: "compaction", phase: "boundary" },
+  ],
 ];
-it("projects native compaction lifecycle without inferring from the boundary", () => {
+it("projects native compaction lifecycle and the boundary's sizes", () => {
   for (const [event, expected] of lifecycleCases) {
     expect(backend.parseJsonlLifecycleEvent?.(JSON.stringify(event), context)).toEqual(expected);
   }

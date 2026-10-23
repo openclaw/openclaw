@@ -364,10 +364,13 @@ export function createCliEventHandlers(params: {
     // Native compaction is silent but busy: the no-output watchdog reads this
     // between phase boundaries, so an end event must always clear the flag,
     // even for a failed compaction (`completed: false`).
-    const previous = compactionActive;
-    compactionActive = event.phase === "start";
-    if (compactionActive !== previous) {
-      onCompactionActiveChange?.();
+    // The boundary only reports sizes after the end, so it leaves the flag as is.
+    if (event.phase !== "boundary") {
+      const previous = compactionActive;
+      compactionActive = event.phase === "start";
+      if (compactionActive !== previous) {
+        onCompactionActiveChange?.();
+      }
     }
     emitLiveEvent("compaction", () => ({ ...event, backend: context.backendResolved.id }));
   };

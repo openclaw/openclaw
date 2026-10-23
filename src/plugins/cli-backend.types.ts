@@ -331,7 +331,16 @@ export type CliBackendParseJsonlEvent = (
 
 export type CliBackendParsedJsonlLifecycleEvent =
   | { kind: "compaction"; phase: "start" }
-  | { kind: "compaction"; phase: "end"; completed: boolean };
+  | { kind: "compaction"; phase: "end"; completed: boolean }
+  | ({ kind: "compaction" } & CliCompactionBoundary);
+
+/** Sizes the CLI reports for a finished compaction; it arrives after the end event. */
+export type CliCompactionBoundary = {
+  phase: "boundary";
+  trigger?: string;
+  tokensBefore?: number;
+  tokensAfter?: number;
+};
 
 export type CliBackendParseJsonlLifecycleEvent = (
   line: string,
