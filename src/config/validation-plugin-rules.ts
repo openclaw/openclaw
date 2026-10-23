@@ -327,10 +327,8 @@ export function validatePreparedConfigWithPlugins(
       issues.push({ path: issuePath, message: "web_search provider must not be empty" });
       return;
     }
-    // The runtime lowercases the configured value before matching provider ids
-    // (src/web-search/runtime.ts), so accept exactly the spellings it resolves
-    // instead of rejecting a value the resolver would use.
-    const normalizedProviderId = normalizeLowercaseStringOrEmpty(trimmed);
+    // Match the runtime's case-insensitive provider lookup.
+    const normalizedProviderId = trimmed.toLowerCase();
     const activeProviderIds = collectActiveWebSearchProviderIds();
     if (activeProviderIds.includes(normalizedProviderId)) {
       return;
