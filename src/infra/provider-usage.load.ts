@@ -23,20 +23,18 @@ import type {
   UsageSummary,
 } from "./provider-usage.types.js";
 
-type UsageSummaryOptions = {
-  timeoutMs?: number;
-  providers?: UsageProviderId[];
-  auth?: ProviderAuth[];
-  authStore?: AuthProfileStore;
-  agentDir?: string;
-  workspaceDir?: string;
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-};
-
 /** Loads usage snapshots from configured provider auth and plugin-backed usage hooks. */
 export async function loadProviderUsageSummary(
-  opts: UsageSummaryOptions = {},
+  opts: {
+    timeoutMs?: number;
+    providers?: UsageProviderId[];
+    auth?: ProviderAuth[];
+    authStore?: AuthProfileStore;
+    agentDir?: string;
+    workspaceDir?: string;
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): Promise<UsageSummary> {
   const now = Date.now();
   const timeoutMs = opts.timeoutMs ?? PROVIDER_USAGE_TIMEOUT_MS;

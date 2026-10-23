@@ -1828,6 +1828,7 @@ src/state/agent-deletion-journal-recovery.ts
 src/state/agent-deletion-journal-status.ts
 src/state/agent-deletion-journal.read.ts
 src/state/agent-deletion-journal.ts
+src/state/agent-input-recovery-context.ts
 src/state/agent-provenance.kernel.ts
 src/state/agent-provenance-publication.ts
 src/state/agent-provenance.schema.ts

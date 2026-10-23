@@ -330,6 +330,7 @@ it("shows RPC failures and retries without a premature greeting", async () => {
     throw new Error("Gateway lost its connection");
   });
   const { page } = await mountSetup(request);
+  await waitForSolid(() => expect(page.querySelector(".sidebar-issues-button")).not.toBeNull());
   alertText(page).toContain("Gateway lost its connection");
   expect(request).toHaveBeenCalledTimes(1);
   await click(page, "Retry");

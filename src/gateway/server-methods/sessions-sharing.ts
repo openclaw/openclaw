@@ -52,6 +52,7 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { measureSessionCollaborationPhase } from "./sessions-collaboration-diagnostics.js";
 import { prepareManagedSessionAccess, sharingExpectedEntry } from "./sessions-sharing-authority.js";
 import { knownSessionIdentities, type SharingActorFacts } from "./sessions-sharing-identities.js";
+import { projectSessionMemberPermissions } from "./sessions-sharing-permissions.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -272,10 +273,11 @@ function createSessionMembersListHandler(
           return;
         }
         const projectedMembers = members.filter((member) => member !== null);
+        const profiles = listResidentUserProfileDisplayFacts();
         const identities = knownSessionIdentities({
           creators: projection.listCreatedActors(),
           actor,
-          profiles: listResidentUserProfileDisplayFacts(),
+          profiles,
         });
         for (const member of projectedMembers) {
           if (!identities.some((identity) => identity.id === member.identityId)) {
@@ -312,6 +314,18 @@ function createSessionMembersListHandler(
             ...(owner?.id ? { owner } : {}),
             members: projectedMembers,
             identities,
+            ...(evidenceAware
+              ? {
+                  permissions: projectSessionMemberPermissions({
+                    cfg: context.getCommittedRuntimeConfig?.() ?? currentCfg,
+                    client,
+                    target: { ...target, entry },
+                    members: evidenceMembers,
+                    identities,
+                    profiles,
+                  }),
+                }
+              : {}),
             role,
             allowedVisibilities: allowedSessionVisibilities(currentCfg),
           },

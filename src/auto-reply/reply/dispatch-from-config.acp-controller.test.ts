@@ -88,7 +88,7 @@ function mockAcpSession(sessionKey: string) {
   );
 }
 
-function dispatchTo(
+async function dispatchTo(
   sessionKey: string,
   body: string,
   options: { onSourceReserved?: (input: SessionControllerInput) => void } = {},
@@ -102,7 +102,7 @@ function dispatchTo(
     SessionKey: sessionKey,
     BodyForAgent: body,
   });
-  const source = prepareReplySourceInput(ctx, cfg, {});
+  const source = await prepareReplySourceInput(ctx, cfg, {});
   if (source.input) {
     options.onSourceReserved?.(source.input);
   }

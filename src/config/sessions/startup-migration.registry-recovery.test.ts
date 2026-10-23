@@ -21,6 +21,7 @@ import {
   isOpenClawAgentDatabaseOpen,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
@@ -156,7 +157,7 @@ it.each([false, true])(
       session: { store: sharedPath },
     };
     const survivorOptions = { agentId: "alpha", env, path: sharedPath };
-    const survivor = openOpenClawAgentDatabase(survivorOptions);
+    openOpenClawAgentDatabase(survivorOptions);
     const deletedOptions = { agentId: "ops", env };
     const deleted = openOpenClawAgentDatabase(deletedOptions);
     for (const agentId of ["alpha", "ops"]) {
@@ -170,8 +171,14 @@ it.each([false, true])(
       env,
       log: { info: vi.fn(), warn: vi.fn() },
     });
-    setCanonicalSqliteSessionMainKey(survivor, "previous");
-    setCanonicalSqliteSessionMainKey(deleted, "previous");
+    runOpenClawAgentWriteTransaction(
+      (database) => setCanonicalSqliteSessionMainKey(database, "previous"),
+      survivorOptions,
+    );
+    runOpenClawAgentWriteTransaction(
+      (database) => setCanonicalSqliteSessionMainKey(database, "previous"),
+      deletedOptions,
+    );
     await closeOpenClawAgentDatabasesAsync(stateDir);
     closeOpenClawAgentDatabasesForTest();
     const deletion = beginAgentDeletionJournal(

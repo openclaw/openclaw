@@ -13,14 +13,6 @@ import {
 
 registerEnglishCatalog(registerChatQuestionsEnglish);
 
-type QuestionOptionsProps = {
-  question: Question;
-  selected: ReadonlySet<string>;
-  disabled: boolean;
-  onSelect: (label: string) => void;
-  optionRef?: (element: HTMLButtonElement) => () => void;
-};
-
 type QuestionFreeTextProps = {
   getTranscriptElement?: () => HTMLElement | null;
   question: Question;
@@ -39,7 +31,13 @@ function Shortcut(props: { value: number }) {
   );
 }
 
-export function QuestionOptions(props: QuestionOptionsProps) {
+export function QuestionOptions(props: {
+  question: Question;
+  selected: ReadonlySet<string>;
+  disabled: boolean;
+  onSelect: (label: string) => void;
+  optionRef?: (element: HTMLButtonElement) => () => void;
+}) {
   const implicit = () => props.question.resource?.selection === "implicit";
   const options = createMemo(() =>
     props.question.options.filter(

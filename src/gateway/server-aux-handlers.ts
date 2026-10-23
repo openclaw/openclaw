@@ -37,7 +37,6 @@ import {
   type OperatorApprovalLifecycleEvent,
   type OperatorStandingGrantMintSpec,
 } from "./exec-approval-manager.js";
-import { createLazyHandler } from "./lazy-handler.js";
 import {
   createPlacementStandingGrantRuntime,
   type PlacementStandingGrantRuntime,
@@ -50,7 +49,11 @@ import {
   cancelUnboundRunApprovals,
   cancelWorkerTurnClaimBoundApprovals,
 } from "./server-methods/approval-run-cancellation.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandler,
+  GatewayRequestHandlers,
+} from "./server-methods/types.js";
 import {
   createGatewaySecretsReloader,
   type GatewaySecretsReloaderParams,
@@ -441,8 +444,16 @@ export function createGatewayAuxHandlers(
     }
   });
 
-  const bindLazyHandlers = (load: Parameters<typeof createLazyHandler>[1]) => (method: string) =>
-    createLazyHandler(method, load);
+  const bindLazyHandlers =
+    (load: () => Promise<GatewayRequestHandlers>) =>
+    (method: string): GatewayRequestHandler =>
+    async (opts) => {
+      const handler = (await load())[method];
+      if (!handler) {
+        throw new Error(`lazy gateway handler not found: ${method}`);
+      }
+      await handler(opts);
+    };
   const execApprovalHandler = bindLazyHandlers(loadExecApprovalHandlers);
   const pluginApprovalHandler = bindLazyHandlers(loadPluginApprovalHandlers);
   const approvalHandler = bindLazyHandlers(loadApprovalHandlers);

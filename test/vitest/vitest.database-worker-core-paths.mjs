@@ -678,6 +678,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/session-reset-acp.controller.test.ts",
   "src/auto-reply/reply/abort.test.ts",
   "src/auto-reply/reply/dispatch-from-config.pending-restart.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.transcript-reset.integration.test.ts",
   "src/auto-reply/reply/session.acp-reset-routing.test.ts",
   "src/auto-reply/reply/session-fork.test.ts",
   "src/auto-reply/reply/dispatch-acp.test.ts",

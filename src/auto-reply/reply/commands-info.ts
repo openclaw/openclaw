@@ -79,20 +79,6 @@ export const handleCommandsListCommand: CommandHandler = defineAuthorizedTextCom
   },
 );
 
-function buildSkillCommandUsage(skillCommands: NonNullable<HandleCommandsParams["skillCommands"]>) {
-  const lines = ["Usage: /skill <name> [input]"];
-  if (skillCommands.length > 0) {
-    const names = skillCommands.slice(0, 8).map((command) => command.skillName || command.name);
-    lines.push("", `Available: ${names.join(", ")}`);
-    lines.push(
-      `More: /commands${skillCommands.length > names.length ? ` (${skillCommands.length - names.length} more)` : ""}`,
-    );
-  } else {
-    lines.push("", "Use /commands to list available skill commands.");
-  }
-  return lines.join("\n");
-}
-
 export const handleSkillCommandUsage: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/skill",
@@ -112,7 +98,17 @@ export const handleSkillCommandUsage: CommandHandler = defineAuthorizedTextComma
       return null;
     }
     const prefix = rawName ? `Unknown skill: ${rawName}\n\n` : "";
-    return commandReply(`${prefix}${buildSkillCommandUsage(skillCommands)}`);
+    const lines = ["Usage: /skill <name> [input]"];
+    if (skillCommands.length > 0) {
+      const names = skillCommands.slice(0, 8).map((command) => command.skillName || command.name);
+      lines.push("", `Available: ${names.join(", ")}`);
+      lines.push(
+        `More: /commands${skillCommands.length > names.length ? ` (${skillCommands.length - names.length} more)` : ""}`,
+      );
+    } else {
+      lines.push("", "Use /commands to list available skill commands.");
+    }
+    return commandReply(`${prefix}${lines.join("\n")}`);
   },
 );
 

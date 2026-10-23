@@ -32,6 +32,18 @@ replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
 
 ### Validation and activation
 
+Git updates check exact candidates' Node requirements before runtime retention,
+snapshot staging, or candidate checkout. Incompatible development candidates are
+skipped so an older compatible commit can still be selected. Local rebases and
+reference build inputs can change the manifest; their resulting Node requirements
+are checked before installation and building.
+
+Git `--dry-run` reports the selected target's Node requirement when its manifest
+is available locally, or explains why compatibility could not be checked. It does
+not fetch missing objects or predict the result of local rebases and build-tested
+fallbacks. These checks require the installed updater to contain the fix; they do
+not install or activate another Node runtime.
+
 Readiness checks share an overall deadline across native service inspection,
 listener checks, authenticated RPC, and HTTP readiness. A network probe's
 per-request limit does not shorten native inspection. Slow inspection still
