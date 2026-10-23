@@ -234,12 +234,15 @@ ordered.
 
 Jobs created before app authority capture may keep their ordinary OpenClaw
 tool cap and continue non-app work, but cannot recover Codex app access
-automatically. Recreate or reauthorize only a job that needs app access, from a
-fresh authenticated owner turn. See
+automatically. Runs whose tool cap excludes Codex app tools receive no app
+reauthorization note; configured MCP servers and other allowed tools remain
+available. Recreate or reauthorize only a job that needs app access, from a fresh
+authenticated owner turn. See
 [Automations](/automation/cron-jobs#codex-apps-in-scheduled-automations).
 Ordinary edits preserve captured app authority. If a `toolsAllow` replacement is
 accepted without a fresh authenticated Codex authority capture, it clears that
-authority; the next run reports that app access requires reauthorization.
+authority; the next run reports that app access requires reauthorization if its
+tool cap still includes Codex apps.
 An update from a fresh authenticated owner turn can instead capture and store a
 new app ceiling for the updated job. The caller must match the job's original
 owner session and account, and explicitly replace `toolsAllow`. An owner update
