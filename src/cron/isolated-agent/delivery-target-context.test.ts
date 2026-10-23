@@ -81,14 +81,20 @@ it("reads current delivery facts without decoding unrelated session payloads", a
         parse.mock.calls.filter(([json]) => json.includes("unrelated-session-payload")),
       ).toHaveLength(0);
       expect(
-        reads.mock.calls.filter(([input]) => input.sessionKeys.includes("agent:main:main")),
+        reads.mock.calls.filter(([input]) => input.sessionKeys?.includes("agent:main:main")),
       ).toHaveLength(1);
       const first = result[1]!;
       const second = result[2]!;
-      if (first.ok && second.ok) {
-        first.value.main!.delivery!.context!.to = "caller-edit";
-        expect(second.value.main!.delivery!.context!.to).toBe("main-recipient");
+      if (!first.ok || !second.ok) {
+        throw new Error("delivery previews failed");
       }
+      const firstDelivery = first.value.main?.delivery;
+      const secondDelivery = second.value.main?.delivery;
+      if (firstDelivery?.kind !== "external" || secondDelivery?.kind !== "external") {
+        throw new Error("expected external delivery previews");
+      }
+      firstDelivery.context!.to = "caller-edit";
+      expect(secondDelivery.context!.to).toBe("main-recipient");
     } finally {
       parse.mockRestore();
       reads.mockRestore();
