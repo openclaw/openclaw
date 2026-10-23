@@ -314,10 +314,11 @@
   height: 20px;
 }
 
-/* Match the inset drawing and stroke of the sibling check and clock SVGs. */
+/* Keep the spinner and pending circle aligned with the other inset glyphs. */
 .task-progress-details
   :is(.session-progress-card__current-marker, .session-progress-card__step-marker)
-  > .session-run-spinner {
+  > .session-run-spinner,
+.task-progress-details .session-progress-card__step-marker[data-status="pending"] > svg {
   width: calc(var(--session-progress-marker-size) - 2px);
   height: calc(var(--session-progress-marker-size) - 2px);
   border-width: 1px;

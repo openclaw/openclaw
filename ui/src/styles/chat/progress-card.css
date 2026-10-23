@@ -273,10 +273,17 @@
 }
 
 .session-progress-card__current-marker,
-.session-progress-card__step--in_progress .session-progress-card__step-marker,
-.session-progress-card__step--pending .session-progress-card__step-marker,
-.session-progress-card__step--paused .session-progress-card__step-marker {
+.session-progress-card__step-marker:not([data-status="completed"]) {
   color: var(--session-progress-neutral);
+}
+
+.session-progress-card__step-marker[data-status="pending"] {
+  opacity: 0.9;
+
+  /* The 20-unit circle plus its 1.5-unit stroke fills 21.5 of the 24-unit viewBox. */
+  svg {
+    scale: calc(24 / 21.5);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
