@@ -24,7 +24,7 @@ function renderConfirmation(props: () => ConfirmationProps) {
     get label() {
       return t("connection.switchGateway.title");
     },
-    loadModule: () => import("../modal-dialog.ts"),
+    loadModule: () => import("../modal-dialog.tsx"),
   };
   const loader = createLazyCustomElementRequests({}, () => props().onCancel());
   const loadingState = projectOwner(loader, (owner) => owner.visibleState);
@@ -98,13 +98,13 @@ function renderConfirmation(props: () => ConfirmationProps) {
           </div>
           <p class="gateway-switch__note">{notes()}</p>
           <openclaw-modal-actions class="gateway-switch__actions">
+            <button type="button" class="btn" onClick={() => props().onCancel()}>
+              {t("connection.switchGateway.cancel")}
+            </button>
             <button type="button" class="btn primary" onClick={() => props().onConfirm()}>
               {t("connection.switchGateway.confirm", {
                 host: formatGatewayHost(props().pendingGatewayUrl ?? ""),
               })}
-            </button>
-            <button type="button" class="btn" onClick={() => props().onCancel()}>
-              {t("connection.switchGateway.cancel")}
             </button>
           </openclaw-modal-actions>
         </div>

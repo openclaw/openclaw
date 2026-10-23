@@ -31,7 +31,7 @@ const serviceContext = {
 };
 
 const runtimeApiMocks = vi.hoisted(() => ({
-  createBrowserPluginService: vi.fn(() => ({ id: "browser-control", start: vi.fn() })),
+  startLazyPluginServiceModule: vi.fn(async () => null),
   createBrowserTool: vi.fn(() => ({
     execute: vi.fn(async () => ({ type: "json", value: { ok: true } })),
   })),
@@ -48,12 +48,16 @@ vi.mock("./register.runtime.js", async () => {
   return {
     ...actual,
     collectBrowserSecurityAuditFindings: runtimeApiMocks.collectBrowserSecurityAuditFindings,
-    createBrowserPluginService: runtimeApiMocks.createBrowserPluginService,
     createBrowserTool: runtimeApiMocks.createBrowserTool,
     handleBrowserGatewayRequest: runtimeApiMocks.handleBrowserGatewayRequest,
     runBrowserProxyCommand: runtimeApiMocks.runBrowserProxyCommand,
   };
 });
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>()),
+  startLazyPluginServiceModule: runtimeApiMocks.startLazyPluginServiceModule,
+}));
 
 vi.mock("./src/cli/browser-cli.js", () => ({
   registerBrowserCli: runtimeApiMocks.registerBrowserCli,
@@ -145,7 +149,7 @@ it("initializes the durable tab registry without loading browser control or Gate
   for (const store of openKeyedStore.mock.results) {
     expect(store.value.entries).not.toHaveBeenCalled();
   }
-  expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
+  expect(runtimeApiMocks.startLazyPluginServiceModule).not.toHaveBeenCalled();
 });
 
 it("exposes static browser metadata on the plugin definition", () => {
@@ -364,10 +368,10 @@ it("registers a lazy browser control service", async () => {
     start: expect.any(Function),
     stop: expect.any(Function),
   });
-  expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
+  expect(runtimeApiMocks.startLazyPluginServiceModule).not.toHaveBeenCalled();
 
   await service.start(serviceContext);
-  expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
+  expect(runtimeApiMocks.startLazyPluginServiceModule).not.toHaveBeenCalled();
 
   await service.stop!(serviceContext);
   expect(runtimeApiMocks.stopBrowserControlService).toHaveBeenCalledOnce();
@@ -375,8 +379,10 @@ it("registers a lazy browser control service", async () => {
 
 it("eager-loads the browser control service when explicitly requested", async () => {
   vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "1");
-  await createService().start(serviceContext);
-  expect(runtimeApiMocks.createBrowserPluginService).toHaveBeenCalledOnce();
+  const service = createService();
+  await service.start(serviceContext);
+  expect(runtimeApiMocks.startLazyPluginServiceModule).toHaveBeenCalledOnce();
+  await service.stop?.(serviceContext);
 });
 
 it("declares setup auto-enable reasons for browser config surfaces", () => {

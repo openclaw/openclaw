@@ -1,4 +1,4 @@
-import { sql } from "kysely";
+import { sql, type RawBuilder } from "kysely";
 import { admitStoreSearch } from "../../infra/database-engine/adapters.js";
 import {
   executeSqliteQuerySync,
@@ -29,6 +29,107 @@ type TranscriptFtsEntry = {
   timestamp: number | string | null;
 };
 
+export type SessionTranscriptFtsSourceRow = {
+  position: number;
+  message_id: string | null;
+  text: string | null;
+  role: string | null;
+  timestamp: number | string | null;
+};
+
+/** Shared PG allocation: content consumes returned identities, never sibling-table reads. */
+export function withPostgresSessionTranscriptFtsRows(
+  db: EngineConnection,
+  sessionId: string,
+  source: RawBuilder<SessionTranscriptFtsSourceRow>,
+) {
+  return getNodeSqliteKysely<TranscriptFtsDatabase>(db)
+    .with("entries(position, message_id, text, role, timestamp)", () => source)
+    .with(
+      (cte) => cte("ids").materialized(),
+      (query) =>
+        query
+          .selectFrom("entries")
+          // Allocate exactly once per entry, independent of evaluation order.
+          .select((eb) =>
+            eb
+              .fn<number>("nextval", [
+                eb.fn<string>("pg_get_serial_sequence", [
+                  sql.lit("session_transcript_fts_rows"),
+                  sql.lit("id"),
+                ]),
+              ])
+              .as("id"),
+          ),
+    )
+    .with(
+      (cte) => cte("allocated").materialized(),
+      (query) =>
+        query
+          .selectFrom(
+            query
+              .selectFrom("entries")
+              .selectAll()
+              .select((eb) =>
+                eb.fn
+                  .agg<number>("row_number", [])
+                  .over((window) => window.orderBy("position"))
+                  .as("rn"),
+              )
+              .as("ordered_entries"),
+          )
+          .innerJoin(
+            query
+              .selectFrom("ids")
+              .select("id")
+              .select((eb) =>
+                eb.fn
+                  .agg<number>("row_number", [])
+                  .over((window) => window.orderBy("id"))
+                  .as("rn"),
+              )
+              .as("ordered_ids"),
+            "ordered_ids.rn",
+            "ordered_entries.rn",
+          )
+          // Recent-search ties and cold export use IDs as chronology.
+          .selectAll("ordered_entries")
+          .select("ordered_ids.id"),
+    )
+    .with("inserted", (query) =>
+      query
+        .insertInto("session_transcript_fts_rows")
+        .columns(["id", "session_id", "message_id"])
+        .expression((insertSource) =>
+          insertSource
+            .selectFrom("allocated")
+            .select((eb) => ["id", eb.val(sessionId).as("session_id"), "message_id"])
+            .orderBy("position"),
+        )
+        .returning("id"),
+    )
+    .with("inserted_content", (query) =>
+      query
+        .insertInto("session_transcript_fts")
+        .columns(["rowid", "text", "session_id", "message_id", "role", "timestamp"])
+        .expression((contentSource) =>
+          contentSource
+            .selectFrom("inserted")
+            .innerJoin("allocated", "allocated.id", "inserted.id")
+            .select((eb) => [
+              "allocated.id",
+              "allocated.text",
+              eb.val(sessionId).as("session_id"),
+              "allocated.message_id",
+              "allocated.role",
+              eb.cast<number>("allocated.timestamp", "double precision").as("timestamp"),
+            ])
+            .orderBy("allocated.position"),
+        )
+        .returning("rowid"),
+    );
+}
+
 /** Insert both projection records in the caller's synchronous write transaction. */
 export function createSessionTranscriptFtsInserter(db: EngineConnection, sessionId: string) {
   const kysely = getNodeSqliteKysely<TranscriptFtsDatabase>(db);
@@ -40,100 +141,18 @@ export function createSessionTranscriptFtsInserter(db: EngineConnection, session
   const prepare = (count: number) => {
     const indexes = Array.from({ length: count }, (_, index) => index);
     const insertContent = prepareSqliteQuerySync<readonly TranscriptFtsEntry[]>(db, (parameter) => {
+      const source =
+        /* kysely-allow-raw: A bounded VALUES relation carries entry order with the content. */
+        sql<SessionTranscriptFtsSourceRow>`(values ${sql.join(indexes.map((index) => sql`(${sql.lit(index)}, ${parameter((rows) => rows[index]!.messageId)}, ${parameter((rows) => rows[index]!.text)}, ${parameter((rows) => rows[index]!.role)}, ${parameter((rows) => rows[index]!.timestamp)})`))})`;
+      if (postgres) {
+        return withPostgresSessionTranscriptFtsRows(db, sessionId, source).selectNoFrom(
+          sql.lit(1).as("written"),
+        );
+      }
       const entries = kysely.with(
         "entries(position, message_id, text, role, timestamp)",
-        () =>
-          /* kysely-allow-raw: A bounded VALUES relation carries entry order with the content. */
-          sql<{
-            position: number;
-            message_id: string | null;
-            text: string | null;
-            role: string | null;
-            timestamp: number | string | null;
-          }>`(values ${sql.join(indexes.map((index) => sql`(${sql.lit(index)}, ${parameter((rows) => rows[index]!.messageId)}, ${parameter((rows) => rows[index]!.text)}, ${parameter((rows) => rows[index]!.role)}, ${parameter((rows) => rows[index]!.timestamp)})`))})`,
+        () => source,
       );
-      if (postgres) {
-        return entries
-          .with(
-            (cte) => cte("ids").materialized(),
-            (query) =>
-              query
-                .selectFrom("entries")
-                // Allocate exactly once per entry, independent of evaluation order.
-                .select((eb) =>
-                  eb
-                    .fn<number>("nextval", [
-                      eb.fn<string>("pg_get_serial_sequence", [
-                        sql.lit("session_transcript_fts_rows"),
-                        sql.lit("id"),
-                      ]),
-                    ])
-                    .as("id"),
-                ),
-          )
-          .with(
-            (cte) => cte("allocated").materialized(),
-            (query) =>
-              query
-                .selectFrom(
-                  query
-                    .selectFrom("entries")
-                    .selectAll()
-                    .select((eb) =>
-                      eb.fn
-                        .agg<number>("row_number", [])
-                        .over((window) => window.orderBy("position"))
-                        .as("rn"),
-                    )
-                    .as("ordered_entries"),
-                )
-                .innerJoin(
-                  query
-                    .selectFrom("ids")
-                    .select("id")
-                    .select((eb) =>
-                      eb.fn
-                        .agg<number>("row_number", [])
-                        .over((window) => window.orderBy("id"))
-                        .as("rn"),
-                    )
-                    .as("ordered_ids"),
-                  "ordered_ids.rn",
-                  "ordered_entries.rn",
-                )
-                // Recent-search ties and cold export use IDs as chronology.
-                .selectAll("ordered_entries")
-                .select("ordered_ids.id"),
-          )
-          .with("inserted", (query) =>
-            query
-              .insertInto("session_transcript_fts_rows")
-              .columns(["id", "session_id", "message_id"])
-              .expression((source) =>
-                source
-                  .selectFrom("allocated")
-                  .select((eb) => ["id", eb.val(sessionId).as("session_id"), "message_id"])
-                  .orderBy("position"),
-              )
-              .returning("id"),
-          )
-          .insertInto("session_transcript_fts")
-          .columns(["rowid", "text", "session_id", "message_id", "role", "timestamp"])
-          .expression((query) =>
-            query
-              .selectFrom("inserted")
-              .innerJoin("allocated", "allocated.id", "inserted.id")
-              .select((eb) => [
-                "allocated.id",
-                "allocated.text",
-                eb.val(sessionId).as("session_id"),
-                "allocated.message_id",
-                "allocated.role",
-                eb.cast<number>("allocated.timestamp", "double precision").as("timestamp"),
-              ])
-              .orderBy("allocated.position"),
-          );
-      }
       return entries
         .with(
           (cte) => cte("allocated").materialized(),

@@ -486,6 +486,21 @@ describe("amazon-bedrock provider plugin", () => {
   });
 
   describe("service tier", () => {
+    it.each([
+      [{ serviceTier: " PRIORITY ", service_tier: "flex" }, {}, "priority"],
+      [{ serviceTier: null, service_tier: " FLEX " }, {}, "flex"],
+      [{ serviceTier: 42 }, {}, undefined],
+      [{ serviceTier: "priority" }, { serviceTier: { type: "reserved" } }, "reserved"],
+    ] as const)(
+      "preserves tier input precedence and authored payloads: %j",
+      async (params, payload, expected) => {
+        const result = await callBedrockConverse(params, { ...payload });
+        expect(result.capturedPayload).toEqual(
+          expected ? { serviceTier: { type: expected } } : undefined,
+        );
+      },
+    );
+
     it("injects serviceTier for valid snake_case value ('priority')", async () => {
       const result = await callBedrockConverse({ service_tier: "priority" });
       expectPayloadServiceTier(result, "priority");

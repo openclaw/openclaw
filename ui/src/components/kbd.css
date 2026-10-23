@@ -5,7 +5,8 @@
   vertical-align: middle;
 }
 
-.shortcut-kbd > span + span {
+/* Key parts are direct spans; avoid invalidating every span when siblings change. */
+.shortcut-kbd > span:where(:not(:first-child)) {
   margin-inline-start: 0.15em;
 }
 .kbd__text {

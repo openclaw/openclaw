@@ -28,18 +28,20 @@ describe("managed local media catalog", () => {
       new Set(["ocr", "vision"]),
     );
     for (const recipe of LLAMA_CPP_MEDIA_RECIPES) {
-      expect(recipe.projector.repository).toBe(recipe.model.repository);
-      expect(recipe.projector.revision).toBe(recipe.model.revision);
+      const [repository, revision]: [string, string] =
+        recipe.capability === "ocr"
+          ? ["ggml-org/GLM-OCR-GGUF", "65a42de1148dbed2297e922b5dbc7d9b70c36578"]
+          : ["ggml-org/SmolVLM2-2.2B-Instruct-GGUF", "1bc3c9f74ceafd4c8d4411cc9cf188bba3798f91"];
       for (const artifact of [recipe.model, recipe.projector]) {
-        expect(artifact.revision).toMatch(/^[a-f0-9]{40}$/u);
+        expect(artifact.source).toBe(`hf:${repository}/${artifact.filename}#${revision}`);
         expect(artifact.expectedSha256).toMatch(/^[a-f0-9]{64}$/u);
         expect(artifact.expectedSize).toBeGreaterThan(0);
         expect(artifact.url).toBe(
-          `https://huggingface.co/${artifact.repository}/resolve/${artifact.revision}/${artifact.filename}?download=true`,
+          `https://huggingface.co/${repository}/resolve/${revision}/${artifact.filename}?download=true`,
         );
         expect(resolveLlamaCppMediaArtifact(artifact.source)).toBe(artifact);
         expect(
-          resolveLlamaCppMediaArtifact(artifact.source.replace(artifact.revision, "main")),
+          resolveLlamaCppMediaArtifact(artifact.source.replace(revision, "main")),
         ).toBeUndefined();
       }
     }

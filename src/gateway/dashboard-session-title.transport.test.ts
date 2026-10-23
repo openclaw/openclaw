@@ -408,6 +408,13 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
     ["empty typographic quotes", "„“", null],
     ["quote-only output", "„ ” « » ‘ ’", null],
     ["balanced quotes", 'Instruction to reply exactly "ok"', 'Instruction to reply exactly "ok"'],
+    ["unmatched closing quote", "Reply with ok’", "Reply with ok"],
+    [
+      "possessives and contractions",
+      "'Users' can't edit permissions'",
+      "Users' can't edit permissions",
+    ],
+    ["truncated quoted span", `${"a".repeat(52)} "long quoted span"`, `${"a".repeat(52)} long q`],
     [
       "truncated quote",
       `Instruction to reply exactly "${"ok ".repeat(15)}"`,

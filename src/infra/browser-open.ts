@@ -5,75 +5,52 @@ import { detectBinary } from "./detect-binary.js";
 import { getWindowsSystem32ExePath } from "./windows-install-roots.js";
 import { isWSL } from "./wsl.js";
 
-type BrowserOpenCommand = {
-  argv: string[] | null;
-  reason?: string;
-};
-
 type BrowserOpenSupport = {
   ok: boolean;
-  reason?: string;
-};
-
-type BrowserOpenEnvironment = {
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
 };
 
 /** Resolve the platform command used to open an HTTP(S) URL in a browser. */
-async function resolveBrowserOpenCommand(
-  environment: BrowserOpenEnvironment = {},
-): Promise<BrowserOpenCommand> {
-  const platform = environment.platform ?? process.platform;
-  const env = environment.env ?? process.env;
+async function resolveBrowserOpenCommand(): Promise<string[] | null> {
+  const platform = process.platform;
+  const env = process.env;
   const hasDisplay = Boolean(env.DISPLAY || env.WAYLAND_DISPLAY);
   const isSsh = Boolean(env.SSH_CLIENT) || Boolean(env.SSH_TTY) || Boolean(env.SSH_CONNECTION);
 
   if (isSsh && !hasDisplay && platform !== "win32" && platform !== "darwin") {
-    return { argv: null, reason: "ssh-no-display" };
+    return null;
   }
 
   if (platform === "win32") {
     const rundll32 = getWindowsSystem32ExePath("rundll32.exe");
-    return {
-      argv: [rundll32, "url.dll,FileProtocolHandler"],
-    };
+    return [rundll32, "url.dll,FileProtocolHandler"];
   }
 
   if (platform !== "darwin" && platform !== "linux") {
-    return { argv: null, reason: "unsupported-platform" };
+    return null;
   }
 
   if (platform === "linux") {
-    const wsl = await isWSL(environment);
+    const wsl = await isWSL();
     if (!hasDisplay && !wsl) {
-      return { argv: null, reason: "no-display" };
+      return null;
     }
     if (wsl) {
       const hasWslview = await detectBinary("wslview");
       if (hasWslview) {
-        return { argv: ["wslview"] };
+        return ["wslview"];
       }
       if (!hasDisplay) {
-        return { argv: null, reason: "wsl-no-wslview" };
+        return null;
       }
     }
   }
   const command = platform === "darwin" ? "open" : "xdg-open";
-  return (await detectBinary(command))
-    ? { argv: [command] }
-    : { argv: null, reason: `missing-${command}` };
+  return (await detectBinary(command)) ? [command] : null;
 }
 
 /** Report whether browser opening is currently available. */
-export async function detectBrowserOpenSupport(
-  environment: BrowserOpenEnvironment = {},
-): Promise<BrowserOpenSupport> {
-  const resolved = await resolveBrowserOpenCommand(environment);
-  if (!resolved.argv) {
-    return { ok: false, reason: resolved.reason };
-  }
-  return { ok: true };
+export async function detectBrowserOpenSupport(): Promise<BrowserOpenSupport> {
+  return { ok: Boolean(await resolveBrowserOpenCommand()) };
 }
 
 /** Open a safe HTTP(S) URL in the user's browser when the platform supports it. */
@@ -118,11 +95,11 @@ export async function openLocalFile(filePath: string): Promise<boolean> {
 }
 
 async function openBrowserPath(normalizedPath: string): Promise<boolean> {
-  const resolved = await resolveBrowserOpenCommand();
-  if (!resolved.argv) {
+  const argv = await resolveBrowserOpenCommand();
+  if (!argv) {
     return false;
   }
-  const command = [...resolved.argv, normalizedPath];
+  const command = [...argv, normalizedPath];
   try {
     const result = await runCommandWithTimeout(command, { timeoutMs: 5_000 });
     return result.code === 0 && result.termination === "exit";

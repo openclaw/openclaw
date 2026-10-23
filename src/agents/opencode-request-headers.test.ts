@@ -8,6 +8,7 @@ import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAnthropicResponse } from "../../packages/ai/src/provider-transport-parity.test-support.js";
+import { createSseResponse } from "../../packages/ai/src/transports/anthropic-transport-stream.test-support.js";
 import {
   completedResponse,
   wireMessage,
@@ -17,150 +18,84 @@ import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-type Protocol =
-  | "openai-completions"
-  | "openai-responses"
-  | "anthropic-messages"
-  | "google-generative-ai";
-type Route = {
-  api: Protocol;
-  provider: string;
-  baseUrl: string;
-  native: boolean;
-  suffix?: string;
+type Protocol = (typeof protocolPaths)[number][0];
+type Route = [api: Protocol, provider: string, baseUrl: string, native: boolean, suffix: string];
+
+// Usage accounting has dedicated provider tests; these fixtures prove request headers and replies.
+const replies: Record<Protocol, Record<string, unknown>[]> = {
+  "openai-completions": [
+    {
+      id: "chatcmpl_fixture",
+      model: "fixture-model",
+      choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }],
+    },
+    {
+      id: "chatcmpl_fixture",
+      model: "fixture-model",
+      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+    },
+  ],
+  "openai-responses": [completedResponse("resp", [wireMessage("msg", "ok")])],
+  "anthropic-messages": [
+    { type: "message_start", message: { id: "msg_fixture", model: "fixture-model" } },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "end_turn" } },
+    { type: "message_stop" },
+  ],
+  "google-generative-ai": [
+    {
+      candidates: [{ content: { role: "model", parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+    },
+  ],
 };
-
-// Independent wire fixtures exercise real adapters and SDK decoding, not policy mocks.
-// No upstream account, inference, DNS, or socket is involved in this proof.
-function sse(events: readonly unknown[]): Response {
-  return new Response(events.map((event) => "data: " + JSON.stringify(event) + "\n\n").join(""), {
-    headers: { "content-type": "text/event-stream" },
-  });
-}
-
 function responseFor(api: Protocol): Response {
-  switch (api) {
-    case "openai-completions":
-      return sse([
-        {
-          id: "chatcmpl_fixture",
-          object: "chat.completion.chunk",
-          created: 1,
-          model: "fixture-model",
-          choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }],
-        },
-        {
-          id: "chatcmpl_fixture",
-          object: "chat.completion.chunk",
-          created: 1,
-          model: "fixture-model",
-          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-          usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
-        },
-      ]);
-    case "openai-responses":
-      return sse([
-        completedResponse("resp_fixture", [wireMessage("msg_fixture", "ok")], {
-          usage: { input_tokens: 3, output_tokens: 1, total_tokens: 4 },
-        }),
-      ]);
-    case "anthropic-messages":
-      return createAnthropicResponse([
-        {
-          type: "message_start",
-          message: {
-            id: "msg_fixture",
-            type: "message",
-            role: "assistant",
-            model: "fixture-model",
-            content: [],
-            usage: { input_tokens: 3, output_tokens: 0 },
-          },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
-        { type: "content_block_stop", index: 0 },
-        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
-        { type: "message_stop" },
-      ]);
-    case "google-generative-ai":
-      return sse([
-        {
-          candidates: [
-            { content: { role: "model", parts: [{ text: "ok" }] }, finishReason: "STOP" },
-          ],
-          usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 1, totalTokenCount: 4 },
-        },
-      ]);
-    default:
-      throw new Error("Missing wire response fixture");
-  }
+  return api === "anthropic-messages"
+    ? createAnthropicResponse(replies[api])
+    : createSseResponse(replies[api]);
 }
 
 const protocolPaths = [
-  ["openai-completions", "openai/v1"],
-  ["openai-responses", "openai/v1"],
-  ["anthropic-messages", "anthropic/v1"],
-  ["google-generative-ai", "google/v1beta"],
+  ["openai-completions", "openai/v1", "/chat/completions"],
+  ["openai-responses", "openai/v1", "/responses"],
+  ["anthropic-messages", "anthropic/v1", "/messages"],
+  ["google-generative-ai", "google/v1beta", "/models/fixture-model:streamGenerateContent?alt=sse"],
 ] as const;
 
-// Both native manifest owners must recognize the new paths. Each proxy sibling
-// protects a different adapter's header merge; old Zen routes cover its two URL shapes.
+// Exercise both manifest owners, each proxy adapter, and both legacy Zen URL shapes.
 const routes: Route[] = [
-  ...protocolPaths.flatMap(([api, path]) => [
-    {
-      api,
-      provider: "opencode-go",
-      baseUrl: "https://opencode.ai/inference/go/" + path,
-      native: true,
-    },
-    { api, provider: "opencode", baseUrl: "https://opencode.ai/inference/" + path, native: true },
-    { api, provider: "opencode-go", baseUrl: "https://proxy.example/" + path, native: false },
+  ...protocolPaths.flatMap(([api, path, suffix]): Route[] => [
+    [api, "opencode-go", "https://opencode.ai/inference/go/" + path, true, suffix],
+    [api, "opencode", "https://opencode.ai/inference/" + path, true, suffix],
+    [api, "opencode-go", "https://proxy.example/" + path, false, suffix],
   ]),
-  ...(["opencode-go", "opencode"] as const).flatMap((provider) => {
+  ...(["opencode-go", "opencode"] as const).flatMap((provider): Route[] => {
     const baseUrl =
       provider === "opencode-go" ? "https://opencode.ai/zen/go" : "https://opencode.ai/zen";
     return [
-      { api: "openai-completions" as const, provider, baseUrl: baseUrl + "/v1", native: true },
-      {
-        api: "anthropic-messages" as const,
-        provider,
-        baseUrl,
-        native: true,
-        suffix: "/v1/messages",
-      },
+      ["openai-completions", provider, baseUrl + "/v1", true, "/chat/completions"],
+      ["anthropic-messages", provider, baseUrl, true, "/v1/messages"],
     ];
   }),
 ];
 
-const requestSuffix: Record<Protocol, string> = {
-  "openai-completions": "/chat/completions",
-  "openai-responses": "/responses",
-  "anthropic-messages": "/messages",
-  "google-generative-ai": "/models/fixture-model:streamGenerateContent?alt=sse",
-};
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
+afterEach(() => vi.unstubAllGlobals());
 
 it.each(routes)(
-  "completes $api via $provider at $baseUrl with native=$native",
-  async ({ api, provider, baseUrl, native, suffix }) => {
+  "completes %s via %s at %s with native=%s",
+  async (api, provider, baseUrl, native, suffix) => {
     const requests: Request[] = [];
     const captureFetch: typeof fetch = async (input, init) => {
       requests.push(new Request(input, init));
       return responseFor(api);
     };
-    // Cover SDKs using global fetch as well as managed transports; neither can
-    // escape to the network if request construction changes.
+    // Stub both SDK-global and managed fetches so neither can escape to the network.
     vi.stubGlobal("fetch", captureFetch);
     const host = createAiTransportHost({
       buildModelFetch: () => captureFetch,
       resolveProviderRequestCapabilities,
-      resolveProviderRequestHeaders: (
-        input: Parameters<typeof resolveProviderRequestPolicyConfig>[0],
-      ) => resolveProviderRequestPolicyConfig(input).headers,
+      resolveProviderRequestHeaders: (input) => resolveProviderRequestPolicyConfig(input).headers,
     });
     const registry = createApiRegistry();
     registerBuiltInApiProviders(registry);
@@ -174,28 +109,23 @@ it.each(routes)(
         baseUrl,
         headers: {
           "X-Model": "keep-model",
-          // A real caller header must replace the model header case-insensitively.
           ...(callerSession ? { "x-opencode-session": "model-session" } : {}),
         },
       });
-      const context: Context = {
-        messages: [{ role: "user", content: "Reply ok", timestamp: 1 }],
-      };
+      const context: Context = { messages: [{ role: "user", content: "Reply ok", timestamp: 1 }] };
       const options: SimpleStreamOptions = {
         apiKey: "synthetic-key",
         sessionId: "conversation-123",
         cacheRetention: "none",
         headers: {
           "X-Custom": "keep-caller",
-          // Native attribution must not accept another coding agent's identity.
           "uSeR-aGeNt": "fixture-caller/1",
           ...(callerSession ? { "X-OpenCode-Session": "caller-session" } : {}),
         },
       };
 
       for (let turn = 0; turn < 2; turn++) {
-        // The runner selects these boundary-aware transports for OpenAI and
-        // Anthropic. Gemini uses the registered lazy adapter and real Google SDK.
+        // Gemini uses its SDK; other APIs use the runner's boundary-aware transport.
         const result = await runWithAiTransportHost(host, async () => {
           if (api === "google-generative-ai") {
             return runtime.completeSimple(model, context, options);
@@ -216,17 +146,18 @@ it.each(routes)(
     // One physical request per turn; no rejected response or retry is hidden.
     expect(requests).toHaveLength(4);
     for (const [index, request] of requests.entries()) {
+      const header = (name: string) => request.headers.get(name);
       expect(request.method).toBe("POST");
-      expect(request.url).toBe(baseUrl + (suffix ?? requestSuffix[api]));
-      expect(request.headers.get("x-model")).toBe("keep-model");
-      expect(request.headers.get("x-custom")).toBe("keep-caller");
+      expect(request.url).toBe(baseUrl + suffix);
+      expect(header("x-model")).toBe("keep-model");
+      expect(header("x-custom")).toBe("keep-caller");
       if (native) {
-        expect(request.headers.get("user-agent")).toMatch(/^openclaw\/[^\s,]+$/);
+        expect(header("user-agent")).toMatch(/^openclaw\/[^\s,]+$/);
       } else {
-        expect(request.headers.get("user-agent")).not.toMatch(/(?:^|[ ,])openclaw\//);
-        expect(request.headers.get("user-agent")).toContain("fixture-caller/1");
+        expect(header("user-agent")).not.toMatch(/(?:^|[ ,])openclaw\//);
+        expect(header("user-agent")).toContain("fixture-caller/1");
       }
-      expect(request.headers.get("x-opencode-session")).toBe(
+      expect(header("x-opencode-session")).toBe(
         index >= 2 ? "caller-session" : native ? "conversation-123" : null,
       );
       const payload: unknown = await request.json();
@@ -234,13 +165,13 @@ it.each(routes)(
       expect(payload).not.toHaveProperty("cachedContent");
       expect(JSON.stringify(payload)).not.toContain('"cache_control"');
       if (api === "google-generative-ai") {
-        expect(request.headers.get("x-goog-api-key")).toBe("synthetic-key");
+        expect(header("x-goog-api-key")).toBe("synthetic-key");
         expect(payload).toMatchObject({ contents: expect.any(Array) });
       } else {
         expect(payload).toMatchObject({ model: "fixture-model", stream: true });
-        expect(
-          request.headers.get(api === "anthropic-messages" ? "x-api-key" : "authorization"),
-        ).toBe(api === "anthropic-messages" ? "synthetic-key" : "Bearer synthetic-key");
+        expect(header(api === "anthropic-messages" ? "x-api-key" : "authorization")).toBe(
+          api === "anthropic-messages" ? "synthetic-key" : "Bearer synthetic-key",
+        );
       }
     }
   },

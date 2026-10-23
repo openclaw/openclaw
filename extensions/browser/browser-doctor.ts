@@ -1,4 +1,4 @@
 export {
+  collectBrowserReadinessFindings,
   maybeRepairOwnedChromeExtensionNativeHosts,
-  noteChromeMcpBrowserReadiness,
 } from "./src/doctor-browser.js";

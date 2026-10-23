@@ -382,7 +382,8 @@ work; the native owner explicitly authorizes startup after publication.
 When enabled, the native updater drains through the Gateway suspension owner,
 stops the old service, publishes `current` under a fenced activation record,
 starts the selected generation, and verifies its process, build, authenticated
-health, HTTP readiness, plugins, and channels. Build and install work stay outside
+health, core HTTP readiness, and plugins. Channel-only outages remain named
+warnings while `/readyz` retains its actual HTTP status. Build and install work stay outside
 cutover. Startup responses with `status: "starting"`, including agent database
 inspection, keep the readiness wait open within its bounded budget. An
 inconclusive check retains the recovery record; it does not establish failure.
@@ -576,9 +577,11 @@ the update needs to replace the installation method or a separate serving root.
 The temporary candidate is removed without activating it.
 
 When replacement is needed, the updater retains its running worker files before
-changing the installed package. Linux OverlayFS installations use private copies
-so hard-link copy-up cannot invalidate the retained files’ identity checks.
-Other supported filesystems keep the hard-link fast path and copy fallback.
+changing the installed package. Ordinary files use hard links, with a copy
+fallback when linking is unavailable. If a linked file's identity changes, its
+size, mode, and content must match the inventory. A mismatch discards that runtime
+as a rollback source and logs the path and failed check; the update continues
+without using the unverified tree. Writes through the same inode remain best effort.
 
 SQLite read-only workers use that retained generation through post-install
 verification, even after the package manager removes the previous package path.
@@ -840,6 +843,12 @@ their own bounds. An explicit `--timeout <seconds>` supplies one overall budget 
 through activation, readiness, and recovery, including native service commands.
 Expiry reports `update-activation-timeout` or pending recovery; it does not start
 another recovery phase. Outstanding writers retain ownership until they settle.
+
+Candidate checks compute an automatic allowance from the copied SQLite and
+plugin state. A shorter update deadline limits that allowance; the update report
+and history warn with both values because checks may time out early. Increase
+`--timeout` to allow more time. This warning comes from the installed updater and
+protects subsequent updates after installation.
 
 The same deadline cancels runtime-retention inventory, its file-hashing workers,
 and materialization before activation. Retention makes one attempt and stops if

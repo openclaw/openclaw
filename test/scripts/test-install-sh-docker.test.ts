@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type SpawnSyncOptionsWithStringEncoding } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -53,14 +53,32 @@ afterEach(() => {
 });
 
 function runBash(source: string, env?: NodeJS.ProcessEnv) {
-  return spawnSync("bash", ["--noprofile", "--norc", "-c", source], {
-    encoding: "utf8",
-    ...(env ? { env } : {}),
-  });
+  return runCommand("bash", ["--noprofile", "--norc", "-c", source], env ? { env } : {});
+}
+
+function runCommand(
+  command: string,
+  args: string[],
+  options: Omit<SpawnSyncOptionsWithStringEncoding, "encoding"> = {},
+) {
+  return spawnSync(command, args, { encoding: "utf8", ...options });
+}
+
+function fixturePaths(prefix: string) {
+  const root = tempDirs.make(`openclaw-${prefix}-`);
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  return { root, bin };
 }
 
 function writeExecutable(file: string, source: string) {
   writeFileSync(file, source, { mode: 0o755 });
+}
+
+function writeCommands(bin: string, commands: Record<string, string>) {
+  for (const [name, source] of Object.entries(commands)) {
+    writeExecutable(join(bin, name), source);
+  }
 }
 
 function writeFiles(root: string, files: Record<string, string>) {
@@ -130,12 +148,9 @@ function scanInstallE2eTranscript(text: string, limits: Record<string, string> =
 }
 
 function runDockerTimezoneValidator(timezone: string) {
-  const root = tempDirs.make("openclaw-docker-timezone-");
-  const binDir = join(root, "bin");
-  const dockerPath = join(binDir, "docker");
-  mkdirSync(binDir, { recursive: true });
+  const { root, bin } = fixturePaths("docker-timezone");
   writeExecutable(
-    dockerPath,
+    join(bin, "docker"),
     `#!/bin/bash
 set -euo pipefail
 while [[ "$#" -gt 0 && "$1" != "-e" ]]; do shift; done
@@ -151,24 +166,21 @@ exec "$HOST_NODE" "$@"
     {
       HOME: root,
       HOST_NODE: testNodeExecPath,
-      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
       TIMEZONE: timezone,
     },
   );
 }
 
 function runFailedInstallerDownload(nonroot: boolean) {
-  const root = tempDirs.make("openclaw-installer-download-");
-  const binDir = join(root, "bin");
-  const curlPath = join(binDir, "curl");
+  const { root, bin } = fixturePaths("installer-download");
   const curlArgsPath = join(root, "curl-args.txt");
   const installerSourcePath = join(root, "installer-source.sh");
   const markerPath = join(root, "installer-marker.txt");
   const outputPathCapture = join(root, "curl-output-path.txt");
-  mkdirSync(binDir, { recursive: true });
   writeFileSync(installerSourcePath, 'touch "$INSTALL_MARKER"\n');
   writeExecutable(
-    curlPath,
+    join(bin, "curl"),
     `#!/bin/sh
 set -eu
 ${nonroot ? `printf '%s\\0' "$@"` : `printf '%s\\n' "$*"`} >"$CURL_ARGS_PATH"
@@ -194,14 +206,14 @@ exit "$FAKE_CURL_EXIT"
     FAKE_INSTALLER_SOURCE: installerSourcePath,
     INSTALL_MARKER: markerPath,
     OUTPUT_PATH_CAPTURE: outputPathCapture,
-    PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    PATH: `${bin}:${process.env.PATH ?? ""}`,
   };
   if (!nonroot) {
     delete env.OPENCLAW_BETA;
     delete env.OPENCLAW_VERSION;
   }
 
-  const result = spawnSync(
+  const result = runCommand(
     "/bin/bash",
     [
       ...(nonroot ? ["--noprofile", "--norc"] : []),
@@ -218,7 +230,7 @@ exit "$FAKE_CURL_EXIT"
             "\n\nverify_installed_version()",
           )}\nINSTALL_URL="https://installer.example.test/install.sh"\nINSTALL_TAG="latest"\nrun_official_installer`,
     ],
-    { encoding: "utf8", env },
+    { env },
   );
 
   return { curlArgsPath, markerPath, outputPathCapture, result };
@@ -275,8 +287,7 @@ function normalizeInstallE2eAgentOutput(output: string) {
   const root = tempDirs.make("openclaw-install-e2e-agent-output-");
   const outputPath = join(root, "agent.json");
   writeFileSync(outputPath, output, "utf8");
-  const result = spawnSync(testNodeExecPath, ["-", outputPath], {
-    encoding: "utf8",
+  const result = runCommand(testNodeExecPath, ["-", outputPath], {
     input: extractScript(
       INSTALL_E2E_RUNNER_PATH,
       /node - <<'NODE' "\$out_json"\n([\s\S]*?)\nNODE\n\}\n\nRUN_AGENT_TURN_BG_PID/u,
@@ -297,8 +308,7 @@ function runUpdateJson(
   },
   env: NodeJS.ProcessEnv = {},
 ) {
-  return spawnSync(testNodeExecPath, ["-"], {
-    encoding: "utf8",
+  return runCommand(testNodeExecPath, ["-"], {
     input: extractScript(
       SMOKE_RUNNER_PATH,
       /UPDATE_JSON="\$UPDATE_JSON" \\\n[\s\S]*?node - <<'NODE'\n([\s\S]*?)\nNODE\n\n {2}echo "==> Verify updated version"/u,
@@ -338,49 +348,37 @@ function runInstallSmokeInstallerPipelineFixture(params: {
   curlExitCode?: number;
   installerArgs: string[];
 }) {
-  const root = tempDirs.make("openclaw-install-smoke-pipeline-");
-  const binDir = join(root, "bin");
+  const { root, bin } = fixturePaths("install-smoke-pipeline");
   const curlArgsPath = join(root, "curl-args.txt");
   const installerArgsPath = join(root, "installer-args.txt");
   const installerMarkerPath = join(root, "installer-ran");
   const installerSourcePath = join(root, "installer.sh");
   const timeoutArgsPath = join(root, "timeout-args.txt");
   const installUrl = "https://installer.example.test/install.sh?channel=beta&trace=1";
-  mkdirSync(binDir, { recursive: true });
-  writeExecutable(
-    join(binDir, "timeout"),
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      `printf '%s\\0' "$@" >"$TIMEOUT_ARGS_PATH"`,
-      "shift 2",
-      'exec "$@"',
-      "",
-    ].join("\n"),
-  );
-  writeExecutable(
-    join(binDir, "curl"),
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      `printf '%s\\0' "$@" >"$CURL_ARGS_PATH"`,
-      'cat "$FAKE_INSTALLER_SOURCE"',
-      'exit "$FAKE_CURL_EXIT"',
-      "",
-    ].join("\n"),
-  );
+  writeCommands(bin, {
+    timeout: `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\0' "$@" >"$TIMEOUT_ARGS_PATH"
+shift 2
+exec "$@"
+`,
+    curl: `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\0' "$@" >"$CURL_ARGS_PATH"
+cat "$FAKE_INSTALLER_SOURCE"
+exit "$FAKE_CURL_EXIT"
+`,
+  });
   writeFileSync(
     installerSourcePath,
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      `printf '%s\\0' "$@" >"$INSTALLER_ARGS_PATH"`,
-      'touch "$INSTALLER_MARKER_PATH"',
-      "",
-    ].join("\n"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\0' "$@" >"$INSTALLER_ARGS_PATH"
+touch "$INSTALLER_MARKER_PATH"
+`,
   );
 
-  const result = spawnSync(
+  const result = runCommand(
     "/bin/bash",
     [
       "--noprofile",
@@ -396,7 +394,6 @@ run_installer_pipeline "$INSTALL_URL" "$@"`,
       ...params.installerArgs,
     ],
     {
-      encoding: "utf8",
       env: {
         ...process.env,
         CURL_ARGS_PATH: curlArgsPath,
@@ -406,7 +403,7 @@ run_installer_pipeline "$INSTALL_URL" "$@"`,
         INSTALLER_MARKER_PATH: installerMarkerPath,
         INSTALL_COMMAND_TIMEOUT: "17",
         INSTALL_URL: installUrl,
-        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
         TIMEOUT_ARGS_PATH: timeoutArgsPath,
       },
     },
@@ -563,18 +560,13 @@ describe("test-install-sh-docker", () => {
   it.runIf(process.platform !== "win32")(
     "serves distinct candidate and baseline bytes when npm packs the same version",
     () => {
-      const root = tempDirs.make("openclaw-install-same-version-");
-      const bin = join(root, "bin");
+      const { root, bin } = fixturePaths("install-same-version");
       const ready = join(root, "server-ready");
       const receipts = join(root, "served.jsonl");
-      mkdirSync(bin);
       symlinkSync(testNodeExecPath, join(bin, "node"));
       expect(spawnSync("mkfifo", [ready]).status).toBe(0);
-      const writeCommand = (name: string, source: string) =>
-        writeExecutable(join(bin, name), source);
-      writeCommand(
-        "npm",
-        `#!/usr/bin/env node
+      writeCommands(bin, {
+        npm: `#!/usr/bin/env node
 const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
@@ -591,10 +583,7 @@ if (pack >= 0) {
   throw new Error("Unexpected npm invocation: " + args.join(" "));
 }
 `,
-      );
-      writeCommand(
-        "python3",
-        `#!/usr/bin/env node
+        python3: `#!/usr/bin/env node
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
@@ -608,15 +597,9 @@ http.createServer((request, response) => {
   fs.writeFileSync(process.env.SERVER_READY, "ready\\n");
 });
 `,
-      );
-      // Join actual listener readiness instead of spending the runner's startup sleep.
-      writeCommand(
-        "sleep",
-        '#!/bin/bash\nIFS= read -r ready < "$SERVER_READY"\n[[ "$ready" == ready ]]\n',
-      );
-      writeCommand(
-        "docker",
-        `#!/usr/bin/env node
+        // Join actual listener readiness instead of spending the runner's startup sleep.
+        sleep: '#!/bin/bash\nIFS= read -r ready < "$SERVER_READY"\n[[ "$ready" == ready ]]\n',
+        docker: `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] !== "run") throw new Error("Unexpected Docker invocation");
@@ -643,10 +626,9 @@ for (let index = 0; index < args.length; index++) {
   }
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 `,
-      );
+      });
 
-      const result = spawnSync("bash", [SCRIPT_PATH], {
-        encoding: "utf8",
+      const result = runCommand("bash", [SCRIPT_PATH], {
         timeout: 30_000,
         env: {
           HOME: root,
@@ -694,16 +676,14 @@ for (let index = 0; index < args.length; index++) {
     expect(dockerfile).not.toMatch(/curl[^\n]+\|\s*bash/u);
   });
   it("keeps release-harness npm lookups outside caller freshness policy", () => {
-    const root = tempDirs.make("openclaw-install-npm-policy-");
-    const binDir = join(root, "bin");
-    mkdirSync(binDir, { recursive: true });
+    const { root, bin } = fixturePaths("install-npm-policy");
     writeExecutable(
-      join(binDir, "npm"),
+      join(bin, "npm"),
       `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({ args: process.argv.slice(2), policy: Object.fromEntries(Object.entries(process.env).filter(([key]) => ["npm_config_before", "npm_config_min_release_age", "npm_config_min-release-age"].includes(key.toLowerCase()))) }));\n`,
     );
 
     const runNpmFixture = (source: string, cwd: string, env: NodeJS.ProcessEnv) =>
-      spawnSync(
+      runCommand(
         "bash",
         [
           "-c",
@@ -711,10 +691,10 @@ for (let index = 0; index < args.length; index++) {
           "bash",
           join(process.cwd(), "scripts/docker/install-sh-common/version-parse.sh"),
         ],
-        { cwd, encoding: "utf8", env },
+        { cwd, env },
       );
 
-    const noPolicyResult = spawnSync(
+    const noPolicyResult = runCommand(
       "bash",
       [
         "-c",
@@ -722,7 +702,6 @@ for (let index = 0; index < args.length; index++) {
       ],
       {
         cwd: process.cwd(),
-        encoding: "utf8",
         env: Object.fromEntries(
           Object.entries(process.env).filter(
             ([key]) =>
@@ -739,24 +718,24 @@ for (let index = 0; index < args.length; index++) {
     );
     expect(noPolicyResult, noPolicyResult.stderr).toMatchObject({ status: 0, stdout: "ok" });
 
-    const noHomeResult = spawnSync(
+    const noHomeResult = runCommand(
       "bash",
       [
         "-c",
         "unset HOME; source scripts/docker/install-sh-common/version-parse.sh; resolve_npm_config_path_value '~/.npmrc'",
       ],
-      { cwd: process.cwd(), encoding: "utf8", env: process.env },
+      { cwd: process.cwd(), env: process.env },
     );
     expect(noHomeResult.status, noHomeResult.stderr).toBe(0);
-    const nativeHomeResult = spawnSync(
+    const nativeHomeResult = runCommand(
       process.execPath,
       ["-e", "delete process.env.HOME; process.stdout.write(require('node:os').homedir())"],
-      { encoding: "utf8", env: process.env },
+      { env: process.env },
     );
     expect(nativeHomeResult.status, nativeHomeResult.stderr).toBe(0);
     expect(noHomeResult.stdout).toBe(join(nativeHomeResult.stdout, ".npmrc"));
 
-    const result = spawnSync(
+    const result = runCommand(
       "bash",
       [
         "-c",
@@ -764,7 +743,6 @@ for (let index = 0; index < args.length; index++) {
       ],
       {
         cwd: process.cwd(),
-        encoding: "utf8",
         env: {
           ...process.env,
           NPM_CONFIG_BEFORE: "2026-09-17T23:07:28.000Z",
@@ -773,7 +751,7 @@ for (let index = 0; index < args.length; index++) {
           "NPM_CONFIG_MIN-RELEASE-AGE": "10080",
           NPM_CONFIG_MIN_RELEASE_AGE: "10080",
           Npm_Config_Min_Release_Age: "10080",
-          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
           npm_config_before: "2026-09-17T23:07:28.000Z",
           npm_config_min_release_age: "10080",
           "npm_config_min-release-age": "10080",
@@ -966,61 +944,49 @@ printf 'status=%s\\n' "$status"
 
   it.each([
     {
-      version: "24.16.0",
+      version: "24.22.1",
       options: { sqlite: false },
-      status: 1,
-      error: "unsupported node 24.16.0: missing node:sqlite",
+      error: "unsupported node 24.22.1: missing node:sqlite",
     },
     {
       version: "24.17.0",
       options: { sqliteVersion: "3.51.2" },
-      status: 1,
       error: "unsupported node 24.17.0: unsafe SQLite 3.51.2",
     },
-  ])("validates non-root Node $version with $options", ({ version, options, status, error }) => {
+  ])("validates non-root Node $version with $options", ({ version, options, error }) => {
     const result = runNonrootNodePreflight(version, options);
-    expect(result.status).toBe(status);
+    expect(result.status).toBe(1);
     expect(result.stderr).toContain(error);
   });
 
   it("accepts non-root smoke Node runtimes that match the installer runtime floor", () => {
     expect(runNonrootNodePreflight("22.23.2").status).toBe(1);
-    expect(runNonrootNodePreflight("24.16.0").status).toBe(0);
+    expect(runNonrootNodePreflight("24.22.1").status).toBe(0);
     expect(runNonrootNodePreflight("25.9.0").status).toBe(1);
     expect(runNonrootNodePreflight("26.0.0").status).toBe(1);
-    expect(runNonrootNodePreflight("26.1.0").status).toBe(0);
+    expect(runNonrootNodePreflight("26.12.1").status).toBe(0);
   });
 
   it.each([
-    {
-      contract: "CI build heap limits",
-      fragments: [
+    [
+      "CI build heap limits",
+      [
         'ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS="--max-old-space-size=8192"',
         'ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=""',
         "ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS=1",
         'OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="$OPENCLAW_DOCKER_BUILD_SKIP_DTS" OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" NODE_OPTIONS="$OPENCLAW_DOCKER_BUILD_NODE_OPTIONS" pnpm_config_verify_deps_before_run=false pnpm build:docker',
       ],
-    },
-    {
-      contract: "launcher version contract in build and runtime stages",
-      fragments: [
-        "COPY node-version.mjs ./",
-        "COPY --from=runtime-assets --chown=node:node /app/node-version.mjs .",
-      ],
-    },
-    {
-      contract: "installed Playwright browser cache",
-      fragments: [
+    ],
+    [
+      "installed Playwright browser cache",
+      [
         "ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright",
         'mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"',
         "node /app/node_modules/playwright-core/cli.js install --with-deps chromium",
       ],
-    },
-  ])("root Dockerfile preserves $contract", ({ fragments }) => {
-    const dockerfile = readFileSync("Dockerfile", "utf8");
-    for (const fragment of fragments) {
-      expect(dockerfile).toContain(fragment);
-    }
+    ],
+  ] as const)("root Dockerfile preserves %s", (_contract, fragments) => {
+    expectIncludes(readFileSync("Dockerfile", "utf8"), ...fragments);
   });
 
   it("passes the baked browser build arg through Docker setup", () => {
@@ -1086,9 +1052,7 @@ printf 'status=%s\\n' "$status"
     },
   ])("bounds $name", ({ file, fragments, unbounded }) => {
     const script = readFileSync(file, "utf8");
-    for (const fragment of fragments) {
-      expect(script).toContain(fragment);
-    }
+    expectIncludes(script, ...fragments);
     expect(script).not.toContain(unbounded);
     if (file === DOCKER_SETUP_PATH) {
       const timeoutHelper = readFileSync(HOST_TIMEOUT_PATH, "utf8");
@@ -1137,21 +1101,10 @@ printf 'status=%s\\n' "$status"
   });
 
   it("normalizes npm 12 pack output and enforces the budget without tsx", () => {
-    const withinBudget = runInstallSmokePackHelpers({
-      openclaw: {
-        filename: "openclaw-2026.8.1.tgz",
-        unpackedSize: 100,
-        version: "2026.8.1",
-      },
-    });
+    const pack = { filename: "openclaw-2026.8.1.tgz", unpackedSize: 100, version: "2026.8.1" };
+    const withinBudget = runInstallSmokePackHelpers({ openclaw: pack });
     expect(withinBudget.result).toMatchObject({ status: 0, stderr: "" });
-    expect(withinBudget.normalized).toEqual([
-      {
-        filename: "openclaw-2026.8.1.tgz",
-        unpackedSize: 100,
-        version: "2026.8.1",
-      },
-    ]);
+    expect(withinBudget.normalized).toEqual([pack]);
 
     const oversized = runInstallSmokePackHelpers(
       [{ name: "ignored" }, { filename: "candidate.tgz", unpackedSize: 101 }],
@@ -1236,20 +1189,13 @@ printf 'status=%s\\n' "$status"
     );
   });
 
-  it("bounds both non-root installer pipelines and propagates curl failures", () => {
+  it("bounds the non-root CLI installer pipeline and propagates curl failures", () => {
     const wrapper = readFileSync(SCRIPT_PATH, "utf8");
-    const nonrootRunner = readFileSync(NONROOT_RUNNER_PATH, "utf8");
 
     expectIncludes(
       wrapper,
       '-e OPENCLAW_INSTALL_CLI_URL="$CLI_INSTALL_URL"',
       `'set -o pipefail; curl -fsSL --connect-timeout 30 --max-time 300 -- "$OPENCLAW_INSTALL_CLI_URL" | bash -s -- --set-npm-prefix --no-onboard'`,
-    );
-    expect(nonrootRunner).toContain(
-      'curl -fsSL --connect-timeout 30 --max-time 300 -o "$installer" -- "$INSTALL_URL"',
-    );
-    expect(nonrootRunner.indexOf('-o "$installer"')).toBeLessThan(
-      nonrootRunner.indexOf('bash "$installer"'),
     );
   });
 
@@ -1314,8 +1260,7 @@ describe("install-sh E2E runner", () => {
     [SMOKE_RUNNER_PATH, "OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL", "60s"],
     [BUN_GLOBAL_SMOKE_PATH, "OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS", "180000ms"],
   ] as const)("%s rejects invalid %s before setup", (script, envName, value) => {
-    const result = spawnSync("bash", [script], {
-      encoding: "utf8",
+    const result = runCommand("bash", [script], {
       env: {
         ...process.env,
         [envName]: value,
@@ -1471,26 +1416,20 @@ printf 'command-status=%s\\n' "$command_result"
   ])(
     "uses the baseline manual path only after offline proof and checks candidate defaults: $scenario",
     ({ scenario, exitCode, updateCount }) => {
-      const root = tempDirs.make("openclaw-update-smoke-");
-      const bin = join(root, "bin");
+      const { root, bin } = fixturePaths("update-smoke");
       const globalRoot = join(root, "node_modules");
       const versionFile = join(root, "version");
       const callsFile = join(root, "updates.jsonl");
       const preload = join(root, "native-inspection.cjs");
-      mkdirSync(bin);
       mkdirSync(join(globalRoot, "openclaw"), { recursive: true });
       writeFileSync(join(globalRoot, "openclaw", "package.json"), '{"version":"2026.8.2"}');
       writeFileSync(versionFile, "2026.8.2");
       writeFileSync(callsFile, "");
       symlinkSync(testNodeExecPath, join(bin, "node"));
-      writeExecutable(
-        join(bin, "npm"),
-        '#!/bin/bash\nif [[ " $* " == *" root -g "* ]]; then printf "%s\\n" "$FAKE_GLOBAL_ROOT"; fi\n',
-      );
-      writeExecutable(join(bin, "timeout"), '#!/bin/bash\nshift 2\nexec "$@"\n');
-      writeExecutable(
-        join(bin, "openclaw"),
-        `#!${testNodeExecPath}
+      writeCommands(bin, {
+        npm: '#!/bin/bash\nif [[ " $* " == *" root -g "* ]]; then printf "%s\\n" "$FAKE_GLOBAL_ROOT"; fi\n',
+        timeout: '#!/bin/bash\nshift 2\nexec "$@"\n',
+        openclaw: `#!${testNodeExecPath}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
@@ -1512,7 +1451,7 @@ if (args[0] === "--version") {
   }));
 }
 `,
-      );
+      });
       // Simulate native /proc and service files; execute the complete shell runner and CLI boundary.
       writeFileSync(
         preload,
@@ -1545,8 +1484,7 @@ fs.readFileSync = (file, ...args) => {
 };
 `,
       );
-      const result = spawnSync("bash", [SMOKE_RUNNER_PATH], {
-        encoding: "utf8",
+      const result = runCommand("bash", [SMOKE_RUNNER_PATH], {
         env: {
           HOME: root,
           PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
@@ -1729,7 +1667,7 @@ describe("bun global install smoke", () => {
     command: string[],
     options: { preload?: string; timeout?: number } = {},
   ) =>
-    spawnSync(
+    runCommand(
       testNodeExecPath,
       [
         ...(options.preload ? ["--import", options.preload] : []),
@@ -1739,7 +1677,6 @@ describe("bun global install smoke", () => {
         ...command,
       ],
       {
-        encoding: "utf8",
         env: { ...process.env, OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_KILL_GRACE_MS: grace },
         timeout: options.timeout,
       },
@@ -1855,17 +1792,13 @@ syncBuiltinESMExports();
     writeFileSync(untrustedOutputPath, "./node_modules/koffi [install]\n");
 
     const assertTrusted = () =>
-      spawnSync(
-        testNodeExecPath,
-        [
-          BUN_GLOBAL_ASSERTIONS_PATH,
-          "assert-openclaw-trusted",
-          packageRoot,
-          globalManifestPath,
-          untrustedOutputPath,
-        ],
-        { encoding: "utf8" },
-      );
+      runCommand(testNodeExecPath, [
+        BUN_GLOBAL_ASSERTIONS_PATH,
+        "assert-openclaw-trusted",
+        packageRoot,
+        globalManifestPath,
+        untrustedOutputPath,
+      ]);
     const trusted = assertTrusted();
     expect(trusted.status, trusted.stderr).toBe(0);
 
@@ -1912,13 +1845,13 @@ syncBuiltinESMExports();
         version: aiVersion,
       }),
     });
-    const packed = spawnSync(
-      "tar",
-      ["-czf", packageTgz, "-C", join(tempDir, "fixture"), "package"],
-      {
-        encoding: "utf8",
-      },
-    );
+    const packed = runCommand("tar", [
+      "-czf",
+      packageTgz,
+      "-C",
+      join(tempDir, "fixture"),
+      "package",
+    ]);
     expect(packed.status, packed.stderr).toBe(0);
     writeFileSync(
       bunPath,
@@ -2027,8 +1960,7 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
     );
     chmodSync(bunPath, 0o755);
 
-    const result = spawnSync("bash", [BUN_GLOBAL_SMOKE_PATH], {
-      encoding: "utf8",
+    const result = runCommand("bash", [BUN_GLOBAL_SMOKE_PATH], {
       env: {
         ...process.env,
         BUN_BIN: bunPath,

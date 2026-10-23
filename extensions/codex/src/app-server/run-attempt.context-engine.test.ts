@@ -794,47 +794,35 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     }
   });
 
-  it.each([
-    {
-      name: "Gateway-routed heartbeat",
-      trigger: "user",
-      bootstrapContextRunKind: "heartbeat",
-    },
-  ] as const)(
-    "returns an exact terminal anchor for $name turns without finalizing inside Codex",
-    async (testCase) => {
-      const workspaceDir = path.join(tempDir, "workspace");
-      const afterTurn = vi.fn(
-        async (_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => undefined,
-      );
-      const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
-      const contextEngine = createContextEngine({ afterTurn, maintain, bootstrap: undefined });
-      const harness = createStartedThreadHarness();
-      const params = await createSqliteParams(
-        workspaceDir,
-        `heartbeat-${testCase.bootstrapContextRunKind}`,
-      );
-      params.contextEngine = contextEngine;
-      params.trigger = testCase.trigger;
-      params.bootstrapContextRunKind = testCase.bootstrapContextRunKind;
-      params.contextTokenBudget = 111;
-      params.requestedModelId = "gpt-5.4-codex-primary";
-      params.fallbackReason = "provider_unavailable";
-      params.degradedReason = "context_overflow";
+  it("returns an exact terminal anchor for Cron turns without finalizing inside Codex", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const afterTurn = vi.fn(
+      async (_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => undefined,
+    );
+    const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    const contextEngine = createContextEngine({ afterTurn, maintain, bootstrap: undefined });
+    const harness = createStartedThreadHarness();
+    const params = await createSqliteParams(workspaceDir, "cron");
+    params.contextEngine = contextEngine;
+    params.trigger = "cron";
+    params.bootstrapContextRunKind = "cron";
+    params.contextTokenBudget = 111;
+    params.requestedModelId = "gpt-5.4-codex-primary";
+    params.fallbackReason = "provider_unavailable";
+    params.degradedReason = "context_overflow";
 
-      const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
-      await harness.completeTurn();
-      const result = await run;
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn();
+    const result = await run;
 
-      expect(result.contextEngineTerminalAnchor).toMatchObject({
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-      });
-      expect(afterTurn).not.toHaveBeenCalled();
-      expect(maintain).not.toHaveBeenCalled();
-    },
-  );
+    expect(result.contextEngineTerminalAnchor).toMatchObject({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+    });
+    expect(afterTurn).not.toHaveBeenCalled();
+    expect(maintain).not.toHaveBeenCalled();
+  });
 
   it("persists the admitted user prompt before an async item buffered during turn startup", async () => {
     const workspaceDir = path.join(tempDir, "workspace-early-async");

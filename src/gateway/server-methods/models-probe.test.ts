@@ -133,9 +133,12 @@ it("normalizes providers, trims profiles, and clamps the timeout", async () => {
   });
 });
 
-it("probes the default agent when agentId is empty", async () => {
+it("probes the default agent without a configured model when agentId is empty", async () => {
   await probe({ provider: "openai", agentId: "" });
   expectProbe({
+    cfg: {},
+    providers: ["openai"],
+    modelCandidates: [],
     agentId: "main",
     agentDir: "/tmp/agent-main",
     workspaceDir: "/tmp/workspace-main",
@@ -191,16 +194,6 @@ it("probes the requested provider so overrides and model selection resolve", asy
     expect.objectContaining({ provider: "byteplus-plan" }),
     undefined,
   );
-});
-
-it("does not require a configured default before probing provider credentials", async () => {
-  const cfg: OpenClawConfig = {};
-  await probe({ provider: "openai" }, cfg);
-  expectProbe({
-    cfg,
-    providers: ["openai"],
-    modelCandidates: [],
-  });
 });
 
 it("maps target results and reports provider success when one credential works", async () => {

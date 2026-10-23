@@ -29,6 +29,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 afterEach(() => vi.unstubAllEnvs());
 
 type Poll = Parameters<MSTeamsPollStore["createPoll"]>[0];
+type Votes = Record<string, string[]>;
 const pollStateKey = (id: string) => crypto.createHash("sha256").update(id).digest("hex");
 
 function pluginStore<T>(namespace: string, maxEntries: number, env: NodeJS.ProcessEnv) {
@@ -36,12 +37,12 @@ function pluginStore<T>(namespace: string, maxEntries: number, env: NodeJS.Proce
 }
 
 async function storedVotes(pollId: string, accountId?: string) {
-  const buckets = pluginStore<{ pollId: string; votes: Poll["votes"] }>(
+  const buckets = pluginStore<{ pollId: string; votes: Votes }>(
     resolveMSTeamsAccountStateNamespace("poll-vote-buckets", accountId),
     32_032,
     process.env,
   );
-  const votes: Poll["votes"] = {};
+  const votes: Votes = {};
   for (const row of await buckets.entries()) {
     if (row.value.pollId === pollId) {
       Object.assign(votes, row.value.votes);
@@ -57,7 +58,6 @@ function poll(overrides: Partial<Poll>): Poll {
     options: ["A", "B"],
     maxSelections: 1,
     createdAt: new Date().toISOString(),
-    votes: {},
     ...overrides,
   };
 }
@@ -128,9 +128,11 @@ describe("msteams polls", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-msteams-polls-accounts-"));
     const defaultStore = createMSTeamsPollStoreState();
     const supportStore = createMSTeamsPollStoreState({ accountId: "support" });
-    await defaultStore.createPoll(poll({ question: "Default?", votes: { shared: ["0"] } }));
+    await defaultStore.createPoll(poll({ question: "Default?" }));
+    await defaultStore.recordVote({ pollId: "poll-1", voterId: "shared", selections: ["0"] });
     expect(await supportStore.getPoll("poll-1")).toBeNull();
-    await supportStore.createPoll(poll({ question: "Support?", votes: { shared: ["1"] } }));
+    await supportStore.createPoll(poll({ question: "Support?" }));
+    await supportStore.recordVote({ pollId: "poll-1", voterId: "shared", selections: ["1"] });
     await supportStore.recordVote({ pollId: "poll-1", voterId: "new-user", selections: ["1"] });
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
@@ -169,7 +171,10 @@ describe("msteams polls", () => {
       ]),
     );
 
-    await store.createPoll(poll({ id: "poll-large", votes }));
+    await store.createPoll(poll({ id: "poll-large" }));
+    for (const [voterId, selections] of Object.entries(votes)) {
+      await store.recordVote({ pollId: "poll-large", voterId, selections });
+    }
     await store.recordVote({ pollId: "poll-large", voterId: "user-new", selections: ["1"] });
 
     const stored = await storedVotes("poll-large");
@@ -232,12 +237,12 @@ describe("msteams polls", () => {
           id: "poll-new",
           question: "New?",
           createdAt: new Date(baseMs + 2_000_000).toISOString(),
-          votes: { "user-new": ["1"] },
         }),
       );
     } finally {
       iterateSpy.mockRestore();
     }
+    await store.recordVote({ pollId: "poll-new", voterId: "user-new", selections: ["1"] });
     expect(bucketScans).toBeLessThanOrEqual(2);
     expect(await metadataStore.entries()).toHaveLength(1000);
     for (const id of [...expired, ...removed]) {
@@ -253,6 +258,9 @@ describe("msteams polls", () => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const metadata = pluginStore<unknown>("polls", 2000, env);
       const buckets = pluginStore<unknown>("poll-vote-buckets", 32_032, env);
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const store = createMSTeamsPollStoreState();
+      await store.createPoll(poll({ id: "new", question: "Pick" }));
       const expiredAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
       for (const id of ["expired-a", "expired-b"]) {
         await metadata.register(id, { id, createdAt: expiredAt });
@@ -269,7 +277,7 @@ describe("msteams polls", () => {
             WHEN 'first' THEN 1 WHEN 'failing' THEN 2 ELSE 3 END
           WHERE plugin_id = 'msteams' AND namespace = 'poll-vote-buckets';
         `);
-        // Inject the failure after createPoll's initial vote replacement read.
+        // The next ordinary vote writes its bucket before pruning these rows.
         database.exec(
           failure === "delete"
             ? `
@@ -287,18 +295,8 @@ describe("msteams polls", () => {
               AND entry_key = 'failing'; END;
         `,
         );
-        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-        const store = createMSTeamsPollStoreState();
         await expect(
-          store.createPoll(
-            poll({
-              id: "new",
-              question: "Pick",
-              // A real bucket write invalidates the initial replacement-read snapshot.
-              // The later prune read must decode the trigger-corrupted rows.
-              votes: { voter: ["1"] },
-            }),
-          ),
+          store.recordVote({ pollId: "new", voterId: "voter", selections: ["1"] }),
         ).rejects.toThrow(
           failure === "null value"
             ? TypeError

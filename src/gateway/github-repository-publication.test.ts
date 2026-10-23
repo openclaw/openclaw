@@ -20,6 +20,7 @@ import { listRepositoryGitHubPublicationsInDatabase } from "./github-repository-
 import { readRepositoryGitHubPublicationInDatabase } from "./github-repository-publication-store.worker.js";
 import {
   createRepositoryPublicationFixture,
+  observeRepositoryCommands,
   repositoryPublicationTestUrl as url,
 } from "./github-repository-publication.test-support.js";
 import {
@@ -128,16 +129,13 @@ it.each(["shared", "personal"] as const)(
   async (source) => {
     const { f, person, coordinator, publish } = await sourceFixture(source);
     let current = true;
-    const transport = mocks.runCommand.getMockImplementation()!;
-    mocks.runCommand.mockImplementation(async (args: string[], options) => {
-      const result = await transport(args, options);
+    observeRepositoryCommands((args) => {
       if (args.includes("repos/owner/repository/pulls") && args.includes("POST")) {
         current = false;
         if (person) {
           person.runtime.live = false;
         }
       }
-      return result;
     });
     const request = () =>
       publish("accepted-before-close", {
@@ -351,14 +349,11 @@ it.each([
     const { f, person, publish } = await sourceFixture(source);
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const transport = mocks.runCommand.getMockImplementation()!;
-    mocks.runCommand.mockImplementation(async (args: string[], options) => {
-      const result = await transport(args, options);
+    observeRepositoryCommands(async (args) => {
       if (args.includes("graphql")) {
         entered.resolve();
         await release.promise;
       }
-      return result;
     });
     const pending = publish("reset-during-push");
     try {

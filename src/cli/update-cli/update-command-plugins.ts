@@ -1,4 +1,3 @@
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -579,14 +578,6 @@ async function updatePluginsAfterCoreUpdateWithLease(
     if (outcome.status === "skipped") {
       runtime.log(theme.muted(`${outcome.pluginId}: ${outcome.message}`));
     }
-  }
-
-  for (const message of uniqueStrings(
-    pluginUpdateOutcomes.flatMap(({ channelFallback }) =>
-      channelFallback?.message ? [channelFallback.message] : [],
-    ),
-  )) {
-    runtime.log(theme.warn(message));
   }
 
   for (const warning of warnings) {

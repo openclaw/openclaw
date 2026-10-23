@@ -18,7 +18,6 @@ export type MatrixQaHarnessFiles = {
   composeFile: string;
   image: string;
   serverName: string;
-  homeserverPort: number;
   registrationToken: string;
 };
 
@@ -115,29 +114,26 @@ export async function waitForReachableMatrixBaseUrl(params: {
   );
 }
 
-function resolveMatrixQaHarnessImage(image?: string) {
-  return (
-    image?.trim() || process.env.OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE?.trim() || MATRIX_QA_DEFAULT_IMAGE
-  );
-}
+export async function writeMatrixQaHarnessFiles(params: {
+  outputDir: string;
+}): Promise<MatrixQaHarnessFiles> {
+  const image = process.env.OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE?.trim() || MATRIX_QA_DEFAULT_IMAGE;
+  const registrationToken = `matrix-qa-${randomUUID()}`;
+  const serverName = MATRIX_QA_DEFAULT_SERVER_NAME;
+  const composeFile = path.join(params.outputDir, "docker-compose.matrix-qa.yml");
+  const dataDir = path.join(params.outputDir, "data");
 
-function renderMatrixQaCompose(params: {
-  homeserverPort: number;
-  image: string;
-  registrationToken: string;
-  serverName: string;
-}) {
+  await fs.mkdir(dataDir, { recursive: true });
   // Omitting `published` lets Docker atomically choose and bind the host port;
   // probing a free numeric port before Compose starts races parallel harnesses.
-  const portMapping =
-    params.homeserverPort === 0
-      ? `      - target: ${MATRIX_QA_INTERNAL_PORT}\n        host_ip: 127.0.0.1`
-      : `      - "127.0.0.1:${params.homeserverPort}:${MATRIX_QA_INTERNAL_PORT}"`;
-  return `services:
+  await fs.writeFile(
+    composeFile,
+    `services:
   ${MATRIX_QA_SERVICE}:
-    image: ${params.image}
+    image: ${image}
     ports:
-${portMapping}
+      - target: ${MATRIX_QA_INTERNAL_PORT}
+        host_ip: 127.0.0.1
     environment:
       TUWUNEL_ADDRESS: "0.0.0.0"
       TUWUNEL_ALLOW_ENCRYPTION: "true"
@@ -145,35 +141,11 @@ ${portMapping}
       TUWUNEL_ALLOW_REGISTRATION: "true"
       TUWUNEL_DATABASE_PATH: "/var/lib/tuwunel"
       TUWUNEL_PORT: "${MATRIX_QA_INTERNAL_PORT}"
-      TUWUNEL_REGISTRATION_TOKEN: "${params.registrationToken}"
-      TUWUNEL_SERVER_NAME: "${params.serverName}"
+      TUWUNEL_REGISTRATION_TOKEN: "${registrationToken}"
+      TUWUNEL_SERVER_NAME: "${serverName}"
     volumes:
       - ./data:/var/lib/tuwunel
-`;
-}
-
-export async function writeMatrixQaHarnessFiles(params: {
-  outputDir: string;
-  image?: string;
-  homeserverPort: number;
-  registrationToken?: string;
-  serverName?: string;
-}): Promise<MatrixQaHarnessFiles> {
-  const image = resolveMatrixQaHarnessImage(params.image);
-  const registrationToken = params.registrationToken?.trim() || `matrix-qa-${randomUUID()}`;
-  const serverName = params.serverName?.trim() || MATRIX_QA_DEFAULT_SERVER_NAME;
-  const composeFile = path.join(params.outputDir, "docker-compose.matrix-qa.yml");
-  const dataDir = path.join(params.outputDir, "data");
-
-  await fs.mkdir(dataDir, { recursive: true });
-  await fs.writeFile(
-    composeFile,
-    `${renderMatrixQaCompose({
-      homeserverPort: params.homeserverPort,
-      image,
-      registrationToken,
-      serverName,
-    })}\n`,
+\n`,
     { encoding: "utf8", mode: 0o600 },
   );
   return {
@@ -181,7 +153,6 @@ export async function writeMatrixQaHarnessFiles(params: {
     composeFile,
     image,
     serverName,
-    homeserverPort: params.homeserverPort,
     registrationToken,
   };
 }

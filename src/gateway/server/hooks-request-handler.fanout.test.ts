@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
@@ -34,14 +34,14 @@ function createGmailHooksConfig(mapping?: {
   config: Parameters<typeof resolveHookMappings>[0];
   configDir: string;
 }): HooksConfigResolved {
+  if (mapping) {
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(mapping.configDir, "openclaw.json"));
+  }
   const canonical = createHooksConfig();
   const policy = { allowRequestSessionKey: true, allowedSessionKeyPrefixes: ["hook:gmail:"] };
   return {
     ...canonical,
-    mappings: resolveHookMappings(
-      { ...policy, ...(mapping?.config ?? { presets: ["gmail"] }) },
-      mapping ? { configDir: mapping.configDir } : undefined,
-    ),
+    mappings: resolveHookMappings({ ...policy, ...(mapping?.config ?? { presets: ["gmail"] }) }),
     sessionPolicy: { ...canonical.sessionPolicy, ...policy },
   };
 }
@@ -117,6 +117,7 @@ function gmailMessage(id: string) {
 }
 
 describe("hook fan-out dispatch", () => {
+  afterEach(() => vi.unstubAllEnvs());
   beforeEach(() => {
     readJsonBodyMock.mockReset();
   });

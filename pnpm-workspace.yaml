@@ -16,6 +16,22 @@ minimumReleaseAgeExclude:
   # Solid itself is exempt from the release-age gate (Peter, 2026-10-11).
   - "solid-js"
   - "@solidjs/*"
+  # Reviewed pnpm security bump (#179992); remove after 2026-10-28T11:16:18.199Z.
+  - "pnpm@12.15.0"
+  - "@pnpm/exe.android-arm64@12.15.0"
+  - "@pnpm/exe.android-x64@12.15.0"
+  - "@pnpm/exe.darwin-arm64@12.15.0"
+  - "@pnpm/exe.darwin-x64@12.15.0"
+  - "@pnpm/exe.freebsd-x64@12.15.0"
+  - "@pnpm/exe.linux-arm64-musl@12.15.0"
+  - "@pnpm/exe.linux-arm64@12.15.0"
+  - "@pnpm/exe.linux-ppc64@12.15.0"
+  - "@pnpm/exe.linux-riscv64@12.15.0"
+  - "@pnpm/exe.linux-s390x@12.15.0"
+  - "@pnpm/exe.linux-x64-musl@12.15.0"
+  - "@pnpm/exe.linux-x64@12.15.0"
+  - "@pnpm/exe.win32-arm64@12.15.0"
+  - "@pnpm/exe.win32-x64@12.15.0"
   # Reviewed Edge TTS 403 fix; remove after 2026-10-19T16:27:27.581Z.
   - "node-edge-tts@1.2.11"
   # Reviewed fs-safe 0.26.8 release and native helpers; remove after 2026-10-25T20:33:09.777Z.
@@ -70,12 +86,11 @@ overrides:
   "@codemirror/commands@6.11.1>@codemirror/view": 6.43.14
   "@codemirror/view@6.43.14>@codemirror/state": 6.7.6
   "@anthropic-ai/sdk": 0.133.0
-  "@anthropic-ai/vertex-sdk@0.20.4>google-auth-library": 11.2.0
+  "@anthropic-ai/vertex-sdk@0.20.4>google-auth-library": 11.3.0
   "@opentelemetry/core": 2.12.0
   "@opentelemetry/propagator-jaeger": 2.12.0
-  "@solidjs/vite-plugin@3.0.0-next.49>@solidjs/babel-plugin": 2.0.0-rc.14
-  "@aws-sdk/core": 3.978.2
-  "@aws-sdk/credential-provider-node": 3.972.85
+  "@aws-sdk/core": 3.978.3
+  "@aws-sdk/credential-provider-node": 3.972.86
   "@aws-sdk/xml-builder": 3.972.41
   "@hono/node-server": 2.1.4
   axios: 1.20.0
@@ -97,7 +112,7 @@ overrides:
   proxy-addr: 2.0.8
   qs: 6.16.0
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
-  typebox: 1.3.36
+  typebox: 1.3.37
   tar: 7.5.22
   tough-cookie: 6.0.2
   "tsdown>rolldown-plugin-dts": 0.28.8
@@ -130,6 +145,10 @@ allowBuilds:
   node-pty: true
 
 packageExtensions:
+  # rc14 imports long directly; protobufjs's transitive edge is not visible in isolated graphs.
+  "baileys@7.0.0-rc14":
+    dependencies:
+      long: 5.3.2
   # The transient npm lock generator also needs the peer marked optional.
   baileys:
     peerDependenciesMeta:

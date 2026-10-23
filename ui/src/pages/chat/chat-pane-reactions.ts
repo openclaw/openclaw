@@ -53,7 +53,6 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
       canReactToSession(this.context.gateway.snapshot, selectedChatSessionRow(state), {
         archived: this.isCurrentSessionArchived(state),
         catalog: Boolean(parseCatalogSessionKey(state.sessionKey)),
-        allowDeferred: true,
       }),
     );
   }

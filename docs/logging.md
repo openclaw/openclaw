@@ -268,6 +268,14 @@ You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g
 `--verbose` only affects console output and WS log verbosity; it does not change
 file log levels.
 
+### Expected shutdown cancellation
+
+During Gateway shutdown, automatic provider catalog discovery can be canceled,
+and cron startup or session recovery can be refused admission. These expected
+lifecycle outcomes do not emit failure warnings or errors. Provider, storage,
+and cleanup failures still use their existing error reporting, including failures
+that wrap a cancellation error.
+
 ### Provider request failures
 
 Model transport failures emit `Model request failed` at warning level with the
@@ -681,8 +689,12 @@ identity, and `identityCount`. For batches this names one scope, not every affec
 session. `holderSessionScopeHash` identifies that same scope for the current holder.
 No session titles, transcript content, repository names, or raw identities are logged.
 
-`slow session lifecycle operation` records operations taking at least one
-second through their actual owner release. It separates
+`slow session lifecycle operation` records serialized mutations and compactions
+taking at least one second through their actual owner release. Lifecycle effects
+can span an entire agent turn, so their elapsed time alone is not a warning:
+they are reported only after spending at least one second in a queue themselves
+or being observed as the holder by a queue-waiting diagnostic. This observation
+still counts if the warning budget suppresses the queue-waiting record. It separates
 `mutationQueueWaitMs`, `lifecycleQueueWaitMs`, `completionDelayMs` and
 `phaseDurationsMs.prepare`, `.run` and `.finalize`. The holder's current
 `holderPhase` can also identify activation, admission or release work. A
@@ -705,8 +717,11 @@ unknown at capacity or after enablement. `omittedObservations` on a later record
 reports suppressed observations; missing records never prove no wait.
 
 Controller transition records use `session controller phase` on the `diagnostic`
-logger at `info` level, with the same process diagnostics gate. Session, source
-and priority-source identities are salted digests, and reasons are fixed labels.
+logger at `info` level in the structured file log only, with the same process
+diagnostics gate. They omit console output because the message alone does not
+identify the phase or status. Slow lifecycle warnings remain on the console.
+Session, source and priority-source identities are salted digests, and reasons
+are fixed labels.
 These records have a separate 60-record-per-minute budget so transition traffic
 cannot suppress the slow warnings above. Their `omittedObservations` count applies
 to phase records independently.

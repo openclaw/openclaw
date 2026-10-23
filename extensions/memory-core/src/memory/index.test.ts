@@ -80,12 +80,12 @@ describe("memory index", () => {
       .run("test", "keep-me", JSON.stringify({ value: "keep-me" }), 1);
     closeOpenClawAgentDatabasesForTest();
 
-    const manager = await getFreshManager(createCfg({}));
+    const manager = await getManager();
     try {
       await manager.sync({ reason: "test", force: true });
       expect(manager.status().dbPath).toBe(agentDbPath);
     } finally {
-      await manager.close?.();
+      await manager.close();
     }
 
     const reopened = openOpenClawAgentDatabase({ agentId: "main" });
@@ -108,6 +108,7 @@ describe("memory index", () => {
   ) => getFreshManager(createCfg(options), purpose);
   const getSessionManager = (purpose?: Parameters<typeof getFreshManager>[1]) =>
     getManager({ provider: "none", sources: ["sessions"], sessionMemory: true }, purpose);
+  const getBatchManager = () => getManager({ provider: "batch-wide-test", batchEnabled: true });
   const read = (manager: MemoryIndexManager, sql: string) =>
     (Reflect.get(manager, "db") as DatabaseSync).prepare(sql);
   const metadataMissing = {
@@ -171,7 +172,7 @@ describe("memory index", () => {
 
   async function getReconfiguredSessionManager(sources: Array<"memory" | "sessions">) {
     const config = { sources, sessionMemory: true, model: "old-embed" };
-    await indexAndClose(await getFreshManager(createCfg(config)));
+    await indexAndClose(await getManager(config));
     return getManager({ ...config, provider: "gemini", model: "new-embed" });
   }
 
@@ -395,9 +396,7 @@ describe("memory index", () => {
   });
 
   it("maps source-wide batch fallback results to missing chunks after cache hits", async () => {
-    const manager = await getFreshManager(
-      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
-    );
+    const manager = await getBatchManager();
     await manager.sync({ reason: "test" });
 
     await writeMemory("2026-01-13.md", "# Log\nBeta memory line.");
@@ -409,9 +408,10 @@ describe("memory index", () => {
 
     expect(providerFixture.providerRuntimeBatchCalls).toEqual([["# Log\nBeta memory line."]]);
     expect(providerFixture.embedBatchCalls).toBe(1);
-    const betaRow = (Reflect.get(manager, "db") as DatabaseSync)
-      .prepare("SELECT embedding FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
-      .get("%2026-01-13.md", "memory") as { embedding: Uint8Array } | undefined;
+    const betaRow = read(
+      manager,
+      "SELECT embedding FROM memory_index_chunks WHERE path LIKE ? AND source = ?",
+    ).get("%2026-01-13.md", "memory") as { embedding: Uint8Array } | undefined;
 
     expect(betaRow).toBeDefined();
     expect(betaRow?.embedding).toEqual(encodeMemoryEmbedding([0, 1, 0, 0]));
@@ -423,9 +423,7 @@ describe("memory index", () => {
         batchAttempts: Number.MAX_SAFE_INTEGER,
       }),
     ];
-    const manager = await getFreshManager(
-      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
-    );
+    const manager = await getBatchManager();
     await manager.sync({ reason: "test" });
 
     expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(1);
@@ -451,46 +449,43 @@ describe("memory index", () => {
     }
   });
 
-  it("disables batch immediately when the provider reports it unavailable", async () => {
-    providerFixture.providerRuntimeBatchErrors = [
-      Object.assign(new Error("provider batch unavailable"), {
-        code: "embedding_batch_unavailable",
-      }),
-    ];
-    const manager = await getManager({ provider: "batch-wide-test", batchEnabled: true });
-    await manager.sync({ reason: "test" });
-
-    expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(1);
-    expect(providerFixture.embedBatchCalls).toBe(1);
-    expect(manager.status().batch).toMatchObject({
-      enabled: false,
-      failures: 2,
+  it.each([
+    {
+      name: "disables batch immediately when the provider reports it unavailable",
+      errors: [
+        Object.assign(new Error("provider batch unavailable"), {
+          code: "embedding_batch_unavailable",
+        }),
+      ],
+      attempts: 1,
       lastError: "provider batch unavailable",
-    });
-  });
-
-  it("preserves frozen errors while recording both attempts", async () => {
-    providerFixture.providerRuntimeBatchErrors = [
-      new Error("memory embeddings batch timed out"),
-      Object.freeze(new Error("provider runtime retry failed")),
-    ];
-    const manager = await getFreshManager(
-      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
-    );
+    },
+    {
+      name: "preserves frozen errors while recording both attempts",
+      errors: [
+        new Error("memory embeddings batch timed out"),
+        Object.freeze(new Error("provider runtime retry failed")),
+      ],
+      attempts: 2,
+      lastError: "provider runtime retry failed",
+    },
+  ])("$name", async ({ errors, attempts, lastError }) => {
+    providerFixture.providerRuntimeBatchErrors = errors;
+    const manager = await getBatchManager();
     await manager.sync({ reason: "test" });
 
-    expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(2);
+    expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(attempts);
     expect(providerFixture.embedBatchCalls).toBe(1);
     expect(manager.status().batch).toMatchObject({
       enabled: false,
       failures: 2,
-      lastError: "provider runtime retry failed",
+      lastError,
     });
   });
 
   it("resets batch failures when a timeout retry recovers", async () => {
     providerFixture.providerRuntimeBatchErrors = [new Error("provider runtime batch failed")];
-    const manager = await getManager({ provider: "batch-wide-test", batchEnabled: true });
+    const manager = await getBatchManager();
     await manager.sync({ reason: "test" });
     expect(manager.status().batch?.failures).toBe(1);
 
@@ -905,7 +900,7 @@ describe("memory index", () => {
   });
 
   it("closes embedding providers when memory index managers close", async () => {
-    const manager = await getFreshManager(createCfg({}));
+    const manager = await getManager();
     await manager.probeEmbeddingAvailability();
     expect(providerFixture.providerCloseCalls).toBe(0);
     await manager.close();

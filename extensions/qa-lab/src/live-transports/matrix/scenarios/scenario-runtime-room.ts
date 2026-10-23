@@ -13,7 +13,6 @@ import {
   assertThreadReplyArtifact,
   buildMatrixQaToken,
   buildMatrixBlockStreamingPrompt,
-  buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
   buildMentionPrompt,
   createMatrixQaScenarioClient,
@@ -88,14 +87,6 @@ export async function runBlockStreamingScenario(context: MatrixQaScenarioContext
     );
   }
   return {
-    artifacts: {
-      blockEventIds: [firstBlock.event.eventId, secondBlock.event.eventId],
-      driverEventId,
-      reply: buildMatrixReplyArtifact(secondBlock.event, secondText),
-      roomId,
-      token: secondText,
-      triggerBody,
-    },
     details: [
       `room id: ${roomId}`,
       `driver event: ${driverEventId}`,
@@ -134,14 +125,6 @@ export async function runRoomAutoJoinInviteScenario(context: MatrixQaScenarioCon
   });
 
   return {
-    artifacts: {
-      driverEventId: result.driverEventId,
-      joinedRoomId: dynamicRoomId,
-      membershipJoinEventId: joinEvent.eventId,
-      reply: result.reply,
-      token: result.token,
-      triggerBody: result.body,
-    },
     details: [
       `joined room id: ${dynamicRoomId}`,
       `join event: ${joinEvent.eventId}`,
@@ -204,13 +187,6 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
     });
 
     return {
-      artifacts: {
-        ...recovered.artifacts,
-        membershipJoinEventId: joinEvent.eventId,
-        membershipLeaveEventId: leaveEvent.eventId,
-        recoveredDriverEventId: recovered.artifacts?.driverEventId,
-        recoveredReply: recovered.artifacts?.reply,
-      },
       details: [
         `room key: ${MATRIX_QA_MEMBERSHIP_ROOM_KEY}`,
         `room id: ${roomId}`,
@@ -259,13 +235,6 @@ export async function runReactionThreadedScenario(context: MatrixQaScenarioConte
     timeoutMs: context.timeoutMs,
   });
   return {
-    artifacts: {
-      driverEventId: thread.driverEventId,
-      ...buildMatrixQaReactionArtifacts(reaction),
-      reply: thread.reply,
-      rootEventId: thread.rootEventId,
-      token: thread.token,
-    },
     details: [
       ...buildMatrixQaThreadDetailLines({
         result: thread,

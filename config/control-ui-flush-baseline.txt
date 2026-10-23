@@ -1,8 +1,5 @@
 # Control UI flush calls; shrink only.
 # Run pnpm check:control-ui-controllers --prune after removing calls.
-ui/src/components/sidebar-reorder.tsx	1
-ui/src/components/sidebar-update-card.tsx	1
-ui/src/components/solid/menu.tsx	1
 ui/src/pages/agents/agent-file-preview.tsx	1
 ui/src/pages/chat/components/chat-header-session-menu.tsx	1
 ui/src/pages/chat/components/chat-position-rail-controller.ts	1

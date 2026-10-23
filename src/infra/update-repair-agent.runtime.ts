@@ -20,6 +20,7 @@ import {
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { SystemAgentConfiguredRoute } from "../system-agent/inference-route.js";
+import { settleWithCleanup } from "./error-graph-internal.js";
 import { GatewayScheduler } from "./gateway-scheduler.js";
 import { sanitizeHostExecEnv, withHostExecInheritedEnvOmitted } from "./host-env-security.js";
 import {
@@ -120,7 +121,7 @@ async function withRepairResources<T>(run: () => Promise<T>): Promise<T> {
     host.bindScheduler(scheduler);
   }
   const resources = createOpenClawDatabaseMaintenanceScope();
-  const [outcome] = await Promise.allSettled([
+  return settleWithCleanup(
     Promise.resolve().then(() => {
       host.assertOpen();
       scheduler.signal.throwIfAborted();
@@ -132,44 +133,39 @@ async function withRepairResources<T>(run: () => Promise<T>): Promise<T> {
         }),
       );
     }),
-  ]);
-  try {
-    const [sdkCleanup] = await Promise.allSettled([
-      existingHost ? Promise.resolve() : scheduler.stop().then(() => host.close()),
-    ]);
-    if (sdkCleanup.status === "rejected" && hasRetainedPluginRuntimeCloseError(sdkCleanup.reason)) {
-      throw sdkCleanup.reason;
-    }
-    try {
-      await resources.close();
-    } catch (error) {
-      if (sdkCleanup.status === "rejected") {
-        throw new AggregateError(
-          [sdkCleanup.reason, error],
-          "Repair SDK and database resource cleanup failed.",
-          { cause: error },
-        );
+    async () => {
+      try {
+        const [sdkCleanup] = await Promise.allSettled([
+          existingHost ? Promise.resolve() : scheduler.stop().then(() => host.close()),
+        ]);
+        if (
+          sdkCleanup.status === "rejected" &&
+          hasRetainedPluginRuntimeCloseError(sdkCleanup.reason)
+        ) {
+          throw sdkCleanup.reason;
+        }
+        try {
+          await resources.close();
+        } catch (error) {
+          if (sdkCleanup.status === "rejected") {
+            throw new AggregateError(
+              [sdkCleanup.reason, error],
+              "Repair SDK and database resource cleanup failed.",
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+        if (sdkCleanup.status === "rejected") {
+          throw sdkCleanup.reason;
+        }
+      } catch (error) {
+        recordAgentCleanupFailure();
+        throw error;
       }
-      throw error;
-    }
-    if (sdkCleanup.status === "rejected") {
-      throw sdkCleanup.reason;
-    }
-  } catch (error) {
-    recordAgentCleanupFailure();
-    if (outcome.status === "rejected") {
-      throw new AggregateError(
-        [outcome.reason, error],
-        "Repair turn and database resource cleanup failed.",
-        { cause: error },
-      );
-    }
-    throw error;
-  }
-  if (outcome.status === "rejected") {
-    throw outcome.reason;
-  }
-  return outcome.value;
+    },
+    "Repair turn and database resource cleanup failed.",
+  );
 }
 
 export async function prepareUpdateRepairInference(signal: AbortSignal, timeoutMs: number) {

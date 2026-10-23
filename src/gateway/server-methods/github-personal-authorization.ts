@@ -216,7 +216,7 @@ export async function prepareGitHubPublicationOptionsRead(
         ? { kind: "absent" }
         : {
             kind: "eligible",
-            action: preparePersonalGitHubAction(options, "operator.read", signal),
+            action: preparePersonalGitHubAction(options, signal),
           };
   const preparedSession = await prepareOptionsSession(sessionKey, requestedAgentId, () => {
     currentClient();
@@ -323,11 +323,7 @@ export async function preparePersonalGitHubActionV2(
 }
 
 /** Authority stays in this direct connection closure; a profile or request id alone grants nothing. */
-function preparePersonalGitHubAction(
-  options: Request,
-  scope: "operator.read" | "operator.write" = "operator.read",
-  signal?: AbortSignal,
-): PersonalGitHubAction {
+function preparePersonalGitHubAction(options: Request, signal?: AbortSignal): PersonalGitHubAction {
   const { client, context } = options;
   const resolveOwner = () => {
     signal?.throwIfAborted();
@@ -342,7 +338,7 @@ function preparePersonalGitHubAction(
     if (current.merged_into) {
       throw new Error("My GitHub requires a verified durable user profile; sign in and try again.");
     }
-    currentGitHubClient(options, scope, {
+    currentGitHubClient(options, "operator.read", {
       profileId: current.id,
       role: current.role ?? null,
       githubLogin: current.githubLogin,

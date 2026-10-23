@@ -22,6 +22,7 @@ import {
   captureSessionTarget,
 } from "../../sessions/session-controller.lifecycle.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
+import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
   normalizeCronScheduledToolPolicy,
@@ -100,18 +101,6 @@ export type CronRunContinuationSession = {
   ) => Promise<void>;
   seal: (options?: { basePersisted?: boolean }) => Promise<void>;
 };
-
-export class CronSessionLifecycleClaimError extends Error {
-  readonly admissionDisposition = "session-conflict" as const;
-
-  constructor(
-    sessionKey: string,
-    message = `Session "${sessionKey}" changed while starting work. Retry.`,
-  ) {
-    super(message);
-    this.name = "CronSessionLifecycleClaimError";
-  }
-}
 
 function resolveCronLifecycleRevisionIdentity(lifecycleRevision: string): string {
   return `cron-lifecycle-revision:${lifecycleRevision}`;

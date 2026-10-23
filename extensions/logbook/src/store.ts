@@ -89,24 +89,12 @@ export class LogbookStore {
     return path.join(this.framesDir, day, `${capturedAtMs}.jpg`);
   }
 
-  insertFrame(params: LogbookFrameInput) {
-    return this.execute("insertFrame", params);
-  }
-
-  lastFrame() {
-    return this.execute("lastFrame", undefined);
-  }
-
   unbatchedActiveFrames(limit: number) {
     return this.execute("unbatchedActiveFrames", { limit });
   }
 
   countUnbatchedActiveFrames() {
     return this.execute("countUnbatchedActiveFrames", undefined);
-  }
-
-  frameById(id: number) {
-    return this.execute("frameById", { id });
   }
 
   framesInRange(startMs: number, endMs: number) {
@@ -153,19 +141,12 @@ export class LogbookStore {
     return this.execute("countCardsForDay", { day });
   }
 
-  replaceCardsInWindow(
-    day: string,
-    startMs: number,
-    endMs: number,
-    drafts: LogbookCardDraft[],
-    options?: { selectKeyframes: boolean },
-  ) {
+  replaceCardsInWindow(day: string, startMs: number, endMs: number, drafts: LogbookCardDraft[]) {
     return this.execute("replaceCardsInWindow", {
       day,
       startMs,
       endMs,
       drafts,
-      selectKeyframes: options?.selectKeyframes,
     });
   }
 

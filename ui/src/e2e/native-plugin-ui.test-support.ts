@@ -6,35 +6,11 @@ import { expect } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 
-type TracedLitPart = {
-  startNode: Node;
-  endNode: Node | null;
-  options?: { host?: object; renderBefore?: Node };
-};
-
 function traceNativeWorkspaceLitErrors() {
   const scope = window as NativePluginWindow;
-  const trace = { prototypes: 0, errors: [] as unknown[] };
+  const trace = { errors: [] as unknown[] };
   scope.nativeWorkspaceLitTrace = trace;
   const prototypes = new WeakSet<object>();
-  const ranges = new WeakMap<object, unknown>();
-  let rangeId = 0;
-  const describe = (node: unknown) =>
-    node instanceof Node
-      ? {
-          nodeType: node.nodeType,
-          tag: node instanceof Element ? node.localName : null,
-          classes:
-            node instanceof Element
-              ? [...node.classList].slice(0, 8).map((name) => name.slice(0, 128))
-              : [],
-          connected: node.isConnected,
-        }
-      : null;
-  const facts = (node: unknown) => ({
-    node: describe(node),
-    parent: node instanceof Node ? describe(node.parentNode) : null,
-  });
   const discover = (node: Node) => {
     if (!(node instanceof Comment) || node.data !== "lit-content") {
       return;
@@ -43,25 +19,15 @@ function traceNativeWorkspaceLitErrors() {
     if (!cached || typeof cached !== "object") {
       return;
     }
-    // SAFETY: Lit 3.3.3 render caches its RootPart on this renderBefore comment.
-    const part = cached as TracedLitPart;
-    const range = part.options ?? part;
-    if (!ranges.has(range)) {
-      ranges.set(range, {
-        id: ++rangeId,
-        container: describe(node.parentNode),
-        host: describe(part.options?.host),
-      });
-    }
-    const prototype: object = Object.getPrototypeOf(part);
+    // Lit's DEV runtime caches the RootPart on this renderBefore comment.
+    const prototype: object = Object.getPrototypeOf(cached);
     const original: unknown = Reflect.get(prototype, "_$setValue");
     // The bundled production runtime renames this method; this probe targets Lit DEV.
     if (prototypes.has(prototype) || typeof original !== "function") {
       return;
     }
     prototypes.add(prototype);
-    trace.prototypes += 1;
-    Reflect.set(prototype, "_$setValue", function (this: TracedLitPart, ...args: unknown[]) {
+    Reflect.set(prototype, "_$setValue", function (this: object, ...args: unknown[]) {
       try {
         return Reflect.apply(original, this, args);
       } catch (error) {
@@ -69,11 +35,6 @@ function traceNativeWorkspaceLitErrors() {
           trace.errors.push({
             message: error instanceof Error ? error.message.slice(0, 1_600) : "Non-Error throw",
             stack: error instanceof Error ? error.stack?.slice(0, 1_600) : undefined,
-            range: ranges.get(this.options ?? this),
-            start: facts(this.startNode),
-            end: facts(this.endNode),
-            renderBefore: facts(this.options?.renderBefore),
-            host: facts(this.options?.host),
           });
         }
         throw error;
@@ -89,10 +50,7 @@ function traceNativeWorkspaceLitErrors() {
   };
   const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
-        scan(node);
-      }
-      for (const node of mutation.removedNodes) {
+      for (const node of [...mutation.addedNodes, ...mutation.removedNodes]) {
         scan(node);
       }
     }
@@ -108,48 +66,22 @@ export async function installNativeWorkspaceLitErrorTrace(page: Page): Promise<v
   });
 }
 
-/** Capture only synthetic fixture ownership and geometry after the original wait fails. */
+/** Supplement the suite's DOM/screenshot diagnostics with plugin ownership. */
 export async function captureNativeWorkspaceFailure(page: Page): Promise<void> {
   const readBrowserState = page.evaluate(() => {
-    const facts = (node: unknown) => {
-      if (!(node instanceof Element)) {
-        return { present: Boolean(node), element: false };
-      }
-      const style = getComputedStyle(node);
-      const rect = node.getBoundingClientRect();
-      return {
-        present: true,
-        element: true,
-        tag: node.localName,
-        classes: [...node.classList],
-        connected: node.isConnected,
-        parentTag: node.parentElement?.localName ?? null,
-        parentClasses: node.parentElement ? [...node.parentElement.classList] : [],
-        childElementCount: node.childElementCount,
-        hidden: node.hasAttribute("hidden"),
-        inert: node.hasAttribute("inert"),
-        display: style.display,
-        visibility: style.visibility,
-        contentVisibility: style.contentVisibility,
-        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-        rectCount: node.getClientRects().length,
-      };
-    };
-    const app = document.querySelector("openclaw-app");
-    const appShell = document.querySelector("openclaw-app-shell");
     const hosts = [...document.querySelectorAll("openclaw-plugin-view")];
-    // ContextProvider ignores its own host; an existing child can still request after shell failure.
-    const requestTarget =
-      hosts.find((host) => host.surface === "workspace") ?? appShell ?? app?.firstElementChild;
+    const app = document.querySelector("openclaw-app");
+    const target =
+      hosts.find((host) => host.surface === "workspace") ??
+      document.querySelector("openclaw-app-shell") ??
+      app?.firstElementChild;
     let owner: unknown = null;
-    requestTarget?.dispatchEvent(
+    target?.dispatchEvent(
       Object.assign(new Event("context-request", { bubbles: true, composed: true }), {
         context: "openclaw.application",
-        contextTarget: requestTarget,
+        contextTarget: target,
         subscribe: false,
         callback(context: ApplicationContext) {
-          const config = context.runtimeConfig.state;
-          const router = context.router.getState();
           owner = {
             registryStatus: context.plugins.registryStatus,
             selected: (["workspace", "composer", "transcript"] as const).map((surface) => {
@@ -161,57 +93,23 @@ export async function captureNativeWorkspaceFailure(page: Page): Promise<void> {
               };
             }),
             errorCount: context.plugins.errors.length,
-            routeStatus: router.status,
-            routeIds: router.matches.map((match) => match.routeId),
-            config: {
-              loading: config.configLoading,
-              saving: config.configSaving,
-              applying: config.configApplying,
-              hash: config.configSnapshot?.hash ?? null,
-              revision: config.configSnapshot?.configRevisionHash ?? null,
-              appliedHash: config.configSnapshot?.appliedConfigHash ?? null,
-            },
           };
         },
       }),
     );
     return {
-      route: location.pathname,
-      viewport: { width: innerWidth, height: innerHeight },
       owner,
-      contextRequestTarget: facts(requestTarget),
-      app: facts(app),
-      appShell: facts(appShell),
-      connectingSplash: facts(document.querySelector(".connect-splash--skeleton")),
-      lazyViewErrors: [...document.querySelectorAll(".lazy-view-error")]
-        .slice(0, 3)
-        .map((element) =>
-          Object.assign(facts(element), {
-            detail: element
-              .querySelector(".lazy-view-error__detail")
-              ?.textContent?.trim()
-              .slice(0, 1_000),
-          }),
-        ),
       bridgeRegistered: Boolean(customElements.get("openclaw-plugin-view")),
-      hosts: hosts.map((host) =>
-        Object.assign(facts(host), {
-          kind: host.kind,
-          surface: host.surface,
-          presented: host.presented,
-          roots: [...host.querySelectorAll("[data-plugin-view-root]")].map(facts),
-        }),
-      ),
-      shell: facts(document.querySelector(".shell")),
-      customHeadings: [...document.querySelectorAll("h1")]
-        .filter((heading) => heading.textContent === "Custom workspace")
-        .map((heading) => {
-          const ancestors = [];
-          for (let node = heading.parentElement; node; node = node.parentElement) {
-            ancestors.push(facts(node));
-          }
-          return Object.assign(facts(heading), { ancestors });
-        }),
+      hosts: hosts.map((host) => ({
+        kind: host.kind,
+        surface: host.surface,
+        presented: host.presented,
+        connected: host.isConnected,
+        rect: host.getBoundingClientRect().toJSON(),
+        display: getComputedStyle(host).display,
+        visibility: getComputedStyle(host).visibility,
+        roots: host.querySelectorAll("[data-plugin-view-root]").length,
+      })),
       litErrors: (window as NativePluginWindow).nativeWorkspaceLitTrace ?? null,
     };
   });
@@ -232,14 +130,13 @@ export async function captureNativePluginUiProof(
   name: string,
   options: { fullPage?: boolean } = {},
 ): Promise<void> {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
-    return;
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+    await page.screenshot({ ...options, path: path.join(owner.artifactDir, name) });
   }
-  await page.screenshot({ ...options, path: path.join(owner.artifactDir, name) });
 }
 
 export type NativePluginWindow = Window & {
-  nativeWorkspaceLitTrace?: { prototypes: number; errors: unknown[] };
+  nativeWorkspaceLitTrace?: { errors: unknown[] };
   nativePluginProof?: { release?: () => void };
   nativeActionProof?: {
     runs: number;
@@ -263,19 +160,14 @@ export async function waitForPendingPluginInitializer(page: Page): Promise<void>
 export const pluginId = "ui-fixture";
 
 export function catalog(revision: string) {
-  return {
+  const plugin = {
+    pluginId,
+    name: "UI fixture",
     revision,
-    diagnostics: [],
-    plugins: [
-      {
-        pluginId,
-        name: "UI fixture",
-        revision,
-        entryUrl: `/__openclaw__/plugins/control-ui/${pluginId}/${revision}/index.js`,
-        styles: [],
-      },
-    ],
+    entryUrl: `/__openclaw__/plugins/control-ui/${pluginId}/${revision}/index.js`,
+    styles: [],
   };
+  return { revision, diagnostics: [], plugins: [plugin] };
 }
 
 export function pluginModule(revision: string, replacements = true) {
@@ -398,9 +290,6 @@ export async function expectComposerFooterLayout(page: Page, composer: Locator, 
         transcriptBottom: threadBounds.bottom,
         content: style.content,
         background: style.backgroundImage,
-        left: footerBounds.left + Number.parseFloat(style.left) - threadBounds.left,
-        right: threadBounds.right - (footerBounds.right - Number.parseFloat(style.right)),
-        scrollbar: (threadBounds.width - thread.clientWidth) / 2,
       };
     });
     const description = `${variant} at ${width}px`;
@@ -408,10 +297,8 @@ export async function expectComposerFooterLayout(page: Page, composer: Locator, 
     expect.soft(geometry.composerTop, description).toBeGreaterThanOrEqual(geometry.footerTop);
     expect.soft(geometry.composerBottom, description).toBeLessThanOrEqual(geometry.footerBottom);
     expect.soft(geometry.inputOutsideContext, description).toBe(true);
-    expect.soft(geometry.content, description).toBe('""');
-    expect.soft(geometry.background, description).toContain("linear-gradient");
-    expect.soft(geometry.left, description).toBeGreaterThanOrEqual(geometry.scrollbar);
-    expect.soft(geometry.right, description).toBeGreaterThanOrEqual(geometry.scrollbar);
+    expect.soft(geometry.content, description).toBe("none");
+    expect.soft(geometry.background, description).toBe("none");
   }
   await page.setViewportSize({ width: 1280, height: 900 });
 }

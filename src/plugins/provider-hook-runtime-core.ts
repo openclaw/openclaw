@@ -160,7 +160,7 @@ export function createProviderHookRuntime(
             cfg: params.config,
             provider: params.provider,
             model: modelId,
-          }).modelRefs
+          })
         : undefined,
       registryScope,
       activate: false,

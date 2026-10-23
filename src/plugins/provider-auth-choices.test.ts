@@ -45,25 +45,26 @@ const {
 const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
 const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
 
-const openaiChoiceMetadata = {
-  choiceId: "openai-api-key",
-  choiceLabel: "OpenAI API key",
-  optionKey: "openaiApiKey",
-  cliFlag: "--openai-api-key",
-  cliOption: "--openai-api-key <key>",
-};
+const openaiChoiceMetadata = choiceMetadata("openai", "OpenAI");
 
 function authMethod(provider: string, method: string, metadata: Record<string, unknown> = {}) {
   return { provider, method, choiceId: `${provider}-${method}`, ...metadata };
 }
 
-function keyChoice(provider: string, label: string, overrides: Record<string, unknown> = {}) {
+function choiceMetadata(provider: string, label: string) {
   return {
-    ...authMethod(provider, "api-key"),
+    choiceId: `${provider}-api-key`,
     choiceLabel: `${label} API key`,
     optionKey: `${provider}ApiKey`,
     cliFlag: `--${provider}-api-key`,
     cliOption: `--${provider}-api-key <key>`,
+  };
+}
+
+function keyChoice(provider: string, label: string, overrides: Record<string, unknown> = {}) {
+  return {
+    ...authMethod(provider, "api-key"),
+    ...choiceMetadata(provider, label),
     cliDescription: `${label} API key`,
     ...overrides,
   };
@@ -97,10 +98,7 @@ function expectedSetupChoice(
 }
 
 function manifest(id: string, providerAuthChoices: Array<Record<string, unknown>>) {
-  return {
-    id,
-    providerAuthChoices,
-  };
+  return { id, providerAuthChoices };
 }
 
 function loginPlugin(
@@ -122,12 +120,8 @@ function loginPlugin(
 }
 
 function setPlugins(plugins: Array<Record<string, unknown>>) {
-  pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
-    plugins,
-  });
-  pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-    plugins,
-  });
+  pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({ plugins });
+  pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({ plugins });
   pluginRegistryMocks.loadPluginMetadataSnapshot.mockReturnValue({
     plugins,
     manifestRegistry: { plugins },
@@ -203,21 +197,7 @@ describe("provider auth choice manifest helpers", () => {
       pluginId: "demo",
       providerId: "demo",
       methodId: "api-key",
-      choiceId: "demo-key",
-      choiceLabel: "",
-      choiceHint: undefined,
-      personalAccount: true,
-      assistantPriority: 10,
-      assistantVisibility: "visible",
-      credentialOnly: true,
-      onboardingScopes: scopes,
-      channelLogin,
-      futureMetadata,
-      optionKey: "demoKey",
-      cliFlag: "--demo-key",
-      cliOption: "--demo-key <key>",
-      cliDescription: "",
-      deprecatedChoiceIds: ["old-demo"],
+      ...metadata,
     };
     expect(resolveChoices()).toStrictEqual([expected]);
     for (const read of [
@@ -342,12 +322,10 @@ describe("provider auth choice manifest helpers", () => {
     setPlugins(
       ["selected", "other"].map((id) =>
         manifest(id, [
-          {
-            provider: "demo",
-            method: "local",
+          authMethod("demo", "local", {
             choiceId: `${id}-local`,
             ...(id === "selected" ? { modelTarget: "utility" } : {}),
-          },
+          }),
         ]),
       ),
     );
@@ -489,13 +467,9 @@ describe("provider auth choice manifest helpers", () => {
       loginPlugin("openai", "bundled", "openai", guided),
       loginPlugin("evil-openai-hijack", "workspace", "evil-openai", {}, [
         {
-          provider: "evil-openai",
-          method: "api-key",
-          choiceId: "evil-openai-api-key",
-          choiceLabel: "Evil OpenAI API key",
+          ...authMethod("evil-openai", "api-key"),
+          ...choiceMetadata("evil-openai", "Evil OpenAI"),
           optionKey: "evilOpenaiApiKey",
-          cliFlag: "--evil-openai-api-key",
-          cliOption: "--evil-openai-api-key <key>",
         },
       ]),
     ]);
@@ -649,13 +623,9 @@ describe("provider auth choice manifest helpers", () => {
         },
         providerAuthChoices: [
           {
-            provider: "fixture-provider",
-            method: "api-key",
-            choiceId: "fixture-provider-api-key",
-            choiceLabel: "Fixture Provider API key",
+            ...authMethod("fixture-provider", "api-key"),
+            ...choiceMetadata("fixture-provider", "Fixture Provider"),
             optionKey: "fixtureProviderApiKey",
-            cliFlag: "--fixture-provider-api-key",
-            cliOption: "--fixture-provider-api-key <key>",
           },
         ],
       },

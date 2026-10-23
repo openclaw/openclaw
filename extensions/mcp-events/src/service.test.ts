@@ -105,6 +105,34 @@ describe("MCP Events callback and subscription lifecycle", () => {
   let beforeUnsubscribe: (() => void) | undefined;
   let callback: Plugin.OpenClawPluginHttpRouteHandler;
 
+  function createScheduler(): McpEventsDependencies["scheduler"] {
+    const controller = new AbortController();
+    return {
+      signal: controller.signal,
+      beginClose: () => {
+        controller.abort();
+        schedules.clear();
+      },
+      now: () => now,
+      schedule: ({ id, mode, ...job }) => {
+        const requestedAtMs = "atMs" in job ? job.atMs : now + job.delayMs;
+        const atMs =
+          mode === "earliest"
+            ? Math.min(requestedAtMs, schedules.get(id)?.atMs ?? Infinity)
+            : requestedAtMs;
+        schedules.set(id, { atMs, run: job.run });
+        return {
+          cancel: () => {
+            schedules.delete(id);
+          },
+          stop: async () => {
+            schedules.delete(id);
+          },
+        };
+      },
+    };
+  }
+
   beforeAll(async () => {
     server = createServer((req, res) => {
       void callback(req, res);
@@ -192,26 +220,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
           },
         },
       },
-      scheduler: {
-        signal: new AbortController().signal,
-        now: () => now,
-        schedule: ({ id, mode, ...job }) => {
-          const requestedAtMs = "atMs" in job ? job.atMs : now + job.delayMs;
-          const atMs =
-            mode === "earliest"
-              ? Math.min(requestedAtMs, schedules.get(id)?.atMs ?? Infinity)
-              : requestedAtMs;
-          schedules.set(id, { atMs, run: job.run });
-          return {
-            cancel: () => {
-              schedules.delete(id);
-            },
-            stop: async () => {
-              schedules.delete(id);
-            },
-          };
-        },
-      },
+      scheduler: createScheduler(),
       cron: {
         readEventSources: async () => sources,
         runEvent: vi.fn<EventCron["runEvent"]>(async () => ({ kind: "pending", reason: "busy" })),
@@ -376,7 +385,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
       config: { plugins: { entries: { "mcp-events": { enabled: true, config: deps.config } } } },
       stateDir: directory,
       logger: deps.logger,
-      scheduler: { ...scheduler, now: deps.scheduler.now, schedule: deps.scheduler.schedule },
+      scheduler: { ...scheduler, ...deps.scheduler },
       getCron: () => cron,
       mcpEvents: { prepareSource: deps.prepareSource },
     };
@@ -408,6 +417,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
   it("restores subscription state before accepting callbacks or reconciling startup hooks", async () => {
     await current!.start();
     await current!.stop();
+    deps = { ...deps, scheduler: createScheduler() };
     current = new McpEventsService(deps);
     const gate = barrier();
     const preflight = vi.mocked(resolvePinnedHostnameWithPolicy);
@@ -605,6 +615,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     expect((await post(body, "evt-1")).status).toBe(200);
     expect((await post(body, "evt-1")).status).toBe(200);
     await current!.stop();
+    deps = { ...deps, scheduler: createScheduler() };
     current = new McpEventsService(deps);
     await current.start();
     expect((await post(body, "evt-1")).status).toBe(200);

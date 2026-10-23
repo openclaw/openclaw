@@ -8,7 +8,8 @@ import {
   type CommandPaletteInputHandoff,
   type CommandPaletteOpenInput,
 } from "../components/command-palette-contract.ts";
-import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
+import type { OpenClawModalDialog } from "../components/modal-dialog.tsx";
+import { keepMobileReturnNative } from "../lib/browser-platform.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -16,7 +17,8 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { showToast } from "../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../lib/uploads.ts";
-import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
+import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
+import type { ApplicationContext } from "./context.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import {
   ensureCustomElementDefined,
@@ -31,8 +33,7 @@ type CommandPaletteShellHost = {
   readonly elements: { commandPalette?: CommandPaletteElement };
   readonly commandPaletteElement: OptionalCustomElement;
   readonly commandPaletteTarget?: CommandPaletteTargetDetail;
-  chatNavigationOptions(face: "chat"): ApplicationNavigationOptions | undefined;
-  navigate(routeId: "chat", options?: ApplicationNavigationOptions): void;
+  readonly shellNavigation: Pick<ShellNavigationCapability, "chatNavigationOptions" | "navigate">;
   readonly lazyCustomElements: LazyCustomElementRequests;
 };
 
@@ -57,6 +58,10 @@ export class ShellCommandPaletteOwner {
   }
 
   readonly open = (): void => {
+    this.synchronizeScope();
+    if (!this.loading.active() && this.loading.hasAttachments()) {
+      this.loading.begin();
+    }
     const palette = this.#host.elements.commandPalette;
     // Opening is an intent, not a prompt transport. Never persist event detail.
     const descriptor = lazyShellEvent(COMMAND_PALETTE_OPEN_EVENT);
@@ -77,7 +82,6 @@ export class ShellCommandPaletteOwner {
       });
       return;
     }
-    this.synchronizeScope();
     this.loading.begin();
     this.#actions.request(this.#host.commandPaletteElement, descriptor, this.open);
   };
@@ -90,11 +94,8 @@ export class ShellCommandPaletteOwner {
   synchronizeScope(): void {
     const gateway = this.#host.context?.gateway;
     const scope = gateway ? gatewayPresentationScope(gateway) : undefined;
-    if (
-      this.#scope &&
-      this.#scope !== scope &&
-      (this.loading.active() || this.#actions.pending())
-    ) {
+    if (this.#scope && this.#scope !== scope) {
+      this.loading.clear();
       this.closePending();
     }
     this.#scope = scope;
@@ -106,6 +107,8 @@ export class ShellCommandPaletteOwner {
       this.#host.lazyCustomElements.visibleState?.element === this.#host.commandPaletteElement
     ) {
       this.closePending();
+    } else if (this.loading.hasAttachments()) {
+      this.open();
     } else if (this.#host.elements.commandPalette?.isConnected) {
       this.#host.elements.commandPalette.togglePalette();
     } else {
@@ -123,10 +126,10 @@ export class ShellCommandPaletteOwner {
       return;
     }
     // Chat can update its existing draft; other routes hand it through navigation.
-    const navigation = host.chatNavigationOptions("chat");
+    const navigation = host.shellNavigation.chatNavigationOptions("chat");
     const search = new URLSearchParams(navigation?.search ?? "");
     search.set("draft", command.endsWith(" ") ? command : `${command} `);
-    host.navigate("chat", { ...navigation, search: `?${search.toString()}` });
+    host.shellNavigation.navigate("chat", { ...navigation, search: `?${search.toString()}` });
   }
 
   handlePendingShortcut(event: KeyboardEvent): boolean {
@@ -134,7 +137,7 @@ export class ShellCommandPaletteOwner {
       event.defaultPrevented ||
       event.isComposing ||
       event.keyCode === 229 ||
-      !this.loading.active() ||
+      (!this.loading.active() && !this.loading.hasAttachments()) ||
       !isCommandPaletteShortcut(event)
     ) {
       return false;
@@ -154,7 +157,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
     defined: boolean;
   };
   let current: Presentation = { submitRequested: false, defined: false };
-  // Shell connection publishes under its restored Solid owner.
+  // Reentrant shell events can publish during a rendering computation.
   const [read, write] = createSignal(current, { ownedWrite: true });
   // Imperative custody reads the same receipt before Solid commits its publication.
   const presentation = () => {
@@ -167,7 +170,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
   };
   const active = () => current.returnFocus !== undefined;
   const shown = createMemo(() => read().returnFocus !== undefined);
-  let imageFiles: File[] = [];
+  let attachmentFiles: File[] = [];
   let mentionTrigger: number | undefined;
   let input: HTMLTextAreaElement | undefined;
   let composing = false;
@@ -190,7 +193,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
     pendingHandoff = undefined;
     composing = false;
     input = undefined;
-    imageFiles = [];
+    attachmentFiles = [];
     mentionTrigger = undefined;
   }
   onCleanup(reset);
@@ -204,6 +207,14 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
         }
       : current.draft;
   }
+  function nativeTextDrop(event: DragEvent): boolean {
+    return (
+      active() &&
+      event.target === input &&
+      !current.submitRequested &&
+      !Array.from(event.dataTransfer?.types ?? []).includes("Files")
+    );
+  }
   function take(): CommandPaletteOpenInput | undefined {
     if (!active()) {
       return undefined;
@@ -215,7 +226,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       selectionDirection: "none" as const,
     };
     const { returnFocus, submitRequested } = current;
-    const files = imageFiles;
+    const files = attachmentFiles;
     const trigger = mentionTrigger;
     // Transfer the original focus target without restoring it between the two inputs.
     input?.closest<OpenClawModalDialog>("openclaw-modal-dialog")?.setReturnFocusTarget(null);
@@ -224,7 +235,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       ...draft,
       returnFocus,
       ...(submitRequested ? { submitRequested: true as const } : {}),
-      ...(files.length ? { imageFiles: files } : {}),
+      ...(files.length ? { attachmentFiles: files } : {}),
       ...(trigger !== undefined ? { mentionTrigger: trigger } : {}),
     };
   }
@@ -234,6 +245,10 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       return active();
     },
     value: () => presentation().draft?.value ?? "",
+    hasAttachments: () => {
+      presentation();
+      return attachmentFiles.length > 0;
+    },
     submitRequested: () => presentation().submitRequested,
     defined: () => presentation().defined,
     waitingForComposition: () => handoffPending,
@@ -251,7 +266,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       if (!defined) {
         void ensureCustomElementDefined(
           "openclaw-modal-dialog",
-          () => import("../components/modal-dialog.ts"),
+          () => import("../components/modal-dialog.tsx"),
         ).then(
           () => {
             if (active()) {
@@ -354,10 +369,47 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
           showToast({ message: uploadsDisabledMessage() });
           return;
         }
-        imageFiles.push(...files);
+        attachmentFiles.push(...files);
+        publish({ ...current });
       }
     },
+    handleDragOver(event: DragEvent): void {
+      if (nativeTextDrop(event)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect =
+          active() &&
+          !current.submitRequested &&
+          uploadsEnabled(host.context?.config) &&
+          Array.from(event.dataTransfer.types).includes("Files")
+            ? "copy"
+            : "none";
+      }
+    },
+    handleDrop(event: DragEvent): void {
+      if (nativeTextDrop(event)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (!active() || current.submitRequested || !event.dataTransfer?.files.length) {
+        return;
+      }
+      if (!uploadsEnabled(host.context?.config)) {
+        showToast({ message: uploadsDisabledMessage() });
+        return;
+      }
+      // Keep raw Files in memory until the canonical draft owns admission/reads.
+      attachmentFiles.push(...event.dataTransfer.files);
+      publish({ ...current });
+    },
     handleKeydown(event: KeyboardEvent): void {
+      if (keepMobileReturnNative(event)) {
+        return;
+      }
       if (composing || event.isComposing || event.keyCode === 229) {
         event.stopPropagation();
         return;
@@ -367,7 +419,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
         event.stopPropagation();
         if (
           !event.repeat &&
-          (current.draft?.value.trim() || imageFiles.length > 0) &&
+          (current.draft?.value.trim() || attachmentFiles.length > 0) &&
           matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)
         ) {
           publish({ ...current, submitRequested: true });
@@ -385,6 +437,18 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
     captureHandoff(): CommandPaletteInputHandoff {
       const captured = generation;
       return () => (captured === generation ? take() : undefined);
+    },
+    dismiss(): void {
+      // Accepted files stay in this custody until the canonical draft takes them.
+      // Dismissal cancels Send and composition, while context retirement clears all.
+      const files = attachmentFiles;
+      const draft = files.length ? snapshot() : undefined;
+      reset();
+      if (files.length) {
+        attachmentFiles = files;
+        current = { ...current, draft };
+      }
+      write(current);
     },
     clear(): void {
       reset();

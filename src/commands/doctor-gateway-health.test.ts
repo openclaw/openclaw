@@ -11,6 +11,7 @@ import {
 } from "../../packages/gateway-client/src/protocol-request.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { waitForGatewayDiagnosticReadiness } from "../cli/daemon-cli/diagnostic-readiness.js";
+import * as restartHealth from "../cli/daemon-cli/restart-health.constants.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
@@ -71,6 +72,7 @@ describe("checkGatewayHealth", () => {
   const sharedRuntime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
   beforeEach(() => {
+    vi.spyOn(restartHealth, "DEFAULT_RESTART_HEALTH_TIMEOUT_MS", "get").mockReturnValue(3_000);
     vi.spyOn(performance, "now").mockReturnValue(0);
     sharedRuntime.log.mockReset();
     sharedRuntime.error.mockReset();
@@ -292,7 +294,7 @@ describe("checkGatewayHealth", () => {
         ],
       });
 
-    await checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 });
+    await checkGatewayHealth({ runtime: sharedRuntime, cfg });
 
     expect(note).toHaveBeenCalledWith(
       "diagnostics-otel · logs · started · stdout",
@@ -325,9 +327,10 @@ describe("checkGatewayHealth", () => {
     });
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await expect(
-      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
-    ).resolves.toMatchObject({ authenticated: true, healthOk: true });
+    await expect(checkGatewayHealth({ runtime: runtime as never, cfg })).resolves.toMatchObject({
+      authenticated: true,
+      healthOk: true,
+    });
 
     expect(note).toHaveBeenCalledWith(
       `- feishu default: ${message} (resolve the reported channel error, then restart the channel)`,
@@ -390,7 +393,7 @@ describe("checkGatewayHealth", () => {
     it("allows slow diagnostics after a 100 ms status response", async () => {
       const started = mockResponseTiming(100, 4_000);
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      const result = checkGatewayHealth({ runtime, cfg, timeoutMs: 3_000 });
+      const result = checkGatewayHealth({ runtime, cfg });
       await started.statusStarted;
       await vi.advanceTimersByTimeAsync(100);
       await started.diagnosticsStarted;
@@ -421,9 +424,10 @@ describe("checkGatewayHealth", () => {
     });
 
     it("reports measured latency and the exhausted diagnostic budget without failing health", async () => {
+      vi.spyOn(restartHealth, "DEFAULT_RESTART_HEALTH_TIMEOUT_MS", "get").mockReturnValue(10_000);
       const started = mockResponseTiming(7_000, null);
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      const result = checkGatewayHealth({ runtime, cfg, timeoutMs: 10_000 });
+      const result = checkGatewayHealth({ runtime, cfg });
       await started.statusStarted;
       await vi.advanceTimersByTimeAsync(7_000);
       await started.diagnosticsStarted;
@@ -489,9 +493,7 @@ describe("checkGatewayHealth", () => {
         new Error(`\u001B[31mexporter probe failed\nAuthorization: Bearer ${token}`),
       );
 
-    await expect(
-      checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({
+    await expect(checkGatewayHealth({ runtime: sharedRuntime, cfg })).resolves.toEqual({
       authenticated: true,
       healthOk: true,
       status: { ok: true },
@@ -510,9 +512,7 @@ describe("checkGatewayHealth", () => {
   it("notes CLI and gateway version mismatch when the gateway reports another runtime version", async () => {
     callGateway.mockResolvedValueOnce({ runtimeVersion: "2026.4.23" }).mockResolvedValueOnce({});
 
-    await expect(
-      checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({
+    await expect(checkGatewayHealth({ runtime: sharedRuntime, cfg })).resolves.toEqual({
       authenticated: true,
       healthOk: true,
       status: { runtimeVersion: "2026.4.23" },
@@ -553,6 +553,49 @@ describe("checkGatewayHealth", () => {
     );
   });
 
+  it.each([
+    ["auth profile migration required", "auth profile migration required", "doctor --fix", ""],
+    [
+      "auth profile migration required",
+      "auth profile migration required",
+      "doctor --fix",
+      "repair-test",
+    ],
+    ["secret reference was not found", "secret reference was not found", "secrets reload", ""],
+    ["private unknown reason", "secret resolution failed", "secrets reload", ""],
+  ])(
+    "reports the remedy for %s in Doctor (%s, %s, %s)",
+    async (_reason, redacted, command, profile) => {
+      vi.stubEnv("OPENCLAW_PROFILE", profile);
+      vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
+      callGateway
+        .mockResolvedValueOnce({
+          degradedSecretOwners: [
+            {
+              ownerKind: "route",
+              ownerId: "legacy-agent",
+              state: "unavailable",
+              degradationState: "cold",
+              paths: ["auth-profile-legacy:auth-profiles"],
+              reason: redacted,
+            },
+          ],
+        })
+        .mockResolvedValue({});
+
+      await expect(checkGatewayHealth({ runtime: sharedRuntime, cfg })).resolves.toMatchObject({
+        healthOk: true,
+        authenticated: true,
+      });
+
+      const retryHint = `openclaw${profile ? ` --profile ${profile}` : ""} ${command}`;
+      expect(note).toHaveBeenCalledWith(
+        `- cold route:legacy-agent (auth-profile-legacy:auth-profiles): ${redacted}\n  Retry: ${retryHint}`,
+        "Secret runtime degradation",
+      );
+    },
+  );
+
   it("lists every degraded SecretRef owner reported by Gateway status", async () => {
     callGateway
       .mockResolvedValueOnce({
@@ -583,7 +626,7 @@ describe("checkGatewayHealth", () => {
       })
       .mockResolvedValueOnce({});
 
-    await checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 });
+    await checkGatewayHealth({ runtime: sharedRuntime, cfg });
 
     expect(note).toHaveBeenCalledWith(
       [
@@ -624,7 +667,7 @@ describe("checkGatewayHealth", () => {
       })
       .mockResolvedValueOnce({});
 
-    await checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 });
+    await checkGatewayHealth({ runtime: sharedRuntime, cfg });
 
     expect(note).toHaveBeenCalledWith(
       [
@@ -633,6 +676,15 @@ describe("checkGatewayHealth", () => {
       ].join("\n"),
       "Plugins configured unavailable",
     );
+  });
+
+  it("shows the Gateway's observed model reasoning mismatch and remediation", async () => {
+    const warning = "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.";
+    callGateway.mockResolvedValue({ modelReasoningWarning: warning });
+
+    await checkGatewayHealth({ runtime: sharedRuntime, cfg });
+
+    expect(note).toHaveBeenCalledWith(warning, "Model reasoning");
   });
 
   it("reports a typed close without depending on gateway error wording", async () => {
@@ -648,7 +700,7 @@ describe("checkGatewayHealth", () => {
     });
     callGateway.mockRejectedValueOnce(error);
 
-    await checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 });
+    await checkGatewayHealth({ runtime: sharedRuntime, cfg });
 
     expect(note).toHaveBeenCalledWith(
       "Gateway connect failed: transport closed: protocol version mismatch",
@@ -668,9 +720,7 @@ describe("checkGatewayHealth", () => {
       gatewayReached: true,
     });
 
-    await expect(
-      checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({
+    await expect(checkGatewayHealth({ runtime: sharedRuntime, cfg })).resolves.toEqual({
       authenticated: false,
       healthOk: true,
     });
@@ -704,9 +754,7 @@ describe("checkGatewayHealth", () => {
     retainGatewayResponsePayload(error, undefined);
     callGateway.mockRejectedValueOnce(error);
 
-    await expect(
-      checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({
+    await expect(checkGatewayHealth({ runtime: sharedRuntime, cfg })).resolves.toEqual({
       authenticated: false,
       healthOk: true,
     });
@@ -734,9 +782,10 @@ describe("checkGatewayHealth", () => {
     callGateway.mockRejectedValueOnce(error);
     probeGatewayStatus.mockResolvedValueOnce({ ok: false, gatewayReached: true });
 
-    await expect(
-      checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({ authenticated: false, healthOk: true });
+    await expect(checkGatewayHealth({ runtime: sharedRuntime, cfg })).resolves.toEqual({
+      authenticated: false,
+      healthOk: true,
+    });
 
     expect(probeGatewayStatus).toHaveBeenCalledOnce();
     expect(sharedRuntime.error).not.toHaveBeenCalled();
@@ -757,9 +806,7 @@ describe("checkGatewayHealth", () => {
       gatewayReached: true,
     });
 
-    await expect(
-      checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({
+    await expect(checkGatewayHealth({ runtime: sharedRuntime, cfg })).resolves.toEqual({
       authenticated: false,
       healthOk: true,
     });
@@ -792,7 +839,7 @@ describe("probeGatewayMemoryStatus", () => {
   it("requests cached memory status without a live embedding probe", async () => {
     callGateway.mockResolvedValue({ embedding: { ok: true } });
 
-    await expect(probeGatewayMemoryStatus({ cfg, timeoutMs: 1234 })).resolves.toEqual({
+    await expect(probeGatewayMemoryStatus({ cfg })).resolves.toEqual({
       checked: true,
       ready: true,
       error: undefined,
@@ -802,7 +849,7 @@ describe("probeGatewayMemoryStatus", () => {
     expect(callGateway).toHaveBeenCalledWith({
       method: "doctor.memory.status",
       params: { probe: false },
-      timeoutMs: 1234,
+      timeoutMs: 8_000,
       sharedStateMode: "read-only",
       config: cfg,
     });

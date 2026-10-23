@@ -6,6 +6,7 @@ import type { GatewayProtocolRequestOptions } from "../../../../packages/gateway
 import type { RequestFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { gatewayRequest } from "./session-fixtures.test-support.ts";
 import {
   deleteSessionPlacementDraft,
   startSessionPlacementInitialTurn,
@@ -78,6 +79,42 @@ function expectNotSent(request: ReturnType<typeof vi.fn>) {
   expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
 }
 
+function pendingSend(
+  onSend: (frame: RequestFrame) => void,
+  pendingOptions: Omit<ConstructorParameters<typeof GatewayPendingRequests>[0], "nowMs"> = {
+    createRequestId: () => "placement-initial-turn",
+    requestTimeoutMs: 30_000,
+  },
+) {
+  fakeTimers();
+  const frames: string[] = [];
+  const pending = new GatewayPendingRequests({
+    ...pendingOptions,
+    nowMs: Date.now,
+  });
+  onTestFinished(() => pending.flush(new Error("test disposed")));
+  const request = vi.fn(
+    (method: string, input?: unknown, options?: GatewayProtocolRequestOptions) => {
+      if (method !== "sessions.send") {
+        return Promise.resolve(method === "sessions.dispatch" ? placement("active") : {});
+      }
+      return pending.request(
+        {
+          send(raw) {
+            const frame = JSON.parse(raw) as RequestFrame;
+            frames.push(raw);
+            onSend(frame);
+          },
+        },
+        method,
+        input,
+        options,
+      );
+    },
+  );
+  return { frames, pending, request };
+}
+
 describe("session placement startup", () => {
   it.each([
     { waitMs: 45_000, cancel: false },
@@ -87,57 +124,33 @@ describe("session placement startup", () => {
   ])(
     "retains a cancellable initial send through startup ($waitMs ms, cancel=$cancel)",
     async ({ waitMs, cancel }) => {
-      fakeTimers();
       const abort = new AbortController();
-      const frames: string[] = [];
       let ready = false;
       let writes = 0;
-      const pending = new GatewayPendingRequests({
-        createRequestId: () => "placement-initial-turn",
-        nowMs: Date.now,
-        requestTimeoutMs: 30_000,
-      });
-      onTestFinished(() => pending.flush(new Error("test disposed")));
-      const request = vi.fn(
-        (method: string, input?: unknown, options?: GatewayProtocolRequestOptions) => {
-          if (method !== "sessions.send") {
-            return Promise.resolve(method === "sessions.dispatch" ? placement("active") : {});
-          }
-          return pending.request(
-            {
-              send(raw) {
-                frames.push(raw);
-                const frame = JSON.parse(raw) as { id: string };
-                if (ready) {
-                  writes += 1;
-                  pending.handleResponse({
-                    type: "res",
-                    id: frame.id,
-                    ok: true,
-                    payload: { runId: "initial-turn", status: "started" },
-                  });
-                } else {
-                  pending.handleResponse({
-                    type: "res",
-                    id: frame.id,
-                    ok: false,
-                    error: {
-                      code: "UNAVAILABLE",
-                      message: "Agent is preparing",
-                      retryable: true,
-                      retryAfterMs: 500,
-                      details: { reason: "startup-sidecars", method },
-                    },
-                  });
-                }
-              },
+      const { frames, pending, request } = pendingSend((frame) => {
+        if (ready) {
+          writes += 1;
+          pending.handleResponse({
+            type: "res",
+            id: frame.id,
+            ok: true,
+            payload: { runId: "initial-turn", status: "started" },
+          });
+        } else {
+          pending.handleResponse({
+            type: "res",
+            id: frame.id,
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              message: "Agent is preparing",
+              retryable: true,
+              retryAfterMs: 500,
+              details: { reason: "startup-sidecars", method: "sessions.send" },
             },
-            method,
-            input,
-            options,
-          );
-        },
-      );
+          });
+        }
+      });
       const outcome = start(request, { signal: abort.signal }, () => !abort.signal.aborted);
       await vi.advanceTimersByTimeAsync(30_000);
       expect(pending.hasPending).toBe(true);
@@ -159,34 +172,11 @@ describe("session placement startup", () => {
   it.each([false, true])(
     "settles a dispatched send before cancellation cleanup (cleanup=%s)",
     async (cleanup) => {
-      fakeTimers();
       const abort = new AbortController();
       const dispatched = Promise.withResolvers<RequestFrame>();
-      const frames: RequestFrame[] = [];
-      const pending = new GatewayPendingRequests({
+      const { frames, pending, request } = pendingSend((frame) => dispatched.resolve(frame), {
         createRequestId: () => "placement-late-ack",
-        nowMs: Date.now,
       });
-      onTestFinished(() => pending.flush(new Error("test disposed")));
-      const request = vi.fn(
-        (method: string, input?: unknown, options?: GatewayProtocolRequestOptions) => {
-          if (method !== "sessions.send") {
-            return Promise.resolve(method === "sessions.dispatch" ? placement("active") : {});
-          }
-          return pending.request(
-            {
-              send(raw) {
-                const frame = JSON.parse(raw) as RequestFrame;
-                frames.push(frame);
-                dispatched.resolve(frame);
-              },
-            },
-            method,
-            input,
-            options,
-          );
-        },
-      );
       const outcome = start(
         request,
         {
@@ -487,17 +477,14 @@ describe("session placement startup", () => {
   });
 
   it("preserves send-not-started classification when cleanup fails", async () => {
-    const request = vi.fn((method: string) => {
-      if (method === "sessions.dispatch") {
-        return Promise.resolve({ placement: { state: "active" } });
-      }
-      if (method === "sessions.send") {
-        return Promise.reject(new Error("gateway not connected"));
-      }
-      if (method === "sessions.reclaim") {
-        return Promise.reject(new Error("cleanup unavailable"));
-      }
-      throw new Error(`unexpected method ${method}`);
+    const request = gatewayRequest({
+      "sessions.dispatch": () => placement("active"),
+      "sessions.send": () => {
+        throw new Error("gateway not connected");
+      },
+      "sessions.reclaim": () => {
+        throw new Error("cleanup unavailable");
+      },
     });
     await expect(start(request, { messageId: "retained" })).resolves.toEqual({
       status: "send-not-started",

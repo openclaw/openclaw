@@ -174,14 +174,7 @@ export function buildShellCommandInvocation(
   return { argv: [config.shell, ...config.args, command], stdin: "ignore" };
 }
 
-export function getShellConfig(customShellPath?: string): ShellConfig {
-  if (customShellPath) {
-    if (!fs.existsSync(customShellPath)) {
-      throw new Error(`Custom shell path not found: ${customShellPath}`);
-    }
-    return createArgvShellConfig(customShellPath, getPosixShellArgs(customShellPath));
-  }
-
+export function getShellConfig(): ShellConfig {
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.
     // Problem: Many Windows system utilities (ipconfig, systeminfo, etc.) write
@@ -207,14 +200,7 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
   return createArgvShellConfig(shell, getPosixShellArgs(shell));
 }
 
-export function getBashShellConfig(customShellPath?: string): ShellConfig {
-  if (customShellPath) {
-    if (!fs.existsSync(customShellPath)) {
-      throw new Error(`Custom shell path not found: ${customShellPath}`);
-    }
-    return resolveBashCommandConfig(customShellPath);
-  }
-
+export function getBashShellConfig(): ShellConfig {
   if (process.platform === "win32") {
     const bash = resolveWindowsBashPath();
     if (bash) {

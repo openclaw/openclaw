@@ -1,9 +1,4 @@
-import type {
-  WizardMultiSelectParams,
-  WizardProgress,
-  WizardPrompter,
-  WizardSelectParams,
-} from "./prompts.js";
+import type { WizardMultiSelectParams, WizardPrompter, WizardSelectParams } from "./prompts.js";
 import { WizardNavigationError } from "./prompts.js";
 
 type PromptKind = "select" | "multiselect" | "text" | "confirm";
@@ -34,13 +29,6 @@ function unwrapNavigationPrompter(prompter: WizardPrompter): WizardPrompter {
     base = basePrompterByNavigationPrompter.get(current);
   }
   return current;
-}
-
-function inertProgress(): WizardProgress {
-  return {
-    update: () => {},
-    stop: () => {},
-  };
 }
 
 function stableKey(value: unknown): string {
@@ -140,7 +128,9 @@ class WizardPromptNavigator {
         call: (nextParams) => this.base.confirm(nextParams),
       }),
     progress: (label) =>
-      this.shouldSuppressOutput() ? inertProgress() : this.base.progress(label),
+      this.shouldSuppressOutput()
+        ? { update: () => {}, stop: () => {} }
+        : this.base.progress(label),
     ...(this.base.openUrl
       ? {
           openUrl: (url) => this.display(() => this.base.openUrl?.(url)),

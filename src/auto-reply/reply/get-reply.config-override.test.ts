@@ -60,7 +60,6 @@ const modelCatalog = [
   { provider: primary.provider, id: primary.model, name: "GPT-5.5", reasoning: true },
   { provider: fallback.provider, id: fallback.model, name: "Claude Fallback", reasoning: false },
 ];
-const heartbeat = { isHeartbeat: true, heartbeatModelOverride: "openai/gpt-5.5@openai:metered" };
 const resolvedConfig: OpenClawConfig = {
   channels: { telegram: { botToken: "resolved-telegram-token" } },
   agents: { defaults: { userTimezone: "America/New_York" } },
@@ -404,27 +403,33 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       sessionDiffBaseline: { sessionId: "overlapping-baseline" },
     });
   });
-  it("suppresses heartbeat model overrides for a model-locked session", async () => {
-    await mockAutoFallbackSession(true);
-    await expectPreparedReply(makeReasoningModelConfig(), heartbeat);
-    expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
-    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
-      ...fallback,
-      hasResolvedHeartbeatModelOverride: false,
-    });
-    expect(runParams()).toMatchObject(fallback);
-    expect(runParams()?.autoFallbackPrimaryProbe).toBeUndefined();
-    expect(runParams()).not.toHaveProperty("configuredProfileId", "openai:metered");
-  });
-  it("keeps an explicit heartbeat profile on its turn without persisting it into chat", async () => {
-    const { sessionKey, storePath } = await mockAutoFallbackSession(undefined, primary);
-    const cfg = makeReasoningModelConfig();
-    await getReplyFromConfig(buildCtx(), heartbeat, cfg);
-    expect(runParams()).toMatchObject({ ...primary, configuredProfileId: "openai:metered" });
-    expect(loadSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBeUndefined();
-    await getReplyFromConfig(buildCtx(), undefined, cfg);
-    expect(runReply.mock.calls[1]?.[0]).not.toHaveProperty("configuredProfileId", "openai:metered");
-  });
+
+  it.for([false, true])(
+    "keeps a scheduled model override turn-local (locked=%s)",
+    async (locked) => {
+      const { sessionKey, storePath } = await mockAutoFallbackSession(
+        locked,
+        locked ? fallback : primary,
+      );
+      const { getReplyFromConfig: getInternalReply } = await import("./get-reply.js");
+      const cfg = makeReasoningModelConfig();
+      await expect(
+        getInternalReply(buildCtx(), { modelOverride: "openai/gpt-5.5@openai:metered" }, cfg),
+      ).resolves.toEqual({ text: "ok" });
+      expect(runParams()).toMatchObject(
+        locked ? fallback : { ...primary, configuredProfileId: "openai:metered" },
+      );
+      expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
+        hasResolvedTurnModelOverride: !locked,
+      });
+      expect(loadSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBeUndefined();
+      await getInternalReply(buildCtx(), undefined, cfg);
+      expect(runReply.mock.calls[1]?.[0]).not.toHaveProperty(
+        "configuredProfileId",
+        "openai:metered",
+      );
+    },
+  );
   it.each([false, true])(
     "resolves primary-probe reasoning (policy-filtered: %s)",
     async (filtered) => {

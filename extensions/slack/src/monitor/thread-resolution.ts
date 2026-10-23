@@ -1,22 +1,11 @@
-import {
-  type WebClient as SlackWebClient,
-  WebAPIHTTPError,
-  WebAPIPlatformError,
-  WebAPIRateLimitedError,
-  WebAPIRequestError,
-} from "@slack/web-api";
+import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
-import {
-  collectErrorGraphCandidates,
-  extractErrorCode,
-  readErrorName,
-} from "openclaw/plugin-sdk/error-runtime";
-import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString as normalizeThreadTs } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError } from "../errors.js";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
+import { isTransientSlackApiError } from "./transient-api-error.js";
 
 const DEFAULT_THREAD_TS_CACHE_TTL_MS = 60_000;
 const DEFAULT_THREAD_TS_CACHE_MAX = 500;
@@ -25,39 +14,6 @@ const markAmbiguousThreadReply = (message: SlackMessageEvent): SlackMessageEvent
   ...message,
   _ambiguousThreadReply: true,
 });
-
-export function isTransientSlackThreadLookupError(error: unknown): boolean {
-  if (error instanceof WebAPIRateLimitedError) {
-    return true;
-  }
-  if (error instanceof WebAPIHTTPError) {
-    return (
-      error.statusCode === 408 ||
-      error.statusCode === 429 ||
-      (error.statusCode >= 500 && error.statusCode < 600)
-    );
-  }
-  // Slack documents these users.info response codes as transient service failures.
-  if (error instanceof WebAPIPlatformError) {
-    return error.data.error === "internal_error" || error.data.error === "service_unavailable";
-  }
-  if (!(error instanceof WebAPIRequestError)) {
-    return false;
-  }
-  // Slack Web API 8.0.0 wraps exhausted 429 retries as this uncoded request error.
-  if (/^A rate limit was exceeded \(url: .+, retry-after: \d+\)$/.test(error.original.message)) {
-    return true;
-  }
-  return collectErrorGraphCandidates(error.original, (current) => [
-    current.cause,
-    current.error,
-    current.original,
-  ]).some(
-    (candidate) =>
-      classifyTransientNetworkErrorCode(extractErrorCode(candidate)) ||
-      readErrorName(candidate) === "TimeoutError",
-  );
-}
 
 async function resolveThreadTsFromHistory(params: {
   client: SlackWebClient;
@@ -121,7 +77,7 @@ export function createSlackThreadTsResolver(params: { client: SlackWebClient }) 
                   `slack inbound: failed to resolve thread_ts via conversations.history for channel=${message.channel} ts=${message.ts}: ${formatSlackError(err)}`,
                 );
               }
-              if (isTransientSlackThreadLookupError(err)) {
+              if (isTransientSlackApiError(err)) {
                 throw err;
               }
               return null;

@@ -2,6 +2,8 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect } from "vitest";
 import { createDashboardTool } from "../../../src/agents/tools/dashboard-tool.js";
+import { createDirectChatContext } from "../../../src/gateway/server-chat.agent-events.test-helpers.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../../src/plugins/runtime/gateway-request-scope.js";
 import type { MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 
 export async function assertDashboardToolPresentation(params: {
@@ -12,21 +14,25 @@ export async function assertDashboardToolPresentation(params: {
 }) {
   const { page, gateway, sessionKey, proofDir } = params;
   let commandDelivery = Promise.resolve();
-  const dashboardTool = createDashboardTool({
-    agentSessionKey: sessionKey,
-    emitCommand: (event) => {
-      commandDelivery = gateway.emitGatewayEvent("board.command", event);
-      return 1;
+  const context = createDirectChatContext({
+    getClientConnIds: () => new Set(["presentation-control-ui"]),
+    broadcastToConnIds: (event, payload) => {
+      commandDelivery = gateway.emitGatewayEvent(event, payload);
     },
   });
+  const dashboardTool = createDashboardTool({ agentSessionKey: sessionKey });
   if (proofDir) {
     await page.screenshot({ path: path.join(proofDir, "07-before-presentation-command.png") });
   }
   for (const presentation of ["expanded", "split"] as const) {
-    const result = await dashboardTool.execute(`${presentation}-dashboard`, {
-      action: "set_presentation",
-      presentation,
-    });
+    const result = await withPluginRuntimeGatewayRequestScope(
+      { context, isWebchatConnect: () => false },
+      () =>
+        dashboardTool.execute(`${presentation}-dashboard`, {
+          action: "set_presentation",
+          presentation,
+        }),
+    );
     expect(result.details).toEqual({ ok: true, delivered: 1 });
     await commandDelivery;
     await expect

@@ -30,6 +30,8 @@ export type OpenClawSharedToolsOptions = {
   /** Complete model-discoverable catalog, prepared by the current host. */
   installedSkills?: readonly InstalledSkill[];
   skillsSnapshot?: SkillSnapshot;
+  /** Restrict mixed tool owners to reads before the recovery surface is filtered. */
+  forceRestartSafeTools?: boolean;
   /**
    * Overrides the originating-channel sender for blocking questions. An actual
    * harness prompt reservation retains delivery ownership.
@@ -101,10 +103,6 @@ export type OpenClawSharedToolsOptions = {
   disableMessageTool?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
-  /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
-  enableHeartbeatTool?: boolean;
-  /** Offer the heartbeat tool definition without accepting responses outside heartbeat runs. */
-  offerHeartbeatTool?: boolean;
   /** Host-only observation after a canonical progress-card replacement commits. */
   onProgressCardPlanSaved?: (unfinished: boolean) => void;
   onYield?: SessionsYieldCallback;

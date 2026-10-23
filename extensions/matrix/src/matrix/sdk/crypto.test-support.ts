@@ -27,21 +27,10 @@ export class MockVerifier
     super();
   }
 
-  verify(): Promise<void> {
-    return this.verifyImpl();
-  }
-
-  cancel(_e: Error): void {
-    void _e;
-  }
-
-  getShowSasCallbacks(): MatrixShowSasCallbacks | null {
-    return this.sasCallbacks;
-  }
-
-  getReciprocateQrCodeCallbacks(): MatrixShowQrCodeCallbacks | null {
-    return this.qrCallbacks;
-  }
+  verify = () => this.verifyImpl();
+  cancel = (_e: Error): void => {};
+  getShowSasCallbacks = () => this.sasCallbacks;
+  getReciprocateQrCodeCallbacks = () => this.qrCallbacks;
 }
 
 export class MockVerificationRequest
@@ -70,9 +59,7 @@ export class MockVerificationRequest
     Object.assign(this, init);
   }
 
-  otherPartySupportsMethod(method: string): boolean {
-    return this.methods.includes(method);
-  }
+  otherPartySupportsMethod = (method: string) => this.methods.includes(method);
 
   accept = vi.fn(async () => {
     this.phase = VerificationPhase.Ready;
@@ -82,22 +69,15 @@ export class MockVerificationRequest
     this.phase = VerificationPhase.Cancelled;
   });
 
-  startVerification = vi.fn(async (_method: string) => {
+  private start() {
     if (!this.verifier) {
       throw new Error("verifier not configured");
     }
     this.phase = VerificationPhase.Started;
     return this.verifier;
-  });
-
-  scanQRCode = vi.fn(async (_qrCodeData: Uint8ClampedArray) => {
-    if (!this.verifier) {
-      throw new Error("verifier not configured");
-    }
-    this.phase = VerificationPhase.Started;
-    return this.verifier;
-  });
-
+  }
+  startVerification = vi.fn(async (_method: string) => this.start());
+  scanQRCode = vi.fn(async (_qrCodeData: Uint8ClampedArray) => this.start());
   generateQRCode = vi.fn(async () => new Uint8ClampedArray([1, 2, 3]));
 }
 

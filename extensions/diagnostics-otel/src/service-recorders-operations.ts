@@ -3,19 +3,16 @@ import {
   normalizeDiagnosticValue,
   normalizeDiagnosticLane,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import type {
-  DiagnosticEventMetadata,
-  DiagnosticEventPayload,
-  DiagnosticEventPrivateData,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { assignOptionalNumberAttrs } from "./service-attributes.js";
 import {
-  normalizeOtelContentValue,
+  assignOtelContentAttr,
   normalizeOtelErrorMessage,
 } from "./service-content-normalization.js";
+import type { DiagnosticHandlers } from "./service-events.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
-import type { SessionRecoveryDiagnosticEvent, TalkDiagnosticEvent } from "./service-types.js";
+import type { SessionRecoveryDiagnosticEvent } from "./service-types.js";
 
 export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
   const sessionRecoveryAttrs = (evt: SessionRecoveryDiagnosticEvent) => {
@@ -44,18 +41,12 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
   };
 
   return {
-    recordSessionsListBaselineRetired(
-      evt: Extract<DiagnosticEventPayload, { type: "sessions.list.baseline.retired" }>,
-      metadata: DiagnosticEventMetadata,
-    ) {
+    "sessions.list.baseline.retired"(evt, metadata) {
       if (metadata.trusted) {
         runtime.sessionsListBaselineRetirementsCounter.add(1, { cause: evt.cause });
       }
     },
-    recordGatewayWsEvent(
-      evt: Extract<DiagnosticEventPayload, { type: "gateway.ws.event" }>,
-      metadata: DiagnosticEventMetadata,
-    ) {
+    "gateway.ws.event"(evt, metadata) {
       if (!metadata.trusted) {
         return;
       }
@@ -83,45 +74,30 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         runtime.gatewayWsSessionEventBytesCounter.add(evt.bytes, sessionAttrs);
       }
     },
-    recordGatewayWsConnections(
-      evt: Extract<DiagnosticEventPayload, { type: "gateway.ws.connections" }>,
-      metadata: DiagnosticEventMetadata,
-    ) {
+    "gateway.ws.connections"(evt, metadata) {
       if (metadata.trusted) {
         runtime.gatewayWsOperatorConnectionsGauge.record(evt.operators);
       }
     },
-    recordSessionsListRetention(
-      evt: Extract<DiagnosticEventPayload, { type: "sessions.list.retention" }>,
-      metadata: DiagnosticEventMetadata,
-    ) {
+    "sessions.list.retention"(evt, metadata) {
       if (metadata.trusted) {
         runtime.sessionsListRetainedViewsGauge.record(evt.views);
         runtime.sessionsListRetainedRefsGauge.record(evt.refs);
         runtime.sessionsListRetainedBytesGauge.record(evt.estimatedBytes);
       }
     },
-    recordSessionEventRetention(
-      evt: Extract<DiagnosticEventPayload, { type: "sessions.event.retention" }>,
-      metadata: DiagnosticEventMetadata,
-    ) {
+    "sessions.event.retention"(evt, metadata) {
       if (metadata.trusted) {
         runtime.sessionEventRowsRetainedEntriesGauge.record(evt.entries);
         runtime.sessionEventRowsRetainedBytesGauge.record(evt.estimatedBytes);
       }
     },
-    recordSessionEventRowsReset(
-      evt: Extract<DiagnosticEventPayload, { type: "sessions.event.rows.reset" }>,
-      metadata: DiagnosticEventMetadata,
-    ) {
+    "sessions.event.rows.reset"(evt, metadata) {
       if (metadata.trusted) {
         runtime.sessionEventRowsResetCounter.add(evt.count, { cause: evt.cause });
       }
     },
-    recordGatewayRpc(
-      evt: Extract<DiagnosticEventPayload, { type: "gateway.rpc" }>,
-      metadata: DiagnosticEventMetadata,
-    ) {
+    "gateway.rpc"(evt, metadata) {
       if (!metadata.trusted || (evt.phase === "response" && evt.firstResponse === false)) {
         return;
       }
@@ -183,12 +159,12 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       span.end(evt.ts);
     },
-    recordLaneEnqueue(evt: Extract<DiagnosticEventPayload, { type: "queue.lane.enqueue" }>) {
+    "queue.lane.enqueue"(evt) {
       const attrs = { "openclaw.lane": normalizeDiagnosticLane(evt.lane) };
       runtime.laneEnqueueCounter.add(1, attrs);
       runtime.queueDepthHistogram.record(evt.queueSize, attrs);
     },
-    recordLaneDequeue(evt: Extract<DiagnosticEventPayload, { type: "queue.lane.dequeue" }>) {
+    "queue.lane.dequeue"(evt) {
       const attrs = { "openclaw.lane": normalizeDiagnosticLane(evt.lane) };
       runtime.laneDequeueCounter.add(1, attrs);
       runtime.queueDepthHistogram.record(evt.queueSize, attrs);
@@ -196,23 +172,21 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         runtime.queueWaitHistogram.record(evt.waitMs, attrs);
       }
     },
-    recordSessionState(evt: Extract<DiagnosticEventPayload, { type: "session.state" }>) {
+    "session.state"(evt) {
       const attrs: Record<string, string> = { "openclaw.state": evt.state };
       if (evt.reason) {
         attrs["openclaw.reason"] = redactSensitiveText(evt.reason);
       }
       runtime.sessionStateCounter.add(1, attrs);
     },
-    recordSessionTurnCreated(
-      evt: Extract<DiagnosticEventPayload, { type: "session.turn.created" }>,
-    ) {
+    "session.turn.created"(evt) {
       runtime.sessionTurnCreatedCounter.add(1, {
         "openclaw.agent": normalizeDiagnosticValue(evt.agentId, "unknown"),
         "openclaw.channel": normalizeDiagnosticValue(evt.channel, "unknown"),
         "openclaw.trigger": evt.trigger,
       });
     },
-    recordSessionStuck(evt: Extract<DiagnosticEventPayload, { type: "session.stuck" }>) {
+    "session.stuck"(evt) {
       const attrs: Record<string, string> = { "openclaw.state": evt.state };
       runtime.sessionStuckCounter.add(1, attrs);
       if (typeof evt.ageMs === "number") {
@@ -228,17 +202,13 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       span.setStatus({ code: SpanStatusCode.ERROR, message: "session stuck" });
       span.end();
     },
-    recordSessionRecoveryRequested(
-      evt: Extract<DiagnosticEventPayload, { type: "session.recovery.requested" }>,
-    ) {
+    "session.recovery.requested"(evt) {
       const attrs = sessionRecoveryAttrs(evt);
       attrs["openclaw.action"] = evt.allowActiveAbort ? "abort" : "recover";
       runtime.sessionRecoveryRequestedCounter.add(1, attrs);
       runtime.sessionRecoveryAgeHistogram.record(evt.ageMs, attrs);
     },
-    recordSessionRecoveryCompleted(
-      evt: Extract<DiagnosticEventPayload, { type: "session.recovery.completed" }>,
-    ) {
+    "session.recovery.completed"(evt) {
       const attrs = sessionRecoveryAttrs(evt);
       attrs["openclaw.status"] = evt.status;
       attrs["openclaw.action"] = normalizeDiagnosticValue(evt.action, "unknown");
@@ -248,7 +218,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       runtime.sessionRecoveryCompletedCounter.add(1, attrs);
       runtime.sessionRecoveryAgeHistogram.record(evt.ageMs, attrs);
     },
-    recordTalkEvent(evt: TalkDiagnosticEvent, metadata: DiagnosticEventMetadata) {
+    "talk.event"(evt, metadata) {
       if (!metadata.trusted) {
         return;
       }
@@ -267,10 +237,10 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         runtime.talkAudioBytesHistogram.record(evt.byteLength, attrs);
       }
     },
-    recordRunAttempt(evt: Extract<DiagnosticEventPayload, { type: "run.attempt" }>) {
+    "run.attempt"(evt) {
       runtime.runAttemptCounter.add(1, { "openclaw.attempt": evt.attempt });
     },
-    recordToolLoop(evt: Extract<DiagnosticEventPayload, { type: "tool.loop" }>) {
+    "tool.loop"(evt) {
       const attrs = {
         "openclaw.toolName": normalizeDiagnosticValue(evt.toolName, "tool"),
         "openclaw.loop.level": evt.level,
@@ -298,10 +268,8 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       span.end(evt.ts);
     },
-    recordMemoryUsageMetrics,
-    recordMemoryPressure(
-      evt: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.pressure" }>,
-    ) {
+    "diagnostic.memory.sample": (evt) => recordMemoryUsageMetrics(evt),
+    "diagnostic.memory.pressure"(evt) {
       const attrs = {
         "openclaw.memory.level": evt.level,
         "openclaw.memory.reason": evt.reason,
@@ -335,9 +303,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       span.end(evt.ts);
     },
-    recordAsyncQueueDropped(
-      evt: Extract<DiagnosticEventPayload, { type: "diagnostic.async_queue.dropped" }>,
-    ) {
+    "diagnostic.async_queue.dropped"(evt) {
       runtime.asyncQueueDroppedCounter.add(evt.droppedEvents, {
         "openclaw.diagnostic.async_queue.drop_class": "total",
       });
@@ -353,11 +319,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         }
       }
     },
-    recordRunCompleted(
-      evt: Extract<DiagnosticEventPayload, { type: "run.completed" }>,
-      metadata: DiagnosticEventMetadata,
-      privateData: DiagnosticEventPrivateData,
-    ) {
+    "run.completed"(evt, metadata, privateData) {
       const attrs: Record<string, string | number> = {
         "openclaw.outcome": evt.outcome,
         "openclaw.provider": evt.provider ?? "unknown",
@@ -388,17 +350,9 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       if (redactedError) {
         spanAttrs["openclaw.error"] = redactedError;
       }
-      const inputValue = runtime.captureContent
-        ? normalizeOtelContentValue(privateData.messageContent?.userPrompt)
-        : undefined;
-      if (inputValue) {
-        spanAttrs["input.value"] = inputValue;
-      }
-      const outputValue = runtime.captureContent
-        ? normalizeOtelContentValue(privateData.messageContent?.finalResponse)
-        : undefined;
-      if (outputValue) {
-        spanAttrs["output.value"] = outputValue;
+      if (runtime.captureContent) {
+        assignOtelContentAttr(spanAttrs, "input.value", privateData.messageContent?.userPrompt);
+        assignOtelContentAttr(spanAttrs, "output.value", privateData.messageContent?.finalResponse);
       }
       const trustedTrace = runtime.trustedTraceContext(evt, metadata);
       const trackedSpan = trustedTrace?.spanId
@@ -421,5 +375,5 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       runtime.completeTrackedLifecycleSpan(trackedSpan ? trustedTrace : undefined, span, evt.ts);
     },
-  };
+  } satisfies DiagnosticHandlers;
 }

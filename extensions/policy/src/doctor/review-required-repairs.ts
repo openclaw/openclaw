@@ -5,7 +5,6 @@ import type {
   HealthRepairEffect,
   HealthRepairResult,
 } from "openclaw/plugin-sdk/health";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CHECK_IDS, type POLICY_CHECK_IDS } from "./check-ids.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
 
@@ -29,14 +28,7 @@ export function previewPolicyReviewRequiredRepair(
       changes: [],
     });
   }
-  if (
-    findings.length === 0 ||
-    findings.some(
-      (finding) =>
-        finding.checkId !== checkId ||
-        POLICY_FIX_METADATA_BY_CHECK_ID.get(finding.checkId)?.fixClass !== "reviewRequired",
-    )
-  ) {
+  if (findings.length === 0 || findings.some((finding) => finding.checkId !== checkId)) {
     return Promise.resolve({
       status: "skipped",
       reason: "policy finding is not classified as review-required",
@@ -44,8 +36,12 @@ export function previewPolicyReviewRequiredRepair(
     });
   }
 
-  const previews = findings.flatMap((finding) => previewForFinding(finding, checkId));
-  if (previews.length === 0) {
+  const previews = new Map(
+    findings
+      .flatMap((finding) => previewForFinding(finding, checkId))
+      .map((preview) => [preview.change, preview.effect]),
+  );
+  if (previews.size === 0) {
     return Promise.resolve({
       status: "skipped",
       reason: "policy review-required repair had no previewable config changes",
@@ -56,9 +52,9 @@ export function previewPolicyReviewRequiredRepair(
   return Promise.resolve({
     status: "skipped",
     reason: "policy repair requires review before changing config",
-    changes: uniqueStrings(previews.map((preview) => preview.change)),
-    warnings: uniqueStrings(previews.map((preview) => preview.change)),
-    effects: uniqueEffects(previews.map((preview) => preview.effect)),
+    changes: [...previews.keys()],
+    warnings: [...previews.keys()],
+    effects: [...previews.values()],
   });
 }
 
@@ -99,16 +95,4 @@ function previewForFinding(
       return [];
   }
   return [{ change, effect: { kind: "config", action, target, dryRunSafe: true } }];
-}
-
-function uniqueEffects(values: readonly HealthRepairEffect[]): readonly HealthRepairEffect[] {
-  const seen = new Set<string>();
-  return values.filter((value) => {
-    const key = JSON.stringify(value);
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
 }

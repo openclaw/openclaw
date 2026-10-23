@@ -4,7 +4,6 @@ import {
   createRoot,
   createSignal,
   getOwner,
-  onCleanup,
   onSettled,
   runWithOwner,
   Show,
@@ -277,25 +276,27 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       />
     );
   }
-  views.set(host, {
-    focus(options) {
-      if (handle?.focus) {
-        handle.focus();
-      } else {
-        // The plugin owns its markup; focus falls back to its first editable control.
-        const input = host.querySelector<HTMLElement>("textarea, input, [contenteditable=true]");
-        if (input) {
-          input.focus(options);
+  onSettled(() => {
+    views.set(host, {
+      focus(options) {
+        if (handle?.focus) {
+          handle.focus();
         } else {
-          HTMLElement.prototype.focus.call(host, options);
+          // The plugin owns its markup; focus falls back to its first editable control.
+          const input = host.querySelector<HTMLElement>("textarea, input, [contenteditable=true]");
+          if (input) {
+            input.focus(options);
+          } else {
+            HTMLElement.prototype.focus.call(host, options);
+          }
         }
-      }
-    },
-  });
-  onCleanup(() => {
-    disposed = true;
-    unmount();
-    views.delete(host);
+      },
+    });
+    return () => {
+      disposed = true;
+      unmount();
+      views.delete(host);
+    };
   });
   return (
     <>

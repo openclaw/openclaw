@@ -69,18 +69,14 @@ export async function readPublicA2uiResource(
   resourcePath: string,
 ): Promise<{ body: Uint8Array; contentType: string } | undefined> {
   const root = await resolveA2uiRootReal();
-  const opened = root
+  await using opened = root
     ? await resolveFileWithinRoot(root, resourcePath.slice(A2UI_PATH.length))
     : null;
   if (!opened) {
     return undefined;
   }
-  try {
-    return {
-      body: await readFileHandleBounded(opened.handle, Infinity),
-      contentType: "application/javascript; charset=utf-8",
-    };
-  } finally {
-    await opened.handle.close();
-  }
+  return {
+    body: await readFileHandleBounded(opened.handle, Infinity),
+    contentType: "application/javascript; charset=utf-8",
+  };
 }

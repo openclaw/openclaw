@@ -134,6 +134,7 @@ suite.define(() => {
     await suite.withPage(
       {
         colorScheme: "dark",
+        reducedMotion: "reduce",
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1280 },
@@ -186,6 +187,18 @@ suite.define(() => {
         await page
           .locator(".chat-group.user", { hasText: "what happened with telegram?" })
           .waitFor();
+        await expect
+          .poll(() =>
+            page
+              .locator(".custodian__thinking-row canvas")
+              .evaluate((canvas: HTMLCanvasElement) => {
+                const pixels = canvas
+                  .getContext("2d")!
+                  .getImageData(0, 0, canvas.width, canvas.height).data;
+                return pixels.some((value, index) => index % 4 === 3 && value > 0);
+              }),
+          )
+          .toBe(true);
         await gateway.resolveDeferred("openclaw.chat", {
           sessionId: "e2e-custodian",
           reply: "I'm watching the system.",

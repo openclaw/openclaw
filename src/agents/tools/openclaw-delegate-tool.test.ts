@@ -88,6 +88,10 @@ it("relays context and the completed approval outcome", async () => {
     execSession: { permissionMode: "guarded" },
   });
   expect(tool.description).toContain("Gateway restart");
+  expect(tool.description).toContain("multiple named custom/local model endpoints");
+  expect(tool.description).toContain(
+    "provider IDs can be user-defined, while api selects the protocol",
+  );
   expect(tool.description).toContain("approve in the Control UI");
   expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("openclaw");
   const result = await tool.execute("call-1", { message: "Add channel." });

@@ -44,7 +44,7 @@ import {
   createUsageCacheWrite as rollupRow,
   disposableUsageLock as disposableLock,
 } from "./session-cost-usage-cache.fixtures.test-support.js";
-import { writeSessionCostUsageRollupInDatabase as writeRollup } from "./session-cost-usage-cache.kernel.js";
+import { writeSessionCostUsageRollupsInDatabase as writeRollups } from "./session-cost-usage-cache.kernel.js";
 import {
   isSessionCostUsageRefreshRunning as isRefreshing,
   prepareSessionCostUsageRefreshLock as prepareLock,
@@ -128,7 +128,7 @@ it.each(["rollup", "prune"] as const)(
       const database = openOpenClawAgentDatabase({ agentId });
       const databasePath = database.path;
       runOpenClawAgentWriteTransaction(
-        ({ db }) => writeRollup(db, rollupRow("session.jsonl", '{"totalTokens":1}', 1)),
+        ({ db }) => writeRollups(db, [rollupRow("session.jsonl", '{"totalTokens":1}', 1)]),
         { agentId, path: databasePath },
         { operationLabel: "session-cost-usage.rollup.write" },
       );
@@ -585,7 +585,7 @@ it("finishes a foreground session write while pruning a cold existing usage stor
     const agentId = "main";
     const template = openOpenClawAgentDatabase({ agentId, env: state.env });
     runOpenClawAgentWriteTransaction(
-      ({ db }) => writeRollup(db, rollupRow("removed-session.jsonl")),
+      ({ db }) => writeRollups(db, [rollupRow("removed-session.jsonl")]),
       { agentId, path: template.path, env: state.env },
       { operationLabel: "session-cost-usage.rollup.write" },
     );

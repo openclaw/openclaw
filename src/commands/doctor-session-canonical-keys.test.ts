@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   replaceSessionEntrySync,
   listCanonicalSessionRepairFacts,
@@ -17,7 +17,10 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.test-support.js";
 import { createCanonicalRepairFixture } from "./doctor-session-repair-fixture.test-support.js";
 
-afterEach(() => closeOpenClawAgentDatabasesForTest());
+afterEach(() => {
+  vi.restoreAllMocks();
+  closeOpenClawAgentDatabasesForTest();
+});
 
 describe("doctor canonical session-key repair", () => {
   it("keeps an unchanged main-key contract read-only and persists a changed key", async () => {
@@ -344,52 +347,61 @@ describe("doctor canonical session-key repair", () => {
   });
 });
 
-describe("doctor canonical session decision races", () => {
-  it("rejects stale canonical facts after delivery evidence changes", async () => {
-    await withStateDirEnv("openclaw-doctor-canonical-stale-fact-", async ({ stateDir }) => {
-      const { env, scope, insert, load, database, expectRepair } =
-        createCanonicalRepairFixture(stateDir);
-      const { storePath } = scope();
-      const sessionKey = "agent:main:matrix:channel:!mixedcase:example.org";
-      insert(sessionKey, {
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "matrix", to: "!MixedCase:example.org" },
-        }),
-        sessionId: "stale-delivery-session",
+it.each([false, true])(
+  "hydrates only selected repair rows, preserving raw guards for malformed=%s",
+  async (malformed) => {
+    await withStateDirEnv("openclaw-doctor-canonical-hydration-", async ({ stateDir }) => {
+      const { scope, insert, database } = createCanonicalRepairFixture(stateDir);
+      const sessionKey = "agent:main:selected";
+      replaceSessionEntrySync(
+        { ...scope(), sessionKey },
+        {
+          sessionId: "selected-session",
+          updatedAt: 10,
+          skillsSnapshot: { prompt: "selected cold payload", skills: [] },
+        },
+      );
+      insert("agent:main:healthy", {
+        sessionId: "healthy-session",
         updatedAt: 10,
+        skillsSnapshot: { prompt: "unrelated cold payload", skills: [] },
       });
-      const facts = listCanonicalSessionRepairFacts({ agentId: "main", env, storePath });
-      const db = database();
-      const changedEntry = {
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "matrix", to: "!MIXEDCASE:example.org" },
-        }),
-        label: "concurrent unrelated metadata",
-        sessionId: "stale-delivery-session",
-        updatedAt: 10,
-      };
-      db.db
-        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-        .run(JSON.stringify(changedEntry), sessionKey);
-      db.db
-        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-        .run(sessionKey);
-
-      expect(
-        listCanonicalSessionRepairFacts({ agentId: "main", env, storePath })[0]?.decisionToken,
-      ).not.toBe(facts[0]?.decisionToken);
-      expect(() =>
-        loadCanonicalSessionRepairEntries({ agentId: "main", env, storePath }, facts),
-      ).toThrow("Canonical session repair inputs changed during scan");
-      expect(
-        db.db.prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?").get(sessionKey),
-      ).toEqual({ entry_json: JSON.stringify(changedEntry) });
-
-      await expectRepair({ foundGroups: 1, repairedGroups: 1 });
-      expect(load("agent:main:matrix:channel:!MIXEDCASE:example.org")?.entry).toMatchObject({
-        label: "concurrent unrelated metadata",
+      if (malformed) {
+        database()
+          .db.prepare(
+            "UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?",
+          )
+          .run("malformed legacy entry", sessionKey);
+      }
+      const facts = listCanonicalSessionRepairFacts(scope()).filter(
+        (fact) => fact.sessionKey === sessionKey,
+      );
+      expect(facts).toHaveLength(1);
+      const parse = JSON.parse;
+      let unrelatedPayloadReads = 0;
+      vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+        if (text.includes("unrelated cold payload")) {
+          unrelatedPayloadReads++;
+        }
+        return parse(text, reviver);
       });
-      expect(load("agent:main:matrix:channel:!MixedCase:example.org")).toBeUndefined();
+      const [loaded] = loadCanonicalSessionRepairEntries(scope(), facts);
+      expect(loaded).toMatchObject({
+        sessionKey,
+        entry: {
+          sessionId: "selected-session",
+          skillsSnapshot: { prompt: "selected cold payload", skills: [] },
+        },
+      });
+      expect(unrelatedPayloadReads).toBe(0);
+      if (malformed) {
+        expect(loaded).toMatchObject({
+          rawEntryJson: "malformed legacy entry",
+          rawSnapshotRevision: expect.any(Number),
+        });
+      } else {
+        expect(loaded).not.toHaveProperty("rawEntryJson");
+      }
     });
-  });
-});
+  },
+);

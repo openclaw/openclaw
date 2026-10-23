@@ -256,20 +256,12 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
-  it("resolves sandbox-relative paths", async () => {
-    await expectMediaPath("./data/file.txt", (root) => path.join(root, "data", "file.txt"));
-  });
-
-  it("maps container /workspace absolute paths into sandbox root", async () => {
-    await expectMediaPath("/workspace/media/pic.png", (root) =>
-      path.join(root, "media", "pic.png"),
-    );
-  });
-
-  it("maps FILE: URLs under /workspace into sandbox root", async () => {
-    await expectMediaPath("FILE:/workspace/media/pic.png", (root) =>
-      path.join(root, "media", "pic.png"),
-    );
+  it.each([
+    ["./data/file.txt", "data/file.txt"],
+    ["/workspace/media/pic.png", "media/pic.png"],
+    ["FILE:/workspace/media/pic.png", "media/pic.png"],
+  ])("maps %s into the sandbox root", async (media, relative) => {
+    await expectMediaPath(media, (root) => path.join(root, relative));
   });
 
   it("rejects paths outside the authoritative backend workdir", async () => {

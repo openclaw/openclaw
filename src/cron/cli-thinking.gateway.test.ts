@@ -117,53 +117,46 @@ async function withCronGateway(
       cronEnabled: false,
       log: createNoopLogger(),
       enqueueSystemEvent: execute,
-      requestHeartbeat: execute,
       runIsolatedAgentJob: execute,
       runCommandJob: execute,
       runScriptJob: execute,
     });
-    try {
-      await withLocalGatewayRequestScope({ deps: {}, getRuntimeConfig: () => cfg }, async () => {
-        const context: GatewayRequestContext = {
-          ...expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "local Gateway context"),
-          cron,
-          cronStorePath: storePath,
-        };
-        callGatewayFromCli.mockImplementation(
-          async (method: string, _options: unknown, params: Record<string, unknown> = {}) => {
-            const respond = vi.fn<RespondFn>();
-            const requestParams = wireValue(params) as Record<string, unknown>;
-            await expectDefined(
-              cronHandlers[method],
-              `Gateway handler ${method}`,
-            )({
-              req: { type: "req", id: "cron-thinking", method, params: requestParams },
-              params: requestParams,
-              client: null,
-              context,
-              respond,
-              isWebchatConnect: () => false,
-            });
-            const [ok, payload, error] = expectDefined(
-              respond.mock.calls.at(-1),
-              "Gateway response",
-            );
-            if (!ok) {
-              throw new Error(error?.message ?? `${method} failed`);
-            }
-            return wireValue(payload);
-          },
-        );
-        await run({
-          readJobs: async () =>
-            (await loadCronJobsStoreWithConfigJobsReadOnly(storePath, state.env)).store.jobs,
-          writeScript: () => state.writeText("thinking-control.js", 'return { notify: "done" };'),
-        });
-        expect(execute).not.toHaveBeenCalled();
+    using _ = { [Symbol.dispose]: () => cron.stop() };
+    await withLocalGatewayRequestScope({ deps: {}, getRuntimeConfig: () => cfg }, async () => {
+      const context: GatewayRequestContext = {
+        ...expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "local Gateway context"),
+        cron,
+        cronStorePath: storePath,
+      };
+      callGatewayFromCli.mockImplementation(
+        async (method: string, _options: unknown, params: Record<string, unknown> = {}) => {
+          const respond = vi.fn<RespondFn>();
+          const requestParams = wireValue(params) as Record<string, unknown>;
+          await expectDefined(
+            cronHandlers[method],
+            `Gateway handler ${method}`,
+          )({
+            req: { type: "req", id: "cron-thinking", method, params: requestParams },
+            params: requestParams,
+            client: null,
+            context,
+            respond,
+            isWebchatConnect: () => false,
+          });
+          const [ok, payload, error] = expectDefined(respond.mock.calls.at(-1), "Gateway response");
+          if (!ok) {
+            throw new Error(error?.message ?? `${method} failed`);
+          }
+          return wireValue(payload);
+        },
+      );
+      await run({
+        readJobs: async () =>
+          (await loadCronJobsStoreWithConfigJobsReadOnly(storePath, state.env)).store.jobs,
+        writeScript: () => state.writeText("thinking-control.js", 'return { notify: "done" };'),
       });
-    } finally {
-      cron.stop();
-    }
+      expect(execute).not.toHaveBeenCalled();
+    });
   });
 }
 

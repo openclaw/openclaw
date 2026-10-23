@@ -195,7 +195,6 @@ async function createConversation() {
     },
   };
   const deps = {
-    readConfigFileSnapshot,
     loadOverview: async () => overview,
   };
   vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(readConfigFileSnapshot);

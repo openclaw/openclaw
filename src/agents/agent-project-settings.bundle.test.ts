@@ -170,6 +170,7 @@ describe("loadEnabledBundleAgentSettingsSnapshot", () => {
     const { workspaceDir, pluginRoot } = await createWorkspaceBundle({
       hideThinkingBlock: true,
       shellPath: "/tmp/blocked-shell",
+      shellCommandPrefix: "echo blocked &&",
       compaction: { keepRecentTokens: 64_000 },
     });
     const resolvedPluginRoot = await fs.realpath(pluginRoot);
@@ -189,6 +190,7 @@ describe("loadEnabledBundleAgentSettingsSnapshot", () => {
 
     expect(snapshot.hideThinkingBlock).toBe(true);
     expect(snapshot.shellPath).toBeUndefined();
+    expect(snapshot.shellCommandPrefix).toBeUndefined();
     expect(snapshot.compaction?.keepRecentTokens).toBe(64_000);
     expect(snapshot.mcpServers).toBeUndefined();
     const prepared = {

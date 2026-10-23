@@ -21,7 +21,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
 import { settingsSearchTextMatches } from "../../lib/settings-navigation.ts";
 import { PLUGIN_SETTINGS_VISIBLE_KEYS } from "../plugins/settings-model.ts";
-import { configPageForSection } from "./config-sections.ts";
+import { configPageForSection, omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
 import { MEMORY_SETTINGS_KEYS } from "./memory-schema.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
 import { setupVisibleSchema } from "./setup-schema.ts";
@@ -156,10 +156,12 @@ export function findSettingsSearchBlocks(params: {
     }
     let section = prepared.sections.get(key);
     if (!section) {
-      const sectionSchema =
+      const sectionSchema = omitCuratedOwnedConfigLeaves(
         key === "wizard"
           ? setupVisibleSchema(rawSectionSchema)
-          : visibleSectionSchema(routeId, rawSectionSchema);
+          : visibleSectionSchema(routeId, rawSectionSchema),
+        key,
+      );
       section = {
         schema: sectionSchema,
         tiers: splitConfigSchemaByTier({

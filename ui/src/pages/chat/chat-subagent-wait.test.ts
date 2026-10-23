@@ -503,7 +503,11 @@ describe("chat waiting on subagents", () => {
     expect(listed([child], false)).toBe(true);
     const worker = { ...child, key: "agent:main:subagent:worker", swarmGroupId: "audit" };
     expect(listed([child, worker])).toBe(true);
-    expect(listed([{ ...child, key: "agent:main:acp:coder" }], false)).toBe(false);
+    for (const key of ["agent:main:acp:coder", "agent:main:worker:unknown"]) {
+      const unlisted = { ...child, key };
+      expect(listed([unlisted], false)).toBe(false);
+      expect(listed([child, unlisted], false)).toBe(false);
+    }
     // A child session is not one of the line's subagents.
     expect(listed([child, { ...child, key: "agent:main:dashboard:opened" }])).toBe(true);
     expect(listed([{ ...child, hasActiveRun: false }])).toBe(false);

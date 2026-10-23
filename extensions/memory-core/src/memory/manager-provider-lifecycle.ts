@@ -112,9 +112,22 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected abstract indexIdentityState: MemoryIndexIdentityState;
   protected abstract syncAdmitted(
     params?: MemorySyncParams,
-    options?: { allowEmbeddingBootstrapFallback?: boolean; queuedSessionOwner?: boolean },
+    options?: {
+      allowEmbeddingBootstrapFallback?: boolean;
+      queuedSessionOwner?: boolean;
+      background?: boolean;
+    },
   ): Promise<void>;
   protected abstract syncPublishedIndexInBackground(params: { reason: string }): Promise<void>;
+
+  protected async syncBackground(params: MemorySyncParams): Promise<void> {
+    if (this.closing || this.closed) {
+      return;
+    }
+    return await this.withManagerOperation(() =>
+      this.syncAdmitted(params, { background: true, queuedSessionOwner: true }),
+    );
+  }
 
   protected markEmbeddingBootstrapFailure(
     err: unknown,
@@ -259,7 +272,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       settings: this.settings,
       currentProviderId,
     });
-    const meta = indexState ? indexState.meta : this.readMeta();
+    const meta = indexState ? indexState.meta : this.database.facts.meta;
     if (
       !fallbackRequest ||
       !meta ||
@@ -595,7 +608,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   protected refreshKeywordFallbackIndexIdentity(indexState?: MemoryRetrievalIndexState) {
-    const meta = indexState ? indexState.meta : this.readMeta();
+    const meta = indexState ? indexState.meta : this.database.facts.meta;
     const state = this.resolveCurrentIndexIdentityState({
       meta,
       provider: meta && meta.provider !== "none" ? { id: meta.provider, model: meta.model } : null,
@@ -625,7 +638,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     this.indexIdentityDirty =
       state.status === "mismatched" ||
       (state.status === "missing" &&
-        (this.sources.has("memory") || (indexState?.hasIndexedChunks ?? this.hasIndexedChunks())));
+        (this.sources.has("memory") || this.database.facts.hasIndexedChunks));
     return state;
   }
 

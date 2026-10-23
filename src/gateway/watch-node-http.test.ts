@@ -73,6 +73,7 @@ afterEach(async () => {
   await tempDirs.cleanup();
   cleanups.length = 0;
   databasePaths.clear();
+  vi.unstubAllEnvs();
 });
 
 async function makeWatchNodeDir(prefix: string): Promise<string> {
@@ -768,6 +769,7 @@ describe("watch node HTTP transport", () => {
       const approved = await approveBootstrapDevicePairing(
         pairing.request.requestId,
         existingProfile,
+        {},
         baseDir,
       );
       expect(approved?.status).toBe("approved");

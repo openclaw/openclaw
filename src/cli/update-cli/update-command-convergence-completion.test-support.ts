@@ -22,22 +22,16 @@ export function registerConvergenceCompletionTests({
   validConfigSnapshot,
   successfulPluginUpdate,
 }: {
-  mocks: { events: string[]; leaseActive: boolean };
+  mocks: { leaseActive: boolean };
   validConfigSnapshot: ConfigFileSnapshot;
   successfulPluginUpdate: PostCorePluginUpdateResult;
 }) {
-  const record = (name: string): void => {
-    mocks.events.push(name + ":" + mocks.leaseActive);
-  };
-  it.each([
-    { runtime: "candidate", coreAlreadyCurrent: false },
-    { runtime: "current", coreAlreadyCurrent: true },
-    { runtime: "resumed", coreAlreadyCurrent: false },
-  ] as const)(
-    "completes unchanged plugins with deferred model retirement once ($runtime, current=$coreAlreadyCurrent)",
-    async ({ runtime, coreAlreadyCurrent }) => {
-      const resumesTarget = runtime === "resumed" || (runtime === "current" && !coreAlreadyCurrent);
-      const installedVersion = runtime === "resumed" ? "2026.9.4" : VERSION;
+  it.each(["candidate", "current", "resumed"] as const)(
+    "completes unchanged plugins with deferred model retirement once (%s)",
+    async (runtime) => {
+      const coreAlreadyCurrent = runtime === "current";
+      const resumesTarget = runtime === "resumed";
+      const installedVersion = resumesTarget ? "2026.9.4" : VERSION;
       vi.mocked(readPackageVersion).mockResolvedValue(installedVersion);
       const run = createUpdateRun({ trigger: "cli" });
       const env = { ...process.env };
@@ -54,7 +48,6 @@ export function registerConvergenceCompletionTests({
       });
       vi.mocked(completePostCorePluginUpdate).mockImplementationOnce(async (params) => {
         expect(mocks.leaseActive).toBe(false);
-        record("complete");
         await params.beforeDoctor?.();
         recordUpdateModelRetirement("completed", doctorEnv);
         params.onWarnings?.(["Deferred retirement repair warning"]);
@@ -65,8 +58,6 @@ export function registerConvergenceCompletionTests({
         await fs.writeFile(path.join(handoffDir, "handoff.json"), '{"completionOwner":"parent"}');
         vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", path.join(handoffDir, "plugins.json"));
         vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementationOnce(async () => {
-          // Run the actual resume producer, not a canned child result. The existing
-          // transport mock observes when a modern child publishes to its parent.
           await withUpdateEnv({ OPENCLAW_UPDATE_RUN_ID: run.runId }, () =>
             resumePostCoreUpdate({
               root: "/tmp/openclaw",
@@ -81,14 +72,14 @@ export function registerConvergenceCompletionTests({
           return { resumed: true, pluginUpdate: published };
         });
       }
-      const beforeDoctor = vi.fn(async () => record("park"));
+      const beforeDoctor = vi.fn(async () => {});
       const result = await convergeUpdatePlugins({
         candidateRuntime: runtime === "candidate",
         coreAlreadyCurrent,
         result: {
           status: coreAlreadyCurrent ? "skipped" : "ok",
           ...(coreAlreadyCurrent ? { reason: "already-current" } : {}),
-          mode: runtime === "resumed" ? "npm" : "git",
+          mode: resumesTarget ? "npm" : "git",
           root: "/tmp/openclaw",
           before: { version: VERSION },
           after: { version: installedVersion },
@@ -110,8 +101,7 @@ export function registerConvergenceCompletionTests({
         beforeDoctor,
       });
       expect(updatePluginsAfterCoreUpdate).toHaveBeenCalledOnce();
-      expect(completePostCorePluginUpdate).toHaveBeenCalledOnce();
-      expect(completePostCorePluginUpdate).toHaveBeenCalledWith(
+      expect(completePostCorePluginUpdate).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           pluginUpdate: expect.objectContaining({ changed: false }),
           nodeRunner: "/selected/node",
@@ -119,7 +109,6 @@ export function registerConvergenceCompletionTests({
         }),
       );
       expect(beforeDoctor).toHaveBeenCalledOnce();
-      expect(mocks.events).not.toContain("complete:true");
       expect(result.resultWithPostUpdate.steps).toContainEqual(
         expect.objectContaining({
           name: "post-plugin-doctor-warning-1",
@@ -129,11 +118,7 @@ export function registerConvergenceCompletionTests({
           },
         }),
       );
-      if (resumesTarget) {
-        expect(continuePostCoreUpdateInFreshProcess).toHaveBeenCalledOnce();
-      } else {
-        expect(continuePostCoreUpdateInFreshProcess).not.toHaveBeenCalled();
-      }
+      expect(continuePostCoreUpdateInFreshProcess).toHaveBeenCalledTimes(resumesTarget ? 1 : 0);
     },
   );
 }

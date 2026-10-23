@@ -140,7 +140,6 @@ type WatchNodeHttpRuntimeOptions = {
   onNodeDisconnected?: (nodeId: string, reason: string) => void;
   onDeviceTokensReplaced?: (deviceId: string, roles: readonly string[]) => void;
   onError?: (message: string, error: unknown) => void;
-  pairingBaseDir?: string;
   now?: () => number;
 };
 
@@ -283,7 +282,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
             nodeId: disconnectHistory.nodeId,
             key: disconnectHistory.pairingGeneration,
           },
-          baseDir: options.pairingBaseDir,
         }).catch((error: unknown) =>
           options.onError?.("watch node disconnect persistence failed", error),
         );
@@ -563,10 +561,8 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       scopes: [],
       rateLimiter: options.rateLimiter,
       clientIp: clientKey,
-      verifyBootstrapToken: async (params) =>
-        await verifyDeviceBootstrapToken({ ...params, baseDir: options.pairingBaseDir }),
-      verifyDeviceToken: async (params) =>
-        await verifyDeviceToken({ ...params, baseDir: options.pairingBaseDir }),
+      verifyBootstrapToken: verifyDeviceBootstrapToken,
+      verifyDeviceToken,
     });
     if (!authDecision.authOk) {
       if (authDecision.authResult.rateLimited) {
@@ -581,7 +577,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     const bootstrapDeviceTokens: NonNullable<HelloOk["auth"]["deviceTokens"]> = [];
     let setupBootstrapAccepted = false;
     if (bootstrapToken) {
-      const existing = await getPairedDevice(derivedDeviceId, options.pairingBaseDir);
+      const existing = await getPairedDevice(derivedDeviceId);
       if (existing && existing.publicKey !== publicKey) {
         sendUnauthorized(res);
         return;
@@ -590,7 +586,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         token: bootstrapToken,
         deviceId: derivedDeviceId,
         publicKey,
-        baseDir: options.pairingBaseDir,
       });
       const voiceProfile = isVoiceNodePairingSetupBootstrapProfile(profile ?? undefined);
       if (!profile || (!isNodePairingSetupBootstrapProfile(profile) && !voiceProfile)) {
@@ -599,29 +594,23 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       }
       // Setup approval owns the entire handoff. Reusing an existing role token
       // could skip a node-to-voice upgrade or hand out an older, broader grant.
-      const pairing = await requestDevicePairing(
-        {
-          deviceId: derivedDeviceId,
-          publicKey,
-          displayName: connect.client.displayName,
-          platform: connect.client.platform,
-          deviceFamily: connect.client.deviceFamily,
-          clientId: connect.client.id,
-          clientMode: connect.client.mode,
-          role: "node",
-          roles: profile.roles,
-          scopes: profile.scopes,
-          remoteIp: clientIp,
-          silent: true,
-        },
-        options.pairingBaseDir,
-      );
-      const approved = await approveBootstrapDevicePairing(
-        pairing.request.requestId,
-        profile,
-        { onTokensReplaced: options.onDeviceTokensReplaced },
-        options.pairingBaseDir,
-      );
+      const pairing = await requestDevicePairing({
+        deviceId: derivedDeviceId,
+        publicKey,
+        displayName: connect.client.displayName,
+        platform: connect.client.platform,
+        deviceFamily: connect.client.deviceFamily,
+        clientId: connect.client.id,
+        clientMode: connect.client.mode,
+        role: "node",
+        roles: profile.roles,
+        scopes: profile.scopes,
+        remoteIp: clientIp,
+        silent: true,
+      });
+      const approved = await approveBootstrapDevicePairing(pairing.request.requestId, profile, {
+        onTokensReplaced: options.onDeviceTokensReplaced,
+      });
       if (approved?.status !== "approved") {
         sendUnauthorized(res);
         return;
@@ -652,7 +641,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       );
       setupBootstrapAccepted = Boolean(issuedDeviceToken);
     } else if (deviceToken) {
-      const paired = await getPairedDevice(derivedDeviceId, options.pairingBaseDir);
+      const paired = await getPairedDevice(derivedDeviceId);
       if (paired?.publicKey !== publicKey) {
         sendUnauthorized(res);
         return;
@@ -663,7 +652,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       return;
     }
 
-    const nodeSnapshot = await beginNodePairingConnect(derivedDeviceId, options.pairingBaseDir);
+    const nodeSnapshot = await beginNodePairingConnect(derivedDeviceId);
     let cleanupClaim = nodeSnapshot.cleanupClaim;
     try {
       let reconciliation: Awaited<ReturnType<typeof reconcileNodePairingOnConnect>>;
@@ -678,11 +667,10 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
               return await options.nodeReapprovalCoordinator.request({
                 input,
                 cleanupClaim,
-                baseDir: options.pairingBaseDir,
               });
             }
             if (!options.rateLimiter) {
-              return await requestNodePairing(input, options.pairingBaseDir);
+              return await requestNodePairing(input);
             }
             return await withSerializedRateLimitAttempt({
               ip: clientKey,
@@ -695,7 +683,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
                 if (rateCheck && !rateCheck.allowed) {
                   throw new WatchNodePairingRateLimitError(rateCheck.retryAfterMs);
                 }
-                const result = await requestNodePairing(input, options.pairingBaseDir);
+                const result = await requestNodePairing(input);
                 options.rateLimiter?.recordFailure(clientKey, AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING);
                 return result;
               },
@@ -715,11 +703,9 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         }
       }
       if (setupBootstrapAccepted && !nodeSnapshot.pairedNode && reconciliation.pendingPairing) {
-        const approved = await approveNodePairing(
-          reconciliation.pendingPairing.request.requestId,
-          { callerScopes: [ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE] },
-          options.pairingBaseDir,
-        );
+        const approved = await approveNodePairing(reconciliation.pendingPairing.request.requestId, {
+          callerScopes: [ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE],
+        });
         if (approved && "node" in approved) {
           broadcastPairingResolved(
             reconciliation.pendingPairing.request.requestId,
@@ -751,7 +737,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           token: bootstrapToken,
           role: "node",
           scopes: [],
-          baseDir: options.pairingBaseDir,
         });
         // Like hello-ok, this response hands off the entire bounded profile;
         // consumeSetupHandoff retires its bearer even when only node connected.
@@ -769,7 +754,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         token: issuedDeviceToken,
         role: "node",
         scopes: [],
-        baseDir: options.pairingBaseDir,
       });
       if (!finalTokenVerification.ok) {
         sendUnauthorized(res);
@@ -779,7 +763,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         nodeId: derivedDeviceId,
         publicKey,
         token: issuedDeviceToken,
-        baseDir: options.pairingBaseDir,
       });
       const nodePairingGeneration = nodePairingState?.generation;
       if (!nodePairingState || !nodePairingGeneration) {
@@ -795,7 +778,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         try {
           await restoreGenericDeviceBootstrapToken({
             record: bootstrapHandoff.record,
-            baseDir: options.pairingBaseDir,
           });
         } catch (error) {
           options.onError?.("watch node generic bootstrap restore failed", error);
@@ -816,7 +798,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
               })
             );
           },
-          baseDir: options.pairingBaseDir,
           ts: now(),
         });
         if (!consumed) {
@@ -919,7 +900,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           try {
             const confirmedHandoff = await confirmSetupHandoffDelivery({
               handoff: bootstrapHandoff,
-              baseDir: options.pairingBaseDir,
             });
             if (confirmedHandoff) {
               broadcastSetupHandoffCompletion({
@@ -963,7 +943,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         void recordPairedNodeConnection(
           session.nodeId,
           nodeSession.connectedAtMs,
-          options.pairingBaseDir,
+          undefined,
           nodePairingGeneration,
         ).catch((error: unknown) =>
           options.onError?.("watch node last-connect metadata update failed", error),

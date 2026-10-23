@@ -500,13 +500,12 @@ export function isDiagnosticEmbeddedRunOwnerClosed(owner: DiagnosticEmbeddedRunO
 export function markDiagnosticEmbeddedRunEnded(params: {
   sessionId: string;
   sessionKey?: string;
-  workKey?: string;
 }): void {
   const activity = resolveSessionActivity(params);
   if (!activity) {
     return;
   }
-  embeddedRunIndex.remove(activity, params.workKey ?? params.sessionId);
+  embeddedRunIndex.remove(activity, params.sessionId);
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
   activity.activeCoreModelCalls.clear();

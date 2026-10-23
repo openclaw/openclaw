@@ -1351,7 +1351,7 @@ function readMigratedSessionStore(stateDir, targetStorePath) {
 
 function readInstalledPluginIndex() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
-  const index = readPluginInstallIndex({ stateDir });
+  const index = readPluginInstallIndex({ stateDir, summary: true });
   assert(index.installRecords, "installed plugin index missing");
   return index;
 }

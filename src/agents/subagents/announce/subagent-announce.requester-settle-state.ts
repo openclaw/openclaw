@@ -20,7 +20,10 @@ export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean 
   );
 }
 
-/** Only a known missing result may mint another public continuation; private retries reconcile. */
+/**
+ * Only a known missing result, or an effect-free run whose transcript write was
+ * rejected, may mint another public continuation; private retries reconcile.
+ */
 export function resolveRequesterSettleRetryState(params: {
   state: RequesterSettleWakeBatchState;
   delivery: SubagentAnnounceDeliveryResult;
@@ -32,7 +35,9 @@ export function resolveRequesterSettleRetryState(params: {
   const retryDelay = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[attemptCount - 1];
   if (
     delivery.disposition !== "retryable" ||
-    (!parentOnly && delivery.reason !== "visible_reply_missing") ||
+    (!parentOnly &&
+      delivery.reason !== "visible_reply_missing" &&
+      delivery.reason !== "requester_transcript_conflict") ||
     delivery.reason === "requester_abandoned" ||
     attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS ||
     retryDelay === undefined
