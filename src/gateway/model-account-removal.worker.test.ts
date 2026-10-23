@@ -1,13 +1,13 @@
+import fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { capturePersonalAuthProfileAuthorization } from "../agents/auth-profiles/personal-authorization.js";
 import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-override.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
-import {
-  loadSessionEntryReadOnly,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import * as targets from "../config/sessions/targets-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { connectUserModelAccountAsync } from "../state/user-model-account-operations.js";
 import { listUserModelAccounts, readUserModelAuthProfile } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -58,7 +58,7 @@ it("removes an owned credential through the worker, retires retained grants and 
     const service = createModelAccountConnectService({ getConfig: () => cfg });
     try {
       for (const agent of ["main", "writer"]) {
-        await replaceSessionEntry(session(agent), {
+        await sessionAccessor.replaceSessionEntry(session(agent), {
           sessionId: `${agent}-synthetic`,
           updatedAt: 17,
           providerOverride: "synthetic",
@@ -73,7 +73,7 @@ it("removes an owned credential through the worker, retires retained grants and 
             prevAuthProfileOverride: removed,
           },
         });
-        await replaceSessionEntry(session(agent, "kept"), {
+        await sessionAccessor.replaceSessionEntry(session(agent, "kept"), {
           sessionId: `${agent}-kept`,
           updatedAt: 18,
           authProfileOverride: kept,
@@ -98,7 +98,7 @@ it("removes an owned credential through the worker, retires retained grants and 
       ).toEqual([kept]);
       expect(grant.assertCurrent).toThrow();
       for (const agent of ["main", "writer"]) {
-        const entry = loadSessionEntryReadOnly(session(agent));
+        const entry = sessionAccessor.loadSessionEntryReadOnly(session(agent));
         expect(entry).toMatchObject({
           updatedAt: 17,
           modelOverride: "example-model",
@@ -107,7 +107,9 @@ it("removes an owned credential through the worker, retires retained grants and 
         });
         expect(entry?.authProfileOverride).toBeUndefined();
         expect(entry?.modelFallback?.prevAuthProfileOverride).toBeUndefined();
-        expect(loadSessionEntryReadOnly(session(agent, "kept"))?.authProfileOverride).toBe(kept);
+        expect(
+          sessionAccessor.loadSessionEntryReadOnly(session(agent, "kept"))?.authProfileOverride,
+        ).toBe(kept);
       }
       expect(
         await service.removeAsync({ owner, actorProfileId: owner, assertCurrent() {} }, removed),
@@ -125,7 +127,7 @@ it("reports confirmed deletion separately from failed session cleanup and suppor
     const owner = ensureProfileForEmail("partial@example.test").id;
     const removed = (await connect(owner, "partial")).authProfileId;
     const scope = session("writer");
-    await replaceSessionEntry(scope, {
+    await sessionAccessor.replaceSessionEntry(scope, {
       sessionId: "partial",
       updatedAt: 1,
       authProfileOverride: removed,
@@ -142,13 +144,13 @@ it("reports confirmed deletion separately from failed session cleanup and suppor
         links: [],
       });
       expect(readUserModelAuthProfile(removed)).toBeUndefined();
-      expect(loadSessionEntryReadOnly(scope)?.authProfileOverride).toBe(removed);
+      expect(sessionAccessor.loadSessionEntryReadOnly(scope)?.authProfileOverride).toBe(removed);
       discovery.mockRestore();
       expect(await service.removeAsync(action, removed)).toMatchObject({
         removed: false,
         sessionCleanup: "complete",
       });
-      expect(loadSessionEntryReadOnly(scope)?.authProfileOverride).toBeUndefined();
+      expect(sessionAccessor.loadSessionEntryReadOnly(scope)?.authProfileOverride).toBeUndefined();
       expect(listUserModelAccounts({ profileId: owner }).accounts).toEqual([]);
     } finally {
       await service.stop();
@@ -195,7 +197,7 @@ it("serves self-owned removal through the RPC handler and lets the existing chat
     const owner = ensureProfileForEmail("rpc@example.test").id;
     const removed = (await connect(owner, "rpc")).authProfileId;
     const scope = session("main");
-    await replaceSessionEntry(scope, {
+    await sessionAccessor.replaceSessionEntry(scope, {
       sessionId: "rpc-chat",
       updatedAt: 1,
       authProfileOverride: removed,
@@ -226,7 +228,7 @@ it("serves self-owned removal through the RPC handler and lets the existing chat
         true,
         expect.objectContaining({ removed: true, sessionCleanup: "complete" }),
       );
-      const entry = loadSessionEntryReadOnly(scope)!;
+      const entry = sessionAccessor.loadSessionEntryReadOnly(scope)!;
       expect(entry.authProfileOverride).toBeUndefined();
       await expect(
         resolveSessionAuthSelection({
@@ -245,6 +247,223 @@ it("serves self-owned removal through the RPC handler and lets the existing chat
       expect(readUserModelAuthProfile(removed)).toBeUndefined();
     } finally {
       await service.stop();
+    }
+  });
+});
+
+it("clears removed current and rollback pins from live incognito sessions without durable persistence", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await state.writeConfig(cfg);
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "synthetic:gateway": {
+          type: "api_key",
+          provider: "synthetic",
+          key: "synthetic-gateway-key",
+        },
+      },
+    });
+    const owner = ensureProfileForEmail("incognito@example.test").id;
+    const removed = (await connect(owner, "incognito-removed")).authProfileId;
+    const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+    const pinned = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:incognito-removed",
+      storePath: sentinel,
+    };
+    const unrelated = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:incognito-kept",
+      storePath: sentinel,
+    };
+    await sessionAccessor.createSessionEntryWithTranscript(pinned, () => ({
+      ok: true,
+      entry: {
+        sessionId: "incognito-removed-entry",
+        updatedAt: 21,
+        incognito: true,
+        modelOverride: "example-model",
+        authProfileOverride: removed,
+        authProfileOverrideSource: "user",
+        modelFallback: {
+          source: "agent-patch",
+          ts: 2,
+          prevModel: "old-model",
+          prevProvider: "synthetic",
+          prevAuthProfileOverride: removed,
+        },
+      },
+    }));
+    await sessionAccessor.createSessionEntryWithTranscript(unrelated, () => ({
+      ok: true,
+      entry: {
+        sessionId: "incognito-kept-entry",
+        updatedAt: 22,
+        incognito: true,
+        authProfileOverride: "synthetic:gateway",
+        authProfileOverrideSource: "user",
+      },
+    }));
+    const service = createModelAccountConnectService({ getConfig: () => cfg });
+    try {
+      const result = await service.removeAsync(
+        { owner, actorProfileId: owner, assertCurrent() {} },
+        removed,
+      );
+      expect(result).toMatchObject({ removed: true, sessionCleanup: "complete" });
+      const entry = sessionAccessor.loadSessionEntryReadOnly(pinned);
+      expect(entry).toMatchObject({
+        updatedAt: 21,
+        modelOverride: "example-model",
+        modelFallback: {
+          source: "agent-patch",
+          prevModel: "old-model",
+          prevProvider: "synthetic",
+        },
+      });
+      expect(entry?.authProfileOverride).toBeUndefined();
+      expect(entry?.authProfileOverrideSource).toBeUndefined();
+      expect(entry?.modelFallback?.prevAuthProfileOverride).toBeUndefined();
+      expect(sessionAccessor.loadSessionEntryReadOnly(unrelated)?.authProfileOverride).toBe(
+        "synthetic:gateway",
+      );
+      // Incognito namespaces stay memory-only: no sentinel or transcript reaches durable storage.
+      expect(fs.existsSync(sentinel)).toBe(false);
+      const durableFiles: string[] = [];
+      const collect = (dir: string) => {
+        for (const name of fs.readdirSync(dir)) {
+          const full = `${dir}/${name}`;
+          if (fs.statSync(full).isDirectory()) {
+            collect(full);
+          } else {
+            durableFiles.push(full);
+          }
+        }
+      };
+      collect(state.stateDir);
+      expect(durableFiles.filter((file) => file.includes("incognito"))).toEqual([]);
+      // The next native turn no longer fails on the removed personal account.
+      await expect(
+        resolveSessionAuthSelection({
+          cfg,
+          agentId: "main",
+          agentDir: state.agentDir(),
+          provider: "synthetic",
+          modelId: "example-model",
+          sessionEntry: entry!,
+          sessionStore: { [pinned.sessionKey]: entry! },
+          sessionKey: pinned.sessionKey,
+          storePath: sentinel,
+          isNewSession: false,
+        }),
+      ).resolves.toMatchObject({ profileId: "synthetic:gateway" });
+    } finally {
+      await service.stop();
+      memorySessionActorOwners.closeDatabase({ agentId: "main", path: sentinel });
+    }
+  });
+});
+
+it("does not create an incognito memory owner for removal without live incognito sessions", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await state.writeConfig(cfg);
+    const owner = ensureProfileForEmail("no-incognito@example.test").id;
+    const removed = (await connect(owner, "no-incognito")).authProfileId;
+    const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+    const service = createModelAccountConnectService({ getConfig: () => cfg });
+    try {
+      expect(
+        await service.removeAsync({ owner, actorProfileId: owner, assertCurrent() {} }, removed),
+      ).toMatchObject({ removed: true, sessionCleanup: "complete" });
+      expect(memorySessionActorOwners.read({ agentId: "main", path: sentinel })).toBeUndefined();
+      expect(fs.existsSync(sentinel)).toBe(false);
+    } finally {
+      await service.stop();
+    }
+  });
+});
+
+it("clears incognito pins for agents that have no durable session store", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await state.writeConfig(cfg);
+    const owner = ensureProfileForEmail("incognito-agent@example.test").id;
+    const removed = (await connect(owner, "incognito-agent")).authProfileId;
+    const sentinel = resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: "ephemeral",
+      env: state.env,
+    });
+    const scope = {
+      agentId: "ephemeral",
+      sessionKey: "agent:ephemeral:dashboard:incognito-agent",
+      storePath: sentinel,
+    };
+    await sessionAccessor.createSessionEntryWithTranscript(scope, () => ({
+      ok: true,
+      entry: {
+        sessionId: "incognito-agent-entry",
+        updatedAt: 9,
+        incognito: true,
+        authProfileOverride: removed,
+        authProfileOverrideSource: "user",
+      },
+    }));
+    const service = createModelAccountConnectService({ getConfig: () => cfg });
+    try {
+      expect(sessionAccessor.loadSessionEntryReadOnly(scope)?.authProfileOverride).toBe(removed);
+      expect(
+        await service.removeAsync({ owner, actorProfileId: owner, assertCurrent() {} }, removed),
+      ).toMatchObject({ removed: true, sessionCleanup: "complete" });
+      expect(sessionAccessor.loadSessionEntryReadOnly(scope)?.authProfileOverride).toBeUndefined();
+      expect(fs.existsSync(sentinel)).toBe(false);
+    } finally {
+      await service.stop();
+      memorySessionActorOwners.closeDatabase({ agentId: "ephemeral", path: sentinel });
+    }
+  });
+});
+
+it("reports incognito cleanup as pending when the memory patch fails and clears it on retry", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await state.writeConfig(cfg);
+    const owner = ensureProfileForEmail("incognito-pending@example.test").id;
+    const removed = (await connect(owner, "incognito-pending")).authProfileId;
+    const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:incognito-pending",
+      storePath: sentinel,
+    };
+    await sessionAccessor.createSessionEntryWithTranscript(scope, () => ({
+      ok: true,
+      entry: {
+        sessionId: "incognito-pending-entry",
+        updatedAt: 5,
+        incognito: true,
+        authProfileOverride: removed,
+      },
+    }));
+    const service = createModelAccountConnectService({ getConfig: () => cfg });
+    const action = { owner, actorProfileId: owner, assertCurrent() {} };
+    const patch = vi
+      .spyOn(sessionAccessor, "patchSessionEntryCore")
+      .mockRejectedValueOnce(new Error("synthetic incognito cleanup failure"));
+    try {
+      expect(await service.removeAsync(action, removed)).toMatchObject({
+        removed: true,
+        sessionCleanup: "pending",
+      });
+      expect(sessionAccessor.loadSessionEntryReadOnly(scope)?.authProfileOverride).toBe(removed);
+      patch.mockRestore();
+      expect(await service.removeAsync(action, removed)).toMatchObject({
+        removed: false,
+        sessionCleanup: "complete",
+      });
+      expect(sessionAccessor.loadSessionEntryReadOnly(scope)?.authProfileOverride).toBeUndefined();
+    } finally {
+      patch.mockRestore();
+      await service.stop();
+      memorySessionActorOwners.closeDatabase({ agentId: "main", path: sentinel });
     }
   });
 });

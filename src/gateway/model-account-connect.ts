@@ -16,6 +16,7 @@ import {
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { listKnownSessionStoreAgentIdsAsync } from "../config/sessions/targets-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -496,9 +497,17 @@ export function createModelAccountConnectService(options: {
           action.assertCurrent();
           const cfg = options.getConfig();
           const agents = await listKnownSessionStoreAgentIdsAsync(cfg);
+          // Incognito namespaces are memory-only, so their agents never appear in
+          // durable discovery; live owners still pin the removed credential.
+          const removedByAgent = new Map(agents.map((agent) => [agent, new Set([authProfileId])]));
+          for (const { agentId } of memorySessionActorOwners.list()) {
+            if (!removedByAgent.has(agentId)) {
+              removedByAgent.set(agentId, new Set([authProfileId]));
+            }
+          }
           await clearRemovedSessionAuthProfiles({
             cfg,
-            removedByAgent: new Map(agents.map((agent) => [agent, new Set([authProfileId])])),
+            removedByAgent,
             rewriteConfig: (current) => current,
             assertCurrent: action.assertCurrent,
           });

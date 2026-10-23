@@ -1,25 +1,112 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { clearRemovedQueuedAuthProfiles } from "../auto-reply/reply/queue.js";
-import { patchSessionEntryTarget } from "../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  patchSessionEntryTarget,
+} from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { withSessionHistoryWorkerReadCandidates } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 
-/** Release only references to credentials whose owning store confirmed removal. */
-export async function clearRemovedSessionAuthProfiles(params: {
+type RemovedSessionAuthProfileParams = {
   cfg: OpenClawConfig;
   removedByAgent: ReadonlyMap<string, ReadonlySet<string>>;
   rewriteConfig: (cfg: OpenClawConfig) => OpenClawConfig;
   assertCurrent?: () => void;
-}): Promise<void> {
+};
+
+/** Clear only the removed pin; model rollback facts and unrelated selections stay. */
+function removedProfileFieldPatch(
+  profileId: string,
+): (current: SessionEntry) => Partial<SessionEntry> | null {
+  return (current) => {
+    const clearCurrent = current.authProfileOverride === profileId;
+    const fallback = current.modelFallback;
+    const clearPrevious = fallback?.prevAuthProfileOverride === profileId;
+    if (!clearCurrent && !clearPrevious) {
+      return null;
+    }
+    return {
+      ...(clearCurrent
+        ? {
+            authProfileOverride: undefined,
+            authProfileOverrideSource: undefined,
+            authProfileOverrideCompactionCount: undefined,
+          }
+        : {}),
+      // Keep model rollback while preventing it from restoring a deleted account.
+      ...(clearPrevious
+        ? {
+            modelFallback: {
+              ...fallback,
+              prevAuthProfileOverride: undefined,
+              prevAuthProfileOverrideSource: undefined,
+              prevAuthProfileOverrideCompactionCount: undefined,
+            },
+          }
+        : {}),
+    };
+  };
+}
+
+/** Live incognito sessions never enter durable stores; release pins via their memory owners. */
+async function clearRemovedIncognitoSessionAuthProfiles(
+  params: Pick<RemovedSessionAuthProfileParams, "removedByAgent" | "assertCurrent">,
+): Promise<void> {
+  for (const owner of memorySessionActorOwners.list()) {
+    const removed = params.removedByAgent.get(owner.agentId);
+    if (!removed?.size) {
+      continue;
+    }
+    try {
+      owner.assertCurrent();
+    } catch {
+      // A closed owner already discarded its memory sessions; nothing remains to release.
+      continue;
+    }
+    const assertCurrent = () => {
+      params.assertCurrent?.();
+      owner.assertCurrent();
+    };
+    const authority = { assertCurrent, authorize: assertCurrent };
+    const isRemoved = (profileId: string | undefined): profileId is string =>
+      profileId !== undefined && removed.has(profileId);
+    for (const { sessionKey, entry } of owner.listSessionEntries(authority)) {
+      const profileIds = new Set(
+        [entry.authProfileOverride, entry.modelFallback?.prevAuthProfileOverride].filter(isRemoved),
+      );
+      for (const profileId of profileIds) {
+        // The incognito sentinel routes this patch to the live memory actor; it
+        // never creates an owner or opens a durable store for an absent session.
+        await patchSessionEntryCore(
+          { agentId: owner.agentId, storePath: owner.path, sessionKey },
+          removedProfileFieldPatch(profileId),
+          {
+            preserveActivity: true,
+            skipMaintenance: true,
+            workerGuard: { assertCurrent },
+          },
+        );
+      }
+    }
+  }
+}
+
+/** Release only references to credentials whose owning store confirmed removal. */
+export async function clearRemovedSessionAuthProfiles(
+  params: RemovedSessionAuthProfileParams,
+): Promise<void> {
   params.assertCurrent?.();
   clearRemovedQueuedAuthProfiles(params);
   if (params.removedByAgent.size === 0) {
     return;
   }
+  await clearRemovedIncognitoSessionAuthProfiles(params);
   const { candidates, ...inventory } = prepareSessionStoreTargetInventory(params.cfg, [
     ...params.removedByAgent.keys(),
   ]);
@@ -116,34 +203,7 @@ export async function clearRemovedSessionAuthProfiles(params: {
                     },
                     target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
                   },
-                  (current) => {
-                    const clearCurrent = current.authProfileOverride === profileId;
-                    const fallback = current.modelFallback;
-                    const clearPrevious = fallback?.prevAuthProfileOverride === profileId;
-                    if (!clearCurrent && !clearPrevious) {
-                      return null;
-                    }
-                    return {
-                      ...(clearCurrent
-                        ? {
-                            authProfileOverride: undefined,
-                            authProfileOverrideSource: undefined,
-                            authProfileOverrideCompactionCount: undefined,
-                          }
-                        : {}),
-                      // Keep model rollback while preventing it from restoring a deleted account.
-                      ...(clearPrevious
-                        ? {
-                            modelFallback: {
-                              ...fallback,
-                              prevAuthProfileOverride: undefined,
-                              prevAuthProfileOverrideSource: undefined,
-                              prevAuthProfileOverrideCompactionCount: undefined,
-                            },
-                          }
-                        : {}),
-                    };
-                  },
+                  removedProfileFieldPatch(profileId),
                   {
                     preserveActivity: true,
                     skipMaintenance: true,
