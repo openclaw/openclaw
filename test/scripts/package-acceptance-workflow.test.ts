@@ -12137,7 +12137,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const stable = workflowJob(RELEASE_CHECKS_WORKFLOW, "windows_node_stable_e2e");
     const main = workflowJob(RELEASE_CHECKS_WORKFLOW, "windows_node_main_e2e");
     const reusableWorkflow =
-      "openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@ceadc375b858b07577d55029d3b5c85b9dc3389e";
+      "openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@fb45902950fd4f62d20a37dbbafac27e916917f2";
 
     expect(resolver.outputs).toMatchObject({
       stable_asset_name: "${{ steps.resolve.outputs.stable_asset_name }}",
@@ -12165,7 +12165,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       windows_node_source: "release",
       windows_node_source_sha:
         "${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_release_sha }}",
-      windows_node_workflow_sha: "ceadc375b858b07577d55029d3b5c85b9dc3389e",
+      windows_node_workflow_sha: "fb45902950fd4f62d20a37dbbafac27e916917f2",
     });
     expect(stable.uses).toBe(reusableWorkflow);
     expect(stable.with).toMatchObject({
@@ -12179,7 +12179,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       windows_node_source: "release",
       windows_node_source_sha:
         "${{ needs.resolve_windows_node_release_artifacts.outputs.stable_release_sha }}",
-      windows_node_workflow_sha: "ceadc375b858b07577d55029d3b5c85b9dc3389e",
+      windows_node_workflow_sha: "fb45902950fd4f62d20a37dbbafac27e916917f2",
     });
     expect(main.uses).toBe(reusableWorkflow);
     expect(main.needs).toEqual([
@@ -12193,7 +12193,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       windows_node_source: "main",
       windows_node_source_sha:
         "${{ needs.resolve_windows_node_main_source.outputs.main_source_sha }}",
-      windows_node_workflow_sha: "ceadc375b858b07577d55029d3b5c85b9dc3389e",
+      windows_node_workflow_sha: "fb45902950fd4f62d20a37dbbafac27e916917f2",
       allow_protocol_mismatch: false,
     });
   });
