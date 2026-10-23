@@ -736,7 +736,9 @@ suite.define(() => {
       await attach.click();
       await polledVisible(takePhoto).toBe(true);
       await expect
-        .poll(() => composerShell.getByRole("menuitem", { name: "Photo", exact: true }).isVisible())
+        .poll(() =>
+          composerShell.getByRole("menuitem", { name: "Photos & videos", exact: true }).isVisible(),
+        )
         .toBe(true);
       await expect
         .poll(() => composerShell.getByRole("menuitem", { name: "File", exact: true }).isVisible())

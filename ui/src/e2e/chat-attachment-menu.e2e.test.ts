@@ -66,6 +66,19 @@ function withChat(
         chooserCount += 1;
       });
       await page.goto(suite.server.baseUrl + options.route);
+      const mediaInput = page.locator(".agent-chat__media-input").first();
+      await mediaInput.waitFor({ state: "attached" });
+      expect(
+        await mediaInput.evaluate((input) => {
+          const style = getComputedStyle(input);
+          return {
+            display: style.display,
+            position: style.position,
+            opacity: style.opacity,
+            pointerEvents: style.pointerEvents,
+          };
+        }),
+      ).toEqual({ display: "none", position: "fixed", opacity: "0", pointerEvents: "none" });
       await run(page, () => chooserCount);
     },
   );
@@ -82,7 +95,22 @@ async function choose(page: Page, kind: string) {
   expect(chooser.isMultiple()).toBe(kind !== "camera");
   expect(await input.getAttribute("class")).toBe(`agent-chat__${kind}-input`);
   expect(await input.getAttribute("capture")).toBe(kind === "camera" ? "environment" : null);
-  expect(await input.getAttribute("accept")).toBe(kind === "file" ? null : "image/*");
+  expect(await input.getAttribute("accept")).toBe(
+    kind === "file" ? null : kind === "media" ? "image/*,video/*" : "image/*",
+  );
+  expect(
+    await input.evaluate((element) => {
+      if (!(element instanceof HTMLInputElement)) {
+        throw new Error("Expected the file chooser to belong to an HTML input");
+      }
+      const style = getComputedStyle(element);
+      return {
+        position: style.position,
+        opacity: style.opacity,
+        pointerEvents: style.pointerEvents,
+      };
+    }),
+  ).toEqual({ position: "fixed", opacity: "0", pointerEvents: "none" });
   return chooser;
 }
 
@@ -149,13 +177,10 @@ suite.define(() => {
           widths.push([932, 430]);
         }
         for (const [width, height] of widths) {
-          // Exercise a prior Photo selection before the fallback picker is repositioned.
-          if (cameraFallback && width === 320) {
-            const chooser = await choose(page, "photo");
-            await expectPickerAtPlusButton(chooser);
-            await chooser.setFiles([]);
-          }
           await page.setViewportSize({ width, height });
+          const mediaChooser = await choose(page, "media");
+          await expectPickerAtPlusButton(mediaChooser);
+          await mediaChooser.setFiles([]);
           await trigger.click();
           const pending = page.waitForEvent("filechooser");
           if (cameraFallback) {
@@ -269,7 +294,9 @@ suite.define(() => {
           await trigger.press("Enter");
           await attachmentOption(page, "file").waitFor({ state: "visible" });
           expect((await items.allTextContents()).map((text) => text.trim())).toEqual(
-            fixture.single ? ["Attach…"] : ["Take photo", "Photo", "File"],
+            fixture.single
+              ? ["Photos & videos", "Attach…"]
+              : ["Take photo", "Photos & videos", "File"],
           );
           for (const value of ["open-skills", "open-connectors", "manage-plugins"]) {
             expect(await page.locator(`.oc-menu-item[data-value="${value}"]`).isVisible()).toBe(
@@ -279,7 +306,7 @@ suite.define(() => {
           await page.keyboard.press("Escape");
           await attachmentOption(page, "file").waitFor({ state: "hidden" });
         }
-        for (const kind of fixture.single ? ["file"] : ["file", "photo"]) {
+        for (const kind of ["file", "media"]) {
           const chooser = await choose(page, kind);
           // Boundary-only cancellation: Playwright does not exercise OS dialogs.
           await chooser.setFiles([]);

@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { onSettled } from "solid-js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { installDialogPolyfill } from "../../../test-helpers/modal-dialog.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
@@ -10,6 +13,14 @@ import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
+import { createAttachmentDraft } from "./chat-attachment-preparation.test-support.ts";
+import { makeMenu } from "./chat-composer-menu.test-support.ts";
+import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
+
+const composerStyles = readFileSync(
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../styles/chat/composer.css"),
+  "utf8",
+);
 
 let host: HTMLDivElement;
 let restoreDialog: () => void;
@@ -72,6 +83,79 @@ function mountInputs(initial: ChatAttachmentControlsProps, composerClass?: strin
     photo: input("photo", container),
   };
 }
+
+it.each([false, true])(
+  "selects existing media through the real menu and draft owner (imagesOnly=%s)",
+  async (imagesOnly) => {
+    const stylesheet = document.head.appendChild(document.createElement("style"));
+    stylesheet.textContent = composerStyles;
+    onTestFinished(() => stylesheet.remove());
+    const draft = createAttachmentDraft({
+      maxBytes: 1024,
+      maxImageBytes: 1024,
+      maxBatchBytes: 2048,
+    });
+    onTestFinished(draft.dispose);
+    const props = { ...draft.props, imagesOnly };
+    const handle = createChatAttachmentInputHandle();
+    mountSolid(
+      () => (
+        <>
+          <ChatAttachmentInputs {...props} inputHandle={handle} />
+          <ChatComposerPlusMenu
+            menu={makeMenu({ open: true, attachments: props, inputHandle: handle })}
+          />
+        </>
+      ),
+      {},
+      host,
+    );
+    const kind = imagesOnly ? "photo" : "media";
+    await waitForSolid(() => expect(host.querySelector(`[data-value="${kind}"]`)).not.toBeNull());
+    const action = host.querySelector<HTMLButtonElement>(`[data-value="${kind}"]`)!;
+    expect(action.textContent).toBe(imagesOnly ? "Photo" : "Photos & videos");
+    const picker = input(kind);
+    for (const fileInput of host.querySelectorAll<HTMLInputElement>('input[type="file"]')) {
+      const style = getComputedStyle(fileInput);
+      expect(
+        {
+          display: style.display,
+          position: style.position,
+          opacity: style.opacity,
+          pointerEvents: style.pointerEvents,
+        },
+        fileInput.className,
+      ).toEqual({
+        display: "none",
+        position: "fixed",
+        opacity: "0",
+        pointerEvents: "none",
+      });
+    }
+    const open = clickSpy(picker);
+    action.click();
+    expect(open).toHaveBeenCalledOnce();
+    expect(picker.accept).toBe(imagesOnly ? "image/*" : "image/*,video/*");
+    expect(picker.multiple).toBe(true);
+    expect(picker.hasAttribute("capture")).toBe(false);
+    const select = (files: File[]) => {
+      Object.defineProperty(picker, "files", { configurable: true, value: files });
+      picker.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    select([
+      new File(["image"], "still.png", { type: "image/png" }),
+      new File(["video"], "clip.mp4", { type: "video/mp4" }),
+    ]);
+    await waitForSolid(() => expect(draft.reads.pendingReads).toBe(0));
+    expect(draft.attachments().map(({ fileName }) => fileName)).toEqual(
+      imagesOnly ? ["still.png"] : ["still.png", "clip.mp4"],
+    );
+    select([]);
+    expect(draft.attachments()).toHaveLength(imagesOnly ? 1 : 2);
+    expect(input("photo").accept).toBe("image/*");
+    expect(input("camera").accept).toBe("image/*");
+  },
+);
 
 it("retains the camera across input renders and retires its active read scope", async () => {
   const props = { readSignal: new AbortController().signal };
