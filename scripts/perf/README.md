@@ -2235,8 +2235,9 @@ records their loaded paths and override flags in `githubObservation.owner` and
 and the handler was observed. Both sides must
 enable identical observation and use separate fixtures, ports, and CPU sets.
 When comparing shared-state command routing, also preserve the baseline
-`src/state/openclaw-state-read-handlers.ts` beside its owner and pass its path with
-`--github-state-handlers` on A. Pair it with the baseline receipt owner so its
+`src/state/openclaw-state-read-handlers.ts` and `src/state/github-publication.read.worker.ts`
+beside their owners and pass their paths with `--github-state-handlers` and
+`--github-publication-reader` on A. Pair them with the baseline receipt owner so its
 original command reaches its original handler; the import records identify the
 selected handler module. This keeps both sides on one dependency installation.
 

@@ -14,11 +14,25 @@ const selectedHandlersUrl = handlersOverride
 if (dirname(fileURLToPath(selectedHandlersUrl)) !== dirname(fileURLToPath(handlersUrl))) {
   throw new Error("GitHub state handler override must be adjacent to its source owner");
 }
+const publicationReaderUrl = new URL(
+  "../../src/state/github-publication.read.worker.ts",
+  import.meta.url,
+).href;
+const readerOverride = process.env.OPENCLAW_BENCH_GITHUB_PUBLICATION_READER;
+const selectedReaderUrl = readerOverride
+  ? pathToFileURL(resolve(readerOverride)).href
+  : publicationReaderUrl;
+if (dirname(fileURLToPath(selectedReaderUrl)) !== dirname(fileURLToPath(publicationReaderUrl))) {
+  throw new Error("GitHub publication reader override must be adjacent to its source owner");
+}
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
     const result = nextResolve(specifier, context);
-    return result.url === handlersUrl ? { ...result, url: selectedHandlersUrl } : result;
+    if (result.url === handlersUrl) {
+      return { ...result, url: selectedHandlersUrl };
+    }
+    return result.url === publicationReaderUrl ? { ...result, url: selectedReaderUrl } : result;
   },
   load(url, context, nextLoad) {
     const result = nextLoad(url, context);
