@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, For, merge, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
@@ -71,15 +71,14 @@ export function StreamGroupParts(props: {
       : (props.parts.find((candidate) => candidate.kind === "stream" && candidate.text.trim())
           ?.key ?? null),
   );
-  const options = merge(() => props.options, {
-    get firstBubbleKey() {
-      return firstBubbleKey();
-    },
-  });
   return (
     <For each={props.parts} keyed={(part) => `${part.kind}:${part.key}`}>
       {(part) => (
-        <StreamPartView part={part()} options={options} presentation={props.presentation} />
+        <StreamPartView
+          part={part()}
+          options={{ ...props.options, firstBubbleKey: firstBubbleKey() }}
+          presentation={props.presentation}
+        />
       )}
     </For>
   );
@@ -161,8 +160,6 @@ function StreamingMessage(props: {
   options: StreamGroupOptions;
 }) {
   const part = () => props.part()!;
-  const isStreaming = createMemo(() => part().isStreaming);
-  const showReasoning = createMemo(() => Boolean(part().thinking));
   const prepared = createMemo(() => prepareChatStreamRender(part()));
   const actions = createMemo(() =>
     resolveMessageActionDetails(prepared(), {
@@ -171,22 +168,16 @@ function StreamingMessage(props: {
       senderLabel: props.options.assistant?.name ?? "Assistant",
     }),
   );
-  const options = merge(() => props.options, {
-    get isStreaming() {
-      return isStreaming();
-    },
-    get showReasoning() {
-      return showReasoning();
-    },
-    get messageActions() {
-      return actions();
-    },
-  });
   return (
     <GroupedMessage
       preparation={prepared()}
       messageKey={part().key}
-      options={options}
+      options={{
+        ...props.options,
+        isStreaming: part().isStreaming,
+        showReasoning: Boolean(part().thinking),
+        messageActions: actions(),
+      }}
       onOpenSidebar={props.options.onOpenSidebar}
     />
   );
