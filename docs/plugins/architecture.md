@@ -989,6 +989,9 @@ Native OpenClaw plugins run **in-process** with the Gateway. They are not sandbo
 Native plugin implications: a plugin can register tools, network handlers, hooks, and services; a plugin bug can crash or destabilize the gateway; and a malicious native plugin is equivalent to arbitrary code execution inside the OpenClaw process.
 </Warning>
 
+Plugin authors must handle asynchronous errors from their own clients and sockets;
+see [Handle native client errors](/plugins/sdk-runtime#handle-native-client-errors).
+
 Compatible bundles are safer by default because OpenClaw currently treats them as metadata/content packs. In current releases, that mostly means bundled skills.
 
 Use allowlists and explicit install/load paths for non-bundled plugins. Treat workspace plugins as development-time code, not production defaults.

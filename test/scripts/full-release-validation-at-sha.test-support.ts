@@ -101,6 +101,7 @@ export function createDispatchFixture(
     workflowSource?: string;
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
+    toolingLagFetchFailure?: boolean;
     unreachableContributionRecord?: boolean;
     activeConcurrencyRun?: boolean;
     completedConcurrencyHistory?: number;
@@ -316,6 +317,14 @@ const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.MOCK_GIT_CALLS, JSON.stringify(args) + "\\n");
+if (args[0] === "fetch" && args.includes("refs/heads/main:refs/remotes/origin/main") && ${JSON.stringify(options.toolingLagFetchFailure ?? false)}) {
+  const mainFetches = fs.readFileSync(process.env.MOCK_GIT_CALLS, "utf8").trim().split("\\n")
+    .filter((line) => line.includes("refs/heads/main:refs/remotes/origin/main"));
+  if (mainFetches.length > 1) {
+    console.error("fixture origin/main fetch failed");
+    process.exit(1);
+  }
+}
 if (args.includes("https://github.com/openclaw/openclaw.git")) {
   if (${JSON.stringify(options.bareShaFetchFailure ?? false)}) {
     console.error("fatal: remote error: upload-pack: not our ref " + args.at(-1));

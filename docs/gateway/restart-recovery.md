@@ -68,11 +68,15 @@ During startup, a new reply waits for its agent's model and plugin runtime to
 finish loading. Agents that are already ready can serve replies while other
 agents continue loading. Startup preparation failures still report an error.
 
-After the HTTP listener binds, interrupted main-session marking overlaps session
-projection preparation. Both settle before channels start and the Gateway reports
-ready. Post-ready recovery reuses the completed store checks instead of repeating
-that scan. Both main-session recovery and queued session deliveries wait for
-subagent source restoration before attempting to resume interrupted work.
+Startup orphan marking runs after plugin loading and startup completion. It uses
+the existing active-session index to exclude archived rows before inspecting
+recovery metadata, without reading full transcripts. Client connections, channels,
+startup-gated RPCs, startup hooks, and saved-input replay still wait for marking; chat readiness stays
+gated until saved-input recovery finishes. Marking failures produce a warning
+without aborting startup,
+and the existing recovery sweep retries failed stores. Main-session recovery and
+queued deliveries still wait for subagent source restoration before resuming
+interrupted work.
 
 ## What survives a restart
 
@@ -109,8 +113,8 @@ backoff run outside the subagent recovery span, so registry activation does not
 wait for saved-input delivery. Gateway shutdown still joins that delivery work.
 The existing chat-send startup gate and main-session recovery sweep wait until
 replay and registry recovery settle. This prevents new input from overtaking
-saved input and the sweep from racing saved-input predecessor admission; HTTP
-readiness does not wait for replay.
+saved input and the sweep from racing saved-input predecessor admission; startup
+completion does not wait for replay.
 Before replaying queued inter-session updates, the Gateway resumes any interrupted
 main turn through its existing recovery owner, preserving the predecessor's order.
 The updates remain queued when that owner defers recovery.
@@ -966,10 +970,11 @@ Three complementary mechanisms mark sessions whose turn did not finish:
   clears the prior interruption and is not replayed. Stale transcript lock files
   are cleaned up at the same time.
 
-Startup selects these candidates in the session database worker, so unrelated
-session summaries do not cross into the Gateway process. Pending canonical
-validation still runs when no recovery candidate exists, and marking rechecks
-the current row and live ownership before committing.
+Startup selects these candidates from the active-session index in the session
+database worker without reading transcripts. Candidate discovery skips archived
+rows, and unrelated session summaries do not cross into the Gateway process.
+Pending canonical validation still runs when no recovery candidate exists, and
+marking rechecks the current row and live ownership before committing.
 
 Agents still undergoing database startup inspection retain their recovery work.
 When admission finishes, the same startup recovery owner scans their stores with

@@ -166,7 +166,7 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-        const { composer, trigger, runtime } = modelPicker(pane);
+        const { composer, picker, trigger, runtime } = modelPicker(pane);
         const draft = composer.locator("textarea").first();
         const attachments = composer.locator(".chat-attachment-thumb");
         const error = pane.locator(".chat-error");
@@ -183,7 +183,7 @@ suite.define(() => {
           await gateway.waitForRequest("chat.send");
         } else {
           await trigger.click();
-          await selectChatModelOption(runtime("opencode"));
+          await selectChatModelOption(picker, "fixture/synthetic-model", { runtime: "opencode" });
           await expectRequest(gateway, "sessions.patch", {
             key,
             model: "fixture/synthetic-model",

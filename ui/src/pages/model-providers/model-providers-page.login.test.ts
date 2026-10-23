@@ -258,7 +258,7 @@ describe("Models provider login", () => {
       try {
         await chooseLogin(page, "Example browser sign-in");
         await waitForSolid(() =>
-          expect(page.querySelector<HTMLAnchorElement>(".wizard-step__sign-in a")?.href).toBe(
+          expect(page.querySelector<HTMLAnchorElement>(".wizard-sign-in a")?.href).toBe(
             "https://provider.example/sign-in",
           ),
         );
@@ -276,8 +276,10 @@ describe("Models provider login", () => {
           );
         }
         if (cancel) {
-          [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
-            .find((button) => button.textContent?.trim() === "Cancel")!
+          page
+            .querySelector<HTMLButtonElement>(
+              'openclaw-modal-dialog button[aria-label="Cancel sign-in"]',
+            )!
             .click();
           await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
           expect(session?.getStatus()).toBe("cancelled");

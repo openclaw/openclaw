@@ -75,6 +75,15 @@ const cases: Array<
   ],
 ];
 
+if (process.platform !== "win32") {
+  cases.push([
+    "literal whitespace in output directory",
+    [complete],
+    ["system-prompt.txt", "tools.json"],
+    " inventory ",
+  ]);
+}
+
 describe("trajectory command export inventory", () => {
   it.each(cases)(
     "reports only written files in existing order for %s",

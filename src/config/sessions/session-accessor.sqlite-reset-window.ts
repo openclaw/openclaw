@@ -51,6 +51,8 @@ type VisibleMessagePositions = {
 
 type ResetMessageWindow = {
   boundarySeq: number;
+  boundaryType: "reset" | "compaction";
+  firstKeptActivePosition?: number;
   contextPrefixEventCount: number;
   keptMessagePositions: number[];
   contextPrefixSizeBytes: number;
@@ -331,6 +333,7 @@ function findLatestResetMessageWindow(
     return null;
   }
   const boundary = readBoundaryWindowFacts(projection, latestBoundary, scope);
+  let firstKeptActivePosition: number | undefined;
   const keptMessagePositions: number[] = [];
   const includesBoundary = latestBoundary.event_type === "compaction";
   let contextPrefixEventCount = includesBoundary ? 1 : 0;
@@ -363,6 +366,7 @@ function findLatestResetMessageWindow(
     }
     const firstKept = unindexedFirstKept ?? indexedFirstKept;
     if (firstKept && firstKept.active_position < latestBoundary.active_position) {
+      firstKeptActivePosition = firstKept.active_position;
       const candidateRows = iterateSqliteQuerySync(
         projection.database.db,
         db
@@ -430,6 +434,8 @@ function findLatestResetMessageWindow(
   }
   return {
     boundarySeq: latestBoundary.seq,
+    boundaryType: includesBoundary ? "compaction" : "reset",
+    firstKeptActivePosition,
     contextPrefixEventCount,
     keptMessagePositions,
     contextPrefixSizeBytes,

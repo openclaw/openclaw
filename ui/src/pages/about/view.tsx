@@ -14,6 +14,7 @@ import {
 import { SettingsPage, SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import "../../components/tooltip.ts";
 import { ThemeBrandIcon } from "../../components/theme-brand-icon.tsx";
+import { registerAboutEnglish } from "../../i18n/locales/en-about.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { COMMUNITY_DISCORD_URL, OFFICIAL_SUPPORT_URL } from "../../lib/product-links.ts";
 import {
@@ -25,6 +26,8 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import "../../styles/about.css";
 import "../../styles/settings.css";
+
+registerAboutEnglish();
 
 export type AboutCommitCopyState = "idle" | "copying" | "copied" | "error";
 type AboutProps = {

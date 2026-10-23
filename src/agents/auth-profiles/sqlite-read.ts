@@ -304,12 +304,13 @@ async function readAgentAuthProfileRows(
           admission: createSqliteWorkerOperationAdmission((request, grant) => {
             binding.authorize(request);
             assertCurrent();
+            const publication = isRecord(request.facts) ? request.facts.publication : undefined;
             if (
               request.stage === "prepare" &&
-              isRecord(request.facts) &&
-              request.facts.kind === "auth-store-read"
+              isRecord(publication) &&
+              publication.kind === "auth-store-read"
             ) {
-              rows = receiveAuthProfileReadRows(request.facts.port, rows);
+              rows = receiveAuthProfileReadRows(publication.port, rows);
             }
             if (!grant()) {
               throw new Error("Auth profile read authority expired");
