@@ -172,6 +172,9 @@ function patchAttributes(
   before: [string, string][],
   after: [string, string][],
 ): void {
+  if (before === after) {
+    return;
+  }
   const previous = new Map(before);
   const next = new Map(after);
   for (const name of new Set([...previous.keys(), ...next.keys()])) {
