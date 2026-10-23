@@ -115,6 +115,7 @@ function historyParams(
     sessionAgentId: scope.agentId,
     canonicalKey: scope.sessionKey,
     cliHistoryHomeDir: homeDir,
+    cliHistoryProjectsRoot: path.join(homeDir, ".claude", "projects"),
     max,
     maxHistoryBytes: 64 * 1024,
     effectiveMaxChars: 4096,
@@ -333,6 +334,33 @@ it("applies native history eligibility to actual empty, message, and marker-only
           cli?.dispose();
         }
       });
+    }
+    // Unauthorized, relative, and node-owned roots never reach revision or native discovery.
+    const readHistoryRevision = vi.fn();
+    const sourceDiscovery = vi.spyOn(rawFs.promises, "readdir");
+    try {
+      for (const denied of [
+        { cliHistoryProjectsRoot: undefined, entry },
+        { cliHistoryProjectsRoot: "relative/projects", entry },
+        {
+          cliHistoryProjectsRoot: path.join(fixture.homeDir, ".claude", "projects"),
+          entry: { ...entry, execHost: "node" as const },
+        },
+      ]) {
+        await expect(
+          prepareCliSessionHistoryReader(
+            {
+              ...historyParams({ scope, entry: denied.entry }, fixture.homeDir),
+              cliHistoryProjectsRoot: denied.cliHistoryProjectsRoot,
+            },
+            { ...readers, readHistoryRevision },
+          ),
+        ).resolves.toBeUndefined();
+      }
+      expect(readHistoryRevision).not.toHaveBeenCalled();
+      expect(sourceDiscovery).not.toHaveBeenCalled();
+    } finally {
+      sourceDiscovery.mockRestore();
     }
   });
 });

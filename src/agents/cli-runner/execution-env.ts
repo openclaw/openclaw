@@ -6,10 +6,10 @@ import {
 } from "./execute-logging.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-type ChildEnvBackend = Pick<
-  PreparedCliRunContext["preparedBackend"],
-  "backend" | "env" | "secretInput"
->;
+type ChildEnvBackend = Pick<PreparedCliRunContext["preparedBackend"], "env" | "secretInput"> & {
+  /** Only `env` and `clearEnv` shape the child; history readers compose without a command. */
+  backend: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
+};
 
 /**
  * The environment a local CLI child starts from: the Gateway process, minus the backend's
@@ -18,7 +18,13 @@ type ChildEnvBackend = Pick<
  * The executor layers per-attempt MCP capture and installation target variables on top; those
  * never carry identity.
  */
-export function resolveCliChildEnv(preparedBackend: ChildEnvBackend): {
+export function resolveCliChildEnv(
+  preparedBackend: ChildEnvBackend,
+  options?: {
+    /** Skill snapshot overrides projected without mutating the Gateway process environment. */
+    skillEnv?: Readonly<Record<string, string>>;
+  },
+): {
   env: Record<string, string>;
   selectedClaudeClearEnv: Set<string> | undefined;
 } {
@@ -35,6 +41,12 @@ export function resolveCliChildEnv(preparedBackend: ChildEnvBackend): {
   );
   const backendEnv = { ...configuredBackendEnv, ...preparedBackendEnv };
   const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
+  if (options?.skillEnv) {
+    Object.assign(
+      env,
+      sanitizeHostExecEnv({ baseEnv: {}, overrides: options.skillEnv, blockPathOverrides: true }),
+    );
+  }
   const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
   for (const key of backend.clearEnv ?? []) {
     if (!preservedEnv.has(key) || selectedClaudeClearEnv?.has(key)) {

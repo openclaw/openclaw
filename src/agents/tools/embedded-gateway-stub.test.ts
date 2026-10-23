@@ -39,10 +39,16 @@ const runtime = vi.hoisted(() => ({
     canonicalKey: "agent:main:main",
   })),
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai" })),
-  readChatHistoryPage: vi.fn(async (): Promise<ChatHistoryPage> => ({
-    messages: [] as unknown[],
-    pagination: { offset: 0, totalMessages: 0, rawPageMessages: 0 },
-  })),
+  readChatHistoryPage: vi.fn(
+    async (
+      _params?: unknown,
+      _signal?: AbortSignal,
+      _retainNativeHistoryAuthorization?: (isCurrent: () => boolean) => void,
+    ): Promise<ChatHistoryPage> => ({
+      messages: [] as unknown[],
+      pagination: { offset: 0, totalMessages: 0, rawPageMessages: 0 },
+    }),
+  ),
   resolveSessionKeyBySessionIdAsync: vi.fn(
     async (): Promise<string | undefined> => "agent:main:main",
   ),
@@ -306,6 +312,8 @@ it.each([undefined, 1])("preserves visible history and offset metadata: %s", asy
   } else {
     expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(
       expect.objectContaining({ offset, max: 1 }),
+      undefined,
+      expect.any(Function),
     );
     expect(result).toMatchObject({ offset, nextOffset: 81, hasMore: true, totalMessages: 82 });
   }
@@ -387,14 +395,41 @@ it("continues a retained anchored page through its original transcript source", 
       messageId: cursor.messageId,
       pageCursor: cursor,
     }),
+    undefined,
+    expect.any(Function),
   );
 });
 
 it("normalizes string history limits before calling the shared owner", async () => {
   await history({ limit: "2" });
 
-  expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(expect.objectContaining({ max: 2 }));
+  expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(
+    expect.objectContaining({ max: 2 }),
+    undefined,
+    expect.any(Function),
+  );
 });
+
+it.each([true, false])(
+  "checks retained history authority before returning: %s",
+  async (current) => {
+    const messages = [{ role: "assistant", content: "prepared history" }];
+    const isCurrent = vi.fn(() => current);
+    runtime.readChatHistoryPage.mockImplementationOnce(async (_params, _signal, retain) => {
+      retain?.(isCurrent);
+      return { messages, pagination: { offset: 0, totalMessages: 1, rawPageMessages: 1 } };
+    });
+    const result = history({});
+    if (current) {
+      await expect(result).resolves.toMatchObject({ messages });
+    } else {
+      await expect(result).rejects.toThrow(
+        "session changed while reading history; reload the conversation",
+      );
+    }
+    expect(isCurrent).toHaveBeenCalledOnce();
+  },
+);
 
 it.each([
   ["cursor", "delta:current", "delta cursors require a running gateway"],

@@ -36,6 +36,7 @@ import {
 } from "../reply-completion.js";
 import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
+import { claudeCliBindingLocation } from "./child-env.js";
 import { runCliCleanup } from "./cleanup.js";
 import { resolveCliSessionId } from "./cli-run-recovery.js";
 import { projectCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
@@ -661,6 +662,7 @@ export function buildCliRunResult(params: {
                 ...(context.promptToolNamesHash
                   ? { promptToolNamesHash: context.promptToolNamesHash }
                   : {}),
+                ...claudeCliBindingLocation(runParams.provider, context),
                 ...(context.cwdHash ? { cwdHash: context.cwdHash } : {}),
                 ...(context.preparedBackend.mcpConfigHash
                   ? { mcpConfigHash: context.preparedBackend.mcpConfigHash }

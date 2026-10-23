@@ -98,6 +98,10 @@ export function setCliSessionBinding(
     ...(typeof binding.authEpochVersion === "number" && Number.isFinite(binding.authEpochVersion)
       ? { authEpochVersion: binding.authEpochVersion }
       : {}),
+    ...(typeof binding.cwd === "string" && binding.cwd ? { cwd: binding.cwd } : {}),
+    ...(typeof binding.transcriptRoot === "string" && binding.transcriptRoot
+      ? { transcriptRoot: binding.transcriptRoot }
+      : {}),
   };
   for (const field of [
     "extraSystemPromptHash",

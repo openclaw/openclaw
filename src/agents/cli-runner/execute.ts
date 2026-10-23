@@ -27,6 +27,7 @@ import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image
 import { resolveFastModeForElapsed } from "../fast-mode.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
+import { buildCliChildEnv } from "./child-env.js";
 import { runCliCleanup } from "./cleanup.js";
 import {
   acceptsCliLiveSession,
@@ -38,7 +39,6 @@ import { NODE_CLAUDE_FORWARD_ENV_KEYS, resolveNodeClaudeAuthEnv } from "./execut
 import { stripGatewayLocalClaudeArgs } from "./execute-node-claude.js";
 import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
-import { resolveCliChildEnv } from "./execution-env.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
 import {
   buildCliArgs,
@@ -305,7 +305,16 @@ export async function executePreparedCliRun(
           });
       cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
       const preparedBackendEnv = context.preparedBackend.env ?? {};
-      const { env, selectedClaudeClearEnv } = resolveCliChildEnv(context.preparedBackend);
+      const childEnv = await buildCliChildEnv({
+        provider: params.provider,
+        preparedBackend: context.preparedBackend,
+        overlays: [mcpCaptureAttempt.env, localProcessEnv],
+        remote: Boolean(nodePlacement),
+        cwd: context.cwd ?? context.workspaceDir,
+      });
+      const { env, selectedClaudeClearEnv } = childEnv;
+      // The recovery copy above is local to this call; settlement reads the caller's context.
+      inputContext.claudeTranscriptRoot = childEnv.claudeTranscriptRoot;
       const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
         NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
       );
@@ -321,10 +330,6 @@ export async function executePreparedCliRun(
       const nodeClearEnv = [
         ...new Set([...(selectedClaudeClearEnv ?? []), ...nodeRuntimeClearEnv]),
       ];
-      Object.assign(env, mcpCaptureAttempt.env, localProcessEnv);
-      // Never mark Claude CLI as host-managed. That marker routes runs into
-      // Anthropic's separate host-managed usage tier instead of normal CLI use.
-      delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
       // The history writer's native owner must be the one this final environment selects.
       context.cliHistoryWriter?.bindExecutionEnv(env, carriesSavedHistory);
 

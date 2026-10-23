@@ -86,6 +86,7 @@ import type { SessionContextMessagesWorkerInput } from "./session-history-read.t
 import type {
   ChatHistoryDisplayRequest,
   ChatHistoryDisplayResult,
+  SessionHistoryWorkerHostRequestHandler,
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
   SessionHistoryDelta,
@@ -589,6 +590,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     run: (
       prepare: () => Omit<SessionTranscriptHistoryWorkerInput, "database">,
       inputBytes: number,
+      onRequest?: SessionHistoryWorkerHostRequestHandler,
     ) => Promise<SessionHistoryWorkerResult>;
     readPreview: SessionHistoryReader<"session-preview", "items">;
     readTitleFields: SessionHistoryReader<"session-title-fields", "fields">;

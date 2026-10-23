@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
+import { shortenHomePath } from "../utils.js";
 import { noteClaudeCliHealth } from "./doctor-claude-cli.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -49,6 +50,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_HOME", homeDir);
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(homeDir, ".openclaw"));
   vi.stubEnv("PATH", binDir);
+  vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
 });
 
 function authResult(loggedIn: boolean) {
@@ -96,6 +98,59 @@ it("stays quiet when Claude CLI is not configured or detected", () => {
   noteClaudeCliHealth({}, { noteFn });
   expect(noteFn).not.toHaveBeenCalled();
 });
+
+it.each([false, true, "home-relative"] as const)(
+  "checks the configured Claude root with a distinct run cwd=%s",
+  (configuredCwd) => {
+    const runCwd = configuredCwd
+      ? path.join(configuredCwd === "home-relative" ? homeDir : workspaceDir, "task")
+      : workspaceDir;
+    fs.mkdirSync(runCwd, { recursive: true });
+    const configDir = configuredCwd ? "selected Claude" : path.join(homeDir, "selected Claude");
+    const projectKey = fs.realpathSync
+      .native(runCwd)
+      .normalize("NFC")
+      .replace(/[^a-zA-Z0-9]/g, "-");
+    const selectedDir = path.resolve(
+      fs.realpathSync.native(runCwd),
+      configDir,
+      "projects",
+      projectKey,
+    );
+    const defaultDir = path.join(homeDir, ".claude", "projects", projectKey);
+    fs.mkdirSync(selectedDir, { recursive: true });
+    fs.mkdirSync(path.dirname(defaultDir), { recursive: true });
+    fs.writeFileSync(defaultDir, "default-root decoy");
+    const cfg = {
+      agents: {
+        defaults: { model: "claude-cli/claude-sonnet-4-6" },
+        entries: {
+          main: {
+            default: true,
+            ...(configuredCwd
+              ? { cwd: configuredCwd === "home-relative" ? "~/task" : runCwd }
+              : {}),
+          },
+        },
+      },
+    };
+    const noteFn = vi.fn();
+    const deps = { workspaceDir, noteFn };
+    vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
+    mockClaudeAuthentication(true);
+    noteClaudeCliHealth(cfg, deps);
+    expect(noteFn).not.toHaveBeenCalled();
+
+    fs.rmdirSync(selectedDir);
+    fs.writeFileSync(selectedDir, "selected-root problem");
+    noteClaudeCliHealth(cfg, deps);
+    expect(noteFn).toHaveBeenCalledTimes(1);
+    expect(noteText(noteFn)).toContain(
+      `${shortenHomePath(selectedDir)} exists but is not a directory.`,
+    );
+    expect(noteText(noteFn)).not.toContain(shortenHomePath(defaultDir));
+  },
+);
 
 it("probes auth with the same cleared environment as Claude execution", () => {
   resolveCliBackendConfigMock.mockReturnValue({

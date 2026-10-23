@@ -1,4 +1,4 @@
-import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
+import type { SessionHistoryWorkerHostRequestHandler } from "./session-history-types.js";
 import type { SessionHistoryWorkerRequestRunner } from "./session-transcript-worker-readers.js";
 import type {
   SessionHistoryWorkerPreparedInput,
@@ -11,7 +11,7 @@ export function createSessionHistoryWorkerRequestStub(
     prepare: () => SessionHistoryWorkerPreparedInput,
     inputBytes: number,
     signal?: AbortSignal,
-    onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
+    onRequest?: SessionHistoryWorkerHostRequestHandler,
   ) => Promise<SessionTranscriptWorkerValues[SessionHistoryWorkerPreparedInput["kind"]]>,
 ): SessionHistoryWorkerRequestRunner {
   return async (prepare, inputBytes, receive, signal, onRequest) => {

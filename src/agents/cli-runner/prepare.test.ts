@@ -141,6 +141,10 @@ import { finalizeCliContextEngineTurn } from "./cli-run-transcript.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import {
+  gatewayClaudeProjectsRoot,
+  registerClaudeConfigDirPreparationTests,
+} from "./prepare-claude-config-dir.test-support.js";
+import {
   createJsonlStdinBackendConfig,
   registerCliMcpPreparationTests,
   setRawCliBackendForPrepareTest,
@@ -609,6 +613,7 @@ describe("prepareCliRunContext", () => {
   });
 
   beforeEach(() => {
+    vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
     // Install narrow test doubles for external runtime seams so preparation
     // remains about data flow, not bundled plugin or loopback startup cost.
     defaultTestCliBackend = buildDefaultTestCliBackend();
@@ -3650,7 +3655,11 @@ describe("prepareCliRunContext", () => {
       controlOperation: testCase.controlOperation,
     });
 
-    const transcriptArgs = { sessionId: testCase.sessionId, workspaceDir: dir };
+    const transcriptArgs = {
+      sessionId: testCase.sessionId,
+      workspaceDir: dir,
+      projectsRoot: gatewayClaudeProjectsRoot(),
+    };
     if (testCase.checksTranscript) {
       expect(transcriptCheck).toHaveBeenCalledWith(transcriptArgs);
     } else {
@@ -4013,6 +4022,7 @@ describe("prepareCliRunContext", () => {
       expect(transcriptCheck).toHaveBeenCalledWith({
         sessionId: "warm-claude-sid",
         workspaceDir: dir,
+        projectsRoot: gatewayClaudeProjectsRoot(),
       });
       expect(orphanCheck).not.toHaveBeenCalled();
       expect(context.reusableCliSession).toEqual({
@@ -4024,6 +4034,12 @@ describe("prepareCliRunContext", () => {
       expect(context.openClawHistoryPrompt).toContain("earlier warm context");
       expect(context.openClawHistoryPrompt).toContain("warm follow-up");
     });
+  });
+
+  registerClaudeConfigDirPreparationTests({
+    getFixture: () => fixture,
+    setBackend: setCliBackendForPrepareTest,
+    setRawBackend: setRawCliBackendForPrepareTest,
   });
 
   it.each(["prepared", "admitted"] as const)(

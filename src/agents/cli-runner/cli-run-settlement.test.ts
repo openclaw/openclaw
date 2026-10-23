@@ -306,6 +306,42 @@ it.each([
   },
 );
 
+it("persists the transcript root selected for the child process", () => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  context.cwd = "/tmp/child-cwd";
+  context.claudeTranscriptRoot = "/tmp/child-claude/projects";
+  const result = testRunResult({
+    context,
+    output: { text: "done" },
+    effectiveCliSessionId: "native-session",
+    bindingFlushOk: true,
+    sessionBindingDisabled: false,
+  });
+  const entry: SessionEntry = { sessionId: context.params.sessionId, updatedAt: 1 };
+
+  applyCliSessionBindingResult(entry, "claude-cli", result.meta.agentMeta);
+
+  expect(getCliSessionBinding(entry, "claude-cli")).toMatchObject({
+    sessionId: "native-session",
+    cwd: "/tmp/child-cwd",
+    transcriptRoot: "/tmp/child-claude/projects",
+  });
+});
+
+it("keeps legacy bindings without a retained transcript root readable", () => {
+  const entry: SessionEntry = {
+    sessionId: "openclaw-session",
+    updatedAt: 1,
+    cliSessionBindings: { "claude-cli": { sessionId: "legacy-session", cwd: "/tmp/legacy-cwd" } },
+  };
+
+  expect(getCliSessionBinding(entry, "claude-cli")).toMatchObject({
+    sessionId: "legacy-session",
+    cwd: "/tmp/legacy-cwd",
+  });
+  expect(getCliSessionBinding(entry, "claude-cli")?.transcriptRoot).toBeUndefined();
+});
+
 it.each(
   ["anthropic", undefined].flatMap((modelProvider) =>
     ["completed", "blocked", "delivered-failure", "hook-handled"].map((kind) => ({

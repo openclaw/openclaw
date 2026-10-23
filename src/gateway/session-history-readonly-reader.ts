@@ -98,6 +98,7 @@ function createBoundSessionHistorySubagentProjection(
 export function createReadonlySessionHistoryReader(
   target: Omit<PreparedSessionHistoryReadTarget, "sourceDiscovery">,
   resolveSourceDatabases?: () => GatewaySessionStoreReadSources | undefined,
+  assertNativeHistoryAuthorized?: () => Promise<void>,
 ) {
   let sourceDatabases = target.sourceDatabases;
   const readDatabase = <T>(read: (database: OpenClawAgentReadOnlyDatabase) => T): T => {
@@ -152,6 +153,7 @@ export function createReadonlySessionHistoryReader(
     () => (sourceDatabases ??= resolveSourceDatabases?.()),
   );
   return {
+    assertNativeHistoryAuthorized,
     readRecentUsage: (maxBytes: number) =>
       readSnapshot((projection) =>
         aggregateSessionTranscriptUsage(

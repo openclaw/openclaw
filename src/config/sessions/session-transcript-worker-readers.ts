@@ -1,6 +1,6 @@
 import { err, ok } from "@openclaw/normalization-core/result";
-import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import type { SessionHistoryWorkerHostRequestHandler } from "./session-history-types.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import type { SessionTranscriptHydrationChunk } from "./session-transcript-hydration.types.js";
 import {
@@ -19,7 +19,7 @@ export type SessionHistoryWorkerRequestRunner = <
   inputBytes: number,
   receive: (value: SessionTranscriptWorkerValues[Kind]) => TResult,
   signal?: AbortSignal,
-  onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
+  onRequest?: SessionHistoryWorkerHostRequestHandler,
   timeoutMs?: number,
 ) => Promise<TResult>;
 
@@ -193,7 +193,8 @@ export function createSessionHistoryWorkerReaders(
     readWatermark: reader("transcript-watermark", (value) => value.watermark),
     readStats: reader("transcript-stats", (value) => value.stats),
     readActivitySummarySource: reader("session-activity-summary-source", (value) => value.source),
-    run: async (prepare, inputBytes) => await runRequest(prepare, inputBytes, (value) => value),
+    run: async (prepare, inputBytes, onRequest) =>
+      await runRequest(prepare, inputBytes, (value) => value, undefined, onRequest),
     readTranscript: async (input, signal) => {
       const events: TranscriptEvent[] = [];
       const eventJson: string[] | undefined = input.includeEventJson ? [] : undefined;
