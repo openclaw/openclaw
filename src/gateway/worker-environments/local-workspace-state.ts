@@ -225,31 +225,13 @@ export function projectionOperations(
     if (snapshot.kind !== "scan") {
       throw new Error("Local workspace checkpoint scan is missing");
     }
-    // Carry the scan's fresh host admission into the receipt and future custody.
-    if (snapshot.buildCacheInputs.length) {
-      const admitted = parseLocalWorkspaceSourcePaths(current().source_paths_json);
-      const known = new Set(admitted);
-      const added = snapshot.buildCacheInputs.filter((entryPath) => !known.has(entryPath));
-      if (added.length) {
-        await update({ source_paths_json: JSON.stringify([...admitted, ...added]) });
-      }
+    const { observation, ...checkpoint } = snapshot;
+    if (observation) {
+      // Admit host paths and unchanged-file identities without materializing the tree here.
+      row = await store.accept(observation, owner.workerAuthority);
     }
     inputPaths = Promise.resolve(snapshot.buildCacheInputs);
     preparedInputPaths = undefined;
-    const { observedRecords, ...checkpoint } = snapshot;
-    if (observedRecords.length) {
-      // These are only fresh identities for unchanged nodes. Persisting them
-      // before reservation cannot advance content or consume pending edits.
-      await update(
-        {},
-        {
-          previousRoot: snapshot.previousRoot,
-          resultingRoot: snapshot.previousRoot!,
-          records: observedRecords,
-          removed: [],
-        },
-      );
-    }
     return checkpoint;
   };
   const recover = async () => {

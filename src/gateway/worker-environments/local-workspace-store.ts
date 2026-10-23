@@ -25,6 +25,7 @@ import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceManifestMutation,
   LocalWorkspaceMutation,
+  LocalWorkspacePreparedUpdate,
   LocalWorkspaceProjection,
 } from "./local-workspace-store.types.js";
 
@@ -59,6 +60,10 @@ export type LocalWorkspaceStore = {
     patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"],
     authority?: WorktreeWorkerAuthority,
     manifest?: LocalWorkspaceManifestMutation | LocalWorkspaceBaselineDocument,
+  ) => Promise<LocalWorkspaceProjection>;
+  accept: (
+    prepared: LocalWorkspacePreparedUpdate,
+    authority?: WorktreeWorkerAuthority,
   ) => Promise<LocalWorkspaceProjection>;
   delete: (row: LocalWorkspaceProjection, authority?: WorktreeWorkerAuthority) => Promise<void>;
 };
@@ -252,6 +257,14 @@ export function withLocalWorkspaceStore<T>(
                   }
                   return result.value;
                 };
+                const accept: LocalWorkspaceStore["accept"] = async (prepared, guard) => {
+                  await mutate(
+                    { kind: "update", revision: prepared.revision, patch: prepared.patch },
+                    guard,
+                    prepared.mutation,
+                  );
+                  return row!;
+                };
                 return await run({
                   signal: lease.signal,
                   assertCurrent,
@@ -269,6 +282,7 @@ export function withLocalWorkspaceStore<T>(
                     return row;
                   },
                   manifest: readManifest,
+                  accept,
                   create: async (value, guard) => {
                     await mutate({ kind: "create", row: value }, guard);
                     return row!;
@@ -286,20 +300,7 @@ export function withLocalWorkspaceStore<T>(
                       if (prepared.kind !== "replace") {
                         throw new Error("Local workspace baseline preparation is missing");
                       }
-                      // Receipt publication needs only this header, never the full tree.
-                      await mutate(
-                        {
-                          kind: "update",
-                          revision: previous.revision,
-                          patch: {
-                            ...patch,
-                            baseline_ref: prepared.resultingRoot,
-                            baseline_json: null,
-                          },
-                        },
-                        guard,
-                        prepared.mutation,
-                      );
+                      await accept(prepared.update, guard);
                     } else {
                       await mutate(
                         { kind: "update", revision: previous.revision, patch, manifest },

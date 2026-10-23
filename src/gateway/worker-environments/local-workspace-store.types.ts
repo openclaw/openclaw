@@ -19,3 +19,10 @@ export type LocalWorkspaceMutation =
       manifest?: LocalWorkspaceManifestMutation;
     }
   | { kind: "delete"; revision: number };
+
+/** The read worker retains the full mutation; the host publishes only this header. */
+export type LocalWorkspacePreparedUpdate = {
+  revision: number;
+  patch: Updateable<DB["local_workspace_projections"]>;
+  mutation: Uint8Array;
+};

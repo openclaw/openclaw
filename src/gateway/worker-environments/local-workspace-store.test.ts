@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
@@ -13,6 +15,7 @@ import {
   WORKTREE_CREATE_LEASE_SCOPE,
   WORKTREE_MUTATION_LEASE_SCOPE,
 } from "../../agents/worktrees/capacity-contract.js";
+import { requireGit } from "../../agents/worktrees/git.js";
 import {
   type SqliteWorkerReply,
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
@@ -366,6 +369,126 @@ it("keeps prepared baseline replacement atomic through rollback and a lost commi
     const materialized = await store.manifest(store.get()!, { kind: "materialize" });
     assert(materialized.kind === "materialize");
     expect(JSON.parse(materialized.rawManifest)).toMatchObject(JSON.parse(rawManifest));
+  });
+});
+
+it("accepts worker-prepared observations without consuming edits or replaying stale metadata", async () => {
+  const worktreeId = randomUUID();
+  const canonical = dirs.make("openclaw-local-workspace-observation-");
+  const unchangedPaths = Array.from({ length: 32 }, (_, index) => `kept-${index}.txt`);
+  const baselinePaths = [...unchangedPaths, "edited.txt"];
+  const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+  for (const entryPath of baselinePaths) {
+    await fs.writeFile(path.join(canonical, entryPath), "before");
+  }
+  await requireGit(canonical, ["init", "--quiet"]);
+  const rawManifest = serializeWorkerWorkspaceManifest({
+    version: 1,
+    baseCommit: "a".repeat(40),
+    entries: baselinePaths.map((entryPath) => ({
+      path: entryPath,
+      type: "file" as const,
+      mode: 0o644,
+      size: 6,
+      sha256: hash("before"),
+    })),
+    directories: [],
+  });
+  const initial = await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const row = await store.create({
+      ...localWorkspaceProjectionFixture(worktreeId, root),
+      projection_path: canonical,
+      source_paths_json: JSON.stringify(baselinePaths),
+    });
+    return store.update(row, {}, undefined, {
+      rawManifest,
+      manifestRef: `sha256:${hash(rawManifest)}`,
+      buildCacheInputs: [],
+    });
+  });
+  const addedPath = ".artifacts/build-cache-inputs/added.txt";
+  await fs.mkdir(path.dirname(path.join(canonical, addedPath)), { recursive: true });
+  await fs.writeFile(path.join(canonical, addedPath), "admitted");
+  await fs.writeFile(path.join(canonical, "edited.txt"), "after");
+  await requireGit(canonical, ["add", "--force", "--", addedPath]);
+  const action = { kind: "scan" as const, target: "projection" as const, canonicalRoot: canonical };
+  const database = openOpenClawStateDatabase({ env });
+  const nodeRows = () =>
+    database.db
+      .prepare(
+        "SELECT path, node_json FROM local_workspace_manifest_nodes WHERE worktree_id = ? ORDER BY path",
+      )
+      .all(worktreeId);
+  const initialNodes = nodeRows();
+  const pending = {
+    pending_ref: "refs/openclaw/results/retained",
+    checkpoint_json: "retained checkpoint receipt",
+  };
+  await expect(
+    withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+      const scan = await store.manifest(store.get()!, action);
+      assert(scan.kind === "scan");
+      // Count expanded tree records crossing the worker boundary, regardless of field name.
+      // Unchanged metadata must remain encoded instead of cloning the whole inventory on host.
+      const expandedRecords = Object.values(scan)
+        .flatMap((value) => (Array.isArray(value) ? value : []))
+        .filter((value) => value && typeof value === "object" && "node" in value);
+      expect(expandedRecords.length).toBeLessThan(unchangedPaths.length);
+      assert(scan.observation);
+      expect(scan.resultingRoot).not.toBe(initial.baseline_ref);
+      await store.update(store.get()!, pending);
+      await store.accept(scan.observation);
+    }),
+  ).rejects.toThrow("Local workspace binding changed");
+  expect(nodeRows()).toEqual(initialNodes);
+  expect(await readLocalWorkspaceProjection(worktreeId, env)).toMatchObject({
+    ...pending,
+    revision: initial.revision + 1,
+    baseline_ref: initial.baseline_ref,
+    source_paths_json: initial.source_paths_json,
+  });
+  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const scan = await store.manifest(store.get()!, action);
+    assert(scan.kind === "scan" && scan.observation);
+    const observed = await store.accept(scan.observation);
+    expect(observed).toMatchObject({
+      ...pending,
+      revision: initial.revision + 2,
+      baseline_ref: initial.baseline_ref,
+      baseline_json: null,
+    });
+    expect(JSON.parse(observed.source_paths_json)).toContain(addedPath);
+    const persisted = nodeRows();
+    expect(persisted).not.toEqual(initialNodes);
+    expect(persisted.map((row) => row.path)).toEqual(initialNodes.map((row) => row.path));
+    expect(
+      persisted.map((row) => {
+        assert(typeof row.node_json === "string");
+        return JSON.parse(row.node_json);
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          canonicalIdentity: expect.any(String),
+          node: expect.objectContaining({ sha256: hash("before") }),
+        }),
+      ]),
+    );
+    const baseline = await store.manifest(observed, { kind: "materialize" });
+    assert(baseline.kind === "materialize");
+    expect(JSON.parse(baseline.rawManifest)).toEqual(JSON.parse(rawManifest));
+
+    const accepted = await store.update(observed, { pending_ref: null }, undefined, scan);
+    expect(accepted.baseline_ref).toBe(scan.resultingRoot);
+    const materialized = await store.manifest(accepted, { kind: "materialize" });
+    assert(materialized.kind === "materialize");
+    expect(JSON.parse(materialized.rawManifest).entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "edited.txt", sha256: hash("after"), size: 5 }),
+        expect.objectContaining({ path: addedPath, sha256: hash("admitted"), size: 8 }),
+        expect.objectContaining({ path: "kept-0.txt", sha256: hash("before"), size: 6 }),
+      ]),
+    );
   });
 });
 
