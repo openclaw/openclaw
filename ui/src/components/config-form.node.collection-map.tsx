@@ -133,7 +133,7 @@ function ConfigMapRow(
         <div class="settings-row__control">
           <CollectionRemoveButton
             focus={props.focus}
-            label={t("configForm.removeEntry")}
+            label={t("configForm.removeEntryKey", { key: key() })}
             disabled={props.params.disabled}
             remove={() => {
               const nextValue = { ...props.params.value };

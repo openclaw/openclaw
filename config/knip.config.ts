@@ -78,6 +78,9 @@ const repositoryScriptEntries = [
   "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-cold-load.ts!",
+  // scripts/control-ui-retention/README.md invokes this opt-in production census.
+  "scripts/control-ui-retention/retention-suite.ts!",
+  "scripts/control-ui-retention/vitest.config.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
   "scripts/bench-control-ui-dev-loop.mts!",
   // #179449 documents this document-handler benchmark CLI by path.
@@ -984,8 +987,8 @@ const config = {
     "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
     "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],
     "ui/src/pages/chat/components/chat-child-attention.tsx": ["types"],
-    "ui/src/pages/chat/components/chat-ci-automation-control.{ts,tsx}": ["types"],
-    "ui/src/pages/chat/components/chat-ci-details.{ts,tsx}": ["types"],
+    "ui/src/pages/chat/components/chat-ci-automation-control.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-ci-details.tsx": ["types"],
     "ui/src/pages/chat/components/chat-clawhub-card.tsx": ["exports"],
     "ui/src/pages/chat/components/chat-details.tsx": ["types"],
     "ui/src/pages/chat/components/chat-question-card{,-view}.{ts,tsx}": ["types"],

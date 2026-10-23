@@ -21,9 +21,9 @@ import {
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { ToolPreview as DeferredToolPreview } from "./chat-message-deferred.tsx";
 import { SidebarPanel } from "./chat-sidebar-content.tsx";
 import { ToolPreview } from "./widget-card-view.tsx";
-import { ToolPreview as DeferredToolPreview } from "./widget-card.ts";
 import * as widgetExport from "./widget-export.ts";
 import { WidgetPinButton } from "./widget-pin-button.tsx";
 

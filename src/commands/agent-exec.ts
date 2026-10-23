@@ -120,38 +120,6 @@ function isStructuredTimeoutError(error: unknown): boolean {
   return false;
 }
 
-function errorEnvelope(error: unknown, sessionId: string): AgentExecEnvelope {
-  const status = isStructuredTimeoutError(error) ? "timeout" : "error";
-  return {
-    ok: false,
-    status,
-    final: "",
-    payloads: [],
-    model: null,
-    provider: null,
-    sessionId,
-    error: {
-      message: formatErrorMessage(error),
-      kind: status === "timeout" ? "timeout" : "exception",
-    },
-  };
-}
-
-function writeAgentExecOutput(
-  runtime: RuntimeEnv,
-  envelope: AgentExecEnvelope,
-  json: boolean,
-): void {
-  if (json) {
-    writeRuntimeJson(runtime, envelope);
-  } else if (envelope.final) {
-    writeRuntimeStdout(runtime, envelope.final);
-  }
-  if (!envelope.ok && envelope.error) {
-    runtime.error(envelope.error.message);
-  }
-}
-
 /** Run one isolated embedded agent turn and project its stable CLI result. */
 export async function agentExecCommand(
   positionalMessage: string | undefined,
@@ -378,7 +346,20 @@ export async function agentExecCommand(
     }
     commandResult = resultForEnvelope(envelope);
   } catch (error) {
-    commandResult = resultForEnvelope(errorEnvelope(error, sessionId));
+    const status = isStructuredTimeoutError(error) ? "timeout" : "error";
+    commandResult = resultForEnvelope({
+      ok: false,
+      status,
+      final: "",
+      payloads: [],
+      model: null,
+      provider: null,
+      sessionId,
+      error: {
+        message: formatErrorMessage(error),
+        kind: status === "timeout" ? "timeout" : "exception",
+      },
+    });
   }
 
   let cleanupError: unknown =
@@ -467,6 +448,15 @@ export async function agentExecCommand(
     return commandResult;
   }
 
-  writeAgentExecOutput(runtime, commandResult.envelope, opts.json === true);
+  const envelope = commandResult.envelope;
+  const json = opts.json === true;
+  if (json) {
+    writeRuntimeJson(runtime, envelope);
+  } else if (envelope.final) {
+    writeRuntimeStdout(runtime, envelope.final);
+  }
+  if (!envelope.ok && envelope.error) {
+    runtime.error(envelope.error.message);
+  }
   return commandResult;
 }

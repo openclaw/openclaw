@@ -1,7 +1,10 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -59,9 +62,40 @@ suite.define(() => {
         await gateway.resolveDeferred("sessions.list", {
           __mockError: { code: "UNAVAILABLE", message: "Older sessions temporarily unavailable" },
         });
-        await sidebar
-          .getByText("Older sessions temporarily unavailable", { exact: false })
-          .waitFor();
+        try {
+          await sidebar
+            .getByText("Older sessions temporarily unavailable", { exact: false })
+            .waitFor();
+        } catch (error) {
+          try {
+            const [requests, hiddenRequests, finalRequests, facts] = await withTimeout(
+              Promise.all([
+                gateway.getRequests("sessions.list"),
+                gateway.getRequests("sessions.list", { offset: limit }),
+                gateway.getRequests("sessions.list", { offset: limit * 2 }),
+                evaluateControlUiContext(page, ({ sessions }) => ({
+                  canonicalReady: sessions.canonicalListReady,
+                  canonicalRevision: sessions.canonicalListRevision,
+                  rosterLoading: sessions.state.loading,
+                  rosterErrorPresent: sessions.state.error !== null,
+                  rosterCount: sessions.state.result?.sessions.length ?? 0,
+                })),
+              ]),
+              1_000,
+              "pagination failure diagnostics",
+            );
+            recordControlUiE2eFailureFacts(page, {
+              ...facts,
+              paginationErrorWaitFailed: true,
+              listRequests: requests.length,
+              hiddenPageRequests: hiddenRequests.length,
+              finalPageRequests: finalRequests.length,
+            });
+          } catch {
+            // Diagnostic collection must preserve the original pagination failure.
+          }
+          throw error;
+        }
         expect(await sidebar.locator(".sidebar-recent-session").count()).toBe(7);
         await more.click();
       }

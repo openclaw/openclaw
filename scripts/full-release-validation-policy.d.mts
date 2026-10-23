@@ -1,5 +1,5 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
-export function validateReleaseManifestAdvisoryJobs(manifest: unknown): [];
+export function validateReleaseManifestAdvisoryJobs(manifest: unknown): ReleaseRecord[];
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
 export function isSplitChangelogEvidenceDelta(paths: unknown, version: unknown): boolean;
 export function classifyReleaseChangelogEvidenceComparison(
@@ -128,6 +128,7 @@ export function composeReleaseChildAttemptEvidence(input: {
   run: ReleaseRecord;
 }): ReleaseRecord;
 
+export function releaseChildAdvisories(child: ReleaseRecord): ReleaseRecord[];
 export function terminalPolicyPass(child: ReleaseRecord, targetVersion?: string): boolean;
 
 export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;

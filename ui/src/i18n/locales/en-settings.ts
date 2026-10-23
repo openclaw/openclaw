@@ -943,6 +943,7 @@ const enSettings = {
   modelProviders: {
     title: "Configured providers",
     configureModels: "Model setup",
+    actionNamed: "{action}: {name}",
     login: {
       action: "Connect provider",
       title: "Connect a provider",

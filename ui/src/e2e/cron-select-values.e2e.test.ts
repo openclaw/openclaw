@@ -52,7 +52,7 @@ suite.define(() => {
     { mode: "create", enabled: true, keyboardName: true, narrow: true },
     { mode: "edit", enabled: true, keyboardName: true, narrow: true },
   ])(
-    "keeps keyboard schedule choices clear of actions ($mode, scheduler $enabled, narrow $narrow)",
+    "keeps actions at the scrollport edge and keyboard choices clear ($mode, scheduler $enabled, narrow $narrow)",
     async ({ mode, enabled, keyboardName, narrow }) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1416, height: 707 } },
@@ -135,6 +135,8 @@ suite.define(() => {
               bottom: choice.bottom,
               top: choice.top,
               footerTop: footer.top,
+              footerBottom: footer.bottom,
+              scrollportBottom: document.querySelector(".content")!.getBoundingClientRect().bottom,
               footerHeight: footer.height,
               reachable: hit === element || (hit !== null && element.contains(hit)),
             };
@@ -146,6 +148,7 @@ suite.define(() => {
           expect(geometry.top).toBeGreaterThanOrEqual(0);
           expect(geometry.bottom).toBeLessThanOrEqual(geometry.footerTop);
           expect(geometry.reachable).toBe(true);
+          expect(Math.abs(geometry.footerBottom - geometry.scrollportBottom)).toBeLessThan(1);
           if (narrow && mode === "create") {
             const buttonTops = await page
               .locator(".cron-editor-actions > button")
@@ -154,6 +157,16 @@ suite.define(() => {
               );
             expect(new Set(buttonTops).size).toBeGreaterThan(1);
           }
+          await scroller.evaluate((element) => {
+            element.scrollTop = element.scrollHeight;
+          });
+          const bottomGap = await page.locator(".cron-editor-actions").evaluate((element) => {
+            const scrollport = element.closest(".content")!;
+            return (
+              scrollport.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom
+            );
+          });
+          expect(Math.abs(bottomGap)).toBeLessThan(1);
           for (const method of ["cron.add", "cron.update", "cron.run"]) {
             expect(await gateway.getRequests(method)).toHaveLength(0);
           }

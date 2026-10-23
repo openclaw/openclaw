@@ -13,6 +13,7 @@ import { registerSessionTitleTarget } from "./session-title-target-registration.
 const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
 const tableViewportSelector = ".markdown-table__viewport";
 const enhancedTableShells = new WeakSet<HTMLElement>();
+const tableCopyStatuses = new WeakMap<HTMLElement, HTMLElement>();
 const tableOwnerStates = new WeakMap<HTMLElement, TableOwnerState>();
 
 type TableOwnerState = {
@@ -80,6 +81,11 @@ function enhanceTableShell(shell: HTMLElement): void {
   label.textContent = t("common.expandTable");
   expand.replaceChildren(createIconElement("maximize", shell.ownerDocument), label);
   copy.replaceChildren(createIconElement("copy", shell.ownerDocument));
+  const status = shell.ownerDocument.createElement("span");
+  status.className = "sr-only";
+  status.setAttribute("role", "status");
+  copy.after(status);
+  tableCopyStatuses.set(copy, status);
 }
 
 export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
@@ -315,6 +321,11 @@ export function handleMarkdownTableInteraction(event: Event): void {
         markdownTableCopyText(table) === text,
       (copied) => {
         copy.replaceChildren(createIconElement(copied ? "check" : "copy", copy.ownerDocument));
+        const status = tableCopyStatuses.get(copy);
+        if (status) {
+          status.textContent =
+            copied === undefined ? "" : t(copied ? "common.copied" : "common.copyFailed");
+        }
         if (copied === undefined) {
           copy.setAttribute("aria-label", t("common.copyTable"));
         } else {

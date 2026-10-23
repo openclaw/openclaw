@@ -2348,7 +2348,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   white-space: nowrap;
 }
 
-.chat-controls__model-menu .chat-controls__auth-meta [aria-hidden] svg {
+.chat-controls__model-menu .chat-controls__auth-meta svg[aria-hidden] {
   width: 13px;
   height: 13px;
   color: inherit;

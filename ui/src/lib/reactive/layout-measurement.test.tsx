@@ -1,6 +1,5 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createLayoutMeasurement } from "./layout-measurement.ts";
 
@@ -8,10 +7,10 @@ const cleanup: Array<() => void> = [];
 let resize: () => void;
 let disconnected = false;
 
-it.each([false, true])("remeasures when fonts settle unless disposed: %s", async (disposed) => {
-  const fonts = createDeferred();
+it.each([false, true])("remeasures when fonts settle unless disposed: %s", (disposed) => {
+  const fonts = Object.assign(new EventTarget(), { ready: new Promise(() => {}) });
   const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
-  Object.defineProperty(document, "fonts", { configurable: true, value: { ready: fonts.promise } });
+  Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
   onTestFinished(() => {
     if (previousFonts) {
       Object.defineProperty(document, "fonts", previousFonts);
@@ -44,8 +43,7 @@ it.each([false, true])("remeasures when fonts settle unless disposed: %s", async
   if (disposed) {
     view.unmount();
   }
-  fonts.resolve();
-  await fonts.promise;
+  fonts.dispatchEvent(new Event("loadingdone"));
   vi.advanceTimersToNextFrame();
   expect(reads).toEqual(disposed ? [10] : [10, 20]);
   expect(element.style.width).toBe(disposed ? "10px" : "20px");

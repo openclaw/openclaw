@@ -18,6 +18,7 @@ const target = { provider: source.channel, to: source.to };
 const scopedPolicy = {
   restartRecoveryDisableMessageTool: true,
   restartRecoverySourceIngress: "internal",
+  restartRecoverySourceMessageChannel: null,
   restartRecoverySourceReplyDeliveryMode: "automatic",
   restartRecoveryForceSafeTools: true,
 } as const;
@@ -33,6 +34,7 @@ it("persists a scoped restart-safe policy and clears retired media constraints",
     forceRestartSafeTools: true,
     runId: "scoped-run",
     sourceIngress: "internal",
+    sourceMessageChannel: null,
     sourceRunId: "scoped-run",
     sourceReplyDeliveryMode: "automatic",
   });
@@ -55,6 +57,7 @@ it("preserves the claimed route when delivery preparation resolves an alias", ()
       restartRecoveryDeliveryContext: { channel: "telegram", to: "-100123", threadId: 1 },
     },
     runId: "recovery-run",
+    sourceMessageChannel: "webchat",
   });
   expect(claimed).toMatchObject({
     ...scopedPolicy,

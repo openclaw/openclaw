@@ -377,6 +377,7 @@ export function reduceSessionEntryPatch(
           : {
               restartRecoveryBeforeAgentReplyState: undefined,
               restartRecoverySourceIngress: undefined,
+              restartRecoverySourceMessageChannel: undefined,
               restartRecoveryOperatorSource: undefined,
               restartRecoveryRequesterSource: undefined,
               restartRecoveryForceSafeTools: undefined,
@@ -450,6 +451,7 @@ export function reduceSessionEntryPatch(
           ? {
               restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
               restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
+              restartRecoverySourceMessageChannel: entry.restartRecoverySourceMessageChannel,
               restartRecoveryForceSafeTools: entry.restartRecoveryForceSafeTools,
             }
           : {}),

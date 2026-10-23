@@ -7,7 +7,6 @@ import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import { createIdleImport } from "../../lib/idle-import.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -84,7 +83,6 @@ export class NewSessionPageOwner {
 
   retainedForHandoff: object | null = null;
   openedFor: string | null = null;
-  readonly critterImport = createIdleImport(() => import("../../components/lobster-pet.tsx"));
   openedGroupDefaults = "";
   openedAgentId = "";
   messageOwnerKey = "";
@@ -218,33 +216,37 @@ export class NewSessionPageOwner {
       return;
     }
     this.isConnected = true;
-    // These receipts reconcile the draft and prepared title before the view reads them.
-    const context = this.context;
-    if (context) {
-      this.contextSubscriptions = [
-        context.theme,
-        context.agents,
-        context.agentIdentity,
-        context.sessions,
-        context.placementStartup,
-        context.runtimeConfig,
-        context.config,
-      ].map((source) => source.subscribe(this.changed));
-      let location = context.router.getState().location;
-      this.contextSubscriptions.push(
-        context.router.subscribe((state) => {
-          if (state.location !== location) {
-            location = state.location;
-            this.retireSubmissionPresentation();
-            this.browser.close();
-          }
-        }),
-      );
+    try {
+      // These receipts reconcile the draft and prepared title before the view reads them.
+      const context = this.context;
+      if (context) {
+        this.contextSubscriptions = [
+          context.theme,
+          context.agents,
+          context.agentIdentity,
+          context.sessions,
+          context.placementStartup,
+          context.runtimeConfig,
+          context.config,
+        ].map((source) => source.subscribe(this.changed));
+        let location = context.router.getState().location;
+        this.contextSubscriptions.push(
+          context.router.subscribe((state) => {
+            if (state.location !== location) {
+              location = state.location;
+              this.retireSubmissionPresentation();
+              this.browser.close();
+            }
+          }),
+        );
+      }
+      this.draft.connect();
+      this.submission.draftPersistence.connect();
+      this.changed();
+    } catch (error) {
+      this.disconnect();
+      throw error;
     }
-    this.draft.connect();
-    this.submission.draftPersistence.connect();
-    this.critterImport.schedule();
-    this.changed();
   }
 
   disconnect() {
@@ -252,24 +254,26 @@ export class NewSessionPageOwner {
     if (!this.isConnected) {
       return;
     }
+    this.isConnected = false;
     this.browser.close();
     for (const stop of this.contextSubscriptions.splice(0)) {
       stop();
     }
     this.closeAttachmentPanel();
-    this.critterImport.dispose();
     this.dictation.dispose();
     this.connectMachine.close();
     if (!this.retainedForHandoff) {
       this.disposeDraft();
     }
-    this.isConnected = false;
   }
 
   disposeDraft() {
-    forgetInstantThreadPage(this.data, this.host);
-    retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
-    this.draft.disconnect();
+    try {
+      forgetInstantThreadPage(this.data, this.host);
+      retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
+    } finally {
+      this.draft.disconnect();
+    }
   }
 
   synchronize() {

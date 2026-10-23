@@ -297,6 +297,7 @@ function SessionRows(props: {
               <Show when={copyIdentity()} keyed>
                 {(_identity) => {
                   let feedback!: HTMLSpanElement;
+                  let announcement!: HTMLSpanElement;
                   return (
                     <>
                       {" "}
@@ -309,6 +310,7 @@ function SessionRows(props: {
                           event.stopPropagation();
                           void handleCopyButton(event, label(), t("usage.sessions.copy"), {
                             feedback,
+                            announcement,
                           });
                         }}
                       >
@@ -318,6 +320,11 @@ function SessionRows(props: {
                         ref={(element) => (feedback = element)}
                         class="session-bar-copy-feedback"
                         hidden
+                      />
+                      <span
+                        ref={(element) => (announcement = element)}
+                        class="sr-only"
+                        role="status"
                       />{" "}
                     </>
                   );

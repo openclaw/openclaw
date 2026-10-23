@@ -203,7 +203,10 @@ function routeModuleKeys(
       }
     }
   }
-  return new Set([...seen].map(controlUiBootManifestKey));
+  // Inline style text does not request a sheet; its external counterpart may be lazy.
+  return new Set(
+    [...seen].filter((id) => !/[?&]inline(?:[=&]|$)/u.test(id)).map(controlUiBootManifestKey),
+  );
 }
 
 function partitionBootKeys(routes: Record<"new" | "chat", Set<string>>) {
@@ -283,7 +286,12 @@ async function main(): Promise<void> {
         // imports; keep the modules reachable from what this route requested.
         const needed = routeModuleKeys(graph, chunks, [...graph.entryModules, ...requestedEntries]);
         const fetched = manifestKeysForChunks(chunks, distDir);
-        routes[route] = new Set(fetched.filter((key) => needed.has(key)));
+        // Extracted styles can have empty JS stubs and disappear from source maps.
+        // Their static import graph still proves which ready route needs them.
+        routes[route] = new Set([
+          ...fetched.filter((key) => needed.has(key)),
+          ...[...needed].filter((key) => key.endsWith(".css")),
+        ]);
         if (routes[route].size < 100) {
           throw new Error(
             `Boot capture looks truncated: ${route} recorded only ${routes[route].size} modules`,

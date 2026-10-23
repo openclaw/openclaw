@@ -831,8 +831,8 @@ describe("CLI attempt execution", () => {
         agentId: "main",
         modelProvider: expectDefined(run.modelProvider, "CLI model provider"),
         modelId: expectDefined(run.model, "CLI model"),
-        toolsAllow: ["read"],
       });
+      context.toolsAllow = ["read"];
       const scoped = await resolveMcpLoopbackScopedTools({
         cfg,
         context,

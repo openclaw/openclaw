@@ -132,6 +132,11 @@ export function prepareCommandSessionRecoveryEntry(
         forceRestartSafeTools: opts.forceRestartSafeTools,
         runId,
         harnessCompletion,
+        sourceMessageChannel:
+          resolveMessageChannel(
+            opts.runContext?.messageChannel ?? opts.messageChannel,
+            opts.replyChannel ?? opts.channel,
+          ) ?? null,
         ...sourceOptions,
         ...(requesterSource
           ? {

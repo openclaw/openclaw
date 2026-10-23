@@ -135,14 +135,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return `locale-namespace-${normalized.slice(resolvedLocaleNamespaceModulePrefix.length).replace("/", "-")}`;
   }
 
-  if (
-    normalized.endsWith("/ui/src/styles/chat/grouped.css") ||
-    normalized.endsWith("/ui/src/styles/chat/message-layout.css")
-  ) {
-    // Both routes load transcript styles; keep them outside the larger shared boot stylesheet.
-    return "chat-transcript-styles";
-  }
-
   // Code highlighting is requested by the first completed code block; it must
   // not share the parser/sanitizer chunk used by ordinary transcript prose.
   if (moduleIdIncludesPackage(id, "highlight.js")) {

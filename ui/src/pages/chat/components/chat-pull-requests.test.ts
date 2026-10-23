@@ -8,7 +8,7 @@ import { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../../app/gateway.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import type { ChatCiDetailsElement } from "./chat-ci-details.ts";
+import type { ChatCiDetailsElement } from "./chat-ci-details.tsx";
 import { ChatPullRequestChecks } from "./chat-pull-request-checks.tsx";
 import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 import {

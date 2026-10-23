@@ -915,7 +915,6 @@ packages/ai/src/provider-transcript-transform.ts	2
 packages/ai/src/providers/agent-tools-parameter-schema.ts	13
 packages/ai/src/providers/anthropic-model-contract.ts	1
 packages/ai/src/providers/anthropic-server-fallback.ts	3
-packages/ai/src/providers/anthropic-tool-projection.ts	2
 packages/ai/src/providers/anthropic-usage.ts	1
 packages/ai/src/providers/anthropic.ts	1
 packages/ai/src/providers/azure-openai-responses.ts	1
@@ -1032,7 +1031,6 @@ src/acp/tool-status.ts	1
 src/acp/translator.agent-events.ts	11
 src/acp/translator.prompt-stream.ts	5
 src/acp/translator.replay.ts	1
-src/acp/translator.session-lifecycle.ts	1
 src/acp/translator.session-state.ts	1
 src/agents/agent-bundle-lsp-runtime.ts	3
 src/agents/agent-bundle-mcp-combined.ts	1
@@ -1201,7 +1199,6 @@ src/agents/live-cache-regression-policy.ts	2
 src/agents/main-session-recovery/main-session-restart-recovery-checkpoint.ts	3
 src/agents/main-session-recovery/main-session-restart-recovery-resume-policy.ts	18
 src/agents/mcp-auth-profile.ts	1
-src/agents/mcp-codex-tool-approval.ts	1
 src/agents/mcp-http-fetch.ts	3
 src/agents/mcp-json-schema-validator.ts	4
 src/agents/mcp-transport-config.ts	1
@@ -1999,7 +1996,7 @@ src/infra/tailscale.ts	4
 src/infra/tmp-openclaw-dir.ts	1
 src/infra/update-check-package-target.ts	2
 src/infra/update-global.ts	2
-src/infra/warning-filter.ts	4
+src/infra/warning-filter.ts	3
 src/infra/windows-gateway-firewall-diagnostics.ts	2
 src/infra/windows-port-pids.ts	2
 src/infra/windows-powershell-spawn.ts	1

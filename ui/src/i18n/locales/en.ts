@@ -954,6 +954,7 @@ export const en: TranslationMap & {
     addEntry: "Add Entry",
     key: "Key",
     removeEntry: "Remove entry",
+    removeEntryKey: "Remove entry: {key}",
     renameRedactedBlocked:
       "This entry holds a stored secret. Add the new key with its value, then remove this one.",
     schemaUnavailable: "Schema unavailable.",

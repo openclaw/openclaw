@@ -13,6 +13,10 @@ sidebarTitle: "Sessions and sidebar"
 The sidebar separates navigation into **Pages**, **Sessions**, and **Users**.
 The New session page starts new conversations.
 
+Session-list failures appear in the sidebar while that list is active and clear
+when it recovers or you change filters. A failed session action, such as a
+rename, keeps its error with that action instead of adding a list error.
+
 On phones, swipe right across the chat to open navigation. A deliberate swipe opens the full drawer while your finger is still down, rather than holding a partly clipped sidebar over the conversation. Short drags and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
 
 To work directly in a folder on a paired device, select that specific device,

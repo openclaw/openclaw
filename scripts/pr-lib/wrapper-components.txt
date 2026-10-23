@@ -1471,7 +1471,6 @@ src/plugins/installed-plugin-index-facts.ts
 src/plugins/installed-plugin-index-hash.ts
 src/plugins/installed-plugin-index-install-owner.ts
 src/plugins/installed-plugin-index-install-records.ts
-src/plugins/installed-plugin-index-invalidation.ts
 src/plugins/installed-plugin-index-manifest.ts
 src/plugins/installed-plugin-index-policy.ts
 src/plugins/installed-plugin-index-record-builder.ts

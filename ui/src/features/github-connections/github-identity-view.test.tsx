@@ -355,6 +355,36 @@ describe("GitHub identity view", () => {
     expect(current.dataset.copyState).toBe("copied");
   });
 
+  it("announces authorization-code copy outcomes in a status region", async () => {
+    const authorization: Extract<GitHubAuthorizationState, { userCode: string }> = {
+      phase: "code",
+      requestId: "github-device-test",
+      userCode: "ABCD-1234",
+      verificationUri: "https://github.com/login/device",
+      expiresInMs: 60_000,
+      pollAfterMs: 5_000,
+      displayExpiresAtMs: 70_000,
+    };
+    const fixture = githubIdentityViewFixture({ authorizable: true, connectionReady: true });
+    const identity = { ...fixture, read: () => ({ ...fixture.read(), authorization }) };
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
+    const statusText = () =>
+      [...view.container.querySelectorAll('.github-device-code ~ [role="status"]')].map(
+        (node) => node.textContent,
+      );
+    const button = view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
+    button.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusText()).toEqual(["Copied!"]);
+
+    await vi.advanceTimersByTimeAsync(1500);
+    writeText.mockRejectedValueOnce(new Error("Synthetic clipboard rejection"));
+    fallback.mockReturnValueOnce(false);
+    button.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusText()).toEqual(["Copy failed"]);
+  });
+
   it("keeps the focused PAT field across draft and mutation updates", async () => {
     const stored = createDeferred<unknown>();
     // SAFETY: this view test exercises only the browser client's request boundary.

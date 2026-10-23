@@ -136,14 +136,14 @@ suite.define(() => {
       for (let attempt = 0; attempt < 2; attempt++) {
         const detections = (await gateway.getRequests(rpc.detect)).length;
         const probes = (await gateway.getRequests("models.probe")).length;
-        await button(currentProvider, "Test connection").click();
+        await button(currentProvider, "Test connection: OpenAI").click();
         const verify = await gateway.waitForRequest("models.probe", { after: probes });
         expect(verify.params).toEqual({ provider: "openai", agentId: "main" });
         if (attempt === 1) {
           await pollRequestCount(gateway, "models.probe").toBe(probes + 1);
           expect((await gateway.getRequests(rpc.detect)).length).toBe(detections);
         }
-        await button(currentProvider, "Test connection").waitFor();
+        await button(currentProvider, "Test connection: OpenAI").waitFor();
         await waitText(
           currentProvider.locator(".model-providers__probe-target"),
           "Connected · Request round-trip: 1234 ms",
@@ -292,7 +292,7 @@ suite.define(() => {
           page.locator(".model-providers__defaults openclaw-select-picker").first(),
           "qwen3-8b-instruct",
         );
-        await button(selectedModel, "Test connection").click();
+        await button(selectedModel, "Test connection: LM Studio").click();
         await selectedModel
           .locator(".model-providers__probe-summary")
           .getByText("Connection failed", { exact: true })
@@ -301,7 +301,7 @@ suite.define(() => {
           selectedModel.locator(".model-providers__probe"),
           "The connection probe failed.",
         );
-        await button(selectedModel, "Test connection").waitFor();
+        await button(selectedModel, "Test connection: LM Studio").waitFor();
         await expectRequestCounts(gateway, { [rpc.prepare]: 0, [rpc.activate]: 0 });
 
         await page.setViewportSize({ height: 844, width: 390 });
