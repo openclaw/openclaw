@@ -131,7 +131,7 @@ export function createSessionCapability(
   let hydratedSelfUserId: string | null = null;
   let connectionClient = gateway.snapshot.client;
   let sessionEventSubscriptionError: string | null = null;
-  let publishedErrorSource: "session-observer" | "operation" | null = null;
+  let publishedErrorSource: "session-observer" | "operation" | "list" | null = null;
 
   const notifySubscribers = () => {
     publicationRevision += 1;
@@ -140,7 +140,7 @@ export function createSessionCapability(
     }
   };
 
-  const publish = (next: SessionState, errorSource?: "session-observer" | "operation") => {
+  const publish = (next: SessionState, errorSource?: "session-observer" | "operation" | "list") => {
     if (next.error === null) {
       publishedErrorSource = null;
     } else if (errorSource || next.error !== state.error) {
@@ -383,12 +383,9 @@ export function createSessionCapability(
     });
 
   const publishReconciledState = (next: SessionState) => {
-    const operationOwnsError = publishedErrorSource === "operation";
-    const error = operationOwnsError ? state.error : sessionEventSubscriptionError;
-    publish(
-      { ...next, error },
-      error === null ? undefined : operationOwnsError ? "operation" : "session-observer",
-    );
+    const source = publishedErrorSource ?? "session-observer";
+    const error = source === "session-observer" ? sessionEventSubscriptionError : state.error;
+    publish({ ...next, error }, source);
   };
 
   const reconcileRunTerminal = (terminal: SessionRunTerminal): boolean => {
@@ -628,6 +625,9 @@ export function createSessionCapability(
     },
     get eventSubscriptionError() {
       return sessionEventSubscriptionError;
+    },
+    get canonicalListError() {
+      return publishedErrorSource === "list" ? state.error : null;
     },
     get presentation() {
       return presentation.result

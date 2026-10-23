@@ -118,6 +118,31 @@ describe("checked-in release-tooling waivers", () => {
     );
   });
 
+  it("composes provider waivers with Windows-node preview advisories", async () => {
+    grant(LIVE_JOB, "releaseChecksCandidate");
+    const observed = await observe(
+      [
+        job(LIVE_JOB, 1),
+        aggregate(),
+        job("Run Windows-node stable E2E / Setup, connect, and invoke candidate gateway", 3, {
+          conclusion: "success",
+        }),
+        job("Run Windows-node main E2E / Setup, connect, and invoke candidate gateway", 4),
+      ],
+      { role: "releaseChecksCandidate" },
+    );
+    expect(observed.errors).toEqual([]);
+    expect(terminalPolicyPass(observed, VERSION)).toBe(true);
+    expect(classifyReleaseSnapshot({ children: [observed], targetVersion: VERSION })).toMatchObject(
+      {
+        state: "passed",
+        blockers: [],
+        waivers: [{ jobName: LIVE_JOB }],
+        advisoryJobs: [{ class: "windows-node-preview", conclusion: "failure" }],
+      },
+    );
+  });
+
   it.each<{
     name: string;
     targetVersion?: string;

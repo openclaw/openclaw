@@ -8,7 +8,13 @@ import {
   advanceProtectionScanState,
   createProtectionScanState,
 } from "../../../packages/tool-call-repair/src/protection-fast-path.js";
-import { findCodeRegions, isInsideCode, isInsideSettledBlockCode } from "./code-regions.js";
+import {
+  canReuseMarkdownOwnership,
+  findCodeOwnership,
+  findCodeRegions,
+  isInsideCode,
+  isInsideSettledBlockCode,
+} from "./code-regions.js";
 import { isGlmArgPayload } from "./glm-arg-key-payload.js";
 import { createConditionalTextProjector, type TextFilter } from "./text-projection.js";
 import { createQuotedStringScanner, parseXmlTagAt, type ParsedToolCallTag } from "./xml-tag-at.js";
@@ -33,13 +39,25 @@ const TOOL_CALL_TAG_NAMES = new Set([
   "mm:parameter",
 ]);
 const TOOL_CALL_PREFIX_NAMES = [...TOOL_CALL_TAG_NAMES, "parameter", "parameters", "arguments"];
-const TOOL_CALL_JSON_PAYLOAD_START_RE =
-  /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
+const ATTRIBUTE_NAME = "[A-Za-z_:][-A-Za-z0-9_:.]*";
+const ATTRIBUTE_VALUE = String.raw`(?:"[^"]*"|'[^']*'|[^\s"'=<>\x60]+)`;
+const ATTRIBUTES = String.raw`(?:\s+${ATTRIBUTE_NAME}\s*=\s*${ATTRIBUTE_VALUE})*`;
+const TOOL_CALL_JSON_PAYLOAD_START_RE = new RegExp(String.raw`^${ATTRIBUTES}\s*[[{]`);
+// The same attribute grammar, with its final name/value allowed to be incomplete.
+const TOOL_CALL_JSON_PAYLOAD_PREFIX_RE = new RegExp(
+  String.raw`^${ATTRIBUTES}(?:\s+${ATTRIBUTE_NAME}(?:\s*=(?:\s*(?:"[^"]*|'[^']*|[^\s"'=<>\x60]+))?)?)?\s*$`,
+);
 const TOOL_CALL_XML_PAYLOAD_START_RE =
   /^\s*(?:\r?\n\s*)?<(?:antml:|mm:)?(?:function_call|tool_call|function|invoke|parameters?|arguments?)\b/i;
 const NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE = /^\s*(?:\r?\n\s*)?<(?:function_call|tool_call)\b/i;
 
 type ToolCallPayloadKind = "json" | "xml" | null;
+type ToolCallXmlProjection = {
+  appendSafe: boolean;
+  // With no code markers, only the delimiter boundary is needed for the next append.
+  parameterText?: string;
+  parameterOwnership?: ReturnType<typeof findCodeOwnership>;
+};
 
 function isToolCallTagPrefix(text: string, start: number): boolean {
   if (start < 0) {
@@ -162,7 +180,11 @@ function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | nu
   return tag && TOOL_CALL_TAG_NAMES.has(tag.tagName) ? tag : null;
 }
 
-function scanXmlTags(text: string, codeRegions: ReturnType<typeof findCodeRegions>) {
+function scanXmlTags(
+  text: string,
+  codeRegions: ReturnType<typeof findCodeRegions>,
+  projection?: ToolCallXmlProjection,
+) {
   type Tag = ParsedToolCallTag & { start: number; hasMatchingClose: boolean };
   const tags: Tag[] = [];
   const openTags = new Map<string, Tag[]>();
@@ -172,6 +194,9 @@ function scanXmlTags(text: string, codeRegions: ReturnType<typeof findCodeRegion
     }
     const parsed = parseXmlTagAt(text, start);
     if (!parsed || parsed.isTruncated) {
+      if (projection && (parsed?.isTruncated || isToolCallTagPrefix(text, start))) {
+        projection.appendSafe = false;
+      }
       continue;
     }
     const tag: Tag = { ...parsed, start, hasMatchingClose: false };
@@ -222,17 +247,26 @@ function isLineEndAfter(text: string, end: number): boolean {
   return cursor >= text.length || text[cursor] === "\n" || text[cursor] === "\r";
 }
 
-function unwrapStandaloneParameterTags(text: string): string {
+function unwrapStandaloneParameterTags(text: string, projection?: ToolCallXmlProjection): string {
   if (!/<\s*\/?\s*parameter\b/i.test(text)) {
+    if (projection && isToolCallTagPrefix(text, text.lastIndexOf("<"))) {
+      projection.appendSafe = false;
+    }
     return text;
   }
 
-  const codeRegions = findCodeRegions(text);
+  const ownership = projection && /[`~\t]| {4}/u.test(text) ? findCodeOwnership(text) : undefined;
+  const codeRegions = projection ? (ownership?.regions ?? []) : findCodeRegions(text);
+  if (projection) {
+    // XML removal can create Markdown syntax absent from the original source.
+    projection.parameterText = ownership ? text : text.slice(-4);
+    projection.parameterOwnership = ownership;
+  }
   const openTags: Array<{ name: string; unwrap: boolean; trimBoundaryLineBreaks: boolean }> = [];
   let result = "";
   let lastIndex = 0;
 
-  for (const tag of scanXmlTags(text, codeRegions)) {
+  for (const tag of scanXmlTags(text, codeRegions, projection)) {
     const idx = tag.start;
 
     if (tag.isClose) {
@@ -240,6 +274,9 @@ function unwrapStandaloneParameterTags(text: string): string {
       if (openIndex !== -1) {
         const opening = expectDefined(openTags[openIndex], "open tags entry at open index");
         if (opening.unwrap) {
+          if (projection && skipHorizontalWhitespace(text, tag.end) === text.length) {
+            projection.appendSafe = false;
+          }
           const contentEnd =
             opening.trimBoundaryLineBreaks &&
             isLineStartAt(text, idx) &&
@@ -289,17 +326,24 @@ function stripToolCallXmlTagsInternal(
   options: StripToolCallXmlOptions,
   streaming: boolean,
   resolveCodeRegions = findCodeRegions,
+  projection?: ToolCallXmlProjection,
 ): string {
   if (
     !text ||
     (!TOOL_CALL_QUICK_RE.test(text) &&
       !(streaming && isToolCallTagPrefix(text, text.lastIndexOf("<"))))
   ) {
+    if (projection && isToolCallTagPrefix(text, text.lastIndexOf("<"))) {
+      projection.appendSafe = false;
+    }
     return text;
   }
   const codeRegions = resolveCodeRegions(text);
   // A lone transport opener is scaffolding unless Markdown owns it as code.
   if (/^\s*<tool_call>\s*$/i.test(text) && !isInsideCode(text.indexOf("<"), codeRegions)) {
+    if (projection) {
+      projection.appendSafe = false;
+    }
     return "";
   }
 
@@ -320,12 +364,18 @@ function stripToolCallXmlTagsInternal(
     }
 
     const tag = parseToolCallTagAt(text, idx);
+    if (projection && (tag?.isTruncated || isToolCallTagPrefix(text, idx))) {
+      projection.appendSafe = false;
+    }
     if (
       streaming &&
       toolCallBlockTagName === null &&
       ((tag?.isTruncated && !tag.isClose) || isToolCallTagPrefix(text, idx))
     ) {
-      return unwrapStandaloneParameterTags(result + text.slice(lastIndex, idx));
+      if (projection) {
+        projection.appendSafe = false;
+      }
+      return unwrapStandaloneParameterTags(result + text.slice(lastIndex, idx), projection);
     }
     if (!tag) {
       continue;
@@ -411,6 +461,9 @@ function stripToolCallXmlTagsInternal(
           break;
         }
       } else {
+        if (projection && TOOL_CALL_JSON_PAYLOAD_PREFIX_RE.test(text.slice(payloadStart))) {
+          projection.appendSafe = false;
+        }
         const preserveEnd = tag.isTruncated ? tag.contentStart : tag.end;
         result += text.slice(idx, preserveEnd);
         if (!tag.isTruncated) {
@@ -435,13 +488,16 @@ function stripToolCallXmlTagsInternal(
     idx = Math.max(idx, tag.end - 1);
   }
 
+  if (projection && toolCallBlockTagName !== null) {
+    projection.appendSafe = false;
+  }
   if (toolCallBlockTagName === null) {
     result += text.slice(lastIndex);
   } else if (toolCallBlockTagName === "function") {
     result += text.slice(toolCallBlockStart);
   }
 
-  return unwrapStandaloneParameterTags(result);
+  return unwrapStandaloneParameterTags(result, projection);
 }
 
 export function toolCallXmlTextFilter(
@@ -456,76 +512,130 @@ export function toolCallXmlTextFilter(
       let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
       const protectionScan = createProtectionScanState();
       let heldPrefix: number | undefined;
-      return createConditionalTextProjector(
-        (text) => {
-          const regions = codeRegions;
-          codeRegions = undefined;
-          if (heldPrefix !== undefined) {
-            return text.slice(0, heldPrefix);
-          }
-          return stripToolCallXmlTagsInternal(
-            text,
-            options,
-            streaming,
-            () => regions ?? findCodeRegions(text),
-          );
-        },
-        ({ text, delta }) => {
-          heldPrefix = undefined;
-          if (active) {
-            return true;
-          }
-          const appended = delta ?? text;
-          advanceProtectionScanState(protectionScan, appended);
-          if (scannedThrough === text.length - appended.length && !appended.includes("<")) {
-            scannedThrough = text.length;
-            return false;
-          }
-          let deferredStart: number | undefined;
-          for (let start = text.indexOf("<", scannedThrough); start !== -1;) {
-            const next = text.indexOf("<", start + 1);
-            const candidate = text.slice(start, next === -1 ? text.length : next);
-            // Markdown ownership can only matter for a candidate that could begin a
-            // tool-call tag; ordinary markup must not re-parse the whole reply.
-            const quickCandidate = TOOL_CALL_QUICK_RE.test(candidate);
-            const prefixCandidate = isToolCallTagPrefix(candidate, 0);
-            if (quickCandidate || prefixCandidate) {
-              const onCurrentLine = candidate.length <= protectionScan.partialLine.length;
-              if (next === -1 && onCurrentLine && prefixCandidate && !quickCandidate) {
-                // Only the unfinished candidate line can be classified from the carried tail.
-                const completed = { ...protectionScan };
-                advanceProtectionScanState(completed, "\n");
-                if (!completed.paragraphAmbiguous && !completed.structuralUnknown) {
-                  if (completed.fenceChar) {
-                    deferredStart = start;
-                    start = next;
-                    continue;
-                  }
-                  if (streaming) {
-                    heldPrefix = start;
-                    scannedThrough = start;
-                    return true;
-                  }
+      let source = "";
+      let sourceTail = "";
+      let output = "";
+      let ownership: ReturnType<typeof findCodeOwnership> | undefined;
+      let projection: ToolCallXmlProjection = { appendSafe: false };
+      const transform = (text: string) => {
+        codeRegions = undefined;
+        projection = { appendSafe: false };
+        if (heldPrefix !== undefined) {
+          return text.slice(0, heldPrefix);
+        }
+        ownership = /[`~\t]| {4}/u.test(text) ? findCodeOwnership(text) : undefined;
+        sourceTail = text.slice(-4);
+        projection.appendSafe = true;
+        return stripToolCallXmlTagsInternal(
+          text,
+          options,
+          streaming,
+          () => ownership?.regions ?? [],
+          projection,
+        );
+      };
+      const project = createConditionalTextProjector(transform, ({ text, delta }) => {
+        heldPrefix = undefined;
+        const appended = delta ?? text;
+        advanceProtectionScanState(protectionScan, appended);
+        if (scannedThrough === text.length - appended.length && !appended.includes("<")) {
+          scannedThrough = text.length;
+          return false;
+        }
+        let deferredStart: number | undefined;
+        for (let start = text.indexOf("<", scannedThrough); start !== -1;) {
+          const next = text.indexOf("<", start + 1);
+          const candidate = text.slice(start, next === -1 ? text.length : next);
+          // Markdown ownership can only matter for a candidate that could begin a
+          // tool-call tag; ordinary markup must not re-parse the whole reply.
+          const quickCandidate = TOOL_CALL_QUICK_RE.test(candidate);
+          const prefixCandidate = isToolCallTagPrefix(candidate, 0);
+          if (quickCandidate || prefixCandidate) {
+            const onCurrentLine = candidate.length <= protectionScan.partialLine.length;
+            if (next === -1 && onCurrentLine && prefixCandidate && !quickCandidate) {
+              // Only the unfinished candidate line can be classified from the carried tail.
+              const completed = { ...protectionScan };
+              advanceProtectionScanState(completed, "\n");
+              if (!completed.paragraphAmbiguous && !completed.structuralUnknown) {
+                if (completed.fenceChar) {
+                  deferredStart = start;
+                  start = next;
+                  continue;
+                }
+                if (streaming) {
+                  heldPrefix = start;
+                  scannedThrough = start;
+                  return true;
                 }
               }
-              codeRegions ??= findCodeRegions(text);
-              const protectedBlock = isInsideSettledBlockCode(start, text, codeRegions);
-              if (!protectedBlock && quickCandidate) {
-                active = true;
-                return true;
-              }
-              if (!protectedBlock && prefixCandidate) {
-                scannedThrough = start;
-                return true;
-              }
             }
-            start = next;
+            codeRegions ??= findCodeRegions(text);
+            const protectedBlock = isInsideSettledBlockCode(start, text, codeRegions);
+            if (!protectedBlock && quickCandidate) {
+              active = true;
+              return true;
+            }
+            if (!protectedBlock && prefixCandidate) {
+              scannedThrough = start;
+              return true;
+            }
           }
-          scannedThrough = deferredStart ?? text.length;
-          codeRegions = undefined;
-          return false;
-        },
-      );
+          start = next;
+        }
+        scannedThrough = deferredStart ?? text.length;
+        codeRegions = undefined;
+        return false;
+      });
+      return (input) => {
+        if (!active) {
+          const result = project(input);
+          source = input.text;
+          output = result.text;
+          return result;
+        }
+        const delta = input.delta;
+        const parameterText = projection.parameterText;
+        if (
+          delta !== null &&
+          projection.appendSafe &&
+          !delta.includes("<") &&
+          // With no code markers in the source, only their append boundary can create code.
+          canReuseMarkdownOwnership(
+            ownership ? source : sourceTail,
+            ownership ? input.text : sourceTail + delta,
+            ownership,
+          ) &&
+          (parameterText === undefined ||
+            canReuseMarkdownOwnership(
+              parameterText,
+              parameterText + delta,
+              projection.parameterOwnership,
+            ))
+        ) {
+          if (parameterText !== undefined) {
+            const next = parameterText + delta;
+            projection.parameterText = projection.parameterOwnership ? next : next.slice(-4);
+          }
+          source = input.text;
+          sourceTail = (sourceTail + delta).slice(-4);
+          output += delta;
+          return { text: output, delta };
+        }
+        // Refresh the canonical result when XML or Markdown can revise earlier text.
+        const previous = output;
+        heldPrefix = undefined;
+        output = transform(input.text);
+        source = input.text;
+        return {
+          text: output,
+          delta:
+            delta === null
+              ? null
+              : output.startsWith(previous)
+                ? output.slice(previous.length)
+                : null,
+        };
+      };
     },
   };
 }

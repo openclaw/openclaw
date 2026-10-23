@@ -91,6 +91,7 @@ export function createInteractionFixture(buildId: string, version: string) {
       contextWindow: 128_000,
     })),
     methodResponses: {
+      "progressCard.get": { card: null },
       "cron.list": cronListResponseFixture([
         ...cronCases,
         ...Array.from({ length: 10 }, (_, index) => ({

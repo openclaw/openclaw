@@ -539,8 +539,32 @@ it("gates zoom shortcuts and traps Tab focus", async () => {
   image.dispatchEvent(new Event("load"));
   flush();
   expect(zoomIn?.getAttribute("aria-disabled")).toBe("false");
-  const availableShortcut = pressKey(dialogAdapter, "+", { cancelable: true });
-  expect(availableShortcut.defaultPrevented).toBe(true);
+  const panzoom = vi.mocked(Panzoom).mock.results.at(-1)!.value;
+  for (const modifier of ["ctrlKey", "metaKey", "altKey"] as const) {
+    for (const key of ["=", "+", "-", "0"]) {
+      const shortcut = pressKey(zoomIn, key, {
+        cancelable: true,
+        shiftKey: key === "+",
+        [modifier]: true,
+      });
+      expect(shortcut.defaultPrevented, `${modifier} ${key}`).toBe(false);
+    }
+  }
+  expect(panzoom.zoomIn).not.toHaveBeenCalled();
+  expect(panzoom.zoomOut).not.toHaveBeenCalled();
+  expect(panzoom.reset).not.toHaveBeenCalled();
+
+  for (const [key, command] of [
+    ["=", panzoom.zoomIn],
+    ["+", panzoom.zoomIn],
+    ["-", panzoom.zoomOut],
+    ["0", panzoom.reset],
+  ] as const) {
+    vi.mocked(command).mockClear();
+    const shortcut = pressKey(zoomIn, key, { cancelable: true, shiftKey: key === "+" });
+    expect(shortcut.defaultPrevented).toBe(true);
+    expect(command).toHaveBeenCalledOnce();
+  }
 
   expectFocusCycle(button(modal, ".close"), button(modal, ".download-image"));
 });

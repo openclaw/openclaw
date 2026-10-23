@@ -1927,9 +1927,8 @@ openclaw-settings-save-indicator:empty {
   border-radius: var(--radius-md);
   color: var(--muted);
   cursor: var(--cursor-action);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
+  /* Inherited color would restyle every row descendant on each animation frame. */
+  transition: background var(--duration-fast) ease;
 }
 
 /* Inset only the paint: adjacent fills need breathing room without shrinking
@@ -2253,7 +2252,6 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-recent-session--active .sidebar-recent-session__name {
-  font-weight: 600;
   color: var(--text-strong);
 }
 
@@ -3105,7 +3103,6 @@ a:is(
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
     transform var(--duration-fast) ease;
 }
 
