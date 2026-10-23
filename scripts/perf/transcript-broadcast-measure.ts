@@ -1414,8 +1414,11 @@ const mock = createServer((req, res) => {
         : [];
     const toolOutput = toolOutputs.at(-1);
     const continuation = toolScenario && toolOutput !== undefined;
+    const primaryMessage = cohort
+      ? `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`
+      : undefined;
     const primary =
-      cohort &&
+      primaryMessage !== undefined &&
       facts.purpose === "benchmark-turn" &&
       !facts.hasToolOutput &&
       !continuation &&
@@ -1424,19 +1427,12 @@ const mock = createServer((req, res) => {
       index <= runCount &&
       lastUser !== undefined &&
       (values["session-event-wake"]
-        ? lastUser.includes(
-            `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`,
-          )
+        ? lastUser.includes(primaryMessage)
         : chatAttachmentContent
           ? lastUser
               .split("\n")
-              .some(
-                (line) =>
-                  stripInboundMetadata(line).trim() ===
-                  `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`,
-              )
-          : stripInboundMetadata(lastUser).trim().split("\n")[0] ===
-            `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`);
+              .some((line) => stripInboundMetadata(line).trim() === primaryMessage)
+          : stripInboundMetadata(lastUser).trim().split("\n")[0] === primaryMessage);
     const requestPhase = primary
       ? `primary:${index}`
       : continuation
