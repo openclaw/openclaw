@@ -149,7 +149,6 @@ test("restricts orphan discovery to the active-session index", async ({
   const plans: string[] = [];
   const prototype = requireNodeSqlite().StatementSync.prototype;
   const observers = (["all", "iterate"] as const).map((method) => {
-    // oxlint-disable-next-line typescript/unbound-method -- Forwarded with the intercepted statement below.
     const read = prototype[method];
     return vi.spyOn(prototype, method).mockImplementation(
       new Proxy(read, {
