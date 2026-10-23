@@ -1254,6 +1254,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor-lint.crabbox.test.ts",
   "src/node-host/config.test.ts",
   "src/flows/doctor-health-contribution-runners.config.deferred.test.ts",
+  "src/flows/doctor-health.deletion-recovery.test.ts",
   "src/flows/doctor-health.dangling-workshop-index.test.ts",
   "src/flows/doctor-health.managed-admission.test.ts",
   "src/flows/doctor-health.managed-approvals.test.ts",
