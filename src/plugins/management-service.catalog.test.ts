@@ -662,8 +662,7 @@ describe("managed plugin catalog", () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
     mocks.providerAuthChoices.mockReturnValue([{ choiceId: "provider", icon: providerIcon }]);
     mocks.recommendedInstalls.mockReturnValue([{ id: "tool", icon: recommendedIcon }]);
-    const resolve = (iconUrl: string) =>
-      resolveManagedSetupCatalogIconUrl({ config: {}, env: {}, iconUrl });
+    const resolve = (iconUrl: string) => resolveManagedSetupCatalogIconUrl({ config: {}, iconUrl });
     expect(resolve(providerIcon)).toBe(providerIcon);
     expect(resolve(`${" ".repeat(2048)}${providerIcon} `)).toBe(providerIcon);
     expect(resolve(recommendedIcon)).toBe(recommendedIcon);
@@ -671,7 +670,6 @@ describe("managed plugin catalog", () => {
     expect(resolve("http://127.0.0.1/private.png")).toBeUndefined();
     expect(mocks.providerAuthChoices).toHaveBeenCalledWith({
       config: {},
-      env: {},
       includeUntrustedWorkspacePlugins: false,
       includeWorkspacePlugins: false,
     });
