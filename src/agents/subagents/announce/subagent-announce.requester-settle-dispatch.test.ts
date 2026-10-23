@@ -284,6 +284,72 @@ describe("requester settle dispatch deadline", () => {
     }
   });
 
+  it.each([
+    { name: "all consumed, NO_REPLY", undelivered: false, silent: true },
+    { name: "all consumed, empty reply", undelivered: false, silent: false },
+    { name: "one undelivered, NO_REPLY", undelivered: true, silent: true },
+  ])(
+    "settles a yielded cohort according to its remaining results: $name",
+    async ({ undelivered, silent }) => {
+      vi.useFakeTimers();
+      const context = createContext();
+      const consumed = settledChild();
+      const sibling = settledChild();
+      sibling.runId = "sibling";
+      sibling.childSessionKey = "agent:main:subagent:sibling";
+      sibling.delivery = { status: undelivered ? "pending" : "delivered" };
+      const children = [consumed, sibling];
+      for (const child of children) {
+        child.requesterSettleWake!.batchRunIds = children.map((entry) => entry.runId);
+      }
+      registryRead.listSubagentRunsForRequester.mockReturnValue(children);
+      const completeBatch = vi.fn<Wake["completeBatch"]>(() => {
+        for (const child of children) {
+          child.requesterSettleWake = undefined;
+        }
+      });
+      useDirectDelivery();
+      startTurn.mockImplementation(async ({ preflight, io }) => {
+        acceptTurn({ preflight, io });
+        io.emitFinal([
+          true,
+          {
+            status: "ok",
+            result: {
+              payloads: [],
+              meta: { terminalReply: { disposition: silent ? "silent" : "empty" } },
+            },
+          },
+          undefined,
+        ]);
+      });
+      const params = wakeParams(consumed, completeBatch);
+      const run = () =>
+        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+
+      await expect(run()).resolves.toBe(!undelivered);
+      expect(startTurn).toHaveBeenCalledOnce();
+      expect(completeBatch).toHaveBeenCalledTimes(undelivered ? 0 : 1);
+      if (undelivered) {
+        expect(consumed.requesterSettleWake).toMatchObject({
+          status: "pending",
+          attemptCount: 1,
+          lastError: "completion agent did not produce a visible reply",
+        });
+        startTurn.mockImplementation(async ({ preflight, io }) => {
+          acceptTurn({ preflight, io });
+          finishTurn(io, "Remaining child result received.");
+        });
+      } else {
+        expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
+      }
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(run()).resolves.toBe(undelivered);
+      expect(startTurn).toHaveBeenCalledTimes(undelivered ? 2 : 1);
+      expect(completeBatch).toHaveBeenCalledOnce();
+    },
+  );
+
   it("retains an expired completion until unrelated interrupted requester work recovers", async () => {
     const context = createContext();
     const { child, completeBatch, params } = dispatchFixture();
@@ -479,6 +545,7 @@ describe("requester settle dispatch deadline", () => {
             : undefined,
       );
       const child = settledChild();
+      child.delivery = { status: "pending" };
       child.requesterSessionKey = requesterSessionKey;
       child.requesterSettleWake = {
         status: "pending",
