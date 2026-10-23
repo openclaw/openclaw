@@ -2,7 +2,11 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it, onTestFinished } from "vitest";
-import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import {
+  nativePane,
+  openChatPanels,
+  selectChatLayoutAction,
+} from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -71,6 +75,7 @@ async function withMobilePage(run: (page: Page) => Promise<void>, colorScheme?: 
 }
 
 async function openMobilePanelLauncher(page: Page) {
+  await nativePane(page).locator(".agent-chat__header--mobile").waitFor();
   const trigger = await openChatPanels(page);
   const host = page.locator(".chat-mobile-host").filter({ visible: true });
   await host
