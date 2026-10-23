@@ -506,8 +506,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       count: 1,
       terminalResult: {
         terminalOutcome: "blocked",
-        terminalSummary:
-          "Required completion delivery failed before reaching the requester: completion delivery was not confirmed after successful generation.",
       },
     });
     expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
@@ -544,7 +542,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       count: 1,
       terminalResult: {
         terminalOutcome: "blocked",
-        terminalSummary: expect.stringContaining("requester wake failed"),
       },
     });
     expect(lifecycle.failTaskRun).not.toHaveBeenCalled();

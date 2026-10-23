@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, Show } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatTimeMs } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -67,15 +67,17 @@ export function useSessionSnoozeEntries(
   const cancel = nativeListener("click", () => popover?.overlay.request(false, "return"));
   const stopClick = nativeListener("click", (event) => event.stopPropagation());
   const stopKeydown = nativeListener("keydown", (event) => event.stopPropagation());
-  actions.openCustomSnooze = open;
-  actions.customSnoozeKeydown = keydown;
-  onCleanup(() => {
-    if (actions.openCustomSnooze === open) {
-      actions.openCustomSnooze = undefined;
-    }
-    if (actions.customSnoozeKeydown === keydown) {
-      actions.customSnoozeKeydown = undefined;
-    }
+  onSettled(() => {
+    actions.openCustomSnooze = open;
+    actions.customSnoozeKeydown = keydown;
+    return () => {
+      if (actions.openCustomSnooze === open) {
+        actions.openCustomSnooze = undefined;
+      }
+      if (actions.customSnoozeKeydown === keydown) {
+        actions.customSnoozeKeydown = undefined;
+      }
+    };
   });
   const customLabel = (
     <span

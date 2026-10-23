@@ -175,6 +175,22 @@ The persistent carriers are experiments, not production context owners. These
 mechanism measurements do not establish Gateway GC or latency improvements; use
 the concurrent, swapped-core Gateway workload for acceptance.
 
+`main-thread-stall-measure.mjs` measures the real stall-attribution owner with the
+same sampling and warmup protocol. It reports calls, sampled bytes per call,
+sample counts, and separately timed calls per second:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/main-thread-stall-measure.mjs entry 21 50000
+node --import ./scripts/tsx.mjs scripts/perf/main-thread-stall-measure.mjs same-name 21 50000
+node --import ./scripts/tsx.mjs scripts/perf/main-thread-stall-measure.mjs phase 21 50000
+```
+
+`entry` establishes an async task; `same-name` reenters its inherited task;
+`phase` labels synchronous work without an inherited task, as when entering a
+stored owner context. Each callback checks its visible task name. Run identical
+commands on baseline and candidate; these owner costs do not measure the
+frequency of each case in a Gateway workload.
+
 ## Workboard dashboard reads
 
 `workboard-read-measure.ts` exercises the real source Gateway and Workboard SQLite

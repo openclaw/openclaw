@@ -6,10 +6,6 @@ import { createDeferred } from "../../../test/helpers/promise.ts";
 import { CommandPaletteLoading } from "../app/app-shell-command-palette-loading-view.tsx";
 import { ShellCommandPaletteOwner } from "../app/app-shell-command-palette-loading.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import {
-  COMMAND_PALETTE_ELEMENT,
-  createLazyCustomElementRequests,
-} from "../app/lazy-custom-element.ts";
 import * as toast from "../lib/toast.ts";
 import * as payloads from "../pages/chat/attachment-payload-store.ts";
 import { createDraftFixture } from "../pages/new-session/draft-submission-flow.test-support.ts";
@@ -55,8 +51,6 @@ function createLoading(context?: ApplicationContext) {
       {
         elements: {},
         context,
-        commandPaletteElement: COMMAND_PALETTE_ELEMENT,
-        lazyCustomElements: createLazyCustomElementRequests(),
         shellNavigation: { chatNavigationOptions: () => undefined, navigate: () => {} },
       },
       { request: () => {}, clear: () => {}, cancel: () => {}, pending: () => false },
@@ -332,6 +326,7 @@ describe("command palette attachments", () => {
         }),
       { container: loader },
     );
+    await vi.dynamicImportSettled();
     flush();
     const coldInput = loader.querySelector("textarea")!;
     if (outcome !== "ready" && outcome !== "policy-delayed") {
