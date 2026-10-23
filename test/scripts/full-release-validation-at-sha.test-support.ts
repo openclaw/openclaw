@@ -97,6 +97,7 @@ export function createDispatchFixture(
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
     unreachableContributionRecord?: boolean;
+    releaseNotes?: string;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-release-dispatch-"));
