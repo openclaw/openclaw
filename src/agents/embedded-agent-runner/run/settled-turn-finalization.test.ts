@@ -159,14 +159,15 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
   }
 
   it.each(["length", "stop"] as const)(
-    "labels a recovered summary only when the settled turn was cut off (%s)",
+    "retains the settled turn's stop reason with its recovered summary (%s)",
     async (stopReason) => {
       // #178300: a tool-free summary of a cut-off turn must not read as a clean finish.
       backendMocks.finalize.mockResolvedValueOnce(
         finalizationReply("answered", "All steps are complete."),
       );
 
-      const result = await finalize(finalizationInput(cutOffAttempt(stopReason)));
+      const input = finalizationInput(cutOffAttempt(stopReason));
+      const result = await finalize(input);
 
       expect(result.finalizationOutcome).toBe("answered");
       expect(backendMocks.finalize.mock.calls[0]?.[0].prompt.includes("cut off")).toBe(
@@ -176,6 +177,31 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
         stopReason === "length"
           ? ["All steps are complete.", CUT_OFF_SUMMARY_NOTICE_TEXT]
           : ["All steps are complete."],
+      );
+      const terminalInput = makeTerminalInput({
+        ...result.prepared,
+        attempt: result.attempt,
+        attemptAssistant: result.attemptAssistant,
+        terminalState: result.terminalState,
+        runParams: input.terminalBase.runParams,
+        settledTurnFinalizationOutcome: result.finalizationOutcome,
+        replayState: { hadPotentialSideEffects: true, replayInvalid: false },
+      });
+      const terminal = await resolveEmbeddedRunTerminal(terminalInput);
+      if (terminal.action !== "complete") {
+        throw new Error("expected summary completion");
+      }
+      expect(terminal.result.meta.stopReason).toBe(stopReason);
+      expect(terminal.result.meta.completion).toMatchObject({
+        stopReason,
+        finishReason: stopReason,
+      });
+      expect(terminal.result.payloads).toEqual(result.prepared.payloadsWithToolMedia);
+      expect(terminalInput.setTerminalLifecycleMeta).toHaveBeenCalledWith(
+        expect.objectContaining({ stopReason }),
+      );
+      expect(input.terminalBase.runParams.onAttemptTerminalReplaced).toHaveBeenCalledTimes(
+        stopReason === "length" ? 0 : 1,
       );
     },
   );

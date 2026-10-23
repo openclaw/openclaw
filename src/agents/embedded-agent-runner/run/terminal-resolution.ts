@@ -500,6 +500,7 @@ async function completeEmbeddedRun(
           incompleteTurnText,
         });
   // Cancellation belongs to the runtime owner, not the last model tool-call message.
+  const rawStop = input.attemptAssistant?.stopReason;
   const stopReason =
     terminalAborted || terminalTimedOut
       ? input.terminalState.outcome.stopReason
@@ -509,7 +510,7 @@ async function completeEmbeddedRun(
           ? "tool_calls"
           : input.attempt.yieldDetected
             ? "end_turn"
-            : (input.attemptAssistant?.stopReason as string | undefined);
+            : (input.terminalState.outcome.stopReason ?? rawStop);
   input.setTerminalLifecycleMeta({
     replayInvalid,
     livenessState,
@@ -574,7 +575,7 @@ async function completeEmbeddedRun(
     input.attempt.assistantTexts.some((text) => text.trim().length > 0) ||
     resolveFinalAssistantVisibleText(input.attemptAssistant) !== undefined;
   const isTruncatedPartialReply =
-    stopReason === "length" && !hasAttemptTerminalState(input.attempt) && hasPartialAssistantText;
+    rawStop === "length" && !hasAttemptTerminalState(input.attempt) && hasPartialAssistantText;
   // Existing visible payloads already avoid the silent-park symptom. The diagnostic
   // fills only an otherwise empty yielded turn and must not duplicate visible output.
   // A length stop delivers partial text, so it is labeled instead of dropped. (#76477)

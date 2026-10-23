@@ -197,6 +197,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     Boolean(initial.attempt.lastToolError) ||
     isEmbeddedRunTerminalTimeout(initial.terminalState.outcome) ||
     classifyAgentRunTerminalOutcome(initial.terminalState.outcome) === "failure";
+  const preserveOutputLimit = initial.terminalState.outcome.stopReason === "length";
   log.warn(
     `settled post-tool turn lacked a final answer: ${describeRun()} — running isolated finalization`,
   );
@@ -281,7 +282,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     return preserveInitial("failed");
   }
 
-  // Only an actual recovery replaces a failed or timed-out turn's terminal ownership.
+  // A summary recovers the reply, but cannot complete work cut off by the output limit.
   const completion =
     finalizationOutcome !== "answered" && preserveOriginalTerminal
       ? initial
@@ -290,7 +291,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
           attemptAssistant: attempt.currentAttemptAssistant,
           currentAttemptCompletedAssistant: attempt.currentAttemptCompletedAssistant,
           terminalState:
-            finalizationOutcome !== "answered"
+            finalizationOutcome !== "answered" || preserveOutputLimit
               ? initial.terminalState
               : {
                   outcome: resolveEmbeddedRunAttemptTerminalOutcome({
@@ -357,7 +358,9 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     // Recovery owns the selected terminal only after delivery observation and
     // authority checks; failed or cancelled summaries retain the original facts.
     assertFinalizationActive();
-    runParams.onAttemptTerminalReplaced?.();
+    if (!preserveOutputLimit) {
+      runParams.onAttemptTerminalReplaced?.();
+    }
   }
   return {
     ...completion,
