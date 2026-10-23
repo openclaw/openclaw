@@ -33,7 +33,10 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
-import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
+import {
+  getUserTurnTranscriptAdmissionOwner,
+  readUserTurnRequesterOrigin,
+} from "../../sessions/user-turn-transcript-admission.js";
 import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcript-media.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import {
@@ -457,10 +460,7 @@ export async function prepareAgentRunUserTurn(params: {
       // that exact provenance into execution, not only its transcript receipt.
       if (settleWakeReplay) {
         inputProvenance = normalizeInputProvenance(recorder.getPendingInputMessage?.()?.provenance);
-        if (
-          params.sessionEntry?.status === "interrupted" &&
-          params.sessionEntry.lastRunId === params.runId
-        ) {
+        if (getUserTurnTranscriptAdmissionOwner(recorder)?.pendingInput()?.interruptedByRestart) {
           // A turn-local carrier survives replay of an already frozen model prompt.
           runtimeContextFragments = [
             ...(runtimeContextFragments ?? []),

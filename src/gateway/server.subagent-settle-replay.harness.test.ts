@@ -637,6 +637,9 @@ describe("public yielded settle replay with real Gateway admission", () => {
         const persistence = await command.userTurnTranscriptRecorder!.persistApproved();
         if (transcriptOnly) {
           expect(persistence).toMatchObject({ appended: false });
+          expect(command.runtimeContextFragments).toEqual([
+            { kind: "runtime-instruction", text: RESTART_RECOVERY_INTERRUPTION_NOTE },
+          ]);
         }
       });
     }
