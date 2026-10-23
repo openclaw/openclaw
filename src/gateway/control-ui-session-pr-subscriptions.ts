@@ -30,6 +30,7 @@ import type {
 import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
 import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
+import { yieldSessionListWork } from "./session-projection-work.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
 const CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS = 60_000;
@@ -501,7 +502,13 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
       }
     }
     if (keys.length > 0) {
-      void scope.track(() => Promise.allSettled(keys.map(currentKeyState))).catch(() => {});
+      // Warm readers must not drain the whole audience ahead of the mutation's RPC reply.
+      void scope
+        .track(async () => {
+          await yieldSessionListWork();
+          return Promise.allSettled(keys.map(currentKeyState));
+        })
+        .catch(() => {});
     }
   });
 
