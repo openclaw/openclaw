@@ -7,7 +7,12 @@ import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { queryWithin } from "./plugins-page.lifecycle-test-support.ts";
-import { createInspectResult, createPlugin, createResult } from "./plugins-page.test-support.ts";
+import {
+  createDiscoveryDetail,
+  createInspectResult,
+  createPlugin,
+  createResult,
+} from "./plugins-page.test-support.ts";
 import { renderPluginSettingsDetail, type DetailProps } from "./settings-view.tsx";
 
 beforeEach(() => i18n.setLocale("en"));
@@ -82,6 +87,38 @@ async function selectSettingAction(row: Element, value: "ask" | "reset") {
   await Promise.resolve();
   flush();
 }
+
+it.each(["multiple-servers", "mixed-capabilities", "missing-description", "disabled"] as const)(
+  "retains server-specific setup for %s instead of misattributing the plugin summary",
+  (scenario) => {
+    const plugin = createPlugin({
+      enabled: scenario !== "disabled",
+      state: scenario === "disabled" ? "disabled" : "enabled",
+      description: scenario === "missing-description" ? "" : "Manage workspace records.",
+    });
+    const catalog = createDiscoveryDetail(plugin);
+    catalog.plugin.catalog.family = "bundle-plugin";
+    catalog.plugin.catalog.summary = plugin.description;
+    catalog.detail.mcpServers = ["workspace"];
+    catalog.detail.mcpServerDetails = [
+      { name: "workspace", setup: "Connect the workspace account." },
+    ];
+    const inspection = createInspectResult();
+    inspection.components.mapped = ["mcpServers"];
+    inspection.components.mcpServers = ["workspace"];
+    inspection.declared.mcpServers = ["workspace"];
+    if (scenario === "multiple-servers") {
+      inspection.components.mcpServers.push("other");
+      inspection.declared.mcpServers.push("other");
+    } else if (scenario === "mixed-capabilities") {
+      inspection.declared.tools = ["workspace_sync"];
+    }
+    const { container } = mount({ result: createResult(plugin), catalog, inspection });
+    const details = container.querySelector(".plugin-capability__details")!;
+    expect(details.textContent).toContain("Connect the workspace account.");
+    expect(details.textContent).not.toContain("What this server does");
+  },
+);
 
 it("does not offer enablement or Settings for an uninstalled plugin", () => {
   const { find } = mount({
