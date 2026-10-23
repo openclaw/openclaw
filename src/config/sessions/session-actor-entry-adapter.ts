@@ -162,6 +162,7 @@ async function patchSessionActorEntry(
         assertCurrent() {
           authority.assertCurrent();
           source.assertCurrent();
+          maintenancePreservation?.capture();
           options.workerGuard?.assertCurrent?.();
           options.workerGuard?.assertMutationAllowed?.();
           options.assertCommitAllowed?.();

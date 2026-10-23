@@ -233,7 +233,7 @@ export async function runSessionEntryWorkerOperation<
   agentId: string;
   assertCurrent: () => void;
   assertPrepared?: () => void;
-  assertCandidate?: (candidate: Candidate) => void;
+  assertCandidate?: (candidate: Candidate, operation: RetainedWorkerTransactionAdmission) => void;
   releaseSource?: () => void | Promise<void>;
   candidateKind: Candidate["kind"];
   retainedExecution?: OpenClawAgentDatabaseExecution;
@@ -420,7 +420,7 @@ export async function runSessionEntryWorkerOperation<
       if (!isRecord(facts) || !matchesReceipt(facts.publication) || !settlement.candidate) {
         throw new Error("Session patch commit omitted its exact candidate");
       }
-      params.assertCandidate?.(settlement.candidate);
+      params.assertCandidate?.(settlement.candidate, retained);
       settlement.admitted = { admission, retained };
       transcriptPublication?.begin(
         settlement.candidate.publication?.transcriptPublication

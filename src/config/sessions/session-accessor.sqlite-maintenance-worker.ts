@@ -1,3 +1,4 @@
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
@@ -16,7 +17,10 @@ export function runSessionMaintenanceMetadataInWorker(params: {
   plan: SessionMaintenanceMetadataCommand & { databaseOptions: ReclamationDatabaseOptions };
   claim: SqliteReclamationClaim;
   assertCurrent: () => void;
-  assertMaintenanceCommitAllowed?: (plans?: readonly SessionMaintenancePreservationPlan[]) => void;
+  assertMaintenanceCommitAllowed?: (
+    plans?: readonly SessionMaintenancePreservationPlan[],
+    operation?: RetainedWorkerTransactionAdmission,
+  ) => void;
   refreshMaintenanceProtection?: () => SessionMaintenanceLiveProtection;
   signal: AbortSignal;
   diagnostics?: SqliteSessionReclamationDiagnostics;
@@ -54,9 +58,9 @@ export function runSessionMaintenanceMetadataInWorker(params: {
     },
     {
       identityAgentId: plan.databaseOptions.agentId,
-      beforeCommit(publication) {
+      beforeCommit(publication, operation) {
         if (plan.kind === "maintenance-plan") {
-          params.assertMaintenanceCommitAllowed?.(publication.maintenancePlans);
+          params.assertMaintenanceCommitAllowed?.(publication.maintenancePlans, operation);
         }
       },
       onResult(result) {

@@ -111,6 +111,7 @@ export async function purgeDeletedAgentSessionEntries(
         const native = !execution;
         const preservation = await prepareSessionMaintenancePreservation(params.storePath, {
           native,
+          env: resolved.env,
         });
         const assertCurrent = () => {
           execution?.assertCurrent();
@@ -183,10 +184,10 @@ export async function purgeDeletedAgentSessionEntries(
             assertPrepared: () => {
               preservation.capture();
             },
-            assertCandidate: (candidate) =>
+            assertCandidate: (candidate, operation) =>
               assertMaintenancePreservationCompatible(
                 sentPreservation,
-                preservation.capture(),
+                preservation.capture(operation),
                 candidate.result.maintenancePlans,
               ),
             candidateKind: "session-agent-purge",

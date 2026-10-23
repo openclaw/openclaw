@@ -5,16 +5,27 @@ import {
   USER_BACKGROUND_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
 import {
+  parseSidebarSessionReference,
+  UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
+import {
   GIT_COAUTHOR_PREFERENCE_KEY,
   USER_PREFS_PROFILE_KEY_LIMIT,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+} from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema-ensure.js";
 import { isOwnedBackgroundPreference } from "./user-background.store.js";
-import { publishUserPreferencesChange } from "./user-preferences-publication.js";
+import {
+  assertUserPreferenceWriteNotHeld,
+  publishUserPreferencesChange,
+} from "./user-preferences-publication.js";
 import type {
   PreparedUserPreferenceUpdate,
   UserPreferenceError,
@@ -35,12 +46,22 @@ export function updatesGitCoauthorPreference(update: PreparedUserPreferenceUpdat
   );
 }
 
+export function updatesPersonalSessionPins(update: PreparedUserPreferenceUpdate): boolean {
+  return (
+    update.serialized.some(({ prefKey }) => prefKey === UI_RAIL_SHORTCUTS_PREFERENCE_KEY) ||
+    update.deletionKeys.includes(UI_RAIL_SHORTCUTS_PREFERENCE_KEY)
+  );
+}
+
 export function deleteUserPreference(
   database: EngineConnection,
   profileId: string,
   key: string,
 ): void {
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
+  if (key === UI_RAIL_SHORTCUTS_PREFERENCE_KEY) {
+    assertUserPreferenceWriteNotHeld(database);
+  }
   if (!tableExists(database, "user_preferences")) {
     return;
   }
@@ -75,6 +96,34 @@ export function selectUserPreferenceValues(
   );
 }
 
+/** Worker-side union keeps another profile's reference protective when one person unpins. */
+export function selectPersonalPinnedSessionKeys(database: EngineConnection): string[] {
+  if (!tableExists(database, "user_preferences")) {
+    return [];
+  }
+  const keys = new Set<string>();
+  const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
+  for (const row of iterateSqliteQuerySync(
+    database,
+    db
+      .selectFrom("user_preferences")
+      .select("value_json")
+      .where("pref_key", "=", UI_RAIL_SHORTCUTS_PREFERENCE_KEY),
+  )) {
+    const entries: unknown = JSON.parse(row.value_json);
+    if (!Array.isArray(entries)) {
+      continue;
+    }
+    for (const entry of entries) {
+      const key = parseSidebarSessionReference(entry);
+      if (key) {
+        keys.add(key);
+      }
+    }
+  }
+  return [...keys].toSorted();
+}
+
 function readPreferenceKeys(database: EngineConnection, profileId: string): Set<string> {
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
   return new Set(
@@ -95,6 +144,7 @@ export function mergeUserPreferences(
     return;
   }
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
+  assertUserPreferenceWriteNotHeld(database);
   const targetKeys = readPreferenceKeys(database, targetProfileId);
   const rows = executeSqliteQuerySync(
     database,
@@ -167,6 +217,9 @@ export function writeUserPreferences(
   update: PreparedUserPreferenceUpdate,
 ): Result<void, UserPreferenceError> {
   const { serialized, deletionKeys, expected } = update;
+  if (updatesPersonalSessionPins(update)) {
+    assertUserPreferenceWriteNotHeld(sqlite);
+  }
   const background = serialized.find((entry) => entry.prefKey === USER_BACKGROUND_PREFERENCE_KEY);
   if (background || deletionKeys.includes(USER_BACKGROUND_PREFERENCE_KEY)) {
     if (!expected.some((entry) => entry.prefKey === USER_BACKGROUND_PREFERENCE_KEY)) {

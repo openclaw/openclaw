@@ -4,6 +4,7 @@ import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { getChildLogger } from "../../logging/logger.js";
 import {
   GatewayDrainingError,
@@ -492,12 +493,14 @@ async function runPendingMaintenance(
         throw new SqliteReclamationInputsChangedError("SQLite automatic maintenance owner retired");
       }
     };
-    const preparedPreservation = await prepareSessionMaintenancePreservation(owner.storePath);
+    const preparedPreservation = await prepareSessionMaintenancePreservation(owner.storePath, {
+      env: owner.scope.env,
+    });
     preservation = preparedPreservation;
     assertInputsCurrent();
-    const capturePreservation = () => {
+    const capturePreservation = (operation?: RetainedWorkerTransactionAdmission) => {
       try {
-        return preparedPreservation.capture();
+        return preparedPreservation.capture(operation);
       } catch (error) {
         planningChanged = true;
         throw error;
@@ -557,7 +560,7 @@ async function runPendingMaintenance(
         assertCommitAllowed: assertInputsCurrent,
         // Consume the committed worker proof under FIFO; later observers retain invalidation ownership.
         onWorkerResult: consumePlanning,
-        assertMaintenanceCommitAllowed(plans) {
+        assertMaintenanceCommitAllowed(plans, retained) {
           assertInputsCurrent();
           try {
             // A late kick can protect an ancestor; the next writer refresh resolves that ancestry.
@@ -568,7 +571,7 @@ async function runPendingMaintenance(
             }
             assertMaintenancePreservationCompatible(
               operation.input.preservation,
-              capturePreservation(),
+              capturePreservation(retained),
               plans,
             );
           } catch (error) {

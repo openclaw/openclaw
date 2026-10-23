@@ -1,4 +1,5 @@
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
+import { parseSidebarSessionReference } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
 import type { RouteId } from "./app-route-paths.ts";
 import type {
   NativeDeviceSettingsCapability,
@@ -89,7 +90,7 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
     return key ? { type: "session", key, rail: true } : null;
   }
   if (value.startsWith("session:")) {
-    const key = value.slice("session:".length).trim();
+    const key = parseSidebarSessionReference(value);
     return key ? { type: "session", key } : null;
   }
   if (value.startsWith("workboard:")) {

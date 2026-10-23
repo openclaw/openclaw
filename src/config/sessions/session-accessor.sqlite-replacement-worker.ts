@@ -453,7 +453,10 @@ export async function runSessionEntryWorkerMutation<T>(
   lifecycle: {
     identityAgentId: string;
     onResult?: (value: T | undefined) => void;
-    beforeCommit?: (publication: SessionEntryReplacementPublication) => void;
+    beforeCommit?: (
+      publication: SessionEntryReplacementPublication,
+      operation: RetainedWorkerTransactionAdmission,
+    ) => void;
     afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
     onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   },
@@ -586,7 +589,7 @@ export async function runSessionEntryWorkerMutation<T>(
       }
       // SAFETY: This command's native kernel supplies the typed publication, not external input.
       const committed = facts.publication as SessionEntryReplacementPublication;
-      lifecycle.beforeCommit?.(committed);
+      lifecycle.beforeCommit?.(committed, retained);
       admitted = { admission, retained };
       publication.begin(
         committed.changedKeys,
@@ -617,6 +620,10 @@ export async function commitSessionEntryReplacementsInWorker(
   assertCurrent: SessionSourceAssertion,
   lifecycle: {
     identityAgentId: string;
+    beforeCommit?: (
+      publication: SessionEntryReplacementPublication,
+      operation: RetainedWorkerTransactionAdmission,
+    ) => void;
     afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
     onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   },
@@ -665,6 +672,8 @@ export async function commitSessionEntryReplacementsInWorker(
             input: { ...guardedInput, nativeBindings },
           }),
         onTransactionFacts: acceptValidation,
+        assertCandidate: (candidate, operation) =>
+          lifecycle.beforeCommit?.(candidate.publication, operation),
         async onCommitted(candidate, published, identity, context) {
           try {
             lifecycle.onLifecycleCommitted?.(candidate.result.pendingArchiveRecovery);
