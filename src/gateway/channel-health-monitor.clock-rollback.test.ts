@@ -6,6 +6,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
+import { createMockChannelManager } from "./channel-health-monitor.test-support.js";
 import type { ChannelManager } from "./server-channels.js";
 
 const STARTED_AT = 1_000_000;
@@ -24,25 +25,9 @@ function createChannelManager(running: boolean) {
     channels: { discord: account },
     channelAccounts: { discord: { default: account } },
   };
-  const manager: ChannelManager = {
+  const manager: ChannelManager = createMockChannelManager({
     getRuntimeSnapshot: vi.fn(() => snapshot),
-    pauseChannelStarts: vi.fn(() => () => {}),
-    startChannels: vi.fn(async () => {}),
-    startChannel: vi.fn(async () => new Map()),
-    stopChannel: vi.fn(async () => {}),
-    releaseChannelRouteHandoffs: vi.fn(),
-    setAutostartSuppression: vi.fn(),
-    getAutostartSuppression: vi.fn(() => null),
-    recoverAutostartSuppression: vi.fn(() => undefined),
-    setAmbientAutostartSuppressedChannelIds: vi.fn(),
-    isAmbientAutostartSuppressed: vi.fn(() => false),
-    markChannelLoggedOut: vi.fn(),
-    isHealthMonitorEnabled: vi.fn(() => true),
-    isAccountListed: vi.fn(() => true),
-    isManuallyStopped: vi.fn(() => false),
-    isAutoRestartScheduled: vi.fn(() => false),
-    resetRestartAttempts: vi.fn(),
-  };
+  });
   return { account, manager };
 }
 
