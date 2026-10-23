@@ -45,6 +45,7 @@ import {
 } from "./chat-thread-interactions.ts";
 import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
+import type { TranscriptHeader } from "./chat-transcript-session.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { ChatWelcome } from "./chat-welcome.tsx";
 
@@ -66,6 +67,7 @@ export function ChatThread(input: {
   props: ChatThreadProps;
   transcript: ChatTranscript;
   bindViewport?: (element: HTMLDivElement) => () => void;
+  historySupplement?: TranscriptHeader;
 }) {
   const mobile = useContext(ChatConversationMobile);
   let root: HTMLDivElement | undefined;
@@ -136,11 +138,21 @@ export function ChatThread(input: {
     Boolean(input.props.gatewayClient?.connected),
   ]);
   const markdownRef = createMarkdownBlocksRef(() => input.props.transcriptVisible ?? true);
-  const historyHeader = () =>
-    input.props.historyPagination
+  const headerContent = (
+    <>
+      <Show when={input.props.historyPagination}>
+        {(pagination) => <ChatHistoryBoundary {...pagination()} />}
+      </Show>
+      {input.historySupplement?.content}
+    </>
+  );
+  const historyHeader = (): TranscriptHeader | null =>
+    input.props.historyPagination || input.historySupplement
       ? {
-          props: input.props.historyPagination,
-          height: CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
+          content: headerContent,
+          height:
+            (input.props.historyPagination ? CHAT_HISTORY_BOUNDARY_HEIGHT_PX : 0) +
+            (input.historySupplement?.height ?? 0),
         }
       : null;
   const historySentinel = (
@@ -157,9 +169,7 @@ export function ChatThread(input: {
       return (
         <div class="chat-thread-inner">
           {sentinel()}
-          {isEmpty() && !showLoadingSkeleton() && input.props.historyPagination ? (
-            <ChatHistoryBoundary {...input.props.historyPagination} />
-          ) : undefined}
+          {isEmpty() && !showLoadingSkeleton() ? historyHeader()?.content : undefined}
           {showLoadingSkeleton() ? (
             mobile() ? (
               <ChatConversationLoading route={false} />

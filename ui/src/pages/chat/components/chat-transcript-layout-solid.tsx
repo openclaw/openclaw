@@ -11,7 +11,6 @@ import {
   createSolidRenderLifecycle,
   type SolidRenderLifecycle,
 } from "../solid-render-lifecycle.ts";
-import { ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import type { TranscriptContent, TranscriptLayoutProps } from "./chat-transcript-layout.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
@@ -60,7 +59,7 @@ function TranscriptRows(props: {
   };
   return (
     <>
-      <Show when={props.snapshot.header}>{(header) => <ChatHistoryBoundary {...header()} />}</Show>
+      {props.snapshot.header}
       <div class="chat-virtual-sizer" ref={(element) => props.columnRef(element)}>
         {props.snapshot.overlay}
         <div

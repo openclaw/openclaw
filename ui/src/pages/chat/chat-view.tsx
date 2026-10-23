@@ -80,28 +80,33 @@ type ChatViewInput = {
   getScrollToLatestElement: () => HTMLButtonElement | null;
 };
 
+// Must match the fixed height of .chat-pending-inputs--history.
+const SAVED_INPUT_HISTORY_HEIGHT_PX = 44;
+
 function ChatTranscript(input: ChatViewInput) {
+  const savedInputNavigation = <ChatSavedInputNavigation {...input} />;
+  const hasSavedInputNavigation = () =>
+    input.frame.pendingInputs &&
+    (input.frame.pendingInputs.page.nextBefore !== undefined ||
+      input.frame.pendingInputs.before !== undefined);
   return (
     <ChatThread
       props={input.frame.threadProps}
       transcript={input.props.transcript}
       bindViewport={input.bindTranscriptViewport}
+      historySupplement={
+        hasSavedInputNavigation()
+          ? {
+              content: savedInputNavigation,
+              height: SAVED_INPUT_HISTORY_HEIGHT_PX,
+            }
+          : undefined
+      }
     />
   );
 }
 
-function ChatFooterContent(
-  input: ChatViewInput & {
-    mobileComposition?: boolean;
-    activities?: ChatActivityPillsProps;
-  },
-) {
-  const swarm = createMemo(() => {
-    const progress = input.props.swarm;
-    return progress && resolveChatSwarmParent(progress)?.swarm?.groups.length
-      ? progress
-      : undefined;
-  });
+function ChatSavedInputNavigation(input: ChatViewInput) {
   const pendingInputs = () => input.frame.pendingInputs;
   const pendingButton = (page: "earlier" | "latest") => (
     <button
@@ -121,23 +126,30 @@ function ChatFooterContent(
     </button>
   );
   return (
+    <div class="chat-pending-inputs chat-pending-inputs--history">
+      <Show when={pendingInputs()?.page.nextBefore !== undefined}>{pendingButton("earlier")}</Show>
+      <Show when={pendingInputs()?.before !== undefined}>{pendingButton("latest")}</Show>
+    </div>
+  );
+}
+
+function ChatFooterContent(
+  input: ChatViewInput & {
+    mobileComposition?: boolean;
+    activities?: ChatActivityPillsProps;
+  },
+) {
+  const swarm = createMemo(() => {
+    const progress = input.props.swarm;
+    return progress && resolveChatSwarmParent(progress)?.swarm?.groups.length
+      ? progress
+      : undefined;
+  });
+  return (
     <>
-      <Show
-        when={
-          pendingInputs() &&
-          (pendingInputs()?.error ||
-            pendingInputs()?.page.nextBefore !== undefined ||
-            pendingInputs()?.before !== undefined)
-        }
-      >
+      <Show when={input.frame.pendingInputs?.error}>
         <div class="chat-pending-inputs" role="status">
-          <Show when={pendingInputs()?.error}>
-            <span>{pendingInputs()?.error}</span>
-          </Show>
-          <Show when={pendingInputs()?.page.nextBefore !== undefined}>
-            {pendingButton("earlier")}
-          </Show>
-          <Show when={pendingInputs()?.before !== undefined}>{pendingButton("latest")}</Show>
+          {input.frame.pendingInputs?.error}
         </div>
       </Show>
       <Show
