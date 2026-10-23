@@ -113,6 +113,9 @@ without inspecting the pathname again. Observer reads rely on that same admitted
 reader instead of capturing and rechecking every candidate file independently.
 Committed writes still invalidate retained entries; config routing, native-open
 replacement detection, and live disclosure authority remain with their owners.
+Session row projections borrow the replica's immutable nested entry facts while
+owning their mutable outer rows. Commit receipts carry pending final delivery in
+the canonical entry postimage, without a second copy.
 
 Session file reads retain workspace authority independently of evictable display
 rows. Committed writers carry their existing full postimages to predicates that
@@ -204,7 +207,10 @@ are the limited exceptions. Runtime access still using them is migration debt.
 For engine stores, the synchronous `withEngineStoreAdmission` scope is lexical:
 it cannot return a Promise, and a retained connection does not extend it.
 PostgreSQL rejects construction and SQL on the Gateway main thread outside that
-scope. The CLI entry records an immutable process role before state access;
+scope. Native lease verification, renewal, and release use this scope only for their
+storage primitive. Lifecycle callbacks remain outside it, and ownership checks
+still read the current owner and expiry before permitting an effect.
+The CLI entry records an immutable process role before state access;
 one-shot CLI and Doctor processes may use the synchronous PostgreSQL bridge.
 An unset role still refuses main-thread access. Interactive onboarding and
 `setup` (including `crestodian`) keep the CLI role through their prompts and

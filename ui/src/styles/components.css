@@ -4057,7 +4057,8 @@ td.data-table-key-col {
   font-size: 13px;
 }
 
-.device-pair-setup__get-apps button {
+.device-pair-setup__get-apps button,
+.apps-pair-hint button {
   padding: 0;
   border: 0;
   background: none;
@@ -4068,11 +4069,13 @@ td.data-table-key-col {
   text-underline-offset: 2px;
 }
 
-.device-pair-setup__get-apps button:hover {
+.device-pair-setup__get-apps button:hover,
+.apps-pair-hint button:hover {
   color: var(--text-strong);
 }
 
-.device-pair-setup__get-apps button:focus-visible {
+.device-pair-setup__get-apps button:focus-visible,
+.apps-pair-hint button:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
   border-radius: 4px;

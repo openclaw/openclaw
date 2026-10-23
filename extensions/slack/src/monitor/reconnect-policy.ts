@@ -4,6 +4,14 @@ import { formatSlackError } from "../errors.js";
 const SLACK_AUTH_ERROR_RE =
   /account_inactive|invalid_auth|token_revoked|token_expired|not_authed|org_login_required|team_access_not_granted|user_removed_from_team|team_disabled|missing_scope|cannot_find_service|invalid_token/i;
 
+// Slack can emit an isolated invalid_auth while the credentials still pass
+// auth.test, so only the remainder proves a dead credential or account.
+const SLACK_DEFINITIVE_AUTH_ERROR_RE =
+  /account_inactive|token_revoked|token_expired|not_authed|org_login_required|team_access_not_granted|user_removed_from_team|team_disabled|missing_scope|cannot_find_service|invalid_token/i;
+
+/** Consecutive isolated invalid_auth failures before the channel turns terminal. */
+export const SLACK_ISOLATED_INVALID_AUTH_TERMINAL_LIMIT = 3;
+
 export const SLACK_SOCKET_RECONNECT_POLICY = {
   initialMs: 2_000,
   maxMs: 30_000,
@@ -118,4 +126,27 @@ export function waitForSlackSocketDisconnect(
  */
 export function isNonRecoverableSlackAuthError(error: unknown): boolean {
   return SLACK_AUTH_ERROR_RE.test(formatSlackError(error, ""));
+}
+
+/** Terminal, retryable-isolated, or undefined (not auth-shaped) for this failure. */
+export function nextSlackAuthFailureState(
+  error: unknown,
+  consecutiveInvalidAuth: number,
+): { decision: "terminal" | "retry-isolated" | undefined; consecutiveInvalidAuth: number } {
+  if (error && isIsolatedInvalidAuthSlackError(error)) {
+    const next = consecutiveInvalidAuth + 1;
+    return next >= SLACK_ISOLATED_INVALID_AUTH_TERMINAL_LIMIT
+      ? { decision: "terminal", consecutiveInvalidAuth: next }
+      : { decision: "retry-isolated", consecutiveInvalidAuth: next };
+  }
+  return {
+    decision: error && isNonRecoverableSlackAuthError(error) ? "terminal" : undefined,
+    consecutiveInvalidAuth,
+  };
+}
+
+/** Isolated invalid_auth: auth-shaped, but not a definitive credential verdict. */
+export function isIsolatedInvalidAuthSlackError(error: unknown): boolean {
+  const text = formatSlackError(error, "");
+  return /invalid_auth/i.test(text) && !SLACK_DEFINITIVE_AUTH_ERROR_RE.test(text);
 }

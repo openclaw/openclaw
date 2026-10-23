@@ -1,4 +1,4 @@
-import { For, Show, createSignal, createStore, createUniqueId, onCleanup } from "solid-js";
+import { For, Show, createSignal, createStore, createUniqueId, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -95,12 +95,16 @@ function SourceCard(props: {
 }
 
 export function ChatSourcePreviews(props: SourcePreviewsProps) {
+  const [ready, setReady] = createSignal(false);
   const [revision, setRevision] = createSignal(0);
   const [failedFavicons, setFailedFavicons] = createStore<Record<string, boolean>>({});
-  let active = true;
-  // Favicon callbacks register during render, so disposal can precede the first settlement.
-  onCleanup(() => {
-    active = false;
+  let active = false;
+  onSettled(() => {
+    active = true;
+    setReady(true);
+    return () => {
+      active = false;
+    };
   });
   const refreshFavicons = () => {
     if (active) {
@@ -108,6 +112,9 @@ export function ChatSourcePreviews(props: SourcePreviewsProps) {
     }
   };
   const favicon = (source: ChatSourcePreview) => {
+    if (!ready()) {
+      return null;
+    }
     revision();
     const url = props.fetchFavicon
       ? readLinkFavicon(new URL(source.url).hostname, props.fetchFavicon, refreshFavicons)

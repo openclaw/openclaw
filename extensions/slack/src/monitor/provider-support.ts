@@ -9,7 +9,7 @@ import { formatSlackError } from "../errors.js";
 import type { SlackChannelResolution } from "../resolve-channels.js";
 import type { SlackUserResolution } from "../resolve-users.js";
 import type { SlackIdentityHealth } from "./enterprise-install.js";
-import { waitForSlackSocketDisconnect } from "./reconnect-policy.js";
+import { nextSlackAuthFailureState, waitForSlackSocketDisconnect } from "./reconnect-policy.js";
 import { installSlackSocketModeEnvelopeGuard } from "./socket-mode-envelope.js";
 
 type SlackAppConstructor = typeof import("@slack/bolt").App;
@@ -176,6 +176,23 @@ export function publishSlackConnectedStatus(
       ? channelBlockedPatch(identityHealth.lastError, { connected: true, lastConnectedAt })
       : channelReadyPatch({ lastConnectedAt }),
   );
+}
+
+export function trackSlackAuthFailure(
+  failure: unknown,
+  phase: string,
+  setStatus: ((next: Record<string, unknown>) => void) | undefined,
+  logError: (message: string) => void,
+  state: { consecutiveInvalidAuth: number },
+): void {
+  const auth = nextSlackAuthFailureState(failure, state.consecutiveInvalidAuth);
+  state.consecutiveInvalidAuth = auth.consecutiveInvalidAuth;
+  if (auth.decision !== "terminal") {
+    return;
+  }
+  publishSlackBlockedStatus(setStatus, failure);
+  logError(`slack ${phase} (${formatSlackError(failure)})`);
+  throw failure instanceof Error ? failure : new Error(formatSlackError(failure));
 }
 
 export function publishSlackBlockedStatus(

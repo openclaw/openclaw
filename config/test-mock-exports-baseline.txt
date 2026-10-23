@@ -5268,7 +5268,6 @@
 ["src/gateway/server-methods/models-auth-status.test.ts","../../plugins/provider-runtime.js","bc06cb809b9254969a831be6c6021bc90fc0f201f2e70f011919709fbc095b2a",1]
 ["src/gateway/server-methods/models-auth-status.test.ts","../../secrets/runtime.js","c19f3e35ce619cfc6e2927f2e4a661ed52f53644959ee694f36b725a294a9f12",1]
 ["src/gateway/server-methods/models-auth-status.test.ts","../server-model-catalog-auth.js","0941d654d4918cb53b9b5598f9841433de78c4ecba5ede233f198107d9b5b59b",1]
-["src/gateway/server-methods/models-probe.test.ts","../../agents/agent-scope.js","e37abb1552ee99ce1b9c4e6d56d2bef936973304fa1da54cd5e74d9ca1c43436",1]
 ["src/gateway/server-methods/models.test.ts","../../plugins/provider-thinking.js","abe7f8b9821360ad20b852ba42050fd945b8348f6f6fbbf0d2e1db2b50e0ae11",1]
 ["src/gateway/server-methods/nodes.apns-registration.test.ts","../../infra/device-pairing-node-state.js","660ee3ac9d77a46230ee5a9b23585fa199d3aefc2e5b2f5c7f0b9a8eaea3f399",1]
 ["src/gateway/server-methods/nodes.apns-registration.test.ts","../server-node-events.js","fbdd7a7cf5896c8cba2f3b141475eb160072a6377d012ba0587bb7aef22a509d",1]

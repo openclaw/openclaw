@@ -2426,6 +2426,32 @@ html[dir="rtl"] .chat-attachment-loading > span {
   overscroll-behavior: none;
 }
 
+/* Group/list hosts keep their accessible structure; one window owns row geometry. */
+.chat-controls__model-options[data-chat-model-window] {
+  display: block;
+}
+
+.chat-controls__model-virtual-content {
+  flex: none;
+  position: relative;
+  width: 100%;
+}
+
+.chat-controls__model-virtual-content .chat-controls__provider-model-group,
+.chat-controls__model-virtual-content .chat-controls__provider-model-list {
+  display: contents;
+}
+
+.chat-controls__model-virtual-row {
+  position: absolute;
+  inset: 0 0 auto;
+  padding-bottom: 2px;
+}
+
+.chat-controls__model-virtual-row .chat-controls__model-option {
+  content-visibility: visible;
+}
+
 .chat-controls__provider-model-group,
 .chat-controls__provider-model-list {
   display: grid;

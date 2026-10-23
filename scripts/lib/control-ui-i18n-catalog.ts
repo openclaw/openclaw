@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { buildBaseHints } from "../../src/config/schema.hints.js";
 import { PUBLIC_SESSION_COPY } from "../../src/shared/public-session-copy.ts";
 import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
+import { registerAboutEnglish } from "../../ui/src/i18n/locales/en-about.ts";
 import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.ts";
 import { registerAgentCreationEnglish } from "../../ui/src/i18n/locales/en-agent-creation.ts";
 import { registerAgentsHomeEnglish } from "../../ui/src/i18n/locales/en-agents-home.ts";
@@ -25,6 +26,7 @@ import { registerClawsEnglish } from "../../ui/src/i18n/locales/en-claws.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
 import { registerCronEnglish } from "../../ui/src/i18n/locales/en-cron.ts";
+import { registerDashboardsEnglish } from "../../ui/src/i18n/locales/en-dashboards.ts";
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
 import { registerDesktopEnglish } from "../../ui/src/i18n/locales/en-desktop.ts";
 import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts";
@@ -82,6 +84,8 @@ const localesDir = path.resolve(
 const sourceFiles = [
   "en.ts",
   "en-agents.ts",
+  "en-about.ts",
+  "en-dashboards.ts",
   "en-agent-creation.ts",
   "en-activity.ts",
   "en-agents-home.ts",
@@ -230,6 +234,8 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     // Preserve partial-fragment key order while keeping shared labels eager.
     {
       ...en,
+      aboutPage: registerAboutEnglish.catalog.aboutPage,
+      dashboardsPage: registerDashboardsEnglish.catalog.dashboardsPage,
       agentChip,
       secretsStore: registerSecretsStoreEnglish.catalog.secretsStore,
       custodian: {

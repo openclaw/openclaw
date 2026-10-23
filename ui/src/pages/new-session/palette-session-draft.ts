@@ -142,7 +142,6 @@ export class PaletteSessionDraft {
     const submission = this.draft?.submission;
     return (
       submission?.error ??
-      submission?.blockedSubmitNotice() ??
       (submission?.submissionOutcomeUnknown ? submission.submitDisabledReason() : null) ??
       (this.preferences.failed ? t("commandPalette.settingsSaveFailed") : null)
     );
@@ -382,7 +381,7 @@ export class PaletteSessionDraft {
     }
     this.preferences.synchronize();
     draft.synchronizeSelections();
-    draft.submission.resumeInterruptedSubmission();
+    draft.submission.synchronizeSubmission();
     const attachmentDraft = draft.submission.attachmentDraft;
     const pending = this.coldSubmit;
     if (
