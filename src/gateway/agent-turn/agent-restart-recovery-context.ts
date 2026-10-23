@@ -49,14 +49,10 @@ export function resolveAgentRestartRecoveryContext(params: {
   ) {
     return undefined;
   }
-  if (
-    params.isRestartRecoveryResumeRun &&
-    entry.restartRecoverySourceMessageChannel !== undefined &&
-    entry.restartRecoverySourceMessageChannel !== INTERNAL_MESSAGE_CHANNEL
-  ) {
-    return entry.restartRecoverySourceMessageChannel === null
-      ? undefined
-      : { messageChannel: entry.restartRecoverySourceMessageChannel };
+  // A channel-less agent RPC turn resumes channel-less; recorded channels keep the
+  // ingress-specific restoration below, including channel delivery authority.
+  if (params.isRestartRecoveryResumeRun && entry.restartRecoverySourceMessageChannel === null) {
+    return undefined;
   }
   if (params.isRestartRecoveryResumeRun && entry.restartRecoverySourceIngress === "control-ui") {
     return { messageChannel: INTERNAL_MESSAGE_CHANNEL, pinnedWidgetAuthoring: true };
