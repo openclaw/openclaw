@@ -7,7 +7,7 @@ it.each([
   ["publication", false, () => import("../pages/chat/components/chat-github-publication.tsx")],
   ["PR content", false, () => import("../pages/chat/components/chat-pull-requests-content.tsx")],
   ["connections", true, () => import("../features/github-connections/github-connections.tsx")],
-  ["CI details", false, () => import("../pages/chat/components/chat-ci-details.ts")],
+  ["CI details", false, () => import("../pages/chat/components/chat-ci-details.tsx")],
   ["session hovercard", false, () => import("../components/session-hovercard-solid.tsx")],
   ["identity", true, () => import("../features/github-connections/github-identity-view.tsx")],
   ["identity controller", true, () => import("../features/github-connections/github-identity.ts")],
