@@ -61,7 +61,7 @@ beforeEach(() => {
     sqliteVersion: "3.50.2",
     nodeSharedSqlite: false,
   });
-  mockCliRuntime("26.8.1");
+  mockCliRuntime("26.12.1");
 });
 
 afterEach(() => {
@@ -151,16 +151,14 @@ describe("Node runtime diagnostics command surfaces", () => {
     ]);
   });
 
-  it("renders an admitted out-of-table service runtime as information", async () => {
+  it("renders a below-floor service runtime as unsupported without an informational note", async () => {
     mocks.readCommand.mockResolvedValue({ programArguments: ["/fixture/node", "gateway"] });
-    mocks.resolveNodeRuntimeInfo.mockResolvedValue({
-      status: "supported",
-      version: "24.15.0",
-      note: "Node 24.15.0: unsupported version, capability check passed.",
-    });
+    mocks.resolveNodeRuntimeInfo.mockResolvedValue({ status: "unsupported", version: "24.22.0" });
     await statusCommand({ json: true }, runtime);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("[info] Node 24.15.0:"));
-    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("[warning]"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service Node 24.22.0 is unsupported."),
+    );
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("[info]"));
     expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("undefined"));
   });
 

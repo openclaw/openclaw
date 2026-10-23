@@ -110,7 +110,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Verify trusted release tooling identity
@@ -335,7 +335,7 @@ jobs:
       - name: Setup trusted Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -648,7 +648,7 @@ jobs:
       - name: Setup trusted Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -736,7 +736,7 @@ jobs:
       - name: Setup trusted Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1146,7 +1146,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Publish immutable bundles, canonical Linux channel, and legacy mirror

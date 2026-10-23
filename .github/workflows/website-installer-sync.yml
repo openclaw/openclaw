@@ -302,6 +302,8 @@ jobs:
           OPENCLAW_NO_PROMPT: "1"
         run: |
           bash dist/installers/install.sh --no-onboard --no-prompt --version latest
+          source "$HOME/.bashrc"
+          hash -r
           openclaw --version
 
   windows-installer:

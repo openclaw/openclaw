@@ -150,6 +150,7 @@ describe("full-release-validation-at-sha", () => {
     );
     expect(() => parseArgs(["-f", "rerun_group=qa"])).toThrow("rerun_group must be one of");
     expect(parseArgs(["-f", "rerun_group=qa-parity"]).inputs.rerun_group).toBe("qa-parity");
+    expect(parseArgs(["-f", "rerun_group=windows-node"]).inputs.rerun_group).toBe("windows-node");
   });
 
   it("infers the release profile from the target package version", () => {
