@@ -397,7 +397,7 @@ describe("new-session composer keyboard submission", () => {
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
-  it("renders a reasoned submit block as an attached notice and keeps Start explanatory", () => {
+  it("renders a reasoned submit block as an attached notice and disables Start", () => {
     const onSubmit = vi.fn();
     const { composer } = renderComposer({
       canSubmit: false,
@@ -416,10 +416,10 @@ describe("new-session composer keyboard submission", () => {
     expect(notice?.textContent?.trim()).toBe("Restoring your last session setup…");
     expect(input?.contains(notice ?? null)).toBe(false);
     expect(notice?.querySelector("svg")).not.toBeNull();
-    expect(start?.disabled).toBe(false);
+    expect(start?.disabled).toBe(true);
     expect(start?.getAttribute("aria-disabled")).toBe("true");
     start?.click();
-    expect(onSubmit).toHaveBeenCalledOnce();
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("previews dictation in a locked draft and reserves the primary slot for Send", () => {

@@ -191,8 +191,7 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
       event.preventDefault();
       return;
     }
-    // A reasoned gate still consumes the press: the submission flow records the
-    // attempt and surfaces the reason instead of silently inserting a newline.
+    // A reasoned gate still consumes the press while its explanation is visible.
     // Only silent gates (busy button, empty draft) keep Enter native.
     if (options.canSubmit || options.submitDisabledReason !== undefined) {
       event.preventDefault();
@@ -337,8 +336,6 @@ function StartControl(props: { options: NewSessionComposerOptions }) {
     props.options.submitting
       ? t("newSession.starting")
       : t(props.options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
-  const reasonedBlock = () =>
-    !props.options.canSubmit && props.options.submitDisabledReason !== undefined;
   const busy = () =>
     props.options.submitting || props.options.attachmentDraft.reads.pendingReads > 0;
   return (
@@ -348,11 +345,10 @@ function StartControl(props: { options: NewSessionComposerOptions }) {
         class={[
           "chat-send-btn new-session-page__start-submit",
           {
-            "new-session-page__start-submit--blocked": reasonedBlock(),
             "new-session-page__start-submit--busy": busy(),
           },
         ]}
-        disabled={!props.options.canSubmit && !reasonedBlock()}
+        disabled={!props.options.canSubmit}
         aria-disabled={props.options.canSubmit ? "false" : "true"}
         aria-busy={busy() ? "true" : "false"}
         aria-label={label()}

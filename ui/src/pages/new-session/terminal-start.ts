@@ -37,7 +37,6 @@ export async function submitDraftInTerminal(options: {
   flow: {
     readonly message: string;
     canSubmit(): boolean;
-    noteBlockedSubmitAttempt(): void;
     setError(message: string): void;
   };
   closeTransientUi: () => void;
@@ -54,7 +53,6 @@ export async function submitDraftInTerminal(options: {
   const catalogId = data?.catalogId.trim() ?? "";
   const agentId = normalizeAgentId(place.agentId);
   if (!context || !client || !catalogId || !agentId || !flow.canSubmit()) {
-    flow.noteBlockedSubmitAttempt();
     return;
   }
   const submission = options.capture(client);

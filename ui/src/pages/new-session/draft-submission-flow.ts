@@ -75,7 +75,6 @@ export class DraftSubmissionFlow {
     phase: "creating" | "accepted";
     message: ReturnType<typeof buildLocalUserMessage>;
   } | null = null;
-  private blockedSubmitGate: string | null = null;
   private rejectedPromptError: string | null = null;
   submissionOutcomeUnknown: SubmissionOutcomeReason | null = null;
   private readonly startedSession = new StartedSessionNavigation();
@@ -259,18 +258,10 @@ export class DraftSubmissionFlow {
     this.callbacks.changed();
   }
 
-  /** A submit was attempted (Enter or Start click) while a gate blocked it. */
-  noteBlockedSubmitAttempt() {
-    this.blockedSubmitGate = this.submitBlock()?.gate ?? null;
-    this.callbacks.changed();
-  }
-
-  /** Attempt-bound reason that retires when its transient gate lifts. */
+  /** Explain unavailable submission before the user tries Enter or Start. */
   blockedSubmitNotice(): string | undefined {
-    const block = this.blockedSubmitGate ? this.submitBlock() : undefined;
-    return block?.gate === this.blockedSubmitGate && !PAGE_RENDERED_GATES.has(block.gate)
-      ? block.reason
-      : undefined;
+    const block = this.submitBlock();
+    return block && !PAGE_RENDERED_GATES.has(block.gate) ? block.reason : undefined;
   }
 
   private buildDraftSessionCreateParams = (options: DraftSessionCreateOverrides = {}) =>
@@ -362,7 +353,6 @@ export class DraftSubmissionFlow {
     this.rejectedPromptError = null;
     this.sessionStartup.clear();
     const preservePendingPlacement = Boolean(this.pendingPlacement.sessionKey);
-    this.blockedSubmitGate = null;
     this.invalidate();
     this.submissionOutcomeUnknown = preservePendingPlacement
       ? (this.submissionOutcomeUnknown ?? "placement-interrupted")
@@ -412,7 +402,6 @@ export class DraftSubmissionFlow {
       startup?.background ?? (backgroundRequested && this.visibilityValue !== "draft");
     const context = this.read().context;
     if (!context || (!startup && !this.canSubmit())) {
-      this.noteBlockedSubmitAttempt();
       return;
     }
     if (
@@ -425,7 +414,6 @@ export class DraftSubmissionFlow {
       this.callbacks.changed();
       return;
     }
-    this.blockedSubmitGate = null;
     const input = prepareDraftSubmission(context, this, this.place, startup, background);
     if (!input) {
       return;
@@ -697,7 +685,6 @@ export class DraftSubmissionFlow {
       flow: this,
       closeTransientUi: this.callbacks.closeTransientUi,
       capture: (client) => {
-        this.blockedSubmitGate = null;
         this.error = null;
         const requestSignal = this.captureSubmitRequest();
         const submitted = this.draftPersistence.captureSubmission();

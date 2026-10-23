@@ -7,7 +7,6 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
-import { renderControl } from "./model-control.test-support.ts";
 import { replaceBrowserPreference } from "./preferences.ts";
 
 // Keep the intentional silent gates in sync with submit-gates.ts.
@@ -277,13 +276,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       });
       const modelControl = place.modelControl;
       modelControl.load(context, "main", true, { agent: place.selectedAgent() });
-      await vi.waitFor(() =>
-        expect(
-          renderControl(modelControl, context, "main", place.selectedAgent()).querySelectorAll(
-            "[data-chat-model-option]",
-          ),
-        ).toHaveLength(1),
-      );
+      await modelControl.metadataRead;
       expectGate(flow, message ? "model-unavailable" : undefined, message);
     },
   );
@@ -410,7 +403,7 @@ describe("DraftSubmissionFlow submit gates", () => {
 
       expect(flow.canSubmit()).toBe(false);
       expect(flow.submitDisabledReason()).toBeTruthy();
-      expect(flow.blockedSubmitNotice()).toBeUndefined();
+      expect(flow.blockedSubmitNotice()).toBe(flow.submitDisabledReason());
 
       await flow.submit();
       expect(context.sessions.createResult).not.toHaveBeenCalled();
