@@ -397,6 +397,10 @@ async function drainStoredChatOutbox(
     const pendingOptions = lane.pendingOptions.get(item.id);
     const retryUnconfirmed = freshAdmission && item.sendState === "unconfirmed";
     if (!freshAdmission || retryUnconfirmed || !visible) {
+      // Consume before await so passive reruns stay cheap and a new foreground
+      // request arriving during reconciliation retains its own wake.
+      const reconcileActiveRun = lane.reconcileActiveRun;
+      lane.reconcileActiveRun = false;
       // History reconciles canonical stored versions, not the live row's transport alias.
       const reconciled = await reconcileStoredChatOutboxHead(
         host,
@@ -405,7 +409,7 @@ async function drainStoredChatOutbox(
         dependencies,
         accepted,
         retryUnconfirmed,
-        lane.reconcileActiveRun,
+        reconcileActiveRun,
       );
       if (reconciled === "blocked") {
         return;
