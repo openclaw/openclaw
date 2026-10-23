@@ -1,13 +1,4 @@
-import {
-  createMemo,
-  createSignal,
-  For,
-  isPending,
-  latest,
-  Loading,
-  mapArray,
-  Show,
-} from "solid-js";
+import { createMemo, createSignal, isPending, latest, Loading, mapArray, Show } from "solid-js";
 import { PersonAvatarLink, PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -21,6 +12,7 @@ import {
   VISIBILITY_LABEL_KEYS,
   ChatSessionSharingModeIcon,
   ChatSessionSharingError,
+  ChatSessionSharingMemberSkeleton,
   createChatSessionSharingPresentation,
 } from "./chat-session-sharing-shared.tsx";
 
@@ -322,26 +314,7 @@ export function useChatSessionSharingMenu(
     },
     render: (renderItems) => (
       <Show when={props.membersAvailable !== false}>
-        <Loading
-          on={scope()}
-          fallback={
-            <div
-              class="chat-pane__sharing-members-loading"
-              role="status"
-              aria-busy="true"
-              aria-label={t("common.loading")}
-            >
-              <For each={[0, 1, 2]}>
-                {() => (
-                  <div class="chat-pane__sharing-member-skeleton" aria-hidden="true">
-                    <span class="skeleton chat-pane__sharing-member-skeleton-icon" />
-                    <span class="skeleton chat-pane__sharing-member-skeleton-label" />
-                  </div>
-                )}
-              </For>
-            </div>
-          }
-        >
+        <Loading on={scope()} fallback={<ChatSessionSharingMemberSkeleton />}>
           {(latest(presentation.read), null)}
           <div aria-busy={isPending(presentation.read) || busy() ? "true" : "false"}>
             {renderItems(() => memberItems()())}

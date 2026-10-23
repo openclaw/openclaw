@@ -5,6 +5,7 @@ import {
   createOptimistic,
   createSignal,
   Errored,
+  For,
   onSettled,
   Show,
 } from "solid-js";
@@ -288,6 +289,27 @@ export function ChatSessionSharingModeIcon(props: {
                 : "messageSquare"
       }
     />
+  );
+}
+
+/** Member-shaped placeholders; their styles delay the reveal so warm reads never flash them. */
+export function ChatSessionSharingMemberSkeleton() {
+  return (
+    <div
+      class="chat-pane__sharing-members-loading"
+      role="status"
+      aria-busy="true"
+      aria-label={t("common.loading")}
+    >
+      <For each={[0, 1, 2]}>
+        {() => (
+          <div class="chat-pane__sharing-member-skeleton" aria-hidden="true">
+            <span class="skeleton chat-pane__sharing-member-skeleton-icon" />
+            <span class="skeleton chat-pane__sharing-member-skeleton-label" />
+          </div>
+        )}
+      </For>
+    </div>
   );
 }
 

@@ -653,6 +653,12 @@
   font-size: 12px;
 }
 
+/* Warm member reads settle before the reveal, and unmounting the rows cancels
+   it. The status container stays visible so its busy label is announced at once. */
+.chat-pane__sharing-member-skeleton {
+  animation: chat-skeleton-reveal 150ms ease-out 150ms backwards;
+}
+
 .chat-pane__sharing-member-skeleton-icon {
   width: 20px;
   height: 20px;
@@ -1127,6 +1133,13 @@
   font-size: 12px;
   text-align: start;
   cursor: default;
+}
+
+/* Placeholder rows take the roster's row box so members replace them in place. */
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-member-skeleton {
+  min-height: 32px;
+  gap: 8px;
+  padding: 4px 8px;
 }
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-person:hover:not(:disabled) {

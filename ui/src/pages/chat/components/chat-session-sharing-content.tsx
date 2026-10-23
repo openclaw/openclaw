@@ -15,7 +15,6 @@ import { PersonAvatarLink, PersonName } from "../../../components/person-activit
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuControls, MenuEntry, MenuHandle } from "../../../components/solid/menu.tsx";
-import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
@@ -28,6 +27,7 @@ import {
   createChatSessionSharingPresentation,
   ChatSessionSharingModeIcon,
   ChatSessionSharingError,
+  ChatSessionSharingMemberSkeleton,
   projectChatSessionSharingRoster,
   chatSessionMembershipLabel,
 } from "./chat-session-sharing-shared.tsx";
@@ -382,7 +382,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
             on={presentation.scope()}
             fallback={
               <div class="chat-pane__sharing-roster">
-                <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+                <ChatSessionSharingMemberSkeleton />
               </div>
             }
           >
