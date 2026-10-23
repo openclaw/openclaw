@@ -99,7 +99,7 @@ export function readSelectedSessionEntriesInDatabase(
     // Older readers have no dirty set and retain their full validation inventory.
     const selectedQuery = query.select((eb) =>
       (options.transcriptSessionIds === undefined
-        ? eb.val(false)
+        ? eb.val(0)
         : eb("session_key", "in", selected)
       ).as("transcript_selected"),
     );
