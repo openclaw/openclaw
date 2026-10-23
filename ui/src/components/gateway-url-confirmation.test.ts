@@ -10,7 +10,7 @@ const modalModule = vi.hoisted(() => ({
   first: Promise.withResolvers<void>(),
   second: Promise.withResolvers<void>(),
   recovery: Promise.withResolvers<void>(),
-  canReload: () => false,
+  canReload: (): boolean => false,
 }));
 
 // Keep the production renderer; hold and reject its actual cold-import boundary.
