@@ -7142,7 +7142,6 @@
 ["ui/src/pages/agents/memory/memory-panel.test.ts","../../../components/confirm-dialog.ts","29010d4b48ecb6a8932036adcb5c2d910c9c76c242c0124481a10ac96470b5e9",1]
 ["ui/src/pages/chat/attachment-video-poster-loading.test.ts","../../lib/media/video-poster.ts","77f6c2857e4f2dcc886b8d079014eb189fc41c3d5870c959e21155dcdf113943",1]
 ["ui/src/pages/chat/attachment-video-poster-loading.test.ts","../../lib/media/video-poster.ts","77f6c2857e4f2dcc886b8d079014eb189fc41c3d5870c959e21155dcdf113943",2]
-["ui/src/pages/chat/chat-outbox-recovery.test.ts","../../lib/chat/composer-draft-store.runtime.ts","3aa9cd60d73dcb6ffb1f9b8d5fdcf7fa1d8db378758df94bab1e86c947c0f0fb",1]
 ["ui/src/pages/chat/chat-page-attachment-handoff.test.ts","../../app/native-gateways.runtime.ts","485bc70dee7d53727254b47472b22e54d8c3ae4a563e7e9407443a4af6fb7dff",1]
 ["ui/src/pages/chat/chat-page-close-route.test.ts","../../app/native-gateways.runtime.ts","485bc70dee7d53727254b47472b22e54d8c3ae4a563e7e9407443a4af6fb7dff",1]
 ["ui/src/pages/chat/chat-page-retained-sessions.test.ts","../../app/native-gateways.runtime.ts","485bc70dee7d53727254b47472b22e54d8c3ae4a563e7e9407443a4af6fb7dff",1]

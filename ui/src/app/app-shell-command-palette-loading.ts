@@ -10,7 +10,6 @@ import {
 } from "../components/command-palette-contract.ts";
 import type { OpenClawModalDialog } from "../components/modal-dialog.tsx";
 import { keepMobileReturnNative } from "../lib/browser-platform.ts";
-import { formatUiError } from "../lib/format-error.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -20,25 +19,18 @@ import { uploadsEnabled, uploadsDisabledMessage } from "../lib/uploads.ts";
 import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ApplicationContext } from "./context.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
-import {
-  ensureCustomElementDefined,
-  type LazyCustomElementRequests,
-  type OptionalCustomElement,
-} from "./lazy-custom-element.ts";
 import { lazyShellEvent, type LazyShellEvent } from "./lazy-shell-action.ts";
 
 type CommandPaletteShellHost = {
   readonly context?: Pick<ApplicationContext, "gateway"> &
     Partial<Pick<ApplicationContext, "config">>;
   readonly elements: { commandPalette?: CommandPaletteElement };
-  readonly commandPaletteElement: OptionalCustomElement;
   readonly commandPaletteTarget?: CommandPaletteTargetDetail;
   readonly shellNavigation: Pick<ShellNavigationCapability, "chatNavigationOptions" | "navigate">;
-  readonly lazyCustomElements: LazyCustomElementRequests;
 };
 
 type CommandPaletteShellActions = {
-  request(element: OptionalCustomElement, event: LazyShellEvent, replay?: () => void): void;
+  request(event: LazyShellEvent): void;
   clear(event: LazyShellEvent): void;
   cancel(): void;
   pending(): boolean;
@@ -83,12 +75,11 @@ export class ShellCommandPaletteOwner {
       return;
     }
     this.loading.begin();
-    this.#actions.request(this.#host.commandPaletteElement, descriptor, this.open);
+    this.#actions.request(descriptor);
   };
 
   closePending(): void {
     this.#actions.cancel();
-    this.#host.lazyCustomElements.abandon();
   }
 
   synchronizeScope(): void {
@@ -102,10 +93,7 @@ export class ShellCommandPaletteOwner {
   }
 
   toggle(): void {
-    if (
-      this.loading.active() ||
-      this.#host.lazyCustomElements.visibleState?.element === this.#host.commandPaletteElement
-    ) {
+    if (this.loading.active() || this.#actions.pending()) {
       this.closePending();
     } else if (this.loading.hasAttachments()) {
       this.open();
@@ -154,9 +142,8 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
     draft?: CommandPaletteInputSnapshot;
     returnFocus?: HTMLElement | null;
     submitRequested: boolean;
-    defined: boolean;
   };
-  let current: Presentation = { submitRequested: false, defined: false };
+  let current: Presentation = { submitRequested: false };
   // Reentrant shell events can publish during a rendering computation.
   const [read, write] = createSignal(current, { ownedWrite: true });
   // Imperative custody reads the same receipt before Solid commits its publication.
@@ -186,7 +173,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
     }
   }
   function reset() {
-    current = { submitRequested: false, defined: current.defined };
+    current = { submitRequested: false };
     generation += 1;
     handoffPending = false;
     cancelCompositionFrame();
@@ -250,36 +237,16 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       return attachmentFiles.length > 0;
     },
     submitRequested: () => presentation().submitRequested,
-    defined: () => presentation().defined,
     waitingForComposition: () => handoffPending,
     begin(): void {
-      const defined = Boolean(customElements.get("openclaw-modal-dialog"));
       publish({
         ...current,
-        defined,
         returnFocus: active()
           ? current.returnFocus
           : document.activeElement instanceof HTMLElement
             ? document.activeElement
             : null,
       });
-      if (!defined) {
-        void ensureCustomElementDefined(
-          "openclaw-modal-dialog",
-          () => import("../components/modal-dialog.tsx"),
-        ).then(
-          () => {
-            if (active()) {
-              publish({ ...current, defined: true });
-            }
-          },
-          (error: unknown) => {
-            if (active()) {
-              showToast({ message: formatUiError(error) });
-            }
-          },
-        );
-      }
     },
     captureInput(_value?: string, event?: InputEvent): void {
       if (!active() || !input) {
