@@ -418,6 +418,11 @@ const enSettings = {
     key: "Key",
     removeEntry: "Remove entry",
     removeEntryKey: "Remove entry: {key}",
+    renameRejected: "Rename not applied. The original key was kept. {reason}",
+    renameDuplicateKey: "This key is already in use.",
+    renameInvalidKey: "Choose a key that matches this setting's constraints.",
+    renameChangeRejected:
+      "The containing setting did not accept this rename. Review its documentation and constraints before trying another name.",
     renameRedactedBlocked:
       "This entry holds a stored secret. Add the new key with its value, then remove this one.",
     schemaUnavailable: "Schema unavailable.",

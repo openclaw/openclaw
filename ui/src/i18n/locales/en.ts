@@ -923,11 +923,6 @@ export const en: TranslationMap & {
     hideValue: "Hide value",
     revealValue: "Reveal value",
     defaultValue: "Default: {value}",
-    renameRejected: "Rename not applied. The original key was kept. {reason}",
-    renameDuplicateKey: "This key is already in use.",
-    renameInvalidKey: "Choose a key that matches this setting's constraints.",
-    renameChangeRejected:
-      "The containing setting did not accept this rename. Review its documentation and constraints before trying another name.",
     sections: {},
   },
   // Historical namespace from the pre-restructure "quick settings" page; its
