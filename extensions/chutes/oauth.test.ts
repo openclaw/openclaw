@@ -140,6 +140,30 @@ it("uses an IPv6 loopback callback without changing the OAuth redirect URI", asy
   expect((tokenRequest as URLSearchParams).get("redirect_uri")).toBe(redirectUri);
 });
 
+it.each([
+  [true, REDIRECT_URI, "not a URL", "Paste the full redirect URL (must include code + state)."],
+  [true, REDIRECT_URI, `${REDIRECT_URI}?code=code_test`, "Missing 'state' parameter."],
+  [true, REDIRECT_URI, `${REDIRECT_URI}?code=code_test&state=wrong`, "OAuth state mismatch"],
+  [false, "https://127.0.0.1:1456/oauth-callback", "", "redirect URI must be http://"],
+  [false, "http://example.com/oauth-callback", "", "redirect hostname must be loopback"],
+] as const)(
+  "rejects invalid callback before token exchange (%s, %s, %s)",
+  async (manual, redirectUri, input, message) => {
+    const fetchFn = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(
+      loginChutes({
+        app: { clientId: "cid_test", redirectUri, scopes: ["openid"] },
+        manual,
+        onAuth: async () => {},
+        onPrompt: async () => input,
+      }),
+    ).rejects.toThrow(message);
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(waitForLocalOAuthCallbackMock).not.toHaveBeenCalled();
+  },
+);
+
 it("rejects unsafe token lifetimes before storing credentials", async () => {
   const fetchFn = oauthFetch({
     token: new Response(

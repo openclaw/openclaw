@@ -777,7 +777,7 @@ openclaw-pending-session-create {
   text-transform: uppercase;
 }
 
-.chat-history-boundary__action:not(:disabled):hover {
+.chat-history-boundary__action:not([aria-disabled="true"]):hover {
   color: var(--text);
 }
 
@@ -968,16 +968,6 @@ openclaw-pending-session-create {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-}
-
-.context-usage__title,
-.context-usage__section-label {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 1.2;
-  text-transform: uppercase;
 }
 
 .context-usage__context-value {
@@ -2074,13 +2064,6 @@ openclaw-chat-video-player {
 
 .chat-swarm__task-icon--failed {
   color: var(--danger);
-}
-
-.chat-swarm__task-name {
-  overflow: hidden;
-  color: var(--text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .chat-swarm__task-duration {

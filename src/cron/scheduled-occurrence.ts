@@ -18,7 +18,7 @@ export type ScheduledExecutionContext = ScheduledExecutionFacts &
   }>;
 
 /** Run-specific facts an executor supplies when its run is admitted. */
-export type ScheduledOccurrenceRun = {
+type ScheduledOccurrenceRun = {
   cfg: OpenClawConfig;
   agentId: string;
   runId: string;

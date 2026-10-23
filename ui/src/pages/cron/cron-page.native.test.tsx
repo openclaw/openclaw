@@ -95,7 +95,9 @@ it.each([true, false])(
           patch: { enabled: false },
         });
         expect(page.querySelector<HTMLInputElement>(selector)?.checked).toBe(false);
-        expect(page.querySelector<HTMLInputElement>(selector)?.disabled).toBe(true);
+        expect(page.querySelector<HTMLInputElement>(selector)?.getAttribute("aria-disabled")).toBe(
+          "true",
+        );
       });
       // The visual expected value never becomes synchronous domain authority.
       expect(page.cron.cronJobs[0]?.enabled).toBe(true);
@@ -106,7 +108,9 @@ it.each([true, false])(
         update.reject(new Error("Gateway declined the pause"));
       }
       await waitForSolid(() => {
-        expect(page.querySelector<HTMLInputElement>(selector)?.disabled).toBe(false);
+        expect(
+          page.querySelector<HTMLInputElement>(selector)?.getAttribute("aria-disabled"),
+        ).toBeNull();
         expect(page.querySelector<HTMLInputElement>(selector)?.checked).toBe(!accepted);
       });
       expect(page.querySelector('[data-test-id="cron-row-optimistic"]')).toBe(row);
@@ -239,7 +243,9 @@ it.each(["replacement", "reconnect"] as const)(
       await waitForSolid(() => {
         expect(request.mock.calls.some(([method]) => method === "cron.update")).toBe(true);
         expect(page.querySelector<HTMLInputElement>(selector)?.checked).toBe(false);
-        expect(page.querySelector<HTMLInputElement>(selector)?.disabled).toBe(true);
+        expect(page.querySelector<HTMLInputElement>(selector)?.getAttribute("aria-disabled")).toBe(
+          "true",
+        );
       });
       current = true;
       if (transition === "replacement") {
@@ -256,12 +262,16 @@ it.each(["replacement", "reconnect"] as const)(
         expect(page.textContent).toContain("Current Gateway");
         expect(page.cron.cronJobs[0]?.enabled).toBe(true);
         expect(page.querySelector<HTMLInputElement>(selector)?.checked).toBe(true);
-        expect(page.querySelector<HTMLInputElement>(selector)?.disabled).toBe(false);
+        expect(
+          page.querySelector<HTMLInputElement>(selector)?.getAttribute("aria-disabled"),
+        ).toBeNull();
       });
       paused.resolve({ ...initialJob, enabled: false });
       await page.settle();
       expect(page.querySelector<HTMLInputElement>(selector)?.checked).toBe(true);
-      expect(page.querySelector<HTMLInputElement>(selector)?.disabled).toBe(false);
+      expect(
+        page.querySelector<HTMLInputElement>(selector)?.getAttribute("aria-disabled"),
+      ).toBeNull();
     } finally {
       paused.resolve({ ...initialJob, enabled: false });
       page.remove();

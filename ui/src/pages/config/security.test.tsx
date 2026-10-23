@@ -40,8 +40,9 @@ describe("Security", () => {
   it("locks the browser toggle while config is busy", () => {
     const { container } = renderSecurity({}, { configBusy: true });
     expect(
-      expectRowByTitle(container, "Browser enabled").querySelector<HTMLInputElement>("input")
-        ?.disabled,
+      expectRowByTitle(container, "Browser enabled")
+        .querySelector("input")
+        ?.hasAttribute("aria-disabled"),
     ).toBe(true);
   });
 

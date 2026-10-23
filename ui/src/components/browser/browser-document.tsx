@@ -73,13 +73,11 @@ declare global {
   }
 }
 
-if (!customElements.get("openclaw-browser-document")) {
-  defineSolidBridge<{ props: BrowserDocumentProps | null }>(
-    "openclaw-browser-document",
-    (props, host) => {
-      host.style.display = "contents";
-      return <BrowserDocumentContent value={props.props} />;
-    },
-    { properties: { props: { default: null, attribute: false } } },
-  );
-}
+export const BrowserDocument = defineSolidBridge<{ props: BrowserDocumentProps | null }>(
+  "openclaw-browser-document",
+  (props, host) => {
+    host.style.display = "contents";
+    return <BrowserDocumentContent value={props.props} />;
+  },
+  { properties: { props: { default: null, attribute: false } } },
+);

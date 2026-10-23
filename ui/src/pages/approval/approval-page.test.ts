@@ -19,7 +19,7 @@ import {
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import "./approval-page-registration.ts";
+import "./approval-page.tsx";
 
 type TestApprovalPage = HTMLElement & {
   approvalId: string;

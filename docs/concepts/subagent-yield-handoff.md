@@ -208,7 +208,7 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   regardless of its size. A mixed wave delivers only its undelivered results;
   already delivered children are referenced in one short line without their
   payloads. An explicit `sessions_yield` still owes one continuation, using the
-  same rule even when every result was already delivered.
+  same rule even when every result was already delivered, but that continuation may finish silently without missing-answer recovery when no member still needs delivery or restart reconciliation.
   Restart-interrupted children still need reconciliation: their retained partial
   results remain in the continuation even if an earlier result was delivered.
   The unfinished-child roster is independent of result delivery and includes

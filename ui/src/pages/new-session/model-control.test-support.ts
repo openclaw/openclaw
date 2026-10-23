@@ -3,6 +3,7 @@ import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { NewSessionModelControlView } from "./model-control-view.tsx";
@@ -11,6 +12,7 @@ import { NewSessionModelControl } from "./model-control.ts";
 type ViewProps = Parameters<typeof NewSessionModelControlView>[0];
 const views = new WeakMap<NewSessionModelControl, ReturnType<typeof mountSolid<ViewProps>>>();
 const openedPickers = new WeakSet<HTMLDetailsElement>();
+const openedProviders = new WeakSet<HTMLButtonElement>();
 const subscribe =
   <T>(listeners: Set<T>) =>
   (listener: T) => {
@@ -89,6 +91,7 @@ export function renderControl(
     thinkingDefault: "medium",
   },
 ) {
+  installModelPickerLayout();
   const props: ViewProps = {
     control,
     options: { ...(agent ? { agent } : {}), agentId, context, sending: false },
@@ -117,6 +120,19 @@ export function renderControl(
     picker.dispatchEvent(new Event("toggle"));
     flush();
   }
+  // Owner tests choose models across providers; reveal those rows through the real disclosure.
+  for (const toggle of container.querySelectorAll<HTMLButtonElement>(
+    "[data-chat-model-provider-toggle]",
+  )) {
+    if (openedProviders.has(toggle)) {
+      continue;
+    }
+    openedProviders.add(toggle);
+    if (toggle.getAttribute("aria-expanded") === "false") {
+      toggle.click();
+      flush();
+    }
+  }
   return container;
 }
 
@@ -125,5 +141,5 @@ export async function waitForModelControl(...params: Parameters<typeof renderCon
   await waitForSolid(() =>
     expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
   );
-  return container;
+  return renderControl(...params);
 }

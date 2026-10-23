@@ -10,7 +10,7 @@ import {
   withSqliteSessionContextReset,
 } from "./session-accessor.sqlite-deletion.js";
 import type { retainPreparedSessionSharingFacts } from "./session-accessor.sqlite-entry-cache-publication-state.js";
-import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
+import { createSessionIdentityResultPublisher } from "./session-accessor.sqlite-identity.js";
 import { toDatabaseOptions, type ResolvedSqliteScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionMessageCutMutationParams } from "./session-accessor.types.js";
 import { restoreSessionColdTranscript } from "./session-cold-storage.js";
@@ -159,18 +159,7 @@ export async function mutateSessionHistoryInWorker(
           ]);
         }
       },
-      onCommitted(candidate, published, identity) {
-        if (published) {
-          publishCommittedSessionIdentity(
-            resolved.agentId,
-            identity,
-            published.previous,
-            published.current,
-            published.prepared,
-          );
-        }
-        return candidate.result;
-      },
+      onCommitted: createSessionIdentityResultPublisher(resolved),
     };
     if (intent.mode === "fork") {
       return runSessionEntryWorkerOperation<SessionMessageCutCandidate, SessionMessageCutResult>({

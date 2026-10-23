@@ -1,4 +1,5 @@
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { TerminalConnection, TerminalSessionInfo } from "./terminal-connection.ts";
 import { observeTerminalRestoreInput } from "./terminal-panel-session-boot.ts";
@@ -11,6 +12,8 @@ import {
   loadPersistedTerminalSessionIds,
   persistTerminalSessionIds,
 } from "./terminal-session-storage.ts";
+
+registerTerminalEnglish();
 
 type TerminalSessionRecoveryHost = {
   storageScope: () => string;

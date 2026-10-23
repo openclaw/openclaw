@@ -415,7 +415,7 @@ function QuestionPageContent(
   );
 }
 
-defineSolidBridge<QuestionPageProps>(
+export const QuestionPage = defineSolidBridge<QuestionPageProps>(
   "openclaw-question-page",
   (props, host) => QuestionPageContent(props, host),
   {

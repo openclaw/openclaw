@@ -71,6 +71,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "node_modules/markdown-it-emoji/lib/data/full.mjs":
       // Shortcode input owns the catalog; earlier boot captures must not keep it eager.
       return "emoji-runtime";
+    case "ui/src/components/mascot-animator.ts":
+      // Only visible mascots request motion; stale boot captures must not keep it eager.
+      return "mascot-motion-runtime";
     case "ui/src/components/emoji-search-panel.tsx":
     case "ui/src/styles/emoji-search-panel.css":
       return "emoji-search-panel";
@@ -134,9 +137,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
 
   if (
     normalized.endsWith("/ui/src/styles/chat/grouped.css") ||
-    normalized.endsWith("/ui/src/styles/chat/message-layout.css")
+    normalized.endsWith("/ui/src/styles/chat/message-layout.css") ||
+    normalized.endsWith("/ui/src/styles/chat/composer.css") ||
+    normalized.endsWith("/ui/src/styles/chat/composer-surface.css")
   ) {
-    // Both routes load transcript styles; keep them outside the larger shared boot stylesheet.
+    // Both routes load the conversation surface; bound the larger shared boot stylesheet.
     return "chat-transcript-styles";
   }
 
@@ -233,11 +238,16 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 controlUiBootModules[route].filter((id) => id.endsWith(".css")),
               );
               return {
-                name: `control-ui-boot-${route}-styles`,
+                name:
+                  route === "chat"
+                    ? (id: string) =>
+                        controlUiBootManifestKey(id).startsWith("ui/src/pages/chat/")
+                          ? "control-ui-boot-chat-component-styles"
+                          : "control-ui-boot-chat-styles"
+                    : `control-ui-boot-${route}-styles`,
                 test: (id: string) =>
                   !/[?&]inline(?:[=&]|$)/u.test(id) && styles.has(controlUiBootManifestKey(id)),
-                // One stylesheet per measured route set, without per-page JS facades.
-                // Keep it separate from core CSS to preserve its existing size ceiling.
+                // Keep Chat component styles separate to bound the largest stylesheet.
                 priority: 9,
               };
             }),

@@ -1,7 +1,6 @@
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createLazyCustomElementRequests } from "../../app/lazy-custom-element.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
@@ -33,17 +32,6 @@ import { NewSessionDraft } from "./draft.ts";
 import { forgetInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import type { SubmissionPresentation } from "./submission-action.ts";
-
-const attachmentPanelElement = {
-  tagName: "openclaw-chat-detail-panel",
-  get label() {
-    return t("chat.attachments.pastedText");
-  },
-  loadModule: async () => {
-    await import("../../styles/chat/sidebar.css");
-    await import("../chat/components/chat-detail-panel.tsx");
-  },
-};
 
 export type PageHost = SolidBridgeElement<
   { data: NewSessionRouteData | undefined },
@@ -106,7 +94,6 @@ export class NewSessionPageOwner {
     ownerKey: string;
     agentId: string;
   } | null = null;
-  readonly attachmentPanelLoader = createLazyCustomElementRequests();
   readonly closeAttachmentPanel = () => {
     if (this.attachmentPanel) {
       this.attachmentPanel = null;
@@ -140,8 +127,6 @@ export class NewSessionPageOwner {
   };
 
   constructor(readonly host: PageHost) {
-    // The page owner publishes its child loader's status through the shared page projection.
-    this.attachmentPanelLoader.subscribe(this.changed);
     this.draft = new NewSessionDraft(
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {
@@ -272,7 +257,6 @@ export class NewSessionPageOwner {
       stop();
     }
     this.closeAttachmentPanel();
-    this.attachmentPanelLoader.requestWhileActive(attachmentPanelElement, false);
     this.critterImport.dispose();
     this.dictation.dispose();
     this.connectMachine.close();
@@ -303,10 +287,6 @@ export class NewSessionPageOwner {
     ) {
       this.closeAttachmentPanel();
     }
-    this.attachmentPanelLoader.requestWhileActive(
-      attachmentPanelElement,
-      this.attachmentPanel !== null,
-    );
 
     if (this.connectMachine.open && !this.place.isAdmin()) {
       this.connectMachine.close();
@@ -356,7 +336,7 @@ export class NewSessionPageOwner {
     }
     this.draft.synchronizeSelections();
     activateDraft(this.submission, openKey);
-    this.submission.resumeInterruptedSubmission();
+    this.submission.synchronizeSubmission();
   }
 
   resetDraft() {
@@ -410,7 +390,7 @@ export class NewSessionPageOwner {
       draftSource: submission.composerDraft,
       canSubmit: !submission.submitting && !dictationLocked && submission.canSubmit(),
       submitDisabledReason: submission.submitDisabledReason(),
-      blockedSubmitNotice: submission.blockedSubmitNotice(),
+      onBlockedSubmit: () => submission.noteBlockedSubmitAttempt(),
       get dictationActive() {
         return dictation.active;
       },

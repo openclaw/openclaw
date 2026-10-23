@@ -56,11 +56,10 @@ const controlUiPerformanceBudgets = {
   startupJsRequests: 9,
   chatBootJsRequests: 25,
   newBootJsRequests: 19,
-  // Creation transfer split: 1,347,441 B Chat and 822,816 B New Session.
-  // Preserve the incoming caps' relative headroom against the matched main build.
-  // Browser client/annotation leaves retain the previous relative Chat headroom.
-  chatBootJsGzipBytes: 1_393_091,
-  newBootJsGzipBytes: 833_875,
+  // Optional browser, sidebar catalog and page copy: 1,333,062 B Chat / 816,697 B New.
+  // Preserve main's relative headroom against the matched d335 build.
+  chatBootJsGzipBytes: 1_383_302,
+  newBootJsGzipBytes: 824_266,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   startupJsGzipBytes: 325_081,

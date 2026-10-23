@@ -140,7 +140,7 @@ describe("Memory plugin mutation ownership", () => {
       await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
       await waitForSolid(() => {
         expect(addonSwitch(view.page, "Active memory")?.checked).toBe(true);
-        expect(addonSwitch(view.page, "Active memory")?.disabled).toBe(true);
+        expect(addonSwitch(view.page, "Active memory")?.hasAttribute("aria-disabled")).toBe(true);
       });
       engine.resolve(committed("other", true));
       await waitForSolid(() =>
@@ -149,9 +149,11 @@ describe("Memory plugin mutation ownership", () => {
       await waitForSolid(() => {
         expect(activeEngine(view.page)).toBe("other");
         expect(
-          view.page.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.disabled,
+          view.page
+            .querySelector(".settings-segmented__input:checked")
+            ?.hasAttribute("aria-disabled"),
         ).toBe(false);
-        expect(addonSwitch(view.page, "Active memory")?.disabled).toBe(true);
+        expect(addonSwitch(view.page, "Active memory")?.hasAttribute("aria-disabled")).toBe(true);
         expect(view.page.textContent).not.toContain("This engine is disabled");
       });
     } finally {
@@ -226,8 +228,8 @@ describe("Memory plugin mutation ownership", () => {
       first.resolve(committed("active-memory", false));
       await waitForSolid(() => expect(setEnabled).toHaveBeenCalledWith("memory-wiki", true));
       await waitForSolid(() => {
-        expect(addonSwitch(element, "Active memory")?.disabled).toBe(false);
-        expect(addonSwitch(element, "Memory wiki")?.disabled).toBe(true);
+        expect(addonSwitch(element, "Active memory")?.hasAttribute("aria-disabled")).toBe(false);
+        expect(addonSwitch(element, "Memory wiki")?.hasAttribute("aria-disabled")).toBe(true);
       });
     } finally {
       first.resolve(committed("active-memory", false));
@@ -352,19 +354,19 @@ describe("Memory plugin mutation ownership", () => {
       setPhase("connected");
       await waitForSolid(() => {
         expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
-        expect(addonSwitch(element, "Active memory")?.disabled).toBe(false);
+        expect(addonSwitch(element, "Active memory")?.hasAttribute("aria-disabled")).toBe(false);
       });
       toggleAddon(element, "Active memory", false);
       await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
       await waitForSolid(() => {
         expect(addonSwitch(element, "Active memory")?.checked).toBe(false);
-        expect(addonSwitch(element, "Active memory")?.disabled).toBe(false);
+        expect(addonSwitch(element, "Active memory")?.hasAttribute("aria-disabled")).toBe(false);
       });
       oldCatalog.resolve({ plugins: [createMemoryTestAddon("active-memory", true)] });
       await nextTurn();
       await waitForSolid(() => {
         expect(addonSwitch(element, "Active memory")?.checked).toBe(false);
-        expect(addonSwitch(element, "Active memory")?.disabled).toBe(false);
+        expect(addonSwitch(element, "Active memory")?.hasAttribute("aria-disabled")).toBe(false);
       });
     } finally {
       oldCatalog.resolve({ plugins: [createMemoryTestAddon("active-memory", true)] });
@@ -509,7 +511,7 @@ describe("Memory plugin mutation ownership", () => {
         publishPluginGeneration(1);
         publishPluginGeneration(1);
         await waitForSolid(() =>
-          expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(true),
+          expect(addonSwitch(element, "Active memory")?.hasAttribute("aria-disabled")).toBe(true),
         );
         expect(setEnabled).toHaveBeenCalledTimes(phase === "queued" ? 0 : 1);
         pendingWrites.resolve();
@@ -519,7 +521,7 @@ describe("Memory plugin mutation ownership", () => {
           expect(element.textContent).toContain("Review active-memory settings."),
         );
         await waitForSolid(() =>
-          expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false),
+          expect(addonSwitch(element, "Active memory")?.hasAttribute("aria-disabled")).toBe(false),
         );
         expect(runExternalMutation).toHaveBeenCalledOnce();
       } finally {
@@ -625,11 +627,11 @@ describe("Memory plugin mutation ownership", () => {
         expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
       );
       flush();
-      expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(true);
+      expect(addonSwitch(element, "Active memory")?.hasAttribute("aria-disabled")).toBe(true);
 
       secondMutation.resolve(committed("active-memory", false));
       await waitForSolid(() =>
-        expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false),
+        expect(addonSwitch(element, "Active memory")?.hasAttribute("aria-disabled")).toBe(false),
       );
     } finally {
       firstMutation.resolve(committed("active-memory", false));
@@ -677,14 +679,14 @@ describe("Memory plugin mutation ownership", () => {
         expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
       );
       flush();
-      expect(element.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled).toBe(
-        true,
-      );
+      expect(
+        element.querySelector(".settings-segmented__input")?.hasAttribute("aria-disabled"),
+      ).toBe(true);
 
       secondMutation.resolve(committed("other", true));
       await waitForSolid(() =>
         expect(
-          element.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled,
+          element.querySelector(".settings-segmented__input")?.hasAttribute("aria-disabled"),
         ).toBe(false),
       );
     } finally {
@@ -715,7 +717,7 @@ describe("Memory plugin mutation ownership", () => {
       toggleAddon(element, "Active memory", false);
       await waitForSolid(() => expect(element.textContent).toContain("Earlier runtime warning."));
       await waitForSolid(() =>
-        expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false),
+        expect(addonSwitch(element, "Active memory")?.hasAttribute("aria-disabled")).toBe(false),
       );
       toggleAddon(element, "Active memory", true);
       await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
@@ -746,7 +748,7 @@ describe("Memory plugin mutation ownership", () => {
         await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
         setBootId(bootId);
         await waitForSolid(() =>
-          expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false),
+          expect(addonSwitch(element, "Active memory")?.hasAttribute("aria-disabled")).toBe(false),
         );
         reply.resolve(committed("active-memory", false, ["Old boot runtime warning."]));
         await runExternalMutation.mock.results[0]?.value;

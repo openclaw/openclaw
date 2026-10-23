@@ -358,7 +358,7 @@ describe("DraftSubmissionFlow", () => {
       });
       if (next === "reconnect") {
         cleanup.mockRestore();
-        flow.resumeInterruptedSubmission();
+        flow.synchronizeSubmission();
         expect(flow.submissionOutcomeUnknown).toBeNull();
         flow.setMessage("a new prompt after reconnect");
         expect(flow.canSubmit()).toBe(true);
@@ -543,7 +543,7 @@ describe("DraftSubmissionFlow", () => {
       expect(flow.canSubmit()).toBe(false);
       expect(flow.submitting).toBe(true);
 
-      flow.resumeInterruptedSubmission();
+      flow.synchronizeSubmission();
       expect(flow.pendingMessage?.["__openclaw"].humanMentions).toEqual([
         { profileId: "profile-original", start: 0, end: 5 },
       ]);
@@ -580,7 +580,7 @@ describe("DraftSubmissionFlow", () => {
         context.gateway.snapshot.hello.features.methods = [];
       }
 
-      flow.resumeInterruptedSubmission();
+      flow.synchronizeSubmission();
 
       if (expired) {
         expect(flow.submissionOutcomeUnknown).toBe("gateway-changed");

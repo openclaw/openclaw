@@ -182,7 +182,7 @@ function routeModuleKeys(
   graph: BootCaptureGraph,
   chunks: ReadonlySet<string>,
   roots: readonly string[],
-): Set<string> {
+) {
   const facades = new Set(graph.dynamicEntries.values());
   const seen = new Set<string>();
   const pending = [...roots];
@@ -203,7 +203,12 @@ function routeModuleKeys(
       }
     }
   }
-  return new Set([...seen].map(controlUiBootManifestKey));
+  return {
+    modules: new Set([...seen].map(controlUiBootManifestKey)),
+    // Extracted styles can have no JavaScript source-map range. Keep their
+    // reachable modules without treating inline CSS strings as stylesheets.
+    styles: [...seen].filter((id) => id.endsWith(".css")).map(controlUiBootManifestKey),
+  };
 }
 
 function partitionBootKeys(routes: Record<"new" | "chat", Set<string>>) {
@@ -281,16 +286,19 @@ async function main(): Promise<void> {
         routeEntries[route] = new Set(requestedEntries.map(controlUiBootManifestKey));
         // Fetched shared chunks can co-locate modules only the other route
         // imports; keep the modules reachable from what this route requested.
-        const needed = routeModuleKeys(graph, chunks, [...graph.entryModules, ...requestedEntries]);
+        const { modules: needed, styles } = routeModuleKeys(graph, chunks, [
+          ...graph.entryModules,
+          ...requestedEntries,
+        ]);
         const fetched = manifestKeysForChunks(chunks, distDir);
-        routes[route] = new Set(fetched.filter((key) => needed.has(key)));
+        routes[route] = new Set([...fetched.filter((key) => needed.has(key)), ...styles]);
         if (routes[route].size < 100) {
           throw new Error(
             `Boot capture looks truncated: ${route} recorded only ${routes[route].size} modules`,
           );
         }
         console.log(
-          `control-ui-boot-manifest: ${route}: ${chunks.size} chunks, ${routes[route].size} of ${fetched.length} fetched modules reachable, ${routeEntries[route].size} dynamic entries`,
+          `control-ui-boot-manifest: ${route}: ${chunks.size} chunks, ${routes[route].size} reachable modules (${styles.length} styles), ${fetched.length} fetched source-map modules, ${routeEntries[route].size} dynamic entries`,
         );
       }
       const modules = partitionBootKeys(routes);

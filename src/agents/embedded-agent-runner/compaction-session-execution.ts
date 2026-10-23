@@ -131,10 +131,16 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       memoryTranscript?.assertActive ?? captureOwnedTranscriptWriteAssertion(sessionTarget);
     assertActive();
     const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
+    // Exclude obsolete history without clipping the current context or previous summary.
     const preparedSessionManager =
       memoryTranscript?.sessionManager ??
       preparedSession?.sessionManager ??
-      (await SessionManager.openAsync(sessionTarget, undefined, undefined, params.abortSignal));
+      (await SessionManager.openAsync(
+        sessionTarget,
+        undefined,
+        { compaction: true },
+        params.abortSignal,
+      ));
     assertActive();
     const responsesApi =
       effectiveModel.api === "openai-responses" ||

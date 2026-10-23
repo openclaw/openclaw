@@ -1,6 +1,7 @@
 import activeMemoryPresentation from "../../../../extensions/active-memory/control-ui.presentation.json" with { type: "json" };
 import memoryWikiPresentation from "../../../../extensions/memory-wiki/control-ui.presentation.json" with { type: "json" };
 import type { TranslationMap } from "../lib/types.ts";
+import { registerPreferencesEnglish } from "./en-preferences.ts";
 import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
@@ -384,6 +385,45 @@ const enSettings = {
     },
   },
   configForm: {
+    redactedPlaceholder: "[redacted - click reveal to view]",
+    sectionHelp: "Help for {section}",
+    advancedDivider: "Advanced",
+    advancedSettings: "Advanced settings",
+    hideValue: en.configForm.hideValue,
+    revealValue: en.configForm.revealValue,
+    disableStreamToReveal: "Disable stream mode to reveal value",
+    storedSecretNotRevealable: "This editor cannot reveal the stored value.",
+    unsupportedType: "Unsupported type: {type}. Use Raw mode.",
+    structuredSecretRaw: "Structured value (SecretRef) - use Raw mode to edit",
+    structuredSecretFile: "Structured value (SecretRef) - edit the config file directly",
+    defaultValue: en.configForm.defaultValue,
+    select: "Select...",
+    enumOn: "On",
+    enumOff: "Off",
+    enumAuto: "Auto",
+    nullValue: "null",
+    jsonValue: "JSON value",
+    invalidJson: "Enter valid JSON before leaving this field.",
+    invalidString: "Enter a value that matches this setting's constraints.",
+    invalidNumber: "Enter a value within the allowed range and step.",
+    draftRejected: "This setting could not be saved. Your draft is still here.",
+    unsupportedArray: "Unsupported array schema. Use Raw mode.",
+    itemCountOne: "{count} item",
+    itemCount: "{count} items",
+    add: "Add",
+    noItems: 'No items yet. Click "Add" to create one.',
+    removeItem: "Remove item",
+    customEntries: "Custom entries",
+    addEntry: "Add Entry",
+    key: "Key",
+    removeEntry: "Remove entry",
+    renameRedactedBlocked:
+      "This entry holds a stored secret. Add the new key with its value, then remove this one.",
+    schemaUnavailable: "Schema unavailable.",
+    unsupportedSchema: "Unsupported schema. Use Raw.",
+    unsupportedNode: "Unsupported schema node. Use Raw mode.",
+    noSettingsMatch: 'No settings match "{query}"',
+    noSettingsInSection: "No settings in this section",
     sections: {
       env: {
         label: "Environment Variables",
@@ -1540,16 +1580,8 @@ const enSettings = {
     themeRemoved: "Custom theme removed.",
   },
   configView: {
-    form: "Form",
-    raw: "Raw",
-    formUnsafeTitle: "Form view can't safely edit some fields",
-    rawTitle: "Edit raw JSON/JSON5 config",
-    rawUnavailableTitle: "Raw mode unavailable for this snapshot",
-    rawDiscard: "Discard",
-    rawDraftPendingFormTitle:
-      "Unsaved raw config edits — save or discard them before switching to Form.",
-    rawDiffUnavailable: "Changes detected (JSON diff not available)",
-    rawConfig: "Raw config (JSON/JSON5)",
+    adminRequired: en.configView.adminRequired,
+    channelSettings: "Channel settings",
     categories: {
       core: "Core",
       ai: "Agent Defaults",
@@ -1652,6 +1684,9 @@ const enSettings = {
       xl: "XL",
       xxl: "XXL",
     },
+    profileSyncedHint: "Saved to your profile — follows you on every device.",
+    syncedHint: "Synced across your devices through the gateway.",
+    syncPendingHint: "Waiting to sync through the gateway.",
     notifications: {
       title: "Push notifications",
       nativeTitle: "Notifications",
@@ -1859,6 +1894,99 @@ const enSettings = {
       collapseTaskProgressHint:
         "On desktop, start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session. On mobile, task progress always starts collapsed and only opens when you open it manually.",
     },
+    sidebarPrefs: {
+      title: "Sidebar",
+      hint: "Choose what appears while sessions are running.",
+      liveActivity: "Show live agent activity in sidebar",
+      liveActivityHint: "Show the latest assistant or tool activity beneath running sessions.",
+      deleteConfirm: "Confirm before deleting sessions",
+      deleteConfirmHint:
+        "Applies to sidebar deletes. Stopping cloud workers and removing preserved worktrees always ask.",
+    },
+    sessionObserver: {
+      title: "Session observer",
+      hint: "Summarize long-running sessions with a small utility model.",
+      toggle: "Session observer",
+      toggleHint: "Generate live status digests for subscribed Control UI sessions.",
+      resolvedModel: "Resolved small model",
+      modelAuto: "auto ({model})",
+      modelConfigured: "configured ({model})",
+      modelDisabled: "disabled",
+      modelUnavailable: "unavailable (no small model)",
+      modelPicker: "Small model",
+      modelPickerHint: "Used for observer digests and other short utility tasks.",
+      modelCatalogUnavailable: "Explicit model catalog unavailable",
+      auto: "Auto (provider default)",
+      disabled: "Disabled",
+      toggleNote: "Update the Control UI session observer",
+      modelNote: "Update the default utility model",
+    },
+    connection: {
+      title: "Connection",
+      gateway: "Gateway",
+      status: "Status",
+      assistant: "Assistant",
+    },
+    root: "<root>",
+    itemCount: "[{count} item]",
+    itemCountPlural: "[{count} items]",
+    open: "Open",
+    fileOpenedOnGateway: en.configView.fileOpenedOnGateway,
+    applying: "Applying…",
+    autoSaveSaving: "Saving…",
+    autoSaveSaved: "Saved",
+    autoSavePaused: "Autosave paused after reconnect",
+    saveNow: "Save",
+    autoSaveFailed: "Save failed",
+    autoSaveRejected: "Settings not applied",
+    autoSaveRejectedHint: "Current settings are unchanged.",
+    rejectionDetails: "Show reason",
+    recoveryNotRestored: en.configView.recoveryNotRestored,
+    recoveryUnknown: en.configView.recoveryUnknown,
+    recoveryBackup: en.configView.recoveryBackup,
+    recoveryReload: "Discard draft and reload",
+    discardUnconfirmed: en.configView.discardUnconfirmed,
+    writeGatewayChanged: en.configView.writeGatewayChanged,
+    writeUnconfirmed: en.configView.writeUnconfirmed,
+    autoSaveConflict: "Settings changed elsewhere",
+    retry: "Retry",
+    applyChanges: "Apply changes",
+    reloadBlocked: en.configView.reloadBlocked,
+    rawDraftBlocksApply: en.configView.rawDraftBlocksApply,
+    rawDraftBlocksFormEdit: en.configView.rawDraftBlocksFormEdit,
+    rawDraftUnverified: en.configView.rawDraftUnverified,
+    invalidConfig: "Your configuration is invalid. Some settings may not work as expected.",
+    dismissWarning: "Don't remind again",
+    viewPendingChangesRaw: "View pending changes",
+    hideEnvValues: "Hide env values",
+    revealEnvValues: "Reveal env values",
+    peek: "Peek",
+    loadingSchema: "Loading schema…",
+    formUnsafeCount: "1 setting in this config can only be edited as text: {paths}",
+    formUnsafeCountPlural: "{count} settings in this config can only be edited as text: {paths}",
+    formUnsafeMore: "+{count} more",
+    openRawEditor: "Open Raw editor",
+    secretCount: "{count} secret",
+    secretCountPlural: "{count} secrets",
+    redacted: "redacted",
+    visible: "visible",
+    revealSensitive: "Reveal sensitive values",
+    hideSensitive: "Hide sensitive values",
+    toggleRawRedaction: "Toggle raw config redaction",
+    sensitiveHidden:
+      "{count} sensitive value hidden. Use the reveal button above to edit the raw config.",
+    sensitiveHiddenPlural:
+      "{count} sensitive values hidden. Use the reveal button above to edit the raw config.",
+    form: "Form",
+    raw: "Raw",
+    formUnsafeTitle: "Form view can't safely edit some fields",
+    rawTitle: "Edit raw JSON/JSON5 config",
+    rawUnavailableTitle: "Raw mode unavailable for this snapshot",
+    rawDiscard: "Discard",
+    rawDraftPendingFormTitle:
+      "Unsaved raw config edits — save or discard them before switching to Form.",
+    rawDiffUnavailable: "Changes detected (JSON diff not available)",
+    rawConfig: "Raw config (JSON/JSON5)",
     sessionSources: {
       title: "Session sources",
       hint: "Choose which coding apps show their existing conversations in the sidebar.",
@@ -1873,15 +2001,6 @@ const enSettings = {
       unavailable:
         "Session source settings are unavailable. Reconnect or reload Settings to try again.",
       managePlugins: "Manage plugins",
-    },
-    sidebarPrefs: {
-      title: "Sidebar",
-      hint: "Choose what appears while sessions are running.",
-      liveActivity: "Show live agent activity in sidebar",
-      liveActivityHint: "Show the latest assistant or tool activity beneath running sessions.",
-      deleteConfirm: "Confirm before deleting sessions",
-      deleteConfirmHint:
-        "Applies to sidebar deletes. Stopping cloud workers and removing preserved worktrees always ask.",
     },
     sessionStorage: {
       title: "Session storage",
@@ -1921,30 +2040,6 @@ const enSettings = {
       runHint: "Run one background batch using the saved, applied policy.",
       runStarted: "Background batch started. You can leave this page while it runs.",
       runCompleted: "Batch completed. {count} transcripts archived.",
-    },
-    sessionObserver: {
-      title: "Session observer",
-      hint: "Summarize long-running sessions with a small utility model.",
-      toggle: "Session observer",
-      toggleHint: "Generate live status digests for subscribed Control UI sessions.",
-      resolvedModel: "Resolved small model",
-      modelAuto: "auto ({model})",
-      modelConfigured: "configured ({model})",
-      modelDisabled: "disabled",
-      modelUnavailable: "unavailable (no small model)",
-      modelPicker: "Small model",
-      modelPickerHint: "Used for observer digests and other short utility tasks.",
-      modelCatalogUnavailable: "Explicit model catalog unavailable",
-      auto: "Auto (provider default)",
-      disabled: "Disabled",
-      toggleNote: "Update the Control UI session observer",
-      modelNote: "Update the default utility model",
-    },
-    connection: {
-      title: "Connection",
-      gateway: "Gateway",
-      status: "Status",
-      assistant: "Assistant",
     },
   },
   memoryPage: {
@@ -2100,7 +2195,10 @@ export const registerSettingsEnglish = Object.assign(
     Object.assign(en.channels, enSettings.channels);
     Object.assign(en.agentTools, enSettings.agentTools);
     Object.assign(en.talkPage, enSettings.talkPage);
-    Object.assign(en.configForm.sections, enSettings.configForm.sections);
+    const { sections, ...configForm } = enSettings.configForm;
+    Object.assign(en.configForm, configForm);
+    Object.assign(en.configForm.sections, sections);
+    registerPreferencesEnglish();
     en.memoryPage = enSettings.memoryPage;
     en.modelProviders = enSettings.modelProviders;
     en.searchPage = enSettings.searchPage;
