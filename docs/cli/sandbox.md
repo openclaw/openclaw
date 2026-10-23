@@ -71,6 +71,43 @@ broaden to `--all`, or rewrite its recorded target to bypass validation.
 
 For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the remote workspace becomes the source of truth after the initial seed, `recreate` deletes that remote workspace for the selected scope, and the next run reseeds it from the current local workspace.
 
+### `openclaw sandbox recover`
+
+When a newly generated guest file exceeds the 64 MiB reconciliation limit, its
+pending checkpoint is preserved and later messages cannot prepare the workspace.
+Use explicit recovery to move that selected file out of synchronization without
+losing its bytes:
+
+```bash
+openclaw sandbox recover --session agent:main:dashboard:example --path .openclaw/tmp/build/archive.tgz
+```
+
+The command routes to the running Gateway with administrator authorization, or
+holds exclusive state ownership when run offline. It pauses the selected local
+sandbox while moving the file and leaves other source edits and the pending
+checkpoint intact. Retry the session afterward to settle the remaining changes;
+repeat for another oversized file if needed.
+
+Only new retained regular files larger than 64 MiB qualify. Already-admitted source
+files, excluded caches, Git metadata, symlinks, and hardlinks are refused. This
+command does not increase limits, change ignore rules, delete files, or reset the
+workspace. Remote-worker workspaces and already-staged reconciliation receipts
+are not supported by this recovery operation.
+
+Recovered files live under
+`<state-dir>/workspace-recovery/<worktree-id>/<recovery-id>/<original-path>`,
+outside synchronization and automatic worktree cleanup. The command prints the
+exact destination; you own its subsequent storage and cleanup. Use the preserved
+file directly or move it to storage appropriate for its purpose rather than
+copying it back into the synchronized workspace unchanged.
+
+A recovery ID is printed before relocation. If a response is interrupted, inspect
+that destination first, then reuse the ID with `--recovery-id <uuid>`. A completed
+move is reported again without replacing files. If both source and destination
+exist, recovery refuses further mutation so you can inspect both copies.
+`--json` returns the destination, byte count, and recovery ID; supply your own
+`--recovery-id` when a machine caller must know the ID before dispatch.
+
 ### `openclaw sandbox explain`
 
 Inspect the effective sandbox mode/scope/workspace access, sandbox tool policy, and elevated-tool gates (with fix-it config key paths).

@@ -259,7 +259,12 @@ without copying the surrounding workspace. Bundled runtime and setup modules,
 including TypeScript source entries, share the host's code identity during ordinary
 inventory loading; each inventory owns its registered callbacks and cleanup.
 Explicit reload captures the selected plugin's code and plugin-only build chunks
-while retaining canonical host and SDK modules. Rebuild before reload when the
+while retaining canonical host and SDK modules. Captured Workers reach shared
+host modules through links in their captured namespace, so their native imports
+preserve the same host selection without inheriting the parent's resolver hooks.
+If the filesystem denies file symlinks, ordinary parent resolution remains
+available; captured Workers that need these shared imports retain that limitation.
+Rebuild before reload when the
 installation loads compiled output. Changes to host or SDK code require a Gateway restart.
 
 Source preparation workers wake synchronous host readers after posting results,

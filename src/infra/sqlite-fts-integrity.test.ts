@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { OPENCLAW_AGENT_FTS_SCHEMAS as schemas } from "../state/openclaw-agent-fts-schema.js";
+import { AGENT_FTS_SCHEMAS as schemas } from "../state/openclaw-agent-fts-schema.js";
 import { installSqliteFtsTokenizerMismatch } from "./sqlite-index-corruption.test-support.js";
 import { repairDoctorSqliteIndexCorruption as repairDoctor } from "./sqlite-index-recovery.js";
 import {

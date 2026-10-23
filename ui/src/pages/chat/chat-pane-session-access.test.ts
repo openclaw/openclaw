@@ -460,6 +460,11 @@ describe("chat pane session access", () => {
     const menu = container.querySelector(".chat-pane__sharing-menu")!;
     await openNativeMenu(menu, "access");
     expect(container.querySelector(".chat-pane__sharing-permissions")).toBeNull();
+    await waitForSolid(() =>
+      expect(container.querySelector<HTMLButtonElement>('[data-value="access"]')?.disabled).toBe(
+        false,
+      ),
+    );
     const access = container.querySelector<HTMLButtonElement>('[data-value="access"]');
     expect(access).not.toBeNull();
     access!.click();

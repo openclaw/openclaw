@@ -12,7 +12,7 @@ vi.mock("./bundled-dir.js", () => ({
 }));
 
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
-import { listBundledPackageChannelMetadata } from "./bundled-package-channel-metadata.js";
+import { listChannelCatalogEntries } from "./channel-catalog-registry.js";
 import type { PluginManifest, PluginPackageChannel } from "./manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
@@ -52,7 +52,8 @@ function fixture(channel: PluginPackageChannel) {
 }
 
 const readMatrix = () =>
-  listBundledPackageChannelMetadata().find((channel) => channel.id === "matrix");
+  listChannelCatalogEntries({ origin: "bundled" }).find((entry) => entry.channel.id === "matrix")
+    ?.channel;
 
 describe("bundled package channel metadata", () => {
   it("reads doctor capabilities from the resolved bundled plugin dir", () => {

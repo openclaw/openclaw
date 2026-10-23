@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { zstdCompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
@@ -212,6 +213,35 @@ afterEach(() => {
 });
 
 describe("media migration of canonical SQLite transcript archives", () => {
+  it.each(["identity", "zstd"] as const)(
+    "warns and preserves malformed UTF-8 in a %s archive and its published copy",
+    async (encoding) => {
+      const f = fixture({ encoding });
+      const malformed = Buffer.from(legacyContent);
+      malformed[malformed.indexOf("keep the attachment")] = 0xff;
+      const bytes = encoding === "zstd" ? zstdCompressSync(malformed) : malformed;
+      {
+        using database = openDatabase(f.databasePath);
+        database
+          .prepare("UPDATE session_transcript_archives SET archive_blob = ?, archive_sha256 = ?")
+          .run(bytes, sha256(bytes));
+      }
+      fs.writeFileSync(f.archivePath, bytes);
+      const before = f.read();
+
+      const result = await migrateLegacyMediaPersistence({ env: f.env });
+
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+      expect(result.warningDisposition).toBe("recoverable");
+      const directives = await migrateHistoricalTranscriptDirectives({ env: f.env });
+      expect(directives.warnings.join("\n")).toContain("must be valid UTF-8");
+      expect(directives.warningDisposition).toBe("recoverable");
+      expect(f.read()).toEqual(before);
+      expect(fs.readFileSync(f.archivePath)).toEqual(bytes);
+    },
+  );
+
   it.each([
     {
       label: "media",

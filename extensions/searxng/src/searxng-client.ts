@@ -160,8 +160,6 @@ export async function runSearxngSearch(params: {
   count?: number;
   categories?: string;
   language?: string;
-  timeoutSeconds?: number;
-  cacheTtlMinutes?: number;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
@@ -181,11 +179,11 @@ export async function runSearxngSearch(params: {
     );
   const baseUrl = resolveSearxngBaseUrl(params.config);
   const timeoutSeconds = resolveTimeoutSeconds(
-    params.timeoutSeconds ?? params.config?.tools?.web?.search?.timeoutSeconds,
+    params.config?.tools?.web?.search?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
   );
   const cacheTtlMs = resolveCacheTtlMs(
-    params.cacheTtlMinutes ?? params.config?.tools?.web?.search?.cacheTtlMinutes,
+    params.config?.tools?.web?.search?.cacheTtlMinutes,
     DEFAULT_CACHE_TTL_MINUTES,
   );
 

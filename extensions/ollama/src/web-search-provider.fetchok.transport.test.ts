@@ -70,7 +70,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-const { createOllamaWebSearchProvider } = await import("./web-search-provider.js");
+const { createOllamaWebSearchProvider } = await import("../web-search-provider.js");
 
 function createSearchTool(apiKey?: string) {
   const tool = createOllamaWebSearchProvider().createTool({

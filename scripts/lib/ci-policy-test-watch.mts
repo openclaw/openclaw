@@ -2013,7 +2013,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   {
     testFile: "test/scripts/tsgo-core-test-shards.test.ts",
     watchGlobs: [
-      "src/{auto-reply,infra/outbound}/**/*.test.{ts,tsx}",
+      "src/{auto-reply,infra/outbound,media}/**/*.test.{ts,tsx}",
       "tsconfig.json",
       "test/tsconfig/tsconfig.test.json",
       "test/tsconfig/tsconfig.core.test*.json",

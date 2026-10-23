@@ -2393,7 +2393,7 @@ struct GatewayProcessManagerTests {
                     },
                     wait: {
                         await exits[index].wait()
-                        return "fixture startup failed"
+                        return .launch("fixture startup failed")
                     },
                     terminate: { exits[index].open() })
             }

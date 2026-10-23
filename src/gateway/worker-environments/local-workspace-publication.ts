@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   LocalWorkspaceMutation,
   LocalWorkspaceProjection,
-} from "./local-workspace-store.kernel.js";
+} from "./local-workspace-store.types.js";
 
 /** Reconstruct only the admitted mutation; caller-provided prior rows carry no authority. */
 export function readLocalWorkspaceCommit(
