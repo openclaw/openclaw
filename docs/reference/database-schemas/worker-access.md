@@ -507,6 +507,12 @@ its pending exact reads instead of returning stale totals.
 
 ## Transactions and query shape
 
+Personal account mutations, approval operations, auth authorization enrollment,
+and auth usage writes obtain their initial host grant before `BEGIN IMMEDIATE`.
+They reread authoritative rows inside the transaction and retain final commit
+authorization. A busy host therefore cannot hold the writer during initial
+admission; commit admission still retains transaction custody.
+
 Use Kysely for ordinary queries. Raw SQL belongs to schema, migrations,
 bootstrap, or a justified engine-owned primitive. Prepare asynchronous inputs
 before a write transaction; its callback is synchronous and cannot await work.
