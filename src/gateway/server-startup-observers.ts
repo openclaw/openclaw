@@ -91,7 +91,6 @@ export async function runGatewayStartupObservers(params: {
   workspaceDir: string;
   getCron: () => PluginHookGatewayCronService | undefined;
   isClosing?: () => boolean;
-  waitForPostReadyWork?: () => Promise<void>;
   onSubagentRecoverySettled?: () => void;
   unlockStartupMethods?: () => void;
   startupTrace?: GatewayStartupTrace;
@@ -106,7 +105,6 @@ export async function runGatewayStartupObservers(params: {
   ) => ReturnType<typeof createHookRunner> | Promise<ReturnType<typeof createHookRunner>>;
   refreshLatestUpdateRestartSentinel: () => Promise<unknown>;
 }): Promise<void> {
-  await params.waitForPostReadyWork?.();
   if (params.signal.aborted || params.isClosing?.()) {
     return;
   }
