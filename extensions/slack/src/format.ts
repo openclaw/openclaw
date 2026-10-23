@@ -511,21 +511,26 @@ export function markdownToSlackMrkdwnChunks(
   const renderOptions = buildSlackRenderOptions();
   const normalizedLimit =
     limit === Number.POSITIVE_INFINITY ? limit : resolveIntegerOption(limit, 1, { min: 1 });
+  // Protection only adds a fixed prefix, so it can change a fit only when the unprotected length is
+  // within the prefix's length of the limit.
+  const protectsWhileMeasuring = (length: number) =>
+    length <= normalizedLimit &&
+    length + SLACK_ASSISTANT_TRANSCRIPT_PREFIX.length > normalizedLimit;
   return renderMarkdownIRChunksWithinLimit({
     ir,
     limit: normalizedLimit,
     renderChunk: (chunk) => {
       const rendered = renderMarkdownWithMarkers(chunk, renderOptions, SLACK_FORMAT_PROFILE);
-      // Protection only adds a prefix, so an oversized probe cannot become a fit.
-      return rendered.length > normalizedLimit
-        ? rendered
-        : protectSlackAssistantTranscriptRoleHeaders(rendered);
+      return protectsWhileMeasuring(rendered.length)
+        ? protectSlackAssistantTranscriptRoleHeaders(rendered)
+        : rendered;
     },
     measureRendered: (rendered) => rendered.length,
   }).map(({ rendered }) =>
-    // Unsplittable safety fallbacks still need protection before leaving Slack.
-    rendered.length > normalizedLimit
-      ? protectSlackAssistantTranscriptRoleHeaders(rendered)
-      : rendered,
+    // Chunks protectsWhileMeasuring skipped, including unsplittable fallbacks, still need
+    // protection before leaving Slack.
+    protectsWhileMeasuring(rendered.length)
+      ? rendered
+      : protectSlackAssistantTranscriptRoleHeaders(rendered),
   );
 }

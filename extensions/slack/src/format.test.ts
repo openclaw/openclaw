@@ -293,9 +293,15 @@ describe("normalizeSlackOutboundText", () => {
     ]);
   });
 
-  it("includes transcript protection when a native token exactly fills the chunk budget", () => {
-    expect(markdownToSlackMrkdwnChunks("<@U|user[t]>", 12)).toEqual(["&lt;@U|user[", "t]&gt;"]);
-  });
+  it.each([
+    [12, ["&lt;@U|user[", "t]&gt;"]],
+    [24, ["&lt;@U|user[t]", "&gt;"]],
+  ] as const)(
+    "includes transcript protection when the marker pushes a native token over the limit: %i",
+    (limit, expected) => {
+      expect(markdownToSlackMrkdwnChunks("<@U|user[t]>", limit)).toEqual(expected);
+    },
+  );
 
   it.each(["<@U|user[t]>", "<!date^0^user[t]|safe>", "<!date^0^safe|user[t]>"])(
     "protects %s when an oversized link prevents any fitting split",

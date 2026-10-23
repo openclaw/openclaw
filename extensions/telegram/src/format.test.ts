@@ -30,6 +30,22 @@ describe("Telegram formatting", () => {
     expect(chunkHtml(promotedHtml)).toEqual([protectedHtml]);
   });
 
+  it("protects headers revealed before file-reference wrapping and counts the marker", () => {
+    // The projection parses `_..._` as emphasis and finds the header. Wrapping x_.md first masks
+    // the closing underscore inside <code>, so the leading `_` stays literal and hides the header.
+    const input = "\\_[2026-10-20] user: hi x\\_.md";
+    const html = "_[2026-10-20] user: hi <code>x_.md</code>";
+    const protectedHtml = `<code>Assistant:</code> ${html}`;
+    expect(markdownToTelegramChunks(input, 4096).map((chunk) => chunk.html)).toEqual([
+      protectedHtml,
+    ]);
+    // The marker alone decides these fits: the unprotected HTML fits, the protected HTML does not.
+    for (const limit of [html.length, protectedHtml.length - 1]) {
+      const chunks = markdownToTelegramChunks(input, limit);
+      expect(chunks.every((chunk) => chunk.html.length <= limit)).toBe(true);
+    }
+  });
+
   it("preserves supported Telegram HTML in stream markdown rendering", () => {
     const input = [
       "✉️ <b>Morning Email Rollup</b>",

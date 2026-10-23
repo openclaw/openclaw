@@ -1,4 +1,5 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   findCodeRegions,
@@ -68,6 +69,20 @@ function buildTelegramCodeBlockOpen(span: { language?: string }): string {
 }
 
 function renderTelegramHtml(ir: MarkdownIR, wrapFileRefs = true): string {
+  const telegramHtml = protectTelegramAssistantTranscriptRoleHeaders(
+    renderPromotedTelegramHtml(ir),
+  );
+  return wrapFileRefs ? wrapFileReferencesInHtml(telegramHtml) : telegramHtml;
+}
+
+// Protection must read the HTML before file-reference wrapping; when it adds the marker, the
+// protected HTML is wrapped again.
+function protectTelegramHtml(promotedHtml: string, html: string): string {
+  const protectedHtml = protectTelegramAssistantTranscriptRoleHeaders(promotedHtml);
+  return protectedHtml === promotedHtml ? html : wrapFileReferencesInHtml(protectedHtml);
+}
+
+function renderPromotedTelegramHtml(ir: MarkdownIR): string {
   const html = renderMarkdownWithMarkers(ir, {
     annotationMarkers: {
       assistant_transcript_role: {
@@ -88,8 +103,7 @@ function renderTelegramHtml(ir: MarkdownIR, wrapFileRefs = true): string {
     escapeText: escapeTelegramHtml,
     buildLink: buildTelegramLink,
   });
-  const telegramHtml = renderSupportedTelegramHtml(html);
-  return wrapFileRefs ? wrapFileReferencesInHtml(telegramHtml) : telegramHtml;
+  return promoteSupportedTelegramHtml(html);
 }
 
 function shouldPreserveTelegramListBoundarySpacing(previous: string, next: string): boolean {
@@ -294,14 +308,13 @@ function promoteEscapedSupportedTelegramTags(text: string, openTags: string[]): 
   );
 }
 
-function renderSupportedTelegramHtml(html: string): string {
+function promoteSupportedTelegramHtml(html: string): string {
   const openEscapedTags: string[] = [];
-  const promoted = html.includes("&lt;")
+  return html.includes("&lt;")
     ? transformUnprotectedTelegramHtmlText(html, ["code", "pre"], (text) =>
         promoteEscapedSupportedTelegramTags(text, openEscapedTags),
       )
     : html;
-  return protectTelegramAssistantTranscriptRoleHeaders(promoted);
 }
 
 /** Project authored rich tags, leaving entity-escaped examples and code literal. */
@@ -661,13 +674,30 @@ export function markdownToTelegramChunks(
   options: { tableMode?: MarkdownTableMode } = {},
 ): TelegramFormattedChunk[] {
   const ir = parseTelegramLegacyMarkdown(markdown, options.tableMode);
+  const normalizedLimit =
+    limit === Number.POSITIVE_INFINITY ? limit : resolveIntegerOption(limit, 1, { min: 1 });
+  // Protection only adds a fixed prefix, which file-reference wrapping leaves intact, so it can
+  // change a fit only when the unprotected length is within the prefix's length of the limit.
+  const protectsWhileMeasuring = (length: number) =>
+    length <= normalizedLimit &&
+    length + TELEGRAM_ASSISTANT_TRANSCRIPT_PREFIX.length > normalizedLimit;
   return renderMarkdownIRChunksWithinLimit({
     ir,
-    limit,
-    renderChunk: renderTelegramHtml,
-    measureRendered: (html) => html.length,
+    limit: normalizedLimit,
+    renderChunk: (chunk) => {
+      const promotedHtml = renderPromotedTelegramHtml(chunk);
+      const html = wrapFileReferencesInHtml(promotedHtml);
+      // Chunks protectsWhileMeasuring skips keep their promoted HTML for protection after chunking.
+      return protectsWhileMeasuring(html.length)
+        ? { html: protectTelegramHtml(promotedHtml, html) }
+        : { html, promotedHtml };
+    },
+    measureRendered: (rendered) => rendered.html.length,
   }).map(({ source, rendered }) => ({
-    html: rendered,
+    html:
+      rendered.promotedHtml === undefined
+        ? rendered.html
+        : protectTelegramHtml(rendered.promotedHtml, rendered.html),
     text: source.text,
   }));
 }

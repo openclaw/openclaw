@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
+import { once } from "node:events";
 import {
   createWriteStream,
   existsSync,
@@ -10,10 +11,12 @@ import {
   writeSync,
   renameSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setImmediate as immediate, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import type { startOpenClawCrablineAdapter } from "@openclaw/crabline";
 import { startQaBusServer, createQaBusState } from "../extensions/qa-lab/bus-api.ts";
 import type { AnyAgentTool } from "../src/agents/agent-tools.types.js";
 import type { ToolHandlerContext } from "../src/agents/embedded-agent-subscribe.handlers.types.js";
@@ -50,17 +53,53 @@ const { values } = parseArgs({
     "tool-start-file": { type: "string" },
     "tool-interval-ms": { type: "string", default: "100" },
     "tool-gc-log": { type: "string" },
+    channel: { type: "string", default: "qa-channel" },
+    "reply-chars": { type: "string", default: "0" },
   },
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/bench-channel-turn.mts [--entry dist/entry.js]\nRuns one cold and ten warmed QA-channel turns with an isolated local mock provider.\nOr use --tool-invocations [--tool-argument-bytes 65536] [--tool-progress-events 500] [--tool-calls 200] [--tool-samples 5] [--tool-interval-ms 100] --tool-gc-log <stdout-log> with --expose-gc --trace-gc-nvp, redirecting stdout to that log, for real tool-owner allocation, promotion, GC and latency measurements without a Gateway.",
+    "Usage: node --import ./scripts/tsx.mjs scripts/bench-channel-turn.mts [--entry dist/entry.js] [--channel qa-channel|telegram|slack] [--reply-chars N]\nRuns one cold and ten warmed channel turns with an isolated local mock provider.\nWith --channel telegram or slack, the channel plugin talks to a local Crabline provider server.\nWith --reply-chars N, each reply is a generated technical Markdown answer of at least N characters.\nOr use --tool-invocations [--tool-argument-bytes 65536] [--tool-progress-events 500] [--tool-calls 200] [--tool-samples 5] [--tool-interval-ms 100] --tool-gc-log <stdout-log> with --expose-gc --trace-gc-nvp, redirecting stdout to that log, for real tool-owner allocation, promotion, GC and latency measurements without a Gateway.",
   );
   process.exit(0);
 }
 if (values["tool-invocations"]) {
   await measureToolInvocations();
   process.exit(0);
+}
+const crablineChannel =
+  values.channel === "telegram" || values.channel === "slack" ? values.channel : undefined;
+const replyChars = Number(values["reply-chars"]);
+if (
+  (!crablineChannel && values.channel !== "qa-channel") ||
+  !Number.isSafeInteger(replyChars) ||
+  replyChars < 0
+) {
+  console.error(
+    "--channel must be qa-channel, telegram or slack and --reply-chars a non-negative integer",
+  );
+  process.exit(2);
+}
+// A long coding answer: headings, lists, links, inline code with HTML-sensitive characters and
+// fenced TypeScript. Long replies pad the turn number so every turn has the same length.
+function buildReply(turn: number) {
+  const id = replyChars > 0 ? String(turn).padStart(2, "0") : String(turn);
+  const intro = `Synthetic channel measurement response ${id}. The Gateway receives this streamed answer from the local mock provider and delivers it ${crablineChannel ? `through the ${crablineChannel} plugin to a local Crabline server` : "to the isolated QA bus"}.`;
+  const parts = [intro];
+  for (let step = 1, length = intro.length; length < replyChars; step++) {
+    const section = [
+      `## Step ${step}: keep chunk ${step} within budget`,
+      `1. Read [render-aware-chunking.ts](https://github.com/openclaw/openclaw/blob/main/packages/markdown-core/src/render-aware-chunking.ts) before changing \`limit <= ${step * 100}\`.\n2. Keep \`Map<string, Chunk[]>\` entries in order & drop empty ones.\n3. Compare [step ${step - 1}](#step-${step - 1}) when \`chunks[${step}] !== undefined\`.`,
+      `- The budget counts rendered characters, so \`<b>\` and \`&amp;\` count in full.\n- Prefer a paragraph break, then a line break, then a space.`,
+      `\`\`\`ts\nexport function planStep${step}(chunks: readonly string[], limit = ${step * 100}): string[] {\n  const kept: string[] = [];\n  for (const chunk of chunks) {\n    if (chunk.length > 0 && chunk.length <= limit && !chunk.includes("<&>")) {\n      kept.push(chunk.trim());\n    }\n  }\n  return kept;\n}\n\`\`\``,
+    ];
+    parts.push(...section);
+    length += section.reduce((sum, part) => sum + part.length + 2, 0);
+  }
+  if (parts.length > 1) {
+    parts.push(`End of synthetic channel measurement response ${id}.`);
+  }
+  return parts.join("\n\n");
 }
 const output = mkdtempSync(path.join(tmpdir(), "sqlmeasure-channel-"));
 const fixture = path.join(output, "fixture");
@@ -75,11 +114,15 @@ type TurnEvidence = TurnIdentity & {
   outboundMessages: number;
   cpu?: GatewayCpuUsage;
   result: { status: "ok" };
-  outboundId: string;
+  outboundId?: string;
+  reply: { length: number; sha256: string };
+  lastOutboundMs?: number;
+  provider?: { methods: string[]; sends: number; rejectedSends: number; digest: string };
 };
 const evidence: {
   output: string;
   harnessVersion: string;
+  workload: { channel: string; replyChars: number };
   phases: { phase: string; start: number; end: number }[];
   turns: TurnEvidence[];
   children: { name: string; pid: number }[];
@@ -93,6 +136,7 @@ const evidence: {
 } = {
   output,
   harnessVersion: "2.0.0-channel.1",
+  workload: { channel: values.channel, replyChars },
   phases: [],
   turns: [],
   children: [],
@@ -103,6 +147,15 @@ const messages: Record<string, TurnIdentity> = {};
 let phase = "01.boot";
 let phaseStart = Date.now();
 let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
+let crabline: Awaited<ReturnType<typeof startOpenClawCrablineAdapter>> | undefined;
+const providerCalls: {
+  method: string;
+  body: Record<string, unknown>;
+  accepted: boolean;
+  at: number;
+}[] = [];
+let slackApi: ReturnType<typeof createServer> | undefined;
+const providerReady = Promise.withResolvers<void>();
 let gateway: ChildProcess | undefined;
 let interrupted = false;
 let cleanupPromise: Promise<void> | undefined;
@@ -116,7 +169,22 @@ function cleanup() {
         children.map((child) => stopChild(child, { teardownGraceMs: 10000, killGraceMs: 2000 })),
       );
     } finally {
-      await bus?.stop();
+      const server = slackApi;
+      server?.closeAllConnections();
+      const closed = await Promise.allSettled([
+        bus?.stop(),
+        server &&
+          new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          }),
+        crabline?.close(),
+      ]);
+      const failure = closed.find((result) => result.status === "rejected");
+      if (failure) {
+        evidence.ok = false;
+        evidence.error ??= String(failure.reason);
+        process.exitCode = 1;
+      }
       evidence.phases.push({ phase, start: phaseStart, end: Date.now() });
       save();
     }
@@ -165,6 +233,110 @@ function launch(args: string[], env: NodeJS.ProcessEnv, name: string, ipc = fals
   save();
   return child;
 }
+// Telegram DMs share the sender's id; Slack DMs pair a native D conversation with a U user.
+const directPeers = {
+  telegram: ["sqlmeasure-user", "sqlmeasure-user"],
+  slack: ["DSQLMEASURE", "USQLMEASURE"],
+} as const;
+async function runProviderTurn(
+  adapter: NonNullable<typeof crabline>,
+  channel: keyof typeof directPeers,
+  turn: number,
+  text: string,
+  reply: string,
+  gatewayPort: number,
+  register: (messageId: string) => void,
+) {
+  const [conversation, senderId] = directPeers[channel];
+  const inbound = adapter.createInbound({
+    input: {
+      conversation: { kind: "direct", id: conversation },
+      senderId,
+      senderName: "SQL measurement",
+      text,
+    },
+  });
+  // Observers key turns by the inbound id the Gateway sees. Telegram ids must grow past the
+  // replies already sent to the chat; Slack's ts is known before the bench delivers the event.
+  const telegramMessageId = (turn + 1) * 1000;
+  if (channel === "telegram") {
+    register(String(telegramMessageId));
+  }
+  const first = providerCalls.length;
+  const start = Date.now();
+  const response = await fetch(inbound.providerUrl, {
+    method: "POST",
+    headers: inbound.providerHeaders,
+    body: JSON.stringify({
+      ...inbound.providerBody,
+      ...(channel === "telegram" && { messageId: telegramMessageId }),
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Crabline ${channel} inbound failed with HTTP ${response.status}`);
+  }
+  const ingress = (await response.json()) as { event?: unknown; message?: { ts?: string } };
+  const messageId = channel === "telegram" ? String(telegramMessageId) : ingress.message?.ts;
+  if (!messageId) {
+    throw new Error(`Crabline ${channel} inbound returned no message id`);
+  }
+  const manifest = adapter.manifest;
+  if (manifest.provider === "slack") {
+    register(messageId);
+    // Slack pushes events: sign Crabline's native event and await the Gateway webhook ack.
+    const body = JSON.stringify(ingress.event);
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = createHmac("sha256", manifest.signingSecret)
+      .update(`v0:${timestamp}:${body}`)
+      .digest("hex");
+    const ack = await fetch(`http://127.0.0.1:${gatewayPort}/slack/events`, {
+      method: "POST",
+      body,
+      headers: {
+        "content-type": "application/json",
+        "x-slack-request-timestamp": timestamp,
+        "x-slack-signature": `v0=${signature}`,
+      },
+    });
+    await ack.arrayBuffer();
+    if (!ack.ok) {
+      throw new Error(`Slack Gateway webhook failed with HTTP ${ack.status}`);
+    }
+  }
+  // The last message carries the reply's last line; a quiet second covers typing and reactions.
+  const lastLine = reply.slice(reply.lastIndexOf("\n") + 1);
+  const sendMethod = channel === "telegram" ? "sendMessage" : "chat.postMessage";
+  const sends = () => providerCalls.slice(first).filter((call) => call.method === sendMethod);
+  const deadline = Date.now() + 180000;
+  let last: (typeof providerCalls)[number] | undefined;
+  while (!last || Date.now() - (providerCalls.at(-1)?.at ?? 0) < 1000) {
+    if (gateway?.exitCode !== null || gateway.signalCode !== null) {
+      throw new Error("Gateway exited during turn");
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`${channel} reply did not settle`);
+    }
+    await delay(50);
+    last ??= sends().find((call) => call.accepted && String(call.body.text).includes(lastLine));
+  }
+  return {
+    key: `${channel}:${inbound.providerTargetKey}`,
+    messageId,
+    firstOutboundMs: (sends()[0]?.at ?? start) - start,
+    lastOutboundMs: last.at - start,
+    provider: {
+      methods: providerCalls
+        .slice(first)
+        .map(({ method, accepted }) => (accepted ? method : `${method}:rejected`)),
+      sends: sends().length,
+      rejectedSends: sends().filter((call) => !call.accepted).length,
+      // Reactions and typing interleave freely; the delivered message bodies must not change.
+      digest: createHash("sha256")
+        .update(JSON.stringify(sends().map(({ body, accepted }) => ({ body, accepted }))))
+        .digest("hex"),
+    },
+  };
+}
 function publish(file: string, value: unknown) {
   const target = path.join(output, file);
   writeFileSync(target + ".new", JSON.stringify(value));
@@ -177,7 +349,105 @@ try {
   const mockPort = await getFreePort();
   evidence.ports = { port, mockPort };
   const state = createQaBusState();
-  bus = await startQaBusServer({ state });
+  if (crablineChannel) {
+    // Loaded here so the default and tool-invocation modes never load Crabline.
+    const { startOpenClawCrablineAdapter: startCrabline } = await import("@openclaw/crabline");
+    crabline = await startCrabline({
+      channel: crablineChannel,
+      recorderPath: path.join(output, "provider-api.jsonl"),
+      onEvent: (event) => {
+        // The Slack front below records Slack's calls itself.
+        const method = event.path.split("/").at(-1);
+        if (crablineChannel !== "telegram" || event.type !== "api" || !method) {
+          return;
+        }
+        // Crabline's Telegram server marks whether it committed each call.
+        const accepted = (event as { accepted?: boolean }).accepted === true;
+        // Telegram starts polling only after its startup calls.
+        if (method === "getUpdates") {
+          if (accepted) {
+            providerReady.resolve();
+          }
+          return;
+        }
+        providerCalls.push({
+          method,
+          body: (event.body ?? {}) as Record<string, unknown>,
+          accepted,
+          at: Date.now(),
+        });
+      },
+    });
+  }
+  if (crabline?.manifest.provider === "slack") {
+    // Every Slack Web API call passes through this front, which records it and whether Slack's
+    // `ok` came back. Crabline's Slack server lacks users.info and reactions; real Slack answers
+    // them, and the plugin would otherwise retry users.info with backoff on every turn.
+    const apiRoot = String(crabline.createProviderReadinessEnv({}).SLACK_API_URL);
+    const parseJson = (text: string): unknown => {
+      try {
+        return JSON.parse(text);
+      } catch {
+        return undefined;
+      }
+    };
+    slackApi = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        const url = new URL(String(request.url), apiRoot);
+        const method = url.pathname.replace(/^\/api\//u, "");
+        const raw = Buffer.concat(chunks);
+        const parsed = String(request.headers["content-type"]).includes("json")
+          ? parseJson(raw.toString())
+          : Object.fromEntries(new URLSearchParams(raw.toString()));
+        const { token: _token, ...body } = (parsed ?? {}) as Record<string, unknown>;
+        const record = (accepted: boolean) => {
+          providerCalls.push({ method, body, accepted, at: Date.now() });
+          if (method === "auth.test" && accepted) {
+            providerReady.resolve();
+          }
+        };
+        if (method === "users.info" || method.startsWith("reactions.")) {
+          record(true);
+          const user = { id: directPeers.slack[1], team_id: "TCRABLINE", name: "sqlmeasure" };
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify(method === "users.info" ? { ok: true, user } : { ok: true }));
+          return;
+        }
+        void fetch(new URL(method + url.search, apiRoot), {
+          method: request.method,
+          headers: Object.fromEntries(
+            ["authorization", "content-type"].flatMap((name) =>
+              request.headers[name] ? [[name, String(request.headers[name])]] : [],
+            ),
+          ),
+          ...(request.method === "POST" ? { body: raw } : {}),
+        })
+          .then(async (upstream) => {
+            const text = await upstream.text();
+            record(upstream.ok && (parseJson(text) as { ok?: unknown } | undefined)?.ok === true);
+            const retryAfter = upstream.headers.get("retry-after");
+            response.writeHead(upstream.status, {
+              "content-type": "application/json",
+              ...(retryAfter && { "retry-after": retryAfter }),
+            });
+            response.end(text);
+          })
+          .catch(() => {
+            record(false);
+            if (!response.headersSent) {
+              response.writeHead(502);
+            }
+            response.end();
+          });
+      });
+    });
+    const server = slackApi;
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+  }
   const cfg: OpenClawConfig = structuredClone(BASE_GATEWAY_BENCH_CONFIG);
   cfg.tools = { codeMode: false };
   applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
@@ -192,12 +462,19 @@ try {
     entries: {
       ...cfg.plugins?.entries,
       "memory-core": { config: { dreaming: { enabled: false } } },
-      "qa-channel": { enabled: true },
+      [values.channel]: { enabled: true },
     },
   };
-  cfg.channels = {
-    "qa-channel": { enabled: true, baseUrl: bus.baseUrl, allowFrom: ["*"], pollTimeoutMs: 100 },
-  };
+  if (crabline) {
+    const providerConfig = crabline.createGatewayConfig({}) as OpenClawConfig;
+    cfg.channels = providerConfig.channels;
+    cfg.messages = providerConfig.messages;
+  } else {
+    bus = await startQaBusServer({ state });
+    cfg.channels = {
+      "qa-channel": { enabled: true, baseUrl: bus.baseUrl, allowFrom: ["*"], pollTimeoutMs: 100 },
+    };
+  }
   const configPath = writeGatewayBenchConfig(fixture, cfg, {});
   const control = path.join(output, "mock-control.json");
   publish("channel-turns.json", messages);
@@ -238,6 +515,11 @@ try {
     ]),
     {
       ...createGatewayBenchEnv(fixture, configPath, { caseEnv: {} }),
+      // Slack reads its Web API root from the environment.
+      ...crabline?.createProviderReadinessEnv({}),
+      ...(slackApi && {
+        SLACK_API_URL: `http://127.0.0.1:${(slackApi.address() as { port: number }).port}/api/`,
+      }),
       OPENAI_API_KEY: "synthetic-sqlmeasure-fixture",
       SQLMEASURE_OUT: output,
       NODE_OPTIONS: process.env.OPENCLAW_CHANNEL_BENCH_NODE_OPTIONS ?? "--enable-source-maps",
@@ -257,6 +539,21 @@ try {
   if (ready.status !== 200) {
     throw new Error("Gateway not ready");
   }
+  if (crabline) {
+    if (gateway.exitCode !== null || gateway.signalCode !== null) {
+      throw new Error("Gateway exited before the provider started");
+    }
+    // Telegram's first completed poll or Slack's first accepted auth.test.
+    await Promise.race([
+      providerReady.promise,
+      once(gateway, "exit").then(() => {
+        throw new Error("Gateway exited before the provider started");
+      }),
+      delay(60000, undefined, { ref: false }).then(() => {
+        throw new Error(`${crablineChannel} provider did not start`);
+      }),
+    ]);
+  }
   await delay(1000);
   let warmResources: GatewayResourceSnapshot | undefined;
   for (let i = 0; i <= 10; i++) {
@@ -273,13 +570,42 @@ try {
       : undefined;
     setPhase(i === 0 ? "02.first-turn" : `03.turn-${String(i).padStart(2, "0")}`);
     const turnId = createHash("sha256").update(phase).digest("hex").slice(0, 32);
-    const messageId = `sqlmeasure-${i}`;
     traces[turnId] = { phase, turnId };
-    messages[messageId] = { phase, turnId };
     publish("trace-map.json", traces);
-    publish("channel-turns.json", messages);
-    const reply = `Synthetic channel measurement response ${i}. The Gateway receives this streamed answer from the local mock provider and delivers it to the isolated QA bus.`;
+    const register = (id: string) => {
+      messages[id] = { phase, turnId };
+      publish("channel-turns.json", messages);
+    };
+    const reply = buildReply(i);
+    const replyEvidence = {
+      length: reply.length,
+      sha256: createHash("sha256").update(reply).digest("hex"),
+    };
     publish("mock-control.json", { text: reply, chunkDelayMs: 5 });
+    const prompt = `Please give a short synthetic status report for measurement turn ${i}.`;
+    if (crabline && crablineChannel) {
+      const delivered = await runProviderTurn(
+        crabline,
+        crablineChannel,
+        i,
+        prompt,
+        reply,
+        port,
+        register,
+      );
+      evidence.turns.push({
+        phase,
+        turnId,
+        result: { status: "ok" },
+        reply: replyEvidence,
+        ...delivered,
+      });
+      save();
+      await delay(1000);
+      continue;
+    }
+    const messageId = `sqlmeasure-${i}`;
+    register(messageId);
     const start = Date.now();
     const cursor = state.getSnapshot().cursor;
     const firstOutbound = state
@@ -296,7 +622,7 @@ try {
         conversation: { kind: "direct", id: "sqlmeasure-peer" },
         senderId: "sqlmeasure-user",
         senderName: "SQL measurement",
-        text: `Please give a short synthetic status report for measurement turn ${i}.`,
+        text: prompt,
         timestamp: 1800000000000 + i,
       },
       messageId,
@@ -357,6 +683,7 @@ try {
       ...(cpu ? { cpu } : {}),
       result: { status: "ok" },
       outboundId: result.id,
+      reply: replyEvidence,
     });
     save();
     if (i === 10) {
@@ -380,8 +707,13 @@ try {
       throw new Error("shutdown timeout");
     }),
   ]);
-  evidence.bus = state.getSnapshot();
-  evidence.ok = evidence.turns.length === 11 && evidence.shutdown[0] === 0;
+  evidence.bus = crabline
+    ? { providerApi: path.join(output, "provider-api.jsonl") }
+    : state.getSnapshot();
+  evidence.ok =
+    evidence.turns.length === 11 &&
+    evidence.turns.every((turn) => !turn.provider?.rejectedSends) &&
+    evidence.shutdown[0] === 0;
   setPhase("done");
   console.log("COMPLETE", output, "ok=" + evidence.ok);
   if (!evidence.ok) {
