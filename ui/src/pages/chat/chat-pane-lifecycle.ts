@@ -15,7 +15,6 @@ import {
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
 import { hasModalSurface } from "../../components/overlay-registry.ts";
-import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -40,7 +39,7 @@ import {
   receiveBrowserAnnotation as admitBrowserAnnotation,
 } from "./chat-pane-browser-annotation.ts";
 import { createChatPaneMcpApps } from "./chat-pane-mcp-app.ts";
-import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
+import { resolveSidebarPanelShortcut } from "./chat-pane-panel-shortcuts.ts";
 import { openPreferredSidebarPanel, releaseAttachmentWorkspaceOwner } from "./chat-pane-rails.ts";
 import { ChatPaneSessionObservation } from "./chat-pane-session-observation.ts";
 import { createChatPaneSessionPanelToggles } from "./chat-pane-session-panel-toggle.ts";
@@ -69,13 +68,15 @@ import { dismissConfirmedActionPopovers } from "./components/chat-message-confir
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { resetThreadPresentation } from "./components/chat-thread-interactions.ts";
 import { retainCreatedIncognitoComposerScope } from "./composer-persistence-state.ts";
-import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { connectCreatedComposerQueue } from "./creation-composer-recovery.ts";
 import { exportChatMarkdown } from "./export.ts";
 import { admitChatSubmission } from "./history-merge.ts";
-import { admitInitialTurnHandoff } from "./initial-turn-handoff-admission.ts";
+import {
+  admitInitialChatTurn,
+  admitInitialTurnHandoff,
+  readAcknowledgedInitialRun,
+} from "./initial-turn-handoff-admission.ts";
 import { subscribeInitialTurnHandoff } from "./initial-turn-handoff.ts";
-import { adoptAcknowledgedInitialRun, readAcknowledgedInitialRun } from "./run-lifecycle.ts";
 import { applyChatCacheSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 import { closeSlot } from "./sidebar-layout.ts";
 
@@ -227,21 +228,16 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     ) {
       return;
     }
-    const shortcut = Object.values(SIDEBAR_PANEL_SHORTCUTS).find(
-      (entry) => entry && matchesShortcutCombo(entry.combo, event),
-    );
     const discussionState = this.sessionDiscussion.snapshot.states.get(state.sessionKey.trim());
-    if (
-      shortcut?.available({
-        state,
-        desktopAvailable: isDesktopPanelAvailable(this.context.gateway.snapshot),
-        discussion: state.connected && state.client ? true : null,
-        discussionAvailable: discussionState === "available" || discussionState === "open",
-        dashboardAvailable: () => !this.compact && this.isBoardPanelAvailable(),
-      })
-    ) {
+    const slot = resolveSidebarPanelShortcut(event, () => ({
+      state,
+      desktopAvailable: isDesktopPanelAvailable(this.context.gateway.snapshot),
+      discussion: state.connected && state.client ? true : null,
+      discussionAvailable: discussionState === "available" || discussionState === "open",
+      dashboardAvailable: () => !this.compact && this.isBoardPanelAvailable(),
+    }));
+    if (slot) {
       event.preventDefault();
-      const { slot } = shortcut;
       const visible = this.isSlotShown(state.sidebarLayout, slot);
       if (visible) {
         releaseAttachmentWorkspaceOwner(state, slot);
@@ -357,22 +353,14 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         } else {
           this.hydrateStoredChatSnapshot(pageState, initialSessionKey);
         }
-        if (admitInitialTurnHandoff(pageState, initialSessionKey)) {
-          pageState.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-          pageState.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-        }
-        admitChatSubmission(pageState, getChatPendingInputs(pageState)?.page.items);
-        adoptAcknowledgedInitialRun(pageState, initialRun);
+        admitInitialChatTurn(pageState, initialRun);
       }
     }
     chatState.attach(pageState);
     chatState.addCleanup(() => this.retireSessionObservation());
     chatState.addCleanup(
       subscribeInitialTurnHandoff(() => {
-        if (admitInitialTurnHandoff(pageState, pageState.sessionKey)) {
-          pageState.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-          pageState.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-        }
+        admitInitialTurnHandoff(pageState, pageState.sessionKey);
       }),
     );
     // Identity publications start scoped loads even when this retained pane is hidden.
@@ -593,13 +581,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         // path, so its one-shot handoffs would expire unclaimed: the rejected turn
         // would vanish instead of offering a retry, and the accepted prompt would
         // stay hidden until the transcript bootstrap resolved.
-        const rejectedTurn = admitInitialTurnHandoff(this.state, nextSessionKey);
-        admitChatSubmission(this.state, getChatPendingInputs(this.state)?.page.items);
-        adoptAcknowledgedInitialRun(this.state, initialRun);
-        if (rejectedTurn) {
-          this.state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-          this.state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-        }
+        admitInitialChatTurn(this.state, initialRun);
       }
       if (nextSessionKey) {
         const handoff = this.takeSessionHandoff(nextSessionKey);

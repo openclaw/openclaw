@@ -106,7 +106,10 @@ describe("cron context replay fixtures", () => {
       sessionId: "parent-session",
       lifecycleRevision: "rev-2",
     });
-    expect(replayScheduledContextFixture(fixture).status).toBe("pause");
+    expect(replayScheduledContextFixture(fixture)).toMatchObject({
+      status: "ready",
+      principal: "unbound-parent",
+    });
   });
 
   it("replaces script and system event bodies but keeps their tool caps", () => {

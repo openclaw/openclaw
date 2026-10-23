@@ -144,8 +144,7 @@ describe("showInputDialog", () => {
     submitForm();
     submitForm();
     expect(submit).toHaveBeenCalledOnce();
-    flush();
-    expect(dialogInput().disabled).toBe(true);
+    await waitForSolid(() => expect(dialogInput().disabled).toBe(true));
 
     const cancelEvent = new CustomEvent("modal-cancel", { cancelable: true });
     modal.dispatchEvent(cancelEvent);
@@ -203,11 +202,14 @@ describe("showInputDialog", () => {
       const { closed } = await open({ ...REQUIRED, submit });
 
       await type("Client work");
+      const input = dialogInput();
       submitForm();
       await waitForSolid(() => expect(document.body.textContent).toContain("gateway exploded"));
 
       expect(submit).toHaveBeenCalledOnce();
+      expect(dialogInput()).toBe(input);
       expect(dialogInput()).toMatchObject({ disabled: false, value: "Client work" });
+      expect(input.getAttribute("aria-invalid")).toBe("true");
       expect(findButton("Create group").disabled).toBe(false);
       expect(document.activeElement).toBe(dialogInput());
 
@@ -216,4 +218,32 @@ describe("showInputDialog", () => {
       expect(dialog()).toBeNull();
     },
   );
+
+  it("retains validation feedback and the input while an admitted retry clears the failure", async () => {
+    const retry = Promise.withResolvers<string | null>();
+    const submit = vi
+      .fn()
+      .mockResolvedValueOnce("Choose another group name")
+      .mockReturnValue(retry.promise);
+    const { closed } = await open({ ...REQUIRED, submit });
+    await type("Client work");
+    const input = dialogInput();
+    submitForm();
+    await waitForSolid(() => {
+      expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+        "Choose another group name",
+      );
+      expect(input.getAttribute("aria-invalid")).toBe("true");
+    });
+
+    submitForm();
+    submitForm();
+    expect(submit).toHaveBeenCalledTimes(2);
+    await waitForSolid(() => expect(input.disabled).toBe(true));
+    expect(dialogInput()).toBe(input);
+    expect(input.hasAttribute("aria-invalid")).toBe(false);
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    retry.resolve(null);
+    await expect(closed).resolves.toBe("Client work");
+  });
 });

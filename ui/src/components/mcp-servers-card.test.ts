@@ -19,7 +19,13 @@ import {
   createSolidApplicationContextProvider,
 } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
+import { showConfirmDialog } from "./confirm-dialog.ts";
 import { McpServersCard } from "./mcp-servers-card.tsx";
+
+vi.mock("./confirm-dialog.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./confirm-dialog.ts")>()),
+  showConfirmDialog: vi.fn(),
+}));
 type ConfigPatchBuilder = Parameters<RuntimeConfigCapability["patchFromSnapshot"]>[0];
 type RuntimeConfigHarness = ReturnType<typeof createRuntimeConfig>;
 function createGateway(
@@ -63,7 +69,7 @@ function createGateway(
   } as unknown as ApplicationGateway;
 }
 function createRuntimeConfig(config: Record<string, unknown>) {
-  const ensureLoaded = vi.fn(async () => undefined);
+  const ensureLoaded = vi.fn<() => Promise<void>>(async () => undefined);
   const patch = vi.fn<(options: ConfigPatchOptions) => Promise<boolean>>(async () => true);
   const listeners = new Set<() => void>();
   const state = {
@@ -96,9 +102,13 @@ async function mountCard(
     connected?: boolean;
     admin?: boolean;
     gateway?: ApplicationGateway;
+    initialLoad?: Promise<void>;
   } = {},
 ) {
   const harness = createRuntimeConfig(options.config ?? { mcp: { servers: {} } });
+  if (options.initialLoad) {
+    harness.ensureLoaded.mockReturnValueOnce(options.initialLoad);
+  }
   const gateway =
     options.gateway ?? createGateway({ connected: options.connected, admin: options.admin });
   const context = {
@@ -196,6 +206,7 @@ async function mountLoginCard(
 describe("openclaw-mcp-servers-card", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
+    vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true);
   });
   afterEach(() => {
     cleanupSolid();
@@ -298,7 +309,7 @@ describe("openclaw-mcp-servers-card", () => {
     {
       name: "requester-owned",
       server: { ...oauthServer, oauth: { identity: "per-requester" } },
-      text: "Each person signs in through this connector in chat.",
+      text: "Each person signs in through this MCP server in chat.",
     },
     {
       name: "mapped profile",
@@ -572,10 +583,58 @@ describe("openclaw-mcp-servers-card", () => {
     });
     actionButton(card, "Remove docs").click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
     expect(firstPatchCall(harness)).toEqual({
       raw: { mcp: { servers: { docs: null } } },
       note: "mcp settings: remove server docs",
       ...(replacePaths.length ? { replacePaths } : {}),
+    });
+  });
+  it("keeps the server and sends no patch when removal is cancelled", async () => {
+    const { card, harness } = await mountCard({
+      config: configWith({ docs: { command: "node", args: ["synthetic-server.mjs"] } }),
+    });
+    vi.mocked(showConfirmDialog).mockResolvedValueOnce(false);
+
+    actionButton(card, "Remove docs").click();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(harness.patch).not.toHaveBeenCalled();
+    expectRow(card, "docs", ["docs"]);
+    expect(showConfirmDialog).toHaveBeenCalledWith({
+      title: "Remove docs?",
+      message: expect.stringContaining("saved configuration"),
+      confirmLabel: "Remove",
+      danger: true,
+    });
+  });
+  it("shows failed removal confirmation and clears it while retrying", async () => {
+    const { card, harness } = await mountCard({
+      config: configWith({ docs: { command: "node", args: ["synthetic-server.mjs"] } }),
+    });
+    vi.mocked(showConfirmDialog).mockRejectedValueOnce(
+      new Error("Unable to open removal confirmation."),
+    );
+    actionButton(card, "Remove docs").click();
+    await waitForFast(() =>
+      expect(card.querySelector('[role="alert"]')?.textContent).toBe(
+        "Unable to open removal confirmation.",
+      ),
+    );
+    expect(harness.patch).not.toHaveBeenCalled();
+    expectRow(card, "docs", ["docs"]);
+
+    const confirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+    actionButton(card, "Remove docs").click();
+    await waitForFast(() => expect(card.querySelector('[role="alert"]')).toBeNull());
+    expect(harness.patch).not.toHaveBeenCalled();
+    confirmation.resolve(true);
+    await waitForFast(() => {
+      expect(harness.patch).toHaveBeenCalledOnce();
+      expect(card.querySelector('[role="status"]')?.textContent).toBe("Removed MCP server docs.");
     });
   });
   it.each(["load", "patch rejection", "patch refusal"] as const)(
@@ -601,7 +660,14 @@ describe("openclaw-mcp-servers-card", () => {
       );
       expect(actionButton(card, "Disable").disabled).toBe(false);
 
+      const retry = deferred<boolean>();
+      harness.patch.mockReturnValueOnce(retry.promise);
       actionButton(card, "Disable").click();
+      await waitForFast(() => {
+        expect(card.querySelector('[role="alert"]')).toBeNull();
+        expect(actionButton(card, "Working").disabled).toBe(true);
+      });
+      retry.resolve(true);
       await waitForFast(() =>
         expect(card.querySelector('[role="status"]')?.textContent).toBe(
           "Disabled MCP server local.",
@@ -609,6 +675,40 @@ describe("openclaw-mcp-servers-card", () => {
       );
     },
   );
+
+  it("shows an initial configuration failure without replacing the controls", async () => {
+    const initialLoad = deferred();
+    const { card } = await mountCard({
+      config: configWith({ local: { command: "node" } }),
+      initialLoad: initialLoad.promise,
+    });
+    initialLoad.reject(new Error("Configuration could not be loaded"));
+    await waitForFast(() =>
+      expect(card.querySelector('[role="alert"]')?.textContent).toBe(
+        "Configuration could not be loaded",
+      ),
+    );
+    expect(actionButton(card, "Disable").disabled).toBe(false);
+  });
+
+  it("keeps a successful mutation visible when an older initial read fails", async () => {
+    const initialLoad = deferred();
+    const { card, harness } = await mountCard({
+      config: configWith({ local: { command: "node" } }),
+      initialLoad: initialLoad.promise,
+    });
+    actionButton(card, "Disable").click();
+    await waitForFast(() =>
+      expect(card.querySelector('[role="status"]')?.textContent).toBe("Disabled MCP server local."),
+    );
+    initialLoad.reject(new Error("Earlier configuration read failed"));
+    await initialLoad.promise.catch(() => {});
+    await waitForFast(() => {
+      expect(card.querySelector('[role="alert"]')).toBeNull();
+      expect(card.querySelector('[role="status"]')?.textContent).toBe("Disabled MCP server local.");
+      expect(harness.patch).toHaveBeenCalledOnce();
+    });
+  });
 
   it("builds removal intent from the snapshot after queued writes settle", async () => {
     const retained = { command: "node", args: ["retained.mjs"], opaque: null };

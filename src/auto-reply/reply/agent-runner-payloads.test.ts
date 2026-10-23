@@ -18,7 +18,6 @@ import type { DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
 const baseParams = {
-  isHeartbeat: false,
   blockStreamingEnabled: false,
   blockReplyPipeline: null,
   replyToMode: "off" as const,
@@ -224,9 +223,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(fallback.replyPayloads[0]?.replyToId).toBeUndefined();
   });
 
-  it("strips legacy bracket tool blocks from heartbeat replies", async () => {
+  it("strips legacy bracket tool blocks from replies", async () => {
     await expectBuiltPayloads({
-      isHeartbeat: true,
       payloads: [
         {
           text: [
@@ -281,19 +279,14 @@ describe("buildReplyPayloads media filter integration", () => {
     },
   );
 
-  it.each([
-    { isHeartbeat: false, visibleAlreadyClean: false },
-    { isHeartbeat: true, visibleAlreadyClean: false },
-    { isHeartbeat: true, visibleAlreadyClean: true },
-  ])(
-    "sanitizes source reply transcript mirror text ($isHeartbeat, $visibleAlreadyClean)",
-    async ({ isHeartbeat, visibleAlreadyClean }) => {
+  it.each([false, true])(
+    "sanitizes source reply transcript mirror text (visibleAlreadyClean=%s)",
+    async (visibleAlreadyClean) => {
       const text =
         'Visible\n<function_response>\nSearching for: "what skills matter most in the age of AI"\n...\n</function_response>\nDone';
       const payload = withMirror(text, visibleAlreadyClean ? "Visible\n\nDone" : text);
 
       const { replyPayloads } = await buildTestReplyPayloads({
-        isHeartbeat,
         payloads: [payload],
       });
 

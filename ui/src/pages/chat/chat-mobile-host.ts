@@ -1,5 +1,4 @@
 import type { JSX } from "@solidjs/web";
-import type { ShellViewportSnapshot } from "../../app/shell-viewport.ts";
 import type { SidebarSlotId } from "./sidebar-layout.ts";
 
 export type MobileDetailsRoute =
@@ -62,5 +61,4 @@ export type ChatMobileHost = {
   /** Undefined means the viewport owner has not observed a value. */
   keyboardVisible: boolean | undefined;
   onComposerEditingChange: (editing: boolean) => void;
-  onViewportChange: (viewport: ShellViewportSnapshot | undefined) => void;
 };

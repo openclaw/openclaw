@@ -29,44 +29,15 @@ type MattermostFinalTextResolution =
       publishedParts: readonly MattermostDraftPublishedPart[];
     };
 
-function normalizeMattermostDraftText(text: string, maxChars: number): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return truncateWithMarker(trimmed, maxChars, { marker: "...", reserve: 3, trimEnd: true });
-}
-
-function consumeMattermostPublishedChunk(params: {
-  source: string;
-  offset: number;
-  chunk: string;
-}): number | undefined {
-  const chunk = params.chunk.trim();
-  if (!chunk) {
-    return params.offset;
-  }
-  let offset = params.offset;
-  while (offset < params.source.length && /\s/.test(params.source[offset] ?? "")) {
-    offset += 1;
-  }
-  return params.source.startsWith(chunk, offset) ? offset + chunk.length : undefined;
-}
-
 export function createMattermostDraftStream(params: {
   client: MattermostClient;
   channelId: string;
   rootId?: string;
-  maxChars?: number;
   throttleMs?: number;
   chunkText?: (text: string) => string[];
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }) {
-  const maxChars = Math.min(
-    params.maxChars ?? MATTERMOST_STREAM_MAX_CHARS,
-    MATTERMOST_STREAM_MAX_CHARS,
-  );
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const streamState = { stopped: false, final: false };
   let terminalAcceptedDeliveryError: Error | undefined;
@@ -105,7 +76,14 @@ export function createMattermostDraftStream(params: {
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     const target = currentGeneration;
-    const normalized = normalizeMattermostDraftText(text, maxChars);
+    const trimmed = text.trim();
+    const normalized = trimmed
+      ? truncateWithMarker(trimmed, MATTERMOST_STREAM_MAX_CHARS, {
+          marker: "...",
+          reserve: 3,
+          trimEnd: true,
+        })
+      : "";
     if (!normalized) {
       return false;
     }
@@ -188,9 +166,15 @@ export function createMattermostDraftStream(params: {
         return;
       }
       publishedAssistantParts.set(messageId, { messageId, content });
+      const chunk = content.trim();
+      let nextOffset = offset;
+      if (chunk) {
+        while (nextOffset < assistantText.length && /\s/.test(assistantText[nextOffset] ?? "")) {
+          nextOffset += 1;
+        }
+      }
       publishedAssistantOffset =
-        consumeMattermostPublishedChunk({ source: assistantText, offset, chunk: content }) ??
-        offset;
+        !chunk || assistantText.startsWith(chunk, nextOffset) ? nextOffset + chunk.length : offset;
     };
     const boundary = (async () => {
       try {
@@ -205,7 +189,7 @@ export function createMattermostDraftStream(params: {
         const finalizedText = sourceText.trim();
         const chunks =
           params.chunkText?.(finalizedText) ??
-          chunkMarkdownTextWithMode(finalizedText, maxChars, "length");
+          chunkMarkdownTextWithMode(finalizedText, MATTERMOST_STREAM_MAX_CHARS, "length");
         const firstChunk = chunks[0];
         if (!firstChunk) {
           return;
@@ -352,7 +336,9 @@ export function createMattermostDraftStream(params: {
       : { kind: "already-delivered", publishedParts };
   };
 
-  params.log?.(`mattermost stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
+  params.log?.(
+    `mattermost stream preview ready (maxChars=${MATTERMOST_STREAM_MAX_CHARS}, throttleMs=${throttleMs})`,
+  );
 
   return {
     update,

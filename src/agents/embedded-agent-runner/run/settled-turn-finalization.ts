@@ -24,7 +24,11 @@ import {
 import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { resolveRuntimeModelAttempt } from "./backend.js";
-import { shouldTreatEmptyAssistantReplyAsSilent } from "./incomplete-turn-recovery.js";
+import {
+  isSettledTurnCutOffByOutputLimit,
+  shouldTreatEmptyAssistantReplyAsSilent,
+} from "./incomplete-turn-recovery.js";
+import { CUT_OFF_SUMMARY_NOTICE_TEXT } from "./incomplete-turn-resolution.js";
 import type { createEmbeddedRunLaneController } from "./lane-controller.js";
 import {
   isEmbeddedRunTerminalTimeout,
@@ -305,6 +309,17 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     ...(await observeSourceDelivery()),
     lastRunPromptUsage,
   });
+  // A tool-free summary cannot show that the cut-off work finished, so the host
+  // says the turn was cut short instead of presenting the summary as a clean finish.
+  if (
+    finalizationOutcome === "answered" &&
+    finalizedPrepared.payloadsWithToolMedia?.length &&
+    isSettledTurnCutOffByOutputLimit(initial.attempt)
+  ) {
+    finalizedPrepared.payloadsWithToolMedia.push(
+      setReplyPayloadMetadata({ text: CUT_OFF_SUMMARY_NOTICE_TEXT }, { hostNotice: true }),
+    );
+  }
   // Only a real finalizer answer may cross source-reply suppression.
   finalizedPrepared.payloadsWithToolMedia?.forEach((payload) => {
     if (finalizationOutcome === "answered") {

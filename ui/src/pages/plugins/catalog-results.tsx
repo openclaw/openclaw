@@ -11,7 +11,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PageReadResult } from "../../lib/page-request.ts";
 import type {
   PluginCatalogItem,
@@ -251,13 +251,9 @@ function CatalogCard(props: {
         class="plugin-catalog-card__primary-link"
         href={props.state.entryHref(props.plugin.id)}
         aria-label={props.plugin.catalog.name}
-        onClick={(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          props.state.onOpenEntry(props.plugin.id);
-        }}
+        onClick={(event: MouseEvent) =>
+          handleNavigationClick(event, () => props.state.onOpenEntry(props.plugin.id))
+        }
       />
       <div class="plugin-catalog-card__head">
         <div class="installed-plugins-card__head">

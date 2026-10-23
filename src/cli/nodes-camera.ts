@@ -303,16 +303,12 @@ export async function writeCameraPayloadToFile(params: {
 export async function writeCameraClipPayloadToFile(params: {
   payload: ReturnType<typeof parseCameraClipPayload>;
   facing: CameraArtifactFacing;
-  tmpDir?: string;
-  id?: string;
   expectedHost?: string;
 }): Promise<string> {
   const filePath = cameraTempPath({
     kind: "clip",
     facing: params.facing,
     ext: params.payload.format,
-    tmpDir: params.tmpDir,
-    id: params.id,
   });
   await writeCameraPayloadToFile({
     filePath,

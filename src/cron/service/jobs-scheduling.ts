@@ -46,7 +46,7 @@ export function resolveCronRestartRetryAtMs(
   const delay =
     job.schedule.kind === "at"
       ? MIN_REFIRE_GAP_MS
-      : errorBackoffMs(job.state.consecutiveErrors ?? 1);
+      : errorBackoffMs(normalizeConsecutiveErrors(job.state.consecutiveErrors));
   return Math.max(nowMs, startedAtMs) + delay;
 }
 
@@ -155,6 +155,10 @@ export function errorBackoffMs(
   return expectDefined(scheduleMs[Math.max(0, idx)], "schedule ms entry at math.max(0, idx)");
 }
 
+export function normalizeConsecutiveErrors(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
 /** Returns the earliest retry timestamp after a failed cron run and its runtime duration. */
 export function resolveJobErrorBackoffUntilMs(
   job: CronJob,
@@ -167,11 +171,7 @@ export function resolveJobErrorBackoffUntilMs(
   if (lastEndedAtMs === undefined) {
     return undefined;
   }
-  const consecutiveErrorsRaw = job.state.consecutiveErrors;
-  const consecutiveErrors =
-    typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
-      ? Math.max(1, Math.floor(consecutiveErrorsRaw))
-      : 1;
+  const consecutiveErrors = normalizeConsecutiveErrors(job.state.consecutiveErrors);
   return asDateTimestampMs(lastEndedAtMs + errorBackoffMs(consecutiveErrors, scheduleMs));
 }
 
@@ -376,7 +376,11 @@ export function isTimeScheduledJob(job: Pick<CronJob, "schedule">): boolean {
 }
 
 /** Computes the next run timestamp for enabled jobs across every/at/cron schedules. */
-export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
+export function computeJobNextRunAtMs(
+  job: CronJob,
+  nowMs: number,
+  opts?: { preserveEveryAnchor?: boolean },
+): number | undefined {
   if (!isJobEnabled(job)) {
     return undefined;
   }
@@ -397,7 +401,8 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
       schedule: job.schedule,
       fallbackAnchorMs,
     });
-    const lastRunAtMs = job.state.lastRunAtMs;
+    // A retry must not become a new anchor for the authored interval.
+    const lastRunAtMs = opts?.preserveEveryAnchor ? undefined : job.state.lastRunAtMs;
     if (isFiniteTimestamp(lastRunAtMs) && lastRunAtMs >= anchorMs) {
       const nextFromLastRun = Math.floor(lastRunAtMs) + everyMs;
       if (!isFiniteTimestamp(nextFromLastRun)) {

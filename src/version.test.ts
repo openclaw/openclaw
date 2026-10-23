@@ -89,7 +89,7 @@ describe("version resolution", () => {
       "package.json": { name: "openclaw", version: "2.3.4" },
     });
     const resolve = (url: string, bundledVersion: string) =>
-      resolveBinaryVersion({ moduleUrl: url, bundledVersion, fallback: "0.0.0" });
+      resolveBinaryVersion({ moduleUrl: url, bundledVersion });
     expect(resolve(moduleUrl, "8.8.8")).toBe("2.3.4");
     expect(resolve("not-a-valid-url", "8.8.8")).toBe("8.8.8");
     expect(resolve("not-a-valid-url", "   ")).toBe("0.0.0");

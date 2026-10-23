@@ -14,15 +14,12 @@ import { loadEnabledBundleLspConfig } from "../plugins/bundle-lsp.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { shouldManageGatewayService } from "./doctor-service-repair-policy.js";
 
-type LoadBundleLspConfig = typeof loadEnabledBundleLspConfig;
-
 /** Notes commonly needed, non-secret Gateway env names that configured bundle LSP servers lack. */
 export async function noteBundleLspEnvPassthrough(params: {
   cfg: OpenClawConfig;
   workspaceDirs: readonly string[];
   env?: NodeJS.ProcessEnv;
   service?: Pick<GatewayService, "readCommand">;
-  loadLspConfig?: LoadBundleLspConfig;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   noteFn?: typeof note;
 }): Promise<void> {
@@ -30,13 +27,12 @@ export async function noteBundleLspEnvPassthrough(params: {
     return;
   }
   const { cfg, workspaceDirs } = params;
-  const loadLspConfig = params.loadLspConfig ?? loadEnabledBundleLspConfig;
   const runWithPluginMetadataSnapshot = params.runWithPluginMetadataSnapshot;
   // Each workspace resolves its own servers at runtime, so one name can carry
   // different launch envs; keep every one so none hides another's withheld names.
   const servers = new Map<string, Array<Record<string, string> | undefined>>();
   for (const workspaceDir of workspaceDirs) {
-    const load = () => loadLspConfig({ workspaceDir, cfg });
+    const load = () => loadEnabledBundleLspConfig({ workspaceDir, cfg });
     const loaded = runWithPluginMetadataSnapshot
       ? runWithPluginMetadataSnapshot({ config: cfg, workspaceDir }, load)
       : load();

@@ -430,6 +430,11 @@ async function createFixture(stateDir: string, agentDir: string) {
       }
       setRuntimeConfigSnapshot(cfg);
     },
+    setGmailProfile(profileId: string) {
+      cfg.hooks = { ...cfg.hooks, gmail: { model: "openai/gpt-4o@" + profileId } };
+      cfg.agents!.defaults!.modelPolicy = { allow: ["openai/gpt-4.1", "openai/gpt-4o"] };
+      setRuntimeConfigSnapshot(cfg);
+    },
     async changeDefaults(profileId: string) {
       cfg = {
         ...cfg,
@@ -842,6 +847,41 @@ describe("cron handler inference binding persistence", () => {
           profileId: allowed ? subscriptionId : platformId,
           authRequirement: allowed ? "subscription" : "api-key",
           source: allowed ? "user" : "auto",
+        });
+      });
+    },
+  );
+
+  it.each([
+    { source: "payload", isGmailHook: true },
+    { source: "session", isGmailHook: true },
+    { source: "delivery-only", isGmailHook: false },
+  ] as const)(
+    "captures the execution account for $source Gmail provenance",
+    async ({ source, isGmailHook }) => {
+      await withFixture(async (fixture) => {
+        await fixture.setCreator(platformId);
+        fixture.setGmailProfile(subscriptionId);
+        const params = {
+          ...createParams(),
+          ...(source === "payload"
+            ? { payload: { ...createParams().payload, externalContentSource: "gmail" } }
+            : source === "session"
+              ? { sessionTarget: "session:agent:main:hook:gmail:synthetic" }
+              : { sessionKey: "agent:main:hook:gmail:synthetic" }),
+        };
+        await fixture.invoke(
+          "cron.add",
+          params,
+          createCronCallerClient("main", undefined, sessionKey),
+        );
+        const created = await fixture.reload();
+        expect(created.payload).not.toHaveProperty("model");
+        expect(created.inferenceBinding).toMatchObject({
+          provider: "openai",
+          profileId: isGmailHook ? subscriptionId : platformId,
+          authRequirement: isGmailHook ? "subscription" : "api-key",
+          source: isGmailHook ? "user" : "auto",
         });
       });
     },

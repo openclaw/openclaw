@@ -36,6 +36,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { projectAgentSelection } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -61,8 +62,10 @@ export function SearchPage() {
   const loadCompletion = createMemo(() => loadRequest()?.promise.then(() => null) ?? null);
   const loading = () => isPending(loadCompletion);
   const [testing, setTesting] = createOptimistic(false);
-  const [testResult, setTestResult] = createSignal<WebSearchTestResult | null>(null);
-  const [testError, setTestError] = createSignal("");
+  const [testRequest, setTestRequest] = createSignal<Promise<WebSearchTestResult | null> | null>(
+    null,
+  );
+  const testResult = createMemo(() => testRequest());
   const [models, setModels] = createSignal<ModelCatalogEntry[]>([]);
   const [model, setModel] = createSignal("");
   const [setupProvider, setSetupProvider] = createSignal("");
@@ -131,8 +134,7 @@ export function SearchPage() {
     const previous = activeTest;
     activeTest = undefined;
     previous?.resolve();
-    setTestResult(null);
-    setTestError("");
+    setTestRequest(null);
   }
 
   function invalidate() {
@@ -319,13 +321,11 @@ export function SearchPage() {
           query: queryText,
         });
         if (current()) {
-          setTestError("");
-          setTestResult(response);
+          return response;
         }
       } catch (cause) {
         if (current()) {
-          setTestResult(null);
-          setTestError(formatUiError(cause));
+          throw cause;
         }
       } finally {
         if (activeTest === presentation) {
@@ -333,10 +333,14 @@ export function SearchPage() {
         }
         presentation.resolve();
       }
+      return null;
     })();
+    void setTestRequest(completed);
+    // A retired or disposed view may no longer consume this result.
+    void completed.catch(() => undefined);
     // Flush the query draft before the action can hold its opening tick.
     await Promise.resolve();
-    return current() ? presentTest(presentation.promise) : completed;
+    return current() ? presentTest(presentation.promise) : completed.catch(() => undefined);
   }
 
   const configState = () => runtimeView.read().state;
@@ -381,22 +385,33 @@ export function SearchPage() {
         ? "muted"
         : "ok";
   };
-  const health = () => {
-    const last = testing() ? null : testResult();
-    const failed = !testing() && (testError() || last?.status === "error");
-    return {
-      kind: failed ? ("danger" as const) : last ? ("ok" as const) : ("muted" as const),
-      label: t(
-        `searchPage.${testing() ? "testing" : failed ? "failure" : last ? "success" : "untested"}`,
-      ),
+  function TestHealth(props: { pending?: boolean; failed?: boolean }) {
+    const pending = () => props.pending || testing();
+    const last = () => (pending() || props.failed ? null : testResult());
+    const failed = () => !pending() && (props.failed || last()?.status === "error");
+    const description = () => {
+      const response = last();
+      return response
+        ? `${response.provider} · ${t("searchPage.duration", { ms: String(response.latencyMs) })}${response.cached ? ` · ${t("searchPage.cached")}` : ""}`
+        : undefined;
     };
-  };
-  const healthDescription = () => {
-    const last = testing() ? null : testResult();
-    return last
-      ? `${last.provider} · ${t("searchPage.duration", { ms: String(last.latencyMs) })}${last.cached ? ` · ${t("searchPage.cached")}` : ""}`
-      : undefined;
-  };
+    return (
+      <SettingsRow
+        title={t("searchPage.health")}
+        description={description()}
+        control={
+          <span role="status">
+            <SettingsStatus
+              kind={failed() ? "danger" : last() ? "ok" : "muted"}
+              label={t(
+                `searchPage.${pending() ? "testing" : failed() ? "failure" : last() ? "success" : "untested"}`,
+              )}
+            />
+          </span>
+        }
+      />
+    );
+  }
   const selectedProvider = () => providers().find((provider) => provider.id === setupProvider());
   const agentOptions = () =>
     (agents.read().agentsList?.agents ?? [])
@@ -531,15 +546,11 @@ export function SearchPage() {
                         </button>
                       }
                     >
-                      <SettingsRow
-                        title={t("searchPage.health")}
-                        description={healthDescription()}
-                        control={
-                          <span role="status">
-                            <SettingsStatus {...health()} />
-                          </span>
-                        }
-                      />
+                      <Loading on={testRequest()} fallback={<TestHealth pending />}>
+                        <Errored fallback={() => <TestHealth failed />}>
+                          <TestHealth />
+                        </Errored>
+                      </Loading>
                       <Show when={current().testProvider || current().route.testable}>
                         <SettingsRow
                           title={t("searchPage.query")}
@@ -560,8 +571,9 @@ export function SearchPage() {
                                   invalidateTest();
                                 }
                               }}
+                              onCompositionEnd={recordCompositionEnd}
                               onKeyDown={(event) => {
-                                if (event.key === "Enter") {
+                                if (event.key === "Enter" && !isComposingKeyboardEvent(event)) {
                                   void test(renderScope);
                                 }
                               }}
@@ -616,7 +628,13 @@ export function SearchPage() {
                         />
                       </Show>
                     </SettingsSection>
-                    {!testing() && renderSearchTestResult(testResult(), testError())}
+                    <Loading on={testRequest()} fallback={undefined}>
+                      <Errored
+                        fallback={(error) => renderSearchTestResult(null, formatUiError(error()))}
+                      >
+                        {renderSearchTestResult(testResult(), "")}
+                      </Errored>
+                    </Loading>
                     <SettingsSection
                       title={t("searchPage.setup")}
                       description={t("searchPage.setupHint")}

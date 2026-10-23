@@ -266,7 +266,7 @@ export function AgentFiles(
                   ariaLabel: t("agents.files.coreFilesTitle"),
                   panelId: "agent-file-panel",
                   variant: "sub",
-                  onSelect: params.onSelectFile,
+                  onSelect: (name) => void params.onSelectFile(name),
                 }}
               />
               {creatableFiles().length === 0 ? undefined : (
@@ -280,7 +280,7 @@ export function AgentFiles(
                     const name = select.value;
                     select.value = "";
                     if (name) {
-                      params.onSelectFile(name);
+                      void params.onSelectFile(name);
                     }
                   }}
                 >

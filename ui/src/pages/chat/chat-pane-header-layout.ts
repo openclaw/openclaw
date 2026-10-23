@@ -19,7 +19,7 @@ import type { ChatProps } from "./chat-view.tsx";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import type { ChatDetailsElements, ChatDetailsViewProps } from "./components/chat-details.tsx";
 import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
-import { chatPullRequestId } from "./components/chat-pull-requests.ts";
+import { chatPullRequestId, retainedPublication } from "./components/chat-pull-requests.ts";
 import {
   getSessionWorkspace,
   isCurrentSessionWorkspace,
@@ -96,7 +96,10 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
         openDetailsPage({ kind: "pull-request", id: chatPullRequestId(request) }, request.title),
       publication: chatProps.githubPublication
         ? {
-            eligible: true,
+            eligible: Boolean(
+              (!chatProps.pullRequestsBranchDismissed && chatProps.pullRequestsBranch) ||
+              retainedPublication(chatProps.githubPublication),
+            ),
             onOpen: (source) =>
               openDetailsPage(
                 { kind: "publication" },
@@ -201,7 +204,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
     chatProps: ChatProps;
     paneChatProps: ChatProps;
     detailsActions: PaneDetailsActions;
-    subagentStop: { onAbort: () => void } | undefined;
+    subagentStop: { target: string; onAbort: () => void } | undefined;
     ownsSubagentsPanel: boolean;
     mobileHost: ChatMobileHost | undefined;
     sidebarLayout: SidebarLayout;

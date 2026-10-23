@@ -259,14 +259,16 @@ export function Config(props: ConfigProps) {
   const schemaReady = createMemo(readSchema);
   const readSchemaReady = () => (hasSchema() ? latest(schemaReady) : schemaReady());
   function RawEditor() {
-    const [pending, setPending] = createOptimistic<"save" | "discard" | "open" | null>(null);
+    const [commandPending, setCommandPending] = createOptimistic(false);
+    const [savePending, setSavePending] = createOptimistic(false);
     const presentCommand = action(function* (
       operation: "save" | "discard" | "open",
       result: void | Promise<unknown>,
       retired: Promise<void>,
     ) {
       if (retired === props.presentationRetired()) {
-        setPending(operation);
+        setCommandPending(true);
+        setSavePending(operation === "save");
       }
       yield Promise.race([result, retired]);
     });
@@ -281,12 +283,11 @@ export function Config(props: ConfigProps) {
       await Promise.resolve();
       return presentCommand(operation, result, retired);
     };
-    const busy = () => pending() !== null || state().configBusy;
-    const saving = () => pending() === "save" || props.saving;
-    const rawRef = createLiveValue(() => props.raw);
+    const busy = () => commandPending() || state().configBusy;
+    const saving = () => savePending() || props.saving;
     // Resolve the raw branch once; a dynamic children factory recreates the textarea on each edit.
-    const editor = (
-      <>
+    return (
+      <SettingsPage>
         {state().hasRawChanges ? (
           <details
             class="config-diff"
@@ -433,7 +434,7 @@ export function Config(props: ConfigProps) {
                 <textarea
                   aria-label={t("configView.rawConfig")}
                   placeholder={t("configView.rawConfig")}
-                  ref={rawRef}
+                  ref={createLiveValue(() => props.raw)}
                   disabled={busy() || !state().mutationAllowed}
                   onInput={(event) => props.onRawChange(event.currentTarget.value)}
                 />
@@ -441,9 +442,8 @@ export function Config(props: ConfigProps) {
             </div>
           </div>
         </div>
-      </>
+      </SettingsPage>
     );
-    return <SettingsPage>{editor}</SettingsPage>;
   }
   function FormEditor() {
     const editor = (

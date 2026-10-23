@@ -21,7 +21,6 @@ import {
   isHostScopedAgentToolActive,
   runWithAgentRingZeroTools,
 } from "../agent-tools.ring-zero-context.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -310,7 +309,6 @@ export async function runAgentHarnessAttempt(
         capabilities: harness.contextEngineHostCapabilities ?? [],
       },
       recorder: internalParams.userTurnTranscriptRecorder,
-      isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
       sessionTarget: internalParams.sessionTarget,
     });
     internalParams = {
@@ -338,8 +336,6 @@ export async function runAgentHarnessAttempt(
     (awaitBaseline &&
       (!selection.builtIn ||
         WORKSPACE_EFFECT_HOOKS.some((hook) => hasGlobalHooks(hook)) ||
-        (internalParams.trigger === "heartbeat" &&
-          hasGlobalHooks("heartbeat_prompt_contribution")) ||
         hasInternalHookListeners("agent", "bootstrap")))
   ) {
     const assertCurrent = resolveAdmittedRunActiveAssertion(
@@ -468,7 +464,6 @@ export async function runAgentHarnessAttempt(
           result.terminal.aborted === true),
       yieldAborted:
         result.terminal.kind === "aborted" && result.terminal.source === "yield_cleanup",
-      isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
       runtimeContext: resolveContextEngineCompletionRuntimeContext(
         internalParams,
         result,

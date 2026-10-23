@@ -305,7 +305,10 @@ vi.mock("../../agents/model-runtime-aliases.js", async (importOriginal) => ({
     const runtime = key
       ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
       : undefined;
-    return runtime || provider;
+    const executionProvider = runtime || provider;
+    return executionProvider && isCliProviderMock(executionProvider, cfg)
+      ? executionProvider
+      : undefined;
   },
 }));
 

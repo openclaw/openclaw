@@ -66,6 +66,22 @@ beforeEach(() => {
 afterEach(clearRuntimeConfigSnapshot);
 
 describe("cron model selection", () => {
+  it.each([
+    { payloadModel: 42 },
+    { payloadModel: false },
+    { payloadModel: {} },
+    { payloadModel: [] },
+  ])("ignores a malformed persisted payload model ($payloadModel)", async ({ payloadModel }) => {
+    const overrides: Partial<SelectionParams> = {};
+    // Persisted rows can contain values outside the TypeScript contract.
+    Object.assign(overrides, { payloadModel });
+    await expect(select(overrides)).resolves.toMatchObject({
+      ok: true,
+      ...defaultRef,
+      modelSource: "default",
+    });
+  });
+
   it("uses the session model when no payload model is present", async () => {
     await expect(
       select({ sessionEntry: { providerOverride: "openai", modelOverride: "gpt-4.1-mini" } }),

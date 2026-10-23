@@ -162,13 +162,17 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   // Token suppression and schema validation stay behind the live-activity boundary.
   narration: SidebarNarration | null = null;
-  private narrationLoad: Promise<SidebarNarration> | null = null;
-  loadNarration(): SidebarNarration | Promise<SidebarNarration> {
+  private narrationLoad: Promise<SidebarNarration | null> | null = null;
+  loadNarration(): SidebarNarration | Promise<SidebarNarration | null> {
     return (
       this.narration ??
-      (this.narrationLoad ??= import("./app-sidebar-session-narration.ts").then(
-        (module) => (this.narration = module.createSidebarNarration()),
-      ))
+      (this.narrationLoad ??= import("./app-sidebar-session-narration.ts")
+        .then((module) => (this.narration = module.createSidebarNarration()))
+        .catch(() => {
+          // Optional row decoration degrades until the next live-activity activation.
+          this.narrationLoad = null;
+          return null;
+        }))
     );
   }
   constructor(

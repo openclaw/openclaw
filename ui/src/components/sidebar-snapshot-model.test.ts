@@ -157,3 +157,10 @@ it("omits incognito-only section metadata and counts while preserving existing e
   expect(admitted?.collapsedSections).toEqual(["category:shared", "category:empty", "online"]);
   expect(JSON.stringify(admitted)).not.toContain("private");
 });
+
+it("retains independently rendered Pinned collapse state through snapshot serialization", () => {
+  const captured = snapshotSections([], new Set(["pinned", "online", "category:gone"]));
+  const serialized = JSON.stringify({ ...model, ...captured });
+  const saved = parseSidebarSnapshot(JSON.parse(serialized));
+  expect(saved?.collapsedSections).toEqual(["pinned", "online"]);
+});

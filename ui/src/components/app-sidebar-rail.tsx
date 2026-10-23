@@ -19,7 +19,7 @@ import {
 } from "../app/native-window-drag.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -56,9 +56,9 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   const newSessionAccess = createMemo(() => host.readNewSessionAccess());
   const zone = createMemo(() => host.reconciledSidebarZone());
   const pins = createMemo(() =>
-    (normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []).map(
-      (entry) => parseSidebarEntry(entry)!,
-    ),
+    (normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? [])
+      .map((entry) => parseSidebarEntry(entry)!)
+      .filter((entry) => entry.type !== "session" || entry.rail),
   );
   const views = ["pages", "sessions", "online"] as const;
   const viewLabel = (view: (typeof views)[number]) =>
@@ -305,12 +305,9 @@ function renderRailPin(
             href={host.sidebarSessionHref(row())}
             aria-label={label()}
             aria-current={row().active ? "page" : undefined}
-            onClick={(event) => {
-              if (shouldHandleNavigationClick(event)) {
-                event.preventDefault();
-                host.selectSession(row().key, undefined, row());
-              }
-            }}
+            onClick={(event) =>
+              handleNavigationClick(event, () => host.selectSession(row().key, undefined, row()))
+            }
           >
             <RailSessionGlyph session={row()} label={label()} />
           </a>

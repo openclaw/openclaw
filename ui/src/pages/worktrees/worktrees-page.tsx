@@ -19,7 +19,7 @@ import {
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -95,10 +95,6 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
   }
   const operation = () => pending().operation() ?? view().operation;
   const busy = () => operation() !== null || view().operationPending;
-  const readList = () => {
-    latest(listRead);
-    return null;
-  };
 
   const owner = (record: WorktreesModel["records"][number]) => {
     if (record.ownerKind === "session" && record.ownerId) {
@@ -113,13 +109,9 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
         <a
           href={target.href}
           title={record.ownerId}
-          onClick={(event) => {
-            if (!shouldHandleNavigationClick(event)) {
-              return;
-            }
-            event.preventDefault();
-            model.context.navigate(face, target.options);
-          }}
+          onClick={(event) =>
+            handleNavigationClick(event, () => model.context.navigate(face, target.options))
+          }
         >
           {t("worktrees.ownerSession")}
         </a>
@@ -266,7 +258,7 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                 on={latest(scope)}
                 fallback={<SettingsEmpty message={t("common.loading")} />}
               >
-                {readList()}
+                {(latest(listRead), null)}
                 <Show
                   when={view().records.length > 0}
                   fallback={<SettingsEmpty message={t("worktrees.empty")} />}

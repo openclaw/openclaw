@@ -291,7 +291,10 @@ export async function resolveCronModelSelection(
       : undefined;
   };
 
-  const payloadSelection = override(params.payloadModel?.trim(), "payload");
+  const payloadSelection = override(
+    typeof params.payloadModel === "string" ? params.payloadModel.trim() : undefined,
+    "payload",
+  );
   if (payloadSelection) {
     return payloadSelection;
   }

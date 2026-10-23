@@ -1,6 +1,6 @@
 import { userInfo } from "node:os";
-import { beforeEach, expect, it, vi } from "vitest";
-import type { loadEnabledBundleLspConfig } from "../plugins/bundle-lsp.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as bundleLsp from "../plugins/bundle-lsp.js";
 import { noteBundleLspEnvPassthrough } from "./doctor-bundle-lsp-env.js";
 
 const { shouldManageGatewayService } = vi.hoisted(() => ({
@@ -17,7 +17,7 @@ const docsUrl = "https://docs.openclaw.ai/plugins/bundles#lsp-server-environment
 
 function lspConfig(
   servers: Record<string, Record<string, unknown>>,
-): typeof loadEnabledBundleLspConfig {
+): typeof bundleLsp.loadEnabledBundleLspConfig {
   return vi.fn(() => ({ config: { lspServers: servers }, diagnostics: [] }));
 }
 
@@ -34,18 +34,22 @@ beforeEach(() => {
   service.readCommand.mockReset().mockResolvedValue(null);
   shouldManageGatewayService.mockReset().mockResolvedValue(false);
 });
+afterEach(() => vi.restoreAllMocks());
 
 async function diagnose(
-  options: Partial<Parameters<typeof noteBundleLspEnvPassthrough>[0]> = {},
+  options: Partial<Parameters<typeof noteBundleLspEnvPassthrough>[0]> & {
+    loadLspConfig?: typeof bundleLsp.loadEnabledBundleLspConfig;
+  } = {},
 ): Promise<string | undefined> {
+  const { loadLspConfig = lspConfig(gopls), ...params } = options;
+  vi.spyOn(bundleLsp, "loadEnabledBundleLspConfig").mockImplementation(loadLspConfig);
   await noteBundleLspEnvPassthrough({
     cfg: {},
     workspaceDirs: ["/synthetic/workspace"],
     env: gatewayEnv,
     service,
-    loadLspConfig: lspConfig(gopls),
     noteFn,
-    ...options,
+    ...params,
   });
   return noteFn.mock.calls[0]?.[0];
 }
@@ -97,7 +101,7 @@ it("evaluates each workspace's config when workspaces reuse a server name", asyn
   const loadLspConfig = vi.fn(({ workspaceDir }: { workspaceDir: string }) => ({
     config: { lspServers: configs[workspaceDir] ?? {} },
     diagnostics: [],
-  })) as unknown as typeof loadEnabledBundleLspConfig;
+  })) as unknown as typeof bundleLsp.loadEnabledBundleLspConfig;
 
   const text = await diagnose({
     workspaceDirs: Object.keys(configs),

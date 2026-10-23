@@ -65,10 +65,6 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     const readiness = createSubagentsPresentation(data);
     const createMobileStop = (key: () => string) =>
       readiness.createStop(() => data().rows.find((row) => row.session.key === key()));
-    const consumeRead = () => {
-      latest(readiness.read);
-      return null;
-    };
     const FallbackShell = (fallbackProps: { loading?: boolean; children: JSX.Element }) => (
       <div
         class={
@@ -119,7 +115,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
             </FallbackShell>
           }
         >
-          {consumeRead()}
+          {(latest(readiness.read), null)}
           {readProps.children}
         </Loading>
       </Errored>
@@ -281,6 +277,11 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
         stop:
           active && row.session.activeRunIds?.length === 1
             ? {
+                target: JSON.stringify([
+                  row.session.key,
+                  row.session.sessionId,
+                  row.session.activeRunIds,
+                ]),
                 label: t(row.stopping ? "chat.subagentsPanel.stopping" : "chat.runControls.stop"),
                 accessibleLabel: row.stopping
                   ? t("chat.subagentsPanel.stopping")

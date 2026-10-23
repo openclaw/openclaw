@@ -107,6 +107,38 @@ it("retains the focused Uninstall button when inspection arrives", () => {
   expect(document.activeElement).toBe(button);
 });
 
+it("retains inspection retry focus and uses the current error and callback", async () => {
+  const firstRetry = vi.fn();
+  const nextRetry = vi.fn();
+  let replace!: () => void;
+  const { container } = mount({}, (props) => {
+    const [failure, setFailure] = createSignal(new Error("Inspection unavailable"));
+    const [retry, setRetry] = createSignal<() => void>(() => firstRetry);
+    props.inspectionRead = {
+      receipt: () => null,
+      value: () => {
+        throw failure();
+      },
+    };
+    Object.defineProperty(props, "onRetryInspection", { get: retry });
+    replace = () => {
+      setFailure(new Error("Inspection still unavailable"));
+      setRetry(() => nextRetry);
+    };
+  });
+  const alert = container.querySelector('[role="alert"]')!;
+  const button = alert.querySelector("button")!;
+  expect(alert.textContent).toContain("Inspection unavailable");
+  button.focus();
+  replace();
+  await waitForSolid(() => expect(alert.textContent).toContain("Inspection still unavailable"));
+  expect(alert.querySelector("button")).toBe(button);
+  expect(document.activeElement).toBe(button);
+  button.click();
+  expect(firstRetry).not.toHaveBeenCalled();
+  expect(nextRetry).toHaveBeenCalledOnce();
+});
+
 it("does not dispatch enablement when setup is missing", () => {
   const { find, props } = mount({
     result: createResult(createPlugin({ state: "needs-setup" })),

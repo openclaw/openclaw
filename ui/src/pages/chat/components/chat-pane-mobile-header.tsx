@@ -12,7 +12,7 @@ import "./chat-pane-mobile-header.css";
 import {
   ChatSessionPublicIndicator,
   type ChatSessionSharingProps,
-} from "./chat-session-sharing.solid.tsx";
+} from "./chat-session-sharing-shared.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 

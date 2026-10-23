@@ -435,10 +435,10 @@ describe("matrix doctor contract state migrations", () => {
   it("preserves a legacy marker's remaining ingress tombstone retention", async () => {
     const now = Date.now();
     const markerTs = now - MATRIX_INBOUND_DEDUPE_TTL_MS + 1_000;
+    using _ = vi.spyOn(Date, "now").mockReturnValueOnce(now);
     await expect(
       importInboundDedupeMarkersToIngress({
         context: params.context,
-        now,
         markers: [
           { accountId: "ops", roomId: "!room:example.org", eventId: "$near-expiry", ts: markerTs },
         ],

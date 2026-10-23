@@ -1,7 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import type { ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
-import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
@@ -49,8 +48,6 @@ export type MessageRenderOptions = {
   allowExternalEmbedUrls?: boolean;
   fetchLinkFavicon?: LinkFaviconFetcher;
   pluginToolIcons?: PluginToolIcons;
-  githubRepo?: MarkdownRenderOptions["githubRepo"];
-  githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onPermissionRetry?: (message: string) => void;
 };

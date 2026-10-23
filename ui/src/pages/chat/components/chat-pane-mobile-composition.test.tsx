@@ -80,7 +80,6 @@ it("retains the People page and lookup across native host replacement and deskto
     resize: vi.fn(),
     keyboardVisible: false,
     onComposerEditingChange: vi.fn(),
-    onViewportChange: vi.fn(),
   };
   const detailsControl = {
     chat: undefined,

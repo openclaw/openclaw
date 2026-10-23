@@ -58,21 +58,6 @@ export async function hasSystemdManager(
   );
 }
 
-function parseUnitNames(output: string): string[] {
-  const names: string[] = [];
-  for (const line of output.split(/\r?\n/)) {
-    if (!line.trim()) {
-      continue;
-    }
-    const name = line.trimStart().split(/\s+/, 1)[0];
-    if (!name?.endsWith(".service")) {
-      throw new Error("Loaded systemd service list could not be inspected.");
-    }
-    names.push(name);
-  }
-  return [...new Set(names)];
-}
-
 const unavailable = () => new Error("Loaded systemd service properties could not be inspected.");
 
 export async function listLoadedSystemdUnits(
@@ -198,7 +183,18 @@ export async function listLoadedSystemdUnits(
       if (listed.termination !== "exit" || listed.code !== 0) {
         throw new Error("Loaded systemd service list could not be inspected.");
       }
-      const names = parseUnitNames(listed.stdout);
+      const parsedNames: string[] = [];
+      for (const line of listed.stdout.split(/\r?\n/)) {
+        if (!line.trim()) {
+          continue;
+        }
+        const name = line.trimStart().split(/\s+/, 1)[0];
+        if (!name?.endsWith(".service")) {
+          throw new Error("Loaded systemd service list could not be inspected.");
+        }
+        parsedNames.push(name);
+      }
+      const names = [...new Set(parsedNames)];
       // Preserve the two bounded phases, but carry the original manager through both.
       deadline = budget.now() + INSPECTION_TIMEOUT_MS;
       phaseQuery = createQuery(names.length * 3 + (connection ? 1 : 2));

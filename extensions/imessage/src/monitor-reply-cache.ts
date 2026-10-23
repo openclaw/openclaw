@@ -300,7 +300,7 @@ export async function resolveIMessageMessageId(
   return messageId;
 }
 
-export async function isKnownFromMeIMessageMessageId(
+async function isKnownFromMeIMessageMessageId(
   messageId: string | undefined,
   ctx: IMessageChatContext & { accountId?: string },
 ): Promise<boolean> {
@@ -322,15 +322,11 @@ export async function isKnownFromMeIMessageTarget(params: {
   chatId?: number;
   chatGuid?: string;
   chatIdentifier?: string;
-  isKnownFromMeMessageId?: (
-    ...args: Parameters<typeof isKnownFromMeIMessageMessageId>
-  ) => boolean | Promise<boolean>;
 }): Promise<boolean> {
   const { accountId, chatId, chatGuid, chatIdentifier } = params;
   const ctx = { accountId, chatId, chatGuid, chatIdentifier };
-  const isKnownFromMe = params.isKnownFromMeMessageId ?? isKnownFromMeIMessageMessageId;
   for (const messageId of params.messageIds) {
-    if (await isKnownFromMe(messageId, ctx)) {
+    if (await isKnownFromMeIMessageMessageId(messageId, ctx)) {
       return true;
     }
   }

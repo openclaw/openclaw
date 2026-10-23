@@ -283,7 +283,7 @@ export function createAgentTurnService(
           admittedSessionId: requestedSessionId ?? runId,
           ...initialSessionGroups,
         };
-        let effectiveBootstrapContextRunKind = request.bootstrapContextRunKind;
+        let effectiveBootstrapContextRunKind = preflight.bootstrapContextRunKind;
         let restoredCronContinuationIdentity:
           | Pick<RestoredCronContinuation, "lifecycleRevision" | "sessionId">
           | undefined;

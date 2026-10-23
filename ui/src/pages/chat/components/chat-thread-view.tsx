@@ -75,6 +75,8 @@ export function ChatThread(input: {
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
+  const transcript = createMemo(() => input.transcript);
+  const geometry = createMemo(() => projectOwner(transcript(), (owner) => owner));
   const presentation = createMemo(
     () =>
       input.transcript.renderSession(input.props.sessionKey, (session) => ({
@@ -146,6 +148,8 @@ export function ChatThread(input: {
   );
   const sentinel = () => (input.props.historyPagination ? historySentinel : undefined);
   const contents = createMemo(() => {
+    // Native range changes redraw this island without preparing the whole pane.
+    geometry().read();
     if (routeLoading()) {
       return mobile() ? <ChatConversationLoading route /> : <LoadingState />;
     }

@@ -1999,7 +1999,7 @@ describe("chat composer render invalidation", () => {
     expect(getComposerTextarea(container)).toBe(textarea);
     expect(chatThread.buildCachedChatItems).not.toHaveBeenCalled();
 
-    textarea.value = "مرحبا";
+    textarea.value = "1. مرحبا";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
 
     expect(getComposerTextarea(container)).toBe(textarea);

@@ -589,6 +589,7 @@ src/config/io.health-state.ts
 src/config/io.invalid-config.ts
 src/config/io.load.ts
 src/config/io.meta.ts
+src/config/io.observe-promotion.ts
 src/config/io.observe-recovery-effects.ts
 src/config/io.observe-recovery.ts
 src/config/io.observe-state.ts
@@ -943,7 +944,6 @@ src/infra/directory-durability.ts
 src/infra/directory-watch-host.ts
 src/infra/disk-space.ts
 src/infra/dispatch-wrapper-resolution.ts
-src/infra/device-identity-process-cache.ts
 src/infra/device-identity-store.ts
 src/infra/device-identity.ts
 src/infra/dotenv-global-core.ts
@@ -1688,7 +1688,6 @@ src/process/spawn-broker/child-diagnostics.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/context.ts
-src/process/spawn-broker/execa-client.ts
 src/process/spawn-broker/execa-protocol.ts
 src/process/spawn-broker/file-reads.ts
 src/process/spawn-broker/host.ts
@@ -1902,7 +1901,6 @@ src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
 src/state/openclaw-agent-memory-revision-migration.ts
-src/state/openclaw-agent-message-tool-outcome-schema.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
 src/state/openclaw-agent-pending-inputs-schema.ts

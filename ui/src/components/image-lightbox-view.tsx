@@ -1,5 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { Errored, Loading, Show, action, createMemo, createOptimistic } from "solid-js";
+import {
+  Errored,
+  Loading,
+  Show,
+  action,
+  createMemo,
+  createOptimistic,
+  createUniqueId,
+  omit,
+} from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { showToast } from "../lib/toast.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
@@ -103,6 +112,23 @@ export function LightboxChrome(props: {
         </Errored>
       </Show>
     </section>
+  );
+}
+
+export function LightboxImage(
+  props: JSX.ImgHTMLAttributes<HTMLImageElement> & { description?: string },
+) {
+  const descriptionId = createUniqueId();
+  const imageProps = omit(props, "description");
+  return (
+    <>
+      <img {...imageProps} aria-describedby={props.description ? descriptionId : undefined} />
+      <Show when={props.description}>
+        <p id={descriptionId} hidden>
+          {props.description}
+        </p>
+      </Show>
+    </>
   );
 }
 

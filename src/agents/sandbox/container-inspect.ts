@@ -141,10 +141,10 @@ export async function recordedPodmanContainerState(engine: SandboxContainerEngin
     allowFailure: true,
   });
   if (result.code === 0) {
-    return { exists: true, running: result.stdout.trim() === "true" };
+    return { exists: true };
   }
   if (isPodmanContainerNotFound(result.stderr)) {
-    return { exists: false, running: false };
+    return { exists: false };
   }
   const detail = result.stderr.trim();
   throw Object.assign(

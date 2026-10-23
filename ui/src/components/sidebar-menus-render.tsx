@@ -6,6 +6,7 @@ import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { patchSettings } from "../app/settings.ts";
 import { registerAgentCreationEnglish } from "../i18n/locales/en-agent-creation.ts";
 import { openEditor } from "../lib/editor-links.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import type { IdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
@@ -364,9 +365,14 @@ export function renderSidebarAgentCreateDialogForMenus(
         onCancel={() => menus.closeAgentCreateDialog()}
         onCreate={(identity) => {
           menus.closeAgentCreateDialog();
-          void import("../app/create-agent.ts").then(({ createApplicationAgent }) =>
-            createApplicationAgent(context, identity),
-          );
+          void import("../app/create-agent.ts")
+            .then(({ createApplicationAgent }) => createApplicationAgent(context, identity))
+            .catch((error: unknown) =>
+              showToast({
+                message: t("agentChip.creationFailed", { error: formatUiError(error) }),
+                durationMs: 12_000,
+              }),
+            );
         }}
       />
     </Loading>

@@ -127,6 +127,7 @@ const sourceFiles = [
   "en-session-organization.ts",
   "en-session-people.ts",
   "en-session-placement.ts",
+  "en-new-session-runtime.ts",
   "en-new-session-setup.ts",
   "en-plugin-consent.ts",
   "en-plugin-management.ts",

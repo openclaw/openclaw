@@ -1099,7 +1099,7 @@ describe("runAgentHarnessAttempt", () => {
     async ({ boundary, selection, ownership }) => {
       const admission = {
         ...createTranscriptAnchor("user-1", 1, 0),
-        logicalTurnId: "heartbeat-turn",
+        logicalTurnId: "scheduled-turn",
         role: "user" as const,
       };
       const terminal = createTranscriptAnchor("assistant-1", 2, 1);
@@ -1126,7 +1126,7 @@ describe("runAgentHarnessAttempt", () => {
         sessionKey: admission.sessionKey,
         storePath: admission.storePath,
       };
-      params.bootstrapContextRunKind = "heartbeat";
+      params.bootstrapContextRunKind = "cron";
       params.model = { ...params.model, contextWindow: 180_000 };
       params.modelContextWindow = 200_000;
       params.contextTokenBudget = 180_000;
@@ -1154,7 +1154,6 @@ describe("runAgentHarnessAttempt", () => {
         expect(onContextEngineTurnCandidate).toHaveBeenCalledWith(
           expect.objectContaining({
             boundary: { admission, terminal },
-            isHeartbeat: true,
             promptError: false,
             aborted: false,
             yieldAborted: false,
@@ -1550,7 +1549,6 @@ describe("runAgentHarnessAttempt", () => {
       contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun,
     ).toHaveBeenCalledWith({
       admission,
-      isHeartbeat: false,
       lease,
       recorder: params.userTurnTranscriptRecorder,
       sessionTarget: undefined,

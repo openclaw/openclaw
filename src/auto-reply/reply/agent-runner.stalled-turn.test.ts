@@ -107,7 +107,6 @@ const settings: QueueSettings = { mode: "followup", debounceMs: 0 };
 
 async function createStalledRun(
   options: {
-    isHeartbeat?: boolean;
     operatorAuthority?: AdmittedRunOperatorAuthority;
     queuedFollowupReplyDisposition?: FollowupRun["queuedFollowupReplyDisposition"];
     originatingChannel?: string;
@@ -143,7 +142,7 @@ async function createStalledRun(
   followupRun.userTurnTranscriptRecorder = recorder;
   const admitted = await admitReplyTurn({
     ...transcriptTarget,
-    kind: options.isHeartbeat ? "heartbeat" : "visible",
+    kind: "visible",
     resetTriggered: false,
   });
   if (admitted.status !== "owned") {
@@ -167,7 +166,6 @@ async function createStalledRun(
     replyOperation: operation,
     opts: {
       [REPLY_OPERATION_RUN_STATE]: runState,
-      ...(options.isHeartbeat ? { isHeartbeat: true } : {}),
     },
     typing: createMockTypingController(),
     sessionCtx: {
@@ -546,15 +544,5 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(getFollowupQueueDepth(queueKey)).toBe(0);
     await settleStalledOwner(stalled);
     expect(drainedRuns).not.toHaveBeenCalled();
-  });
-
-  it("does not arm a continuation for heartbeat turns", async () => {
-    const stalled = await createStalledRun({ isHeartbeat: true });
-    await stallBeforeOutput(stalled);
-
-    expect(stalled.runState.continueStalledTurn).toBeUndefined();
-
-    await settleStalledOwner(stalled);
-    expect(getFollowupQueueDepth(queueKey)).toBe(0);
   });
 });

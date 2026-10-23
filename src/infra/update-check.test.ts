@@ -384,7 +384,7 @@ it("does not query the exact package after cancellation during selector lookup",
 
   await expect(
     registryStatus({
-      registryChannel: "extended-stable",
+      resolveRegistryChannel: () => "extended-stable",
       signal: controller.signal,
       timeoutMs: undefined,
     }),
@@ -493,7 +493,7 @@ it.each(["beta", "latest"])(
       );
     }
 
-    const status = await registryStatus({ registryChannel: "beta" });
+    const status = await registryStatus({ resolveRegistryChannel: () => "beta" });
 
     expect(status.registry).toEqual({ latestVersion: "2026.6.6", tag: selectedTag });
   },
@@ -512,7 +512,7 @@ it("reports unsupported_git_channel for Git status without querying npm", async 
     expect(initialized, initialized.stderr).toMatchObject({ code: 0, termination: "exit" });
     const status = await registryStatus({
       root,
-      registryChannel: "extended-stable",
+      resolveRegistryChannel: () => "extended-stable",
       fetchGit: false,
     });
 

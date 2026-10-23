@@ -332,15 +332,15 @@ describe("createMattermostDraftStream", () => {
   });
 
   it("truncates on a code-point boundary so a straddling emoji is dropped whole", async () => {
-    // The cut at UTF-16 index 9 bisects the emoji at indices 8-9.
-    const { calls, stream } = createDraftStreamFixture({ maxChars: 12 });
+    // The cut at UTF-16 index 3997 bisects the emoji at indices 3996-3997.
+    const { calls, stream } = createDraftStreamFixture();
 
-    const input = `${"a".repeat(8)}\u{1F600}${"b".repeat(5)}`;
+    const input = `${"a".repeat(3996)}\u{1F600}${"b".repeat(5)}`;
     stream.update(input);
     await stream.flush();
 
     expect(calls).toHaveLength(1);
-    expect(parseRequestJson(calls[0]?.init).message).toBe("aaaaaaaa...");
+    expect(parseRequestJson(calls[0]?.init).message).toBe(`${"a".repeat(3996)}...`);
   });
 
   it("does not resend after an update failure followed by stop", async () => {
@@ -379,17 +379,16 @@ describe("createMattermostDraftStream forceNewMessage", () => {
   });
 
   it("restores and chunks an already-flushed over-limit block before rotating", async () => {
-    const firstChunk = "a".repeat(10);
-    const secondChunk = "b".repeat(10);
+    const firstChunk = "a".repeat(4000);
+    const secondChunk = "b".repeat(4000);
     const chunkText = vi.fn(() => [firstChunk, secondChunk]);
     const { calls, stream: configuredStream } = createDraftStreamFixture({
-      maxChars: 10,
       chunkText,
     });
 
     configuredStream.update(`${firstChunk}${secondChunk}`);
     await configuredStream.flush();
-    expect(parseRequestJson(calls[0]?.init)?.message).toBe("aaaaaaa...");
+    expect(parseRequestJson(calls[0]?.init)?.message).toBe(`${"a".repeat(3997)}...`);
 
     await configuredStream.forceNewMessage();
     expect(configuredStream.postId()).toBeUndefined();

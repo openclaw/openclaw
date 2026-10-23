@@ -112,6 +112,33 @@ it("keeps the raw Save command busy until its owner settles", async () => {
   expect(container.querySelector("textarea")).toBe(textarea);
 });
 
+it.each(["Open", "Discard"])(
+  "locks raw controls during %s without showing Saving",
+  async (label) => {
+    const completion = createDeferred();
+    const command = vi.fn(() => completion.promise);
+    const { container } = renderConfigView({
+      formMode: "raw",
+      raw: '{"gateway":{"mode":"local"}}',
+      originalRaw: "{}",
+      onOpenFile: command,
+      onRawDiscard: command,
+    });
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".config-raw-actions button"),
+    );
+    buttons.find((button) => button.textContent?.trim() === label)!.click();
+    await waitForSolid(() => expect(buttons.every((button) => button.disabled)).toBe(true));
+    const save = buttons.find((button) => button.classList.contains("primary"))!;
+    expect(save.textContent?.trim()).toBe("Save");
+    expect(save.getAttribute("aria-busy")).toBe("false");
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
+    completion.resolve();
+    await waitForSolid(() => expect(buttons.every((button) => !button.disabled)).toBe(true));
+    expect(command).toHaveBeenCalledOnce();
+  },
+);
+
 it("publishes the plain config owner before entering the save presentation", async () => {
   const completion = createDeferred<boolean>();
   const save = vi.fn(() => {

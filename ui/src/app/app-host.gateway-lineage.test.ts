@@ -5,8 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayHelloOk } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import type { LoginGateElement } from "../components/login-gate.ts";
-import { captureChatOutboxAdmission, storageTargetForComposer } from "../lib/chat/outbox-store.ts";
+import { listStoredChatOutboxes } from "../lib/chat/outbox-store-projection.ts";
 import "../components/login-gate.ts";
+import { captureChatOutboxAdmission, storageTargetForComposer } from "../lib/chat/outbox-store.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -23,7 +24,6 @@ import { createTestChatPane } from "../pages/chat/chat-pane.test-support.ts";
 import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
 import { createComposerQuestions } from "../pages/chat/components/chat-composer-questions.ts";
 import { ChatComposer } from "../pages/chat/components/chat-composer.tsx";
-import { listStoredChatOutboxes } from "../pages/chat/composer-persistence.ts";
 import {
   activeQueuedMessageEdit,
   beginQueuedMessageEdit,

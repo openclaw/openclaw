@@ -20,7 +20,7 @@ import "./modal-dialog.tsx";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
-export type FilePreviewModalFile = {
+type FilePreviewModalFile = {
   path: string;
   size: string;
   contents: string;

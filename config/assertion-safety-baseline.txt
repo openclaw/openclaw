@@ -372,7 +372,7 @@ extensions/logbook/src/analyze.ts	5
 extensions/logbook/src/service.ts	5
 extensions/matrix/src/actions.ts	2
 extensions/matrix/src/approval-handler.runtime.ts	3
-extensions/matrix/src/approval-native.ts	5
+extensions/matrix/src/approval-native.ts	4
 extensions/matrix/src/approval-reactions.ts	1
 extensions/matrix/src/auth-precedence.ts	1
 extensions/matrix/src/channel.ts	4
@@ -709,7 +709,7 @@ extensions/slack/src/approval-handler.runtime.ts	1
 extensions/slack/src/blocks-input.ts	2
 extensions/slack/src/channel-actions.ts	1
 extensions/slack/src/channel-type.ts	1
-extensions/slack/src/channel.ts	4
+extensions/slack/src/channel.ts	1
 extensions/slack/src/client-delivery.ts	1
 extensions/slack/src/client-options.ts	2
 extensions/slack/src/doctor.ts	1
@@ -1224,7 +1224,6 @@ src/agents/models-config.merge.ts	1
 src/agents/models-config.plan.ts	2
 src/agents/models-config.providers.policy.lookup.ts	1
 src/agents/modes/interactive/theme/theme.ts	11
-src/agents/node-plugin-tools.ts	1
 src/agents/openai-model-routes.ts	2
 src/agents/openclaw-tools.requester-yield.ts	2
 src/agents/plugin-model-catalog.ts	3
@@ -1923,7 +1922,6 @@ src/infra/fs-safe-remove.ts	4
 src/infra/gateway-lock.ts	2
 src/infra/gateway-processes.ts	1
 src/infra/git-commit.ts	1
-src/infra/heartbeat-visibility.ts	1
 src/infra/install-package-dir.ts	2
 src/infra/json-utf8-bytes.ts	4
 src/infra/kysely-sync.ts	7
@@ -1945,7 +1943,6 @@ src/infra/outbound/deliver-channel.ts	3
 src/infra/outbound/deliver-payload.ts	1
 src/infra/outbound/deliver-prepare.ts	1
 src/infra/outbound/delivery-queue-storage.ts	3
-src/infra/outbound/format.ts	1
 src/infra/outbound/message-account-selection.ts	1
 src/infra/outbound/message-action-execution.ts	3
 src/infra/outbound/message-action-runner.ts	1

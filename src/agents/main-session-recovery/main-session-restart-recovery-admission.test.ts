@@ -95,7 +95,6 @@ describe("startup recovery admission", () => {
   ) {
     const recovery = scheduleRestartAbortedMainSessionRecovery({
       getConfig: () => ({}),
-      delayMs: 0,
       stateDir: tmpDir,
       gatewayRuntime,
       ...options,

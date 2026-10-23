@@ -122,13 +122,14 @@ const definition = (job: CronJob | undefined) =>
     scheduledToolPolicy: job.scheduledToolPolicy,
   };
 
-function expectAllowed(caller: Caller, shape: Partial<CronJob>, opName: string): boolean {
+function expectAllowed(caller: Caller, shape: Partial<CronJob>): boolean {
   const ownSession = shape.owner?.sessionKey === S_A;
   if (caller === "scoped" || caller === "creator") {
     return ownSession && shape.owner?.accountId === "default";
   }
-  // Management keeps creator attribution: a manager's own-session cap still needs a fresh capture.
-  return caller === "manager" && !(opName === "cap" && ownSession);
+  // These jobs hold no app authority, so a manager's own-session cap needs no fresh capture
+  // (app-authority jobs: cron.scheduled-policy-adoption.integration.test.ts).
+  return caller === "manager";
 }
 
 async function updateAs(
@@ -299,7 +300,7 @@ describe("cron ownership access matrix", () => {
           if (after && !isDeepStrictEqual(after.owner, before?.owner)) {
             violations.push(`${cell}: owner changed`);
           }
-          if (ok !== expectAllowed(caller, shape, opName)) {
+          if (ok !== expectAllowed(caller, shape)) {
             violations.push(`${cell}: ${ok ? "allowed" : `refused (${message})`}`);
           }
           if (!ok && !isDeepStrictEqual(definition(after), definition(before))) {

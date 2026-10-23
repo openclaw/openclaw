@@ -49,9 +49,9 @@ type GuardedSessionManager = SessionManager &
       | "flushPendingToolResults"
       | "flushPendingToolResultsAsync"
       | "clearPendingToolResults"
-      | "setNextUserMessagePersistence"
     >
   > & {
+    setNextUserMessagePersistence?: TranscriptRunContext["setNextUserMessagePersistence"];
     /** Refresh the exact owning run when a caller reuses this guarded manager. */
     setTranscriptRunContext?: (options: Parameters<typeof guardSessionManager>[1]) => void;
     /** Retire only this binding after its accepted transcript writes drain. */

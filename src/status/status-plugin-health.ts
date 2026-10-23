@@ -29,7 +29,7 @@ type ContextEngineQuarantineRecord = {
   failedAt: Date | number;
 };
 
-export type RuntimeToolQuarantineRecord = {
+type RuntimeToolQuarantineRecord = {
   toolName: string;
   owner?: string;
   reason: string;

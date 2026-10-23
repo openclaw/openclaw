@@ -81,18 +81,16 @@ export function buildGatewayRuntimeRecoveryHints(params: {
 }
 
 export function buildPlatformServiceStartHints(params: {
-  platform?: NodeJS.Platform;
   installHint: string;
   startCommand: string;
   launchAgentPlistPath: string;
   systemdServiceName: string;
   windowsTaskName: string;
 }): string[] {
-  const platform = params.platform ?? process.platform;
   const base = [params.installHint, params.startCommand];
   // Install guidance and the OpenClaw start command stay first; native manager
   // commands are supplemental because they do not resolve profile/env paths.
-  switch (platform) {
+  switch (process.platform) {
     case "darwin":
       return [...base, `launchctl bootstrap gui/$UID ${params.launchAgentPlistPath}`];
     case "linux":
