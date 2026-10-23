@@ -1,5 +1,5 @@
 // Control UI tests cover required cues without introducing native validation.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.tsx";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
@@ -88,6 +88,46 @@ describe("config field required semantics", () => {
     optional.dispatchEvent(new Event("input", { bubbles: true }));
     expect(optional.getAttribute("aria-invalid")).toBe("false");
     expect(onPatch).toHaveBeenLastCalledWith(["laboratory", "optionaltext"], undefined);
+  });
+
+  it("marks required short enums while preserving optional defaults and keyboard selection", () => {
+    const choice = { type: "string", enum: ["a", "b"] } satisfies JsonSchema;
+    const { container, onPatch } = render(
+      {
+        requiredChoice: { ...choice, title: "Short choice" },
+        optionalChoice: { ...choice, title: "Optional choice" },
+        defaultedChoice: { ...choice, title: "Defaulted choice", default: "a" },
+        invalidDefault: { ...choice, title: "Invalid default", default: "invalid" },
+      },
+      ["requiredChoice", "defaultedChoice", "invalidDefault"],
+      { requiredChoice: "a", optionalChoice: "a" },
+    );
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+    for (const [label, required] of [
+      ["Short choice", true],
+      ["Optional choice", false],
+      ["Defaulted choice", false],
+      ["Invalid default", true],
+    ] as const) {
+      const group = container.querySelector(`[role="radiogroup"][aria-label="${label}"]`);
+      expect(group).not.toBeNull();
+      expect(group?.getAttribute("aria-required"), label).toBe(required ? "true" : null);
+      expect(group?.closest(".settings-row")?.textContent?.includes("Required"), label).toBe(
+        required,
+      );
+      expect(group?.querySelector("[required]")).toBeNull();
+    }
+    expect(onPatch).not.toHaveBeenCalled();
+    const first = container.querySelector<HTMLInputElement>(
+      '[role="radiogroup"][aria-label="Short choice"] input',
+    );
+    if (!first) {
+      throw new Error("Missing first required choice");
+    }
+    first.focus();
+    first.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["laboratory", "requiredChoice"], "b");
   });
 
   it("does not request manual input for direct or inherited valid defaults", () => {

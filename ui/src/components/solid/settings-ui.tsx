@@ -34,6 +34,7 @@ export type SettingsSegmentedProps<T extends string, Label> = {
 } & (
   | {
       mode?: undefined;
+      ariaRequired?: boolean;
       onChange: (value: T, element: HTMLElement) => boolean | void;
       onReselect?: (value: T, element: HTMLElement) => void;
     }
@@ -429,6 +430,7 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
           class={["settings-segmented", props.class]}
           role="radiogroup"
           aria-label={props.ariaLabel}
+          aria-required={props.mode !== "buttons" && props.ariaRequired ? "true" : undefined}
           aria-describedby={props.descriptionId}
           aria-orientation="horizontal"
         >

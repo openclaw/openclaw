@@ -224,6 +224,7 @@ export function SegmentedControl(props: {
   options: unknown[];
   resolvedValue: unknown;
   disabled: boolean;
+  required?: boolean;
   ariaLabel: string;
   descriptionId?: string;
   onSelect: (value: unknown) => boolean | void;
@@ -243,6 +244,7 @@ export function SegmentedControl(props: {
       value={selectedIndex() < 0 ? "" : String(selectedIndex())}
       options={options()}
       disabled={props.disabled}
+      ariaRequired={props.required}
       ariaLabel={props.ariaLabel}
       descriptionId={props.descriptionId}
       onChange={(index: string) => {
