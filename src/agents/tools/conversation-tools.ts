@@ -30,6 +30,7 @@ import {
   ToolInputError,
 } from "./common.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
+import { createSessionsSendTool } from "./sessions-send-tool.js";
 import {
   buildTurnSendLedgerSessionKey,
   buildTurnSendTargetKey,
@@ -39,7 +40,6 @@ import {
   releaseTurnSend,
   reserveTurnSend,
 } from "./turn-send-ledger.js";
-import { createSessionsSendTool } from "./sessions-send-tool.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 
