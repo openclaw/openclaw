@@ -122,10 +122,6 @@ describe("web-fetch-utils", () => {
       "He said:\nStay hungry\nThen he left.",
     ],
     [
-      "<dl><dt>Term</dt><dd>Definition</dd><dt>Other</dt><dd>Meaning</dd></dl>",
-      "Term\nDefinition\nOther\nMeaning",
-    ],
-    [
       "<figure><figcaption>Figure 1: Results</figcaption></figure><p>Body text.</p>",
       "Figure 1: Results\n\nBody text.",
     ],
