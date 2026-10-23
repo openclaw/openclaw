@@ -1,6 +1,6 @@
 // Managed process replacement proves recovery of a child whose requester already finished.
 import { once } from "node:events";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -216,8 +216,6 @@ it.skipIf(process.platform === "win32").for([
   async ({ outcome, replaceChild }, { signal }) => {
     const provider = await startProvider(signal);
     const model = buildMockOpenAiResponsesProvider(provider.baseUrl, "gpt-5.4");
-    const { buildId } = asRecord(JSON.parse(await readFile("dist/build-info.json", "utf8")));
-    expect(typeof buildId).toBe("string");
     const instance = await createOpenClawTestInstance({
       name: "gateway-quiet-subagent-restart",
       port: provider.gatewayPort,
@@ -289,13 +287,17 @@ it.skipIf(process.platform === "win32").for([
         {
           url: instance.url,
           token: instance.gatewayToken,
-          clientName: "openclaw-control-ui",
-          clientBuildId: typeof buildId === "string" ? buildId : undefined,
-          mode: "webchat",
-          origin: `http://127.0.0.1:${instance.port}`,
+          clientName: "gateway-client",
+          // Recovery needs the original profiled operator; backend probes are unprofiled.
+          mode: "test",
           scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
-            path: instance.state.path("proof-device.sqlite"),
+            path: instance.state.statePath(
+              "proof-identities",
+              "requester",
+              "client",
+              "credentials.sqlite",
+            ),
           }),
           onEvent: ({ event, payload }) => {
             if (
@@ -420,6 +422,8 @@ it.skipIf(process.platform === "win32").for([
               slots: { memory: "none" },
             },
             models: {
+              // Keep this synthetic restart fixture independent of remote catalog adoption.
+              catalogRefresh: { enabled: false },
               mode: "replace",
               providers: {
                 [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
@@ -436,7 +440,6 @@ it.skipIf(process.platform === "win32").for([
                     params: { transport: "sse", openaiWsWarmup: false },
                   },
                 },
-                heartbeat: { every: "0m" },
                 skipBootstrap: true,
                 skills: [],
                 timeoutSeconds: 120,
@@ -450,10 +453,7 @@ it.skipIf(process.platform === "win32").for([
             },
             gateway: {
               mode: "local",
-              controlUi: {
-                enabled: false,
-                allowedOrigins: [`http://127.0.0.1:${instance.port}`],
-              },
+              controlUi: { enabled: false },
               bind: "loopback",
               port: instance.port,
               auth: { mode: "token", token: instance.gatewayToken },
