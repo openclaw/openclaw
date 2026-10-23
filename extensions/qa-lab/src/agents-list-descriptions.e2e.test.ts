@@ -43,7 +43,6 @@ it(
             agents: {
               ...config.agents,
               ownership: "explicit",
-              defaults: { ...config.agents?.defaults, heartbeat: { every: "0m" } },
               entries: {
                 qa: {
                   ...config.agents?.entries?.qa,
