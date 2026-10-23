@@ -2,7 +2,7 @@ import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
 export type KeyedFifoLease = {
-  wait(signal?: AbortSignal): Promise<boolean>;
+  wait(): Promise<void>;
   release(): void;
 };
 
@@ -61,25 +61,8 @@ export function createKeyedFifoLeaseRegistry(globalKey: symbol): KeyedFifoLeaseR
       state.releases.add(release);
 
       return {
-        async wait(signal) {
-          if (signal?.aborted) {
-            return false;
-          }
-          const ready = Promise.all(predecessors).then(() => true);
-          if (!signal) {
-            return await ready;
-          }
-          return await new Promise<boolean>((resolve) => {
-            const abort = () => resolve(false);
-            signal.addEventListener("abort", abort, { once: true });
-            if (signal.aborted) {
-              abort();
-            }
-            void ready.then((value) => {
-              signal.removeEventListener("abort", abort);
-              resolve(value);
-            });
-          });
+        async wait() {
+          await Promise.all(predecessors);
         },
         release,
       };

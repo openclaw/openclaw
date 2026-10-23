@@ -1,0 +1,132 @@
+title: Discord agent E2E native lifecycle and Gateway reply
+scenario:
+  id: discord-e2e-lifecycle
+  surface: channels
+  coverage:
+    secondary:
+      - discord.configured-and-runtime-routing
+  objective: Exercise owned native fixtures and separately prove a real Discord event reaches the SUT Gateway and produces a correlated public reply.
+  successCriteria:
+    - Native send, reply, pagination, edit, reaction add/remove, public thread, upload, and delete succeed on owned objects.
+    - A fresh marker returns from the leased SUT identity after the owned trigger.
+    - Private receipts and Gateway events survive cleanup; missing permission or ambiguous ownership fails the run.
+  execution:
+    kind: flow
+    channel: discord
+    config:
+      requiredChannelDriver: live
+      agentE2e: true
+    timeoutMs: 180000
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Owns Discord messages, an attachment, and a public thread under one lease.
+flow:
+  steps:
+    - name: checks capabilities on this run's lease
+      actions:
+        - call: channelE2e.doctor
+          saveAs: readiness
+        - assert:
+            expr: readiness.ok
+            message: Discord lifecycle requires all advertised native capabilities
+        - set: marker
+          value:
+            expr: "'OPENCLAW_E2E_DISCORD_' + randomUUID().replaceAll('-', '').toUpperCase()"
+    - name: creates and edits a quiet native fixture
+      actions:
+        - call: channelE2e.send
+          args:
+            - text: { expr: "'fixture ' + marker" }
+              mention: false
+          saveAs: fixture
+        - call: channelE2e.edit
+          args:
+            - messageId: { ref: fixture.id }
+              text: { expr: "'edited ' + marker" }
+        - call: channelE2e.read
+          args: [{ messageId: { ref: fixture.id } }]
+          saveAs: edited
+        - assert:
+            expr: "edited[0].id === fixture.id && edited[0].text === 'edited ' + marker && edited[0].actor === 'driver'"
+            message: Native edit did not persist on the owned driver message
+    - name: replies and paginates with provider message IDs
+      actions:
+        - call: channelE2e.send
+          args:
+            - text: { expr: "'quiet reply ' + marker" }
+              replyToMessageId: { ref: fixture.id }
+              mention: false
+          saveAs: fixtureReply
+        - call: channelE2e.read
+          args: [{ after: { ref: fixture.id }, limit: 100 }]
+          saveAs: page
+        - assert:
+            expr: page.some((message) => message.id === fixtureReply.id)
+            message: Discord after-cursor pagination omitted the new owned reply
+        - call: channelE2e.react
+          args: [{ messageId: { ref: fixture.id }, emoji: "\U0001F44D" }]
+        - call: channelE2e.react
+          args: [{ messageId: { ref: fixture.id }, emoji: "\U0001F44D", remove: true }]
+    - name: creates an owned public thread and reads its message
+      actions:
+        - call: channelE2e.thread
+          args: [{ messageId: { ref: fixture.id }, name: { expr: "'qa-' + marker" } }]
+          saveAs: thread
+        - call: channelE2e.send
+          args: [{ threadId: { ref: thread.threadId }, text: { expr: "'thread ' + marker" } }]
+          saveAs: threaded
+        - call: channelE2e.read
+          args: [{ threadId: { ref: thread.threadId }, messageId: { ref: threaded.id } }]
+          saveAs: threadRead
+        - assert:
+            expr: "threadRead[0].threadId === thread.threadId && threadRead[0].text === 'thread ' + marker"
+            message: Native thread read escaped the owned thread or lost its message
+    - name: uploads a task-owned file and deletes its Discord message
+      actions:
+        - set: filePath
+          value:
+            expr: "path.join(env.gateway.workspaceDir, marker + '.txt')"
+        - try:
+            actions:
+              - call: fs.writeFile
+                args:
+                  [
+                    { ref: filePath },
+                    { expr: "'Discord native upload fixture ' + marker" },
+                    { mode: 384, flag: wx },
+                  ]
+              - call: channelE2e.upload
+                args: [{ path: { ref: filePath }, text: native upload fixture }]
+                saveAs: uploaded
+              - call: channelE2e.read
+                args: [{ messageId: { ref: uploaded.id } }]
+                saveAs: uploadedRead
+              - assert:
+                  expr: "uploadedRead[0].attachments.some((attachment) => attachment.name === marker + '.txt')"
+                  message: Discord did not expose the uploaded fixture attachment
+              - call: channelE2e.delete
+                args: [{ messageId: { ref: uploaded.id } }]
+              - call: channelE2e.read
+                args: [{ after: { ref: fixture.id }, limit: 100 }]
+                saveAs: afterDelete
+              - assert:
+                  expr: "!afterDelete.some((message) => message.id === uploaded.id)"
+                  message: Deleted upload remains visible in Discord history
+            finally:
+              - call: fs.rm
+                args: [{ ref: filePath }, { force: true }]
+    - name: proves the real SUT Gateway round trip separately from native fixtures
+      actions:
+        - call: channelE2e.send
+          args: [{ text: { expr: "'reply exactly: ' + marker" }, mention: true }]
+          saveAs: trigger
+        - call: channelE2e.waitForReply
+          args:
+            - afterMessageId: { ref: trigger.id }
+              textIncludes: { ref: marker }
+              timeoutMs: 60000
+          saveAs: sutReply
+        - assert:
+            expr: sutReply.actor === 'sut' && sutReply.channelId === trigger.channelId && sutReply.text.includes(marker)
+            message: No identity- and cursor-correlated SUT reply was observed
+      detailsExpr: "'Native fixture operations and a real Gateway reply passed; this does not prove a model invoked a message tool.'"

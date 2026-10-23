@@ -1,26 +1,29 @@
 import {
   createArtifactTransferService,
-  type ArtifactTransferOptions,
   type TransferArtifact,
 } from "./artifact-transfer-service.js";
+import { workerBootstrapOperationTimeoutMs } from "./bootstrap-timeouts.js";
 
-const BOOTSTRAP_TRANSFER_TTL_MS = 10 * 60_000;
-
-export function createWorkerBootstrapArtifactTransferService(
-  options: ArtifactTransferOptions = {},
-) {
-  const transfer = createArtifactTransferService(options);
+export function createWorkerBootstrapArtifactTransferService() {
+  const transfer = createArtifactTransferService();
   return {
     ...transfer,
     prepare(params: {
       artifact: TransferArtifact;
+      /** Total bytes downloaded concurrently through the same Gateway uplink. */
+      transferBytes?: number;
       isAuthorized: () => boolean;
       signal?: AbortSignal;
     }) {
       return transfer.prepare({
         ...params,
         artifactKey: params.artifact.tarballSha256,
-        ttlMs: BOOTSTRAP_TRANSFER_TTL_MS,
+        ttlMs: workerBootstrapOperationTimeoutMs({
+          tarballBytes: params.transferBytes ?? params.artifact.tarballBytes,
+        }),
+        // Allow frequent ranged resumes without granting unlimited artifact replays.
+        // The size-derived lifetime and live owner still bound every serial serve.
+        maxServes: 256,
       });
     },
   };

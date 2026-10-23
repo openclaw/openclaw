@@ -1,247 +1,171 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
+import {
+  createInboundDecisionParams,
+  type InboundDecisionParams,
+} from "./inbound-decision.test-support.js";
 
 type InboundProcessingModule = typeof import("./inbound-processing.js");
-type InboundDecisionParams = Parameters<
-  InboundProcessingModule["resolveIMessageInboundDecision"]
->[0];
 
+type ReplyCacheModule = typeof import("../monitor-reply-cache.js");
+let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
 let buildIMessageInboundContext: InboundProcessingModule["buildIMessageInboundContext"];
 let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
 const cfg = {} as OpenClawConfig;
 
 beforeAll(async () => {
-  await loadFreshIMessageReplyCacheForTest();
+  ({ rememberIMessageReplyCache } = await loadFreshIMessageReplyCacheForTest());
   ({ buildIMessageInboundContext, resolveIMessageInboundDecision } =
     await import("./inbound-processing.js"));
 });
 
-function resolveDecision(
-  overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
-    message?: Partial<InboundDecisionParams["message"]>;
-  } = {},
+function resolveDecision(overrides: Parameters<typeof createInboundDecisionParams>[0] = {}) {
+  return resolveIMessageInboundDecision(createInboundDecisionParams({ cfg, ...overrides }));
+}
+
+async function buildContext(
+  messageOverrides: Partial<InboundDecisionParams["message"]>,
+  overrides: Parameters<typeof resolveDecision>[0] = {},
 ) {
-  const { message: messageOverrides, ...restOverrides } = overrides;
-  const message = {
-    id: 42,
-    sender: "+15555550123",
-    text: "ok",
-    is_from_me: false,
-    is_group: false,
-    ...messageOverrides,
-  };
-  const messageText = restOverrides.messageText ?? message.text ?? "";
-  const bodyText = restOverrides.bodyText ?? messageText;
-  return resolveIMessageInboundDecision({
+  const { message } = createInboundDecisionParams({ message: messageOverrides });
+  const admitted = await resolveDecision({ ...overrides, message });
+  expect(admitted.kind).toBe("dispatch");
+  if (admitted.kind !== "dispatch") {
+    throw new Error("expected context fixture admission");
+  }
+  return buildIMessageInboundContext({
     cfg,
-    accountId: "default",
-    opts: undefined,
-    allowFrom: ["*"],
-    groupAllowFrom: [],
-    groupPolicy: "open",
-    dmPolicy: "open",
-    storeAllowFrom: [],
+    accountService: undefined,
+    decision: admitted,
+    message,
     historyLimit: 0,
     groupHistories: new Map(),
-    echoCache: undefined,
-    selfChatCache: undefined,
-    isKnownFromMeMessageId: () => false,
-    logVerbose: undefined,
-    ...restOverrides,
-    message,
-    messageText,
-    bodyText,
   });
 }
 
 describe("buildIMessageInboundContext presentation", () => {
-  it("uses provider-resolved contact names for direct session and sender presentation", async () => {
-    const message = {
-      id: 12344,
-      guid: "p:0/GUID-contact-name",
-      sender: "+15555550123",
-      sender_name: "Alice",
-      chat_name: "",
-      text: "Hello",
-      is_from_me: false,
-      is_group: false,
-    };
-    const decision = await resolveDecision({ message });
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-
-    const { ctxPayload, fromLabel } = await buildIMessageInboundContext({
-      cfg,
-      accountService: undefined,
-      decision,
-      message,
-      historyLimit: 0,
-      groupHistories: new Map(),
-    });
-
-    expect(fromLabel).toBe("Alice id:+15555550123");
-    expect(ctxPayload.ConversationLabel).toBe("Alice");
-    expect(ctxPayload.SenderName).toBe("Alice");
-  });
-
-  it("keeps group route IDs out of named session presentation", async () => {
-    const message = {
-      id: 12345,
-      guid: "p:0/GUID-group-name",
-      chat_id: 13,
-      chat_name: "Family",
-      sender: "+15555550123",
-      sender_name: "Alice",
-      text: "Hello",
-      is_from_me: false,
-      is_group: true,
-    };
-    const decision = await resolveDecision({ message });
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-
-    const { ctxPayload, fromLabel } = await buildIMessageInboundContext({
-      cfg,
-      accountService: undefined,
-      decision,
-      message,
-      historyLimit: 0,
-      groupHistories: new Map(),
-    });
-
-    expect(fromLabel).toBe("Family id:13");
-    expect(ctxPayload.ConversationLabel).toBe("Family");
-    expect(ctxPayload.GroupSubject).toBe("Family");
+  it.each([
+    [
+      { sender_name: "Alice", chat_name: "" },
+      "Alice id:+15555550123",
+      {
+        ConversationLabel: "Alice",
+        SenderName: "Alice",
+        CommandTurn: { kind: "normal", source: "message" },
+      },
+    ],
+    [
+      { sender_name: "Alice", chat_name: "Family", chat_id: 13, is_group: true },
+      "Family id:13",
+      { ConversationLabel: "Family", GroupSubject: "Family" },
+    ],
+  ] as const)("presents named conversation %s", async (message, fromLabel, ctxPayload) => {
+    const actual = await buildContext(message);
+    expect(actual).toMatchObject({ fromLabel, ctxPayload });
+    expect(actual.ctxPayload.CommandSource).toBeUndefined();
   });
 });
 
 describe("resolveIMessageInboundDecision command auth", () => {
-  const resolveDmCommandDecision = (params: {
-    messageId: number;
-    storeAllowFrom: string[];
-    dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
-    allowFrom?: string[];
-    text?: string;
-  }) =>
-    resolveDecision({
-      message: {
-        id: params.messageId,
-        sender: "+15555550123",
-        text: params.text ?? "/status",
-        is_from_me: false,
-        is_group: false,
-      },
-      allowFrom: params.allowFrom ?? [],
-      dmPolicy: params.dmPolicy ?? "open",
-      storeAllowFrom: params.storeAllowFrom,
-    });
-
   it("does not auto-authorize DM commands in open mode without allowlists", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 100,
-      storeAllowFrom: [],
+    const decision = await resolveDecision({
+      message: { id: 100, text: "/status" },
+      allowFrom: [],
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "dmPolicy blocked" });
   });
 
-  it("authorizes DM commands for senders in pairing-mode store allowlist", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 101,
-      dmPolicy: "pairing",
-      storeAllowFrom: ["+15555550123"],
-    });
-
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-    expect(decision.commandAuthorized).toBe(true);
-    expect(decision.hasControlCommand).toBe(true);
-  });
-
   it("marks authorized iMessage control commands as text command turns", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 102,
-      dmPolicy: "pairing",
-      storeAllowFrom: ["+15555550123"],
-      text: "/new",
-    });
+    const { ctxPayload } = await buildContext(
+      { id: 102, guid: "p:0/GUID-command", text: "/new" },
+      { allowFrom: [], dmPolicy: "pairing", storeAllowFrom: ["+15555550123"] },
+    );
 
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-
-    const { ctxPayload } = await buildIMessageInboundContext({
-      cfg,
-      accountService: undefined,
-      decision,
-      message: {
-        id: 102,
-        guid: "p:0/GUID-command",
-        sender: "+15555550123",
-        text: "/new",
-        is_from_me: false,
-        is_group: false,
-      },
-      historyLimit: 0,
-      groupHistories: new Map(),
-    });
-
-    expect(ctxPayload.CommandAuthorized).toBe(true);
-    expect(ctxPayload.ConversationRoutePeerId).toBe("+15555550123");
-    expect(ctxPayload.CommandSource).toBe("text");
-    expect(ctxPayload.CommandTurn).toMatchObject({
-      kind: "text-slash",
-      source: "text",
-      authorized: true,
-      commandName: "new",
+    expect(ctxPayload).toMatchObject({
+      CommandAuthorized: true,
+      ConversationRoutePeerId: "+15555550123",
+      CommandSource: "text",
+      CommandTurn: { kind: "text-slash", source: "text", authorized: true, commandName: "new" },
     });
   });
+});
 
-  it("does not mark authorized non-command iMessage DMs as text command turns", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 103,
-      dmPolicy: "pairing",
-      storeAllowFrom: ["+15555550123"],
-      text: "hello there",
-    });
+describe("iMessage bot-owned thread mention policy", () => {
+  const rootGuid = "imessage-bot-thread-root";
 
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
+  beforeAll(async () => {
+    for (const [messageId, isFromMe] of [
+      [rootGuid, true],
+      ["imessage-human-thread-root", false],
+    ] as const) {
+      await rememberIMessageReplyCache({
+        accountId: "default",
+        messageId,
+        chatId: 123,
+        timestamp: Date.now(),
+        isFromMe,
+      });
     }
-    expect(decision.commandAuthorized).toBe(true);
-    expect(decision.hasControlCommand).toBe(false);
+  });
 
-    const { ctxPayload } = await buildIMessageInboundContext({
-      cfg,
-      accountService: undefined,
-      decision,
-      message: {
-        id: 103,
-        guid: "p:0/GUID-non-command",
-        sender: "+15555550123",
-        text: "hello there",
-        is_from_me: false,
-        is_group: false,
+  async function resolveThreadReply(overrides: Parameters<typeof resolveDecision>[0] = {}) {
+    return resolveDecision({
+      cfg: {
+        messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+        channels: {
+          imessage: {
+            groupPolicy: "open",
+            groups: {
+              "*": { requireMention: true, requireMentionInBotThreads: false },
+              "123": {},
+            },
+          },
+        },
       },
-      historyLimit: 0,
-      groupHistories: new Map(),
+      ...overrides,
+      message: {
+        is_group: true,
+        chat_id: 123,
+        text: "follow-up",
+        thread_originator_guid: rootGuid,
+        ...overrides.message,
+      },
     });
+  }
 
-    expect(ctxPayload.CommandAuthorized).toBe(true);
-    expect(ctxPayload.CommandSource).toBeUndefined();
-    expect(ctxPayload.CommandTurn).toMatchObject({
-      kind: "normal",
-      source: "message",
-      commandName: undefined,
-    });
+  it.each([
+    { name: "human root", message: { thread_originator_guid: "imessage-human-thread-root" } },
+    { name: "another account", accountId: "other" },
+    { name: "another group", message: { chat_id: 456 } },
+    {
+      name: "reply to the bot without a native thread root",
+      message: { thread_originator_guid: undefined, reply_to_guid: rootGuid },
+    },
+  ])("retains the mention requirement for $name", async ({ name: _name, ...overrides }) => {
+    expect(await resolveThreadReply(overrides)).toEqual({ kind: "drop", reason: "no mention" });
+  });
+
+  it("recognizes the native part-prefixed root and keeps sender authorization", async () => {
+    const message = { thread_originator_guid: `p:0/${rootGuid}` };
+    expect((await resolveThreadReply({ message })).kind).toBe("dispatch");
+    expect(
+      await resolveThreadReply({
+        message,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["+15555550999"],
+      }),
+    ).toEqual({ kind: "drop", reason: "not in groupAllowFrom" });
+  });
+
+  it("restores normal mention gating when the remembered root expires", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.now() + 7 * 60 * 60 * 1000);
+      expect(await resolveThreadReply()).toEqual({ kind: "drop", reason: "no mention" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

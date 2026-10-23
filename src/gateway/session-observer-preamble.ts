@@ -1,5 +1,7 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import { normalizeSessionPreambleText } from "../agents/session-preamble.js";
+import { sanitizeProgressStatusText } from "../channels/progress-draft-status-text.js";
+import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import type { SessionObserverEvent } from "./session-observer-contract.js";
 import type { SessionObserverState } from "./session-observer-model.js";
 
@@ -15,25 +17,25 @@ type PreambleEntry = {
 };
 
 export function createSessionObserverPreamblePublisher(params: {
-  now: () => number;
-  setTimeoutFn: typeof setTimeout;
-  clearTimeoutFn: typeof clearTimeout;
   isCurrent: (state: SessionObserverState) => boolean;
+  preparePublication?: (state: SessionObserverState, publish: () => void) => void | Promise<void>;
   publish: (state: SessionObserverState, digest: SessionObserverDigest) => void;
 }) {
   const entries = new Map<SessionObserverState, PreambleEntry>();
-  const generations = new WeakMap<SessionObserverState, number>();
 
   const clear = (state: SessionObserverState): void => {
     const entry = entries.get(state);
     if (entry?.timer) {
-      params.clearTimeoutFn(entry.timer);
+      clearTimeout(entry.timer);
     }
     entries.delete(state);
   };
 
-  const publish = (state: SessionObserverState, entry: PreambleEntry): void => {
+  const publishPrepared = (state: SessionObserverState, entry: PreambleEntry): void => {
     entry.timer = undefined;
+    if (entries.get(state) !== entry) {
+      return;
+    }
     if (!params.isCurrent(state)) {
       clear(state);
       return;
@@ -63,20 +65,34 @@ export function createSessionObserverPreamblePublisher(params: {
     };
     state.previousDigest = digest;
     state.lastPublishedPreambleHeadline = entry.headline;
-    entry.lastPublishedAt = params.now();
+    entry.lastPublishedAt = Date.now();
     entry.published = true;
     params.publish(state, digest);
   };
+  const publish = (state: SessionObserverState, entry: PreambleEntry): void | Promise<void> => {
+    if (params.preparePublication) {
+      return params.preparePublication(state, () => publishPrepared(state, entry));
+    }
+    publishPrepared(state, entry);
+  };
 
   return {
-    handle(state: SessionObserverState, event: SessionObserverEvent): boolean {
+    handle(state: SessionObserverState, event: SessionObserverEvent): boolean | Promise<boolean> {
       if (event.stream !== "item" || event.data.kind !== "preamble") {
         return false;
       }
-      const headline = normalizeSessionPreambleText(
-        event.data.progressText,
-        PREAMBLE_HEADLINE_MAX_CHARS,
-      );
+      const progressText = event.data.progressText;
+      if (typeof progressText !== "string") {
+        return true;
+      }
+      const sanitized = sanitizeProgressStatusText(progressText);
+      if (!sanitized) {
+        return true;
+      }
+      const normalized = stripMarkdown(sanitized, { linkStyle: "label" })
+        .replace(/\s+/gu, " ")
+        .trim();
+      const headline = truncateUtf16Safe(normalized, PREAMBLE_HEADLINE_MAX_CHARS);
       if (!headline) {
         return true;
       }
@@ -95,39 +111,35 @@ export function createSessionObserverPreamblePublisher(params: {
         published: false,
         updatedAt: event.ts,
       };
-      if (previousHeadline !== headline) {
-        generations.set(state, (generations.get(state) ?? 0) + 1);
-      }
       state.lastPreambleHeadline = headline;
       entry.headline = headline;
       entry.updatedAt = event.ts;
       entries.set(state, entry);
 
-      const elapsed = params.now() - entry.lastPublishedAt;
+      const elapsed = Date.now() - entry.lastPublishedAt;
       if (!entry.published || elapsed >= PREAMBLE_PUBLISH_INTERVAL_MS) {
         if (entry.timer) {
-          params.clearTimeoutFn(entry.timer);
+          clearTimeout(entry.timer);
         }
-        publish(state, entry);
+        const pending = publish(state, entry);
+        if (pending) {
+          return pending.then(() => true);
+        }
       } else if (!entry.timer) {
-        entry.timer = params.setTimeoutFn(
-          () => publish(state, entry),
-          PREAMBLE_PUBLISH_INTERVAL_MS - elapsed,
-        );
+        entry.timer = setTimeout(() => {
+          void publish(state, entry);
+        }, PREAMBLE_PUBLISH_INTERVAL_MS - elapsed);
         entry.timer.unref?.();
       }
       return true;
     },
-    generation(state: SessionObserverState): number {
-      return generations.get(state) ?? 0;
-    },
-    flush(state: SessionObserverState): void {
+    flush(state: SessionObserverState): void | Promise<void> {
       const entry = entries.get(state);
       if (entry) {
         if (entry.timer) {
-          params.clearTimeoutFn(entry.timer);
+          clearTimeout(entry.timer);
         }
-        publish(state, entry);
+        return publish(state, entry);
       }
     },
     clear,

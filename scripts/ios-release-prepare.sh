@@ -16,6 +16,7 @@ EOF
 }
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${ROOT_DIR}/scripts/lib/ios-fastlane.sh"
 IOS_DIR="${ROOT_DIR}/apps/ios"
 BUILD_DIR="${IOS_DIR}/build"
 RELEASE_XCCONFIG="${IOS_DIR}/build/AppStoreRelease.xcconfig"
@@ -58,53 +59,7 @@ write_generated_file() {
   mv -f "${tmp_file}" "${output_path}"
 }
 
-require_option_value() {
-  local option="$1"
-  local value="${2-}"
-
-  if [[ -z "${value}" || "${value}" == --* ]]; then
-    echo "Missing value for ${option}." >&2
-    usage >&2
-    exit 1
-  fi
-}
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --)
-      shift
-      ;;
-    --build-number)
-      require_option_value "$1" "${2-}"
-      BUILD_NUMBER="${2:-}"
-      shift 2
-      ;;
-    --revision)
-      require_option_value "$1" "${2-}"
-      APP_STORE_REVISION="${2:-}"
-      shift 2
-      ;;
-    --version)
-      require_option_value "$1" "${2-}"
-      RELEASE_VERSION="${2:-}"
-      shift 2
-      ;;
-    --team-id)
-      require_option_value "$1" "${2-}"
-      TEAM_ID="${2:-}"
-      shift 2
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "Unknown argument: $1" >&2
-      usage
-      exit 1
-      ;;
-  esac
-done
+parse_ios_release_args prepare "$@"
 
 if [[ -z "${BUILD_NUMBER}" ]]; then
   echo "Missing required --build-number." >&2
@@ -134,12 +89,12 @@ if [[ -z "${TEAM_ID}" ]]; then
 fi
 
 if [[ "${TEAM_ID}" != "${CANONICAL_TEAM_ID}" ]]; then
-  echo "iOS App Store release must use canonical OpenClaw Team ID ${CANONICAL_TEAM_ID}; got ${TEAM_ID}." >&2
+  echo "iOS App Store release must use official OpenClaw Team ID ${CANONICAL_TEAM_ID}; got ${TEAM_ID}." >&2
   exit 1
 fi
 
 if [[ -n "${OPENCLAW_PUSH_RELAY_BASE_URL:-}" || -n "${IOS_PUSH_RELAY_BASE_URL:-}" ]]; then
-  echo "iOS App Store release uses the canonical hosted push relay; custom relay URL overrides are not allowed." >&2
+  echo "iOS App Store release uses the official hosted push relay; custom relay URL overrides are not allowed." >&2
   exit 1
 fi
 

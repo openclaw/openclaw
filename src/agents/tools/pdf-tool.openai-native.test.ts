@@ -1,243 +1,154 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import * as pdfExtractModule from "../../media/pdf-extract.js";
-import { isRecord } from "../../utils.js";
-import * as pdfNativeProviders from "./pdf-native-providers.js";
+import * as pdfExtract from "../../media/pdf-extract.js";
+import { sealSecretSentinel } from "../../secrets/sentinel.js";
+import * as modelAuth from "../model-auth.js";
+import { createPdfTool } from "./pdf-tool.js";
 import {
   createPdfToolInfraStub,
-  FAKE_PDF_MEDIA,
   resetPdfToolAuthEnv,
   withTempPdfAgentDir,
 } from "./pdf-tool.test-support.js";
 
-const completeMock = vi.hoisted(() => vi.fn());
-const registerProviderStreamForModelMock = vi.hoisted(() => vi.fn());
+const complete = vi.fn();
+const { stubPdfToolInfra } = createPdfToolInfraStub(complete);
+const completePages = {
+  pages: { processed: [1, 2], total: 2, selection: "automatic" as const, truncated: false },
+  textTruncated: false,
+  imagesTruncated: false,
+};
 
-vi.mock("../../llm/stream.js", async () => {
-  const actual = await vi.importActual<typeof import("../../llm/stream.js")>("../../llm/stream.js");
-  return { ...actual, complete: completeMock };
+beforeEach(() => {
+  resetPdfToolAuthEnv();
+  complete.mockReset().mockResolvedValue({
+    role: "assistant",
+    stopReason: "stop",
+    content: [{ type: "text", text: "bounded extraction" }],
+  });
 });
+afterEach(() => vi.restoreAllMocks());
 
-vi.mock("../provider-stream.js", () => ({
-  registerProviderStreamForModel: registerProviderStreamForModelMock,
-}));
-
-const { stubPdfToolInfra } = createPdfToolInfraStub(completeMock);
-const OPENAI_PDF_MODEL = "openai/gpt-5.4-mini";
-
-function withPdfModel(primary: string): OpenClawConfig {
-  return { agents: { defaults: { pdfModel: { primary } } } };
+async function runCase(params: {
+  enabled?: boolean;
+  input?: string[];
+  args?: Record<string, unknown>;
+  metadata?: typeof completePages;
+  unsupported?: boolean;
+  authValue?: string;
+}) {
+  return withTempPdfAgentDir(async (agentDir) => {
+    const native = vi.fn(async () =>
+      params.unsupported ? undefined : { text: "native document" },
+    );
+    await stubPdfToolInfra(agentDir, {
+      provider: "openai",
+      input: params.input ?? ["text", "image"],
+      baseUrl: "https://api.openai.com/v1",
+      mediaUnderstandingProviders: [{ id: "openai", analyzePdf: native }],
+    });
+    if (params.authValue) {
+      vi.spyOn(modelAuth, "requireApiKey").mockReturnValue(params.authValue);
+    }
+    const extract = vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({
+      text: "bounded document",
+      images: [],
+      ...(params.metadata ? { metadata: params.metadata } : {}),
+    });
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          pdfModel: { primary: "openai/gpt-4.1-mini" },
+          pdfMaxPages: 20,
+          ...(params.enabled === undefined ? {} : { pdfNativeOpenai: params.enabled }),
+        },
+      },
+    };
+    const tool = createPdfTool({ config, agentDir });
+    if (!tool) {
+      throw new Error("expected PDF tool");
+    }
+    const result = await tool.execute("pdf-opt-in", { pdf: "/tmp/synthetic.pdf", ...params.args });
+    return { result, native, extract };
+  });
 }
 
-function expectDetails(value: unknown, expected: Record<string, unknown>): void {
-  if (!isRecord(value)) {
-    throw new Error("expected details object");
-  }
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(value[key], key).toEqual(expectedValue);
-  }
-}
-
-describe("createPdfTool OpenAI native routing", () => {
-  beforeEach(() => {
-    resetPdfToolAuthEnv();
-    completeMock.mockReset();
-    registerProviderStreamForModelMock.mockReset();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("uses native input for the public OpenAI Responses endpoint", async () => {
-    await withTempPdfAgentDir(async (agentDir) => {
-      await stubPdfToolInfra(agentDir, {
-        provider: "openai",
-        input: ["text", "image"],
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
+describe("OpenAI native PDF opt-in", () => {
+  it.each([undefined, false, true])(
+    "preserves extraction unless explicitly enabled (%s)",
+    async (enabled) => {
+      const { result, native } = await runCase({ enabled, metadata: completePages });
+      expect(result.details).toMatchObject({
+        native: enabled === true,
+        model: "openai/gpt-4.1-mini",
       });
-      vi.spyOn(pdfNativeProviders, "openaiAnalyzePdf").mockResolvedValue("native OpenAI summary");
-      const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent");
-      const { createPdfTool } = await import("./pdf-tool.js");
-      const tool = createPdfTool({ config: withPdfModel(OPENAI_PDF_MODEL), agentDir });
-      if (!tool) {
-        throw new Error("expected pdf tool");
-      }
+      expect(native).toHaveBeenCalledTimes(enabled === true ? 1 : 0);
+      expect(complete).toHaveBeenCalledTimes(enabled === true ? 0 : 1);
+    },
+  );
 
-      const result = await tool.execute("t1", {
-        prompt: "summarize",
-        pdf: "/tmp/doc.pdf",
-      });
-
-      expect(pdfNativeProviders.openaiAnalyzePdf).toHaveBeenCalledWith(
-        expect.objectContaining({
-          modelId: "gpt-5.4-mini",
-          baseUrl: "https://api.openai.com/v1",
-        }),
+  it.each([
+    { name: "page selection", args: { pages: "2" }, metadata: completePages },
+    { name: "password", args: { password: "synthetic-password" }, metadata: completePages },
+    { name: "unknown completeness", metadata: undefined },
+    {
+      name: "page limit",
+      metadata: {
+        ...completePages,
+        pages: {
+          ...completePages.pages,
+          processed: Array.from({ length: 20 }, (_, i) => i + 1),
+          total: 30,
+          truncated: true,
+        },
+      },
+    },
+    { name: "truncated extracted text", metadata: { ...completePages, textTruncated: true } },
+    { name: "truncated page images", metadata: { ...completePages, imagesTruncated: true } },
+    { name: "text-only model", input: ["text"], metadata: completePages },
+  ])("keeps bounded extraction for $name", async (params) => {
+    const { result, native, extract } = await runCase({ enabled: true, ...params });
+    expect(result.details).toMatchObject({ native: false });
+    expect(native).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledOnce();
+    if (params.args?.pages) {
+      expect(extract).toHaveBeenCalledWith(expect.objectContaining({ pageNumbers: [2] }));
+    }
+    if (params.args?.password) {
+      expect(extract).toHaveBeenCalledWith(
+        expect.objectContaining({ password: "synthetic-password" }),
       );
-      expect(extractSpy).not.toHaveBeenCalled();
-      expect(result.content).toEqual([{ type: "text", text: "native OpenAI summary" }]);
-      expectDetails(result.details, { native: true, model: OPENAI_PDF_MODEL });
-    });
+    }
   });
 
-  it.each([
-    { pages: "1,3-4", expected: { pageNumbers: [1, 3, 4] } },
-    { password: " fixture password ", expected: { password: " fixture password " } },
-    { pages: "2", password: "fixture", expected: { pageNumbers: [2], password: "fixture" } },
-  ])("preserves OpenAI extraction options: $expected", async ({ expected, ...options }) => {
-    await withTempPdfAgentDir(async (agentDir) => {
-      await stubPdfToolInfra(agentDir, {
-        provider: "openai",
-        input: ["text", "image"],
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      });
-      const nativeSpy = vi.spyOn(pdfNativeProviders, "openaiAnalyzePdf");
-      const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
-        text: "Selected and decrypted content",
-        images: [],
-      });
-      completeMock.mockResolvedValue({
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: "fallback summary" }],
-      });
-      const { createPdfTool } = await import("./pdf-tool.js");
-      const tool = createPdfTool({ config: withPdfModel(OPENAI_PDF_MODEL), agentDir });
-      if (!tool) {
-        throw new Error("expected pdf tool");
-      }
-
-      const result = await tool.execute("t1", { pdf: "/tmp/doc.pdf", ...options });
-
-      expect(extractSpy).toHaveBeenCalledWith(expect.objectContaining(expected));
-      expect(nativeSpy).not.toHaveBeenCalled();
-      expect(result.content).toEqual([{ type: "text", text: "fallback summary" }]);
-      expectDetails(result.details, { native: false, model: OPENAI_PDF_MODEL });
+  it("uses its existing extraction when the provider rejects native eligibility before upload", async () => {
+    const { result, native, extract } = await runCase({
+      enabled: true,
+      metadata: completePages,
+      unsupported: true,
     });
+    expect(native).toHaveBeenCalledOnce();
+    expect(result.details).toMatchObject({ native: false });
+    expect(extract).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { label: "combined limit", sizes: [25_000_000, 25_000_000], native: true },
-    { label: "combined limit plus one byte", sizes: [25_000_000, 25_000_001], native: false },
-    { label: "six individually valid PDFs", sizes: Array(6).fill(9_000_000), native: false },
-    { label: "single file below limit", sizes: [49_999_999], native: true },
-    { label: "single file at strict limit", sizes: [50_000_000], native: false },
-  ])("routes original PDF sizes at $label", async ({ sizes, native }) => {
-    await withTempPdfAgentDir(async (agentDir) => {
-      const { loadSpy } = await stubPdfToolInfra(agentDir, {
-        provider: "openai",
-        input: ["text", "image"],
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      });
-      for (const size of sizes) {
-        loadSpy.mockResolvedValueOnce({ ...FAKE_PDF_MEDIA, buffer: Buffer.alloc(size) });
-      }
-      const nativeSpy = vi
-        .spyOn(pdfNativeProviders, "openaiAnalyzePdf")
-        .mockResolvedValue("native summary");
-      const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
-        text: "Extracted content",
-        images: [],
-      });
-      completeMock.mockResolvedValue({
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: "fallback summary" }],
-      });
-      const { createPdfTool } = await import("./pdf-tool.js");
-      const tool = createPdfTool({ config: withPdfModel(OPENAI_PDF_MODEL), agentDir });
-      if (!tool) {
-        throw new Error("expected pdf tool");
-      }
-
-      const result = await tool.execute("t1", {
-        pdfs: sizes.map((_, index) => `/tmp/doc-${index}.pdf`),
-        maxBytesMb: 60,
-      });
-
-      expect(nativeSpy).toHaveBeenCalledTimes(native ? 1 : 0);
-      expect(extractSpy).toHaveBeenCalledTimes(native ? 0 : sizes.length);
-      expect(completeMock).toHaveBeenCalledTimes(native ? 0 : 1);
-      expect(result.content).toEqual([
-        { type: "text", text: native ? "native summary" : "fallback summary" },
-      ]);
-      expectDetails(result.details, { native, model: OPENAI_PDF_MODEL });
+  it("opens prepared credential sentinels only at the admitted provider handoff", async () => {
+    const credential = "synthetic-provider-key";
+    const { native } = await runCase({
+      enabled: true,
+      metadata: completePages,
+      authValue: sealSecretSentinel(credential, { label: "pdf-auth-regression" }),
     });
+    expect(native).toHaveBeenCalledWith(expect.objectContaining({ apiKey: credential }));
   });
 
-  it("uses extraction fallback for custom OpenAI Responses endpoints", async () => {
-    await withTempPdfAgentDir(async (agentDir) => {
-      await stubPdfToolInfra(agentDir, {
-        provider: "openai",
-        input: ["text", "image"],
-        api: "openai-responses",
-        baseUrl: "https://proxy.example.com/v1",
-      });
-      const nativeSpy = vi.spyOn(pdfNativeProviders, "openaiAnalyzePdf");
-      const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
-        text: "Extracted content",
-        images: [],
-      });
-      completeMock.mockResolvedValue({
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: "fallback summary" }],
-      } as never);
-      const { createPdfTool } = await import("./pdf-tool.js");
-      const tool = createPdfTool({ config: withPdfModel(OPENAI_PDF_MODEL), agentDir });
-      if (!tool) {
-        throw new Error("expected pdf tool");
-      }
-
-      const result = await tool.execute("t1", {
-        prompt: "summarize",
-        pdf: "/tmp/doc.pdf",
-      });
-
-      expect(nativeSpy).not.toHaveBeenCalled();
-      expect(extractSpy).toHaveBeenCalledTimes(1);
-      expect(result.content).toEqual([{ type: "text", text: "fallback summary" }]);
-      expectDetails(result.details, { native: false, model: OPENAI_PDF_MODEL });
-      expect(completeMock.mock.calls[0]?.[1].systemPrompt).toBeUndefined();
-    });
-  });
-
-  it("uses extraction fallback for the ChatGPT/Codex transport", async () => {
-    await withTempPdfAgentDir(async (agentDir) => {
-      await stubPdfToolInfra(agentDir, {
-        provider: "openai",
-        input: ["text", "image"],
-        api: "openai-chatgpt-responses",
-      });
-      const nativeSpy = vi.spyOn(pdfNativeProviders, "openaiAnalyzePdf");
-      const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
-        text: "Extracted content",
-        images: [],
-      });
-      completeMock.mockResolvedValue({
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: "fallback summary" }],
-      } as never);
-      const { createPdfTool } = await import("./pdf-tool.js");
-      const tool = createPdfTool({ config: withPdfModel(OPENAI_PDF_MODEL), agentDir });
-      if (!tool) {
-        throw new Error("expected pdf tool");
-      }
-
-      const result = await tool.execute("t1", {
-        prompt: "summarize",
-        pdf: "/tmp/doc.pdf",
-      });
-
-      expect(nativeSpy).not.toHaveBeenCalled();
-      expect(extractSpy).toHaveBeenCalledTimes(1);
-      expect(result.content).toEqual([{ type: "text", text: "fallback summary" }]);
-      expectDetails(result.details, { native: false, model: OPENAI_PDF_MODEL });
-    });
+  it("refuses an unknown credential sentinel before the provider handoff", async () => {
+    await expect(
+      runCase({
+        enabled: true,
+        metadata: completePages,
+        authValue: "oc-sent-v2.unknown.end",
+      }),
+    ).rejects.toThrow(/not registered/);
   });
 });

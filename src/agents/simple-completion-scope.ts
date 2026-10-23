@@ -1,7 +1,10 @@
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 
-type SimpleCompletionModelResolver = typeof resolveModelAsync;
+/** Shipped SDK resolver callbacks do not supply core-owned logical reference facts. */
+export type SimpleCompletionModelResolver = (
+  ...args: Parameters<typeof resolveModelAsync>
+) => Promise<Omit<Awaited<ReturnType<typeof resolveModelAsync>>, "logicalRef">>;
 
 export type PreparedSimpleCompletionResolverContext = Readonly<{
   modelResolver: SimpleCompletionModelResolver;

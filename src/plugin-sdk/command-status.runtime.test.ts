@@ -1,40 +1,46 @@
-/**
- * Tests command status runtime lazy loading and direct status reply behavior.
- */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const buildStatusReply = vi.fn(async (params: unknown) => params);
+const buildStatusReply = vi.fn<(params: unknown) => Promise<unknown>>();
 const loadSessionEntry = vi.fn();
-const resolveSessionAgentId = vi.fn();
-const listAgentEntries = vi.fn();
-const resolveDefaultModelForAgent = vi.fn();
-const resolveDefaultModel = vi.fn();
-const createModelSelectionState = vi.fn();
 const resolveCurrentDirectiveLevels = vi.fn();
 
 vi.mock("../auto-reply/reply/commands-status.js", () => ({
   buildStatusReply,
 }));
 
-vi.mock("../gateway/session-utils.js", () => ({
-  loadGatewaySessionEntryReadOnly: loadSessionEntry,
+// mock-isolation: command status tests supply config without reading operator state.
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => ({}),
 }));
 
+// mock-isolation: command status tests control entry data without a live session store.
+vi.mock("../gateway/session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: loadSessionEntry,
+}));
+
+// mock-isolation: keep status rendering on the synthetic agent rather than live agent discovery.
 vi.mock("../agents/agent-scope.js", () => ({
-  listAgentEntries,
-  resolveSessionAgentId,
+  listAgentEntries: () => [],
+  resolveSessionAgentId: () => "main",
 }));
 
+// mock-isolation: use a fixed model without resolving provider configuration.
 vi.mock("../agents/model-selection.js", () => ({
-  resolveDefaultModelForAgent,
+  resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-5.4" }),
 }));
 
+// mock-isolation: supply deterministic directive defaults without loading runtime model state.
 vi.mock("../auto-reply/reply/directive-handling.defaults.js", () => ({
-  resolveDefaultModel,
+  resolveDefaultModel: () => ({ defaultProvider: "openai", defaultModel: "gpt-5.4" }),
 }));
 
+// mock-isolation: provide synthetic thinking levels without consulting provider catalogs.
 vi.mock("../auto-reply/reply/model-selection.js", () => ({
-  createModelSelectionState,
+  createModelSelectionState: async () => ({
+    resolveThinkingCatalog: async () => [],
+    resolveDefaultThinkingLevel: async () => "off",
+    resolveDefaultReasoningLevel: async () => "on",
+  }),
 }));
 
 vi.mock("../auto-reply/reply/directive-handling.levels.js", () => ({
@@ -43,214 +49,66 @@ vi.mock("../auto-reply/reply/directive-handling.levels.js", () => ({
 
 const { resolveDirectStatusReplyForSessionCore } = await import("./command-status.runtime.js");
 
-function expectResolvedReasoningLevel(value: unknown, expected: string) {
-  expect((value as { resolvedReasoningLevel?: unknown }).resolvedReasoningLevel).toBe(expected);
+function loadedSession(cfg = {}, entry = {}) {
+  return {
+    cfg,
+    canonicalKey: "main",
+    entry: { sessionId: "sess-main", ...entry },
+    store: {},
+    storePath: "/tmp/sessions.json",
+  };
 }
 
-function requireBuildStatusReplyParams(index = 0): unknown {
-  const call = buildStatusReply.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected buildStatusReply call ${index}`);
-  }
-  return call[0];
-}
+const directiveLevels = (currentReasoningLevel: string) => ({
+  currentThinkLevel: "off",
+  currentFastMode: false,
+  currentVerboseLevel: "off",
+  currentReasoningLevel,
+  currentElevatedLevel: "off",
+});
+
+const statusReply = (senderIsOwner: boolean, isAuthorizedSender: boolean) =>
+  resolveDirectStatusReplyForSessionCore({
+    cfg: {},
+    sessionKey: "main",
+    channel: "cli",
+    senderIsOwner,
+    isAuthorizedSender,
+    isGroup: false,
+    defaultGroupActivation: () => "always",
+  });
 
 describe("resolveDirectStatusReplyForSessionCore", () => {
   beforeEach(() => {
-    buildStatusReply.mockReset();
-    loadSessionEntry.mockReset();
-    resolveSessionAgentId.mockReset();
-    listAgentEntries.mockReset();
-    resolveDefaultModelForAgent.mockReset();
-    resolveDefaultModel.mockReset();
-    createModelSelectionState.mockReset();
-    resolveCurrentDirectiveLevels.mockReset();
-
-    buildStatusReply.mockImplementation(async (params: unknown) => params);
-    loadSessionEntry.mockReturnValue({
-      cfg: {
-        agents: {
-          defaults: {
-            reasoningDefault: "off",
-          },
-        },
-      },
-      canonicalKey: "main",
-      entry: {
-        sessionId: "sess-main",
-      },
-      store: {},
-      storePath: "/tmp/sessions.json",
-    });
-    resolveSessionAgentId.mockReturnValue("main");
-    listAgentEntries.mockReturnValue([]);
-    resolveDefaultModelForAgent.mockReturnValue({ provider: "openai", model: "gpt-5.4" });
-    resolveDefaultModel.mockReturnValue({ defaultProvider: "openai", defaultModel: "gpt-5.4" });
-    createModelSelectionState.mockResolvedValue({
-      resolveThinkingCatalog: vi.fn(async () => []),
-      resolveDefaultThinkingLevel: vi.fn(async () => "off"),
-      resolveDefaultReasoningLevel: vi.fn(async () => "on"),
-    });
-    resolveCurrentDirectiveLevels.mockResolvedValue({
-      currentThinkLevel: "off",
-      currentFastMode: false,
-      currentVerboseLevel: "off",
-      currentReasoningLevel: "off",
-      currentElevatedLevel: "off",
-    });
+    buildStatusReply.mockReset().mockImplementation(async (params: unknown) => params);
+    loadSessionEntry
+      .mockReset()
+      .mockResolvedValue(loadedSession({ agents: { defaults: { reasoningDefault: "off" } } }));
+    resolveCurrentDirectiveLevels.mockReset().mockResolvedValue(directiveLevels("off"));
   });
 
   it("treats agentCfg reasoningDefault as explicit for direct /status", async () => {
-    const result = await resolveDirectStatusReplyForSessionCore({
-      cfg: {},
-      sessionKey: "main",
-      channel: "cli",
-      senderIsOwner: true,
-      isAuthorizedSender: true,
-      isGroup: false,
-      defaultGroupActivation: () => "always",
-    });
-
-    expect(buildStatusReply).toHaveBeenCalledOnce();
-    expectResolvedReasoningLevel(requireBuildStatusReplyParams(), "off");
-    expectResolvedReasoningLevel(result, "off");
+    expect(await statusReply(true, true)).toMatchObject({ resolvedReasoningLevel: "off" });
   });
 
-  it("allows configured reasoning defaults for authorized direct /status senders", async () => {
-    loadSessionEntry.mockReturnValue({
-      cfg: {
-        agents: {
-          defaults: {
-            reasoningDefault: "stream",
-          },
-        },
-      },
-      canonicalKey: "main",
-      entry: {
-        sessionId: "sess-main",
-      },
-      store: {},
-      storePath: "/tmp/sessions.json",
-    });
-    resolveCurrentDirectiveLevels.mockResolvedValueOnce({
-      currentThinkLevel: "off",
-      currentFastMode: false,
-      currentVerboseLevel: "off",
-      currentReasoningLevel: "stream",
-      currentElevatedLevel: "off",
-    });
-
-    const result = await resolveDirectStatusReplyForSessionCore({
-      cfg: {},
-      sessionKey: "main",
-      channel: "cli",
-      senderIsOwner: false,
-      isAuthorizedSender: true,
-      isGroup: false,
-      defaultGroupActivation: () => "always",
-    });
-
-    expectResolvedReasoningLevel(result, "stream");
-  });
-
-  it("hides configured reasoning defaults from unauthorized direct /status senders", async () => {
-    loadSessionEntry.mockReturnValue({
-      cfg: {
-        agents: {
-          defaults: {
-            reasoningDefault: "stream",
-          },
-        },
-      },
-      canonicalKey: "main",
-      entry: {
-        sessionId: "sess-main",
-      },
-      store: {},
-      storePath: "/tmp/sessions.json",
-    });
-    resolveCurrentDirectiveLevels.mockResolvedValueOnce({
-      currentThinkLevel: "off",
-      currentFastMode: false,
-      currentVerboseLevel: "off",
-      currentReasoningLevel: "stream",
-      currentElevatedLevel: "off",
-    });
-
-    const result = await resolveDirectStatusReplyForSessionCore({
-      cfg: {},
-      sessionKey: "main",
-      channel: "cli",
-      senderIsOwner: false,
-      isAuthorizedSender: false,
-      isGroup: false,
-      defaultGroupActivation: () => "always",
-    });
-
-    expectResolvedReasoningLevel(result, "off");
-  });
-
-  it("hides session reasoning state from unauthorized direct /status senders", async () => {
-    loadSessionEntry.mockReturnValue({
-      cfg: {},
-      canonicalKey: "main",
-      entry: {
-        sessionId: "sess-main",
-        reasoningLevel: "stream",
-      },
-      store: {},
-      storePath: "/tmp/sessions.json",
-    });
-    resolveCurrentDirectiveLevels.mockResolvedValueOnce({
-      currentThinkLevel: "off",
-      currentFastMode: false,
-      currentVerboseLevel: "off",
-      currentReasoningLevel: "stream",
-      currentElevatedLevel: "off",
-    });
-
-    const result = await resolveDirectStatusReplyForSessionCore({
-      cfg: {},
-      sessionKey: "main",
-      channel: "cli",
-      senderIsOwner: false,
-      isAuthorizedSender: false,
-      isGroup: false,
-      defaultGroupActivation: () => "always",
-    });
-
-    expectResolvedReasoningLevel(result, "off");
-  });
-
-  it("allows session reasoning state for authorized direct /status senders", async () => {
-    loadSessionEntry.mockReturnValue({
-      cfg: {},
-      canonicalKey: "main",
-      entry: {
-        sessionId: "sess-main",
-        reasoningLevel: "stream",
-      },
-      store: {},
-      storePath: "/tmp/sessions.json",
-    });
-    resolveCurrentDirectiveLevels.mockResolvedValueOnce({
-      currentThinkLevel: "off",
-      currentFastMode: false,
-      currentVerboseLevel: "off",
-      currentReasoningLevel: "stream",
-      currentElevatedLevel: "off",
-    });
-
-    const result = await resolveDirectStatusReplyForSessionCore({
-      cfg: {},
-      sessionKey: "main",
-      channel: "cli",
-      senderIsOwner: false,
-      isAuthorizedSender: true,
-      isGroup: false,
-      defaultGroupActivation: () => "always",
-    });
-
-    expectResolvedReasoningLevel(result, "stream");
-  });
+  it.each([
+    { session: false, isAuthorizedSender: true },
+    { session: false, isAuthorizedSender: false },
+    { session: true, isAuthorizedSender: true },
+    { session: true, isAuthorizedSender: false },
+  ])(
+    "gates reasoning: session=$session authorized=$isAuthorizedSender",
+    async ({ session, isAuthorizedSender }) => {
+      loadSessionEntry.mockResolvedValue(
+        loadedSession(
+          session ? {} : { agents: { defaults: { reasoningDefault: "stream" } } },
+          session ? { reasoningLevel: "stream" } : {},
+        ),
+      );
+      resolveCurrentDirectiveLevels.mockResolvedValueOnce(directiveLevels("stream"));
+      expect(await statusReply(false, isAuthorizedSender)).toMatchObject({
+        resolvedReasoningLevel: isAuthorizedSender ? "stream" : "off",
+      });
+    },
+  );
 });

@@ -1,140 +1,436 @@
-import { describe, expect, it, vi } from "vitest";
-import type { BuildChannelInboundEventContextParams } from "../channels/inbound-event/context.js";
+import { AsyncResource } from "node:async_hooks";
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildChannelInboundEventContext } from "../channels/inbound-event/context.js";
 import {
-  configureChannelAdmissionEvidenceCollection,
-  consumeChannelAdmissionEvidence,
-  readChannelContextAdmissionEvidence,
+  createChannelAdmissionAudit,
+  readChannelContextGatewayContextResolver,
+  type ChannelAdmissionAudit,
 } from "../channels/message-access/admission-evidence.js";
 import type { ResolvedChannelMessageIngress } from "../channels/message-access/runtime-types.js";
-import { resolveStableChannelMessageIngress } from "../channels/message-access/runtime.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginOrigin } from "./plugin-origin.types.js";
-import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
+import {
+  createChannelIngressResolver,
+  defineStableChannelIngressIdentity,
+  resolveChannelMessageIngress,
+  resolveStableChannelMessageIngress,
+} from "../plugin-sdk/channel-ingress-runtime.js";
+import { recordAcceptedSessionParticipantInput } from "../sessions/session-participant-input-recording.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { createLazyPluginRuntime } from "./loader-module-runtime.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import {
+  markPluginRegistryActive,
+  markPluginRegistryRetired,
+  withPluginRegistryPreparationScope,
+} from "./registry-lifecycle.js";
+import {
+  contextParams,
+  createRuntimeBuilder,
+  inspect,
+  resolveIngressForRuntime,
+} from "./registry-runtime.channel-ingress.test-support.js";
 import { createPluginRegistry } from "./registry.js";
+import {
+  bindGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+  hasGatewayContextOwner,
+  withPluginRuntimeRegistryScope,
+} from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
-function createRuntimeBuilder(params: { origin: PluginOrigin; id?: string }) {
-  const registryBuilder = createPluginRegistry({
+const recordParticipant = vi.hoisted(() => vi.fn());
+vi.mock("../sessions/session-participant-recording.js", () => ({
+  recordSessionParticipantBestEffort: recordParticipant,
+}));
+type ContextParams = Parameters<typeof contextParams>[0];
+type InboundContext = ReturnType<typeof buildChannelInboundEventContext>;
+
+function expectIngressState(context: object, state: "present" | "unknown") {
+  expect(inspect(context)).toMatchObject({ ingressState: state, invoker: { state } });
+}
+function expectIngress(
+  source:
+    | typeof buildChannelInboundEventContext
+    | { buildContext: typeof buildChannelInboundEventContext },
+  ingress: ContextParams["ingress"],
+  state: "present" | "unknown",
+  params: Omit<ContextParams, "ingress"> = {},
+) {
+  const build = typeof source === "function" ? source : source.buildContext;
+  expectIngressState(build(contextParams({ ingress, ...params })), state);
+}
+const audits = new Set<ChannelAdmissionAudit>();
+const cleanups: Array<() => void | Promise<void>> = [];
+const fullRegistration = { config: {}, registrationMode: "full" as const };
+const sessionKey = "agent:main:channel-owner:dm:dm-1";
+const ingressBinding = {
+  agentId: "main",
+  sessionKey,
+  messageId: "message-1",
+  inboundEventKind: "user_request" as const,
+};
+function route(overrides: Partial<ContextParams["route"]> = {}) {
+  return { agentId: "main", routeSessionKey: sessionKey, ...overrides };
+}
+function group(overrides: Partial<ContextParams["conversation"]> = {}) {
+  return { kind: "group" as const, id: "room-1", parentId: "parent-1", ...overrides };
+}
+function expectProvenance(context: object, audit?: ChannelAdmissionAudit) {
+  expect(inspect(context)).toMatchObject({ ingressState: audit ? "present" : "unknown" });
+  const resolver = readChannelContextGatewayContextResolver(context);
+  if (audit) {
+    expect(resolver?.()?.channelAdmissionAudit).toBe(audit);
+  } else {
+    expect(resolver).toBeUndefined();
+  }
+}
+function bundledRuntime(audit = createAudit()) {
+  return createRuntimeBuilder({ origin: "bundled", audit });
+}
+function recordInput(context: Parameters<typeof recordAcceptedSessionParticipantInput>[0]) {
+  recordAcceptedSessionParticipantInput(context, {
+    agentId: "main",
+    sessionKey,
+    storePath: "/unused",
+  });
+}
+function createRegistry(runtime: PluginRuntime = createPluginRuntime()) {
+  return createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {
-      channel: { inbound: { buildContext: buildChannelInboundEventContext } },
-    } as PluginRuntime,
+    runtime,
     activateGlobalSideEffects: false,
   });
-  const record = createPluginRecord({
-    id: params.id ?? "channel-owner",
-    origin: params.origin,
-  });
-  const api = registryBuilder.createApi(record, {
-    config: {} as OpenClawConfig,
-    registrationMode: "full",
-  });
-  api.registerChannel({
-    plugin: {
-      id: record.id,
-      meta: {
-        id: record.id,
-        label: record.id,
-        selectionLabel: record.id,
-        docsPath: `/channels/${record.id}`,
-        blurb: "test channel",
-      },
-      capabilities: { chatTypes: ["direct"] },
-      config: {
-        listAccountIds: () => [],
-        resolveAccount: () => ({ accountId: "default" }),
-      },
-      outbound: { deliveryMode: "direct" },
-    },
-  });
-  registryBuilder.registry.plugins.push(record);
-  markPluginRegistryActive(registryBuilder.registry);
-  const resolveBuildContext = () => {
-    const registration = registryBuilder.registry.channels.find(
-      (candidate) => candidate.plugin.id === record.id,
-    );
-    const runtime = registration?.resolveChannelRuntime?.();
-    if (!runtime) {
-      throw new Error(`missing registered channel runtime for ${record.id}`);
-    }
-    return runtime.inbound.buildContext;
-  };
-  return { buildContext: resolveBuildContext(), record, registryBuilder, resolveBuildContext };
 }
 
-async function resolveIngress(
-  participantId: string,
+function channelFixture(id: string, label = id): ChannelPlugin {
+  return {
+    id,
+    meta: { id, label, selectionLabel: label, docsPath: `/channels/${id}`, blurb: "test channel" },
+    capabilities: { chatTypes: ["direct"] },
+    config: { listAccountIds: () => [], resolveAccount: () => ({ accountId: "default" }) },
+    outbound: { deliveryMode: "direct" },
+  };
+}
+
+function createGateway(audit: ChannelAdmissionAudit) {
+  return { channelAdmissionAudit: audit, getRuntimeConfig: () => ({}) } as GatewayRequestContext;
+}
+function scopedGateway(id: string, audit: ChannelAdmissionAudit) {
+  const gateway = createGateway(audit);
+  const channel = createRuntimeBuilder({
+    origin: "bundled",
+    id,
+    gatewayContextResolver: () => gateway,
+  });
+  cleanups.push(() => markPluginRegistryRetired(channel.registryBuilder.registry));
+  return { ...channel, gateway };
+}
+
+function createAudit() {
+  const audit = createChannelAdmissionAudit({ enabled: true });
+  audits.add(audit);
+  return audit;
+}
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) {
+    await cleanup();
+  }
+  for (const audit of audits) {
+    audit.close();
+  }
+  audits.clear();
+});
+
+it.each([
+  "loadAdapter",
+  "setIdleTimeoutBySessionKey",
+  "setMaxAgeBySessionKey",
+  "setIdleTimeoutBySessionKeyAsync",
+  "setMaxAgeBySessionKeyAsync",
+] as const)(
+  "keeps adopted channel %s usable after its captured registry is collected",
+  async (method) => {
+    class RetainedService {
+      id = "retired-channel-scope";
+      start() {}
+    }
+    const registryBuilder = createRegistry();
+    const record = createPluginRecord({ id: "adopted-channel", origin: "bundled" });
+    const api = registryBuilder.createApi(record, { config: {} });
+    const instance = getPluginInstance(record)!;
+    const binding = { boundAt: 1, lastActivityAt: 2 };
+    const bindings = {
+      setIdleTimeoutBySessionKey: vi.fn(() => [binding]),
+      setMaxAgeBySessionKey: vi.fn(() => [binding]),
+      setIdleTimeoutBySessionKeyAsync: vi.fn(async () => [binding]),
+      setMaxAgeBySessionKeyAsync: vi.fn(async () => [binding]),
+    };
+    api.registerChannel({
+      plugin: {
+        ...channelFixture(record.id),
+        conversationBindings: bindings,
+      },
+    });
+    registryBuilder.registry.plugins.push(record);
+    markPluginRegistryActive(registryBuilder.registry);
+    const capturedChannel = api.runtime.channel;
+    const current = createEmptyPluginRegistry();
+    current.plugins.push(record);
+    current.channels.push(...registryBuilder.registry.channels);
+    const resource = (() => {
+      const intermediate = createEmptyPluginRegistry();
+      intermediate.plugins.push(record);
+      intermediate.channels.push(...registryBuilder.registry.channels);
+      intermediate.services.push({
+        id: "retired-channel-scope",
+        pluginId: record.id,
+        source: "retention-test",
+        origin: "config",
+        service: new RetainedService(),
+      });
+      markPluginRegistryActive(intermediate);
+      markPluginRegistryRetired(registryBuilder.registry);
+      const captured = instance.run(() => new AsyncResource("adopted-channel-runtime"));
+      markPluginRegistryActive(current);
+      markPluginRegistryRetired(intermediate);
+      return captured;
+    })();
+    const input = { channelId: record.id, targetSessionKey: "agent:main:channel:dm:fixture" };
+    const invoke = (channel: PluginRuntime["channel"]) => {
+      if (method === "loadAdapter") {
+        return channel.outbound.loadAdapter(record.id);
+      }
+      if (method === "setIdleTimeoutBySessionKey" || method === "setIdleTimeoutBySessionKeyAsync") {
+        return channel.threadBindings[method]({ ...input, idleTimeoutMs: 10 });
+      }
+      return channel.threadBindings[method]({ ...input, maxAgeMs: 20 });
+    };
+    try {
+      await setImmediate();
+      expect(queryObjects(RetainedService)).toBe(0);
+      for (const readChannel of [() => capturedChannel, () => api.runtime.channel]) {
+        const result = await resource.runInAsyncScope(() => invoke(readChannel()));
+        if (method === "loadAdapter") {
+          expect(result).toBe(current.channels[0]?.plugin.outbound);
+        } else {
+          expect(result).toEqual([binding]);
+        }
+      }
+      if (method === "loadAdapter") {
+        const empty = createEmptyPluginRegistry();
+        await withPluginRuntimeRegistryScope(empty, async () => {
+          expect(await capturedChannel.outbound.loadAdapter(record.id)).toBeUndefined();
+        });
+        expect(empty.channels).toHaveLength(0);
+      }
+      if (method !== "loadAdapter") {
+        expect(bindings[method]).toHaveBeenCalledTimes(2);
+        expect(bindings[method]).toHaveBeenLastCalledWith({
+          targetSessionKey: input.targetSessionKey,
+          accountId: undefined,
+          ...(method.includes("Idle") ? { idleTimeoutMs: 10 } : { maxAgeMs: 20 }),
+        });
+      }
+    } finally {
+      resource.emitDestroy();
+      markPluginRegistryRetired(current);
+      await instance.dispose();
+    }
+  },
+);
+
+type LegacyIngressMethod = "direct" | "stable" | "factory";
+
+function createLegacyReceiver(
   params: {
-    channelId?: string;
-    conversation?: {
-      kind: "direct" | "group" | "channel";
-      id: string;
-      parentId?: string;
-      threadId?: string;
-    };
-    contextBinding?: {
-      agentId: string;
-      sessionKey: string;
-      messageId: string;
-      nativeChannelId?: string;
-      inboundEventKind: "user_request" | "room_event";
-    };
+    audit?: ChannelAdmissionAudit;
+    trusted?: boolean;
+    readStoreAllowFrom?: () => Promise<string[]>;
   } = {},
 ) {
-  return await resolveStableChannelMessageIngress({
-    channelId: params.channelId ?? "channel-owner",
+  const audit = params.audit ?? createAudit();
+  const identity = {
+    resolveParticipant: (subject: { stableId?: string | number | null }) => ({
+      domain: "workspace-one",
+      idKind: "user-id",
+      id: String(subject.stableId),
+    }),
+  };
+  const input = {
+    channelId: "channel-owner",
     accountId: "default",
-    subject: { stableId: participantId },
-    conversation: params.conversation ?? { kind: "direct", id: "dm-1" },
-    dmPolicy: "allowlist",
-    allowFrom: [participantId],
-    contextBinding: params.contextBinding ?? {
-      agentId: "main",
-      sessionKey: "agent:main:channel-owner:dm:dm-1",
-      messageId: "message-1",
-      inboundEventKind: "user_request",
+    subject: { stableId: "person-a" },
+    conversation: { kind: "direct" as const, id: "dm-1" },
+    contextBinding: ingressBinding,
+    dmPolicy: params.readStoreAllowFrom ? ("pairing" as const) : ("allowlist" as const),
+    allowFrom: ["person-a"],
+    readStoreAllowFrom: params.readStoreAllowFrom,
+    useDefaultPairingStore: false,
+  };
+  let resolvers!: Record<LegacyIngressMethod, () => Promise<ResolvedChannelMessageIngress>>;
+  let receiveIngress!: () => Promise<ResolvedChannelMessageIngress>;
+  const channel = createRuntimeBuilder({
+    origin: "global",
+    trustedOfficialInstall: params.trusted !== false,
+    audit,
+    prepare: (api) => {
+      const descriptor = defineStableChannelIngressIdentity(identity);
+      // The released factory is created before registerChannel publishes its owner.
+      const factory = createChannelIngressResolver({ ...input, identity: descriptor });
+      resolvers = {
+        direct: () =>
+          resolveChannelMessageIngress({
+            ...input,
+            identity: descriptor,
+            event: { kind: "message", authMode: "inbound", mayPair: true },
+            policy: { dmPolicy: input.dmPolicy, groupPolicy: "disabled" },
+          }),
+        stable: () => resolveStableChannelMessageIngress({ ...input, identity }),
+        factory: () => factory.message(input),
+      };
+      return {
+        startAccount: async () => {
+          const buildContext = api.runtime.channel.inbound.buildContext;
+          const ingress = await receiveIngress();
+          return buildContext(contextParams({ ingress }));
+        },
+      };
     },
   });
-}
-
-function contextParams(params: {
-  ingress: ResolvedChannelMessageIngress | readonly ResolvedChannelMessageIngress[];
-  channelId?: string;
-  conversation?: BuildChannelInboundEventContextParams["conversation"];
-  route?: BuildChannelInboundEventContextParams["route"];
-  reply?: BuildChannelInboundEventContextParams["reply"];
-  senderId?: string;
-  messageId?: string;
-  inboundEventKind?: BuildChannelInboundEventContextParams["message"]["inboundEventKind"];
-}): BuildChannelInboundEventContextParams {
-  return {
-    channel: params.channelId ?? "channel-owner",
-    accountId: "default",
-    from: "test:dm-1",
-    sender: { id: params.senderId ?? "person-a" },
-    conversation: params.conversation ?? { kind: "direct", id: "dm-1" },
-    route: params.route ?? {
-      agentId: "main",
-      routeSessionKey: "agent:main:channel-owner:dm:dm-1",
-    },
-    reply: params.reply ?? { to: "channel-owner:dm-1" },
-    messageId: params.messageId ?? "message-1",
-    message: {
-      rawBody: "hello",
-      inboundEventKind: params.inboundEventKind ?? "user_request",
-    },
-    channelIngress: params.ingress,
+  const dispose = async () => {
+    markPluginRegistryRetired(channel.registryBuilder.registry);
+    await channel.instance!.dispose();
   };
-}
-
-function inspect(context: object) {
-  return consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(context));
+  cleanups.push(dispose);
+  return {
+    ...channel,
+    audit,
+    resolvers,
+    receive: async (resolve: () => Promise<ResolvedChannelMessageIngress>) => {
+      receiveIngress = resolve;
+      const startAccount =
+        channel.registryBuilder.registry.channels[0]!.plugin.gateway!.startAccount!;
+      return (await startAccount({} as never)) as InboundContext;
+    },
+    dispose,
+  };
 }
 
 describe("bundled channel ingress runtime ownership", () => {
+  it("never binds a registration-time factory to another live instance of the same channel", async () => {
+    const first = createLegacyReceiver();
+    const second = createLegacyReceiver();
+    expectProvenance(await second.receive(first.resolvers.factory));
+    expectProvenance(await first.receive(first.resolvers.factory), first.audit);
+    expectProvenance(await second.receive(second.resolvers.factory), second.audit);
+    await first.dispose();
+    expectProvenance(await second.receive(first.resolvers.factory));
+  });
+
+  it("drops released-helper provenance when its owner retires during policy resolution", async () => {
+    const entered = createDeferredCore();
+    const allowFrom = createDeferredCore<string[]>();
+    cleanups.unshift(() => allowFrom.resolve([]));
+    const channel = createLegacyReceiver({
+      readStoreAllowFrom: () => {
+        entered.resolve();
+        return allowFrom.promise;
+      },
+    });
+    const pending = channel.receive(channel.resolvers.direct);
+    await entered.promise;
+    markPluginRegistryRetired(channel.registryBuilder.registry);
+    allowFrom.resolve([]);
+    expectProvenance(await pending);
+  });
+
+  it("retains released helpers when the exact channel instance moves to a new registry", async () => {
+    const channel = createLegacyReceiver();
+    const next = createEmptyPluginRegistry();
+    cleanups.unshift(() => markPluginRegistryRetired(next));
+    next.plugins.push(channel.record);
+    next.channels.push(...channel.registryBuilder.registry.channels);
+    markPluginRegistryActive(next);
+    markPluginRegistryRetired(channel.registryBuilder.registry);
+    for (const method of ["direct", "stable", "factory"] as const) {
+      recordParticipant.mockClear();
+      const context = await channel.receive(channel.resolvers[method]);
+      expect(inspect(context)).toMatchObject({
+        ingressState: "present",
+        invoker: { state: "present", kind: "person" },
+        decisionCoverage: "enforced",
+      });
+      expect(readChannelContextGatewayContextResolver(context)?.()?.channelAdmissionAudit).toBe(
+        channel.audit,
+      );
+      recordInput(context);
+      expect(recordParticipant).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          identity: {
+            type: "remote",
+            pluginId: "channel-owner",
+            domain: "workspace-one",
+            idKind: "user-id",
+            id: "person-a",
+          },
+        }),
+      );
+    }
+    next.channels.splice(0);
+    expectProvenance(await channel.receive(channel.resolvers.factory));
+  });
+
+  it("keeps unqualified released helpers policy-only even beside a trusted channel", async () => {
+    const trusted = createLegacyReceiver();
+    const untrusted = createLegacyReceiver({ audit: trusted.audit, trusted: false });
+    for (const method of ["direct", "stable", "factory"] as const) {
+      const outside = await trusted.resolvers[method]();
+      expect(outside.ingress.admission).toBe("dispatch");
+      expectProvenance(trusted.buildContext(contextParams({ ingress: outside })));
+      const external = await untrusted.receive(untrusted.resolvers[method]);
+      expect(readChannelContextGatewayContextResolver(external)).toBeUndefined();
+      recordParticipant.mockClear();
+      recordInput(external);
+      expect(recordParticipant).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["bundled", "global"] as const)(
+    "retains the host Gateway resolver for a trusted %s channel ingress",
+    async (origin) => {
+      const gatewayContext = {} as GatewayRequestContext;
+      const gatewayContextResolver = vi.fn(() => gatewayContext);
+      const channel = createRuntimeBuilder({
+        origin,
+        trustedOfficialInstall: origin !== "bundled",
+        gatewayContextResolver,
+      });
+      const apiInbound = channel.api.runtime.channel.inbound;
+      expect(apiInbound.ingress).toBe(channel.ingress);
+      expect(apiInbound.buildContext).toBe(channel.buildContext);
+      const ingress = await channel.resolveIngress("person-a");
+      const context = apiInbound.buildContext(contextParams({ ingress }));
+
+      const retainedResolver = readChannelContextGatewayContextResolver(context);
+      expect(retainedResolver?.()).toBe(gatewayContext);
+      expect(hasGatewayContextOwner(retainedResolver!, gatewayContextResolver)).toBe(true);
+      markPluginRegistryRetired(channel.registryBuilder.registry);
+      expect(retainedResolver?.()).toBeUndefined();
+      const retiredIngress = await channel.resolveIngress("person-a");
+      expect(
+        readChannelContextGatewayContextResolver(
+          apiInbound.buildContext(contextParams({ ingress: retiredIngress })),
+        ),
+      ).toBeUndefined();
+    },
+  );
+
   it("binds authenticated owner turns to the exact live trusted channel plugin", async () => {
     const runtime = createPluginRuntime();
     const command = vi.fn(async () => ({ payloads: [] }));
@@ -142,29 +438,26 @@ describe("bundled channel ingress runtime ownership", () => {
       configurable: true,
       value: command,
     });
-    const registryBuilder = createPluginRegistry({
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-      runtime,
-      activateGlobalSideEffects: false,
-    });
-    const owner = createPluginRecord({ id: "discord", origin: "bundled" });
-    const foreign = createPluginRecord({ id: "foreign", origin: "bundled" });
-    const untrusted = createPluginRecord({ id: "impostor", origin: "workspace" });
-    const ownerApi = registryBuilder.createApi(owner, { config: {} as OpenClawConfig });
-    const foreignApi = registryBuilder.createApi(foreign, { config: {} as OpenClawConfig });
-    const untrustedApi = registryBuilder.createApi(untrusted, { config: {} as OpenClawConfig });
-    registryBuilder.registry.plugins.push(owner, foreign, untrusted);
-    registryBuilder.registry.channels.push(
-      {
-        pluginId: "discord",
-        plugin: { id: "discord" },
-        source: owner.source,
-      } as never,
-      {
-        pluginId: "impostor",
-        plugin: { id: "community" },
-        source: untrusted.source,
-      } as never,
+    const registryBuilder = createRegistry(runtime);
+    const addPlugin = (id: string, origin: "bundled" | "workspace", channelId?: string) => {
+      const record = createPluginRecord({ id, origin });
+      const api = registryBuilder.createApi(record, { config: {} });
+      registryBuilder.registry.plugins.push(record);
+      if (channelId) {
+        registryBuilder.registry.channels.push({
+          pluginId: id,
+          plugin: { id: channelId },
+          source: record.source,
+        } as never);
+      }
+      return { record, api };
+    };
+    const { record: owner, api: ownerApi } = addPlugin("discord", "bundled", "discord");
+    const { api: foreignApi } = addPlugin("foreign", "bundled");
+    const { record: untrusted, api: untrustedApi } = addPlugin(
+      "impostor",
+      "workspace",
+      "community",
     );
     markPluginRegistryActive(registryBuilder.registry);
     const options = {
@@ -203,8 +496,7 @@ describe("bundled channel ingress runtime ownership", () => {
       expect.objectContaining({ messageChannel: "community", senderIsOwner: false }),
       commandRuntime,
     );
-    expect(ownerClaimReads).toBe(1);
-    expect(channelReads).toBe(1);
+    expect({ ownerClaimReads, channelReads }).toEqual({ ownerClaimReads: 1, channelReads: 1 });
     await expect(
       retainedGuest({ ...guestOptions, senderIsOwner: true }, commandRuntime),
     ).rejects.toThrow('Plugin "impostor" cannot admit authenticated owner authority');
@@ -221,44 +513,25 @@ describe("bundled channel ingress runtime ownership", () => {
   });
 
   it("defers and preserves the exact active runtime across an inactive prepared load", async () => {
+    const audit = createAudit();
+    const gateway = createGateway(audit);
+    const subagent = {} as PluginRuntime["subagent"];
+    bindGatewayContextResolver(subagent, () => gateway);
     let channelReads = 0;
-    const channel = { inbound: { buildContext: buildChannelInboundEventContext } };
-    const runtime = Object.defineProperty({} as PluginRuntime, "channel", {
+    const inbound = { buildContext: buildChannelInboundEventContext, dispatch: vi.fn() };
+    const channel = { inbound, turn: inbound };
+    const runtime = Object.defineProperty({ subagent } as PluginRuntime, "channel", {
       configurable: true,
       get: () => {
         channelReads += 1;
         return channel;
       },
     });
-    const registryBuilder = createPluginRegistry({
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-      runtime,
-      activateGlobalSideEffects: false,
-    });
+    const registryBuilder = createRegistry(runtime);
     const record = createPluginRecord({ id: "deferred-channel", origin: "bundled" });
-    const api = registryBuilder.createApi(record, {
-      config: {} as OpenClawConfig,
-      registrationMode: "full",
-    });
+    const api = registryBuilder.createApi(record, fullRegistration);
 
-    api.registerChannel({
-      plugin: {
-        id: "deferred-channel",
-        meta: {
-          id: "deferred-channel",
-          label: "Deferred Channel",
-          selectionLabel: "Deferred Channel",
-          docsPath: "/channels/deferred-channel",
-          blurb: "test channel",
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" }),
-        },
-        outbound: { deliveryMode: "direct" },
-      },
-    });
+    api.registerChannel({ plugin: channelFixture("deferred-channel") });
 
     registryBuilder.registry.plugins.push(record);
     markPluginRegistryActive(registryBuilder.registry);
@@ -266,482 +539,244 @@ describe("bundled channel ingress runtime ownership", () => {
       id: record.id,
       origin: "bundled",
     });
-    registryBuilder.createApi(inactivePreparedRecord, {
-      config: {} as OpenClawConfig,
-      registrationMode: "setup-only",
-    });
+    const inactivePreparedApi = registryBuilder.createApi(inactivePreparedRecord, fullRegistration);
 
     expect(channelReads).toBe(0);
     const registeredRuntime = registryBuilder.registry.channels[0]?.resolveChannelRuntime?.();
     expect(registeredRuntime).toBeDefined();
     expect(channelReads).toBe(1);
+    expect(registeredRuntime!.turn).toBe(registeredRuntime!.inbound);
+    expect(registeredRuntime!.turn.dispatch).toBe(inbound.dispatch);
+    expect(inactivePreparedApi.runtime.channel.inbound.buildContext).toBe(
+      buildChannelInboundEventContext,
+    );
+    expect(registryBuilder.registry.channels[0]?.resolveChannelRuntime?.()).toBe(registeredRuntime);
 
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const ingress = await resolveIngress("person-a", { channelId: "deferred-channel" });
-      expect(
-        inspect(
-          registeredRuntime!.inbound.buildContext(
-            contextParams({ ingress, channelId: "deferred-channel" }),
-          ),
-        ),
-      ).toMatchObject({ ingressState: "present", invoker: { state: "present" } });
-    } finally {
-      cleanup();
-    }
+    const ingress = await resolveIngressForRuntime(registeredRuntime!, "person-a", {
+      channelId: "deferred-channel",
+    });
+    expectIngress(registeredRuntime!.turn, ingress, "present", { channelId: "deferred-channel" });
   });
 
-  it.each(["workspace", "global"] as const)(
-    "does not mint for %s plugins, only the exact active bundled record",
-    async (origin) => {
-      const cleanup = configureChannelAdmissionEvidenceCollection(true);
-      try {
-        const external = createRuntimeBuilder({ origin });
-        const bundled = createRuntimeBuilder({ origin: "bundled" });
-        const ingress = await resolveIngress("person-a");
+  it("does not mint for untrusted plugins, only the exact active bundled record", async () => {
+    const audit = createAudit();
+    const external = createRuntimeBuilder({ origin: "workspace", audit });
+    const bundled = createRuntimeBuilder({ origin: "bundled", audit });
+    const ingress = await bundled.resolveIngress("person-a");
 
-        expect(inspect(external.buildContext(contextParams({ ingress })))).toMatchObject({
-          ingressState: "unknown",
-          invoker: { state: "unknown" },
-        });
-        expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
-          ingressState: "present",
-          invoker: { state: "present", kind: "person" },
-          decisionCoverage: "enforced",
-        });
-      } finally {
-        cleanup();
+    expect(inspect(external.buildContext(contextParams({ ingress })))).toMatchObject({
+      ingressState: "unknown",
+      invoker: { state: "unknown" },
+    });
+    expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
+      ingressState: "present",
+      invoker: { state: "present", kind: "person" },
+      decisionCoverage: "enforced",
+    });
+  });
+
+  it.each(["accepted", "mismatched", "builder failure"] as const)(
+    "consumes the handoff after its first %s attempt",
+    async (outcome) => {
+      const bundled = bundledRuntime();
+      const ingress = await bundled.resolveIngress("person-a");
+      const input = contextParams({ ingress });
+      if (outcome === "builder failure") {
+        expect(() =>
+          bundled.buildContext({
+            ...input,
+            finalize: () => {
+              throw new Error("context failed");
+            },
+          }),
+        ).toThrow("context failed");
+      } else {
+        if (outcome === "mismatched") {
+          input.conversation = { kind: "group", id: "other-room" };
+        }
+        const state = outcome === "accepted" ? "present" : "unknown";
+        expectIngressState(bundled.buildContext(input), state);
+      }
+      expectIngress(bundled, ingress, "unknown");
+    },
+  );
+
+  it.each<
+    [
+      string,
+      Partial<ContextParams>?,
+      Parameters<typeof resolveIngressForRuntime>[2]?,
+      ("event" | "accessor")?,
+    ]
+  >([
+    ["agent", { route: route({ agentId: "other-agent" }) }],
+    ["session", { route: route({ routeSessionKey: "agent:main:channel-owner:dm:other" }) }],
+    ["message", { messageId: "message-2" }],
+    ["event kind", { inboundEventKind: "room_event" }],
+    ["conversation kind and id", { conversation: { kind: "group", id: "room-2" } }],
+    [
+      "thread",
+      { conversation: group({ threadId: "thread-2" }) },
+      { conversation: group({ threadId: "thread-1" }) },
+    ],
+    ["parent", { conversation: group({ parentId: "parent-2" }) }, { conversation: group() }],
+    ["native channel", { conversation: { kind: "direct", id: "dm-1", nativeChannelId: "other" } }],
+    ["routing account owner", { route: route({ accountId: "other-account" }) }],
+    ["participant", { senderId: "person-b" }],
+    [
+      "omitted native conversation",
+      undefined,
+      { contextBinding: { ...ingressBinding, nativeChannelId: "native-dm-1" } },
+    ],
+    ["mutated event", undefined, undefined, "event"],
+    ["accessor-bearing event", undefined, undefined, "accessor"],
+  ])("rejects first-use %s substitution", async (_name, context, overrides, mutation) => {
+    const bundled = bundledRuntime();
+    const ingress = await bundled.resolveIngress("person-a", overrides);
+    const getter = vi.fn(() => {
+      throw new Error("must not run");
+    });
+    if (mutation === "event") {
+      ingress.state.event.kind = "reaction";
+    } else if (mutation === "accessor") {
+      Object.defineProperty(ingress.state, "event", { configurable: true, get: getter });
+    }
+    expectIngress(bundled, ingress, "unknown", context);
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["same channel across Gateways", "shared-owner", "shared-owner", "person-a", true],
+    ["different registered records", "alpha-owner", "beta-owner", "person-b", false],
+  ] as const)(
+    "isolates %s and rejects cross-record reuse",
+    async (_name, firstId, secondId, participant, separateAudit) => {
+      const firstAudit = createAudit();
+      const secondAudit = separateAudit ? createAudit() : firstAudit;
+      const first = scopedGateway(firstId, firstAudit);
+      const firstIngress = await first.resolveIngress("person-a", { channelId: firstId });
+      const second = scopedGateway(secondId, secondAudit);
+      const firstContext = first.buildContext(
+        contextParams({ ingress: firstIngress, channelId: firstId }),
+      );
+      expectIngressState(firstContext, "present");
+      expect(readChannelContextGatewayContextResolver(firstContext)?.()).toBe(first.gateway);
+      const secondIngress = await second.resolveIngress(participant, { channelId: secondId });
+      const secondContext = second.buildContext(
+        contextParams({ ingress: secondIngress, channelId: secondId, senderId: participant }),
+      );
+      expectIngressState(secondContext, "present");
+      expect(readChannelContextGatewayContextResolver(secondContext)?.()).toBe(second.gateway);
+      const foreignIngress = await first.resolveIngress("person-a", { channelId: firstId });
+      expectIngress(second, foreignIngress, "unknown", { channelId: secondId });
+      if (separateAudit) {
+        secondAudit.close();
+        markPluginRegistryRetired(second.registryBuilder.registry);
+        const survivingIngress = await first.resolveIngress("person-a", { channelId: firstId });
+        expectIngress(first, survivingIngress, "present", { channelId: firstId });
       }
     },
   );
 
-  it("consumes the exact resolution-to-context handoff on its first attempt", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const bundled = createRuntimeBuilder({ origin: "bundled" });
-      const ingress = await resolveIngress("person-a");
+  it("preserves a live channel owner but never revives its retired instance", async () => {
+    const audit = createAudit();
+    const bundled = bundledRuntime(audit);
+    markPluginRegistryActive(bundled.registryBuilder.registry);
+    const liveIngress = await bundled.resolveIngress("person-a");
+    expectIngress(bundled, liveIngress, "present");
+    const ingress = await bundled.resolveIngress("person-a");
+    markPluginRegistryRetired(bundled.registryBuilder.registry);
+    markPluginRegistryActive(bundled.registryBuilder.registry);
 
-      expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
-        ingressState: "present",
-        invoker: { state: "present" },
-      });
-      expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
-        ingressState: "unknown",
-        invoker: { state: "unknown" },
-      });
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("consumes a mismatched handoff so a corrected replay stays unknown", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const bundled = createRuntimeBuilder({ origin: "bundled" });
-      const ingress = await resolveIngress("person-a");
-
-      expect(
-        inspect(
-          bundled.buildContext(
-            contextParams({
-              ingress,
-              conversation: { kind: "group", id: "other-room" },
-            }),
-          ),
-        ),
-      ).toMatchObject({ ingressState: "unknown", invoker: { state: "unknown" } });
-      expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
-        ingressState: "unknown",
-        invoker: { state: "unknown" },
-      });
-    } finally {
-      cleanup();
-    }
-  });
-
-  it.each([
-    {
-      name: "agent",
-      context: {
-        route: {
-          agentId: "other-agent",
-          routeSessionKey: "agent:main:channel-owner:dm:dm-1",
-        },
-      },
-    },
-    {
-      name: "session",
-      context: {
-        route: {
-          agentId: "main",
-          routeSessionKey: "agent:main:channel-owner:dm:other",
-        },
-      },
-    },
-    { name: "message", context: { messageId: "message-2" } },
-    { name: "event kind", context: { inboundEventKind: "room_event" as const } },
-  ])("rejects first-use cross-$name substitution", async ({ context }) => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const bundled = createRuntimeBuilder({ origin: "bundled" });
-      const ingress = await resolveIngress("person-a", {
-        contextBinding: {
-          agentId: "main",
-          sessionKey: "agent:main:channel-owner:dm:dm-1",
-          messageId: "message-1",
-          inboundEventKind: "user_request",
-        },
-      });
-
-      expect(
-        inspect(
-          bundled.buildContext(
-            contextParams({
-              ingress,
-              route: context.route,
-              messageId: context.messageId,
-              inboundEventKind: context.inboundEventKind,
-            }),
-          ),
-        ),
-      ).toMatchObject({ ingressState: "unknown", invoker: { state: "unknown" } });
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("binds an admitted aggregate to its final source message", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const bundled = createRuntimeBuilder({ origin: "bundled" });
-      const binding = {
-        agentId: "main",
-        sessionKey: "agent:main:channel-owner:dm:dm-1",
-        inboundEventKind: "user_request" as const,
-      };
-      const first = await resolveIngress("person-a", {
-        contextBinding: { ...binding, messageId: "message-1" },
-      });
-      const last = await resolveIngress("person-a", {
-        contextBinding: { ...binding, messageId: "message-2" },
-      });
-
-      expect(
-        inspect(
-          bundled.buildContext(contextParams({ ingress: [first, last], messageId: "message-2" })),
-        ),
-      ).toMatchObject({ ingressState: "present", invoker: { state: "present" } });
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("requires an explicitly bound native conversation id at handoff", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const bundled = createRuntimeBuilder({ origin: "bundled" });
-      const ingress = await resolveIngress("person-a", {
-        contextBinding: {
-          agentId: "main",
-          sessionKey: "agent:main:channel-owner:dm:dm-1",
-          messageId: "message-1",
-          nativeChannelId: "native-dm-1",
-          inboundEventKind: "user_request",
-        },
-      });
-
-      expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
-        ingressState: "unknown",
-        invoker: { state: "unknown" },
-      });
-    } finally {
-      cleanup();
-    }
-  });
-
-  it.each([
-    {
-      name: "conversation kind and id",
-      ingressConversation: { kind: "direct" as const, id: "dm-1" },
-      context: { conversation: { kind: "group" as const, id: "room-2" } },
-    },
-    {
-      name: "thread",
-      ingressConversation: {
-        kind: "group" as const,
-        id: "room-1",
-        parentId: "parent-1",
-        threadId: "thread-1",
-      },
-      context: {
-        conversation: {
-          kind: "group" as const,
-          id: "room-1",
-          parentId: "parent-1",
-          threadId: "thread-2",
-        },
-      },
-    },
-    {
-      name: "parent",
-      ingressConversation: {
-        kind: "group" as const,
-        id: "room-1",
-        parentId: "parent-1",
-      },
-      context: {
-        conversation: { kind: "group" as const, id: "room-1", parentId: "parent-2" },
-      },
-    },
-    {
-      name: "native channel",
-      ingressConversation: { kind: "direct" as const, id: "dm-1" },
-      context: {
-        conversation: { kind: "direct" as const, id: "dm-1", nativeChannelId: "other" },
-      },
-    },
-    {
-      name: "routing account owner",
-      ingressConversation: { kind: "direct" as const, id: "dm-1" },
-      context: {
-        route: {
-          agentId: "main",
-          accountId: "other-account",
-          routeSessionKey: "agent:main:channel-owner:dm:dm-1",
-        },
-      },
-    },
-    {
-      name: "participant",
-      ingressConversation: { kind: "direct" as const, id: "dm-1" },
-      context: { senderId: "person-b" },
-    },
-    {
-      name: "participant whitespace",
-      ingressConversation: { kind: "direct" as const, id: "dm-1" },
-      context: { senderId: " person-a " },
-    },
-  ])("rejects cross-scope $name substitution", async ({ ingressConversation, context }) => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const bundled = createRuntimeBuilder({ origin: "bundled" });
-      const ingress = await resolveIngress("person-a", { conversation: ingressConversation });
-      expect(
-        inspect(
-          bundled.buildContext(
-            contextParams({
-              ingress,
-              conversation: context.conversation,
-              route: context.route,
-              senderId: context.senderId,
-            }),
-          ),
-        ),
-      ).toMatchObject({ ingressState: "unknown", invoker: { state: "unknown" } });
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("rejects a stable event mutation on the exact resolver object", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const bundled = createRuntimeBuilder({ origin: "bundled" });
-      const ingress = await resolveIngress("person-a");
-      ingress.state.event.kind = "reaction";
-
-      expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
-        ingressState: "unknown",
-        invoker: { state: "unknown" },
-      });
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("rejects accessor-bearing scope without invoking the accessor", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const bundled = createRuntimeBuilder({ origin: "bundled" });
-      const ingress = await resolveIngress("person-a");
-      const getter = vi.fn(() => {
-        throw new Error("must not run");
-      });
-      Object.defineProperty(ingress.state, "event", { configurable: true, get: getter });
-
-      expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
-        ingressState: "unknown",
-        invoker: { state: "unknown" },
-      });
-      expect(getter).not.toHaveBeenCalled();
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("consumes the handoff before a context builder failure", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const bundled = createRuntimeBuilder({ origin: "bundled" });
-      const ingress = await resolveIngress("person-a");
-      expect(() =>
-        bundled.buildContext({
-          ...contextParams({ ingress }),
-          finalize: () => {
-            throw new Error("context failed");
-          },
-        }),
-      ).toThrow("context failed");
-      expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
-        ingressState: "unknown",
-        invoker: { state: "unknown" },
-      });
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("rejects a result after a same-id registered owner replaces its record", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const first = createRuntimeBuilder({ origin: "bundled", id: "shared-owner" });
-      const firstIngress = await resolveIngress("person-a", { channelId: "shared-owner" });
-      const second = createRuntimeBuilder({ origin: "bundled", id: "shared-owner" });
-
-      expect(
-        inspect(
-          first.buildContext(contextParams({ ingress: firstIngress, channelId: "shared-owner" })),
-        ),
-      ).toMatchObject({ ingressState: "unknown", invoker: { state: "unknown" } });
-      expect(
-        inspect(
-          second.buildContext(contextParams({ ingress: firstIngress, channelId: "shared-owner" })),
-        ),
-      ).toMatchObject({ ingressState: "unknown", invoker: { state: "unknown" } });
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("keeps two active registered records exact and rejects cross-record reuse", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const alpha = createRuntimeBuilder({ origin: "bundled", id: "alpha-owner" });
-      const beta = createRuntimeBuilder({ origin: "bundled", id: "beta-owner" });
-      const alphaIngress = await resolveIngress("person-a", { channelId: "alpha-owner" });
-      const betaIngress = await resolveIngress("person-b", { channelId: "beta-owner" });
-
-      expect(
-        inspect(
-          alpha.buildContext(contextParams({ ingress: alphaIngress, channelId: "alpha-owner" })),
-        ),
-      ).toMatchObject({ ingressState: "present", invoker: { state: "present" } });
-      expect(
-        inspect(
-          beta.buildContext(
-            contextParams({ ingress: betaIngress, channelId: "beta-owner", senderId: "person-b" }),
-          ),
-        ),
-      ).toMatchObject({ ingressState: "present", invoker: { state: "present" } });
-
-      const crossRecord = await resolveIngress("person-a", { channelId: "alpha-owner" });
-      expect(
-        inspect(
-          beta.buildContext(contextParams({ ingress: crossRecord, channelId: "beta-owner" })),
-        ),
-      ).toMatchObject({ ingressState: "unknown", invoker: { state: "unknown" } });
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("invalidates the pre-retirement closure and result across reactivation", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const bundled = createRuntimeBuilder({ origin: "bundled" });
-      const ingress = await resolveIngress("person-a");
-      markPluginRegistryRetired(bundled.registryBuilder.registry);
-      markPluginRegistryActive(bundled.registryBuilder.registry);
-
-      expect(inspect(bundled.buildContext(contextParams({ ingress })))).toMatchObject({
-        ingressState: "unknown",
-        invoker: { state: "unknown" },
-      });
-      const reactivatedBuildContext = bundled.resolveBuildContext();
-      const reactivatedIngress = await resolveIngress("person-a");
-      expect(
-        inspect(reactivatedBuildContext(contextParams({ ingress: reactivatedIngress }))),
-      ).toMatchObject({
-        ingressState: "present",
-        invoker: { state: "present" },
-      });
-    } finally {
-      cleanup();
-    }
+    expectIngress(bundled, ingress, "unknown");
+    const reactivatedBuildContext = bundled.resolveBuildContext();
+    const reactivatedIngress = await bundled.resolveIngress("person-a");
+    expectIngress(reactivatedBuildContext, reactivatedIngress, "unknown");
+    const replacement = bundledRuntime(audit);
+    const replacementIngress = await replacement.resolveIngress("person-a");
+    expectIngress(replacement, replacementIngress, "present");
   });
 
   it("degrades stale, replaced, and rollback-owned closures to unknown", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const stale = createRuntimeBuilder({ origin: "bundled" });
-      const replaced = createRuntimeBuilder({ origin: "bundled" });
-      const rollback = createRuntimeBuilder({ origin: "bundled" });
-      const ingress = await resolveIngress("person-a");
+    const audit = createAudit();
+    const stale = bundledRuntime(audit);
+    const replaced = bundledRuntime(audit);
+    const rollback = bundledRuntime(audit);
+    const staleIngress = await stale.resolveIngress("person-a");
+    const replacedIngress = await replaced.resolveIngress("person-a");
+    const rollbackIngress = await rollback.resolveIngress("person-a");
+    const liveIngress = await rollback.resolveIngress("person-a");
 
-      expect(inspect(rollback.buildContext(contextParams({ ingress })))).toMatchObject({
-        ingressState: "present",
-      });
+    expectIngress(rollback, liveIngress, "present");
 
-      markPluginRegistryRetired(stale.registryBuilder.registry);
-      const replacementRecord = createPluginRecord({ id: replaced.record.id, origin: "bundled" });
-      replaced.registryBuilder.createApi(replacementRecord, {
-        config: {} as OpenClawConfig,
-        registrationMode: "full",
-      });
-      rollback.registryBuilder.rollbackPluginGlobalSideEffects(rollback.record.id, rollback.record);
+    markPluginRegistryRetired(stale.registryBuilder.registry);
+    const replacementRecord = createPluginRecord({ id: replaced.record.id, origin: "bundled" });
+    const replacementApi = replaced.registryBuilder.createApi(replacementRecord, fullRegistration);
+    const registration = replaced.registryBuilder.registry.channels[0]!;
+    withPluginRegistryPreparationScope(replaced.registryBuilder.registry, () => {
+      replacementApi.registerChannel({ plugin: registration.plugin });
+    });
+    const previousIndex = replaced.registryBuilder.registry.plugins.indexOf(replaced.record);
+    replaced.registryBuilder.registry.plugins.splice(previousIndex, 1, replacementRecord);
+    const replacementRuntime = registration.resolveChannelRuntime!();
+    const replacementIngress = await resolveIngressForRuntime(replacementRuntime, "person-a");
+    expectIngress(replacementRuntime.inbound, replacementIngress, "present");
+    rollback.registryBuilder.rollbackPluginGlobalSideEffects(rollback.record.id, rollback.record);
 
-      for (const buildContext of [
-        stale.buildContext,
-        replaced.buildContext,
-        rollback.buildContext,
-      ]) {
-        expect(inspect(buildContext(contextParams({ ingress })))).toMatchObject({
-          ingressState: "unknown",
-          invoker: { state: "unknown" },
-        });
-      }
-    } finally {
-      cleanup();
+    for (const [channel, ingress] of [
+      [stale, staleIngress],
+      [replaced, replacedIngress],
+      [rollback, rollbackIngress],
+    ] as const) {
+      expectIngress(channel, ingress, "unknown");
     }
   });
 
-  it("rejects structural results and mixed collect participants", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const bundled = createRuntimeBuilder({ origin: "bundled" });
-      const first = await resolveIngress("person-a");
-      const same = await resolveIngress("person-a");
-      const mixed = await resolveIngress("person-b");
+  it("binds aggregates to their final source and rejects structural or mixed participants", async () => {
+    const audit = createAudit();
+    const bundled = bundledRuntime(audit);
+    const first = await bundled.resolveIngress("person-a");
+    const same = await bundled.resolveIngress("person-a", {
+      contextBinding: { ...ingressBinding, messageId: "message-2" },
+    });
+    const mixed = await bundled.resolveIngress("person-b");
 
-      expect(inspect(bundled.buildContext(contextParams({ ingress: { ...first } })))).toMatchObject(
-        {
-          ingressState: "unknown",
-        },
-      );
-      expect(
-        inspect(bundled.buildContext(contextParams({ ingress: [first, same] }))),
-      ).toMatchObject({
-        ingressState: "present",
-        invoker: { state: "present" },
-      });
-      expect(
-        inspect(bundled.buildContext(contextParams({ ingress: [first, mixed] }))),
-      ).toMatchObject({
-        ingressState: "unknown",
-        invoker: { state: "unknown" },
-      });
-    } finally {
-      cleanup();
-    }
+    expectIngress(bundled, { ...first }, "unknown");
+    expectIngress(bundled, [first, same], "present", { messageId: "message-2" });
+    expectIngress(bundled, [first, mixed], "unknown");
+  });
+});
+
+describe("plugin runtime hook dispatch ownership", () => {
+  it.each([
+    { origin: "bundled" as const, trustedOfficialInstall: undefined },
+    { origin: "global" as const, trustedOfficialInstall: true },
+  ])("binds $origin hook dispatch to its host-owned plugin identity", async (ownership) => {
+    const hookTurn = {
+      name: "Inbox watcher",
+      agentId: "mail",
+      sessionKey: "hook:imap:account:1",
+      message: "Summarize the incoming email.",
+      externalContentSource: "email",
+      deliver: false,
+    } satisfies Parameters<PluginRuntime["hooks"]["dispatchHookAgentTurn"]>[0];
+    let observedPluginId: string | undefined;
+    const dispatchHookAgentTurn = vi.fn(async () => {
+      observedPluginId = getPluginRuntimeGatewayRequestScope()?.pluginId;
+      return { ok: true as const, runId: "hook-run" };
+    });
+    const builder = createRegistry(
+      createLazyPluginRuntime({ runtimeOptions: { hooks: { dispatchHookAgentTurn } } }),
+    );
+    const record = createPluginRecord({ id: "trusted-mail", ...ownership });
+    const api = builder.createApi(record, { config: {} });
+    builder.registry.plugins.push(record);
+
+    await expect(api.runtime.hooks.dispatchHookAgentTurn(hookTurn)).resolves.toEqual({
+      ok: true,
+      runId: "hook-run",
+    });
+    expect(observedPluginId).toBe("trusted-mail");
+    expect(dispatchHookAgentTurn).toHaveBeenCalledWith(hookTurn);
   });
 });

@@ -3,20 +3,23 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { buildSubagentList } from "./subagent-list.js";
+import { buildSubagentListForTests as buildSubagentList } from "./subagent-list.test-support.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-
-const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 
 let testWorkspaceDir = os.tmpdir();
 
@@ -25,6 +28,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await cleanupSessionStateForTest({ stateDir: testWorkspaceDir });
   await fs.rm(testWorkspaceDir, {
     recursive: true,
     force: true,
@@ -33,16 +37,280 @@ afterAll(async () => {
   });
 });
 
-beforeEach(() => {
-  resetSubagentRegistryForTests();
+beforeEach(async () => {
+  await resetSubagentRegistryForTests();
+  setRuntimeConfigSnapshot({});
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("buildSubagentList", () => {
-  it("builds the subagent list without decoding unrelated saved prompts", async () => {
+  it("enriches unbound mixed children from memory and recorded durable owners", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const authority = { assertCurrent() {}, authorize() {} };
+      const owners = ["main", "research"].map((agentId) =>
+        memorySessionActorOwners.get({
+          agentId,
+          path: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env }),
+        }),
+      );
+      const now = Date.now();
+      const runs: SubagentRunRecord[] = [];
+      try {
+        for (const owner of owners) {
+          for (const incognito of [false, true]) {
+            const childSessionKey = incognito
+              ? `agent:${owner.agentId}:subagent:incognito-list`
+              : "global";
+            const runId = `${owner.agentId}-${incognito ? "private" : "durable"}`;
+            const entry: SessionEntry = {
+              sessionId: runId,
+              lifecycleRevision: runId,
+              updatedAt: now,
+              model: `openai/${runId}`,
+              ...(incognito ? { incognito: true } : {}),
+            };
+            if (incognito) {
+              const actor = await owner.acquire(
+                { database: owner.identity, sessionKey: childSessionKey },
+                { assertCurrent() {}, assertReadable() {} },
+              );
+              try {
+                expect(
+                  (
+                    await actor.storage!.mutate(
+                      { type: "session.entry.create", input: { entry } },
+                      authority,
+                    )
+                  ).kind,
+                ).toBe("committed");
+              } finally {
+                await actor.release();
+              }
+            } else {
+              await replaceSessionEntry(
+                { agentId: owner.agentId, sessionKey: childSessionKey },
+                entry,
+              );
+            }
+            runs.push({
+              runId,
+              childSessionKey,
+              childAgentId: owner.agentId,
+              requesterSessionKey: "agent:main:main",
+              requesterDisplayKey: "main",
+              task: runId,
+              model: "openai/fallback",
+              cleanup: "keep",
+              createdAt: now,
+              execution: { status: "running", startedAt: now },
+            });
+          }
+        }
+        runs.push({
+          ...runs[0]!,
+          runId: "missing-private",
+          childAgentId: "missing",
+          childSessionKey: "agent:missing:subagent:incognito-list",
+          model: "openai/fallback",
+        });
+        const list = await buildSubagentList({
+          cfg: {},
+          runs,
+          recentMinutes: 30,
+          readSnapshot: new Map(),
+        });
+        expect(new Map(list.active.map((entry) => [entry.runId, entry.model]))).toEqual(
+          new Map([
+            ["main-durable", "openai/main-durable"],
+            ["main-private", "openai/main-private"],
+            ["research-durable", "openai/research-durable"],
+            ["research-private", "openai/research-private"],
+            ["missing-private", "openai/fallback"],
+          ]),
+        );
+        owners[0]!.closeSession("agent:main:subagent:incognito-list");
+        const closed = await buildSubagentList({
+          cfg: {},
+          runs,
+          recentMinutes: 30,
+          readSnapshot: new Map(),
+        });
+        expect(closed.active.find((entry) => entry.runId === "main-private")?.model).toBe(
+          "openai/fallback",
+        );
+      } finally {
+        for (const owner of owners) {
+          memorySessionActorOwners.closeDatabase(owner);
+        }
+      }
+    });
+  });
+
+  it("keeps raw child metadata separate by logical owner in custom stores", async () => {
+    await withOpenClawTestState({ label: "subagent-list-raw-owners" }, async (state) => {
+      const storePath = state.statePath("shared-{agentId}.sqlite");
+      const cfg: OpenClawConfig = { session: { store: storePath } };
+      const now = Date.now();
+      const runs = ["main", "research"].map((childAgentId): SubagentRunRecord => ({
+        runId: `run-${childAgentId}`,
+        childSessionKey: "global",
+        childAgentId,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: childAgentId,
+        model: "openai/run-fallback",
+        cleanup: "keep",
+        createdAt: now,
+        execution: { status: "running", startedAt: now },
+      }));
+      for (const run of runs) {
+        await replaceSessionEntry(
+          {
+            agentId: run.childAgentId,
+            storePath: storePath.replace("{agentId}", run.childAgentId!),
+            sessionKey: "global",
+          },
+          { sessionId: run.runId, updatedAt: now, model: `openai/saved-${run.childAgentId}` },
+        );
+      }
+
+      const list = await buildSubagentList({
+        cfg,
+        runs,
+        recentMinutes: 30,
+        readSnapshot: new Map(),
+      });
+      expect(list.active.map(({ runId, model }) => ({ runId, model }))).toEqual([
+        { runId: "run-main", model: "openai/saved-main" },
+        { runId: "run-research", model: "openai/saved-research" },
+      ]);
+    });
+  });
+
+  it("reads fresh active and recent metadata from each visible child's store", async () => {
+    await withOpenClawTestState({ label: "subagent-list-selection" }, async (state) => {
+      const cfg: OpenClawConfig = {
+        session: { store: state.statePath("agents/{agentId}/sessions/sessions.json") },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const now = Date.now();
+      const runs = [
+        { agentId: "main", name: "active", ended: false },
+        { agentId: "main", name: "recent", ended: true },
+        { agentId: "research", name: "other-store", ended: false },
+        { agentId: "research", name: "missing", ended: false },
+        { agentId: "main", name: "main-global", ended: false, raw: true },
+        { agentId: "research", name: "research-global", ended: false, raw: true },
+      ].map(({ agentId, name, ended, raw }, index): SubagentRunRecord => ({
+        runId: `run-${name}`,
+        childSessionKey: raw ? "global" : `agent:${agentId}:subagent:${name}`,
+        childAgentId: raw ? agentId : undefined,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: name,
+        model: "openai/run-fallback",
+        cleanup: "keep",
+        createdAt: now - 1000 - index,
+        execution: ended
+          ? { status: "terminal", endedAt: now - 100, outcome: { status: "ok" } }
+          : { status: "running", startedAt: now - 1000 - index },
+      }));
+      for (const run of runs.filter((entry) => entry.task !== "missing")) {
+        await replaceSessionEntry(
+          { sessionKey: run.childSessionKey, agentId: run.childAgentId },
+          {
+            sessionId: run.runId,
+            updatedAt: now,
+            modelProvider: "openai",
+            model: `saved-${run.task}`,
+          },
+        );
+      }
+      const list = () =>
+        buildSubagentList({ cfg, runs, recentMinutes: 30, readSnapshot: new Map() });
+      expect((await list()).active.map(({ sessionKey, model }) => ({ sessionKey, model }))).toEqual(
+        [
+          { sessionKey: runs[0]!.childSessionKey, model: "openai/saved-active" },
+          { sessionKey: runs[2]!.childSessionKey, model: "openai/saved-other-store" },
+          { sessionKey: runs[3]!.childSessionKey, model: "openai/run-fallback" },
+          { sessionKey: "global", model: "openai/saved-main-global" },
+          { sessionKey: "global", model: "openai/saved-research-global" },
+        ],
+      );
+      expect((await list()).recent).toMatchObject([{ model: "openai/saved-recent" }]);
+      await replaceSessionEntry(
+        { sessionKey: runs[0]!.childSessionKey },
+        { sessionId: runs[0]!.runId, updatedAt: now + 1, model: "openai/replaced" },
+      );
+      expect((await list()).active[0]?.model).toBe("openai/replaced");
+    });
+  });
+
+  it("keeps a yielded child visible with its real wait and independent delivery state", async () => {
+    const now = Date.now();
+    const parent: SubagentRunRecord = {
+      runId: "yielded-parent",
+      childSessionKey: "agent:main:subagent:yielded-parent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "Wait for remote evidence",
+      cleanup: "keep",
+      createdAt: now - 3_600_000,
+      pauseReason: "sessions_yield",
+      execution: { status: "terminal", endedAt: now - 3_500_000, outcome: { status: "ok" } },
+      delivery: { status: "pending" },
+    };
+    await addSubagentRunForTests(parent);
+    const list = () => buildSubagentList({ cfg: {}, runs: [parent], recentMinutes: 30 });
+    expect((await list()).active[0]).toMatchObject({
+      status: "waiting for external continuation",
+      execution: { state: "waiting", wait: { kind: "external" } },
+      deliveryStatus: "pending",
+    });
+
+    const child: SubagentRunRecord = {
+      ...parent,
+      runId: "evidence-child",
+      childSessionKey: "agent:main:subagent:evidence-child",
+      requesterSessionKey: parent.childSessionKey,
+      createdAt: now,
+      pauseReason: undefined,
+      execution: { status: "running", startedAt: now },
+      expectsCompletionMessage: true,
+    };
+    await addSubagentRunForTests(child);
+    expect((await list()).active[0]?.execution).toEqual({
+      state: "waiting",
+      wait: {
+        kind: "children",
+        pendingCount: 1,
+        dependencies: [{ runId: child.runId, sessionKey: child.childSessionKey }],
+      },
+    });
+    await addSubagentRunForTests({ ...child, expectsCompletionMessage: false });
+    expect((await list()).active[0]).toMatchObject({
+      status: "waiting for external continuation",
+      execution: { state: "waiting", wait: { kind: "external" } },
+    });
+    await resetSubagentRegistryForTests();
+    const killed = { ...parent, endedReason: SUBAGENT_ENDED_REASON_KILLED };
+    await addSubagentRunForTests(killed);
+    expect(
+      (await buildSubagentList({ cfg: {}, runs: [killed], recentMinutes: 30 })).active,
+    ).toEqual([]);
+  });
+
+  it("builds the subagent list without decoding unrelated session metadata or saved prompts", async () => {
     const stateDir = await fs.mkdtemp(path.join(testWorkspaceDir, "metadata-"));
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       try {
         const storePath = path.join(stateDir, "agents/main/sessions/sessions.json");
+        const cfg: OpenClawConfig = { session: { store: storePath } };
+        setRuntimeConfigSnapshot(cfg);
         const childSessionKey = "agent:main:subagent:target";
         for (let i = 0; i < 20; i++) {
           await replaceSessionEntry(
@@ -50,6 +318,7 @@ describe("buildSubagentList", () => {
             {
               sessionId: `other-${i}`,
               updatedAt: 1,
+              label: `UNRELATED_PAYLOAD_${i}`,
               skillsSnapshot: { prompt: `UNRELATED_PAYLOAD_${"x".repeat(4096)}`, skills: [] },
             },
           );
@@ -77,12 +346,12 @@ describe("buildSubagentList", () => {
           createdAt: Date.now(),
           execution: { status: "queued" },
         } satisfies SubagentRunRecord;
-        addSubagentRunForTests(run);
+        await addSubagentRunForTests(run);
 
         const parse = vi.spyOn(JSON, "parse");
         try {
-          const list = buildSubagentList({
-            cfg: { session: { store: storePath } },
+          const list = await buildSubagentList({
+            cfg,
             runs: [run],
             recentMinutes: 30,
             taskMaxChars: 110,
@@ -96,6 +365,8 @@ describe("buildSubagentList", () => {
             totalTokens: 197000,
           });
           expect(list.active[0]?.line).toContain("prompt/cache 197k");
+          expect(list.active[0]?.line).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
+          expect(list.active[0]?.line).not.toContain("1k io");
           const unrelatedParses = parse.mock.calls.filter(
             ([value]) => typeof value === "string" && value.includes("UNRELATED_PAYLOAD_"),
           ).length;
@@ -104,58 +375,14 @@ describe("buildSubagentList", () => {
           parse.mockRestore();
         }
       } finally {
-        resetSubagentRegistryForTests();
+        await resetSubagentRegistryForTests();
         await cleanupSessionStateForTest({ stateDir });
         await fs.rm(stateDir, { recursive: true, force: true });
       }
     });
   });
 
-  it("returns empty active and recent sections when no runs exist", () => {
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const list = buildSubagentList({
-      cfg,
-      runs: [],
-      recentMinutes: 30,
-      taskMaxChars: 110,
-    });
-    expect(list.active).toStrictEqual([]);
-    expect(list.recent).toStrictEqual([]);
-    expect(list.text).toContain("active subagents:");
-    expect(list.text).toContain("recent (last 30m):");
-  });
-
-  it("truncates long task text in list lines", () => {
-    const run = {
-      runId: "run-long-task",
-      childSessionKey: "agent:main:subagent:long-task",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "This is a deliberately long task description used to verify that subagent list output keeps the full task text instead of appending ellipsis after a short hard cutoff.",
-      cleanup: "keep",
-      createdAt: 1000,
-      execution: { status: "running", startedAt: 1000 },
-    } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const list = buildSubagentList({
-      cfg,
-      runs: [run],
-      recentMinutes: 30,
-      taskMaxChars: 110,
-    });
-    expect(list.active[0]?.task).toHaveLength(110);
-    expect(list.active[0]?.task).toMatch(/\.\.\.$/);
-    expect(list.active[0]?.line).not.toContain("after a short hard cutoff.");
-  });
-
-  it("shows taskName in list lines and structured views", () => {
+  it("shows taskName in list lines and structured views", async () => {
     const run = {
       runId: "run-task-name",
       childSessionKey: "agent:main:subagent:task-name",
@@ -168,14 +395,10 @@ describe("buildSubagentList", () => {
       createdAt: 1000,
       execution: { status: "running", startedAt: 1000 },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    await addSubagentRunForTests(run);
 
-    const list = buildSubagentList({
-      cfg,
+    const list = await buildSubagentList({
+      cfg: {},
       runs: [run],
       recentMinutes: 30,
     });
@@ -184,157 +407,63 @@ describe("buildSubagentList", () => {
     expect(list.active[0]?.line).toContain("review_subagents: Review worker");
   });
 
-  it.each([
-    {
-      name: "a killed run with a provider failure",
-      endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      outcome: { status: "error", error: "agent run aborted" } as const,
-      expectedStatus: "killed",
-    },
-    {
-      name: "a killed run with an earlier successful provider outcome",
-      endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      outcome: { status: "ok" } as const,
-      expectedStatus: "killed",
-    },
-    {
-      name: "a failed run",
-      outcome: { status: "error", error: "provider rejected the request" } as const,
-      expectedStatus: "failed",
-    },
-    {
-      name: "a timed-out run",
-      outcome: { status: "timeout" } as const,
-      expectedStatus: "timeout",
-    },
-    {
-      name: "a completed run",
-      outcome: { status: "ok" } as const,
-      expectedStatus: "done",
-    },
-  ])(
-    "projects the canonical terminal status for $name",
-    ({ endedReason, outcome, expectedStatus }) => {
-      const now = Date.now();
-      const run = {
-        runId: `run-status-${expectedStatus}`,
-        childSessionKey: `agent:main:subagent:status-${expectedStatus}`,
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: "report the actual child outcome",
-        cleanup: "keep",
-        createdAt: now - 2_000,
-        execution: {
-          status: "terminal",
-          startedAt: now - 2_000,
-          endedAt: now - 1_000,
-          outcome,
-        },
-        ...(endedReason ? { endedReason } : {}),
-      } satisfies SubagentRunRecord;
-      addSubagentRunForTests(run);
-
-      const list = buildSubagentList({
-        cfg: {} as OpenClawConfig,
-        runs: [run],
-        recentMinutes: 30,
-      });
-
-      expect(list.recent[0]?.status).toBe(expectedStatus);
-      expect(list.recent[0]?.line).toContain(` ${expectedStatus}`);
-    },
-  );
-
-  it("keeps ended orchestrators active while descendants remain pending", () => {
-    // Parent orchestrators can finish their own turn before child workers do;
-    // list output should keep them active until descendants settle.
+  it("shows finished ancestors as done while suspended child results remain available", async () => {
     const now = Date.now();
-    const orchestratorRun = {
-      runId: "run-orchestrator-ended",
-      childSessionKey: "agent:main:subagent:orchestrator-ended",
+    const parent = {
+      runId: "finished-parent",
+      childSessionKey: "agent:main:subagent:finished-parent",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "orchestrate child workers",
       cleanup: "keep",
       createdAt: now - 120_000,
-      execution: {
-        status: "terminal",
-        startedAt: now - 120_000,
-        endedAt: now - 60_000,
-        outcome: { status: "ok" },
-      },
+      execution: { status: "terminal", endedAt: now - 60_000, outcome: { status: "ok" } },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(orchestratorRun);
-    addSubagentRunForTests({
-      runId: "run-orchestrator-child-active",
-      childSessionKey: "agent:main:subagent:orchestrator-ended:subagent:child",
-      requesterSessionKey: "agent:main:subagent:orchestrator-ended",
-      requesterDisplayKey: "subagent:orchestrator-ended",
-      task: "child worker still running",
-      cleanup: "keep",
-      createdAt: now - 30_000,
-      startedAt: now - 30_000,
-    });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const list = buildSubagentList({
-      cfg,
-      runs: [orchestratorRun],
-      recentMinutes: 30,
-      taskMaxChars: 110,
-    });
+    const child = {
+      ...parent,
+      runId: "suspended-child",
+      childSessionKey: "agent:main:subagent:suspended-child",
+      requesterSessionKey: parent.childSessionKey,
+      delivery: { status: "suspended", suspendedAt: now, suspendedReason: "expiry" },
+    } satisfies SubagentRunRecord;
+    await addSubagentRunForTests(parent);
+    await addSubagentRunForTests(child);
+    const list = () => buildSubagentList({ cfg: {}, runs: [parent, child], recentMinutes: 30 });
 
-    expect(list.active[0]?.status).toBe("active (waiting on 1 child)");
-    expect(list.active[0]?.childSessions).toEqual([
-      "agent:main:subagent:orchestrator-ended:subagent:child",
+    const finished = await list();
+    expect(finished.active).toEqual([]);
+    expect(finished.recent).toMatchObject([
+      { runId: parent.runId, status: "done", pendingDescendants: 0 },
+      { runId: child.runId, status: "done", deliveryStatus: "suspended" },
     ]);
-    expect(list.recent).toStrictEqual([]);
+    expect(finished.text).not.toContain("waiting on");
+
+    await addSubagentRunForTests({
+      ...parent,
+      runId: "live-grandchild",
+      childSessionKey: "agent:main:subagent:live-grandchild",
+      requesterSessionKey: child.childSessionKey,
+      createdAt: now,
+      execution: { status: "running", startedAt: now },
+    });
+    const active = await list();
+    expect(active.active).toMatchObject([
+      { runId: parent.runId, status: "active (waiting on 1 child)", pendingDescendants: 1 },
+      { runId: child.runId, status: "active (waiting on 1 child)", pendingDescendants: 1 },
+    ]);
+    expect(active.recent).toEqual([]);
   });
 
   it.each([
-    {
-      name: "a killed parent with a provider failure",
-      endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      outcome: { status: "error", error: "agent run aborted" } as const,
-      pendingChildren: 1,
-      expectedStatus: "killed (waiting on 1 child)",
-    },
-    {
-      name: "a killed parent with an earlier successful provider outcome",
-      endedReason: SUBAGENT_ENDED_REASON_KILLED,
-      outcome: { status: "ok" } as const,
-      pendingChildren: 2,
-      expectedStatus: "killed (waiting on 2 children)",
-    },
-    {
-      name: "a failed parent",
-      outcome: { status: "error", error: "provider rejected the request" } as const,
-      pendingChildren: 1,
-      expectedStatus: "failed (waiting on 1 child)",
-    },
     {
       name: "a timed-out parent",
       outcome: { status: "timeout" } as const,
       pendingChildren: 2,
       expectedStatus: "timeout (waiting on 2 children)",
     },
-    {
-      name: "a successfully completed parent",
-      outcome: { status: "ok" } as const,
-      pendingChildren: 2,
-      expectedStatus: "active (waiting on 2 children)",
-    },
-    {
-      name: "a still-running parent",
-      ended: false,
-      pendingChildren: 1,
-      expectedStatus: "active (waiting on 1 child)",
-    },
   ])(
     "preserves the status of $name while descendants remain pending",
-    ({ endedReason, outcome, ended, pendingChildren, expectedStatus }) => {
+    async ({ outcome, pendingChildren, expectedStatus }) => {
       const now = Date.now();
       const parentRun = {
         runId: `run-parent-${expectedStatus.replaceAll(" ", "-")}`,
@@ -344,20 +473,16 @@ describe("buildSubagentList", () => {
         task: "orchestrate child workers",
         cleanup: "keep",
         createdAt: now - 120_000,
-        execution:
-          ended === false
-            ? { status: "running", startedAt: now - 120_000 }
-            : {
-                status: "terminal",
-                startedAt: now - 120_000,
-                endedAt: now - 60_000,
-                outcome,
-              },
-        ...(endedReason ? { endedReason } : {}),
+        execution: {
+          status: "terminal",
+          startedAt: now - 120_000,
+          endedAt: now - 60_000,
+          outcome,
+        },
       } satisfies SubagentRunRecord;
-      addSubagentRunForTests(parentRun);
+      await addSubagentRunForTests(parentRun);
       for (let childIndex = 0; childIndex < pendingChildren; childIndex += 1) {
-        addSubagentRunForTests({
+        await addSubagentRunForTests({
           runId: `${parentRun.runId}-child-${childIndex}`,
           childSessionKey: `${parentRun.childSessionKey}:subagent:child-${childIndex}`,
           requesterSessionKey: parentRun.childSessionKey,
@@ -369,8 +494,8 @@ describe("buildSubagentList", () => {
         });
       }
 
-      const list = buildSubagentList({
-        cfg: {} as OpenClawConfig,
+      const list = await buildSubagentList({
+        cfg: {},
         runs: [parentRun],
         recentMinutes: 30,
       });
@@ -382,174 +507,13 @@ describe("buildSubagentList", () => {
         pendingDescendants: pendingChildren,
       });
       expect(list.active[0]?.line).toContain(` ${expectedStatus}`);
-      expect(list.active[0]?.childSessions).toHaveLength(pendingChildren);
+      expect(list.active[0]?.childSessions).toEqual(
+        Array.from(
+          { length: pendingChildren },
+          (_, childIndex) => `${parentRun.childSessionKey}:subagent:child-${childIndex}`,
+        ),
+      );
       expect(list.recent).toStrictEqual([]);
     },
   );
-
-  it("omits old ended descendants from child session summaries", () => {
-    const now = Date.now();
-    const parentRun = {
-      runId: "run-parent-active-old-child",
-      childSessionKey: "agent:main:subagent:parent-active-old-child",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "parent active",
-      cleanup: "keep",
-      createdAt: now - 120_000,
-      execution: { status: "running", startedAt: now - 120_000 },
-    } satisfies SubagentRunRecord;
-    addSubagentRunForTests(parentRun);
-    addSubagentRunForTests({
-      runId: "run-old-ended-child-summary",
-      childSessionKey: `${parentRun.childSessionKey}:subagent:old-ended-child`,
-      requesterSessionKey: parentRun.childSessionKey,
-      requesterDisplayKey: "subagent:parent-active-old-child",
-      task: "old ended child",
-      cleanup: "keep",
-      createdAt: now - 60 * 60_000,
-      startedAt: now - 59 * 60_000,
-      endedAt: now - 31 * 60_000,
-      outcome: { status: "ok" },
-    });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-
-    const list = buildSubagentList({
-      cfg,
-      runs: [parentRun],
-      recentMinutes: 30,
-      taskMaxChars: 110,
-    });
-
-    expect(list.active[0]?.childSessions).toBeUndefined();
-  });
-
-  it("formats io and prompt/cache usage from session entries", async () => {
-    const run = {
-      runId: "run-usage",
-      childSessionKey: "agent:main:subagent:usage",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "do thing",
-      cleanup: "keep",
-      createdAt: 1000,
-      execution: { status: "running", startedAt: 1000 },
-    } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
-    const storePath = path.join(testWorkspaceDir, "sessions-subagent-list-usage.json");
-    await replaceSessionEntry(
-      {
-        storePath,
-        sessionKey: "agent:main:subagent:usage",
-      },
-      {
-        sessionId: "child-session-usage",
-        updatedAt: Date.now(),
-        inputTokens: 12,
-        outputTokens: 1000,
-        totalTokens: 197000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-        model: "opencode/claude-opus-4-6",
-      },
-    );
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { store: storePath },
-    } as OpenClawConfig;
-    // Prompt/cache usage is separate from visible IO so operators can spot
-    // cache-heavy sessions without misreading it as assistant output.
-    const list = buildSubagentList({
-      cfg,
-      runs: [run],
-      recentMinutes: 30,
-      taskMaxChars: 110,
-    });
-
-    expect(list.active[0]?.line).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
-    expect(list.active[0]?.line).toContain("prompt/cache 197k");
-    expect(list.active[0]?.line).not.toContain("1k io");
-  });
-
-  it("keeps stale unended runs out of active and recent list output", () => {
-    const now = Date.now();
-    const staleRun = {
-      runId: "run-stale-list",
-      childSessionKey: "agent:main:subagent:stale-list",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "stale hidden work",
-      cleanup: "keep",
-      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-      execution: {
-        status: "running",
-        startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-      },
-    } satisfies SubagentRunRecord;
-    addSubagentRunForTests(staleRun);
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-
-    const list = buildSubagentList({
-      cfg,
-      runs: [staleRun],
-      recentMinutes: 30,
-      taskMaxChars: 110,
-    });
-
-    expect(list.total).toBe(1);
-    expect(list.active).toStrictEqual([]);
-    expect(list.recent).toStrictEqual([]);
-    expect(list.text).toContain("active subagents:\n(none)");
-  });
-
-  it("does not let a stale unended child keep an ended parent listed active", () => {
-    const now = Date.now();
-    const parentRun = {
-      runId: "run-parent-ended-stale-child",
-      childSessionKey: "agent:main:subagent:parent-ended-stale-child",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "parent ended",
-      cleanup: "keep",
-      createdAt: now - 120_000,
-      execution: {
-        status: "terminal",
-        startedAt: now - 120_000,
-        endedAt: now - 60_000,
-        outcome: { status: "ok" },
-      },
-    } satisfies SubagentRunRecord;
-    addSubagentRunForTests(parentRun);
-    addSubagentRunForTests({
-      runId: "run-stale-child",
-      childSessionKey: `${parentRun.childSessionKey}:subagent:stale-child`,
-      requesterSessionKey: parentRun.childSessionKey,
-      requesterDisplayKey: "subagent:parent-ended-stale-child",
-      task: "stale child",
-      cleanup: "keep",
-      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-      startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-    });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-
-    const list = buildSubagentList({
-      cfg,
-      runs: [parentRun],
-      recentMinutes: 30,
-      taskMaxChars: 110,
-    });
-
-    expect(list.active).toStrictEqual([]);
-    expect(list.recent[0]?.status).toBe("done");
-  });
 });

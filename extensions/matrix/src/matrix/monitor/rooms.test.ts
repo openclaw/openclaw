@@ -1,4 +1,3 @@
-// Matrix tests cover rooms plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 
@@ -17,6 +16,7 @@ describe("resolveMatrixRoomConfig", () => {
     });
     expect(byId.allowed).toBe(true);
     expect(byId.matchKey).toBe("!room:example.org");
+    expect(byId.matchSource).toBe("direct");
 
     const byAlias = resolveMatrixRoomConfig({
       rooms,
@@ -25,6 +25,7 @@ describe("resolveMatrixRoomConfig", () => {
     });
     expect(byAlias.allowed).toBe(true);
     expect(byAlias.matchKey).toBe("#alias:example.org");
+    expect(byAlias.matchSource).toBe("direct");
 
     const byName = resolveMatrixRoomConfig({
       rooms: { "Project Room": { enabled: true } },
@@ -33,29 +34,10 @@ describe("resolveMatrixRoomConfig", () => {
     });
     expect(byName.allowed).toBe(false);
     expect(byName.config).toBeUndefined();
+    expect(byName.matchSource).toBeUndefined();
   });
 
   describe("matchSource classification", () => {
-    it('returns matchSource="direct" for exact room ID match', () => {
-      const result = resolveMatrixRoomConfig({
-        rooms: { "!room:example.org": { enabled: true } },
-        roomId: "!room:example.org",
-        aliases: [],
-      });
-      expect(result.matchSource).toBe("direct");
-      expect(result.config).toEqual({ enabled: true });
-    });
-
-    it('returns matchSource="direct" for alias match', () => {
-      const result = resolveMatrixRoomConfig({
-        rooms: { "#alias:example.org": { enabled: true } },
-        roomId: "!room:example.org",
-        aliases: ["#alias:example.org"],
-      });
-      expect(result.matchSource).toBe("direct");
-      expect(result.config).toEqual({ enabled: true });
-    });
-
     it('returns matchSource="wildcard" for wildcard match', () => {
       const result = resolveMatrixRoomConfig({
         rooms: { "*": { enabled: true } },
@@ -64,16 +46,6 @@ describe("resolveMatrixRoomConfig", () => {
       });
       expect(result.matchSource).toBe("wildcard");
       expect(result.config).toEqual({ enabled: true });
-    });
-
-    it("returns undefined matchSource when no match", () => {
-      const result = resolveMatrixRoomConfig({
-        rooms: { "!other:example.org": { enabled: true } },
-        roomId: "!room:example.org",
-        aliases: [],
-      });
-      expect(result.matchSource).toBeUndefined();
-      expect(result.config).toBeUndefined();
     });
 
     it("direct match takes priority over wildcard", () => {
@@ -87,36 +59,6 @@ describe("resolveMatrixRoomConfig", () => {
       });
       expect(result.matchSource).toBe("direct");
       expect(result.config?.systemPrompt).toBe("room-specific");
-    });
-  });
-
-  describe("DM override safety (matchSource distinction)", () => {
-    // These tests verify the matchSource property that handler.ts uses
-    // to decide whether a configured room should override DM classification.
-    // Only "direct" matches should trigger the override -- never "wildcard".
-
-    it("wildcard config should NOT be usable to override DM classification", () => {
-      const result = resolveMatrixRoomConfig({
-        rooms: { "*": { enabled: true, skills: ["general"] } },
-        roomId: "!dm-room:example.org",
-        aliases: [],
-      });
-      // handler.ts checks: matchSource === "direct" -> this is "wildcard", so no override
-      expect(result.matchSource).not.toBe("direct");
-      expect(result.matchSource).toBe("wildcard");
-    });
-
-    it("explicitly configured room should be usable to override DM classification", () => {
-      const result = resolveMatrixRoomConfig({
-        rooms: {
-          "!configured-room:example.org": { enabled: true },
-          "*": { enabled: true },
-        },
-        roomId: "!configured-room:example.org",
-        aliases: [],
-      });
-      // handler.ts checks: matchSource === "direct" -> this IS "direct", so override is safe
-      expect(result.matchSource).toBe("direct");
     });
   });
 });

@@ -1,14 +1,16 @@
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { PeriodDescriptor, Person, ReportDocument, SummaryDocument } from "../types.js";
 import { REPORT_SCRIPT } from "./script.js";
-import { escapeHtml, safeExternalUrl } from "./shared.js";
+import { safeExternalUrl } from "./shared.js";
 import { REPORT_STYLES } from "./styles.js";
 
 export type PageContext = {
   basePath: string;
+  controlUiBasePath?: string;
+  mainKey?: string;
   nonce: string;
   absoluteUrl: string;
   displayTimezone: string;
-  nowMs?: number;
 };
 type Window = Pick<PeriodDescriptor, "period" | "key" | "sinceMs" | "untilMs">;
 type Snapshot = Window & { generatedAtMs: number; status: ReportDocument["status"] };
@@ -38,18 +40,19 @@ export function periodTitle(entry: Window): string {
     timeZone: "UTC",
   }).format(entry.sinceMs);
 }
+export function formatUtcDay(value: number | Date): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(value);
+}
 export function formatWindow(entry: Pick<Window, "sinceMs" | "untilMs">): string {
   const start = new Date(entry.sinceMs);
   const end = new Date(entry.untilMs - 1);
-  const day = (value: Date) =>
-    new Intl.DateTimeFormat("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      timeZone: "UTC",
-    }).format(value);
   if (start.toISOString().slice(0, 10) === end.toISOString().slice(0, 10)) {
-    return day(start);
+    return formatUtcDay(start);
   }
   if (
     start.getUTCFullYear() === end.getUTCFullYear() &&
@@ -62,17 +65,17 @@ export function formatWindow(entry: Pick<Window, "sinceMs" | "untilMs">): string
     }).format(start);
     return `${monthDay}-${end.getUTCDate()}, ${end.getUTCFullYear()}`;
   }
-  return `${day(start)}-${day(end)}`;
+  return `${formatUtcDay(start)}-${formatUtcDay(end)}`;
 }
-export function isOpen(ctx: PageContext, entry: Pick<Window, "sinceMs" | "untilMs">): boolean {
-  const now = ctx.nowMs ?? Date.now();
+export function isOpen(entry: Pick<Window, "sinceMs" | "untilMs">): boolean {
+  const now = Date.now();
   return now >= entry.sinceMs && now < entry.untilMs;
 }
 export function openPeriodStatus(ctx: PageContext, entry: Snapshot): string {
-  if (!isOpen(ctx, entry)) {
+  if (!isOpen(entry)) {
     return "";
   }
-  const minutes = Math.max(1, Math.ceil((entry.untilMs - (ctx.nowMs ?? Date.now())) / 60000));
+  const minutes = Math.max(1, Math.ceil((entry.untilMs - Date.now()) / 60000));
   const remaining = minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`;
   const until = new Date(entry.untilMs).toISOString();
   const asOf = new Date(entry.generatedAtMs).toISOString();
@@ -149,13 +152,19 @@ export function shell(
   ctx: PageContext,
   title: string,
   body: string,
-  page: "home" | "report" | "people" | "person",
+  page: "home" | "report" | "people" | "person" | "sessions",
 ): string {
-  const active = page === "home" || page === "report" ? "Reports" : "People";
+  const active =
+    page === "sessions"
+      ? "Work sessions"
+      : page === "home" || page === "report"
+        ? "Reports"
+        : "People";
   const links = [
     ["Reports", `${ctx.basePath}/`],
     ["Latest", `${ctx.basePath}/latest/`],
     ["People", `${ctx.basePath}/people/`],
+    ["Work sessions", `${ctx.basePath}/sessions/`],
   ]
     .map(
       ([label, url]) =>

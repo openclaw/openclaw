@@ -1,4 +1,3 @@
-// Provides config test helpers for temporary homes and fixture writes.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "../plugin-sdk/test-env.js";
@@ -35,10 +34,6 @@ export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise
   }
 }
 
-export function createProcessEnvFixture(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return { ...overrides };
-}
-
 export async function writeOpenClawConfig(home: string, config: unknown): Promise<string> {
   const configPath = path.join(home, ".openclaw", "openclaw.json");
   await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -73,35 +68,6 @@ export async function withTempHomeConfig<T>(
   });
 }
 
-/**
- * Helper to test env var overrides. Saves/restores env vars for a callback.
- */
-export async function withEnvOverride<T>(
-  overrides: Record<string, string | undefined>,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const saved: Record<string, string | undefined> = {};
-  for (const key of Object.keys(overrides)) {
-    saved[key] = process.env[key];
-    if (overrides[key] === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = overrides[key];
-    }
-  }
-  try {
-    return await fn();
-  } finally {
-    for (const key of Object.keys(saved)) {
-      if (saved[key] === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = saved[key];
-      }
-    }
-  }
-}
-
 export function buildWebSearchProviderConfig(params: {
   provider: NonNullable<
     NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>["provider"]
@@ -121,24 +87,11 @@ export function buildWebSearchProviderConfig(params: {
         : params.provider === "kimi"
           ? "moonshot"
           : params.provider;
-  return {
-    tools: {
-      web: {
-        search,
-      },
-    },
-    ...(params.providerConfig
-      ? {
-          plugins: {
-            entries: {
-              [pluginId]: {
-                config: {
-                  webSearch: params.providerConfig,
-                },
-              },
-            },
-          },
-        }
-      : {}),
-  };
+  const config: Record<string, unknown> = { tools: { web: { search } } };
+  if (params.providerConfig) {
+    config.plugins = {
+      entries: { [pluginId]: { config: { webSearch: params.providerConfig } } },
+    };
+  }
+  return config;
 }

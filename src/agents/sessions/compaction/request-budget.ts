@@ -1,7 +1,7 @@
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
-import { estimateFreshLlmBoundaryTokenPressure } from "../context-token-pressure.js";
+import { createFreshLlmBoundaryTokenEstimator } from "../context-token-pressure.js";
 
 /** Ephemeral foreground facts; a separately routed summarizer cannot reconstruct these. */
 export type CompactionRequestBudget = Readonly<{
@@ -23,6 +23,11 @@ export type CompactionRequestConstraints = Readonly<{
 }>;
 
 const promptRequestBudgets = new WeakMap<PromptOptions, CompactionRequestBudget>();
+
+function estimateVariableRequestTokens(messages: AgentMessage[], prompt: string): number {
+  const estimateTokens = createFreshLlmBoundaryTokenEstimator({});
+  return estimateTokens({ messages, prompt }) - estimateTokens({ messages: [], prompt: "" });
+}
 
 /** Bind prepared foreground facts to the exact owned prompt invocation, outside public options. */
 export function attachPromptCompactionRequestBudget(
@@ -58,18 +63,19 @@ export function createCompactionRequestBudget(params: {
   pendingQueuedContextMessages?: AgentMessage[];
   pendingAdditivePrompt?: string;
 }): CompactionRequestBudget {
-  const fixedTokens = estimateFreshLlmBoundaryTokenPressure({
-    ...params,
+  const estimateTokens = createFreshLlmBoundaryTokenEstimator(params);
+  const fixedTokens = estimateTokens({
     messages: [],
     prompt: "",
   });
   const pendingUserTokens =
-    estimateFreshLlmBoundaryTokenPressure({
-      ...params,
-      messages: [],
-      prompt: params.pendingPrompt ?? "",
-      imageCount: params.pendingImageCount,
-    }) - fixedTokens;
+    (params.pendingPrompt ?? "") === "" && (params.pendingImageCount ?? 0) === 0
+      ? 0
+      : estimateTokens({
+          messages: [],
+          prompt: params.pendingPrompt ?? "",
+          imageCount: params.pendingImageCount,
+        }) - fixedTokens;
   const pendingQueuedContextTokens = estimateCompactionHistoryTokens(
     params.pendingQueuedContextMessages ?? [],
   );
@@ -77,10 +83,7 @@ export function createCompactionRequestBudget(params: {
     estimateCompactionHistoryTokens(params.pendingContextMessages ?? []) +
     pendingQueuedContextTokens;
   const additiveTokens = params.pendingAdditivePrompt
-    ? estimateFreshLlmBoundaryTokenPressure({
-        messages: [],
-        prompt: params.pendingAdditivePrompt,
-      }) - estimateFreshLlmBoundaryTokenPressure({ messages: [], prompt: "" })
+    ? estimateVariableRequestTokens([], params.pendingAdditivePrompt)
     : 0;
   return {
     contextWindow: params.contextWindow,
@@ -135,11 +138,7 @@ export function estimateCompactionHistoryTokens(
         budget?.pendingUserTokens ?? budget?.pendingTokens ?? 0,
       )
     : 0;
-  return (
-    estimateFreshLlmBoundaryTokenPressure({ messages, prompt: "" }) -
-    estimateFreshLlmBoundaryTokenPressure({ messages: [], prompt: "" }) -
-    overlap
-  );
+  return estimateVariableRequestTokens(messages, "") - overlap;
 }
 
 export function estimateCompactedRequestTokens(
@@ -149,6 +148,25 @@ export function estimateCompactedRequestTokens(
   return (
     budget.fixedTokens + budget.pendingTokens + estimateCompactionHistoryTokens(messages, budget)
   );
+}
+
+export function assertCompactionRequestCanFit(
+  messages: AgentMessage[],
+  budget: CompactionRequestBudget | undefined,
+  hasCompactableHistory: boolean,
+): void {
+  // Try useful history reduction for pending input; only fixed overhead is unreclaimable here.
+  if (budget && (!hasCompactableHistory || budget.fixedTokens > budget.contextWindow)) {
+    const requestTokens = estimateCompactedRequestTokens(messages, budget);
+    if (requestTokens > budget.contextWindow) {
+      const historyTokens = requestTokens - budget.fixedTokens - budget.pendingTokens;
+      throw new Error(
+        `The estimated foreground request budget still exceeds the ${budget.contextWindow}-token model window ` +
+          `(fixed instructions and tools: ${budget.fixedTokens}; pending input: ${budget.pendingTokens}; retained history: ${historyTokens}). ` +
+          "No further history compaction can make this request fit. Use /context detail to reduce fixed context, shorten the request, or select a larger-context model.",
+      );
+    }
+  }
 }
 
 export function resolveCompactionRetentionBudget(

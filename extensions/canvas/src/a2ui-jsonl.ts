@@ -1,6 +1,3 @@
-/**
- * A2UI JSONL helpers for Canvas text rendering and validation.
- */
 import { A2uiMessageSchema as A2uiV09MessageSchema } from "@a2ui/web_core/v0_9";
 
 const A2UI_V08_ACTION_KEYS = [
@@ -16,16 +13,11 @@ const A2UI_V09_ACTION_KEYS = [
   "deleteSurface",
 ] as const;
 
-/** A2UI message dialects recognized by the Canvas validator. */
-type A2UIVersion = "v0.8" | "v0.9";
-
-/** Validates A2UI JSONL and returns the detected dialect/version metadata. */
-function validateA2UIJsonl(jsonl: string) {
+export function validateSupportedA2UIJsonl(jsonl: string) {
   const lines = jsonl.split(/\r?\n/);
   const errors: string[] = [];
   let sawV08 = false;
   let sawV09 = false;
-  let messageCount = 0;
   const messages: unknown[] = [];
 
   lines.forEach((line, idx) => {
@@ -33,7 +25,6 @@ function validateA2UIJsonl(jsonl: string) {
     if (!trimmed) {
       return;
     }
-    messageCount += 1;
     let obj: unknown;
     try {
       obj = JSON.parse(trimmed) as unknown;
@@ -92,7 +83,7 @@ function validateA2UIJsonl(jsonl: string) {
     messages.push(record);
   });
 
-  if (messageCount === 0) {
+  if (messages.length === 0 && errors.length === 0) {
     errors.push("no JSONL messages found");
   }
   if (sawV08 && sawV09) {
@@ -102,11 +93,6 @@ function validateA2UIJsonl(jsonl: string) {
     throw new Error(`Invalid A2UI JSONL:\n- ${errors.join("\n- ")}`);
   }
 
-  const version: A2UIVersion = sawV09 ? "v0.9" : "v0.8";
-  return { version, messageCount, messages };
-}
-
-/** Validates A2UI JSONL against the Canvas runtime's currently supported dialect. */
-export function validateSupportedA2UIJsonl(jsonl: string) {
-  return validateA2UIJsonl(jsonl);
+  const version: "v0.8" | "v0.9" = sawV09 ? "v0.9" : "v0.8";
+  return { version, messages };
 }

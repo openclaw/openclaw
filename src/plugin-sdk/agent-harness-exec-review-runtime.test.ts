@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { describe, expect, it } from "vitest";
 import { buildExecAutoReviewInputForShellCommand } from "./agent-harness-exec-review-runtime.js";
 

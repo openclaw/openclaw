@@ -1,25 +1,14 @@
-// Detects the package manager used by a project directory.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { readPackageManagerSpec } from "./package-json.js";
-
-type DetectedPackageManager = "pnpm" | "bun" | "npm";
+import { canAccess } from "./path-existence.js";
 
 export type BunGlobalInstallOwner = {
   globalRoot: string;
   globalProjectRoot: string;
   bunInstall?: string;
 };
-
-async function exists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 /** Resolves Bun's global project from its installed owner rather than unrelated caller settings. */
 export function resolveBunGlobalInstallOwner(
@@ -73,7 +62,7 @@ export function resolveBunGlobalInstallOwner(
   };
 }
 
-export function resolvePnpmNodeModulesRoot(root: string): string | null {
+function resolvePnpmNodeModulesRoot(root: string): string | null {
   const resolved = path.resolve(root);
   const parts = resolved.split(path.sep);
   const pnpmIndex = parts.lastIndexOf(".pnpm");
@@ -88,20 +77,13 @@ export function resolvePnpmNodeModulesRoot(root: string): string | null {
   return path.basename(parent) === "node_modules" ? parent : null;
 }
 
-export async function isBunOwnedPackageRoot(root: string): Promise<boolean> {
-  return resolveBunGlobalInstallOwner(root) !== null;
-}
-
-export async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {
+async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {
   const nodeModulesRoot = resolvePnpmNodeModulesRoot(root);
-  if (!nodeModulesRoot || !(await exists(path.join(nodeModulesRoot, ".modules.yaml")))) {
-    return false;
-  }
-  return true;
+  return nodeModulesRoot !== null && (await canAccess(path.join(nodeModulesRoot, ".modules.yaml")));
 }
 
 /** Detects the package manager that owns a package root from manifests, locks, and install layout. */
-export async function detectPackageManager(root: string): Promise<DetectedPackageManager | null> {
+export async function detectPackageManager(root: string): Promise<"pnpm" | "bun" | "npm" | null> {
   const pm = (await readPackageManagerSpec(root))?.split("@")[0]?.trim();
   const files = await fs.readdir(root).catch((): string[] => []);
   const hasNpmShrinkwrap = files.includes("npm-shrinkwrap.json");
@@ -110,16 +92,14 @@ export async function detectPackageManager(root: string): Promise<DetectedPackag
 
   // Published packages retain source pnpm metadata, and modern releases omit
   // shrinkwrap; detect Bun by its install root before checking older npm locks.
-  if (await isBunOwnedPackageRoot(root)) {
+  if (resolveBunGlobalInstallOwner(root)) {
     return "bun";
   }
-  if (hasNpmShrinkwrap) {
-    if (pm === "pnpm" && (hasPnpmLock || (await isPnpmOwnedPackageRoot(root)))) {
-      return "pnpm";
-    }
-    if (pm === "bun" && hasBunLock) {
-      return "bun";
-    }
+  if (
+    hasNpmShrinkwrap &&
+    !(pm === "pnpm" && (hasPnpmLock || (await isPnpmOwnedPackageRoot(root)))) &&
+    !(pm === "bun" && hasBunLock)
+  ) {
     return "npm";
   }
 
@@ -133,7 +113,7 @@ export async function detectPackageManager(root: string): Promise<DetectedPackag
   if (hasBunLock) {
     return "bun";
   }
-  if (files.includes("package-lock.json") || hasNpmShrinkwrap) {
+  if (files.includes("package-lock.json")) {
     return "npm";
   }
   return null;

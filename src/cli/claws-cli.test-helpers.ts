@@ -6,19 +6,6 @@ export const minimalManifest = {
   agent: { id: "demo-agent", name: "Demo Agent" },
 };
 
-export const pluginSetupReadiness = {
-  ready: false,
-  requirements: [
-    {
-      kind: "plugin-setup" as const,
-      plugin: "market-data",
-      provider: "market-data",
-      envVars: ["MARKET_DATA_TOKEN"],
-      authMethods: ["token"],
-    },
-  ],
-};
-
 export async function canonicalFuturePath(target: string): Promise<string> {
   return join(await realpath(dirname(target)), basename(target));
 }

@@ -36,7 +36,7 @@ When the tester says `finish validation`:
    retained, retain the run-owned runtime too and disable `diagnostics-otel`,
    set `diagnostics.otel.enabled` to `false`, restart the fixture through OCM,
    and remove the plugin with `ocm @<test-env> -- plugins uninstall
-diagnostics-otel --force`. If the fixture is destroyed, remove only its
+   diagnostics-otel --force`. If the fixture is destroyed, remove only its
    run-owned runtime with `ocm runtime remove <run-runtime-name>` after the
    fixture is gone. For an in-place lane, do not stop, downgrade, restore, or
    otherwise rewrite the real gateway automatically. Ask whether the tester

@@ -19,11 +19,17 @@ export function resolveObservedDialogTimeoutMs(timeoutMs: number | undefined): n
   return Math.max(1, Math.floor(parsed ?? OBSERVED_DIALOG_TIMEOUT_MS));
 }
 
-export function appendRecentDialog(state: PageState, record: BrowserObservedDialogRecord): void {
+export function recordClosedDialog(
+  state: PageState,
+  dialog: BrowserObservedDialogRecord,
+  closedBy: NonNullable<BrowserObservedDialogRecord["closedBy"]>,
+): BrowserObservedDialogRecord {
+  const record = { ...serializeDialogRecord(dialog), closedAt: new Date().toISOString(), closedBy };
   state.recentDialogs.push(record);
   while (state.recentDialogs.length > MAX_RECENT_DIALOGS) {
     state.recentDialogs.shift();
   }
+  return record;
 }
 
 function serializeDialogRecord(dialog: BrowserObservedDialogRecord): BrowserObservedDialogRecord {
@@ -38,14 +44,10 @@ function serializeDialogRecord(dialog: BrowserObservedDialogRecord): BrowserObse
   };
 }
 
-function serializePendingDialog(dialog: PendingObservedDialog): BrowserObservedDialogRecord {
-  return serializeDialogRecord(dialog);
-}
-
 export function serializeObservedBrowserState(state: PageState): BrowserObservedState {
   return {
     dialogs: {
-      pending: state.pendingDialogs.map(serializePendingDialog),
+      pending: state.pendingDialogs.map(serializeDialogRecord),
       recent: state.recentDialogs.map(serializeDialogRecord),
     },
   };
@@ -64,16 +66,9 @@ function abortActionsBlockedByDialog(state: PageState, reason?: unknown): void {
   }
   const err = reason ?? new BrowserObservedDialogBlockedError(serializeObservedBrowserState(state));
   for (const controller of state.dialogAbortControllers) {
-    if (!controller.signal.aborted) {
-      controller.abort(err);
-    }
+    controller.abort(err);
   }
   state.dialogAbortControllers.clear();
-}
-
-function isNoDialogShowingError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return message.toLowerCase().includes("no dialog is showing");
 }
 
 export async function settleObservedDialog(params: {
@@ -94,23 +89,14 @@ export async function settleObservedDialog(params: {
       await pending.dialog.dismiss();
     }
   } catch (err) {
-    if (!isNoDialogShowingError(err)) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.toLowerCase().includes("no dialog is showing")) {
       throw err;
     }
     closedBy = "remote";
   }
 
-  const record: BrowserObservedDialogRecord = {
-    id: pending.id,
-    type: pending.type,
-    message: pending.message,
-    ...(pending.defaultValue !== undefined ? { defaultValue: pending.defaultValue } : {}),
-    openedAt: pending.openedAt,
-    closedAt: new Date().toISOString(),
-    closedBy,
-  };
-  appendRecentDialog(state, record);
-  return record;
+  return recordClosedDialog(state, pending, closedBy);
 }
 
 export function observeDialog(pageState: PageState, dialog: Dialog): void {
@@ -165,5 +151,3 @@ export function resolvePendingDialogForResponse(params: {
   }
   throw new Error("No dialog is pending.");
 }
-
-/** Respond to a pending observed dialog on a page. */

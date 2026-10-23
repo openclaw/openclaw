@@ -21,11 +21,3 @@ export function fenceForOwnershipError(
     connection.fence("credential-replaced");
   }
 }
-
-export function isTerminalConnection(connection: WorkerConnection): boolean {
-  return (
-    connection.state.kind === "fenced" ||
-    connection.state.kind === "failed" ||
-    connection.state.kind === "stopped"
-  );
-}

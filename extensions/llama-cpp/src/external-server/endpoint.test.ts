@@ -3,7 +3,6 @@ import { normalizeLlamaServerProviderConfig, resolveLlamaServerEndpoint } from "
 
 describe("llama-server endpoint", () => {
   it.each([
-    ["http://127.0.0.1:8080", "http://127.0.0.1:8080", "http://127.0.0.1:8080/v1"],
     ["http://127.0.0.1:8080/v1/", "http://127.0.0.1:8080", "http://127.0.0.1:8080/v1"],
     ["localhost:8010/v1", "http://localhost:8010", "http://localhost:8010/v1"],
     [

@@ -1,71 +1,45 @@
-// Tests final media delivery through the run-reply-agent path.
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TemplateContext } from "../templating.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
-import {
-  createMockFollowupRun,
-  createMockReplyOperation,
-  createMockTypingController,
-} from "./test-helpers.js";
+import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const executeAgentTurnMock = vi.fn();
 const resolveOutboundAttachmentFromUrlMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
-const refreshQueuedFollowupSessionMock = vi.fn();
-const scheduleFollowupDrainMock = vi.fn();
 
 vi.mock("../../agents/context.js", () => ({
   resolveContextTokensForModel: () => 200_000,
 }));
 
-vi.mock("../../agents/model-selection.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/model-selection.js")>(
-    "../../agents/model-selection.js",
-  );
-  return {
-    ...actual,
-    isCliProvider: () => false,
-  };
-});
+vi.mock("../../agents/model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-selection.js")>()),
+  isCliProvider: () => false,
+}));
 
-vi.mock("../../agents/sandbox.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../agents/sandbox.js")>("../../agents/sandbox.js");
-  return {
-    ...actual,
-    ensureSandboxWorkspaceForSession: async () => null,
-  };
-});
+vi.mock("../../agents/sandbox/context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/sandbox/context.js")>()),
+  ensureSandboxWorkspaceForSession: async () => null,
+  prepareSandboxWorkspaceForSession: async () => null,
+}));
 
-vi.mock("../../infra/diagnostic-events.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/diagnostic-events.js")>(
-    "../../infra/diagnostic-events.js",
-  );
-  return {
-    ...actual,
-    emitTrustedDiagnosticEvent: vi.fn(),
-    isDiagnosticsEnabled: () => false,
-  };
-});
+vi.mock("../../infra/diagnostic-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/diagnostic-events.js")>()),
+  emitTrustedDiagnosticEvent: vi.fn(),
+  isDiagnosticsEnabled: () => false,
+}));
 
-vi.mock("../../infra/diagnostics-timeline.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/diagnostics-timeline.js")>(
-    "../../infra/diagnostics-timeline.js",
-  );
-  return {
-    ...actual,
-    measureDiagnosticsTimelineSpan: async (_name: string, run: () => unknown) => await run(),
-  };
-});
+vi.mock("../../infra/diagnostics-timeline.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/diagnostics-timeline.js")>()),
+  measureDiagnosticsTimelineSpan: async (_name: string, run: () => unknown) => await run(),
+}));
 
 vi.mock("../../media/outbound-attachment.js", () => ({
   resolveOutboundAttachmentFromUrl: (...args: unknown[]) =>
     resolveOutboundAttachmentFromUrlMock(...args),
 }));
 
-vi.mock("./agent-runner-failure-reply.js", () => ({
-  buildEmptyInteractiveReplyPayload: vi.fn(() => undefined),
+vi.mock("./agent-runner-failure-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-failure-reply.js")>()),
   buildKnownAgentRunFailureReplyPayload: vi.fn(() => undefined),
   markPostCompactionModelFailurePayload: (_failure: true | undefined, payload: unknown) => payload,
 }));
@@ -83,59 +57,49 @@ vi.mock("./agent-runner-memory.js", () => ({
     sessionEntry,
 }));
 
-vi.mock("./agent-runner-utils.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js");
-  return {
-    ...actual,
-    resolveQueuedReplyExecutionConfig: async (config: unknown) => config,
-  };
-});
+vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-utils.js")>()),
+  resolveQueuedReplyExecutionConfig: async (config: unknown) => config,
+}));
 
-vi.mock("./queue.js", async () => {
-  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
-  return {
-    ...actual,
-    enqueueFollowupRun: (...args: unknown[]) => enqueueFollowupRunMock(...args),
-    refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
-    scheduleFollowupDrain: (...args: unknown[]) => scheduleFollowupDrainMock(...args),
-  };
-});
+vi.mock("./queue.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./queue.js")>()),
+  enqueueFollowupRun: (...args: unknown[]) => enqueueFollowupRunMock(...args),
+  refreshQueuedFollowupSession: vi.fn(),
+  scheduleFollowupDrain: vi.fn(),
+}));
 
 vi.mock("./session-updates.js", () => ({
   incrementCompactionCount: async () => undefined,
 }));
 
-vi.mock("./session-usage.js", () => ({
-  persistSessionUsageUpdate: async () => undefined,
-}));
-
-const { runReplyAgent } = await import("./agent-runner.js");
+const { runReplyAgent } = await import("./agent-runner-run.js");
 
 type AgentTurnExecutionResult = Awaited<
   ReturnType<typeof import("./agent-runner-execution.js").executeAgentTurn>
 >;
+type AgentTurnParams = Parameters<typeof import("./agent-runner-execution.js").executeAgentTurn>[0];
 
 function makeRunReplyAgentParams(
-  overrides: Partial<Parameters<typeof runReplyAgent>[0]> = {},
+  blockStreamingEnabled = false,
 ): Parameters<typeof runReplyAgent>[0] {
   const provider = "telegram";
-  const workspaceDir = "/tmp/workspace";
   const prompt = "generate chart";
+  const replyOperation = createReplyOperation({
+    sessionKey: "main",
+    sessionId: "session",
+    resetTriggered: false,
+  });
+  onTestFinished(() => replyOperation.complete());
 
   return {
     commandBody: prompt,
     followupRun: createMockFollowupRun({
       prompt,
-      run: {
-        agentId: "main",
-        agentDir: "/tmp/agent",
-        messageProvider: provider,
-        workspaceDir,
-      },
-    }) as unknown as FollowupRun,
+      run: { agentDir: "/tmp/agent", messageProvider: provider, workspaceDir: "/tmp/workspace" },
+    }),
     queueKey: "main",
-    resolvedQueue: { mode: "interrupt" } as QueueSettings,
+    resolvedQueue: { mode: "interrupt" },
     shouldSteer: false,
     shouldFollowup: false,
     isActive: false,
@@ -147,16 +111,16 @@ function makeRunReplyAgentParams(
       OriginatingTo: "chat-1",
       AccountId: "default",
       MessageSid: "msg-1",
-    } as unknown as TemplateContext,
+    },
     defaultModel: "anthropic/claude",
     resolvedVerboseLevel: "off",
     isNewSession: false,
-    blockStreamingEnabled: false,
+    blockStreamingEnabled,
     resolvedBlockStreamingBreak: "message_end",
     shouldInjectGroupIntro: false,
     typingMode: "instant",
-    replyOperation: createMockReplyOperation().replyOperation,
-    ...overrides,
+    replyOperation,
+    ...(blockStreamingEnabled ? { opts: { onBlockReply: vi.fn(async () => {}) } } : {}),
   };
 }
 
@@ -166,112 +130,59 @@ describe("runReplyAgent final MEDIA replies", () => {
     executeAgentTurnMock.mockReset();
     resolveOutboundAttachmentFromUrlMock.mockReset();
     enqueueFollowupRunMock.mockReset();
-    refreshQueuedFollowupSessionMock.mockReset();
-    scheduleFollowupDrainMock.mockReset();
 
-    executeAgentTurnMock.mockImplementation(async (params: unknown) => {
-      const { buildReplyPayloads } = await vi.importActual<
-        typeof import("./agent-runner-payloads.js")
-      >("./agent-runner-payloads.js");
-      const runnerParams = params as {
-        replyMediaContext?: {
-          normalizePayload?: (payload: {
-            text?: string;
-            mediaUrl?: string;
-            mediaUrls?: string[];
-          }) => Promise<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>;
-        };
-      };
-      const normalizeMediaPaths = runnerParams.replyMediaContext?.normalizePayload;
-      if (!normalizeMediaPaths) {
-        throw new Error("runReplyAgent did not pass replyMediaContext to the agent turn");
-      }
-      const { replyPayloads } = await buildReplyPayloads({
-        payloads: [{ text: "here is the chart\nMEDIA:./out/generated.png" }],
-        isHeartbeat: false,
-        didLogHeartbeatStrip: false,
-        blockStreamingEnabled: false,
-        blockReplyPipeline: null,
-        replyToMode: "all",
-        replyToChannel: "telegram",
-        currentMessageId: "msg-1",
-        messageProvider: "telegram",
-        originatingChannel: "telegram",
-        originatingTo: "chat-1",
-        accountId: "default",
-        normalizeMediaPaths,
-      });
-      const payload = replyPayloads[0];
-      if (!payload) {
-        throw new Error("expected parsed reply payload");
-      }
-      return {
-        runId: "media-test",
-        outcome: { kind: "rejected", payload },
-      } satisfies AgentTurnExecutionResult;
-    });
     resolveOutboundAttachmentFromUrlMock.mockImplementation(async (mediaUrl: string) => ({
       path: path.join("/tmp/outbound-media", path.basename(mediaUrl)),
     }));
   });
 
-  it("normalizes final MEDIA directives through runReplyAgent", async () => {
-    const result = await runReplyAgent(makeRunReplyAgentParams());
+  it.each([
+    { mediaUrl: "https://example.invalid/pending.png", audioAsVoice: false },
+    { mediaUrl: "https://example.invalid/pending.opus", audioAsVoice: true },
+  ])("keeps pending tool media after NO_REPLY: $mediaUrl", async ({ mediaUrl, audioAsVoice }) => {
+    executeAgentTurnMock.mockResolvedValueOnce({
+      runId: "silent-media-test",
+      outcome: {
+        kind: "settled",
+        status: "ok",
+        result: {
+          payloads: [{ text: "Unsent" }, { text: "Caption", mediaUrl, audioAsVoice }],
+          meta: {
+            durationMs: 0,
+            finalAssistantRawText: "NO_REPLY",
+            terminalReply: { disposition: "silent" },
+          },
+        },
+        resolved: { provider: "anthropic", model: "claude" },
+        fallback: { exhausted: false, attempts: [] },
+        autoCompactionCount: 0,
+      },
+    } satisfies AgentTurnExecutionResult);
 
-    expect(Array.isArray(result)).toBe(false);
-    if (!result || Array.isArray(result)) {
-      throw new Error("expected single reply payload");
-    }
-    expect(result).toMatchObject({
-      text: "here is the chart",
-      mediaUrl: "/tmp/outbound-media/generated.png",
-      mediaUrls: ["/tmp/outbound-media/generated.png"],
-    });
-    expect(executeAgentTurnMock).toHaveBeenCalledOnce();
-    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
-      path.join("/tmp/workspace", "out", "generated.png"),
-      5 * 1024 * 1024,
-      { mediaAccess: expect.objectContaining({ workspaceDir: "/tmp/workspace" }) },
-    );
+    const result = await runReplyAgent(makeRunReplyAgentParams());
+    const payloads = Array.isArray(result) ? result : result ? [result] : [];
+    expect(payloads).toMatchObject([{ mediaUrl, audioAsVoice }]);
+    expect(payloads[0]?.text).toBeUndefined();
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
 
   it("uses one runReplyAgent media context for block and final MEDIA replies", async () => {
     let stagedIndex = 0;
     resolveOutboundAttachmentFromUrlMock.mockImplementation(async (mediaUrl: string) => {
-      stagedIndex += 1;
       return {
-        path: path.join("/tmp/outbound-media", `${stagedIndex}-${path.basename(mediaUrl)}`),
+        path: path.join("/tmp/outbound-media", `${++stagedIndex}-${path.basename(mediaUrl)}`),
       };
     });
-    executeAgentTurnMock.mockImplementationOnce(async (params: unknown) => {
+    executeAgentTurnMock.mockImplementationOnce(async (params: AgentTurnParams) => {
       const { buildReplyPayloads } = await vi.importActual<
         typeof import("./agent-runner-payloads.js")
       >("./agent-runner-payloads.js");
-      const runnerParams = params as {
-        replyMediaContext?: {
-          normalizePayload?: (payload: {
-            text?: string;
-            mediaUrl?: string;
-            mediaUrls?: string[];
-          }) => Promise<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>;
-        };
-      };
-      const normalizeMediaPaths = runnerParams.replyMediaContext?.normalizePayload;
-      if (!normalizeMediaPaths) {
-        throw new Error("runReplyAgent did not pass replyMediaContext to the agent turn");
-      }
+      const normalizeMediaPaths = params.replyMediaContext?.normalizePayload;
+      assert(normalizeMediaPaths, "runReplyAgent must pass replyMediaContext to the agent turn");
       const commonParams = {
-        isHeartbeat: false,
-        didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
         replyToMode: "all" as const,
-        replyToChannel: "telegram" as const,
-        currentMessageId: "msg-1",
-        messageProvider: "telegram",
-        originatingChannel: "telegram" as const,
-        originatingTo: "chat-1",
-        accountId: "default",
         normalizeMediaPaths,
       };
       const blockPayloads = await buildReplyPayloads({
@@ -287,30 +198,22 @@ describe("runReplyAgent final MEDIA replies", () => {
         mediaUrl: "/tmp/outbound-media/1-chart.png",
       });
       const payload = finalPayloads.replyPayloads[0];
-      if (!payload) {
-        throw new Error("expected parsed final payload");
-      }
+      assert(payload, "expected parsed final payload");
       return {
         runId: "media-test",
         outcome: { kind: "rejected", payload },
       } satisfies AgentTurnExecutionResult;
     });
 
-    const result = await runReplyAgent(
-      makeRunReplyAgentParams({
-        blockStreamingEnabled: true,
-        opts: { onBlockReply: vi.fn(async () => {}) },
-      }),
-    );
+    const result = await runReplyAgent(makeRunReplyAgentParams(true));
 
-    expect(Array.isArray(result)).toBe(false);
-    if (!result || Array.isArray(result)) {
-      throw new Error("expected single reply payload");
-    }
+    assert(result && !Array.isArray(result), "expected single reply payload");
     expect(result).toMatchObject({
       text: "final",
       mediaUrl: "/tmp/outbound-media/1-chart.png",
       mediaUrls: ["/tmp/outbound-media/1-chart.png"],
+      attachments: [{ name: "chart.png", mimeType: "image/png", trustedLocalMedia: true }],
+      trustedLocalMedia: true,
     });
     expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);
   });

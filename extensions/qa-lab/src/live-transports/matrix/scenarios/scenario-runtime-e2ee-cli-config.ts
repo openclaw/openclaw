@@ -1,4 +1,3 @@
-// Qa Matrix plugin module implements CLI config assertions for E2EE scenarios.
 import { readFile } from "node:fs/promises";
 import {
   formatMatrixQaCliCommand,
@@ -9,6 +8,7 @@ import {
 import {
   buildMatrixQaPluginActivationConfig,
   isMatrixQaCliBackupUsable,
+  type MatrixQaCliEncryptionSetupStatus,
   type MatrixQaCliVerificationStatus,
 } from "./scenario-runtime-e2ee-cli-shared.js";
 
@@ -34,6 +34,26 @@ export function assertMatrixQaCliE2eeStatus(
         status.backup?.keyLoadError ? `, backupError=${status.backup.keyLoadError}` : ""
       }`,
     );
+  }
+}
+
+export function assertMatrixQaCliEncryptionSetupResult(
+  setup: MatrixQaCliEncryptionSetupStatus,
+  accountId: string,
+  encryptionChanged: boolean,
+  failure: string,
+): asserts setup is MatrixQaCliEncryptionSetupStatus & {
+  bootstrap: { success: true };
+  status: MatrixQaCliVerificationStatus;
+} {
+  if (
+    setup.accountId !== accountId ||
+    setup.success !== true ||
+    setup.encryptionChanged !== encryptionChanged ||
+    setup.bootstrap?.success !== true ||
+    !setup.status
+  ) {
+    throw new Error(`${failure}: ${setup.bootstrap?.error ?? "unknown error"}`);
   }
 }
 
@@ -72,36 +92,29 @@ export function assertMatrixQaCliAccountAddBootstrapStatus(params: {
 
 export async function runMatrixQaCliExpectedFailure(params: {
   args: string[];
-  start: (args: string[], timeoutMs?: number) => MatrixQaCliSession;
+  start: (
+    args: string[],
+    timeoutMs?: number,
+    options?: { allowNonZero?: boolean },
+  ) => MatrixQaCliSession;
   stdin?: string;
   timeoutMs: number;
 }): Promise<MatrixQaCliRunResult> {
-  const session = params.start(params.args, params.timeoutMs);
+  const session = params.start(params.args, params.timeoutMs, { allowNonZero: true });
   try {
     if (params.stdin !== undefined) {
       await session.writeStdin(params.stdin);
       session.endStdin();
     }
     const result = await session.wait();
-    throw new Error(
-      `${formatMatrixQaCliCommand(params.args)} unexpectedly succeeded with stdout:\n${redactMatrixQaCliOutput(
-        result.stdout,
-      )}`,
-    );
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("unexpectedly succeeded")) {
-      throw error;
+    if (result.exitCode === 0) {
+      throw new Error(
+        `${formatMatrixQaCliCommand(params.args)} unexpectedly succeeded with stdout:\n${redactMatrixQaCliOutput(
+          result.stdout,
+        )}`,
+      );
     }
-    const output = session.output();
-    if (!output.stdout.trim() && !output.stderr.trim()) {
-      throw error;
-    }
-    return {
-      args: params.args,
-      exitCode: 1,
-      stderr: output.stderr,
-      stdout: output.stdout,
-    };
+    return result;
   } finally {
     session.kill();
   }
@@ -113,6 +126,7 @@ export function buildMatrixQaCliE2eeAccountConfig(params: {
   baseUrl: string;
   deviceId: string;
   encryption: boolean;
+  initialSyncLimit?: number;
   name: string;
   password?: string;
   userId: string;
@@ -128,7 +142,7 @@ export function buildMatrixQaCliE2eeAccountConfig(params: {
             deviceId: params.deviceId,
             encryption: params.encryption,
             homeserver: params.baseUrl,
-            initialSyncLimit: 1,
+            initialSyncLimit: params.initialSyncLimit ?? 1,
             name: params.name,
             network: {
               dangerouslyAllowPrivateNetwork: true,
@@ -143,14 +157,7 @@ export function buildMatrixQaCliE2eeAccountConfig(params: {
   };
 }
 
-export async function readMatrixQaCliConfig(pathname: string): Promise<{
-  channels?: {
-    matrix?: {
-      accounts?: Record<string, Record<string, unknown>>;
-      defaultAccount?: string;
-    };
-  };
-}> {
+export async function readMatrixQaCliConfig(pathname: string) {
   return JSON.parse(await readFile(pathname, "utf8")) as {
     channels?: {
       matrix?: {

@@ -1,31 +1,43 @@
-// Legacy OAuth sidecar reader for migrating encrypted auth-profile secret material.
+// Temporary #174343 OAuth upgrade dead-end repair; remove after 2026-11-29 with
+// Doctor compat record doctor-pre-july-retired-state.
 import * as childProcess from "node:child_process";
 import { createDecipheriv, hash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { authProfilesLog } from "../../../agents/auth-profiles/constants.js";
-import { LEGACY_OAUTH_REF_PROVIDER } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
-import type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
+import {
+  normalizeUniqueTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { coerceLegacyAuthStore } from "../../../agents/auth-profiles/legacy-flat-credential.js";
+import {
+  isLegacyOAuthRef,
+  type LegacyOAuthRef,
+} from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import { resolveOAuthDir, resolveStateDir } from "../../../config/paths.js";
-import { loadJsonFileThroughSymlink } from "../../../infra/json-file.js";
-import { isPathInside } from "../../../infra/path-safety.js";
-
-export { isLegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
-export type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { decodeUtf8Input } from "../../../infra/utf8-input.js";
+import { shortenHomePath } from "../../../utils.js";
+import { listReferencedLegacyOAuthSidecarPaths } from "../../doctor-auth-legacy-paths.js";
+import {
+  acquireAuthProfileMigrationSourceLocks,
+  prepareAuthProfileSourceReceipt,
+  parseAuthProfileMigrationSource,
+  finalizeAuthProfileMigrationSource,
+  type AuthProfileMigrationSourceReceipt,
+} from "../../doctor-auth-migration-receipts.js";
 
 const LEGACY_OAUTH_SECRET_DIRNAME = "auth-profiles";
 const LEGACY_OAUTH_SECRET_VERSION = 1;
 const LEGACY_OAUTH_SECRET_ALGORITHM = "aes-256-gcm";
-const LEGACY_OAUTH_SECRET_KEY_ENV = "OPENCLAW_AUTH_PROFILE_SECRET_KEY";
 const LEGACY_OAUTH_SECRET_KEYCHAIN_SERVICE = "OpenClaw Auth Profile Secrets";
 const LEGACY_OAUTH_SECRET_KEYCHAIN_ACCOUNT = "oauth-profile-master-key";
 const LEGACY_OAUTH_SECRET_KEY_FILE_NAME = "auth-profile-secret-key";
 
-export type LegacyOAuthSecretMaterial = {
+type LegacyOAuthSecretMaterial = {
   /** OAuth access token from the legacy sidecar. */
   access?: string;
   /** OAuth refresh token from the legacy sidecar. */
@@ -41,8 +53,7 @@ type LegacyOAuthEncryptedPayload = {
   ciphertext: string;
 };
 
-/** Resolve the legacy OAuth sidecar JSON path for an auth profile ref. */
-export function resolveLegacyOAuthSidecarPath(
+function resolveLegacyOAuthSidecarPath(
   ref: LegacyOAuthRef,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
@@ -78,106 +89,56 @@ function coerceLegacyOAuthEncryptedPayload(raw: unknown): LegacyOAuthEncryptedPa
     : null;
 }
 
-/** Return true when raw JSON has the legacy OAuth sidecar envelope or plaintext token shape. */
-export function isLegacyOAuthSidecarPayload(raw: unknown): boolean {
-  if (!isRecord(raw)) {
-    return false;
-  }
-  if (
-    raw.version !== LEGACY_OAUTH_SECRET_VERSION ||
-    readNonEmptyString(raw.profileId) === undefined ||
-    raw.provider !== LEGACY_OAUTH_REF_PROVIDER
-  ) {
-    return false;
-  }
-  return (
-    coerceLegacyOAuthEncryptedPayload(raw.encrypted) !== null ||
-    normalizeLegacyOAuthSecretMaterial(raw) !== null
-  );
-}
-
-function buildLegacyOAuthSecretAad(params: {
-  ref: LegacyOAuthRef;
-  profileId: string;
-  provider: string;
-}): Buffer {
-  return Buffer.from(`${params.ref.id}\0${params.profileId}\0${params.provider}`, "utf8");
-}
-
-function buildLegacyOAuthSecretKey(seed: string): Buffer {
-  // Legacy #79006 compatibility: existing sidecars were encrypted with this
-  // SHA-256 key derivation, so changing it would strand affected users.
-  return hash("sha256", `openclaw:auth-profile-oauth:${seed}`, "buffer");
-}
-
 function uniquePaths(paths: Array<string | undefined>): string[] {
   return uniqueStrings(paths.filter((entry): entry is string => Boolean(entry)));
 }
 
 function resolveLegacyOAuthSecretKeyFileCandidates(env: NodeJS.ProcessEnv): string[] {
+  const home = (process.platform === "win32" ? env.USERPROFILE : env.HOME)?.trim() || os.homedir();
+  let root: string | undefined;
+  let directory = "OpenClaw";
   if (process.platform === "win32") {
-    const home = env.USERPROFILE?.trim() || os.homedir();
-    const root = env.APPDATA?.trim() || (home ? path.join(home, "AppData", "Roaming") : undefined);
-    return uniquePaths([
-      root ? path.join(root, "OpenClaw", LEGACY_OAUTH_SECRET_KEY_FILE_NAME) : undefined,
-      home
-        ? path.join(home, ".openclaw-auth-profile-secrets", LEGACY_OAUTH_SECRET_KEY_FILE_NAME)
-        : undefined,
-    ]);
+    root = env.APPDATA?.trim() || (home ? path.join(home, "AppData", "Roaming") : undefined);
+  } else if (process.platform === "darwin") {
+    root = home ? path.join(home, "Library", "Application Support") : undefined;
+  } else {
+    root = env.XDG_CONFIG_HOME?.trim() || (home ? path.join(home, ".config") : undefined);
+    directory = "openclaw";
   }
-
-  if (process.platform === "darwin") {
-    const home = env.HOME?.trim() || os.homedir();
-    return uniquePaths([
-      home
-        ? path.join(
-            home,
-            "Library",
-            "Application Support",
-            "OpenClaw",
-            LEGACY_OAUTH_SECRET_KEY_FILE_NAME,
-          )
-        : undefined,
-      home
-        ? path.join(home, ".openclaw-auth-profile-secrets", LEGACY_OAUTH_SECRET_KEY_FILE_NAME)
-        : undefined,
-    ]);
-  }
-
-  const home = env.HOME?.trim() || os.homedir();
-  const root = env.XDG_CONFIG_HOME?.trim() || (home ? path.join(home, ".config") : undefined);
   return uniquePaths([
-    root ? path.join(root, "openclaw", LEGACY_OAUTH_SECRET_KEY_FILE_NAME) : undefined,
+    root ? path.join(root, directory, LEGACY_OAUTH_SECRET_KEY_FILE_NAME) : undefined,
     home
       ? path.join(home, ".openclaw-auth-profile-secrets", LEGACY_OAUTH_SECRET_KEY_FILE_NAME)
       : undefined,
   ]);
 }
 
-function resolveLegacyOAuthSecretKeyFilePath(env: NodeJS.ProcessEnv): string | undefined {
+export function resolveLegacyOAuthSecretKeyFiles(env: NodeJS.ProcessEnv): string[] {
   const stateDir = resolveStateDir(env);
-  return resolveLegacyOAuthSecretKeyFileCandidates(env).find(
+  return resolveLegacyOAuthSecretKeyFileCandidates(env).filter(
     (candidate) => !isPathInside(stateDir, candidate),
   );
 }
 
-function readLegacyOAuthSecretKeyFile(env: NodeJS.ProcessEnv): string | undefined {
-  const keyPath = resolveLegacyOAuthSecretKeyFilePath(env);
-  if (!keyPath) {
-    return undefined;
-  }
-  try {
-    const value = fs.readFileSync(keyPath, "utf8").trim();
-    return value || undefined;
-  } catch {
-    return undefined;
-  }
+function readLegacyOAuthSecretKeyFiles(env: NodeJS.ProcessEnv): string[] {
+  return normalizeUniqueTrimmedStringList(
+    resolveLegacyOAuthSecretKeyFiles(env).flatMap((keyPath) => {
+      let bytes: Buffer;
+      try {
+        bytes = fs.readFileSync(keyPath);
+      } catch {
+        return [];
+      }
+      return [decodeUtf8Input(bytes, `Legacy OAuth key ${keyPath}`)];
+    }),
+  );
 }
 
 function readLegacyMacOAuthSecretKeychainKey(params: {
   allowKeychainPrompt?: boolean;
   env: NodeJS.ProcessEnv;
 }): string | undefined {
+  // The security CLI has no no-UI lookup; unattended Doctor must not trigger a Keychain prompt.
   if (
     process.platform !== "darwin" ||
     params.allowKeychainPrompt === false ||
@@ -189,8 +150,7 @@ function readLegacyMacOAuthSecretKeychainKey(params: {
   try {
     // Read-only compatibility for #79006 sidecar OAuth profiles. Do not add
     // writes, creation, prompts, or new OS-level Keychain integrations here.
-    // This exists only to keep affected users working until doctor migrates
-    // them back to inline auth-profiles.json OAuth credentials.
+    // Doctor alone reads this retired source while importing into SQLite.
     return childProcess
       .execFileSync(
         "security",
@@ -210,112 +170,16 @@ function readLegacyMacOAuthSecretKeychainKey(params: {
   }
 }
 
-function resolveLegacyOAuthSecretKeySeeds(env: NodeJS.ProcessEnv): string[] {
-  const seeds: string[] = [];
-  const addSeed = (value: string | undefined): void => {
-    const trimmed = value?.trim();
-    if (trimmed && !seeds.includes(trimmed)) {
-      seeds.push(trimmed);
-    }
-  };
-  addSeed(env[LEGACY_OAUTH_SECRET_KEY_ENV]);
-  if (env.NODE_ENV === "test" && env.VITEST === "true") {
-    addSeed("openclaw-test-oauth-profile-secret-key");
-  }
-  addSeed(readLegacyOAuthSecretKeyFile(env));
-  return seeds;
-}
-
-function decryptLegacyOAuthSecretMaterialWithSeed(
-  params: {
-    ref: LegacyOAuthRef;
-    profileId: string;
-    provider: string;
-    encrypted: LegacyOAuthEncryptedPayload;
-  },
-  seed: string,
-): LegacyOAuthSecretMaterial | null {
-  try {
-    const decipher = createDecipheriv(
-      LEGACY_OAUTH_SECRET_ALGORITHM,
-      buildLegacyOAuthSecretKey(seed),
-      Buffer.from(params.encrypted.iv, "base64url"),
-    );
-    decipher.setAAD(
-      buildLegacyOAuthSecretAad({
-        ref: params.ref,
-        profileId: params.profileId,
-        provider: params.provider,
-      }),
-    );
-    decipher.setAuthTag(Buffer.from(params.encrypted.tag, "base64url"));
-    const plaintext = Buffer.concat([
-      decipher.update(Buffer.from(params.encrypted.ciphertext, "base64url")),
-      decipher.final(),
-    ]).toString("utf8");
-    return normalizeLegacyOAuthSecretMaterial(JSON.parse(plaintext) as unknown);
-  } catch {
-    return null;
-  }
-}
-
-function decryptLegacyOAuthSecretMaterial(params: {
-  ref: LegacyOAuthRef;
-  profileId: string;
-  provider: string;
-  encrypted: LegacyOAuthEncryptedPayload;
-  env: NodeJS.ProcessEnv;
-  allowKeychainPrompt?: boolean;
-}): LegacyOAuthSecretMaterial | null {
-  const seeds = resolveLegacyOAuthSecretKeySeeds(params.env);
-  for (const seed of seeds) {
-    const material = decryptLegacyOAuthSecretMaterialWithSeed(params, seed);
-    if (material) {
-      return material;
-    }
-  }
-  const keychainSeed = readLegacyMacOAuthSecretKeychainKey({
-    allowKeychainPrompt: params.allowKeychainPrompt,
-    env: params.env,
-  });
-  if (keychainSeed && !seeds.includes(keychainSeed)) {
-    return decryptLegacyOAuthSecretMaterialWithSeed(params, keychainSeed);
-  }
-  if (
-    process.platform === "darwin" &&
-    params.allowKeychainPrompt === false &&
-    params.env.VITEST !== "true" &&
-    params.env.VITEST_WORKER_ID === undefined
-  ) {
-    emitKeychainOnlyMigrationHintOnce(params.profileId);
-  }
-  return null;
-}
-
-let keychainOnlyMigrationHintEmitted = false;
-
-function emitKeychainOnlyMigrationHintOnce(profileId: string): void {
-  if (keychainOnlyMigrationHintEmitted) {
-    return;
-  }
-  keychainOnlyMigrationHintEmitted = true;
-  authProfilesLog.warn(
-    "Legacy Codex OAuth credentials are stored only in macOS Keychain on this host. " +
-      "Headless paths cannot prompt for Keychain access; run `openclaw doctor --fix` " +
-      "from an interactive terminal to migrate them back to inline auth-profiles.json credentials.",
-    { profileId },
-  );
-}
-
-export function loadLegacyOAuthSidecarMaterial(params: {
+function loadLegacyOAuthSidecarMaterial(params: {
   ref: LegacyOAuthRef;
   profileId: string;
   provider: string;
   allowKeychainPrompt?: boolean;
   env?: NodeJS.ProcessEnv;
+  raw: unknown;
 }): LegacyOAuthSecretMaterial | null {
   const env = params.env ?? process.env;
-  const raw = loadJsonFileThroughSymlink(resolveLegacyOAuthSidecarPath(params.ref, env));
+  const raw = params.raw;
   if (!isRecord(raw)) {
     return null;
   }
@@ -328,14 +192,170 @@ export function loadLegacyOAuthSidecarMaterial(params: {
   }
   const encrypted = coerceLegacyOAuthEncryptedPayload(raw.encrypted);
   if (encrypted) {
-    return decryptLegacyOAuthSecretMaterial({
-      ref: params.ref,
-      profileId: params.profileId,
-      provider: params.provider,
-      encrypted,
-      env,
+    const decryptLegacyOAuthSecretMaterialWithSeed = (
+      seed: string,
+    ): LegacyOAuthSecretMaterial | null => {
+      let plaintext: Buffer;
+      try {
+        // Legacy #79006 compatibility: existing sidecars were encrypted with this
+        // SHA-256 key derivation, so changing it would strand affected users.
+        const decipher = createDecipheriv(
+          LEGACY_OAUTH_SECRET_ALGORITHM,
+          hash("sha256", `openclaw:auth-profile-oauth:${seed}`, "buffer"),
+          Buffer.from(encrypted.iv, "base64url"),
+        );
+        decipher.setAAD(
+          Buffer.from(`${params.ref.id}\0${params.profileId}\0${params.provider}`, "utf8"),
+        );
+        decipher.setAuthTag(Buffer.from(encrypted.tag, "base64url"));
+        plaintext = Buffer.concat([
+          decipher.update(Buffer.from(encrypted.ciphertext, "base64url")),
+          decipher.final(),
+        ]);
+      } catch {
+        return null;
+      }
+      const text = decodeUtf8Input(plaintext, "Decrypted legacy OAuth sidecar");
+      try {
+        return normalizeLegacyOAuthSecretMaterial(JSON.parse(text) as unknown);
+      } catch {
+        return null;
+      }
+    };
+    const seeds = readLegacyOAuthSecretKeyFiles(env);
+    for (const seed of seeds) {
+      const material = decryptLegacyOAuthSecretMaterialWithSeed(seed);
+      if (material) {
+        return material;
+      }
+    }
+    const keychainSeed = readLegacyMacOAuthSecretKeychainKey({
       allowKeychainPrompt: params.allowKeychainPrompt,
+      env,
     });
+    if (keychainSeed && !seeds.includes(keychainSeed)) {
+      return decryptLegacyOAuthSecretMaterialWithSeed(keychainSeed);
+    }
+    return null;
   }
   return normalizeLegacyOAuthSecretMaterial(raw);
+}
+
+export function collectUnresolvedLegacyOAuthSidecarProfileIds(raw: unknown): string[] {
+  if (!isRecord(raw) || !isRecord(raw.profiles)) {
+    return [];
+  }
+  const profileIds: string[] = [];
+  for (const [profileId, profile] of Object.entries(raw.profiles)) {
+    if (!isRecord(profile) || profile.type !== "oauth" || !isRecord(profile.oauthRef)) {
+      continue;
+    }
+    if (
+      readNonEmptyString(profile.oauthRef.id) &&
+      readNonEmptyString(profile.oauthRef.provider) &&
+      (!readNonEmptyString(profile.access) || !readNonEmptyString(profile.refresh))
+    ) {
+      profileIds.push(profileId);
+    }
+  }
+  return profileIds;
+}
+
+export function prepareLegacyOAuthSidecarImport(params: {
+  rawStore: unknown;
+  env: NodeJS.ProcessEnv;
+  oauthEnv: NodeJS.ProcessEnv;
+  targetDatabasePath: string;
+  targetStoreKey: "primary" | "shared";
+  now: () => number;
+}): AuthProfileMigrationSourceReceipt[] {
+  const { rawStore, env, oauthEnv, targetDatabasePath, targetStoreKey, now } = params;
+  const sidecarReceipts: AuthProfileMigrationSourceReceipt[] = [];
+  if (isRecord(rawStore) && isRecord(rawStore.profiles)) {
+    for (const [profileId, profile] of Object.entries(rawStore.profiles)) {
+      if (
+        !isRecord(profile) ||
+        profile.type !== "oauth" ||
+        !isLegacyOAuthRef(profile.oauthRef) ||
+        profile.provider !== profile.oauthRef.provider
+      ) {
+        continue;
+      }
+      const sidecarPath = resolveLegacyOAuthSidecarPath(profile.oauthRef, oauthEnv);
+      if (!fs.existsSync(sidecarPath)) {
+        throw new Error(
+          `Legacy OAuth sidecar is missing at ${sidecarPath}. Restore that file or correct OPENCLAW_OAUTH_DIR, then rerun openclaw doctor --fix. The auth source remains unchanged for retry.`,
+        );
+      }
+      const receipt = prepareAuthProfileSourceReceipt({
+        pathname: sidecarPath,
+        targetDatabasePath,
+        targetTable: targetStoreKey === "shared" ? "auth_profile_stores" : "auth_profile_store",
+        targetStoreKey,
+        now,
+        env,
+      });
+      const material = loadLegacyOAuthSidecarMaterial({
+        profileId,
+        provider: profile.provider,
+        ref: profile.oauthRef,
+        env: oauthEnv,
+        raw: parseAuthProfileMigrationSource(receipt),
+        allowKeychainPrompt: process.stdin.isTTY,
+      });
+      if (material) {
+        delete profile.oauthRef;
+        Object.assign(profile, material);
+      }
+      sidecarReceipts.push(receipt);
+    }
+  }
+  return sidecarReceipts;
+}
+
+export function parseLegacyOAuthFile(raw: unknown) {
+  const store = isRecord(raw)
+    ? coerceLegacyAuthStore(
+        Object.fromEntries(
+          Object.entries(raw).map(([provider, credential]) => [
+            provider,
+            isRecord(credential) ? { ...credential, type: "oauth", provider } : credential,
+          ]),
+        ),
+      )
+    : null;
+  const rejectedEntries = isRecord(raw)
+    ? Object.keys(raw).length - Object.keys(store ?? {}).length
+    : raw === undefined
+      ? 0
+      : 1;
+  return { store, rejectedEntries };
+}
+
+export function finalizeLegacyOAuthSidecarImports(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  receipts: Iterable<AuthProfileMigrationSourceReceipt>;
+}): { changes: string[]; warnings: string[] } {
+  const { cfg, env, receipts } = params;
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const stillReferenced = new Set(listReferencedLegacyOAuthSidecarPaths(env, cfg));
+  for (const receipt of receipts) {
+    if (stillReferenced.has(receipt.sourcePath)) {
+      continue;
+    }
+    const release = acquireAuthProfileMigrationSourceLocks([receipt.sourcePath]);
+    try {
+      finalizeAuthProfileMigrationSource(receipt);
+      changes.push(`Archived legacy OAuth sidecar -> ${shortenHomePath(receipt.archivePath)}.`);
+    } catch (err) {
+      warnings.push(
+        `Could not archive legacy OAuth sidecar ${shortenHomePath(receipt.sourcePath)}: ${String(err)}`,
+      );
+    } finally {
+      release();
+    }
+  }
+  return { changes, warnings };
 }

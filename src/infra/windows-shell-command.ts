@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ExecCommandAnalysis } from "./exec-command-analysis-types.js";
 import { resolveCommandResolutionFromArgv } from "./exec-command-resolution.js";
@@ -53,11 +52,10 @@ function findWindowsUnsupportedToken(command: string): string | null {
   return null;
 }
 
-export function tokenizeWindowsSegment(segment: string): string[] | null {
+function tokenizeWindowsSegment(segment: string): string[] | null {
   const tokens: string[] = [];
   let buf = "";
-  let inDouble = false;
-  let inSingle = false;
+  let quote: '"' | "'" | undefined;
   let wasQuoted = false;
 
   const pushToken = () => {
@@ -70,33 +68,26 @@ export function tokenizeWindowsSegment(segment: string): string[] | null {
 
   for (let i = 0; i < segment.length; i += 1) {
     const ch = segment.charAt(i);
-    if (ch === '"' && !inSingle) {
-      if (!inDouble) {
-        wasQuoted = true;
-      }
-      inDouble = !inDouble;
-      continue;
-    }
-    if (ch === "'" && !inDouble) {
-      if (inSingle && segment[i + 1] === "'") {
+    if ((ch === '"' || ch === "'") && (!quote || quote === ch)) {
+      if (quote === "'" && segment[i + 1] === "'") {
         buf += "'";
         i += 1;
         continue;
       }
-      if (!inSingle) {
+      if (!quote) {
         wasQuoted = true;
       }
-      inSingle = !inSingle;
+      quote = quote ? undefined : ch;
       continue;
     }
-    if (!inDouble && !inSingle && /\s/.test(ch)) {
+    if (!quote && /\s/.test(ch)) {
       pushToken();
       continue;
     }
     buf += ch;
   }
 
-  if (inDouble || inSingle) {
+  if (quote) {
     return null;
   }
   pushToken();
@@ -120,32 +111,23 @@ const POWERSHELL_FLAGS =
   /(?:-(?!c(?:ommand)?\b|-command\b)\w+(?:\s+(?!-)(?:"[^"]*(?:""[^"]*)*"|'[^']*(?:''[^']*)*'|\S+))?\s+)*/i
     .source;
 const POWERSHELL_INVOKE_PREFIX = `^(?:powershell|pwsh)(?:\\.exe)?\\s+${POWERSHELL_FLAGS}(?:-command|-c|--command)\\s+`;
-const POWERSHELL_DOUBLE_QUOTED = new RegExp(`${POWERSHELL_INVOKE_PREFIX}"(.+)"$`, "is");
-const POWERSHELL_SINGLE_QUOTED = new RegExp(`${POWERSHELL_INVOKE_PREFIX}'(.+)'$`, "is");
-const POWERSHELL_UNQUOTED = new RegExp(`${POWERSHELL_INVOKE_PREFIX}(.+)$`, "is");
+const POWERSHELL_INVOKE_PATTERNS = ['"', "'", ""].map((quote) => ({
+  quote,
+  pattern: new RegExp(`${POWERSHELL_INVOKE_PREFIX}${quote}(.+)${quote}$`, "is"),
+}));
 
 function stripWindowsShellWrapperOnce(command: string): string {
   const psCallMatch = command.match(/^&\s+(.+)$/s);
-  if (psCallMatch) {
-    return expectDefined(psCallMatch[1], "ps call match capture group 1");
+  if (psCallMatch?.[1]) {
+    return psCallMatch[1];
   }
 
-  const psInvokeMatch = command.match(POWERSHELL_DOUBLE_QUOTED);
-  if (psInvokeMatch) {
-    return expectDefined(psInvokeMatch[1], "ps invoke match capture group 1").replace(/""/g, '"');
+  for (const { quote, pattern } of POWERSHELL_INVOKE_PATTERNS) {
+    const match = command.match(pattern);
+    if (match?.[1]) {
+      return quote ? match[1].replaceAll(quote + quote, quote) : match[1];
+    }
   }
-  const psInvokeSingleQuote = command.match(POWERSHELL_SINGLE_QUOTED);
-  if (psInvokeSingleQuote) {
-    return expectDefined(psInvokeSingleQuote[1], "ps invoke single quote capture group 1").replace(
-      /''/g,
-      "'",
-    );
-  }
-  const psInvokeNoQuote = command.match(POWERSHELL_UNQUOTED);
-  if (psInvokeNoQuote) {
-    return expectDefined(psInvokeNoQuote[1], "ps invoke no quote capture group 1");
-  }
-
   // `cmd /c` stays intact because PowerShell execution would change cmd.exe
   // builtin semantics; callers need explicit trust for cmd itself.
   return command;
@@ -167,7 +149,7 @@ export function analyzeWindowsShellCommand(params: {
     };
   }
   const argv = tokenizeWindowsSegment(effective);
-  if (!argv || argv.length === 0) {
+  if (!argv) {
     return { ok: false, reason: "unable to parse windows command", segments: [] };
   }
   return {
@@ -188,7 +170,7 @@ export function analyzeWindowsShellCommand(params: {
 }
 
 export function isWindowsPlatform(platform?: string | null): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(platform);
+  const normalized = normalizeLowercaseStringOrEmpty(platform ?? process.platform);
   return normalized.startsWith("win");
 }
 

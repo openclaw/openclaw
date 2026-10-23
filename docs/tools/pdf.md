@@ -7,20 +7,21 @@ read_when:
   - You are debugging native PDF mode vs extraction fallback
 ---
 
-`pdf` analyzes one or more PDF documents and returns text. It uses native document input on Anthropic, Google, and supported OpenAI Responses routes, and falls back to text/image extraction otherwise.
+`pdf` analyzes one or more PDF documents and returns text. By default, it uses native document input on Anthropic and Google models, and text/image extraction for every other provider. An explicit OpenAI opt-in is described below.
 
 ## Availability
 
-The tool registers only when OpenClaw can resolve a PDF-capable model for the agent. Resolution order:
+The agent can register the tool before automatic model selection completes. On execution, model resolution follows this order:
 
 1. `agents.defaults.pdfModel` (explicit primary/fallbacks)
 2. `agents.defaults.imageModel` (explicit primary/fallbacks)
-3. The agent's resolved session/default model, if its provider supports native PDF input (Anthropic, Google, OpenAI) or already has a configured vision model
-4. Auto-detected image/vision-capable providers with usable auth, preferring native-PDF providers first
+3. A vision model from the default model's provider, if that provider supports native PDF input (Anthropic, Google)
+4. Automatic candidates with usable auth: native-PDF providers first, then image/vision-capable providers and providers declaring PDF text-extraction support. A default provider's declared text-extraction model takes precedence over generic image candidates.
+5. The active session model, if no earlier candidate resolves, it supports images, its provider has usable auth, and its provider does not disable PDF image extraction (`documentModels.pdf.image: false`). This includes vision-capable OpenRouter models without separate `pdfModel` or `imageModel` configuration.
 
-Every fallback candidate is auth-checked before use, so a configured `provider/model` only counts if OpenClaw can authenticate that provider for the agent. If no usable model resolves, the `pdf` tool is not exposed.
+Automatic candidates are auth-checked before selection. Explicit PDF/image settings retain their configured precedence and are authenticated at execution. If deferred resolution finds no usable model, the call fails with `No PDF model configured.` before opening the PDF.
 
-On fresh installs and after upgrades, automatic selection can prefer OpenAI's PDF model when OpenAI is the default provider with usable auth, even when Anthropic is also available. Explicit `pdfModel` and `imageModel` settings keep their precedence. Saved configuration is not rewritten.
+PDF analysis uses the selected model's configured provider credentials or connected account. It does not require a separate PDF API key. Native Anthropic requests use bearer authentication and the maintained OAuth client identity for saved setup-token/OAuth credentials; API-key credentials continue to use API-key authentication. Native Claude CLI login alone does not supply an HTTP credential for PDF analysis.
 
 ## Input reference
 
@@ -37,7 +38,7 @@ Analysis prompt.
 </ParamField>
 
 <ParamField path="pages" type="string">
-Page filter like `1-5` or `1,3,7-9`. OpenAI uses extraction when this is set. Not supported with Anthropic or Google native PDF input.
+Page filter like `1-5` or `1,3,7-9`. Not supported in native provider mode.
 </ParamField>
 
 <ParamField path="password" type="string">
@@ -55,7 +56,7 @@ Per-PDF size cap in MB. Defaults to `agents.defaults.pdfMaxMb`, or `10` if unset
 Notes:
 
 - `pdf` and `pdfs` are merged and deduplicated before loading; at least one is required.
-- `pages` is parsed as 1-based page numbers, deduped, sorted, and clamped to `agents.defaults.pdfMaxPages` (default `20`). A range that matches no in-bounds pages errors before the model call.
+- `pages` is parsed as 1-based page numbers, deduped, and sorted. `agents.defaults.pdfMaxPages` (default `20`) limits the number of selected pages, not their page numbers; if a larger selection is shortened, both the PDF model and the calling model receive a partial-document notice.
 
 ## Supported PDF references
 
@@ -66,35 +67,48 @@ Notes:
 
 Other URI schemes (for example `ftp://`) return `details.error = "unsupported_pdf_reference"`. Remote `http(s)` URLs are rejected when the tool runs sandboxed. With workspace-only file policy enabled, local paths outside allowed roots are rejected; managed inbound refs and replayed paths under OpenClaw's inbound media store are still allowed.
 
+`data:` URLs are unsupported. Files identified as other document types, such as
+plain text or JSON, are rejected before model dispatch.
+
+Relative paths resolve from the task's working directory, including selected Git
+worktrees. Local reads use the session's approved filesystem root; see
+[Local media files](/tools/media-overview#local-media-files).
+
 ## Execution modes
 
 ### Native provider mode
 
-Used for providers `anthropic` and `google`, and for `openai` with the `openai-responses` transport at the official HTTPS `api.openai.com` endpoint. Raw PDF bytes go directly to the provider API as a native document/inline-PDF part per file. OpenAI receives the complete documents as `input_file` parts; local extraction page limits do not apply to native input.
+Used for provider `anthropic` and `google` (the only providers that currently declare native PDF document support). Raw PDF bytes go directly to the provider API as a native document/inline-PDF part per file.
 
 Limits:
 
-- OpenAI native input requires `image` in the resolved model's input capabilities. Configured text-only models retain extraction, including explicit `input: ["text"]` overrides.
-- Anthropic and Google reject `pages` and `password` with `pages is not supported with native PDF providers` or `password is not supported with native PDF providers`. Use an extraction-capable route for these options.
-- OpenAI uses extraction when `pages` or `password` is set, preserving page filtering and encrypted-PDF support.
-- OpenAI native input requires each PDF to be smaller than `50,000,000` bytes and all PDFs together to be at most `50,000,000` bytes. Larger requests use extraction. These conservative decimal-byte bounds follow the [OpenAI file input limits](https://developers.openai.com/api/docs/guides/file-inputs#usage-considerations); the per-PDF loader cap still applies first.
-
-An existing OpenAI configuration that meets these requirements sends the complete original PDFs after upgrading, rather than only locally extracted content. `pdfMaxPages` limits extraction only; it does not limit native uploads.
+- `pages` is not supported; if set, the tool throws `pages is not supported with native PDF providers`.
+- `password` is not supported; if set, the tool throws `password is not supported with native PDF providers`. Use a non-native model for encrypted PDFs.
 
 ### Extraction fallback mode
 
-Used for every other provider, custom OpenAI endpoints, and ChatGPT/Codex transports. OpenAI also uses extraction for text-only models, page filtering, decryption, and requests exceeding the native file limits.
+Used for every other provider.
 
 1. Extract text from the selected pages (up to `agents.defaults.pdfMaxPages`, default `20`) via the bundled `document-extract` plugin, which uses the `clawpdf` package (PDFium WebAssembly) for text and image extraction.
-2. If the extracted text is shorter than `200` characters, render the same pages to PNG images. The render budget is `4,000,000` pixels total, shared across all pages needing images (allocated proportionally per remaining page, not per page), so text pages that already have enough text skip rendering entirely.
+2. For each selected page with fewer than `200` characters of extracted text, render that page to a PNG image. A text-rich page does not suppress image fallback for other selected pages. The render budget is `4,000,000` pixels total, shared across all pages needing images (allocated proportionally per remaining page, not per page), so text pages that already have enough text skip rendering entirely.
 3. Send the extracted text (and any rendered images) plus the prompt to the selected model.
 
 Details:
 
+- Local extraction runs in a reusable worker so PDF text and image processing do not block the Gateway. Cancelling the agent run stops queued or active extraction.
 - Encrypted PDFs open with the top-level `password` parameter.
 - If the model has no image input and there is no extractable text, the tool errors.
 - If image rendering fails, OpenClaw drops the images and continues with the extracted text.
 - If the target model is text-only and extraction produced images, OpenClaw drops the images and sends text only.
+- If page, text, or image limits make extraction partial, OpenClaw includes a short partial-document notice in the analysis context and tool result.
+
+### Explicit OpenAI native input
+
+The optional `agents.defaults.pdfNativeOpenai: true` setting allows sending the complete PDF to the official OpenAI Responses API when the already-selected OpenAI model supports images. It defaults to off: choosing an OpenAI model alone does not opt in, and enabling it does not change provider ordering.
+
+This sends the original document, including text and page images, to OpenAI. Use it only when that full-document transmission is appropriate. `pages`, `password`, an unverifiable page count, or a document exceeding `pdfMaxPages` retains extraction. Completeness is checked using the configured document extractor before native upload; the extractor must remain enabled. Custom endpoints, Codex/ChatGPT transports and text-only models retain extraction. Native requests also retain the configured per-file limit and OpenAI's under-50-MB per-file / 50-MB combined limits; over-limit requests use extraction.
+
+For example, explicitly select an OpenAI model and set `pdfNativeOpenai: true` beside `pdfModel` in the following configuration. Omit the flag or use `false` to preserve the released extraction behavior. No saved setting is automatically opted in during an upgrade.
 
 ## Config
 
@@ -113,11 +127,12 @@ Details:
 }
 ```
 
-| Key                           | Default | Meaning                                                                                   |
-| ----------------------------- | ------- | ----------------------------------------------------------------------------------------- |
-| `agents.defaults.pdfModel`    | unset   | Explicit primary/fallback PDF models; falls back to `imageModel`, then the session model. |
-| `agents.defaults.pdfMaxMb`    | `10`    | Per-PDF size cap in MB.                                                                   |
-| `agents.defaults.pdfMaxPages` | `20`    | Max pages processed per PDF.                                                              |
+| Key                               | Default | Meaning                                                                                   |
+| --------------------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| `agents.defaults.pdfModel`        | unset   | Explicit primary/fallback PDF models; falls back to `imageModel`, then the session model. |
+| `agents.defaults.pdfNativeOpenai` | `false` | Explicit whole-document upload opt-in for eligible, already-selected OpenAI models.       |
+| `agents.defaults.pdfMaxMb`        | `10`    | Per-PDF size cap in MB.                                                                   |
+| `agents.defaults.pdfMaxPages`     | `20`    | Max pages processed per PDF.                                                              |
 
 See [Configuration Reference](/gateway/config-agents#agent-defaults) for full field details.
 

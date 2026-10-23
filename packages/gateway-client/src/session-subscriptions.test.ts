@@ -1,68 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
-  type GatewayProtocolRequestOptions,
 } from "./protocol-request.js";
 import {
   GatewaySessionMessageSubscriptionCoordinator,
   getGatewaySessionMessageSubscriptionCoordinator,
   releaseGatewaySessionMessageSubscription,
   resetGatewaySessionMessageSubscriptionCoordinator,
-  type GatewaySessionMessageRequestClient,
 } from "./session-subscriptions.js";
+import { createClient, createStalledRequestClient } from "./session-subscriptions.test-support.js";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "./timeouts.js";
-
-type SessionRequestHandler = (method: string, params: Record<string, unknown>) => Promise<unknown>;
-
-function createClient(
-  handler: SessionRequestHandler = async (method, params) =>
-    method === "sessions.messages.subscribe" ? { key: params.key } : {},
-) {
-  const request = vi.fn(handler);
-  return {
-    client: {
-      request: (method: string, params: Record<string, unknown>) => request(method, params),
-    } as unknown as GatewaySessionMessageRequestClient,
-    request,
-  };
-}
-
-function createStalledRequestClient(stalledMethod: string, stalledKey: string) {
-  let shouldStall = true;
-  const request = vi.fn(
-    (
-      method: string,
-      params: Record<string, unknown>,
-      options?: GatewayProtocolRequestOptions,
-    ): Promise<unknown> => {
-      if (shouldStall && method === stalledMethod && params.key === stalledKey) {
-        shouldStall = false;
-        return new Promise((_, reject) => {
-          const timeoutMs = options?.timeoutMs;
-          if (typeof timeoutMs === "number") {
-            setTimeout(
-              () =>
-                reject(
-                  new GatewayProtocolRequestTimeoutError({
-                    method,
-                    timeoutMs,
-                    requestSent: true,
-                  }),
-                ),
-              timeoutMs,
-            );
-          }
-        });
-      }
-      return Promise.resolve(method === "sessions.messages.subscribe" ? { key: params.key } : {});
-    },
-  );
-  return {
-    client: { request } as unknown as GatewaySessionMessageRequestClient,
-    request,
-  };
-}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -89,81 +38,18 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     await coordinator.release(first);
     expect(request).toHaveBeenCalledOnce();
     await coordinator.release(second);
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.unsubscribe", { key: "main" });
-  });
-
-  it("uses the Gateway canonical key when releasing a requested alias", async () => {
-    const { client, request } = createClient(async (method) =>
-      method === "sessions.messages.subscribe" ? { key: "agent:main:main" } : {},
-    );
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-
-    const subscription = await coordinator.acquire("main");
-    expect(subscription).toEqual({ key: "agent:main:main", agentId: null });
-
-    await coordinator.release(subscription);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-      key: "agent:main:main",
-    });
-  });
-
-  it("retains the requested alias after the Gateway returns a canonical key", async () => {
-    const { client, request } = createClient(async (method) =>
-      method === "sessions.messages.subscribe" ? { key: "agent:main:main" } : {},
-    );
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-
-    const first = await coordinator.acquire("main");
-    const second = await coordinator.acquire("main");
-
-    expect(first).not.toBe(second);
-    expect(first).toEqual({ key: "agent:main:main", agentId: null });
-    expect(second).toEqual({ key: "agent:main:main", agentId: null });
-    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.unsubscribe", {
+      subscriptionId: expect.any(String),
       key: "main",
-    });
-
-    await coordinator.release(first);
-    expect(request).toHaveBeenCalledOnce();
-    await coordinator.release(second);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-      key: "agent:main:main",
-    });
-  });
-
-  it("shares requested and acknowledged canonical aliases without a custom matcher", async () => {
-    const { client, request } = createClient(async (method) =>
-      method === "sessions.messages.subscribe" ? { key: "agent:main:main" } : {},
-    );
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-
-    const requested = await coordinator.acquire("main");
-    const canonical = await coordinator.acquire("agent:main:main");
-
-    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
-      key: "main",
-    });
-    expect(requested.key).toBe("agent:main:main");
-    expect(canonical.key).toBe("agent:main:main");
-
-    await coordinator.release(requested);
-    expect(request).toHaveBeenCalledOnce();
-    await coordinator.release(canonical);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-      key: "agent:main:main",
     });
   });
 
   it.each([
-    { name: "default main", requestedKey: "main", canonicalKey: "agent:main:main" },
     {
       name: "configured main",
       requestedKey: "agent:ops:main",
       canonicalKey: "agent:ops:work",
     },
-    { name: "global main", requestedKey: "agent:ops:main", canonicalKey: "global" },
   ])(
     "coalesces $name aliases before the first canonical acknowledgment",
     async ({ requestedKey, canonicalKey }) => {
@@ -177,6 +63,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       const canonical = coordinator.acquire(canonicalKey);
 
       expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
+        subscriptionId: expect.any(String),
         key: requestedKey,
       });
 
@@ -186,13 +73,20 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       expect(first).not.toBe(second);
       expect(first).toEqual({ key: canonicalKey, agentId: null });
       expect(second).toEqual({ key: canonicalKey, agentId: null });
-      expect(request).toHaveBeenCalledOnce();
+      expect(
+        request.mock.calls.filter(([method]) => method === "sessions.messages.subscribe"),
+      ).toHaveLength(1);
 
       await coordinator.release(first);
-      expect(request).toHaveBeenCalledOnce();
+      expect(
+        request.mock.calls.filter(([method]) => method === "sessions.messages.unsubscribe"),
+      ).toHaveLength(0);
       await coordinator.release(second);
-      expect(request).toHaveBeenCalledTimes(2);
+      expect(
+        request.mock.calls.filter(([method]) => method === "sessions.messages.unsubscribe"),
+      ).toHaveLength(1);
       expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
+        subscriptionId: expect.any(String),
         key: canonicalKey,
       });
     },
@@ -227,6 +121,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     });
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
       key: "agent:main:main",
       includeApprovals: true,
     });
@@ -236,6 +131,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     await coordinator.release(upgraded);
     expect(request).toHaveBeenCalledTimes(3);
     expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
+      subscriptionId: expect.any(String),
       key: "agent:main:main",
     });
   });
@@ -252,6 +148,16 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
     expect(research).toEqual({ key: "global", agentId: "research" });
     expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
+      key: "global",
+      agentId: "main",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
+      key: "global",
+      agentId: "research",
+    });
     acknowledgement.resolve({ key: "global" });
     await expect(main).resolves.toEqual({ key: "global", agentId: "main" });
   });
@@ -273,7 +179,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(request).toHaveBeenNthCalledWith(
       2,
       "sessions.messages.subscribe",
-      { key: "healthy" },
+      { subscriptionId: expect.any(String), key: "healthy" },
       { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
     );
     await expect(recovered).resolves.toEqual({ key: "healthy", agentId: null });
@@ -282,54 +188,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
 
     expect(failure).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenNthCalledWith(
-      3,
-      "sessions.messages.unsubscribe",
-      { key: "stalled" },
-      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
-    );
-  });
-
-  it("does not compensate an unsent subscription timeout", async () => {
-    const timeout = new GatewayProtocolRequestTimeoutError({
-      method: "sessions.messages.subscribe",
-      timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-      requestSent: false,
-    });
-    const request = vi.fn(async () => {
-      throw timeout;
-    });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
-
-    await expect(coordinator.acquire("main")).rejects.toBe(timeout);
-    expect(request).toHaveBeenCalledOnce();
-  });
-
-  it("retries a rejected final unsubscribe with the original live lease", async () => {
-    let unsubscribeCount = 0;
-    const { client, request } = createClient(async (method, params) => {
-      if (method === "sessions.messages.subscribe") {
-        return { key: params.key };
-      }
-      unsubscribeCount += 1;
-      if (unsubscribeCount === 1) {
-        throw new Error("temporary unsubscribe failure");
-      }
-      return {};
-    });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-    const subscription = await coordinator.acquire("main");
-
-    await expect(coordinator.release(subscription)).rejects.toThrow(
-      "temporary unsubscribe failure",
-    );
-    await expect(coordinator.release(subscription)).resolves.toBeUndefined();
-
-    expect(unsubscribeCount).toBe(2);
-    expect(request).toHaveBeenCalledTimes(3);
-    await expect(coordinator.release(subscription)).resolves.toBeUndefined();
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a timed-out final unsubscribe retryable on its original lease", async () => {
@@ -346,6 +205,26 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
     expect(failure).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
     await expect(coordinator.release(subscription)).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    new GatewayProtocolRequestError({ retryable: true }),
+    new GatewayProtocolRequestTimeoutError({
+      method: "sessions.messages.unsubscribe",
+      timeoutMs: 30_000,
+      requestSent: false,
+    }),
+  ])("shares an observer when the failed unsubscribe did not commit: %s", async (error) => {
+    const { client, request } = createClient();
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+    const original = await coordinator.acquire("main");
+    request.mockRejectedValueOnce(error);
+    await expect(coordinator.release(original)).rejects.toBe(error);
+    const replacement = await coordinator.acquire("main");
+    await coordinator.release(original);
+    expect(request).toHaveBeenCalledTimes(2);
+    await coordinator.release(replacement);
     expect(request).toHaveBeenCalledTimes(3);
   });
 
@@ -383,37 +262,10 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
     await expect(replacement).resolves.toEqual({ key: "main", agentId: null });
     expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.messages.subscribe", { key: "main" });
-  });
-
-  it("keeps approval observers upgraded when plain owners arrive later", async () => {
-    const replay = { approvals: [{ id: "approval-1" }] };
-    const { client, request } = createClient(async (method, params) =>
-      method === "sessions.messages.subscribe"
-        ? { key: params.key, ...(params.includeApprovals ? { approvalReplay: replay } : {}) }
-        : {},
-    );
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-
-    const approvals = await coordinator.acquire("main", { includeApprovals: true });
-    const plain = await coordinator.acquire("main");
-
-    expect(approvals).toEqual({
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
       key: "main",
-      agentId: null,
-      includeApprovals: true,
-      approvalReplay: replay,
     });
-    expect(plain).toEqual({ key: "main", agentId: null });
-    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
-      key: "main",
-      includeApprovals: true,
-    });
-
-    await coordinator.release(approvals);
-    expect(request).toHaveBeenCalledOnce();
-    await coordinator.release(plain);
-    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("upgrades an existing plain observer once and never downgrades approvals", async () => {
@@ -433,8 +285,12 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     const laterPlain = await coordinator.acquire("main");
 
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", { key: "main" });
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
+      key: "main",
+    });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
       key: "main",
       includeApprovals: true,
     });
@@ -456,20 +312,6 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       closeFirst: true,
       before: ["approval-old"],
       after: [],
-    },
-    {
-      name: "another pane joins an upgraded observer",
-      initialApprovals: false,
-      closeFirst: false,
-      before: [],
-      after: ["approval-new"],
-    },
-    {
-      name: "another pane joins an initial approval observer",
-      initialApprovals: true,
-      closeFirst: false,
-      before: ["approval-old"],
-      after: ["approval-new"],
     },
   ])("refreshes pending approvals when $name", async (scenario) => {
     let replay = { approvals: scenario.before.map((id) => ({ id })) };
@@ -503,47 +345,6 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       request.mock.calls.filter(([method]) => method === "sessions.messages.unsubscribe"),
     ).toHaveLength(1);
   });
-
-  it.each(["none", "plain", "approvals"] as const)(
-    "restores the %s owner's capability after an approval replay times out",
-    async (retained) => {
-      let capability: "none" | "plain" | "approvals" = "none";
-      let timeoutNext = false;
-      const timeout = new GatewayProtocolRequestTimeoutError({
-        method: "sessions.messages.subscribe",
-        timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-        requestSent: true,
-      });
-      const { client } = createClient(async (method, params) => {
-        capability =
-          method === "sessions.messages.unsubscribe"
-            ? "none"
-            : params.includeApprovals
-              ? "approvals"
-              : "plain";
-        if (timeoutNext) {
-          timeoutNext = false;
-          throw timeout;
-        }
-        return { key: params.key, approvalReplay: { approvals: [] } };
-      });
-      const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-      const owner =
-        retained === "none"
-          ? null
-          : await coordinator.acquire("main", { includeApprovals: retained === "approvals" });
-      try {
-        timeoutNext = true;
-        await expect(coordinator.acquire("main", { includeApprovals: true })).rejects.toBe(timeout);
-        expect(capability).toBe(retained);
-      } finally {
-        if (owner) {
-          await coordinator.release(owner);
-        }
-      }
-      expect(capability).toBe("none");
-    },
-  );
 
   it("preserves the plain observer when an approval upgrade is unauthorized", async () => {
     let rejectApproval = true;
@@ -605,10 +406,14 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     ]);
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
       key: "main",
       includeApprovals: true,
     });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", { key: "main" });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
+      key: "main",
+    });
   });
 
   it("releases the last plain owner after its provisional approval upgrade fails", async () => {
@@ -633,45 +438,11 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     approval.reject(new Error("approval replay unavailable"));
     await expect(pendingApproval).rejects.toThrow("approval replay unavailable");
     await expect(release).resolves.toBeUndefined();
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", { key: "main" });
+    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
+      subscriptionId: expect.any(String),
+      key: "main",
+    });
     expect(request).toHaveBeenCalledTimes(3);
-  });
-
-  it("isolates the same global key by canonical agent", async () => {
-    const { client, request } = createClient();
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-
-    const [main, research] = await Promise.all([
-      coordinator.acquire("global", { agentId: "main" }),
-      coordinator.acquire("global", { agentId: "research" }),
-    ]);
-
-    expect(main).toEqual({ key: "global", agentId: "main" });
-    expect(research).toEqual({ key: "global", agentId: "research" });
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", {
-      key: "global",
-      agentId: "main",
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
-      key: "global",
-      agentId: "research",
-    });
-  });
-
-  it("retries an initial subscribe without retaining a failed observer", async () => {
-    let calls = 0;
-    const { client, request } = createClient(async (_method, params) => {
-      calls += 1;
-      if (calls === 1) {
-        throw new Error("temporary subscribe failure");
-      }
-      return { key: params.key };
-    });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-
-    await expect(coordinator.acquire("main")).rejects.toThrow("temporary subscribe failure");
-    await expect(coordinator.acquire("main")).resolves.toEqual({ key: "main", agentId: null });
-    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("retires an old generation without unsubscribing a replacement connection", async () => {
@@ -689,7 +460,10 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
     await releaseGatewaySessionMessageSubscription(replacement);
     expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", { key: "main" });
+    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
+      subscriptionId: expect.any(String),
+      key: "main",
+    });
   });
 
   it("rejects a subscribe acknowledgment from a retired connection", async () => {
@@ -703,22 +477,6 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
     await expect(pending).rejects.toThrow("replaced Gateway connection");
     expect(request).toHaveBeenCalledOnce();
-  });
-
-  it("shares canonical lease ownership across clients of the same connection", async () => {
-    const { client, request } = createClient();
-    const firstCoordinator = getGatewaySessionMessageSubscriptionCoordinator(client);
-    const secondCoordinator = getGatewaySessionMessageSubscriptionCoordinator(client);
-
-    expect(firstCoordinator).toBe(secondCoordinator);
-    const first = await firstCoordinator.acquire("main");
-    const second = await secondCoordinator.acquire("main");
-    expect(request).toHaveBeenCalledOnce();
-
-    await releaseGatewaySessionMessageSubscription(first);
-    expect(request).toHaveBeenCalledOnce();
-    await releaseGatewaySessionMessageSubscription(second);
-    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("configures a cached coordinator before sharing UI session aliases", async () => {
@@ -739,6 +497,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     }).acquire("main");
 
     expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
+      subscriptionId: expect.any(String),
       key: "MAIN",
     });
     expect(first.key).toBe("agent:main:main");
@@ -754,6 +513,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     await releaseGatewaySessionMessageSubscription(second);
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
+      subscriptionId: expect.any(String),
       key: "agent:main:main",
     });
   });

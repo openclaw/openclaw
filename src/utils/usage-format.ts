@@ -20,8 +20,9 @@ import {
   resolveAgentDir,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope-config.js";
+import { MODELS_JSON_STATE, type ModelKeyNormalizer } from "../agents/models-config-state.js";
 import { normalizeProviderMapKeys } from "../agents/models-config.merge.js";
-import type { NormalizedUsage } from "../agents/usage.js";
+import { hasRecordedUsageCost, type NormalizedUsage } from "../agents/usage.js";
 import { mergeModelCost } from "../config/model-cost.js";
 import { resolveStateDir } from "../config/paths.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
@@ -34,35 +35,17 @@ import {
   modelCatalogPricingFingerprint,
   resolveModelPricing,
   resolveModelPricingContext,
+  type PricingContext,
 } from "../model-catalog/pricing.js";
 export { formatTokenCount } from "./token-format.js";
 export type { ModelCostConfig } from "@openclaw/llm-core";
 
-type ModelKeyNormalizer = (provider: string, model: string) => string;
-type ModelsJsonCostCache = {
-  providers: Record<string, ModelProviderConfig> | undefined;
-  entries: WeakMap<ModelKeyNormalizer, Map<string, RawModelCostConfig>>;
-};
-
-type ProviderCostIndexSource = {
-  model: NonNullable<ModelProviderConfig["models"]>[number];
-  providerKey: string;
-  modelId: string;
-};
-
-type ProviderCostIndex = {
-  entries: Map<string, RawModelCostConfig>;
-  sources: Map<string, ProviderCostIndexSource["model"][]>;
-  structure: ProviderCostIndexSource[];
-};
-
 const EMPTY_PROVIDER_COST_INDEX = new Map<string, RawModelCostConfig>();
 const MODELS_JSON_COST_CACHE_LIMIT = 128;
 
-let modelsJsonCostCacheByAgentDir = new Map<string, ModelsJsonCostCache>();
-let providerCostIndexByNormalizer = new WeakMap<
+const providerCostIndexByNormalizer = new WeakMap<
   ModelKeyNormalizer,
-  WeakMap<Record<string, ModelProviderConfig>, ProviderCostIndex>
+  WeakMap<Record<string, ModelProviderConfig>, Map<string, RawModelCostConfig>>
 >();
 
 /** Formats a USD amount for usage summaries, keeping tiny costs visible. */
@@ -92,52 +75,22 @@ function normalizeRawModelKey(provider: string, model: string): string {
   );
 }
 
-function isRawModelCostConfig(value: unknown): value is RawModelCostConfig {
-  return value !== null && typeof value === "object";
-}
-
-function collectProviderCostSources(
-  providers: Record<string, ModelProviderConfig>,
-): ProviderCostIndexSource[] {
-  return Object.entries(normalizeProviderMapKeys(providers)).flatMap(([providerKey, provider]) =>
-    (provider?.models ?? []).map((model) => ({ providerKey, model, modelId: model.id })),
+function hasModelCostRates(
+  cost: Partial<RawModelCostConfig> | undefined,
+): cost is Partial<RawModelCostConfig> {
+  return (
+    cost !== undefined &&
+    (cost.input !== undefined ||
+      cost.output !== undefined ||
+      cost.cacheRead !== undefined ||
+      cost.cacheWrite !== undefined ||
+      Boolean(cost.tieredPricing?.length))
   );
-}
-
-function buildProviderCostIndexBundle(
-  structure: ProviderCostIndexSource[],
-  normalizeKey: ModelKeyNormalizer,
-): ProviderCostIndex {
-  const sources: ProviderCostIndex["sources"] = new Map();
-  for (const { providerKey, model, modelId } of structure) {
-    const key = normalizeKey(providerKey, modelId);
-    const rows = sources.get(key) ?? [];
-    rows.push(model);
-    sources.set(key, rows);
-  }
-  return { entries: new Map(), sources, structure };
-}
-
-function refreshProviderCostIndexEntry(index: ProviderCostIndex, key: string): void {
-  // Retain every row, including metadata-only rows, so edits cannot resurrect
-  // a later duplicate's price or turn a removed cost into an authored pin.
-  let cost: RawModelCostConfig | undefined;
-  for (const model of index.sources.get(key) ?? []) {
-    if (isRawModelCostConfig(model.cost)) {
-      cost = mergeModelCost(model.cost, cost);
-    }
-  }
-  if (cost) {
-    index.entries.set(key, cost);
-  } else {
-    index.entries.delete(key);
-  }
 }
 
 function getProviderCostIndex(
   providers: Record<string, ModelProviderConfig> | undefined,
   normalizeKey: ModelKeyNormalizer = normalizeRawModelKey,
-  key?: string,
 ): Map<string, RawModelCostConfig> {
   if (!providers) {
     return EMPTY_PROVIDER_COST_INDEX;
@@ -149,42 +102,35 @@ function getProviderCostIndex(
     providerCostIndexByNormalizer.set(normalizeKey, cache);
   }
   let index = cache.get(providers);
-  const structure = collectProviderCostSources(providers);
-  // Identity and order matter even when duplicate rows have the same id.
-  // Prices stay live on their source rows; only membership/id changes rebuild keys.
-  if (
-    !index ||
-    index.structure.length !== structure.length ||
-    index.structure.some((source, position) => {
-      const current = structure[position];
-      return (
-        !current ||
-        source.model !== current.model ||
-        source.modelId !== current.modelId ||
-        source.providerKey !== current.providerKey
-      );
-    })
-  ) {
-    index = buildProviderCostIndexBundle(structure, normalizeKey);
+  if (!index) {
+    // Config publication replaces snapshots; in-place edits refresh on the next publication.
+    index = new Map();
+    for (const [providerKey, provider] of Object.entries(normalizeProviderMapKeys(providers))) {
+      for (const model of provider?.models ?? []) {
+        if (model.cost !== null && typeof model.cost === "object") {
+          const key = normalizeKey(providerKey, model.id);
+          const cost = mergeModelCost(model.cost, index.get(key));
+          if (cost) {
+            index.set(key, cost);
+          }
+        }
+      }
+    }
     cache.set(providers, index);
   }
-  for (const entryKey of key === undefined ? index.sources.keys() : [key]) {
-    refreshProviderCostIndexEntry(index, entryKey);
-  }
-  return index.entries;
+  return index;
 }
 
-function loadModelsJsonCostIndex(options?: {
-  agentDir?: string;
-  normalizeKey?: ModelKeyNormalizer;
-}): Map<string, RawModelCostConfig> {
-  const agentDir = options?.agentDir;
+function loadModelsJsonCostIndex(
+  agentDir: string | undefined,
+  normalizeKey: ModelKeyNormalizer = normalizeRawModelKey,
+): Map<string, RawModelCostConfig> {
   if (!agentDir) {
     return EMPTY_PROVIDER_COST_INDEX;
   }
   const modelsPath = path.join(agentDir, "models.json");
   try {
-    let modelsJsonCostCache = modelsJsonCostCacheByAgentDir.get(agentDir);
+    let modelsJsonCostCache = MODELS_JSON_STATE.costCache.get(agentDir);
     if (!modelsJsonCostCache) {
       const parsed = tryReadJsonSync<{
         providers?: Record<string, ModelProviderConfig>;
@@ -194,19 +140,12 @@ function loadModelsJsonCostIndex(options?: {
       }
       modelsJsonCostCache = {
         providers: parsed?.providers,
-        entries: new WeakMap(),
       };
-      pruneMapToMaxSize(modelsJsonCostCacheByAgentDir, MODELS_JSON_COST_CACHE_LIMIT - 1);
-      modelsJsonCostCacheByAgentDir.set(agentDir, modelsJsonCostCache);
+      pruneMapToMaxSize(MODELS_JSON_STATE.costCache, MODELS_JSON_COST_CACHE_LIMIT - 1);
+      MODELS_JSON_STATE.costCache.set(agentDir, modelsJsonCostCache);
     }
 
-    const normalizeKey = options?.normalizeKey ?? normalizeRawModelKey;
-    let entries = modelsJsonCostCache.entries.get(normalizeKey);
-    if (!entries) {
-      entries = getProviderCostIndex(modelsJsonCostCache.providers, normalizeKey);
-      modelsJsonCostCache.entries.set(normalizeKey, entries);
-    }
-    return entries;
+    return getProviderCostIndex(modelsJsonCostCache.providers, normalizeKey);
   } catch {
     return EMPTY_PROVIDER_COST_INDEX;
   }
@@ -257,28 +196,40 @@ export function resolveModelCostConfigFingerprint(
   config?: OpenClawConfig,
   agentDir?: string,
 ): string {
+  return fingerprintModelCostPricing(config, agentDir, resolveModelPricingContext(config));
+}
+
+function fingerprintModelCostPricing(
+  config: OpenClawConfig | undefined,
+  agentDir: string | undefined,
+  pricingContext: PricingContext,
+): string {
   const resolvedAgentDir = resolveCostAgentDir(config, agentDir);
   const sourceConfig = config ? projectConfigOntoRuntimeSourceSnapshot(config) : undefined;
-  const pricingContext = resolveModelPricingContext(config);
   const serialized = stableCostFingerprintValue({
     configuredRaw: serializeCostIndex(getProviderCostIndex(sourceConfig?.models?.providers)),
     configuredNormalized: serializeCostIndex(
       getProviderCostIndex(sourceConfig?.models?.providers, pricingContext.normalizeKey),
     ),
-    modelsJsonRaw: serializeCostIndex(
-      loadModelsJsonCostIndex({
-        agentDir: resolvedAgentDir,
-      }),
-    ),
+    modelsJsonRaw: serializeCostIndex(loadModelsJsonCostIndex(resolvedAgentDir)),
     modelsJsonNormalized: serializeCostIndex(
-      loadModelsJsonCostIndex({
-        agentDir: resolvedAgentDir,
-        normalizeKey: pricingContext.normalizeKey,
-      }),
+      loadModelsJsonCostIndex(resolvedAgentDir, pricingContext.normalizeKey),
     ),
     catalogPricing: modelCatalogPricingFingerprint(pricingContext),
   });
   return createHash("sha256").update(serialized).digest("hex");
+}
+
+export type CapturedModelCostPricing = ReturnType<typeof captureModelCostPricing>;
+
+/** Captures hosted rows, normalization policy, and prices for one usage operation. */
+export function captureModelCostPricing(config?: OpenClawConfig, agentDir?: string) {
+  const pricingContext = resolveModelPricingContext(config);
+  return {
+    fingerprint: () => fingerprintModelCostPricing(config, agentDir, pricingContext),
+    resolve: (provider?: string, model?: string) =>
+      resolveModelCostConfigWithPricing({ provider, model, config, agentDir }, pricingContext),
+  };
 }
 
 /**
@@ -292,6 +243,13 @@ export function resolveModelCostConfig(params: {
   agentDir?: string;
   allowPluginNormalization?: boolean;
 }): ModelCostConfig | undefined {
+  return resolveModelCostConfigWithPricing(params);
+}
+
+function resolveModelCostConfigWithPricing(
+  params: Parameters<typeof resolveModelCostConfig>[0],
+  capturedPricing?: PricingContext,
+): ModelCostConfig | undefined {
   const provider = normalizeProviderId(normalizeOptionalString(params.provider) ?? "");
   const model = normalizeOptionalString(params.model);
   if (!provider || !model) {
@@ -301,8 +259,8 @@ export function resolveModelCostConfig(params: {
   const agentDir = resolveCostAgentDir(params.config, params.agentDir);
   // Favor direct configured keys first so local pricing/status lookups stay
   // synchronous and do not drag plugin/provider discovery into the hot path.
-  const rawModelsJsonCost = loadModelsJsonCostIndex({ agentDir }).get(rawKey);
-  if (rawModelsJsonCost) {
+  const rawModelsJsonCost = loadModelsJsonCostIndex(agentDir).get(rawKey);
+  if (hasModelCostRates(rawModelsJsonCost)) {
     return normalizeModelCostConfig(rawModelsJsonCost);
   }
 
@@ -311,24 +269,18 @@ export function resolveModelCostConfig(params: {
   const sourceConfig = params.config
     ? projectConfigOntoRuntimeSourceSnapshot(params.config)
     : undefined;
-  let configuredCost = getProviderCostIndex(sourceConfig?.models?.providers, undefined, rawKey).get(
-    rawKey,
-  );
-  let pricingContext: ReturnType<typeof resolveModelPricingContext> | undefined;
+  let configuredCost = getProviderCostIndex(sourceConfig?.models?.providers).get(rawKey);
+  let pricingContext = capturedPricing;
   if (params.allowPluginNormalization !== false && !configuredCost) {
-    pricingContext = resolveModelPricingContext(params.config);
+    pricingContext ??= resolveModelPricingContext(params.config);
     const key = pricingContext.normalizeKey(provider, model);
-    const modelsJsonCost = loadModelsJsonCostIndex({
-      agentDir,
-      normalizeKey: pricingContext.normalizeKey,
-    }).get(key);
-    if (modelsJsonCost) {
+    const modelsJsonCost = loadModelsJsonCostIndex(agentDir, pricingContext.normalizeKey).get(key);
+    if (hasModelCostRates(modelsJsonCost)) {
       return normalizeModelCostConfig(modelsJsonCost);
     }
     configuredCost = getProviderCostIndex(
       sourceConfig?.models?.providers,
       pricingContext.normalizeKey,
-      key,
     ).get(key);
   }
 
@@ -348,22 +300,42 @@ export function resolveModelCostConfig(params: {
   }
   const inheritedCost = pricingContext
     ? resolveModelPricing(pricingContext, pricingContext.normalizeKey(provider, model))
-    : getProviderCostIndex(params.config?.models?.providers, undefined, rawKey).get(rawKey);
+    : getProviderCostIndex(params.config?.models?.providers).get(rawKey);
   const merged = mergeModelCost(
-    inheritedCost ? normalizeResolvedPricing(inheritedCost) : undefined,
+    hasModelCostRates(inheritedCost) ? normalizeResolvedPricing(inheritedCost) : undefined,
     configuredCost,
   );
-  return merged ? normalizeResolvedPricing(merged) : undefined;
+  return hasModelCostRates(merged) ? normalizeResolvedPricing(merged) : undefined;
 }
 
 /** Estimates one call's USD cost; tier selection includes cached prompt tokens. */
 export function estimateUsageCost(params: {
   usage?: NormalizedUsage | null;
   cost?: ModelCostConfig;
+  /** Captured physical-route rates: missing billable counters or prices remain unknown. */
+  declaredCost?: Partial<Pick<ModelCostConfig, "input" | "output" | "cacheRead" | "cacheWrite">>;
 }): number | undefined {
   const usage = params.usage;
-  const cost = params.cost;
-  if (!usage || !cost) {
+  let cost = params.cost;
+  if (params.declaredCost) {
+    const buckets = ["input", "output", "cacheRead", "cacheWrite"] as const;
+    if (!usage || !buckets.some((bucket) => usage[bucket] !== undefined)) {
+      return undefined;
+    }
+    for (const bucket of buckets) {
+      const count = usage[bucket];
+      const rate = params.declaredCost[bucket];
+      if (
+        (count === undefined && rate !== 0) ||
+        (count !== undefined && (!Number.isFinite(count) || count < 0)) ||
+        (count !== 0 && (rate === undefined || !Number.isFinite(rate) || rate < 0))
+      ) {
+        return undefined;
+      }
+    }
+    cost = normalizeResolvedPricing(params.declaredCost);
+  }
+  if (!usage || !cost || usage.usageReport?.state === "unavailable") {
     return undefined;
   }
   const total = calculateUsageCost(usage, cost).total;
@@ -378,7 +350,13 @@ export function estimateAggregateUsageCost(
   },
 ): number | undefined {
   const usage = params.usage;
-  if (usage?.cost !== undefined) {
+  if (usage?.usageReport?.state === "unavailable") {
+    return undefined;
+  }
+  if (usage?.costStatus) {
+    return usage.costStatus === "complete" ? usage.cost?.total : undefined;
+  }
+  if (usage?.cost && hasRecordedUsageCost(usage.cost)) {
     return usage.cost.total;
   }
   const hasBillableBuckets =
@@ -386,15 +364,14 @@ export function estimateAggregateUsageCost(
     [usage.input, usage.output, usage.cacheRead, usage.cacheWrite].some(
       (value) => value !== undefined,
     );
+  // Legacy run summaries can report billing without any token buckets.
   if (!hasBillableBuckets) {
-    return undefined;
+    return usage?.cost?.total;
   }
   // Recorded totals own billing; discover fallback prices only for unpriced usage.
   const cost = params.cost ?? resolveModelCostConfig(params);
+  if (usage?.cost && cost) {
+    return usage.cost.total;
+  }
   return cost?.tieredPricing?.length ? undefined : estimateUsageCost({ usage, cost });
-}
-
-export function resetUsageFormatCachesForTest(): void {
-  modelsJsonCostCacheByAgentDir = new Map();
-  providerCostIndexByNormalizer = new WeakMap();
 }

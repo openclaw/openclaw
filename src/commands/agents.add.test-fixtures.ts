@@ -7,7 +7,7 @@ export async function createAgentForAddCommandTest(params: {
   entry?: { id: string; name?: string; workspace?: string; agentDir?: string };
   bindingSpecs?: string[];
   stagedConfig?: Parameters<typeof createAgent>[0]["stagedConfig"];
-  prepareConfigCommit?: () => Promise<(() => void | Promise<void>) | void>;
+  prepareConfigCommit?: Parameters<typeof createAgent>[0]["prepareConfigCommit"];
 }) {
   const name = params.name ?? params.entry?.name ?? params.entry?.id ?? "";
   const agentId = (params.entry?.id ?? name).toLowerCase();
@@ -21,7 +21,8 @@ export async function createAgentForAddCommandTest(params: {
         match: { channel: params.bindingSpecs[0].split(":")[0] },
       }
     : undefined;
-  await params.prepareConfigCommit?.();
+  const receipt = await params.prepareConfigCommit?.();
+  await receipt?.commit();
   const committed = committedConfigFiles.write(params.stagedConfig?.config ?? {});
   return {
     status: "created" as const,

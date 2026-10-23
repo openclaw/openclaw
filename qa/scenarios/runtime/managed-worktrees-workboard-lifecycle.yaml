@@ -18,7 +18,8 @@ scenario:
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - src/agents/worktrees/service.ts
-    - src/agents/worktrees/service.run-end-cleanup.test.ts
+    - src/agents/worktrees/service.test.ts
+    - src/agents/worktrees/service.removal-safety.test.ts
     - extensions/workboard/src/dispatcher.ts
     - extensions/workboard/src/dispatcher-workspace.ts
     - test/e2e/qa-lab/runtime/managed-worktrees-workboard-lifecycle-product-proof.e2e.test.ts

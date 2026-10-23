@@ -1,9 +1,8 @@
-// Safe loader for the conventional package-local OpenClaw profile.
 import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
 import type { ToolProfileId } from "../agents/tool-policy-shared.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isSafeClawRelativePath } from "./schema-portability.js";
-import { parseClawOpenClawProfile } from "./schema.js";
+import { parseClawOpenClawProfile, parseLegacyLocalUpdateClawOpenClawProfile } from "./schema.js";
 import {
   materializeClawToolProfile,
   resolveClawToolProfileSnapshot,
@@ -29,10 +28,10 @@ function isToolProfileId(value: string): value is ToolProfileId {
   return resolveClawToolProfileSnapshot({ profile: value }) !== undefined;
 }
 
-function migrateLegacyDynamicToolProfile(value: unknown): {
-  value: unknown;
-  legacyProfile?: ClawOpenClawProfile;
-} {
+function migrateLegacyDynamicToolProfile(
+  value: unknown,
+  parseProfile: typeof parseClawOpenClawProfile,
+): unknown {
   const profile = record(value);
   const agent = record(profile?.agent);
   const tools = record(agent?.tools);
@@ -45,12 +44,12 @@ function migrateLegacyDynamicToolProfile(value: unknown): {
     !isToolProfileId(toolProfile) ||
     tools.allow !== undefined
   ) {
-    return { value };
+    return value;
   }
   if (toolProfile === "full") {
-    return { value };
+    return value;
   }
-  const validationProbe = parseClawOpenClawProfile({
+  const validationProbe = parseProfile({
     ...profile,
     agent: {
       ...agent,
@@ -61,48 +60,27 @@ function migrateLegacyDynamicToolProfile(value: unknown): {
     },
   });
   if (!validationProbe.ok) {
-    return { value };
+    return value;
   }
   const validatedTools = validationProbe.profile.agent.tools;
   if (!validatedTools) {
-    return { value };
+    return value;
   }
   const selection = {
     ...validatedTools,
     profile: toolProfile,
-  };
-  const legacyProfile: ClawOpenClawProfile = {
-    ...validationProbe.profile,
-    agent: {
-      ...validationProbe.profile.agent,
-      tools: selection,
-    },
   };
   const migrated = materializeClawToolProfile(
     { tools: selection },
     { allowLegacyDynamicProfile: true },
   );
   return {
-    value: {
-      ...profile,
-      agent: {
-        ...agent,
-        tools: migrated.tools,
-      },
+    ...profile,
+    agent: {
+      ...agent,
+      tools: migrated.tools,
     },
-    legacyProfile,
   };
-}
-
-async function readProfileFile(packageRoot: string, path: string): Promise<Buffer> {
-  const packageFiles = await fsSafeRoot(packageRoot);
-  const read = await packageFiles.read(path, {
-    hardlinks: "reject",
-    maxBytes: MAX_PROFILE_BYTES,
-    nonBlockingRead: true,
-    symlinks: "reject",
-  });
-  return read.buffer;
 }
 
 /**
@@ -118,11 +96,11 @@ export async function readClawOpenClawProfile(params: {
   packageRoot: string;
   metadata?: Record<string, string>;
   allowLegacyDynamicToolProfile?: boolean;
+  allowLegacyLocalUpdateHostSettings?: boolean;
 }): Promise<
   | {
       ok: true;
       profile?: ClawOpenClawProfile;
-      legacyProfile?: ClawOpenClawProfile;
       raw?: Buffer;
       path?: string;
       diagnostics?: ClawDiagnostic[];
@@ -180,7 +158,13 @@ export async function readClawOpenClawProfile(params: {
 
   let raw: Buffer;
   try {
-    raw = await readProfileFile(params.packageRoot, declaredPath);
+    const profileFiles = await fsSafeRoot(params.packageRoot);
+    const read = await profileFiles.read(declaredPath, {
+      hardlinks: "reject",
+      maxBytes: MAX_PROFILE_BYTES,
+      symlinks: "reject",
+    });
+    raw = read.buffer;
   } catch (error) {
     const unsafe =
       error instanceof FsSafeError &&
@@ -215,11 +199,41 @@ export async function readClawOpenClawProfile(params: {
   if (!yaml.ok) {
     return yaml;
   }
+  const parseProfile = params.allowLegacyLocalUpdateHostSettings
+    ? parseLegacyLocalUpdateClawOpenClawProfile
+    : parseClawOpenClawProfile;
   const migration = params.allowLegacyDynamicToolProfile
-    ? migrateLegacyDynamicToolProfile(yaml.value)
-    : { value: yaml.value };
-  const parsed = parseClawOpenClawProfile(migration.value);
+    ? migrateLegacyDynamicToolProfile(yaml.value, parseProfile)
+    : yaml.value;
+  const parsed = parseProfile(migration);
   if (!parsed.ok) {
+    // Only the released host-field shape gets migration guidance; other schema errors stay exact.
+    const legacy = params.allowLegacyLocalUpdateHostSettings
+      ? undefined
+      : parseLegacyLocalUpdateClawOpenClawProfile(migration);
+    if (legacy?.ok) {
+      const legacyFields = legacy.diagnostics
+        .filter(
+          (entry) =>
+            entry.code === "legacy_openclaw_model_ignored" ||
+            entry.code === "legacy_openclaw_subagents_ignored",
+        )
+        .map((entry) => entry.path.slice(2));
+      if (legacyFields.length > 0) {
+        return {
+          ok: false,
+          diagnostics: [
+            {
+              level: "error",
+              code: "legacy_openclaw_profile_requires_conversion",
+              phase: "schema",
+              path: `${diagnosticPath}.agent`,
+              message: `Released-v1 OpenClaw profile contains ${legacyFields.join(" and ")}. Copy the package and remove these fields from ${declaredPath}; configure model and delegation on the host, then run claws add --dry-run for a fresh consent plan.`,
+            },
+          ],
+        };
+      }
+    }
     return {
       ok: false,
       diagnostics: parsed.diagnostics.map((entry) => ({
@@ -228,12 +242,16 @@ export async function readClawOpenClawProfile(params: {
       })),
     };
   }
+  const profileDiagnostics = parsed.diagnostics.map((entry) => ({
+    ...entry,
+    path: `${diagnosticPath}${entry.path.slice(1)}`,
+  }));
+  const allDiagnostics = [...diagnostics, ...profileDiagnostics];
   return {
     ok: true,
     profile: parsed.profile,
-    ...(migration.legacyProfile ? { legacyProfile: migration.legacyProfile } : {}),
     raw,
     path: declaredPath,
-    ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    ...(allDiagnostics.length > 0 ? { diagnostics: allDiagnostics } : {}),
   };
 }

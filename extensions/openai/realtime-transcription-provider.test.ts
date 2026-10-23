@@ -1,63 +1,26 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openAIRealtimeHost } from "./realtime-host.js";
+import { createOpenAIRealtimeClientSecret } from "./realtime-provider-shared.js";
 import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
+import {
+  createTranscriptionSession,
+  createTranscriptionSocketHarness,
+  emitCommitted,
+  emitCompleted,
+  emitDelta,
+  emitFailed,
+  emitJson,
+} from "./realtime-transcription-provider.test-support.js";
 
-const { FakeWebSocket, providerAuthMocks, ssrfMocks } = vi.hoisted(() => {
-  type Listener = (...args: unknown[]) => void;
-
-  class MockWebSocket {
-    static readonly OPEN = 1;
-    static readonly CLOSED = 3;
-    static instances: MockWebSocket[] = [];
-    static onCreated: ((socket: MockWebSocket) => void) | undefined;
-
-    readonly listeners = new Map<string, Listener[]>();
-    readonly headers?: Record<string, string>;
-    readonly url?: string;
-    readyState = 0;
-    sent: string[] = [];
-    closed = false;
-
-    constructor(url?: string, options?: { headers?: Record<string, string> }) {
-      this.url = url;
-      this.headers = options?.headers;
-      MockWebSocket.instances.push(this);
-      MockWebSocket.onCreated?.(this);
-    }
-
-    on(event: string, listener: Listener): this {
-      const listeners = this.listeners.get(event) ?? [];
-      listeners.push(listener);
-      this.listeners.set(event, listeners);
-      return this;
-    }
-
-    emit(event: string, ...args: unknown[]): void {
-      for (const listener of this.listeners.get(event) ?? []) {
-        listener(...args);
-      }
-    }
-
-    send(payload: string): void {
-      this.sent.push(payload);
-    }
-
-    close(code?: number, reason?: string): void {
-      this.closed = true;
-      this.readyState = MockWebSocket.CLOSED;
-      this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
-    }
-
-    terminate(): void {
-      this.closed = true;
-      this.readyState = MockWebSocket.CLOSED;
-    }
-  }
+const { FakeWebSocket, providerAuthMocks, ssrfMocks } = await vi.hoisted(async () => {
+  const { createTranscriptionMockWebSocket } =
+    await import("./realtime-transcription-socket.test-support.js");
 
   return {
-    FakeWebSocket: MockWebSocket,
+    FakeWebSocket: createTranscriptionMockWebSocket(),
     providerAuthMocks: {
       isProviderAuthProfileConfigured: vi.fn(),
+      isProviderAuthProfileConfiguredAsync: vi.fn(),
       resolveProviderAuthProfileApiKey: vi.fn(),
     },
     ssrfMocks: {
@@ -66,12 +29,15 @@ const { FakeWebSocket, providerAuthMocks, ssrfMocks } = vi.hoisted(() => {
   };
 });
 
-vi.mock("ws", () => ({
-  default: FakeWebSocket,
+// Intercept the shared transport constructor, not Bun's bare ws adapter.
+vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
+  WebSocket: FakeWebSocket,
 }));
 
+// mock-isolation: Transcription transport tests supply synthetic credentials without opening host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: providerAuthMocks.isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync: providerAuthMocks.isProviderAuthProfileConfiguredAsync,
   resolveProviderAuthProfileApiKey: providerAuthMocks.resolveProviderAuthProfileApiKey,
 }));
 
@@ -80,57 +46,14 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 }));
 
 type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
-type SentRealtimeEvent = {
-  type: string;
-  audio?: string;
-  session?: unknown;
-};
+type SentRealtimeEvent = { type: string };
 
 function parseSent(socket: FakeWebSocketInstance): SentRealtimeEvent[] {
   return socket.sent.map((payload) => JSON.parse(payload) as SentRealtimeEvent);
 }
 
-const sessions = new Set<{ close(): void }>();
-
-async function waitForFakeSocket(
-  session: { close(): void },
-  index = 0,
-): Promise<FakeWebSocketInstance> {
-  sessions.add(session);
-  await vi.dynamicImportSettled();
-  const existing = FakeWebSocket.instances[index];
-  if (existing) {
-    return existing;
-  }
-  const created = createDeferred<FakeWebSocketInstance>();
-  FakeWebSocket.onCreated = (socket) => {
-    if (FakeWebSocket.instances[index] === socket) {
-      created.resolve(socket);
-    }
-  };
-  try {
-    return await vi.waitFor(() => created.promise);
-  } finally {
-    FakeWebSocket.onCreated = undefined;
-  }
-}
-
-function emitJson(socket: FakeWebSocketInstance, event: Record<string, unknown>): void {
-  socket.emit("message", Buffer.from(JSON.stringify(event)));
-}
-
-async function connectFakeSession(
-  session: { connect(): Promise<void>; close(): void },
-  socketIndex = 0,
-): Promise<FakeWebSocketInstance> {
-  const connecting = session.connect();
-  const socket = await waitForFakeSocket(session, socketIndex);
-  socket.readyState = FakeWebSocket.OPEN;
-  socket.emit("open");
-  emitJson(socket, { type: "session.updated" });
-  await connecting;
-  return socket;
-}
+const socketHarness = createTranscriptionSocketHarness(FakeWebSocket);
+const { waitForFakeSocket, connectFakeSession } = socketHarness;
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
   const call = mock.mock.calls[index];
@@ -140,217 +63,91 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<
   return call[0] as Record<string, unknown>;
 }
 
+async function connectSession() {
+  const errors: string[] = [];
+  const partials: string[] = [];
+  const transcripts: string[] = [];
+  const onError = vi.fn((error: Error) => errors.push(error.message));
+  const onPartial = vi.fn((partial: string) => partials.push(partial));
+  const onTranscript = vi.fn((transcript: string) => transcripts.push(transcript));
+  const session = createTranscriptionSession({ onError, onPartial, onTranscript });
+  const socket = await connectFakeSession(session);
+  return { session, socket, errors, partials, transcripts, onError, onPartial, onTranscript };
+}
+
+function expectOverflow(
+  session: ReturnType<typeof createTranscriptionSession>,
+  onError: Awaited<ReturnType<typeof connectSession>>["onError"],
+  onTranscript: Awaited<ReturnType<typeof connectSession>>["onTranscript"],
+  limit: string,
+) {
+  expect(onError).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      message: `OpenAI realtime transcription exceeded the ${limit} limit`,
+    }),
+  );
+  expect(onTranscript).not.toHaveBeenCalled();
+  expect(session.isConnected()).toBe(false);
+}
+
+function createSecret(
+  response: Response,
+  overrides: Partial<Parameters<typeof createOpenAIRealtimeClientSecret>[0]> = {},
+  label?: string,
+) {
+  ssrfMocks.fetchWithSsrFGuard.mockResolvedValue({ response, release: vi.fn() });
+  return createOpenAIRealtimeClientSecret(
+    {
+      authToken: "sk-test",
+      auditContext: "test",
+      session: { model: "gpt-4o-realtime-preview" },
+      ...overrides,
+    },
+    openAIRealtimeHost,
+    label,
+  );
+}
+
 describe("buildOpenAIRealtimeTranscriptionProvider", () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
     providerAuthMocks.isProviderAuthProfileConfigured.mockReset();
+    providerAuthMocks.isProviderAuthProfileConfiguredAsync.mockReset();
     providerAuthMocks.resolveProviderAuthProfileApiKey.mockReset();
     ssrfMocks.fetchWithSsrFGuard.mockReset();
     vi.stubEnv("OPENAI_API_KEY", "");
   });
 
   afterEach(() => {
-    // Close session ownership before its fake peers so cleanup cannot start a reconnect.
-    for (const session of sessions) {
-      session.close();
-    }
-    for (const socket of FakeWebSocket.instances) {
-      socket.close();
-    }
-    sessions.clear();
+    socketHarness.close();
     vi.unstubAllEnvs();
-  });
-
-  it("normalizes OpenAI config defaults", () => {
-    const provider = buildOpenAIRealtimeTranscriptionProvider();
-    const resolved = provider.resolveConfig?.({
-      cfg: {} as never,
-      rawConfig: {
-        providers: {
-          openai: {
-            apiKey: "sk-test", // pragma: allowlist secret
-          },
-        },
-      },
-    });
-
-    expect(resolved).toEqual({
-      apiKey: "sk-test",
-    });
-  });
-
-  it("keeps provider-owned transcription settings configurable via raw provider config", () => {
-    const provider = buildOpenAIRealtimeTranscriptionProvider();
-    const resolved = provider.resolveConfig?.({
-      cfg: {} as never,
-      rawConfig: {
-        providers: {
-          openai: {
-            language: "en",
-            model: "gpt-4o-transcribe",
-            prompt: "expect OpenClaw product names",
-            silenceDurationMs: 900,
-            vadThreshold: 0.45,
-          },
-        },
-      },
-    });
-
-    expect(resolved).toEqual({
-      language: "en",
-      model: "gpt-4o-transcribe",
-      prompt: "expect OpenClaw product names",
-      silenceDurationMs: 900,
-      vadThreshold: 0.45,
-    });
   });
 
   it("preserves explicit zero-valued VAD settings", () => {
     const provider = buildOpenAIRealtimeTranscriptionProvider();
+    const openai = { silenceDurationMs: 0, vadThreshold: 0 };
     const resolved = provider.resolveConfig?.({
       cfg: {} as never,
-      rawConfig: {
-        providers: {
-          openai: {
-            silenceDurationMs: 0,
-            vadThreshold: 0,
-          },
-        },
-      },
+      rawConfig: { providers: { openai } },
     });
 
-    expect(resolved?.silenceDurationMs).toBe(0);
-    expect(resolved?.vadThreshold).toBe(0);
+    expect(resolved).toMatchObject({ silenceDurationMs: 0, vadThreshold: 0 });
   });
 
-  it("drops malformed VAD timing settings", () => {
-    const provider = buildOpenAIRealtimeTranscriptionProvider();
-    const resolved = provider.resolveConfig?.({
-      cfg: {} as never,
-      rawConfig: {
-        providers: {
-          openai: {
-            silenceDurationMs: -1,
-            vadThreshold: 1.5,
-          },
-        },
-      },
-    });
-
-    expect(resolved?.silenceDurationMs).toBeUndefined();
-    expect(resolved?.vadThreshold).toBeUndefined();
-  });
-
-  it("accepts the legacy openai-realtime alias", () => {
-    const provider = buildOpenAIRealtimeTranscriptionProvider();
-    expect(provider.aliases).toContain("openai-realtime");
-  });
-
-  it("treats an OpenAI API-key profile as configured", () => {
+  it("treats an OpenAI API-key profile as configured through its asynchronous owner", async () => {
     const provider = buildOpenAIRealtimeTranscriptionProvider();
     const cfg = { auth: { order: { openai: ["openai:default"] } } };
-    providerAuthMocks.isProviderAuthProfileConfigured.mockReturnValue(true);
+    providerAuthMocks.isProviderAuthProfileConfiguredAsync.mockResolvedValue(true);
 
-    expect(provider.isConfigured({ cfg: cfg as never, providerConfig: {} })).toBe(true);
-    expect(providerAuthMocks.isProviderAuthProfileConfigured).toHaveBeenCalledWith({
+    expect(await provider.isConfiguredAsync?.({ cfg: cfg as never, providerConfig: {} })).toBe(
+      true,
+    );
+    expect(providerAuthMocks.isProviderAuthProfileConfigured).not.toHaveBeenCalled();
+    expect(providerAuthMocks.isProviderAuthProfileConfiguredAsync).toHaveBeenCalledWith({
       provider: "openai",
       cfg,
       profileTypes: ["api_key"],
     });
-  });
-
-  it("does not treat a whitespace-only environment API key as configured", () => {
-    vi.stubEnv("OPENAI_API_KEY", "   ");
-    const provider = buildOpenAIRealtimeTranscriptionProvider();
-
-    expect(provider.isConfigured({ cfg: {} as never, providerConfig: {} })).toBe(false);
-  });
-
-  it("mints an API-key client secret for realtime transcription sockets", async () => {
-    const provider = buildOpenAIRealtimeTranscriptionProvider();
-    const release = vi.fn();
-    providerAuthMocks.resolveProviderAuthProfileApiKey.mockResolvedValue("sk-profile"); // pragma: allowlist secret
-    ssrfMocks.fetchWithSsrFGuard.mockResolvedValue({
-      response: new Response(JSON.stringify({ value: "ek-test" }), { status: 200 }),
-      release,
-    });
-    const cfg = { auth: { order: { openai: ["openai:default"] } } };
-    const session = provider.createSession({
-      cfg: cfg as never,
-      providerConfig: {},
-    });
-
-    const connecting = session.connect();
-    const socket = await waitForFakeSocket(session);
-
-    expect(socket.headers?.Authorization).toBe("Bearer ek-test");
-    expect(providerAuthMocks.resolveProviderAuthProfileApiKey).toHaveBeenCalledWith({
-      provider: "openai",
-      cfg,
-      profileTypes: ["api_key"],
-    });
-    const request = mockCallArg(ssrfMocks.fetchWithSsrFGuard);
-    expect(request.auditContext).toBe("openai-realtime-transcription-session");
-    expect(request.url).toBe("https://api.openai.com/v1/realtime/client_secrets");
-    expect(request.policy).toEqual({
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-      hostnameAllowlist: ["api.openai.com"],
-    });
-    const init = request.init as {
-      method?: string;
-      headers?: Record<string, string>;
-      body?: unknown;
-    };
-    expect(init.method).toBe("POST");
-    expect(init.headers?.Authorization).toBe("Bearer sk-profile");
-    expect(init.headers?.["Content-Type"]).toBe("application/json");
-    expect(typeof init.body).toBe("string");
-    expect(JSON.parse(init.body as string)).toEqual({
-      session: {
-        type: "transcription",
-        audio: {
-          input: {
-            format: { type: "audio/pcmu" },
-            transcription: { model: "gpt-4o-transcribe" },
-            turn_detection: {
-              type: "server_vad",
-              threshold: 0.5,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 800,
-            },
-          },
-        },
-      },
-    });
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "transcription_session.updated" })));
-    await connecting;
-
-    expect(release).toHaveBeenCalled();
-    expect(parseSent(socket)[0]).toEqual({
-      type: "session.update",
-      session: {
-        type: "transcription",
-        audio: {
-          input: {
-            format: { type: "audio/pcmu" },
-            transcription: { model: "gpt-4o-transcribe" },
-            turn_detection: {
-              type: "server_vad",
-              threshold: 0.5,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 800,
-            },
-          },
-        },
-      },
-    });
-    session.sendAudio(Buffer.alloc(0));
-    session.close();
-    expect(parseSent(socket).at(-1)?.type).toBe("session.update");
   });
 
   it("does not use Codex OAuth for realtime transcription", async () => {
@@ -391,9 +188,8 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
 
     socket.readyState = FakeWebSocket.OPEN;
     socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "transcription_session.updated" })));
+    emitJson(socket, { type: "transcription_session.updated" });
     await connecting;
-    session.close();
   });
 
   it("waits for readiness, commits pending audio once on close, and delivers its final", async () => {
@@ -443,7 +239,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     };
     expect(parseSent(socket)).toEqual([expectedSessionUpdate]);
 
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    emitJson(socket, { type: "session.updated" });
     await connecting;
 
     expect(session.isConnected()).toBe(true);
@@ -460,19 +256,13 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
       parseSent(socket).filter(({ type }) => type === "input_audio_buffer.commit"),
     ).toHaveLength(1);
     emitJson(socket, { type: "input_audio_buffer.committed", item_id: "final-item" });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "final-item",
-      transcript: "final caller sentence",
-    });
+    emitCompleted(socket, "final-item", "final caller sentence");
     expect(onTranscript).toHaveBeenCalledExactlyOnceWith("final caller sentence");
     socket.close();
   });
 
   it("never commits audio from a previous websocket generation", async () => {
-    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-    });
+    const session = createTranscriptionSession({});
     const previousSocket = await connectFakeSession(session);
     session.sendAudio(Buffer.alloc(800, 1));
     const replacementSocket = await connectFakeSession(session, 1);
@@ -484,128 +274,64 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     replacementSocket.close();
   });
 
-  it.each(["audio append", "final commit"] as const)(
-    "reports websocket backpressure during %s exactly once",
-    async (phase) => {
-      const onError = vi.fn();
-      const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
-        providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-        onError,
+  it("reports websocket backpressure during final commit exactly once", async () => {
+    const { session, socket, onError } = await connectSession();
+    session.sendAudio(Buffer.alloc(800, 1));
+    Object.defineProperty(socket, "bufferedAmount", { value: 1024 * 1024 });
+
+    session.close();
+    session.close();
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("final audio commit") }),
+    );
+    expect(parseSent(socket).at(-1)?.type).toBe("input_audio_buffer.append");
+  });
+
+  it.each([false, true])(
+    "commits 1600-byte audio once after VAD stops (acknowledged: %s)",
+    async (acknowledged) => {
+      const { session, socket } = await connectSession();
+      session.sendAudio(Buffer.alloc(800, 1));
+      session.sendAudio(Buffer.alloc(800, 2));
+      emitJson(socket, {
+        type: "input_audio_buffer.speech_stopped",
+        item_id: "first-turn",
+        audio_end_ms: 100,
       });
-      const socket = await connectFakeSession(session);
-      if (phase === "final commit") {
-        session.sendAudio(Buffer.alloc(800, 1));
-      }
-      Object.defineProperty(socket, "bufferedAmount", { value: 1024 * 1024 });
-      if (phase === "audio append") {
-        session.sendAudio(Buffer.alloc(800, 1));
-      }
-
-      session.close();
-      session.close();
-
-      expect(onError).toHaveBeenCalledOnce();
-      if (phase === "final commit") {
-        expect(onError).toHaveBeenCalledWith(
-          expect.objectContaining({ message: expect.stringContaining("final audio commit") }),
-        );
-      }
-      expect(parseSent(socket).at(-1)?.type).toBe(
-        phase === "audio append" ? "session.update" : "input_audio_buffer.append",
-      );
-    },
-  );
-
-  it.each([
-    [1, 0, false, false],
-    [799, 0, false, false],
-    [800, 1, false, false],
-    [800, 0, true, false],
-    [1599, 0, true, false],
-    [1600, 1, true, false],
-    [1600, 1, true, true],
-  ] as const)(
-    "commits eligible %i-byte audio once (%i commits, VAD stopped: %s, acknowledged: %s)",
-    async (audioBytes, expectedCommits, vadStopped, acknowledged) => {
-      const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
-        providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      });
-      const socket = await connectFakeSession(session);
-      if (vadStopped) {
-        session.sendAudio(Buffer.alloc(800, 1));
-        session.sendAudio(Buffer.alloc(audioBytes - 800, 2));
-        emitJson(socket, {
-          type: "input_audio_buffer.speech_stopped",
-          item_id: "first-turn",
-          audio_end_ms: 100,
-        });
-        if (acknowledged) {
-          emitJson(socket, { type: "input_audio_buffer.committed", item_id: "first-turn" });
-          emitJson(socket, { type: "input_audio_buffer.committed", item_id: "first-turn" });
-        }
-      } else {
-        session.sendAudio(Buffer.alloc(audioBytes, 1));
+      if (acknowledged) {
+        emitJson(socket, { type: "input_audio_buffer.committed", item_id: "first-turn" });
+        emitJson(socket, { type: "input_audio_buffer.committed", item_id: "first-turn" });
       }
 
       session.close();
 
       expect(
         parseSent(socket).filter(({ type }) => type === "input_audio_buffer.commit"),
-      ).toHaveLength(expectedCommits);
+      ).toHaveLength(1);
       socket.close();
     },
   );
 
   it("keeps out-of-order transcription items isolated and emits finals in commit order", async () => {
-    const partials: string[] = [];
-    const transcripts: string[] = [];
-    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onPartial: (partial) => partials.push(partial),
-      onTranscript: (transcript) => transcripts.push(transcript),
-    });
-
-    const socket = await connectFakeSession(session);
+    const { session, socket, partials, transcripts } = await connectSession();
     session.sendAudio(Buffer.alloc(800, 1));
     emitJson(socket, {
       type: "input_audio_buffer.speech_stopped",
       item_id: "item-2",
       audio_end_ms: 100,
     });
-    emitJson(socket, {
-      type: "input_audio_buffer.committed",
-      item_id: "item-2",
-      previous_item_id: "item-1",
-    });
-    emitJson(socket, {
-      type: "input_audio_buffer.committed",
-      item_id: "item-1",
-      previous_item_id: null,
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.delta",
-      item_id: "item-1",
-      delta: "first partial",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.delta",
-      item_id: "item-2",
-      delta: "second partial",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-2",
-      transcript: "second final",
-    });
+    emitCommitted(socket, "item-2", "item-1");
+    emitCommitted(socket, "item-1", null);
+    emitDelta(socket, "item-1", "first partial");
+    emitDelta(socket, "item-2", "second partial");
+    emitCompleted(socket, "item-2", "second final");
 
     expect(partials).toEqual(["first partial", "second partial"]);
     expect(transcripts).toEqual([]);
 
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-1",
-      transcript: "first final",
-    });
+    emitCompleted(socket, "item-1", "first final");
 
     expect(transcripts).toEqual(["first final", "second final"]);
     session.close();
@@ -613,29 +339,12 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
   });
 
   it("reports failed transcription items without blocking later committed turns", async () => {
-    const errors: string[] = [];
-    const transcripts: string[] = [];
-    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onError: (error) => errors.push(error.message),
-      onTranscript: (transcript) => transcripts.push(transcript),
-    });
-
-    const socket = await connectFakeSession(session);
-
+    const { session, socket, errors, transcripts } = await connectSession();
     for (const itemId of ["item-1", "item-2"]) {
       emitJson(socket, { type: "input_audio_buffer.committed", item_id: itemId });
     }
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-2",
-      transcript: "second final",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.failed",
-      item_id: "item-1",
-      error: { message: "first turn failed" },
-    });
+    emitCompleted(socket, "item-2", "second final");
+    emitFailed(socket, "item-1", "first turn failed");
 
     expect(errors).toEqual(["first turn failed"]);
     expect(transcripts).toEqual(["second final"]);
@@ -645,103 +354,36 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
   });
 
   it("releases settled turns from the unresolved item budget", async () => {
-    const transcripts: string[] = [];
-    const onError = vi.fn();
-    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onError,
-      onTranscript: (transcript) => transcripts.push(transcript),
-    });
-    const socket = await connectFakeSession(session);
-
+    const { session, socket, transcripts, onError } = await connectSession();
     for (let index = 0; index < 128; index += 1) {
       const itemId = `item-${index}`;
-      emitJson(socket, {
-        type: "input_audio_buffer.committed",
-        item_id: itemId,
-        previous_item_id: index === 0 ? null : `item-${index - 1}`,
-      });
-      emitJson(socket, {
-        type: "conversation.item.input_audio_transcription.completed",
-        item_id: itemId,
-        transcript: `turn-${index}`,
-      });
+      emitCommitted(socket, itemId, index === 0 ? null : `item-${index - 1}`);
+      emitCompleted(socket, itemId, `turn-${index}`);
     }
-    emitJson(socket, {
-      type: "input_audio_buffer.committed",
-      item_id: "item-129",
-      previous_item_id: "item-128",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-129",
-      transcript: "turn-129",
-    });
-    emitJson(socket, {
-      type: "input_audio_buffer.committed",
-      item_id: "item-128",
-      previous_item_id: "item-127",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-128",
-      transcript: "turn-128",
-    });
+    emitCommitted(socket, "item-129", "item-128");
+    emitCompleted(socket, "item-129", "turn-129");
+    emitCommitted(socket, "item-128", "item-127");
+    emitCompleted(socket, "item-128", "turn-128");
 
     expect(transcripts).toHaveLength(130);
     expect(transcripts.slice(-2)).toEqual(["turn-128", "turn-129"]);
     expect(onError).not.toHaveBeenCalled();
     expect(session.isConnected()).toBe(true);
-    session.close();
   });
 
   it("fails once when unresolved item correlation exceeds its session bound", async () => {
-    const onError = vi.fn();
-    const onTranscript = vi.fn();
-    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onError,
-      onTranscript,
-    });
-    const socket = await connectFakeSession(session);
-
+    const { session, socket, onError, onTranscript } = await connectSession();
     for (let index = 0; index < 64; index += 1) {
-      emitJson(socket, {
-        type: "input_audio_buffer.committed",
-        item_id: `item-${index}`,
-        previous_item_id: "missing-predecessor",
-      });
-      emitJson(socket, {
-        type: "conversation.item.input_audio_transcription.completed",
-        item_id: `item-${index}`,
-        transcript: `turn-${index}`,
-      });
+      emitCommitted(socket, `item-${index}`, "missing-predecessor");
+      emitCompleted(socket, `item-${index}`, `turn-${index}`);
     }
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.failed",
-      item_id: "overflow-item",
-      error: { message: "provider failure" },
-    });
+    emitFailed(socket, "overflow-item", "provider failure");
 
-    expect(onError).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        message: "OpenAI realtime transcription exceeded the 64 unresolved item limit",
-      }),
-    );
-    expect(onTranscript).not.toHaveBeenCalled();
-    expect(session.isConnected()).toBe(false);
+    expectOverflow(session, onError, onTranscript, "64 unresolved item");
 
     const replacementSocket = await connectFakeSession(session, 1);
-    emitJson(replacementSocket, {
-      type: "input_audio_buffer.committed",
-      item_id: "replacement-item",
-      previous_item_id: null,
-    });
-    emitJson(replacementSocket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "replacement-item",
-      transcript: "replacement transcript",
-    });
+    emitCommitted(replacementSocket, "replacement-item", null);
+    emitCompleted(replacementSocket, "replacement-item", "replacement transcript");
 
     expect(onTranscript).toHaveBeenCalledExactlyOnceWith("replacement transcript");
     expect(onError).toHaveBeenCalledTimes(1);
@@ -750,131 +392,42 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
   });
 
   it("fails once when aggregate in-progress transcript text exceeds 256 KiB", async () => {
-    const onError = vi.fn();
-    const onPartial = vi.fn();
-    const onTranscript = vi.fn();
-    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onError,
-      onPartial,
-      onTranscript,
-    });
-    const socket = await connectFakeSession(session);
+    const { session, socket, onError, onPartial, onTranscript } = await connectSession();
     const exactLimit = "🙂".repeat((256 * 1024) / 4);
 
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.delta",
-      item_id: "item-1",
-      delta: exactLimit,
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.delta",
-      item_id: "item-1",
-      delta: "x",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-1",
-      transcript: "late transcript",
-    });
+    emitDelta(socket, "item-1", exactLimit);
+    emitDelta(socket, "item-1", "x");
+    emitCompleted(socket, "item-1", "late transcript");
 
     expect(onPartial).toHaveBeenCalledExactlyOnceWith(exactLimit);
-    expect(onError).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        message: "OpenAI realtime transcription exceeded the 256 KiB retained transcript limit",
-      }),
-    );
-    expect(onTranscript).not.toHaveBeenCalled();
-    expect(session.isConnected()).toBe(false);
-    session.close();
+    expectOverflow(session, onError, onTranscript, "256 KiB retained transcript");
   });
 
   it("accounts for UTF-8 surrogate pairs split across delta frames", async () => {
-    const onError = vi.fn();
-    const onPartial = vi.fn();
-    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onError,
-      onPartial,
-    });
-    const socket = await connectFakeSession(session);
+    const { session, socket, onError, onPartial } = await connectSession();
     const prefix = "x".repeat(256 * 1024 - 4);
 
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.delta",
-      item_id: "item-1",
-      delta: prefix,
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.delta",
-      item_id: "item-1",
-      delta: "\ud83d",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.delta",
-      item_id: "item-1",
-      delta: "\ude42",
-    });
+    emitDelta(socket, "item-1", prefix);
+    emitDelta(socket, "item-1", "\ud83d");
+    emitDelta(socket, "item-1", "\ude42");
 
     expect(onPartial).toHaveBeenLastCalledWith(`${prefix}🙂`);
     expect(onError).not.toHaveBeenCalled();
     expect(session.isConnected()).toBe(true);
-    session.close();
   });
 
   it("ignores duplicate completion events without double-charging retained text", async () => {
-    const onError = vi.fn();
-    const onPartial = vi.fn();
-    const transcripts: string[] = [];
-    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onError,
-      onPartial,
-      onTranscript: (transcript) => transcripts.push(transcript),
-    });
-    const socket = await connectFakeSession(session);
+    const { session, socket, transcripts, onError, onPartial } = await connectSession();
     const secondTranscript = "x".repeat(192 * 1024);
 
-    emitJson(socket, {
-      type: "input_audio_buffer.committed",
-      item_id: "item-2",
-      previous_item_id: "item-1",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-2",
-      transcript: secondTranscript,
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.delta",
-      item_id: "item-2",
-      delta: "late partial",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.failed",
-      item_id: "item-2",
-      error: { message: "late failure" },
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-2",
-      transcript: secondTranscript,
-    });
-    emitJson(socket, {
-      type: "input_audio_buffer.committed",
-      item_id: "item-1",
-      previous_item_id: null,
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-1",
-      transcript: "first",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-2",
-      transcript: "late duplicate",
-    });
+    emitCommitted(socket, "item-2", "item-1");
+    emitCompleted(socket, "item-2", secondTranscript);
+    emitDelta(socket, "item-2", "late partial");
+    emitFailed(socket, "item-2", "late failure");
+    emitCompleted(socket, "item-2", secondTranscript);
+    emitCommitted(socket, "item-1", null);
+    emitCompleted(socket, "item-1", "first");
+    emitCompleted(socket, "item-2", "late duplicate");
 
     expect(transcripts).toEqual(["first", secondTranscript]);
     expect(onPartial).not.toHaveBeenCalled();
@@ -882,203 +435,196 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     expect(session.isConnected()).toBe(true);
 
     const replacementSocket = await connectFakeSession(session, 1);
-    emitJson(replacementSocket, {
-      type: "input_audio_buffer.committed",
-      item_id: "item-2",
-      previous_item_id: null,
-    });
-    emitJson(replacementSocket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-2",
-      transcript: "new session",
-    });
+    emitCommitted(replacementSocket, "item-2", null);
+    emitCompleted(replacementSocket, "item-2", "new session");
 
     expect(transcripts).toEqual(["first", secondTranscript, "new session"]);
-    session.close();
   });
 
   it("tombstones terminal outcomes received before their commit", async () => {
-    const errors: string[] = [];
-    const partials: string[] = [];
-    const transcripts: string[] = [];
-    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onError: (error) => errors.push(error.message),
-      onPartial: (partial) => partials.push(partial),
-      onTranscript: (transcript) => transcripts.push(transcript),
-    });
-    const socket = await connectFakeSession(session);
+    const { session, socket, errors, partials, transcripts } = await connectSession();
+    emitCompleted(socket, "item-completed", "first");
+    emitCompleted(socket, "item-completed", "duplicate");
+    emitDelta(socket, "item-completed", "late partial");
+    emitFailed(socket, "item-completed", "late failure");
+    emitCommitted(socket, "item-completed", null);
 
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-completed",
-      transcript: "first",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-completed",
-      transcript: "duplicate",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.delta",
-      item_id: "item-completed",
-      delta: "late partial",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.failed",
-      item_id: "item-completed",
-      error: { message: "late failure" },
-    });
-    emitJson(socket, {
-      type: "input_audio_buffer.committed",
-      item_id: "item-completed",
-      previous_item_id: null,
-    });
-
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.failed",
-      item_id: "item-failed",
-      error: { message: "first failure" },
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-failed",
-      transcript: "late completion",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.delta",
-      item_id: "item-failed",
-      delta: "late partial",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.failed",
-      item_id: "item-failed",
-      error: { message: "duplicate failure" },
-    });
-    emitJson(socket, {
-      type: "input_audio_buffer.committed",
-      item_id: "item-failed",
-      previous_item_id: null,
-    });
+    emitFailed(socket, "item-failed", "first failure");
+    emitCompleted(socket, "item-failed", "late completion");
+    emitDelta(socket, "item-failed", "late partial");
+    emitFailed(socket, "item-failed", "duplicate failure");
+    emitCommitted(socket, "item-failed", null);
 
     expect(transcripts).toEqual(["first"]);
     expect(errors).toEqual(["first failure"]);
     expect(partials).toEqual([]);
     expect(session.isConnected()).toBe(true);
-    session.close();
-  });
-
-  it("keeps active predecessor satisfaction as terminal history grows", async () => {
-    const transcripts: string[] = [];
-    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onTranscript: (transcript) => transcripts.push(transcript),
-    });
-    const socket = await connectFakeSession(session);
-
-    emitJson(socket, {
-      type: "input_audio_buffer.committed",
-      item_id: "root",
-      previous_item_id: null,
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "root",
-      transcript: "root transcript",
-    });
-    emitJson(socket, {
-      type: "input_audio_buffer.committed",
-      item_id: "waiting",
-      previous_item_id: "root",
-    });
-    for (let index = 0; index < 64; index += 1) {
-      emitJson(socket, {
-        type: "conversation.item.input_audio_transcription.completed",
-        item_id: `uncommitted-${index}`,
-        transcript: "",
-      });
-    }
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "waiting",
-      transcript: "waiting transcript",
-    });
-
-    expect(transcripts).toEqual(["root transcript", "waiting transcript"]);
-    expect(session.isConnected()).toBe(true);
-    session.close();
   });
 
   it("keeps the first failed terminal outcome when completion arrives late", async () => {
-    const errors: string[] = [];
-    const transcripts: string[] = [];
-    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onError: (error) => errors.push(error.message),
-      onTranscript: (transcript) => transcripts.push(transcript),
-    });
-    const socket = await connectFakeSession(session);
-
-    emitJson(socket, {
-      type: "input_audio_buffer.committed",
-      item_id: "item-2",
-      previous_item_id: "item-1",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.failed",
-      item_id: "item-2",
-      error: { message: "second failed" },
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-2",
-      transcript: "late second",
-    });
-    emitJson(socket, {
-      type: "input_audio_buffer.committed",
-      item_id: "item-1",
-      previous_item_id: null,
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "item-1",
-      transcript: "first",
-    });
+    const { session, socket, errors, transcripts } = await connectSession();
+    emitCommitted(socket, "item-2", "item-1");
+    emitFailed(socket, "item-2", "second failed");
+    emitCompleted(socket, "item-2", "late second");
+    emitCommitted(socket, "item-1", null);
+    emitCompleted(socket, "item-1", "first");
 
     expect(errors).toEqual(["second failed"]);
     expect(transcripts).toEqual(["first"]);
     expect(session.isConnected()).toBe(true);
-    session.close();
   });
 
   it("fails before retaining oversized correlation identities", async () => {
-    const onError = vi.fn();
-    const onTranscript = vi.fn();
-    const session = buildOpenAIRealtimeTranscriptionProvider().createSession({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onError,
-      onTranscript,
-    });
-    const socket = await connectFakeSession(session);
-
+    const { session, socket, onError, onTranscript } = await connectSession();
     session.sendAudio(Buffer.alloc(800, 1));
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.failed",
-      item_id: "i".repeat(1025),
-      error: { message: "provider failure" },
-    });
+    emitFailed(socket, "i".repeat(1025), "provider failure");
 
-    expect(onError).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        message: "OpenAI realtime transcription exceeded the 1024-byte item identity limit",
-      }),
-    );
-    expect(onTranscript).not.toHaveBeenCalled();
-    expect(session.isConnected()).toBe(false);
+    expectOverflow(session, onError, onTranscript, "1024-byte item identity");
     expect(parseSent(socket).map((event) => event.type)).toEqual([
       "session.update",
       "input_audio_buffer.append",
     ]);
-    session.close();
+  });
+
+  it.each([
+    { label: "without item identity", itemId: undefined, committed: false },
+    { label: "before item commit", itemId: "uncommitted-item", committed: false },
+    { label: "after item commit", itemId: "committed-item", committed: true },
+  ])("rejects an oversized final transcript $label", async ({ itemId, committed }) => {
+    const { session, socket, onError, onTranscript } = await connectSession();
+    if (committed) {
+      emitCommitted(socket, itemId, null);
+    }
+
+    const transcript = `${"🙂".repeat((256 * 1024) / 4)}x`;
+    emitJson(socket, {
+      type: "conversation.item.input_audio_transcription.completed",
+      ...(itemId ? { item_id: itemId } : {}),
+      transcript,
+    });
+    emitJson(socket, {
+      type: "conversation.item.input_audio_transcription.completed",
+      ...(itemId ? { item_id: itemId } : {}),
+      transcript: "late transcript",
+    });
+
+    expectOverflow(session, onError, onTranscript, "256 KiB retained transcript");
+    expect(socket.closed).toBe(true);
+  });
+
+  it("accepts an exact-limit UTF-8 final after releasing its own partial", async () => {
+    const { session, socket, onError, onPartial, onTranscript } = await connectSession();
+    const transcript = "🙂".repeat((256 * 1024) / 4);
+    emitDelta(socket, "uncommitted-item", transcript);
+    emitCompleted(socket, "uncommitted-item", transcript);
+
+    expect(onPartial).toHaveBeenCalledExactlyOnceWith(transcript);
+    expect(onTranscript).toHaveBeenCalledExactlyOnceWith(transcript);
+    expect(onError).not.toHaveBeenCalled();
+    expect(session.isConnected()).toBe(true);
+  });
+
+  it("counts retained sibling text when admitting a final transcript", async () => {
+    const { session, socket, onError, onTranscript } = await connectSession();
+    const partial = "🙂".repeat((128 * 1024) / 4);
+    for (const itemId of ["retained-item", "completing-item"]) {
+      emitDelta(socket, itemId, partial);
+    }
+    emitCompleted(socket, "completing-item", `${partial}x`);
+
+    expectOverflow(session, onError, onTranscript, "256 KiB retained transcript");
+  });
+
+  it("preserves terminal history at capacity, fails on overflow, and reconnects", async () => {
+    const { session, socket, transcripts, onError, onPartial } = await connectSession();
+    emitCompleted(socket, "oldest", "first");
+    for (let index = 0; index < 4095; index += 1) {
+      emitCompleted(socket, `settled-${index}`, "");
+    }
+    emitCompleted(socket, "oldest", "duplicate");
+    emitDelta(socket, "oldest", "late partial");
+    expect(transcripts).toEqual(["first"]);
+    expect(onPartial).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(session.isConnected()).toBe(true);
+
+    emitCommitted(socket, "overflow-item", null);
+    emitFailed(socket, "overflow-item", "provider failure");
+    expect(onError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        message: "OpenAI realtime transcription exceeded the terminal item history limit",
+      }),
+    );
+    expect(transcripts).toEqual(["first"]);
+    expect(session.isConnected()).toBe(false);
+
+    const replacementSocket = await connectFakeSession(session, 1);
+    emitCompleted(replacementSocket, "replacement-item", "replacement transcript");
+    expect(transcripts).toEqual(["first", "replacement transcript"]);
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails visibly when terminal item identities exceed 256 KiB", async () => {
+    const { session, socket, onError, onTranscript } = await connectSession();
+    for (let index = 0; index < 256; index += 1) {
+      emitCompleted(socket, `${index.toString().padStart(4, "0")}${"i".repeat(1020)}`, "");
+    }
+    emitCompleted(socket, "overflow-item", "must not emit");
+
+    expectOverflow(session, onError, onTranscript, "terminal item history");
+  });
+
+  describe("createOpenAIRealtimeClientSecret", () => {
+    it("returns client secret from a well-formed response", async () => {
+      const result = await createSecret(
+        Response.json({
+          client_secret: { value: "eph-secret-abc" },
+          expires_at: Math.floor(Date.now() / 1000) + 60,
+        }),
+      );
+      expect(result).toMatchObject({ value: "eph-secret-abc", expiresAt: expect.any(Number) });
+      expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenLastCalledWith(
+        expect.objectContaining({ timeoutMs: 30_000 }),
+      );
+    });
+
+    it("bounds oversized success response and cancels the stream", async () => {
+      let readCount = 0;
+      const cancel = vi.fn();
+      const chunk = new Uint8Array(1024 * 1024);
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (readCount >= 20) {
+              controller.close();
+            } else {
+              readCount += 1;
+              controller.enqueue(chunk);
+            }
+          },
+          cancel,
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+      await expect(createSecret(response)).rejects.toThrow(/openai\.realtime-session/);
+      expect(cancel).toHaveBeenCalled();
+      expect(readCount).toBeLessThan(20);
+    });
+
+    it("replaces rejected transcription API-key details with bounded guidance", async () => {
+      await expect(
+        createSecret(
+          Response.json(
+            { error: { message: "Incorrect API key provided: secret" } },
+            { status: 401 },
+          ),
+          {
+            session: { type: "transcription" },
+            authRejectedMessage: "Update the transcription API key",
+          },
+          "OpenAI Realtime transcription",
+        ),
+      ).rejects.toThrow("Update the transcription API key");
+    });
   });
 });

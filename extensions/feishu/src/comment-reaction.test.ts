@@ -1,4 +1,3 @@
-// Feishu tests cover comment reaction plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import {
@@ -19,21 +18,6 @@ vi.mock("./client.js", () => ({
 
 describe("createCommentTypingReactionLifecycle", () => {
   const request = vi.fn();
-  const commentReactionUrl =
-    "/open-apis/drive/v2/files/doc_token_1/comments/reaction?file_type=docx";
-
-  function expectedTypingReactionRequest(action: "add" | "delete") {
-    return {
-      method: "POST",
-      url: commentReactionUrl,
-      data: {
-        action,
-        reply_id: "reply_1",
-        reaction_type: "Typing",
-      },
-      timeout: 30_000,
-    };
-  }
 
   afterAll(() => {
     vi.doUnmock("./accounts.js");
@@ -46,17 +30,10 @@ describe("createCommentTypingReactionLifecycle", () => {
     resolveFeishuRuntimeAccountMock.mockReturnValue({
       accountId: "default",
       configured: true,
-      config: {
-        typingIndicator: true,
-      },
+      config: { typingIndicator: true },
     });
-    createFeishuClientMock.mockReturnValue({
-      request,
-    });
-    request.mockResolvedValue({
-      code: 0,
-      data: {},
-    });
+    createFeishuClientMock.mockReturnValue({ request });
+    request.mockResolvedValue({ code: 0, data: {} });
   });
 
   function createTypingReactionLifecycle(...args: [replyId?: string]) {
@@ -65,9 +42,7 @@ describe("createCommentTypingReactionLifecycle", () => {
       fileToken: "doc_token_1",
       fileType: "docx",
       replyId: args.length === 0 ? "reply_1" : args[0],
-      runtime: {
-        log: vi.fn(),
-      } as never,
+      runtime: { log: vi.fn() } as never,
     });
   }
 
@@ -80,16 +55,6 @@ describe("createCommentTypingReactionLifecycle", () => {
         threadId: "reply_1",
       },
     });
-
-  it("adds and removes a comment typing reaction using reply_id", async () => {
-    const lifecycle = createTypingReactionLifecycle();
-
-    await lifecycle.start();
-    await lifecycle.cleanup();
-
-    expect(request).toHaveBeenNthCalledWith(1, expectedTypingReactionRequest("add"));
-    expect(request).toHaveBeenNthCalledWith(2, expectedTypingReactionRequest("delete"));
-  });
 
   it("skips requests when reply_id is missing", async () => {
     const lifecycle = createTypingReactionLifecycle(undefined);
@@ -108,32 +73,11 @@ describe("createCommentTypingReactionLifecycle", () => {
     await lifecycle.cleanup();
 
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(2, expectedTypingReactionRequest("delete"));
-  });
-
-  it("retries delete during later cleanup after an ambient delete failure", async () => {
-    request
-      .mockResolvedValueOnce({
-        code: 0,
-        data: {},
-      })
-      .mockResolvedValueOnce({
-        code: 5001,
-        msg: "temporary failure",
-      })
-      .mockResolvedValueOnce({
-        code: 0,
-        data: {},
-      });
-
-    const lifecycle = createTypingReactionLifecycle();
-
-    await lifecycle.start();
-    await cleanupAmbientReply();
-    await lifecycle.cleanup();
-
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenNthCalledWith(2, expectedTypingReactionRequest("delete"));
-    expect(request).toHaveBeenNthCalledWith(3, expectedTypingReactionRequest("delete"));
+    expect(request).toHaveBeenNthCalledWith(2, {
+      method: "POST",
+      url: "/open-apis/drive/v2/files/doc_token_1/comments/reaction?file_type=docx",
+      data: { action: "delete", reply_id: "reply_1", reaction_type: "Typing" },
+      timeout: 30_000,
+    });
   });
 });

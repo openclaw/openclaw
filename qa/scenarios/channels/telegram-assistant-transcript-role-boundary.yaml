@@ -17,7 +17,6 @@ scenario:
   codeRefs:
     - packages/markdown-core/src/assistant-transcript.ts
     - extensions/telegram/src/format.ts
-    - extensions/telegram/src/format-render.ts
     - extensions/qa-lab/src/crabline-transport.ts
   execution:
     kind: flow

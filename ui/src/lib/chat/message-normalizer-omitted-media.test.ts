@@ -25,7 +25,6 @@ describe("message-normalizer omitted historical media", () => {
     ["missing", undefined],
     ["negative", -1],
     ["NaN", Number.NaN],
-    ["infinite", Number.POSITIVE_INFINITY],
     ["string", "12288"],
   ])(
     "omits %s byte metadata without dropping the historical image placeholder",

@@ -3,7 +3,12 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveSignalAccountKey } from "./account-selection.js";
 import type { SignalTransportConfig } from "./account-types.js";
+import {
+  hasLegacySignalTransportFields,
+  LEGACY_SIGNAL_TRANSPORT_FIELDS,
+} from "./legacy-transport.js";
 import {
   allocateSignalManagedNativePort,
   assignSignalManagedNativePort,
@@ -12,19 +17,11 @@ import {
   isValidSignalManagedNativePort,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
-import { buildSignalTransportHttpUrl, normalizeSignalTransportUrl } from "./transport-url.js";
-
-const LEGACY_TRANSPORT_FIELDS = [
-  "configPath",
-  "httpUrl",
-  "httpHost",
-  "httpPort",
-  "cliPath",
-  "autoStart",
-  "startupTimeoutMs",
-  "receiveMode",
-  "ignoreStories",
-] as const;
+import {
+  assertSignalSocketTransport,
+  buildSignalTransportHttpUrl,
+  normalizeSignalTransportUrl,
+} from "./transport-url.js";
 
 const PENDING_LEGACY_TRANSPORT_WARNING =
   "- channels.signal: legacy auto transport is ambiguous while its endpoint is unavailable; bring the endpoint online and rerun openclaw doctor --fix, or replace the retired fields with an explicit account-owned transport in openclaw.json.";
@@ -46,30 +43,21 @@ function isSignalTransportConfig(value: unknown): value is SignalTransportConfig
   if (!isRecord(value)) {
     return false;
   }
-  if (value.kind === "managed-native") {
-    if (value.httpPort !== undefined && !isValidSignalManagedNativePort(value.httpPort)) {
+  try {
+    if (value.kind === "managed-native") {
+      assertSignalSocketTransport(value);
+      if (value.httpPort !== undefined && !isValidSignalManagedNativePort(value.httpPort)) {
+        return false;
+      }
+      if (value.url === undefined) {
+        return true;
+      }
+    } else if (value.kind !== "external-native" && value.kind !== "container") {
       return false;
-    }
-    if (value.url === undefined) {
-      return true;
     }
     if (typeof value.url !== "string") {
       return false;
     }
-    try {
-      normalizeSignalTransportUrl(value.url);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  if (
-    (value.kind !== "external-native" && value.kind !== "container") ||
-    typeof value.url !== "string"
-  ) {
-    return false;
-  }
-  try {
     normalizeSignalTransportUrl(value.url);
     return true;
   } catch {
@@ -90,10 +78,6 @@ function legacyBaseUrl(entry: Record<string, unknown>, parent: Record<string, un
   const rawPort = inherited(entry, parent, "httpPort");
   const port = typeof rawPort === "number" ? rawPort : 8080;
   return buildSignalTransportHttpUrl(host, port);
-}
-
-function hasLegacyFields(entry: Record<string, unknown>): boolean {
-  return LEGACY_TRANSPORT_FIELDS.some((field) => Object.hasOwn(entry, field));
 }
 
 function wasLegacySignalAccountConfigured(
@@ -266,43 +250,8 @@ function resolveLegacyTransportWithoutDetection(params: {
   return buildManagedNativeTransport(params.entry, params.parent);
 }
 
-async function resolveLegacyTransport(params: {
-  entry: Record<string, unknown>;
-  parent: Record<string, unknown>;
-  apiMode: unknown;
-  detect?: DetectTransport;
-}): Promise<SignalTransportConfig | undefined> {
-  const resolved = resolveLegacyTransportWithoutDetection(params);
-  if (resolved) {
-    return resolved;
-  }
-  const account = normalizeOptionalString(inherited(params.entry, params.parent, "account"));
-  try {
-    const detected = await params.detect?.({
-      url: legacyBaseUrl(params.entry, params.parent),
-      ...(account ? { account } : {}),
-    });
-    if (
-      detected?.kind === "external-native" &&
-      resolveLegacyAutoStart(params.entry, params.parent)
-    ) {
-      return buildManagedNativeTransport(params.entry, params.parent);
-    }
-    return detected;
-  } catch {
-    if (resolveLegacyAutoStart(params.entry, params.parent)) {
-      // A gateway-owned daemon is normally offline while update has the service stopped.
-      // Preserve that explicit ownership instead of blocking migration on a live probe.
-      return buildManagedNativeTransport(params.entry, params.parent);
-    }
-    // Shipped auto mode could select either protocol at the same URL. Do not guess while the
-    // endpoint is down; the warning points to an explicit account-owned config replacement.
-    return undefined;
-  }
-}
-
 function clearLegacyTransportFields(entry: Record<string, unknown>): void {
-  for (const field of LEGACY_TRANSPORT_FIELDS) {
+  for (const field of LEGACY_SIGNAL_TRANSPORT_FIELDS) {
     delete entry[field];
   }
 }
@@ -323,18 +272,15 @@ function signalAccountIds(entries: Record<string, unknown>[]): string[] {
     .map(([accountId]) => accountId);
 }
 
-function isDefaultSignalAccountId(accountId: string | undefined): boolean {
-  return Boolean(accountId?.trim()) && normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID;
+function resolveNestedDefaultEntryIndex(entries: Record<string, unknown>[]): number | undefined {
+  const accounts = isRecord(entries[0]?.accounts) ? entries[0].accounts : {};
+  const key = resolveSignalAccountKey(accounts, DEFAULT_ACCOUNT_ID);
+  const offset = signalAccountIds(entries).findIndex((accountId) => accountId === key);
+  return offset >= 0 ? offset + 1 : undefined;
 }
 
-function resolveSignalAccountKey(
-  accounts: Record<string, unknown>,
-  accountId: string,
-): string | undefined {
-  const normalizedAccountId = normalizeAccountId(accountId);
-  return Object.keys(accounts).find(
-    (key) => Boolean(key.trim()) && normalizeAccountId(key) === normalizedAccountId,
-  );
+function isDefaultSignalAccountId(accountId: string | undefined): boolean {
+  return Boolean(accountId?.trim()) && normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID;
 }
 
 function nestedDefaultOwnsEffectiveTransport(entries: Record<string, unknown>[]): boolean {
@@ -343,22 +289,21 @@ function nestedDefaultOwnsEffectiveTransport(entries: Record<string, unknown>[])
   const nestedDefault = nestedDefaultKey ? accounts[nestedDefaultKey] : undefined;
   return (
     isRecord(nestedDefault) &&
-    (isSignalTransportConfig(nestedDefault.transport) || hasLegacyFields(nestedDefault))
+    (isSignalTransportConfig(nestedDefault.transport) ||
+      hasLegacySignalTransportFields(nestedDefault))
   );
 }
 
 function isDiscardedTransportEntry(entries: Record<string, unknown>[], index: number): boolean {
-  if (index === 0) {
-    // Shipped account merging let accounts.default override root transport fields. Materialize
-    // that effective merged entry once; probing the shadowed root can block an otherwise valid
-    // migration when its retired endpoint is offline.
-    return !hasRootSignalAccount(entries) || nestedDefaultOwnsEffectiveTransport(entries);
+  if (isSignalTransportConfig(entries[0]?.transport)) {
+    // Canonical root transport owns the default account and must reserve its port;
+    // a nested default's retired endpoint fields are cleanup-only.
+    return index === resolveNestedDefaultEntryIndex(entries);
   }
-  // A canonical root transport owns the default account; a nested default's
-  // retired endpoint fields are cleanup-only and must not block migration.
+  // Shipped account merging let accounts.default override legacy root transport fields.
+  // Do not probe a shadowed root endpoint while migrating that effective entry.
   return (
-    isDefaultSignalAccountId(signalAccountIds(entries)[index - 1]) &&
-    isSignalTransportConfig(entries[0]?.transport)
+    index === 0 && (!hasRootSignalAccount(entries) || nestedDefaultOwnsEffectiveTransport(entries))
   );
 }
 
@@ -409,107 +354,6 @@ export function clearLegacySignalTransportFieldsForAccount(params: {
   return next;
 }
 
-function allocateMigratedManagedPorts(params: {
-  entries: Record<string, unknown>[];
-  transports: Array<SignalTransportConfig | undefined>;
-}): Array<SignalTransportConfig | undefined> {
-  const reservedPorts = new Set<number>();
-  const rootIsAccount = hasRootSignalAccount(params.entries);
-  const accountIds = signalAccountIds(params.entries);
-  const nestedDefaultOffset = accountIds.findIndex((accountId) =>
-    isDefaultSignalAccountId(accountId),
-  );
-  const canonicalDefaultIndex = isSignalTransportConfig(params.entries[0]?.transport)
-    ? 0
-    : nestedDefaultOffset >= 0
-      ? nestedDefaultOffset + 1
-      : rootIsAccount
-        ? 0
-        : undefined;
-  for (const [index, transport] of params.transports.entries()) {
-    if (!transport || (index === 0 && canonicalDefaultIndex !== 0)) {
-      continue;
-    }
-    if (transport.kind !== "managed-native") {
-      const localPort = resolveLocalSignalTransportPort(transport.url);
-      if (localPort !== undefined) {
-        reservedPorts.add(localPort);
-      }
-      continue;
-    }
-    if (transport.url && !isSignalManagedNativeConnectionUrlForBind(transport)) {
-      const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
-      if (localConnectionPort !== undefined) {
-        reservedPorts.add(localConnectionPort);
-      }
-    }
-    if (index === canonicalDefaultIndex || isRecord(params.entries[index]?.transport)) {
-      reservedPorts.add(transport.httpPort ?? DEFAULT_SIGNAL_MANAGED_NATIVE_PORT);
-    }
-  }
-  return params.transports.map((transport, index) => {
-    if (!transport || (index === 0 && canonicalDefaultIndex !== 0)) {
-      return transport;
-    }
-    if (transport.kind !== "managed-native") {
-      return transport;
-    }
-    const existingCanonical = isRecord(params.entries[index]?.transport);
-    if (existingCanonical || index === canonicalDefaultIndex) {
-      return transport;
-    }
-    const rawPreferredPort = params.entries[index]?.httpPort;
-    const preferredPort =
-      typeof rawPreferredPort === "number" ? rawPreferredPort : transport.httpPort;
-    const httpPort = allocateSignalManagedNativePort({
-      reservedPorts,
-      ...(typeof preferredPort === "number" ? { preferredPort } : {}),
-    });
-    reservedPorts.add(httpPort);
-    return assignSignalManagedNativePort(transport, httpPort);
-  });
-}
-
-function applyMigratedSignalTransports(params: {
-  cfg: OpenClawConfig;
-  entries: Record<string, unknown>[];
-  transports: Array<SignalTransportConfig | undefined>;
-}): OpenClawConfig | undefined {
-  const next = structuredClone(params.cfg);
-  const nextSignal = next.channels?.signal as unknown;
-  if (!isRecord(nextSignal)) {
-    return undefined;
-  }
-  const accountIds = signalAccountIds(params.entries);
-  const nextAccounts = isRecord(nextSignal.accounts) ? nextSignal.accounts : {};
-  const nextEntries = [nextSignal, ...Object.values(nextAccounts).filter(isRecord)];
-  const rootIsAccount = hasRootSignalAccount(params.entries);
-  const canonicalRootTransport = isSignalTransportConfig(params.entries[0]?.transport)
-    ? params.entries[0].transport
-    : undefined;
-  for (const [index, entry] of nextEntries.entries()) {
-    const accountId = index === 0 ? undefined : accountIds[index - 1];
-    if (isDefaultSignalAccountId(accountId)) {
-      const defaultTransport = canonicalRootTransport ?? params.transports[index];
-      if (defaultTransport) {
-        nextSignal.transport = defaultTransport;
-      } else {
-        delete nextSignal.transport;
-      }
-      delete entry.transport;
-    } else if (index === 0 && !rootIsAccount) {
-      delete entry.transport;
-    } else if (params.transports[index]) {
-      entry.transport = params.transports[index];
-    } else {
-      delete entry.transport;
-    }
-    clearLegacyTransportFields(entry);
-  }
-  delete nextSignal.apiMode;
-  return next;
-}
-
 function hasContainerTransportWithoutEffectiveAccount(cfg: OpenClawConfig): boolean {
   const signal = cfg.channels?.signal as unknown;
   if (!isRecord(signal)) {
@@ -556,6 +400,13 @@ function hasContainerTransportWithoutEffectiveAccount(cfg: OpenClawConfig): bool
   return false;
 }
 
+function pendingSignalTransportMigration(
+  cfg: OpenClawConfig,
+  warning: string,
+): ChannelDoctorConfigMutation {
+  return { config: cfg, changes: [], warnings: [warning] };
+}
+
 function prepareLegacySignalTransportMigration(cfg: OpenClawConfig):
   | ChannelDoctorConfigMutation
   | {
@@ -571,35 +422,42 @@ function prepareLegacySignalTransportMigration(cfg: OpenClawConfig):
   const accounts = isRecord(signal.accounts) ? signal.accounts : {};
   const hasLegacy =
     Object.hasOwn(signal, "apiMode") ||
-    hasLegacyFields(signal) ||
-    Object.values(accounts).some((entry) => isRecord(entry) && hasLegacyFields(entry));
+    hasLegacySignalTransportFields(signal) ||
+    Object.values(accounts).some(hasLegacySignalTransportFields);
   if (!hasLegacy) {
     return { config: cfg, changes: [] };
   }
   const apiMode = signal.apiMode;
   const entries = [signal, ...Object.values(accounts).filter(isRecord)];
+  // A malformed explicit socket opt-in must never become an HTTP daemon during repair.
+  if (
+    entries.some(
+      (entry) =>
+        isRecord(entry.transport) &&
+        Object.hasOwn(entry.transport, "socketPath") &&
+        (entry.transport.kind !== "managed-native" || !isSignalTransportConfig(entry.transport)),
+    )
+  ) {
+    return pendingSignalTransportMigration(
+      cfg,
+      "- channels.signal: invalid transport.socketPath configuration; correct the socket path and remove conflicting HTTP or receiveMode on-start options, then run openclaw doctor --fix.",
+    );
+  }
   const migrationEntries = entries.filter((_, index) => shouldMaterializeTransport(entries, index));
   const legacyResolutionEntries = migrationEntries.filter(
     (entry) => !isSignalTransportConfig(entry.transport),
   );
   const invalidDerivedEndpoint = findInvalidLegacyDerivedEndpoint(legacyResolutionEntries, signal);
   if (invalidDerivedEndpoint) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: [
-        invalidDerivedEndpoint === "port"
-          ? PENDING_LEGACY_INVALID_PORT_WARNING
-          : PENDING_LEGACY_INVALID_HOST_WARNING,
-      ],
-    };
+    return pendingSignalTransportMigration(
+      cfg,
+      invalidDerivedEndpoint === "port"
+        ? PENDING_LEGACY_INVALID_PORT_WARNING
+        : PENDING_LEGACY_INVALID_HOST_WARNING,
+    );
   }
   if (hasInvalidLegacyHttpUrl(legacyResolutionEntries, signal)) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_INVALID_URL_WARNING],
-    };
+    return pendingSignalTransportMigration(cfg, PENDING_LEGACY_INVALID_URL_WARNING);
   }
   return { signal, apiMode, entries, legacyResolutionEntries };
 }
@@ -610,35 +468,104 @@ function finishLegacySignalTransportMigration(
   resolvedTransports: Array<SignalTransportConfig | undefined>,
 ): ChannelDoctorConfigMutation {
   if (hasInvalidManagedTransportPort(resolvedTransports)) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_INVALID_PORT_WARNING],
-    };
+    return pendingSignalTransportMigration(cfg, PENDING_LEGACY_INVALID_PORT_WARNING);
   }
-  const transports = allocateMigratedManagedPorts({
-    entries,
-    transports: resolvedTransports,
-  });
+  function allocateMigratedManagedPorts(): Array<SignalTransportConfig | undefined> {
+    const reservedPorts = new Set<number>();
+    const rootIsAccount = hasRootSignalAccount(entries);
+    const nestedDefaultIndex = resolveNestedDefaultEntryIndex(entries);
+    const canonicalDefaultIndex = isSignalTransportConfig(entries[0]?.transport)
+      ? 0
+      : nestedDefaultIndex !== undefined
+        ? nestedDefaultIndex
+        : rootIsAccount
+          ? 0
+          : undefined;
+    for (const [index, transport] of resolvedTransports.entries()) {
+      if (!transport || (index === 0 && canonicalDefaultIndex !== 0)) {
+        continue;
+      }
+      if (transport.kind === "managed-native" && transport.socketPath !== undefined) {
+        continue;
+      }
+      if (transport.kind !== "managed-native") {
+        const localPort = resolveLocalSignalTransportPort(transport.url);
+        if (localPort !== undefined) {
+          reservedPorts.add(localPort);
+        }
+        continue;
+      }
+      if (transport.url && !isSignalManagedNativeConnectionUrlForBind(transport)) {
+        const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
+        if (localConnectionPort !== undefined) {
+          reservedPorts.add(localConnectionPort);
+        }
+      }
+      if (index === canonicalDefaultIndex || isRecord(entries[index]?.transport)) {
+        reservedPorts.add(transport.httpPort ?? DEFAULT_SIGNAL_MANAGED_NATIVE_PORT);
+      }
+    }
+    return resolvedTransports.map((transport, index) => {
+      if (!transport || (index === 0 && canonicalDefaultIndex !== 0)) {
+        return transport;
+      }
+      if (transport.kind !== "managed-native" || transport.socketPath !== undefined) {
+        return transport;
+      }
+      const existingCanonical = isRecord(entries[index]?.transport);
+      if (existingCanonical || index === canonicalDefaultIndex) {
+        return transport;
+      }
+      const rawPreferredPort = entries[index]?.httpPort;
+      const preferredPort =
+        typeof rawPreferredPort === "number" ? rawPreferredPort : transport.httpPort;
+      const httpPort = allocateSignalManagedNativePort({
+        reservedPorts,
+        ...(typeof preferredPort === "number" ? { preferredPort } : {}),
+      });
+      reservedPorts.add(httpPort);
+      return assignSignalManagedNativePort(transport, httpPort);
+    });
+  }
+  const transports = allocateMigratedManagedPorts();
   if (
     transports.some((transport, index) => shouldMaterializeTransport(entries, index) && !transport)
   ) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_TRANSPORT_WARNING],
-    };
+    return pendingSignalTransportMigration(cfg, PENDING_LEGACY_TRANSPORT_WARNING);
   }
-  const next = applyMigratedSignalTransports({ cfg, entries, transports });
-  if (!next) {
+  const next = structuredClone(cfg);
+  const nextSignal = next.channels?.signal as unknown;
+  if (!isRecord(nextSignal)) {
     return { config: cfg, changes: [] };
   }
+  const nestedDefaultIndex = resolveNestedDefaultEntryIndex(entries);
+  const nextAccounts = isRecord(nextSignal.accounts) ? nextSignal.accounts : {};
+  const nextEntries = [nextSignal, ...Object.values(nextAccounts).filter(isRecord)];
+  const rootIsAccount = hasRootSignalAccount(entries);
+  const canonicalRootTransport = isSignalTransportConfig(entries[0]?.transport)
+    ? entries[0].transport
+    : undefined;
+  for (const [index, entry] of nextEntries.entries()) {
+    if (index === nestedDefaultIndex) {
+      const defaultTransport = canonicalRootTransport ?? transports[index];
+      if (defaultTransport) {
+        nextSignal.transport = defaultTransport;
+      } else {
+        delete nextSignal.transport;
+      }
+      delete entry.transport;
+    } else if (index === 0 && !rootIsAccount) {
+      delete entry.transport;
+    } else if (transports[index]) {
+      entry.transport = transports[index];
+    } else {
+      delete entry.transport;
+    }
+    clearLegacyTransportFields(entry);
+  }
+  delete nextSignal.apiMode;
   if (hasContainerTransportWithoutEffectiveAccount(next)) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_CONTAINER_ACCOUNT_WARNING],
-    };
+    return pendingSignalTransportMigration(cfg, PENDING_LEGACY_CONTAINER_ACCOUNT_WARNING);
   }
   return {
     config: next,
@@ -661,18 +588,39 @@ export async function migrateLegacySignalTransportConfig(params: {
     !params.detect &&
     legacyResolutionEntries.some((entry) => requiresDetection(entry, signal, apiMode))
   ) {
-    return {
-      config: params.cfg,
-      changes: [],
-      warnings: [PENDING_LEGACY_TRANSPORT_WARNING],
-    };
+    return pendingSignalTransportMigration(params.cfg, PENDING_LEGACY_TRANSPORT_WARNING);
   }
   const resolvedTransports = await Promise.all(
-    entries.map(async (entry, index) =>
-      !shouldMaterializeTransport(entries, index)
-        ? undefined
-        : await resolveLegacyTransport({ entry, parent: signal, apiMode, detect: params.detect }),
-    ),
+    entries.map(async (entry, index): Promise<SignalTransportConfig | undefined> => {
+      if (!shouldMaterializeTransport(entries, index)) {
+        return undefined;
+      }
+      const detect = params.detect;
+      const resolved = resolveLegacyTransportWithoutDetection({ entry, parent: signal, apiMode });
+      if (resolved) {
+        return resolved;
+      }
+      const account = normalizeOptionalString(inherited(entry, signal, "account"));
+      try {
+        const detected = await detect?.({
+          url: legacyBaseUrl(entry, signal),
+          ...(account ? { account } : {}),
+        });
+        if (detected?.kind === "external-native" && resolveLegacyAutoStart(entry, signal)) {
+          return buildManagedNativeTransport(entry, signal);
+        }
+        return detected;
+      } catch {
+        if (resolveLegacyAutoStart(entry, signal)) {
+          // A gateway-owned daemon is normally offline while update has the service stopped.
+          // Preserve that explicit ownership instead of blocking migration on a live probe.
+          return buildManagedNativeTransport(entry, signal);
+        }
+        // Shipped auto mode could select either protocol at the same URL. Do not guess while the
+        // endpoint is down; the warning points to an explicit account-owned config replacement.
+        return undefined;
+      }
+    }),
   );
   return finishLegacySignalTransportMigration(params.cfg, entries, resolvedTransports);
 }

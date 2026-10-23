@@ -1,33 +1,46 @@
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { validateNodeHostStatsPayload, validateNodeInvokeProgressParams } from "../index.js";
+import {
+  NodeInvokeCancelEventSchema,
+  type NodeInvokeCancelEvent,
+  validateNodeHostStatsPayload,
+  validateNodeInvokeProgressParams,
+} from "../index.js";
+import { ProtocolSchemas } from "./protocol-schemas.js";
+
+function stats(
+  cpuCount: number,
+  loadAverage: number[],
+  [memoryTotalBytes, memoryFreeBytes]: [number, number],
+  [diskTotalBytes, diskAvailableBytes]: [number, number],
+) {
+  return {
+    cpuCount,
+    loadAverage,
+    memoryTotalBytes,
+    memoryFreeBytes,
+    diskTotalBytes,
+    diskAvailableBytes,
+  };
+}
 
 describe("node protocol schemas", () => {
   const minimalStats = { cpuCount: 1, memoryTotalBytes: 0, memoryFreeBytes: 0 };
 
+  it("publishes the closed node invoke cancellation payload", () => {
+    const payload: NodeInvokeCancelEvent = { invokeId: "invoke-1", nodeId: "node-1" };
+
+    expect(ProtocolSchemas.NodeInvokeCancelEvent).toBe(NodeInvokeCancelEventSchema);
+    expect(Value.Check(NodeInvokeCancelEventSchema, payload)).toBe(true);
+    expect(Value.Check(NodeInvokeCancelEventSchema, { ...payload, invokeId: "" })).toBe(false);
+    expect(Value.Check(NodeInvokeCancelEventSchema, { invokeId: "invoke-1" })).toBe(false);
+    expect(Value.Check(NodeInvokeCancelEventSchema, { ...payload, extra: true })).toBe(false);
+  });
+
   it.each([
     ["minimal", minimalStats],
-    [
-      "full",
-      {
-        cpuCount: 16,
-        loadAverage: [1.5, 2, 0.75],
-        memoryTotalBytes: 16_000_000_000,
-        memoryFreeBytes: 4_000_000_000,
-        diskTotalBytes: 1_000_000_000_000,
-        diskAvailableBytes: 250_000_000_000,
-      },
-    ],
-    [
-      "upper bounds and equal capacities",
-      {
-        cpuCount: 4_096,
-        loadAverage: [100_000, 0, 100_000],
-        memoryTotalBytes: 100,
-        memoryFreeBytes: 100,
-        diskTotalBytes: 0,
-        diskAvailableBytes: 0,
-      },
-    ],
+    ["full", stats(16, [1.5, 2, 0.75], [16_000, 4_000], [100_000, 25_000])],
+    ["upper bounds and equal capacities", stats(4_096, [100_000, 0, 100_000], [100, 100], [0, 0])],
   ])("accepts %s host stats", (_name, payload) => {
     expect(validateNodeHostStatsPayload(payload)).toBe(true);
   });
@@ -59,32 +72,11 @@ describe("node protocol schemas", () => {
   });
 
   it("accepts bounded progress chunks and rejects extra fields", () => {
+    const progress = { invokeId: "invoke-1", nodeId: "node-1", seq: 0, chunk: "stdout line" };
+    expect(validateNodeInvokeProgressParams(progress)).toBe(true);
     expect(
-      validateNodeInvokeProgressParams({
-        invokeId: "invoke-1",
-        nodeId: "node-1",
-        seq: 0,
-        chunk: "stdout line",
-      }),
-    ).toBe(true);
-
-    expect(
-      validateNodeInvokeProgressParams({
-        invokeId: "invoke-1",
-        nodeId: "node-1",
-        seq: 0,
-        chunk: "x".repeat(16 * 1024 + 1),
-      }),
+      validateNodeInvokeProgressParams({ ...progress, chunk: "x".repeat(16 * 1024 + 1) }),
     ).toBe(false);
-
-    expect(
-      validateNodeInvokeProgressParams({
-        invokeId: "invoke-1",
-        nodeId: "node-1",
-        seq: 0,
-        chunk: "stdout line",
-        extra: "not allowed",
-      }),
-    ).toBe(false);
+    expect(validateNodeInvokeProgressParams({ ...progress, extra: "not allowed" })).toBe(false);
   });
 });

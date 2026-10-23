@@ -30,15 +30,27 @@ function nodeEnvironment(
   deviceId: string,
   available: number,
   overrides: Partial<EnvironmentSummary> = {},
+  total = Math.max(available, 1),
 ): EnvironmentSummary {
   return {
     id: `node:${deviceId}`,
     type: "node",
     status: "available",
     sessionHost: true,
-    workerSlots: { total: Math.max(available, 1), available },
+    workerSlots: { total, available },
     ...overrides,
   };
+}
+
+function expectCandidates(result: unknown, ...candidates: [string, number][]) {
+  expect(result).toEqual({
+    ok: true,
+    candidates: candidates.map(([deviceId, availableSlots]) => ({ deviceId, availableSlots })),
+  });
+}
+
+function expectError(result: unknown, message: string) {
+  expect(result).toEqual({ ok: false, error: expect.stringContaining(message) });
 }
 
 function nodeProof(environment: EnvironmentSummary): NodeWorkerSupervisorNodeProof {
@@ -53,6 +65,8 @@ function nodeProof(environment: EnvironmentSummary): NodeWorkerSupervisorNodePro
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: {
       enabled: true,
+      capturedExecPolicy: true,
+      promptContext: 1,
       capacity: environment.workerSlots ?? { total: 1, available: 0 },
     },
     commands: ["runtime.exec"],
@@ -63,7 +77,9 @@ async function selectNodes(
   environments: EnvironmentSummary[],
   options: {
     requirement?: DevicePlacementRequirement;
+    executionMode?: "worker-turn" | "remote-exec";
     availability?: (deviceId: string) => Promise<DeviceWorkerAvailability>;
+    admittedSessions?: ReadonlyMap<string, number>;
   } = {},
 ) {
   const proofs = new Map(
@@ -89,33 +105,84 @@ async function selectNodes(
     environmentService,
     requirement: options.requirement ?? WORKER_REQUIREMENT,
     runtimeId: "test-runtime",
+    executionMode:
+      options.executionMode ??
+      (options.requirement === REMOTE_REQUIREMENT ? "remote-exec" : "worker-turn"),
     config: CONFIG,
+    getAdmittedSessionCounts: () => options.admittedSessions,
   });
 }
 
 describe("paired-device automatic placement selection", () => {
-  it("prefers hosts with the most available worker slots", async () => {
-    const result = await selectNodes([
-      nodeEnvironment("alpha", 1),
-      nodeEnvironment("charlie", 2),
-      nodeEnvironment("bravo", 4),
-    ]);
+  it.each([0, 2])(
+    "reports the required node update before capacity when %s slots are free",
+    async (available) => {
+      const environment = nodeEnvironment("outdated", available);
+      const node = nodeProof(environment);
+      delete node.workerHost.capturedExecPolicy;
+      expectError(
+        await selectNodes([environment], {
+          availability: async () => ({ available: true, node }),
+        }),
+        "run openclaw update, then reconnect",
+      );
+    },
+  );
 
-    expect(result).toEqual({
-      ok: true,
-      candidates: [
-        { deviceId: "bravo", availableSlots: 4 },
-        { deviceId: "charlie", availableSlots: 2 },
-        { deviceId: "alpha", availableSlots: 1 },
+  it("keeps remote-exec independent of captured policy even when its harness consumes a slot", async () => {
+    const environment = nodeEnvironment("remote", 2);
+    const node = nodeProof(environment);
+    delete node.workerHost.capturedExecPolicy;
+    expectCandidates(
+      await selectNodes([environment], {
+        executionMode: "remote-exec",
+        requirement: { ...REMOTE_REQUIREMENT, consumesWorkerSlot: true },
+        availability: async () => ({ available: true, node }),
+      }),
+      ["remote", 2],
+    );
+  });
+
+  it.each([1, 2])(
+    "prefers lower admitted demand while a third host still advertises %s free slots",
+    async (available) => {
+      const result = await selectNodes(
+        [
+          nodeEnvironment("alpha", available, {}, 2),
+          nodeEnvironment("bravo", 1, {}, 2),
+          nodeEnvironment("charlie", 1, {}, 2),
+        ],
+        {
+          admittedSessions: new Map([
+            ["alpha", 2],
+            ["bravo", 1],
+            ["charlie", 1],
+          ]),
+        },
+      );
+
+      expectCandidates(result, ["bravo", 1], ["charlie", 1], ["alpha", available]);
+    },
+  );
+
+  it("retains physical occupancy for idle workers without double-counting admitted demand", async () => {
+    const result = await selectNodes(
+      [
+        nodeEnvironment("idle-full", 0, {}, 2),
+        nodeEnvironment("admitted", 1, {}, 2),
+        nodeEnvironment("idle-spare", 1, {}, 2),
       ],
-    });
+      { admittedSessions: new Map([["admitted", 1]]) },
+    );
+
+    expectCandidates(result, ["idle-spare", 1], ["admitted", 1]);
   });
 
   it("ranks current worker capacity instead of stale environment snapshots", async () => {
     const environments = [
-      nodeEnvironment("alpha", 9),
-      nodeEnvironment("bravo", 1),
       nodeEnvironment("charlie", 5),
+      nodeEnvironment("bravo", 1),
+      nodeEnvironment("alpha", 9),
     ];
     const liveCapacity = new Map([
       ["alpha", 2],
@@ -125,16 +192,8 @@ describe("paired-device automatic placement selection", () => {
     const currentNodes = new Map(
       environments.map((environment) => {
         const node = nodeProof(environment);
-        return [
-          node.nodeId,
-          {
-            ...node,
-            workerHost: {
-              ...node.workerHost,
-              capacity: { total: 9, available: liveCapacity.get(node.nodeId) ?? 0 },
-            },
-          },
-        ] as const;
+        node.workerHost.capacity = { total: 9, available: liveCapacity.get(node.nodeId) ?? 0 };
+        return [node.nodeId, node] as const;
       }),
     );
 
@@ -142,31 +201,7 @@ describe("paired-device automatic placement selection", () => {
       availability: async (deviceId) => ({ available: true, node: currentNodes.get(deviceId) }),
     });
 
-    expect(result).toEqual({
-      ok: true,
-      candidates: [
-        { deviceId: "bravo", availableSlots: 4 },
-        { deviceId: "alpha", availableSlots: 2 },
-        { deviceId: "charlie", availableSlots: 2 },
-      ],
-    });
-  });
-
-  it("breaks equal-capacity ties by device identity, independently of catalog order", async () => {
-    const result = await selectNodes([
-      nodeEnvironment("charlie", 2),
-      nodeEnvironment("alpha", 2),
-      nodeEnvironment("bravo", 2),
-    ]);
-
-    expect(result).toEqual({
-      ok: true,
-      candidates: [
-        { deviceId: "alpha", availableSlots: 2 },
-        { deviceId: "bravo", availableSlots: 2 },
-        { deviceId: "charlie", availableSlots: 2 },
-      ],
-    });
+    expectCandidates(result, ["bravo", 4], ["alpha", 2], ["charlie", 2]);
   });
 
   it("excludes disconnected, full, outdated, non-host, and no-longer-paired nodes", async () => {
@@ -189,58 +224,37 @@ describe("paired-device automatic placement selection", () => {
           : { available: true, node: proofs.get(`node:${deviceId}`) },
     });
 
-    expect(result).toEqual({
-      ok: true,
-      candidates: [{ deviceId: "eligible", availableSlots: 1 }],
-    });
+    expectCandidates(result, ["eligible", 1]);
   });
 
   it("orders remote-exec hosts only by device identity, including hosts with no free slots", async () => {
     const result = await selectNodes(
       [nodeEnvironment("charlie", 5), nodeEnvironment("alpha", 0), nodeEnvironment("bravo", 2)],
-      { requirement: REMOTE_REQUIREMENT },
+      { requirement: REMOTE_REQUIREMENT, admittedSessions: new Map([["alpha", 20]]) },
     );
 
-    expect(result).toEqual({
-      ok: true,
-      candidates: [
-        { deviceId: "alpha", availableSlots: 0 },
-        { deviceId: "bravo", availableSlots: 2 },
-        { deviceId: "charlie", availableSlots: 5 },
-      ],
-    });
+    expectCandidates(result, ["alpha", 0], ["bravo", 2], ["charlie", 5]);
   });
 
   it.each([
-    {
-      name: "no paired session host",
-      environments: [nodeEnvironment("plain-node", 2, { sessionHost: false })],
-      message: "pair a node, enable session hosting",
-    },
-    {
-      name: "all hosts disconnected",
-      environments: [nodeEnvironment("offline", 2, { status: "unavailable" })],
-      message: "all paired session-host nodes are disconnected",
-    },
-    {
-      name: "all hosts full",
-      environments: [nodeEnvironment("full", 0)],
-      message: "all paired session-host nodes are at capacity",
-    },
-    {
-      name: "an outdated node whose live runner can no longer advertise session hosting",
-      environments: [
-        nodeEnvironment("outdated", 0, {
-          sessionHost: false,
-          issues: [NODE_RUNNER_UPDATE_REQUIRED_ISSUE],
-        }),
-      ],
-      message: "run openclaw update, then reconnect",
-    },
-  ])("explains $name with an operator recovery action", async ({ environments, message }) => {
-    const result = await selectNodes(environments);
-
-    expect(result).toEqual({ ok: false, error: expect.stringContaining(message) });
+    [
+      nodeEnvironment("plain-node", 2, { sessionHost: false }),
+      "pair a node, enable session hosting",
+    ],
+    [
+      nodeEnvironment("offline", 2, { status: "unavailable" }),
+      "all paired session-host nodes are disconnected",
+    ],
+    [nodeEnvironment("full", 0), "device worker is at capacity"],
+    [
+      nodeEnvironment("outdated", 0, {
+        sessionHost: false,
+        issues: [NODE_RUNNER_UPDATE_REQUIRED_ISSUE],
+      }),
+      "run openclaw update, then reconnect",
+    ],
+  ] as const)("explains %j with an operator recovery action", async (environment, message) => {
+    expectError(await selectNodes([environment]), message);
   });
 
   it("rejects runtimes that do not declare paired-device placement support", async () => {
@@ -250,12 +264,10 @@ describe("paired-device automatic placement selection", () => {
       environmentService: {},
       requirement: undefined,
       runtimeId: "cloud-only",
+      executionMode: "remote-exec",
       config: CONFIG,
     });
 
-    expect(result).toEqual({
-      ok: false,
-      error: expect.stringContaining("runtime cloud-only does not support paired-device placement"),
-    });
+    expectError(result, "runtime cloud-only does not support paired-device placement");
   });
 });

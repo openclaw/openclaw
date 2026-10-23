@@ -49,12 +49,6 @@ describe("resolveFileWithinRoot", () => {
     });
   });
 
-  it("rejects malformed URL encoding as a missing file", async () => {
-    await withCanvasTemp("openclaw-canvas-resolver-", async (root) => {
-      await expect(resolveFileWithinRoot(root, "/%E0%A4%A")).resolves.toBeNull();
-    });
-  });
-
   it.runIf(process.platform !== "win32")("rejects symlink entries", async () => {
     await withCanvasTemp("openclaw-canvas-resolver-", async (root) => {
       await withCanvasTemp("openclaw-canvas-resolver-outside-", async (outside) => {

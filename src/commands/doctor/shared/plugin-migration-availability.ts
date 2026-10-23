@@ -1,0 +1,259 @@
+import { cloneEnvWithPlatformSemantics } from "../../../config/config-env-vars.js";
+import { resolveDeferredPluginMigrationConfigPaths } from "../../../config/deferred-plugin-migration-config.js";
+import { resolveConfigWidePluginMetadataSnapshot } from "../../../config/io.plugin-metadata.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import type { DeferredPluginMigration } from "../../../infra/deferred-plugin-migrations.js";
+import { isPathInside } from "../../../infra/path-guards.js";
+import { resolveUpdateRehearsalRoot } from "../../../infra/update-rehearsal-paths.js";
+import { normalizePluginsConfig } from "../../../plugins/config-state.js";
+import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
+import { createBlockedPluginDiagnosticLookup } from "../../../plugins/discovery-availability.js";
+import { resolvePluginDoctorContractArtifact } from "../../../plugins/doctor-contract-artifact.js";
+import { createInstalledPluginIndexScopeLookup } from "../../../plugins/installed-plugin-index-scope-lookup.js";
+import { resolveInstalledPluginIndexStateDatabaseOptions } from "../../../plugins/installed-plugin-index-store-path.js";
+import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
+import { passesManifestOwnerBasePolicy } from "../../../plugins/manifest-owner-policy.js";
+import { isTrustedOfficialCatalogLookupDuplicate } from "../../../plugins/official-external-install-records.js";
+import {
+  getOfficialExternalPluginCatalogEntry,
+  resolveOfficialExternalPluginId,
+} from "../../../plugins/official-external-plugin-catalog.js";
+import { isPayloadMissing } from "../../../plugins/payload-verification.js";
+import { createPluginCache, withPluginCache } from "../../../plugins/plugin-cache.js";
+import {
+  isArtifactPreservingStateRead,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../../../state/openclaw-state-db-readonly.js";
+import { collectConfiguredRuntimeIds } from "./configured-runtime-plugin-installs.js";
+import {
+  collectUpdateDeferredPluginIds,
+  resolveConfiguredPluginInstallContext,
+} from "./missing-configured-plugin-install.candidates.js";
+import {
+  collectBlockedPluginIds,
+  collectConfiguredChannelIds,
+  collectConfiguredPluginIds,
+} from "./missing-configured-plugin-install.ids.js";
+
+export type PluginMigrationInspection = {
+  requiredPluginIds: readonly string[];
+  inspectionRequiredPluginIds: readonly string[];
+  statelessPlugins: readonly { id: string; version?: string }[];
+  runtimePluginAliases: readonly string[];
+  unavailablePluginIds?: readonly string[];
+  discoveryBlockedPluginIds?: readonly string[];
+  replacementPluginIds?: Readonly<Record<string, string>>;
+};
+
+export type PluginMigrationAvailability = PluginMigrationInspection & {
+  pending: DeferredPluginMigration[];
+};
+
+/** Inspect the selected package generation without importing its Doctor contract. */
+export async function inspectPluginMigrationAvailability(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  installRecords?: Record<string, PluginInstallRecord>;
+  retainedPluginIds?: readonly string[];
+  deferInstallation: boolean;
+}): Promise<PluginMigrationAvailability> {
+  const artifactPreserving = isArtifactPreservingStateRead();
+  const env = artifactPreserving ? cloneEnvWithPlatformSemantics(params.env) : params.env;
+  const rehearsalRoot = resolveUpdateRehearsalRoot(env);
+  const inspect = () =>
+    withPluginCache(createPluginCache(), async () => {
+      const metadata =
+        params.installRecords !== undefined
+          ? resolveConfigWidePluginMetadataSnapshot({
+              config: params.cfg,
+              env,
+              installRecords: params.installRecords,
+              allowCurrent: false,
+            })
+          : loadManifestMetadataSnapshot({ config: params.cfg, env });
+      return withPluginMetadataSnapshotScope(
+        metadata,
+        async () => {
+          const configuredPluginIds = collectConfiguredPluginIds(params.cfg, env);
+          const configuredChannelIds = collectConfiguredChannelIds(params.cfg, env);
+          const blockedPluginIds = collectBlockedPluginIds(params.cfg);
+          const context = await resolveConfiguredPluginInstallContext({
+            cfg: params.cfg,
+            env,
+            configuredPluginIds,
+            configuredChannelIds,
+            blockedPluginIds,
+            baselineRecords: params.installRecords,
+          });
+          const selected = collectUpdateDeferredPluginIds({
+            cfg: params.cfg,
+            env,
+            configuredPluginIds,
+            configuredChannelIds,
+            configuredChannelOwnerPluginIds: context.configuredChannelOwnerPluginIds,
+            blockedPluginIds,
+          });
+          const findBlockedPluginDiagnostic = createBlockedPluginDiagnosticLookup({
+            diagnostics: metadata.diagnostics,
+            config: params.cfg,
+            env,
+          });
+          const inspectedIds = new Set([...selected, ...(params.retainedPluginIds ?? [])]);
+          const requiredPluginIds: string[] = [];
+          const inspectionRequiredPluginIds: string[] = [];
+          const statelessCandidates = new Set<string>();
+          for (const plugin of metadata.plugins) {
+            if (!inspectedIds.has(plugin.id)) {
+              continue;
+            }
+            const declaration = plugin.doctorContract?.stateMigrations;
+            const artifact = resolvePluginDoctorContractArtifact(plugin);
+            const legacySetup =
+              declaration !== true &&
+              !Array.isArray(declaration) &&
+              plugin.origin !== "bundled" &&
+              plugin.channels.length > 0 &&
+              plugin.setupSource;
+            const requiresStateMigration =
+              declaration === true || (Array.isArray(declaration) && declaration.length > 0);
+            if (requiresStateMigration) {
+              requiredPluginIds.push(plugin.id);
+            } else if (
+              legacySetup ||
+              (artifact && (!plugin.doctorContract || Array.isArray(declaration)))
+            ) {
+              inspectionRequiredPluginIds.push(plugin.id);
+            } else {
+              statelessCandidates.add(plugin.id);
+            }
+          }
+          const requiredIds = new Set(requiredPluginIds);
+          const inspectionRequiredIds = new Set(inspectionRequiredPluginIds);
+          const statelessPlugins: { id: string; version?: string }[] = [];
+          const unavailablePluginIds: string[] = [];
+          const discoveryBlockedPluginIds: string[] = [];
+          const normalizedConfig = normalizePluginsConfig(params.cfg.plugins);
+          const pending = [...inspectedIds].toSorted().flatMap((pluginId) => {
+            if (!passesManifestOwnerBasePolicy({ plugin: { id: pluginId }, normalizedConfig })) {
+              unavailablePluginIds.push(pluginId);
+              return [];
+            }
+            const plugin = metadata.plugins.find((candidate) => candidate.id === pluginId);
+            const bundled = context.bundledPluginsById.has(pluginId);
+            const blocked = plugin ? undefined : findBlockedPluginDiagnostic(pluginId);
+            if (blocked) {
+              discoveryBlockedPluginIds.push(pluginId);
+            }
+            const unavailable =
+              Boolean(blocked) ||
+              !context.knownIds.has(pluginId) ||
+              (Object.hasOwn(context.records, pluginId) &&
+                isPayloadMissing(env, context.records[pluginId]?.installPath)) ||
+              context.installedPluginIdsWithRepairablePackages.has(pluginId) ||
+              context.configuredPluginIdsWithStaleDescriptors.has(pluginId);
+            if (unavailable || !plugin) {
+              unavailablePluginIds.push(pluginId);
+            }
+            // A private rehearsal copy is already bound to an explicit local payload. The
+            // updating parent does not own an install record for that copy, so waiting for
+            // package convergence would hide its Doctor contract from the canary. A present
+            // `source: "path"` install is operator-managed: package convergence skips it, so
+            // waiting would only move the same contract to a second Doctor. Unrecorded
+            // config paths stay deferred because their source may be stale during an update.
+            const availableWithoutPackageConvergence =
+              (bundled && !blocked) ||
+              (!unavailable && context.records[pluginId]?.source === "path") ||
+              (plugin?.origin === "config" &&
+                rehearsalRoot !== undefined &&
+                isPathInside(rehearsalRoot, plugin.rootDir) &&
+                !unavailable);
+            const available =
+              availableWithoutPackageConvergence || (!params.deferInstallation && !unavailable);
+            if (available && plugin && statelessCandidates.has(pluginId)) {
+              // Installation-only confirmation reads metadata; it need not activate a channel.
+              statelessPlugins.push({
+                id: pluginId,
+                version: plugin.packageVersion ?? plugin.version,
+              });
+            }
+            if (!selected.has(pluginId) || available) {
+              return [];
+            }
+            return [
+              {
+                pluginId,
+                ...(requiredIds.has(pluginId) ? { requiresStateMigration: true as const } : {}),
+                ...(inspectionRequiredIds.has(pluginId)
+                  ? { requiresDoctorInspection: true as const }
+                  : {}),
+                ...resolveDeferredPluginMigrationConfigPaths({
+                  config: params.cfg,
+                  pluginId,
+                  compatibilityMigrationPaths: plugin?.configContracts?.compatibilityMigrationPaths,
+                }),
+                reason: blocked
+                  ? "The configured plugin is present but blocked. Fix the blocked plugin path before retrying its data/settings upgrade."
+                  : params.deferInstallation
+                    ? "Package convergence must wait until the updating parent releases its install records."
+                    : "The configured plugin package is missing or has not converged.",
+                command: blocked ? "openclaw doctor --fix" : "openclaw update repair",
+              },
+            ];
+          });
+          const lookup = createInstalledPluginIndexScopeLookup(metadata.index);
+          const replacementPluginIds: Record<string, string> = {};
+          for (const pluginId of unavailablePluginIds) {
+            const entry = getOfficialExternalPluginCatalogEntry(pluginId);
+            const replacementPluginId = entry && resolveOfficialExternalPluginId(entry);
+            if (
+              replacementPluginId &&
+              metadata.plugins.some(
+                (plugin) =>
+                  plugin.id === replacementPluginId && plugin.trustedOfficialInstall === true,
+              ) &&
+              isTrustedOfficialCatalogLookupDuplicate({
+                pluginId,
+                replacementPluginId,
+                replacementRecord: context.records[replacementPluginId],
+              })
+            ) {
+              replacementPluginIds[pluginId] = replacementPluginId;
+            }
+          }
+          const statelessIds = new Set(statelessPlugins.map((plugin) => plugin.id));
+          const runtimePluginAliases = collectConfiguredRuntimeIds(params.cfg).filter((runtime) => {
+            if (
+              selected.has(runtime) ||
+              lookup.hasInstalledPluginIds([runtime]) ||
+              Object.hasOwn(context.records, runtime) ||
+              Object.hasOwn(params.cfg.plugins?.entries ?? {}, runtime)
+            ) {
+              return false;
+            }
+            const owners = new Set<string>();
+            lookup.addAgentHarnessOwners(owners, [runtime]);
+            return owners.size > 0 && [...owners].every((owner) => statelessIds.has(owner));
+          });
+          return {
+            pending,
+            requiredPluginIds: requiredPluginIds.toSorted(),
+            inspectionRequiredPluginIds: inspectionRequiredPluginIds.toSorted(),
+            statelessPlugins,
+            runtimePluginAliases,
+            discoveryBlockedPluginIds,
+            // The updating parent still owns package availability until convergence resumes.
+            ...(!params.deferInstallation ? { unavailablePluginIds, replacementPluginIds } : {}),
+          };
+        },
+        { config: params.cfg, env },
+      );
+    });
+  // Package and catalog checks re-enter metadata after awaits; keep one view until they settle.
+  return artifactPreserving
+    ? withOpenClawStateDatabaseReadSnapshot(
+        inspect,
+        resolveInstalledPluginIndexStateDatabaseOptions({ env }),
+      )
+    : inspect();
+}

@@ -3,39 +3,96 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runManagedCommand } from "./managed-child-process.mts";
+import { acquireManagedCleanup } from "./managed-cleanup-handoff.mts";
+import { createVitestResourceOwner } from "./vitest-resource-ownership.mts";
 import {
+  requestVitestWorkerArtifacts,
   verifyVitestWorkerArtifacts,
   VITEST_WORKER_PREPARE_REQUEST,
   VITEST_WORKER_PREPARE_REPLY,
-  type VitestWorkerDescriptor,
   type VitestWorkerManifest,
 } from "./vitest-worker-artifacts.mts";
+import { useVitestWorkerCache } from "./vitest-worker-cache-policy.mts";
+import type { VitestWorkerDescriptor } from "./vitest-worker-descriptor.mts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
-function createVitestWorkerDirectory() {
+function createVitestWorkerDirectory(env: NodeJS.ProcessEnv) {
   const parent = path.join(root, ".artifacts", "vitest-workers");
   fs.mkdirSync(parent, { recursive: true });
-  const directory = fs.mkdtempSync(path.join(parent, "run-"));
+  let directory: string;
+  if (!useVitestWorkerCache(env)) {
+    directory = fs.mkdtempSync(path.join(parent, "run-"));
+  } else {
+    // A retained or live generation keeps its slot. Only joined disposal releases it.
+    for (let slot = 0; ; slot++) {
+      directory = path.join(parent, `run-cache-${slot}`);
+      try {
+        fs.mkdirSync(directory, { mode: 0o700 });
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          throw error;
+        }
+      }
+    }
+  }
   fs.writeFileSync(path.join(directory, "package.json"), '{"type":"module"}\n');
   return directory;
 }
 
 /** The invocation owns preparation and waits for every real borrower before disposal. */
-export function createVitestWorkerRun(env: NodeJS.ProcessEnv = process.env) {
-  const directory = createVitestWorkerDirectory();
+export function createVitestWorkerRun(
+  env: NodeJS.ProcessEnv = process.env,
+  parent?: VitestWorkerDescriptor,
+) {
+  const directory = parent?.directory ?? createVitestWorkerDirectory(env);
   let preparation: Promise<VitestWorkerManifest> | undefined;
+  let retainArtifacts:
+    | typeof import("./vitest-worker-cache.mts").retainVitestWorkerArtifacts
+    | undefined;
   let disposal: Promise<void> | undefined;
+  let releaseCleanup: Awaited<ReturnType<typeof acquireManagedCleanup>>;
   const borrowers: Promise<unknown>[] = [];
   let channelError: Error | undefined;
   const compilerAbort = new AbortController();
   let compilerJoined = true;
+  let resources: ReturnType<typeof createVitestResourceOwner> | undefined;
+  let resourcesReleased = true;
+  const onParentDisconnect = () => {
+    channelError ??= new Error("Compiled subprocess owner disconnected before group completion");
+    console.error(channelError);
+    compilerAbort.abort();
+    // Reuse the group's normal signal/descendant cleanup, including pending admission.
+    process.kill(process.pid, "SIGTERM");
+  };
+  if (parent) {
+    if (!process.connected) {
+      throw new Error("Compiled subprocess owner IPC is unavailable");
+    }
+    process.once("disconnect", onParentDisconnect);
+    process.channel?.unref();
+  }
 
   function prepare(): Promise<VitestWorkerManifest> {
     if (disposal) {
       return Promise.reject(new Error("Compiled subprocess owner is closing"));
     }
     return (preparation ??= (async () => {
+      // The loan remains in use through final verification after its child joins.
+      // Keep that work under the same parent custody as the managed command.
+      releaseCleanup = await acquireManagedCleanup(compilerAbort.signal);
+      if (parent) {
+        // One upstream loan serves this group's real borrowers; each still verifies below.
+        await requestVitestWorkerArtifacts(compilerAbort.signal);
+        return JSON.parse(
+          await fs.promises.readFile(path.join(directory, "manifest.json"), "utf8"),
+        ) as VitestWorkerManifest;
+      }
+      if (useVitestWorkerCache(env)) {
+        // Load cleanup before the runner's loader service can stop during shutdown.
+        retainArtifacts = (await import("./vitest-worker-cache.mts")).retainVitestWorkerArtifacts;
+      }
       compilerJoined = false;
       const code = await runManagedCommand({
         bin: process.execPath,
@@ -75,12 +132,20 @@ export function createVitestWorkerRun(env: NodeJS.ProcessEnv = process.env) {
       console.error(
         `[vitest-workers] prepared ${manifest.identity.slice(0, 12)} in ${Math.round(manifest.durationMs)}ms (${Object.keys(manifest.inputs).length} inputs, ${Object.keys(manifest.outputs).length} outputs)`,
       );
+      // The compiler requires a fresh directory; publish fixture ownership only before lending.
+      resources = createVitestResourceOwner(directory);
+      resourcesReleased = false;
       return manifest;
     })());
   }
   return {
     descriptor: { directory } satisfies VitestWorkerDescriptor,
-    borrow<T>(child: ChildProcess, completion: Promise<T>): Promise<T> {
+    prepare,
+    borrow<T>(
+      child: ChildProcess,
+      completion: Promise<T>,
+      onPreparationProgress?: () => void,
+    ): Promise<T> {
       let request: Promise<void> | undefined;
       const onMessage = (message: unknown) => {
         if (message !== VITEST_WORKER_PREPARE_REQUEST || request) {
@@ -94,6 +159,7 @@ export function createVitestWorkerRun(env: NodeJS.ProcessEnv = process.env) {
             if (disposal) {
               throw new Error("Compiled subprocess owner is closing");
             }
+            onPreparationProgress?.();
           } catch (error) {
             reply = { type: VITEST_WORKER_PREPARE_REPLY, error: String(error) };
           }
@@ -103,6 +169,11 @@ export function createVitestWorkerRun(env: NodeJS.ProcessEnv = process.env) {
             });
           }
         })();
+        // Only accepted admission and verified readiness count as progress.
+        // Duplicate IPC and the compiler's intermediate output cannot renew it.
+        if (!disposal) {
+          onPreparationProgress?.();
+        }
       };
       child.on("message", onMessage);
       // Existing Windows completion observes exit; artifact ownership additionally
@@ -131,32 +202,62 @@ export function createVitestWorkerRun(env: NodeJS.ProcessEnv = process.env) {
       void ownedCompletion.catch(() => {});
       return joined;
     },
-    dispose(): Promise<void> {
+    /** `interrupted`: the invocation is exiting by signal, so its outcome cannot change. */
+    dispose({ interrupted = false }: { interrupted?: boolean } = {}): Promise<void> {
       return (disposal ??= (async () => {
         compilerAbort.abort();
         const settled = await Promise.allSettled(borrowers);
         const uncertain = settled.find((result) => result.status === "rejected");
+        const [cleanupOutcome] = await Promise.allSettled([
+          (async () => {
+            try {
+              const manifest = await preparation;
+              resources?.assertReleased();
+              resourcesReleased = true;
+              if (uncertain?.status === "rejected") {
+                throw uncertain.reason;
+              }
+              if (channelError) {
+                throw channelError;
+              }
+              // An interrupted run already exits by signal: verification cannot change
+              // that outcome, and a full scan can outlast the caller's kill escalation.
+              if (interrupted) {
+                return;
+              }
+              if (fs.existsSync(path.join(directory, "manifest.json"))) {
+                console.error("[vitest-workers] verifying completed generation before cleanup");
+                await verifyVitestWorkerArtifacts(directory, manifest);
+              }
+              if (!parent && manifest?.cacheSignature) {
+                if (await retainArtifacts?.(root, directory, manifest)) {
+                  console.error("[vitest-workers] retained completed compiler outputs for reuse");
+                }
+              }
+            } finally {
+              process.off("disconnect", onParentDisconnect);
+              if (uncertain || !compilerJoined || !resourcesReleased) {
+                console.error(
+                  `[vitest-workers] retaining ${directory}: ${!compilerJoined ? "compiler" : !resourcesReleased ? "fixture resource" : "borrower"} join failed`,
+                );
+              } else if (!parent) {
+                // Large generations must not block signal delivery during final cleanup.
+                // Desktop metadata can arrive between child deletion and the final rmdir.
+                await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 3 });
+              }
+            }
+          })(),
+        ]);
         try {
-          await preparation;
-          if (uncertain?.status === "rejected") {
-            throw uncertain.reason;
+          await releaseCleanup?.(!uncertain && compilerJoined && resourcesReleased, true);
+        } catch (error) {
+          if (cleanupOutcome.status === "fulfilled") {
+            throw error;
           }
-          if (channelError) {
-            throw channelError;
-          }
-          if (fs.existsSync(path.join(directory, "manifest.json"))) {
-            console.error("[vitest-workers] verifying completed generation before cleanup");
-            await verifyVitestWorkerArtifacts(directory);
-          }
-        } finally {
-          if (uncertain || !compilerJoined) {
-            console.error(
-              `[vitest-workers] retaining ${directory}: ${!compilerJoined ? "compiler" : "borrower"} join failed`,
-            );
-          } else {
-            // Large generations must not block signal delivery during final cleanup.
-            await fs.promises.rm(directory, { recursive: true, force: true });
-          }
+          console.error(error);
+        }
+        if (cleanupOutcome.status === "rejected") {
+          throw cleanupOutcome.reason;
         }
       })());
     },

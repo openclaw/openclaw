@@ -1,6 +1,7 @@
 // Capability registry tests cover plugin-owned capability precedence and
 // config-derived image-provider fallback registration.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { resolvePluginCapabilityProvider } from "../plugins/capability-provider-runtime.js";
 import { buildMediaUnderstandingCapabilityRegistry } from "./provider-capability-registry.js";
 
@@ -34,20 +35,16 @@ describe("media-understanding capability registry", () => {
     expect(registry.get("textOnly")).toBeUndefined();
   });
 
-  it("keeps plugin-owned capabilities ahead of config auto-registration", () => {
-    resolveProviders.mockReturnValue({ id: "google", capabilities: ["audio"] });
+  it("accepts source model overrides before runtime defaults during secrets preparation", () => {
+    const validated = validateConfigObjectRaw({
+      tools: { media: { models: [{ provider: "openai" }] } },
+      models: { providers: { openai: { models: [{ id: "source-model", name: "Source model" }] } } },
+    });
+    if (!validated.ok) {
+      throw new Error("expected source config to validate");
+    }
 
-    const registry = buildMediaUnderstandingCapabilityRegistry({
-      tools: { media: { models: [{ provider: "google" }] } },
-      models: {
-        providers: {
-          google: {
-            models: [{ id: "custom-gemini", input: ["text", "image"] }],
-          },
-        },
-      },
-    } as never);
-
-    expect(registry.get("google")?.capabilities).toEqual(["audio"]);
+    const registry = buildMediaUnderstandingCapabilityRegistry(validated.config);
+    expect(registry.get("openai")).toBeUndefined();
   });
 });

@@ -1,12 +1,8 @@
-/**
- * transcripts built-in tool.
- *
- * Manages live capture, manual import, summarization, and process-local transcript sessions.
- */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import { resolveStateDir } from "../../config/paths.js";
+import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createTranscriptsStore,
@@ -14,20 +10,18 @@ import {
   stopTranscriptCapture,
 } from "../../transcripts/capture-operations.js";
 import {
-  persistTranscriptSummary,
-  readTranscriptSummary,
-} from "../../transcripts/capture-summary.js";
-import {
   activeSessions,
+  assertTranscriptCaptureEnabled,
+} from "../../transcripts/capture-startup.js";
+import { persistTranscriptSummary } from "../../transcripts/capture-summary.js";
+import {
   authorizeTranscriptSource,
   createTranscriptSessionId,
   isTranscriptSelectionCurrent,
-  readTranscriptStringParam,
+  isTranscriptSelectionOwned,
   resolveTranscriptSourceOwnership,
   resolveSourceProvider,
-  sourceFromParams,
   startTranscripts,
-  type TranscriptsLogger,
   type TranscriptsRuntimeContext,
 } from "../../transcripts/capture.js";
 import { resolveTranscriptsConfig } from "../../transcripts/config.js";
@@ -37,12 +31,13 @@ import type {
   TranscriptSessionDescriptor,
   TranscriptToolCaller,
 } from "../../transcripts/provider-types.js";
-import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
 import {
-  transcriptSessionSelector,
-  TranscriptsSummaryChangedError,
-  type TranscriptsStore,
-} from "../../transcripts/store.js";
+  readTranscriptStringParam,
+  sanitizeTranscriptSourceLocator,
+  sourceFromParams,
+} from "../../transcripts/source-locator.js";
+import { TranscriptsSummaryChangedError } from "../../transcripts/store-errors.js";
+import { transcriptSessionSelector, type TranscriptsStore } from "../../transcripts/store.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { AnyAgentTool } from "./common.js";
 import { listPastTranscripts, showPastTranscript } from "./transcripts-tool-read.js";
@@ -97,6 +92,7 @@ async function importTranscripts(params: {
   store: TranscriptsStore;
   rawParams: Record<string, unknown>;
 }) {
+  const getConfig = createRuntimeConfigReader(params.ctx.config ?? {});
   const requestedSource = {
     ...sourceFromParams(params.rawParams),
     ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
@@ -105,25 +101,23 @@ async function importTranscripts(params: {
   if (!provider?.importTranscript) {
     throw new Error(`transcripts provider ${requestedSource.providerId} cannot import transcripts`);
   }
-  const resolvedSource = resolveTranscriptSourceOwnership({
+  const providerSource = resolveTranscriptSourceOwnership({
     ctx: params.ctx,
     operation: "import",
     provider,
     source: requestedSource,
   });
-  const providerSource = resolvedSource.source;
   await authorizeTranscriptSource({
     action: "import",
     ctx: params.ctx,
     provider,
     source: providerSource,
   });
-  const requestedSessionId = readTranscriptStringParam(params.rawParams, "sessionId", {
-    trim: true,
-  });
+  assertTranscriptCaptureEnabled({ ...params.ctx, config: getConfig() });
+  const requestedSessionId = readTranscriptStringParam(params.rawParams, "sessionId");
   const session: TranscriptSessionDescriptor = {
     sessionId: requestedSessionId ?? createTranscriptSessionId(),
-    title: readTranscriptStringParam(params.rawParams, "title", { trim: true }),
+    title: readTranscriptStringParam(params.rawParams, "title"),
     source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
     stoppedAt: new Date().toISOString(),
@@ -141,16 +135,18 @@ async function importTranscripts(params: {
     cfg: params.ctx.config,
     session: { ...session, source: providerSource, metadata: { ...session.metadata } },
     text: transcript,
-    speakerLabel: readTranscriptStringParam(params.rawParams, "speakerLabel", { trim: true }),
+    speakerLabel: readTranscriptStringParam(params.rawParams, "speakerLabel"),
   });
   for (const utterance of utterances) {
     await params.store.appendUtteranceForSession(session, utterance);
   }
   const persisted = await persistTranscriptSummary({
+    stateDir: params.ctx.stateDir,
     config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
     cfg: params.ctx.config,
     store: params.store,
     session,
+    assertCurrent: params.ctx.assertCallerActive,
   });
   const { summaryPath, intendedSummaryPath, summary, summaryExportError } =
     await exportTranscriptSummary(params.store, session, persisted);
@@ -178,25 +174,37 @@ async function summarizeExisting(params: {
   params.ctx.assertCallerActive?.();
   // Finalization owns notes through export. Older model results must not
   // overwrite it, even while the same capture reservation is still held.
-  const canWriteSummary = () =>
-    isTranscriptSelectionCurrent(selection, params.store) &&
+  const ownsSummary = () =>
+    isTranscriptSelectionOwned(selection) &&
     (!selection.selectedActive || selection.selectedActive.session === selection.session) &&
     !selection.selectedActive?.stopping &&
     !selection.selectedActive?.finalization;
-  if (!canWriteSummary()) {
+  const canWriteSummary = async () => {
+    const current = await isTranscriptSelectionCurrent(selection, params.store);
+    params.ctx.assertCallerActive?.();
+    return current && ownsSummary();
+  };
+  if (!(await canWriteSummary())) {
     return transcriptSelectionNoLongerActive(selection);
   }
   const { session, selector } = selection;
   const sessionId = session.sessionId;
-  const summary = await readTranscriptSummary({ ...params, cfg: params.ctx.config, session });
-  // Reading yields; a retired capture cannot write into its same-tuple replacement.
-  params.ctx.assertCallerActive?.();
-  if (!canWriteSummary()) {
-    return transcriptSelectionNoLongerActive(selection);
-  }
-  let intendedPath: string;
+  let persisted: Awaited<ReturnType<typeof persistTranscriptSummary>>;
   try {
-    intendedPath = await params.store.writeSummary(summary, session, selection.historicalRevision);
+    persisted = await persistTranscriptSummary({
+      ...params,
+      stateDir: params.ctx.stateDir,
+      cfg: params.ctx.config,
+      session,
+      expectedInputRevision: selection.historicalRevision,
+      allowAppends: Boolean(selection.selectedActive),
+      assertCurrent: () => {
+        params.ctx.assertCallerActive?.();
+        if (!ownsSummary()) {
+          throw new TranscriptsSummaryChangedError();
+        }
+      },
+    });
   } catch (error) {
     if (error instanceof TranscriptsSummaryChangedError) {
       return transcriptSelectionNoLongerActive(selection);
@@ -204,14 +212,15 @@ async function summarizeExisting(params: {
     throw error;
   }
   params.ctx.assertCallerActive?.();
-  if (!canWriteSummary()) {
+  if (!(await canWriteSummary())) {
     return transcriptSelectionNoLongerActive(selection);
   }
   const { summaryPath, intendedSummaryPath, summaryExportError } = await exportTranscriptSummary(
     params.store,
     session,
-    { summary, intendedSummaryPath: intendedPath },
+    persisted,
   );
+  const { summary } = persisted;
   return toolText(
     `Transcripts summarized: ${sessionId}${summaryPath ? `\nSummary: ${summaryPath}` : `\nSummary export failed: ${summaryExportError}`}`,
     {
@@ -226,11 +235,10 @@ async function summarizeExisting(params: {
 }
 
 async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
-  const providers = [
+  const providers = uniqueStrings([
     manualTranscriptSourceProvider.id,
     ...listTranscriptSourceProviders(ctx.config).map((provider) => provider.id),
-  ];
-  const uniqueProviders = uniqueStrings(providers);
+  ]);
   const visibleEntries = (
     await Promise.all(
       [...activeSessions.values()].map(async (entry) =>
@@ -312,7 +320,7 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
   }
   return toolText(
     [
-      `Transcripts providers: ${uniqueProviders.length ? uniqueProviders.join(", ") : "none"}`,
+      `Transcripts providers: ${providers.length ? providers.join(", ") : "none"}`,
       `Active sessions: ${active.length}`,
       ...(pendingFinalization.length
         ? [
@@ -322,30 +330,25 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
       ...activeLines,
       ...selectorText,
     ].join("\n"),
-    { providers: uniqueProviders, active, pendingFinalization },
+    { providers, active, pendingFinalization },
   );
 }
 
-/** Create the agent-facing transcripts tool. */
-export function createTranscriptsTool(options?: {
+export function createTranscriptsTool(options: {
   agentId?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
   caller?: TranscriptToolCaller;
   assertCallerActive?: () => void;
+  /** The turn has no human or operator identity to authorize transcript access. */
+  callerUnavailable?: true;
   config?: OpenClawConfig;
-  stateDir?: string;
-  logger?: TranscriptsLogger;
 }): AnyAgentTool {
-  const ctx: TranscriptsRuntimeContext = {
-    config: options?.config,
-    stateDir: options?.stateDir ?? resolveStateDir(),
-    logger: options?.logger ?? console,
-    ...(options?.agentId ? { agentId: options.agentId } : {}),
-    ...(options?.agentChannel ? { agentChannel: options.agentChannel } : {}),
-    ...(options?.agentAccountId ? { agentAccountId: options.agentAccountId } : {}),
-    ...(options?.caller ? { caller: options.caller } : {}),
-    ...(options?.assertCallerActive ? { assertCallerActive: options.assertCallerActive } : {}),
+  const getConfig = options.config && createRuntimeConfigReader(options.config);
+  const context: TranscriptsRuntimeContext = {
+    stateDir: resolveStateDir(),
+    logger: console,
+    ...(options.agentId ? { agentId: options.agentId } : {}),
+    ...(options.caller ? { caller: options.caller } : {}),
+    ...(options.assertCallerActive ? { assertCallerActive: options.assertCallerActive } : {}),
   };
   return {
     name: "transcripts",
@@ -354,12 +357,16 @@ export function createTranscriptsTool(options?: {
       "Start, stop, import, summarize, or inspect meeting transcript captures; list past meetings and read their notes.",
     parameters: TranscriptsSchema,
     async execute(_toolCallId, rawParams, signal) {
-      const config = resolveTranscriptsConfig(ctx.config?.transcripts);
-      if (!config.enabled) {
-        throw new Error("transcripts are disabled");
+      if (options.callerUnavailable) {
+        throw new Error(
+          "transcripts are unavailable in this turn: it has no user or operator identity to authorize access.",
+        );
       }
+      const ctx = { ...context, config: getConfig?.() };
+      const config = resolveTranscriptsConfig(ctx.config?.transcripts);
+      assertTranscriptCaptureEnabled(ctx);
       const params = asOptionalRecord(rawParams) ?? {};
-      const action = readTranscriptStringParam(params, "action", { required: true, trim: true });
+      const action = readTranscriptStringParam(params, "action", { required: true });
       if (
         params.selector !== undefined &&
         action !== "stop" &&

@@ -1,4 +1,3 @@
-// Diagnostic session attention helpers summarize active work for session diagnostics.
 import type { DiagnosticSessionActiveWorkKind } from "../infra/diagnostic-events.js";
 import type { DiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 
@@ -8,21 +7,18 @@ export type SessionAttentionClassification =
       reason: string;
       classification: "long_running";
       activeWorkKind?: DiagnosticSessionActiveWorkKind;
-      recoveryEligible: false;
     }
   | {
       eventType: "session.stalled";
       reason: string;
       classification: "blocked_tool_call" | "stalled_agent_run";
       activeWorkKind?: DiagnosticSessionActiveWorkKind;
-      recoveryEligible: false;
     }
   | {
       eventType: "session.stuck";
       reason: string;
       classification: "stale_session_state";
       activeWorkKind?: undefined;
-      recoveryEligible: true;
     };
 
 export function classifySessionAttention(params: {
@@ -33,14 +29,29 @@ export function classifySessionAttention(params: {
   stuckSessionAbortMs?: number;
   runtimeOwnsLiveness?: boolean;
 }): SessionAttentionClassification {
+  const longRunning = (reason: string): SessionAttentionClassification => ({
+    eventType: "session.long_running",
+    reason,
+    classification: "long_running",
+    activeWorkKind: params.activity.activeWorkKind,
+  });
+  const stalled = (
+    reason: string,
+    classification: "blocked_tool_call" | "stalled_agent_run" = "stalled_agent_run",
+  ): SessionAttentionClassification => ({
+    eventType: "session.stalled",
+    reason,
+    classification,
+    activeWorkKind: params.activity.activeWorkKind,
+  });
+  if (
+    params.activity.activeRetryWaitDeadlineAtMs !== undefined &&
+    Date.now() < params.activity.activeRetryWaitDeadlineAtMs
+  ) {
+    return longRunning("provider_retry_wait");
+  }
   if (params.runtimeOwnsLiveness) {
-    return {
-      eventType: "session.long_running",
-      reason: "runtime_owned_wait",
-      classification: "long_running",
-      activeWorkKind: params.activity.activeWorkKind,
-      recoveryEligible: false,
-    };
+    return longRunning("runtime_owned_wait");
   }
   if (params.activity.activeWorkKind) {
     const lastProgressAgeMs = params.activity.lastProgressAgeMs ?? 0;
@@ -49,13 +60,7 @@ export function classifySessionAttention(params: {
       typeof params.stuckSessionAbortMs === "number" &&
       (params.activity.repeatedRequestNoProgressAgeMs ?? 0) >= params.stuckSessionAbortMs
     ) {
-      return {
-        eventType: "session.stalled",
-        reason: "repeated_model_requests_without_progress",
-        classification: "stalled_agent_run",
-        activeWorkKind: params.activity.activeWorkKind,
-        recoveryEligible: false,
-      };
+      return stalled("repeated_model_requests_without_progress");
     }
 
     // Idle session with queued work and stale orphaned activity (no active
@@ -72,7 +77,6 @@ export function classifySessionAttention(params: {
         eventType: "session.stuck",
         reason: "queued_work_without_active_run",
         classification: "stale_session_state",
-        recoveryEligible: true,
       };
     }
     if (
@@ -80,26 +84,20 @@ export function classifySessionAttention(params: {
       (params.activity.activeToolAgeMs ?? 0) > params.staleMs &&
       lastProgressAgeMs > params.staleMs
     ) {
-      return {
-        eventType: "session.stalled",
-        reason: "blocked_tool_call",
-        classification: "blocked_tool_call",
-        activeWorkKind: params.activity.activeWorkKind,
-        recoveryEligible: false,
-      };
+      if (
+        params.activity.activeToolDeadlineAtMs !== undefined &&
+        Date.now() < params.activity.activeToolDeadlineAtMs
+      ) {
+        return longRunning("tool_execution_wait");
+      }
+      return stalled("blocked_tool_call", "blocked_tool_call");
     }
     if (
       params.queueDepth > 0 &&
       params.activity.activeWorkKind === "embedded_run" &&
       isTerminalDiagnosticProgressReason(params.activity.lastProgressReason)
     ) {
-      return {
-        eventType: "session.stalled",
-        reason: "queued_behind_terminal_active_work",
-        classification: "stalled_agent_run",
-        activeWorkKind: params.activity.activeWorkKind,
-        recoveryEligible: false,
-      };
+      return stalled("queued_behind_terminal_active_work");
     }
     if (
       params.activity.activeWorkKind === "model_call" &&
@@ -110,45 +108,20 @@ export function classifySessionAttention(params: {
         typeof params.stuckSessionAbortMs === "number" &&
         lastProgressAgeMs >= params.stuckSessionAbortMs
       ) {
-        return {
-          eventType: "session.stalled",
-          reason: "active_work_without_progress",
-          classification: "stalled_agent_run",
-          activeWorkKind: params.activity.activeWorkKind,
-          recoveryEligible: false,
-        };
+        return stalled("active_work_without_progress");
       }
-      return {
-        eventType: "session.long_running",
-        reason: "active_model_call_without_progress",
-        classification: "long_running",
-        activeWorkKind: params.activity.activeWorkKind,
-        recoveryEligible: false,
-      };
+      return longRunning("active_model_call_without_progress");
     }
     if (lastProgressAgeMs > params.staleMs) {
-      return {
-        eventType: "session.stalled",
-        reason: "active_work_without_progress",
-        classification: "stalled_agent_run",
-        activeWorkKind: params.activity.activeWorkKind,
-        recoveryEligible: false,
-      };
+      return stalled("active_work_without_progress");
     }
-    return {
-      eventType: "session.long_running",
-      reason: params.queueDepth > 0 ? "queued_behind_active_work" : "active_work",
-      classification: "long_running",
-      activeWorkKind: params.activity.activeWorkKind,
-      recoveryEligible: false,
-    };
+    return longRunning(params.queueDepth > 0 ? "queued_behind_active_work" : "active_work");
   }
 
   return {
     eventType: "session.stuck",
     reason: params.queueDepth > 0 ? "queued_work_without_active_run" : "stale_session_state",
     classification: "stale_session_state",
-    recoveryEligible: true,
   };
 }
 

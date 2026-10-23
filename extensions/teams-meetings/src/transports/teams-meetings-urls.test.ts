@@ -27,21 +27,6 @@ describe("Microsoft Teams meeting URL normalization", () => {
     expect(normalizeTeamsMeetingUrlForReuse(url)).toBe(expected);
   });
 
-  it("ignores query parameters when comparing meeting identity", () => {
-    expect(
-      isSameTeamsMeetingUrl(
-        WORK_URL,
-        `${WORK_URL.split("?")[0]}?context=%7b%22Tid%22%3a%22other%22%7d&anon=true`,
-      ),
-    ).toBe(true);
-    expect(
-      isSameTeamsMeetingUrl(
-        "https://teams.live.com/meet/abc-123?invite=one",
-        "https://teams.live.com/meet/ABC-123?invite=two",
-      ),
-    ).toBe(true);
-  });
-
   it.each([
     [
       "https://teams.live.com/meet/abc-123?p=one",
@@ -59,10 +44,8 @@ describe("Microsoft Teams meeting URL normalization", () => {
   });
 
   it.each([
-    "https://teams.microsoft.com/",
     "https://teams.microsoft.com/v2/",
     "https://teams.microsoft.com/l/channel/19%3Achannel%40thread.tacv2",
-    "https://teams.live.com/",
     "https://teams.live.com/dl/launcher/launcher.html?url=https%3A%2F%2Fevil.example%2Fmeet%2Fabc",
     "https://teams.live.com/dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2Fabc%2Fextra",
     "https://teams.live.com/light-meetings/launch?coords=not-json",

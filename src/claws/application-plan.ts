@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core";
+import { digestClawValue } from "./digest.js";
 import type {
   ClawAddCapabilityChange,
   ClawAddPlanAction,
@@ -13,15 +12,39 @@ import type {
   ClawPackagePreflightResult,
 } from "./types.js";
 
-export function clawProfileExtensionPackages(
-  profile: ClawOpenClawProfile | undefined,
-): ClawPackage[] {
-  return (profile?.extensions ?? []).map((extension) => ({
-    kind: "plugin",
-    source: extension.source,
-    ref: extension.ref,
-    version: extension.version,
-  }));
+export function clawAddCapabilityChange(
+  change: Omit<ClawAddCapabilityChange, "classification" | "requiresDistinctConsent" | "digest">,
+): ClawAddCapabilityChange {
+  return {
+    ...change,
+    classification: "escalation",
+    requiresDistinctConsent: true,
+    digest: digestClawValue(change.effect),
+  };
+}
+
+export function clawAgentCapabilityChange(
+  agentId: string,
+  settings: ClawOpenClawProfile["agent"],
+): ClawAddCapabilityChange | undefined {
+  const effect = {
+    ...(settings.sandbox ? { sandbox: settings.sandbox } : {}),
+    ...(settings.tools ? { tools: settings.tools } : {}),
+    ...(settings.memory ? { memory: settings.memory } : {}),
+    ...(settings.heartbeat ? { heartbeat: settings.heartbeat } : {}),
+  };
+  if (Object.keys(effect).length === 0) {
+    return undefined;
+  }
+  return clawAddCapabilityChange({
+    kind: "agent",
+    id: agentId,
+    path: "agent",
+    action: "create",
+    reason:
+      "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
+    effect,
+  });
 }
 
 function blocker(code: string, path: string, message: string): ClawDiagnostic {
@@ -52,43 +75,6 @@ export function findClawExtensionPackageCollisions(params: {
   }
 
   return collisions;
-}
-
-function extensionCapabilityChange(params: {
-  extension: ClawOpenClawExtension;
-  preflight: ClawPackagePreflightResult;
-}): ClawAddCapabilityChange {
-  const effect = {
-    id: params.extension.id,
-    source: params.extension.source,
-    ref: params.extension.ref,
-    version: params.extension.version,
-    expectedFormat: params.extension.format,
-    detectedFormat: params.preflight.detectedFormat ?? "unresolved",
-    integrity: params.preflight.integrity ?? "unresolved",
-    mapped: params.preflight.mapped ?? [],
-    unavailable: params.preflight.unavailable ?? [],
-    adapterIdentity: params.preflight.adapterIdentity ?? "unresolved",
-    ...(params.preflight.installId ? { installId: params.preflight.installId } : {}),
-    ...(params.preflight.warning ? { riskWarning: params.preflight.warning } : {}),
-  };
-  const change = {
-    kind: "package" as const,
-    id: `extension:${params.extension.id}`,
-    path: `openclaw.extensions.${params.extension.id}`,
-    action: params.preflight.action === "reuse" ? ("reuse" as const) : ("install" as const),
-    reason:
-      params.preflight.action === "reuse"
-        ? "The OpenClaw profile requires access to an existing native extension."
-        : "The OpenClaw profile requires installation of native extension content or executable code.",
-    effect,
-  };
-  return {
-    ...change,
-    classification: "escalation",
-    requiresDistinctConsent: true,
-    digest: `sha256:${createHash("sha256").update(stableStringify(effect)).digest("hex")}`,
-  };
 }
 
 export async function planClawExtensions(params: {
@@ -131,14 +117,17 @@ export async function planClawExtensions(params: {
         preflight.installId &&
         preflight.action &&
         preflight.detectedFormat &&
-        preflight.adapterIdentity,
+        preflight.adapterIdentity &&
+        preflight.declaredCapabilities &&
+        preflight.capabilityGrants &&
+        preflight.capabilityGrantsByPluginId,
       );
     const incompleteProvenance =
       preflight.ok && !completeProvenance
         ? blocker(
             "extension_provenance_incomplete",
             `$.profiles.openclaw.extensions[${index}]`,
-            `Extension ${JSON.stringify(extension.id)} did not resolve complete canonical identity and adapter provenance.`,
+            `Extension ${JSON.stringify(extension.id)} did not resolve complete identity and adapter provenance.`,
           )
         : undefined;
     const formatMismatch =
@@ -146,7 +135,7 @@ export async function planClawExtensions(params: {
         ? blocker(
             "extension_format_mismatch",
             `$.profiles.openclaw.extensions[${index}].format`,
-            `Extension ${JSON.stringify(extension.id)} declares format ${JSON.stringify(extension.format)}, but the canonical plugin detector found ${JSON.stringify(preflight.detectedFormat ?? "unknown")}.`,
+            `Extension ${JSON.stringify(extension.id)} declares format ${JSON.stringify(extension.format)}, but the plugin detector found ${JSON.stringify(preflight.detectedFormat ?? "unknown")}.`,
           )
         : undefined;
     const diagnostic = !preflight.ok
@@ -175,6 +164,13 @@ export async function planClawExtensions(params: {
       ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
       ...(preflight.installId ? { installId: preflight.installId } : {}),
       ...(preflight.action ? { ownerAction: preflight.action } : {}),
+      ...(preflight.declaredCapabilities
+        ? { declaredCapabilities: preflight.declaredCapabilities }
+        : {}),
+      ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
+      ...(preflight.capabilityGrantsByPluginId
+        ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
+        : {}),
       requirementState,
       mapped: preflight.mapped ?? [],
       unavailable: preflight.unavailable ?? [],
@@ -196,6 +192,13 @@ export async function planClawExtensions(params: {
         ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
         ...(preflight.installId ? { installId: preflight.installId } : {}),
         ...(preflight.action ? { ownerAction: preflight.action } : {}),
+        ...(preflight.declaredCapabilities
+          ? { declaredCapabilities: preflight.declaredCapabilities }
+          : {}),
+        ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
+        ...(preflight.capabilityGrantsByPluginId
+          ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
+          : {}),
         requirementState,
         ...(preflight.requirements ? { prerequisites: preflight.requirements } : {}),
         ...(completeProvenance
@@ -220,7 +223,35 @@ export async function planClawExtensions(params: {
       blocked: extensionPlan.blocked,
       ...(diagnostic ? { reason: diagnostic.message } : {}),
     });
-    capabilityChanges.push(extensionCapabilityChange({ extension, preflight }));
+    const effect = {
+      id: extension.id,
+      source: extension.source,
+      ref: extension.ref,
+      version: extension.version,
+      expectedFormat: extension.format,
+      detectedFormat: preflight.detectedFormat ?? "unresolved",
+      integrity: preflight.integrity ?? "unresolved",
+      mapped: preflight.mapped ?? [],
+      unavailable: preflight.unavailable ?? [],
+      adapterIdentity: preflight.adapterIdentity ?? "unresolved",
+      declaredCapabilities: preflight.declaredCapabilities ?? {},
+      capabilityGrants: preflight.capabilityGrants ?? {},
+      capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId ?? {},
+      ...(preflight.installId ? { installId: preflight.installId } : {}),
+      ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
+    };
+    const change = {
+      kind: "package" as const,
+      id: `extension:${extension.id}`,
+      path: `openclaw.extensions.${extension.id}`,
+      action: preflight.action === "reuse" ? ("reuse" as const) : ("install" as const),
+      reason:
+        preflight.action === "reuse"
+          ? "The OpenClaw profile requires access to an existing native extension."
+          : "The OpenClaw profile requires installation of native extension content or executable code.",
+      effect,
+    };
+    capabilityChanges.push(clawAddCapabilityChange(change));
   }
 
   return { extensions, actions, capabilityChanges, requirements, blockers };

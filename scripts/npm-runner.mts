@@ -1,6 +1,7 @@
-// Resolves npm commands from the active Node toolchain, especially on Windows.
+// Resolves npm commands without Windows shell lookup or a Node dependency under Bun.
 import fs from "node:fs";
 import path from "node:path";
+import { resolveBundledNpmCommand } from "../src/infra/npm-command.ts";
 import {
   buildCmdExeCommandLine,
   resolvePathEnvKey,
@@ -20,52 +21,12 @@ type NpmRunner = {
   args: string[];
   command: string;
   env?: NodeJS.ProcessEnv;
+  packageJsonPath?: string;
   shell: boolean;
   windowsVerbatimArguments?: boolean;
 };
 
-type ToolchainNpmRunnerParams = Required<Omit<NpmRunnerParams, "env">> & {
-  nodeDir: string;
-  pathImpl: typeof path.posix;
-};
-
-function resolveToolchainNpmRunner(params: ToolchainNpmRunnerParams): NpmRunner | null {
-  const npmCliCandidates = [
-    params.pathImpl.resolve(params.nodeDir, "../lib/node_modules/npm/bin/npm-cli.js"),
-    params.pathImpl.resolve(params.nodeDir, "node_modules/npm/bin/npm-cli.js"),
-  ];
-  const npmCliPath = npmCliCandidates.find((candidate) => params.existsSync(candidate));
-  if (npmCliPath) {
-    return {
-      command: params.execPath,
-      args: [npmCliPath, ...params.npmArgs],
-      shell: false,
-    };
-  }
-  if (params.platform !== "win32") {
-    return null;
-  }
-  const npmExePath = params.pathImpl.resolve(params.nodeDir, "npm.exe");
-  if (params.existsSync(npmExePath)) {
-    return {
-      command: npmExePath,
-      args: params.npmArgs,
-      shell: false,
-    };
-  }
-  const npmCmdPath = params.pathImpl.resolve(params.nodeDir, "npm.cmd");
-  if (params.existsSync(npmCmdPath)) {
-    return {
-      command: params.comSpec,
-      args: ["/d", "/s", "/c", buildCmdExeCommandLine(npmCmdPath, params.npmArgs)],
-      shell: false,
-      windowsVerbatimArguments: true,
-    };
-  }
-  return null;
-}
-
-/** Resolves a toolchain-local npm invocation for the current platform. */
+/** Resolves bundled npm under Bun, or npm from the selected Node toolchain. */
 export function resolveNpmRunner(params: NpmRunnerParams = {}): NpmRunner {
   const execPath = params.execPath ?? process.execPath;
   const npmArgs = params.npmArgs ?? [];
@@ -75,25 +36,43 @@ export function resolveNpmRunner(params: NpmRunnerParams = {}): NpmRunner {
   const comSpec = params.comSpec ?? (platform === "win32" ? resolveWindowsCmdExePath(env) : "");
   const pathImpl = platform === "win32" ? path.win32 : path.posix;
   const nodeDir = pathImpl.dirname(execPath);
-  const npmToolchain = resolveToolchainNpmRunner({
-    comSpec,
-    existsSync,
-    execPath,
-    nodeDir,
-    npmArgs,
-    pathImpl,
-    platform,
-  });
-  if (npmToolchain) {
-    return npmToolchain;
+  if (execPath === process.execPath && process.versions.bun) {
+    const [command, npmCliPath, ...args] = resolveBundledNpmCommand(npmArgs);
+    return {
+      command,
+      args: [npmCliPath, ...args],
+      packageJsonPath: path.resolve(npmCliPath, "../../package.json"),
+      shell: false,
+    };
+  }
+  const npmCliCandidates = [
+    pathImpl.resolve(nodeDir, "../lib/node_modules/npm/bin/npm-cli.js"),
+    pathImpl.resolve(nodeDir, "node_modules/npm/bin/npm-cli.js"),
+  ];
+  const npmCliPath = npmCliCandidates.find((candidate) => existsSync(candidate));
+  if (npmCliPath) {
+    return {
+      command: execPath,
+      args: [npmCliPath, ...npmArgs],
+      packageJsonPath: pathImpl.resolve(npmCliPath, "../../package.json"),
+      shell: false,
+    };
   }
   if (platform === "win32") {
-    const expectedPaths = [
-      pathImpl.resolve(nodeDir, "../lib/node_modules/npm/bin/npm-cli.js"),
-      pathImpl.resolve(nodeDir, "node_modules/npm/bin/npm-cli.js"),
-      pathImpl.resolve(nodeDir, "npm.exe"),
-      pathImpl.resolve(nodeDir, "npm.cmd"),
-    ];
+    const npmExePath = pathImpl.resolve(nodeDir, "npm.exe");
+    if (existsSync(npmExePath)) {
+      return { command: npmExePath, args: npmArgs, shell: false };
+    }
+    const npmCmdPath = pathImpl.resolve(nodeDir, "npm.cmd");
+    if (existsSync(npmCmdPath)) {
+      return {
+        command: comSpec,
+        args: ["/d", "/s", "/c", buildCmdExeCommandLine(npmCmdPath, npmArgs)],
+        shell: false,
+        windowsVerbatimArguments: true,
+      };
+    }
+    const expectedPaths = [...npmCliCandidates, npmExePath, npmCmdPath];
     throw new Error(
       `failed to resolve a toolchain-local npm next to ${execPath}. ` +
         `Checked: ${expectedPaths.join(", ")}. ` +

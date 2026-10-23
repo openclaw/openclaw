@@ -92,7 +92,11 @@ openclaw onboard --non-interactive \
 ```
 
 <Note>
-`--accept-risk` is required alongside `--non-interactive`.
+`--accept-risk` is required alongside `--non-interactive`. `--mode` defaults to
+`local`, so these are the same runs as the **direct flag** commands above. Run
+them on the Gateway host: remote-client onboarding (`--mode remote`) only
+configures the local client connection and does not set up provider credentials
+on the server.
 </Note>
 
 ## Built-in catalog
@@ -137,7 +141,7 @@ review its different pricing and verify model access for the selected endpoint.
     If the Gateway runs as a managed service (launchd, systemd, Docker), `TOKENHUB_API_KEY` and `TOKENPLAN_API_KEY` must be visible to that process. Set them in `~/.openclaw/.env` or via `env.shellEnv` so launchd, systemd, or Docker exec environments can read them.
 
     <Warning>
-      Keys exported only in an interactive shell are not visible to managed gateway processes. Use the env file or config seam for persistent availability.
+      Keys exported only in an interactive shell are not visible to managed gateway processes. Use the env file or config setting for persistent availability.
     </Warning>
 
   </Accordion>

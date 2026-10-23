@@ -1,4 +1,3 @@
-// Zalo plugin module implements setup surface behavior.
 import {
   buildSingleChannelSecretPromptState,
   createStandardChannelSetupStatus,
@@ -6,6 +5,7 @@ import {
   hasConfiguredSecretInput,
   promptSingleChannelSecretInput,
   runSingleChannelSecretStep,
+  patchScopedAccountConfig,
   patchTopLevelChannelConfigSection,
   type ChannelSetupWizard,
   type OpenClawConfig,
@@ -30,30 +30,14 @@ function setZaloUpdateMode(
   webhookSecret?: SecretInput,
   webhookPath?: string,
 ): OpenClawConfig {
-  const isDefault = accountId === DEFAULT_ACCOUNT_ID;
-  const current = isDefault ? cfg.channels?.zalo : cfg.channels?.zalo?.accounts?.[accountId];
-  const next = { ...current };
-  if (mode === "polling") {
-    delete next.webhookUrl;
-    delete next.webhookSecret;
-    delete next.webhookPath;
-  } else {
-    next.webhookUrl = webhookUrl;
-    next.webhookSecret = webhookSecret;
-    next.webhookPath = webhookPath;
-  }
-  let patch: Record<string, unknown> = next;
-  if (!isDefault) {
-    const accounts = { ...cfg.channels?.zalo?.accounts };
-    accounts[accountId] = next;
-    patch = { accounts };
-  }
-  return patchTopLevelChannelConfigSection({
+  return patchScopedAccountConfig({
     cfg,
-    channel,
-    clearFields:
-      isDefault && mode === "polling" ? ["webhookUrl", "webhookSecret", "webhookPath"] : undefined,
-    patch,
+    channelKey: channel,
+    accountId,
+    ensureChannelEnabled: false,
+    ensureAccountEnabled: false,
+    clearFields: mode === "polling" ? ["webhookUrl", "webhookSecret", "webhookPath"] : undefined,
+    patch: mode === "polling" ? {} : { webhookUrl, webhookSecret, webhookPath },
   });
 }
 
@@ -113,23 +97,12 @@ export const zaloSetupWizard: ChannelSetupWizard = {
             })
           : currentCfg,
       applySet: async (currentCfg, value) =>
-        patchTopLevelChannelConfigSection({
+        patchScopedAccountConfig({
           cfg: currentCfg,
-          channel,
-          enabled: true,
-          patch:
-            accountId === DEFAULT_ACCOUNT_ID
-              ? { botToken: value }
-              : {
-                  accounts: {
-                    ...currentCfg.channels?.zalo?.accounts,
-                    [accountId]: {
-                      ...currentCfg.channels?.zalo?.accounts?.[accountId],
-                      enabled: true,
-                      botToken: value,
-                    },
-                  },
-                },
+          channelKey: channel,
+          accountId,
+          patch: { botToken: value },
+          accountPatch: { enabled: true, botToken: value },
         }),
     });
     next = tokenStep.cfg;
@@ -155,37 +128,16 @@ export const zaloSetupWizard: ChannelSetupWizard = {
         }
       })();
 
-      let webhookSecretResult = await promptSingleChannelSecretInput({
-        cfg: next,
-        prompter,
-        providerHint: "zalo-webhook",
-        credentialLabel: t("wizard.zalo.webhookSecret"),
-        secretInputMode: options?.secretInputMode,
-        ...buildSingleChannelSecretPromptState({
-          accountConfigured: hasConfiguredSecretInput(resolvedAccount.config.webhookSecret),
-          hasConfigToken: hasConfiguredSecretInput(resolvedAccount.config.webhookSecret),
-          allowEnv: false,
-        }),
-        envPrompt: "",
-        keepPrompt: t("wizard.zalo.webhookSecretKeep"),
-        inputPrompt: t("wizard.zalo.webhookSecretInput"),
-        preferredEnvVar: "ZALO_WEBHOOK_SECRET",
-      });
-      while (
-        webhookSecretResult.action === "set" &&
-        typeof webhookSecretResult.value === "string" &&
-        (webhookSecretResult.value.length < 8 || webhookSecretResult.value.length > 256)
-      ) {
-        await prompter.note(t("wizard.zalo.webhookSecretLength"), t("wizard.zalo.webhookTitle"));
-        webhookSecretResult = await promptSingleChannelSecretInput({
+      const promptWebhookSecret = (hasWebhookSecret: boolean) =>
+        promptSingleChannelSecretInput({
           cfg: next,
           prompter,
           providerHint: "zalo-webhook",
           credentialLabel: t("wizard.zalo.webhookSecret"),
           secretInputMode: options?.secretInputMode,
           ...buildSingleChannelSecretPromptState({
-            accountConfigured: false,
-            hasConfigToken: false,
+            accountConfigured: hasWebhookSecret,
+            hasConfigToken: hasWebhookSecret,
             allowEnv: false,
           }),
           envPrompt: "",
@@ -193,6 +145,16 @@ export const zaloSetupWizard: ChannelSetupWizard = {
           inputPrompt: t("wizard.zalo.webhookSecretInput"),
           preferredEnvVar: "ZALO_WEBHOOK_SECRET",
         });
+      let webhookSecretResult = await promptWebhookSecret(
+        hasConfiguredSecretInput(resolvedAccount.config.webhookSecret),
+      );
+      while (
+        webhookSecretResult.action === "set" &&
+        typeof webhookSecretResult.value === "string" &&
+        (webhookSecretResult.value.length < 8 || webhookSecretResult.value.length > 256)
+      ) {
+        await prompter.note(t("wizard.zalo.webhookSecretLength"), t("wizard.zalo.webhookTitle"));
+        webhookSecretResult = await promptWebhookSecret(false);
       }
       const webhookSecret =
         webhookSecretResult.action === "set"

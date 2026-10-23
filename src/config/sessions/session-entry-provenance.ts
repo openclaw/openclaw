@@ -1,62 +1,239 @@
-import { SESSION_EXPANDED_PARTICIPANT_LIMIT } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
+import {
+  SESSION_EXPANDED_PARTICIPANT_LIMIT,
+  type SessionParticipant,
+} from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import type {
+  SessionCreatedActor as ProjectedSessionCreatedActor,
+  SessionRow,
+} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
+import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import type { HookExternalContentSource } from "../../security/external-content.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 
-/** Kept aligned with SessionStateActorType (src/sessions/session-state-event-kinds.ts); not imported to avoid layering config/sessions onto src/sessions. */
-export type SessionActor = {
-  type: "human" | "agent" | "system";
-  id?: string;
-  label?: string;
-};
+/** Persisted identity excludes display-only actor projections. */
+export type SessionActor = SchemaContract<
+  Pick<ProjectedSessionCreatedActor, "type" | "id" | "label">
+>;
 
-/** Only trusted creation owners may stamp a Gateway profile namespace. */
+/** Causal creator attribution; the enclosing actor stays the legacy isolation identity. */
+type DelegatedSessionCreator =
+  | { type: "human"; source: "profile"; id: string }
+  | { type: "agent"; id?: string };
+
+/** Only trusted creation owners may stamp Gateway profile namespaces. */
 export type SessionCreatedActor = SessionActor &
-  ({ type: "human"; source: "profile" | "channel" | "unknown" } | { type: "agent" | "system" });
+  ({ type: "human"; source: "profile" | "channel" | "unknown" } | { type: "agent" | "system" }) & {
+    delegatedBy?: DelegatedSessionCreator;
+  };
 
-export function sessionCreatorProfileId(
-  actor: (SessionActor & { source?: unknown }) | undefined,
-): string | undefined {
+type CreatorInput = SessionActor & { source?: unknown; delegatedBy?: unknown };
+
+/** Creator-facing policy and display use attribution, never the execution/isolation identity. */
+export function resolveSessionCreatorActor(
+  actor: SessionCreatedActor | undefined,
+): SessionCreatedActor | undefined;
+export function resolveSessionCreatorActor(
+  actor: CreatorInput | undefined,
+): CreatorInput | undefined;
+export function resolveSessionCreatorActor(
+  actor: CreatorInput | undefined,
+): CreatorInput | undefined {
+  const creator = actor?.delegatedBy;
+  if (isRecord(creator)) {
+    const id = typeof creator.id === "string" ? creator.id.trim() : undefined;
+    if (creator.type === "human" && creator.source === "profile" && id) {
+      return { type: "human", source: "profile", id };
+    }
+    if (creator.type === "agent") {
+      return { type: "agent", ...(id ? { id } : {}) };
+    }
+  }
+  return actor;
+}
+
+export function sessionCreatorProfileId(actor: CreatorInput | undefined): string | undefined {
+  return sessionIsolationProfileId(resolveSessionCreatorActor(actor));
+}
+
+/** Deliberately ignores attribution: old and new readers must choose the same sandbox. */
+export function sessionIsolationProfileId(actor: CreatorInput | undefined): string | undefined {
   return actor?.type === "human" && actor.source === "profile" ? actor.id : undefined;
+}
+
+/** Call only at creation with a host-captured causal requester, never a selected tool user. */
+export function attributeDelegatedSessionCreator(
+  actor: SessionCreatedActor | undefined,
+  requesterProfileId?: string,
+  spawningAgentId?: string,
+): SessionCreatedActor | undefined {
+  const id = requesterProfileId?.trim();
+  if (!actor) {
+    return undefined;
+  }
+  const { delegatedBy: _previous, ...legacyActor } = actor;
+  const agentId = spawningAgentId?.trim();
+  if (!id && legacyActor.type !== "human" && (!agentId || legacyActor.id === agentId)) {
+    return legacyActor;
+  }
+  // Keep the legacy actor and hot columns unchanged. Older readers safely ignore this
+  // nested attribution and their full-object creation-stamp preservation retains it.
+  return {
+    ...legacyActor,
+    delegatedBy: id
+      ? { type: "human", source: "profile", id }
+      : { type: "agent", ...(agentId ? { id: agentId } : {}) },
+  };
 }
 
 export type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 export const MAX_SESSION_PARTICIPANTS = SESSION_EXPANDED_PARTICIPANT_LIMIT;
+
+type ContributorSource = {
+  agentId: string;
+  config: OpenClawConfig;
+  sessionKey: string;
+  /** Host-verified requester for the admitted request, not model-supplied profile IDs. */
+  requesterProfileId?: string;
+};
+
+export function isMainGitContributorScope(source: ContributorSource): boolean {
+  return (
+    source.sessionKey ===
+      buildAgentMainSessionKey({
+        agentId: source.agentId,
+        mainKey: source.config.session?.mainKey,
+      }) ||
+    (source.config.session?.scope === "global" && source.sessionKey === "global")
+  );
+}
+
+/** Delegation retains contributor identities without inventing child participation. */
+export function inheritSessionGitContributorProfileIds(
+  parent:
+    | {
+        incognito?: boolean;
+        inheritedGitContributorProfileIds?: string[];
+        participants?: SessionParticipant[];
+      }
+    | undefined,
+  source?: ContributorSource,
+): string[] | undefined {
+  if (!parent || parent.incognito) {
+    return undefined;
+  }
+  // Main is a routing hub, not a task's contributor roster.
+  if (source && isMainGitContributorScope(source)) {
+    return source.requesterProfileId ? [source.requesterProfileId] : undefined;
+  }
+  const directProfileIds = (parent.participants ?? [])
+    .flatMap(({ identity }) => (identity.type === "profile" ? [identity.id] : []))
+    .toSorted();
+  const profileIds = [
+    ...new Set([...(parent.inheritedGitContributorProfileIds ?? []), ...directProfileIds]),
+  ].slice(0, MAX_SESSION_PARTICIPANTS);
+  return profileIds.length > 0 ? profileIds : undefined;
+}
 
 export type SessionOwnerAssignment = {
   actor: SessionActor;
   assignedBy?: SessionActor;
   assignedAt?: number;
 };
-export type SessionCreatedVia =
-  | "operator" // gateway sessions.create (Control UI / operator clients)
-  | "spawn" // sessions_spawn native or ACP subagent spawn
-  | "channel" // inbound channel conversation materialization
-  | "cron"
-  | "talk"
-  | "run" // create-on-run materialization (agent-session-persist)
-  | "plugin" // trusted plugin runtime creation
-  | "internal"; // internal/hidden sessions (internal-session-effects, voice bare rows)
+/** Personal preferences follow the assigned human, otherwise the authenticated human creator. */
+export function sessionPersonalProfileId(
+  entry: { owner?: SessionOwnerAssignment; createdActor?: SessionCreatedActor } | undefined,
+): string | undefined {
+  const assigned = entry?.owner?.actor;
+  return assigned?.type === "human" ? assigned.id : sessionCreatorProfileId(entry?.createdActor);
+}
+
+/** Visible spawns keep the matching verified human parent owner without changing creator attribution. */
+export function inheritSpawnSessionOwner(
+  source: { owner?: SessionOwnerAssignment; createdActor?: SessionCreatedActor } | undefined,
+  assignedBy: SessionActor | undefined,
+  requesterProfileId: string | undefined,
+  now = Date.now(),
+  resolveProfileId: (profileId: string) => string | undefined = (profileId) => profileId,
+): SessionOwnerAssignment | undefined {
+  const assigned = source?.owner?.actor;
+  const creator = resolveSessionCreatorActor(source?.createdActor);
+  const owner = assigned
+    ? assigned.type === "human"
+      ? assigned
+      : undefined
+    : creator?.type === "human" && creator.source === "profile"
+      ? creator
+      : undefined;
+  const directMatch = owner?.id && requesterProfileId && owner.id === requesterProfileId;
+  const resolvedOwnerId = !directMatch && owner?.id ? resolveProfileId(owner.id) : owner?.id;
+  const resolvedRequesterId =
+    !directMatch && requesterProfileId ? resolveProfileId(requesterProfileId) : requesterProfileId;
+  const assignmentActor =
+    resolvedOwnerId && resolvedOwnerId === resolvedRequesterId
+      ? {
+          type: "human" as const,
+          id: resolvedRequesterId,
+          ...(owner?.label ? { label: owner.label } : {}),
+        }
+      : assignedBy?.type === "agent" && assignedBy.id
+        ? {
+            type: "agent" as const,
+            id: assignedBy.id,
+            ...(assignedBy.label ? { label: assignedBy.label } : {}),
+          }
+        : undefined;
+  if (!assignmentActor) {
+    return undefined;
+  }
+  return {
+    actor: assignmentActor,
+    ...(assignedBy?.id
+      ? {
+          assignedBy: {
+            type: assignedBy.type,
+            id: assignedBy.id,
+            ...(assignedBy.label ? { label: assignedBy.label } : {}),
+          },
+        }
+      : {}),
+    assignedAt: now,
+  };
+}
+
+export type SessionCreatedVia = NonNullable<SessionRow["createdVia"]>;
 
 // Return shape mirrors the SessionEntry creation fields as a leaf contract;
 // types.ts imports from here, never the reverse (madge cycle guard).
 export function buildSessionCreationStamp(params: {
   via: SessionCreatedVia;
+  surface?: "plugin-dock";
   actor?: SessionCreatedActor;
   now?: number;
   sandbox?: "required";
+  incognito?: boolean;
   skillLibrarySelections?: SkillLibrarySelection[];
+  inheritedGitContributorProfileIds?: string[];
 }): {
   createdVia: SessionCreatedVia;
+  createdSurface?: "plugin-dock";
   createdActor?: SessionCreatedActor;
   createdAt: number;
   sandbox?: "required";
   skillLibrarySelections?: SkillLibrarySelection[];
+  inheritedGitContributorProfileIds?: string[];
 } {
   return {
     createdVia: params.via,
+    ...(params.surface ? { createdSurface: params.surface } : {}),
     ...(params.actor ? { createdActor: params.actor } : {}),
     createdAt: params.now ?? Date.now(),
     ...(params.sandbox === "required" ? { sandbox: "required" as const } : {}),
+    ...(params.via === "spawn" && !params.incognito && params.inheritedGitContributorProfileIds
+      ? { inheritedGitContributorProfileIds: [...params.inheritedGitContributorProfileIds] }
+      : {}),
     ...(params.skillLibrarySelections
       ? {
           skillLibrarySelections: params.skillLibrarySelections.map((selection) => ({
@@ -67,6 +244,33 @@ export function buildSessionCreationStamp(params: {
   };
 }
 
+export function buildInboundSessionCreationStamp(
+  ctx:
+    | {
+        SessionCreation?: Parameters<typeof buildSessionCreationStamp>[0];
+        SenderId?: string;
+        SenderName?: string;
+      }
+    | undefined,
+) {
+  const senderId = ctx?.SenderId?.trim();
+  return buildSessionCreationStamp(
+    ctx?.SessionCreation ?? {
+      via: "channel",
+      ...(senderId
+        ? {
+            actor: {
+              type: "human",
+              source: "channel",
+              id: senderId,
+              label: ctx?.SenderName?.trim() || undefined,
+            },
+          }
+        : {}),
+    },
+  );
+}
+
 /** Logical nodes retain creation attribution and isolation across writes and rollovers. */
 export function preserveCreationStamp<
   T extends Partial<ReturnType<typeof buildSessionCreationStamp>>,
@@ -75,8 +279,10 @@ export function preserveCreationStamp<
     ? {
         ...entry,
         createdVia: authoritative.createdVia,
+        createdSurface: authoritative.createdSurface,
         createdActor: authoritative.createdActor,
         createdAt: authoritative.createdAt,
+        inheritedGitContributorProfileIds: authoritative.inheritedGitContributorProfileIds,
         ...(authoritative.sandbox === "required" ? { sandbox: authoritative.sandbox } : {}),
       }
     : entry;
@@ -112,6 +318,8 @@ export function inheritSessionCreationPolicy(
 }
 
 export type SessionEntryProvenance = {
+  /** Human contributor candidates captured once by trusted delegation; not participant activity. */
+  inheritedGitContributorProfileIds?: string[];
   /** Plugin id that owns this session through a trusted runtime creation seam. */
   pluginOwnerId?: string;
   /** External hook source that has contributed content to this transcript. */

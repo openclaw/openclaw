@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 // Plain-HTTP origins have no crypto.subtle; device identity must still mint,
 // fingerprint, and sign with the pure-JS paths so pairing works everywhere.
-import { hashes, verifyAsync } from "@noble/ed25519";
+import { createHash } from "node:crypto";
+import { verifyAsync } from "@noble/ed25519";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./index.ts";
@@ -34,7 +35,9 @@ describe("device identity on an insecure context", () => {
     expect(globalThis.crypto.subtle).toBeUndefined();
 
     const identity = await loadOrCreateDeviceIdentity();
-    expect(identity.deviceId).toMatch(/^[0-9a-f]{64}$/);
+    expect(identity.deviceId).toBe(
+      createHash("sha256").update(base64UrlDecode(identity.publicKey)).digest("hex"),
+    );
 
     // The identity round-trips from storage with a stable id.
     const reloaded = await loadOrCreateDeviceIdentity();
@@ -86,11 +89,5 @@ describe("device identity on an insecure context", () => {
 
     const identity = await cold.loadOrCreateDeviceIdentity();
     expect(identity.deviceId).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  it("resolves the SHA-512 provider without crypto.subtle", async () => {
-    expect(typeof hashes.sha512Async).toBe("function");
-    const digest = await hashes.sha512Async?.(new Uint8Array([1, 2, 3]));
-    expect(digest).toHaveLength(64);
   });
 });

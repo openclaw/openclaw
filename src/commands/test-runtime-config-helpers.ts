@@ -91,9 +91,9 @@ type CapturingTestRuntime = {
 
 /** Creates a mocked runtime whose calls can be asserted by Vitest tests. */
 export function createTestRuntime(): TestRuntime {
-  const log = vi.fn() as MockFn<RuntimeEnv["log"]>;
-  const error = vi.fn() as MockFn<RuntimeEnv["error"]>;
-  const exit = vi.fn((_code: number) => undefined) as MockFn<RuntimeEnv["exit"]>;
+  const log = vi.fn<RuntimeEnv["log"]>();
+  const error = vi.fn<RuntimeEnv["error"]>();
+  const exit = vi.fn<RuntimeEnv["exit"]>((_code: number) => undefined);
   return {
     log,
     error,

@@ -17,12 +17,14 @@ export {
 export {
   hasAnthropicVertexAvailableAuth,
   hasAnthropicVertexCredentials,
-  resolveAnthropicVertexClientRegion,
   resolveAnthropicVertexConfigApiKey,
   resolveAnthropicVertexProjectId,
   resolveAnthropicVertexRegion,
-  resolveAnthropicVertexRegionFromBaseUrl,
 } from "./region.js";
+export {
+  resolveAnthropicVertexClientRegion,
+  resolveAnthropicVertexRegionFromBaseUrl,
+} from "./region-endpoint.js";
 
 const loadStreamRuntimeModule = createLazyRuntimeModule(() => import("./stream-runtime.js"));
 

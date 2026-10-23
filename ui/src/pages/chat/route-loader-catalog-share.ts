@@ -8,12 +8,15 @@ import type { SessionsCatalogListResult } from "../../../../packages/gateway-pro
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
 import { missingSessionRouteData } from "./route-loader-session-reference.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
+
+registerSessionNavigationEnglish();
 
 function targetFromLocation(context: ApplicationContext, location: RouteLocation) {
   const search = new URLSearchParams(location.search);
@@ -88,15 +91,17 @@ export async function loadCatalogShareRouteFromLocation(
         session.threadId.length === shareRoute.fullLength &&
         session.threadId.startsWith(target.shortId),
     );
+    const pathForThread = (session: (typeof matches)[number], prefixLength: number) =>
+      buildControlUiCatalogSharePath({
+        shareRoute,
+        threadId: session.threadId,
+        displayName: session.name,
+        basePath: context.basePath,
+        prefixLength,
+      });
     if (matches.length > 1 || host.nextCursor) {
       const candidates = matches.flatMap((session) => {
-        const href = buildControlUiCatalogSharePath({
-          shareRoute,
-          threadId: session.threadId,
-          displayName: session.name,
-          basePath: context.basePath,
-          prefixLength: shareRoute.fullLength,
-        });
+        const href = pathForThread(session, shareRoute.fullLength);
         return href
           ? [
               {
@@ -120,13 +125,7 @@ export async function loadCatalogShareRouteFromLocation(
     if (!session) {
       return missingSessionRouteData(context, "chat", agentId);
     }
-    const pathname = buildControlUiCatalogSharePath({
-      shareRoute,
-      threadId: session.threadId,
-      displayName: session.name,
-      basePath: context.basePath,
-      prefixLength: target.shortId.length,
-    });
+    const pathname = pathForThread(session, target.shortId.length);
     if (!pathname) {
       return routeError(t("chat.sessionRoute.catalogShareUnavailable"));
     }

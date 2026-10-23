@@ -1,6 +1,5 @@
-// Public media-understanding helpers and types for provider plugins.
-
 export type {
+  AudioTranscriptionConfigContext,
   AudioTranscriptionRequest,
   AudioTranscriptionResult,
   ImageDescriptionRequest,
@@ -13,6 +12,8 @@ export type {
   MediaUnderstandingProviderAuthResult,
   MediaUnderstandingProviderRequestAuth,
   MediaUnderstandingProviderSyntheticAuthResult,
+  PdfAnalysisRequest,
+  PdfAnalysisResult,
   StructuredExtractionImageInput,
   StructuredExtractionInput,
   StructuredExtractionRequest,

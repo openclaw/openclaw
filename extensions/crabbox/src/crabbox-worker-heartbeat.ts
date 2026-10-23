@@ -1,7 +1,12 @@
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { crabboxCommandError } from "./crabbox-worker-command-error.js";
-
-const CRABBOX_HEARTBEAT_UPGRADE = "upgrade Crabbox to v0.44.0 or newer for `crabbox heartbeat`";
+import {
+  crabboxCommandError,
+  runCrabboxCommandWithCoordinatorRetry,
+  sanitizeCrabboxNotice,
+} from "./crabbox-worker-command.js";
+import { parseInspectJson, type CrabboxLeaseLifetime } from "./crabbox-worker-inspect.js";
+import { heartbeatIntervalMs } from "./crabbox-worker-profile.js";
+import { CRABBOX_HEARTBEAT_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 type HeartbeatContext = {
   binary: string;
@@ -10,6 +15,7 @@ type HeartbeatContext = {
   id: string;
   idleTimeout: string;
   provider: string;
+  lifetime?: CrabboxLeaseLifetime;
 };
 
 type HeartbeatEntry = HeartbeatContext & {
@@ -17,29 +23,19 @@ type HeartbeatEntry = HeartbeatContext & {
   failureWarned: boolean;
   pending?: Promise<void>;
   timer?: ReturnType<typeof setTimeout>;
+  notice?: string;
 };
 
-function permanentHeartbeatFailure(result: SpawnResult): "command" | "provider" | undefined {
+function providerDoesNotSupportHeartbeat(result: SpawnResult): boolean {
   const output = `${result.stderr}\n${result.stdout}`;
-  if (
+  return (
     result.termination === "exit" &&
     result.code === 2 &&
     /\bprovider=\S+ does not support lease heartbeat\b/iu.test(output)
-  ) {
-    return "provider";
-  }
-  const commandUnknown =
-    /\b(?:unexpected argument|unknown command|unrecognized command)[^\r\n]*\bheartbeat\b/iu.test(
-      output,
-    ) || /\bheartbeat\b[^\r\n]*\b(?:unknown|unrecognized)\b/iu.test(output);
-  // Exit 2 also reports claim conflicts; only explicit capability errors disable renewal.
-  return commandUnknown ? "command" : undefined;
+  );
 }
 
-export function createCrabboxHeartbeatManager(dependencies: {
-  run: (context: HeartbeatContext, signal: AbortSignal) => Promise<SpawnResult>;
-  warn: (message: string) => void;
-}) {
+export function createCrabboxHeartbeatManager(dependencies: { warn: (message: string) => void }) {
   const entries = new Map<string, HeartbeatEntry>();
   let disposed = false;
   const isCurrent = (entry: HeartbeatEntry) =>
@@ -48,12 +44,30 @@ export function createCrabboxHeartbeatManager(dependencies: {
     dependencies.warn(
       `${message}; cloud worker machines may be reaped after ${entry.idleTimeout} of coordinator-idle time`,
     );
+  const observe = (entry: HeartbeatEntry, lifetime?: CrabboxLeaseLifetime) => {
+    entry.lifetime = { ...entry.lifetime, ...lifetime };
+    const idle = entry.lifetime.idleTimeoutMs;
+    if (idle !== undefined) {
+      entry.idleTimeout = `${idle}ms`;
+      entry.heartbeatIntervalMs = heartbeatIntervalMs(idle);
+      entry.heartbeatTimeoutMs = Math.min(
+        CRABBOX_HEARTBEAT_TIMEOUT_MS,
+        Math.max(1, Math.floor(idle / 2)),
+      );
+    }
+    const notice = lifetime?.policyNotice;
+    if (notice && notice !== entry.notice) {
+      dependencies.warn(`Crabbox worker lease ${entry.id}: ${notice}`);
+      entry.notice = notice;
+    }
+  };
 
   const schedule = (entry: HeartbeatEntry, delayMs = entry.heartbeatIntervalMs) => {
     if (!isCurrent(entry)) {
       return;
     }
     entry.timer = setTimeout(() => {
+      entry.timer = undefined;
       entry.pending = heartbeat(entry);
     }, delayMs);
     entry.timer.unref?.();
@@ -66,7 +80,22 @@ export function createCrabboxHeartbeatManager(dependencies: {
     let result: SpawnResult;
     const startedAt = Date.now();
     try {
-      result = await dependencies.run(entry, entry.controller.signal);
+      result = await runCrabboxCommandWithCoordinatorRetry({
+        action: "heartbeat",
+        args: [
+          "heartbeat",
+          "--provider",
+          entry.provider,
+          "--id",
+          entry.id,
+          "--idle-timeout",
+          entry.idleTimeout,
+          "--json",
+        ],
+        binary: entry.binary,
+        signal: entry.controller.signal,
+        timeoutMs: entry.heartbeatTimeoutMs,
+      });
     } catch (error) {
       if (isCurrent(entry) && !entry.failureWarned) {
         entry.failureWarned = true;
@@ -79,17 +108,38 @@ export function createCrabboxHeartbeatManager(dependencies: {
       return;
     }
     if (result.termination === "exit" && result.code === 0) {
+      try {
+        if (result.stdout.trim()) {
+          const inspected = parseInspectJson(result.stdout);
+          if (inspected.id !== entry.id) {
+            throw new Error("Crabbox heartbeat returned a different lease id");
+          }
+          observe(entry, inspected.lifetime);
+        }
+        const notice = sanitizeCrabboxNotice(result.stderr);
+        if (notice) {
+          observe(entry, { policyNotice: notice });
+        }
+      } catch (error) {
+        if (!entry.failureWarned) {
+          warn(
+            entry,
+            error instanceof Error ? error.message : "Invalid Crabbox heartbeat response",
+          );
+        }
+        entry.failureWarned = true;
+        schedule(entry);
+        return;
+      }
       entry.failureWarned = false;
       schedule(entry);
       return;
     }
-    const permanentFailure = permanentHeartbeatFailure(result);
-    if (permanentFailure) {
-      const message =
-        permanentFailure === "command"
-          ? `Crabbox heartbeat is unavailable for worker lease ${entry.id}; ${CRABBOX_HEARTBEAT_UPGRADE}`
-          : `Crabbox provider ${entry.provider} does not support heartbeat for worker lease ${entry.id}`;
-      warn(entry, message);
+    if (providerDoesNotSupportHeartbeat(result)) {
+      warn(
+        entry,
+        `Crabbox provider ${entry.provider} does not support heartbeat for worker lease ${entry.id}`,
+      );
       return;
     }
     if (!entry.failureWarned) {
@@ -120,10 +170,23 @@ export function createCrabboxHeartbeatManager(dependencies: {
 
   return {
     start(context: HeartbeatContext): void {
-      if (disposed || entries.has(context.id)) {
+      if (disposed) {
+        return;
+      }
+      const existing = entries.get(context.id);
+      if (existing) {
+        if (isCurrent(existing)) {
+          const previousInterval = existing.heartbeatIntervalMs;
+          observe(existing, context.lifetime);
+          if (existing.timer && existing.heartbeatIntervalMs < previousInterval) {
+            clearTimeout(existing.timer);
+            schedule(existing);
+          }
+        }
         return;
       }
       const entry = { ...context, failureWarned: false, controller: new AbortController() };
+      observe(entry, context.lifetime);
       entries.set(context.id, entry);
       schedule(entry, 0);
     },

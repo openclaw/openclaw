@@ -1,204 +1,83 @@
-// Discord tests cover audit plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import {
-  auditDiscordChannelPermissionsWithFetcher,
-  collectDiscordAuditChannelIdsForAccount,
+  auditDiscordChannelPermissionsWithFetcher as auditPermissions,
+  collectDiscordAuditChannelIdsForAccount as collect,
 } from "./audit-core.js";
 
-const fetchChannelPermissionsDiscordMock = vi.fn();
-
-function readDiscordGuilds(cfg: OpenClawConfig) {
-  const guilds = cfg.channels?.discord?.guilds;
-  if (!guilds) {
-    throw new Error("expected discord guilds config");
-  }
-  return guilds;
+const fetchPermissions = vi.fn();
+function legacyConfig(channels: Record<string, { allow: boolean }>): OpenClawConfig {
+  return {
+    channels: { discord: { guilds: { "123": { channels } } } },
+  } as unknown as OpenClawConfig;
 }
-
-describe("discord audit", () => {
-  beforeEach(() => {
-    fetchChannelPermissionsDiscordMock.mockReset();
+function audit(channelIds: string[], cfg: OpenClawConfig) {
+  return auditPermissions({
+    cfg,
+    token: "t",
+    accountId: "default",
+    channelIds,
+    timeoutMs: 1000,
+    fetchChannelPermissions: fetchPermissions,
   });
+}
+beforeEach(() => {
+  fetchPermissions.mockReset();
+});
 
-  it("collects numeric channel ids even when config uses allow=false and counts unresolved keys", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          enabled: true,
-          token: "t",
-          groupPolicy: "allowlist",
-          guilds: {
-            "123": {
-              channels: {
-                "111": { allow: true },
-                general: { allow: true },
-                "222": { allow: false },
-              },
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const collected = collectDiscordAuditChannelIdsForAccount({ guilds: readDiscordGuilds(cfg) });
-    expect(collected.channelIds).toEqual(["111", "222"]);
-    expect(collected.unresolvedChannels).toBe(1);
-
-    fetchChannelPermissionsDiscordMock.mockResolvedValueOnce({
-      channelId: "111",
-      permissions: ["ViewChannel"],
-      raw: "0",
-      isDm: false,
-    });
-    fetchChannelPermissionsDiscordMock.mockResolvedValueOnce({
-      channelId: "222",
-      permissions: ["ViewChannel", "SendMessages"],
-      raw: "0",
-      isDm: false,
-    });
-
-    const audit = await auditDiscordChannelPermissionsWithFetcher({
-      cfg,
-      token: "t",
-      accountId: "default",
-      channelIds: collected.channelIds,
-      timeoutMs: 1000,
-      fetchChannelPermissions: fetchChannelPermissionsDiscordMock,
-    });
-    expect(audit.ok).toBe(false);
-    expect(audit.channels).toHaveLength(2);
-    expect(audit.channels[0]?.channelId).toBe("111");
-    expect(audit.channels[0]?.missing).toContain("SendMessages");
+it("audits disallowed numeric channels and counts unresolved keys", async () => {
+  const cfg = legacyConfig({
+    "111": { allow: true },
+    general: { allow: true },
+    "222": { allow: false },
   });
+  const collected = collect({ guilds: cfg.channels?.discord?.guilds });
+  expect(collected).toEqual({ channelIds: ["111", "222"], unresolvedChannels: 1 });
+  fetchPermissions
+    .mockResolvedValueOnce({ permissions: ["ViewChannel"] })
+    .mockResolvedValueOnce({ permissions: ["ViewChannel", "SendMessages"] });
+  const result = await audit(collected.channelIds, cfg);
+  expect(result.ok).toBe(false);
+  expect(result.channels).toHaveLength(2);
+  expect(result.channels[0]?.channelId).toBe("111");
+  expect(result.channels[0]?.missing).toContain("SendMessages");
+});
 
-  it("does not count '*' wildcard key as unresolved channel", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          enabled: true,
-          token: "t",
-          groupPolicy: "allowlist",
-          guilds: {
-            "123": {
-              channels: {
-                "111": { allow: true },
-                "*": { allow: true },
-              },
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const collected = collectDiscordAuditChannelIdsForAccount({ guilds: readDiscordGuilds(cfg) });
-    expect(collected.channelIds).toEqual(["111"]);
-    expect(collected.unresolvedChannels).toBe(0);
+it("does not count wildcard keys as unresolved channels", () => {
+  const cfg = legacyConfig({ "111": { allow: true }, "*": { allow: true } });
+  expect(collect({ guilds: cfg.channels?.discord?.guilds })).toEqual({
+    channelIds: ["111"],
+    unresolvedChannels: 0,
   });
+});
 
-  it("handles guild with only '*' wildcard and no numeric channel ids", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          enabled: true,
-          token: "t",
-          groupPolicy: "allowlist",
-          guilds: {
-            "123": {
-              channels: {
-                "*": { allow: true },
-              },
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+it("includes voice auto-join channels", () => {
+  const voice = {
+    autoJoin: [
+      { guildId: "123", channelId: "222" },
+      { guildId: "123", channelId: "general" },
+    ],
+  };
+  const guilds = { "123": { channels: { "111": { enabled: true } } } };
+  expect(collect({ guilds, voice })).toEqual({ channelIds: ["111", "222"], unresolvedChannels: 1 });
+});
 
-    const collected = collectDiscordAuditChannelIdsForAccount({ guilds: readDiscordGuilds(cfg) });
-    expect(collected.channelIds).toStrictEqual([]);
-    expect(collected.unresolvedChannels).toBe(0);
+const voiceMissing = ["Connect", "Speak", "ReadMessageHistory"];
+const threadMissing = ["SendMessagesInThreads"];
+it.each([
+  [ChannelType.GuildVoice, "222", voiceMissing],
+  [ChannelType.GuildStageVoice, "222", voiceMissing],
+  [ChannelType.GuildNewsThread, "333", threadMissing],
+  [ChannelType.GuildPublicThread, "333", threadMissing],
+  [ChannelType.GuildPrivateThread, "333", threadMissing],
+] as const)("requires channel-type permissions for %s", async (channelType, id, missing) => {
+  fetchPermissions.mockResolvedValueOnce({
+    permissions: ["ViewChannel", "SendMessages"],
+    channelType,
   });
-
-  it("collects audit channel ids without resolving SecretRef-backed Discord tokens", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          enabled: true,
-          token: {
-            source: "env",
-            provider: "default",
-            id: "DISCORD_BOT_TOKEN",
-          },
-          guilds: {
-            "123": {
-              channels: {
-                "111": { allow: true },
-                general: { allow: true },
-              },
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const collected = collectDiscordAuditChannelIdsForAccount({ guilds: readDiscordGuilds(cfg) });
-    expect(collected.channelIds).toEqual(["111"]);
-    expect(collected.unresolvedChannels).toBe(1);
-  });
-
-  it("includes configured voice auto-join channels in permission audits", () => {
-    const collected = collectDiscordAuditChannelIdsForAccount({
-      guilds: {
-        "123": {
-          channels: {
-            "111": { enabled: true },
-          },
-        },
-      },
-      voice: {
-        autoJoin: [
-          { guildId: "123", channelId: "222" },
-          { guildId: "123", channelId: "general" },
-        ],
-      },
-    });
-
-    expect(collected.channelIds).toEqual(["111", "222"]);
-    expect(collected.unresolvedChannels).toBe(1);
-  });
-
-  it.each([ChannelType.GuildVoice, ChannelType.GuildStageVoice])(
-    "requires voice permissions for voice channel audit targets of type %s",
-    async (channelType) => {
-      const cfg = {
-        channels: {
-          discord: {
-            enabled: true,
-            token: "t",
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      fetchChannelPermissionsDiscordMock.mockResolvedValueOnce({
-        channelId: "222",
-        permissions: ["ViewChannel", "SendMessages"],
-        channelType,
-        raw: "0",
-        isDm: false,
-      });
-
-      const audit = await auditDiscordChannelPermissionsWithFetcher({
-        cfg,
-        token: "t",
-        accountId: "default",
-        channelIds: ["222"],
-        timeoutMs: 1000,
-        fetchChannelPermissions: fetchChannelPermissionsDiscordMock,
-      });
-
-      expect(audit.ok).toBe(false);
-      expect(audit.channels[0]?.missing).toEqual(["Connect", "Speak", "ReadMessageHistory"]);
-    },
-  );
+  const cfg = { channels: { discord: { enabled: true, token: "t" } } };
+  const result = await audit([id], cfg);
+  expect(result.ok).toBe(false);
+  expect(result.channels[0]?.missing).toEqual(missing);
 });

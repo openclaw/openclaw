@@ -1,0 +1,33 @@
+{
+  "id": "apple-fm",
+  "name": "Apple Foundation Models",
+  "description": "On-device Apple Intelligence inference for lightweight setup and short tasks.",
+  "categories": ["models"],
+  "activation": { "onStartup": false },
+  "enabledByDefaultOnPlatforms": ["darwin"],
+  "autoEnableWhenConfiguredProviders": ["apple-fm"],
+  "providers": ["apple-fm"],
+  "syntheticAuthRefs": ["apple-fm"],
+  "nonSecretAuthMarkers": ["apple-fm-local"],
+  "modelPricing": { "providers": { "apple-fm": { "external": false } } },
+  "setup": { "providers": [{ "id": "apple-fm", "authMethods": ["local"] }] },
+  "providerAuthChoices": [
+    {
+      "provider": "apple-fm",
+      "method": "local",
+      "choiceId": "apple-fm",
+      "platforms": ["darwin"],
+      "assistantVisibility": "detected-only",
+      "modelTarget": "utility",
+      "choiceLabel": "Apple Foundation Models (on-device)",
+      "choiceHint": "Free on-device setup and utility tasks; choose a separate model for your agent",
+      "groupId": "apple-fm",
+      "groupLabel": "Apple Foundation Models",
+      "groupHint": "On-device, no API key",
+      "onboardingFeatured": true,
+      "appGuidedDiscovery": true,
+      "appGuidedActionLabel": "Set up on this Mac"
+    }
+  ],
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

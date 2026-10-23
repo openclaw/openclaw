@@ -1,6 +1,6 @@
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
-import { requestXaiCodeExecution } from "./src/code-execution-shared.js";
+import { createCodeExecutionTool } from "./code-execution.js";
 import { requestXaiWebSearch } from "./src/web-search-shared.js";
 import { requestXaiXSearch } from "./src/x-search-shared.js";
 
@@ -35,29 +35,47 @@ const callers = [
   {
     name: "code_execution",
     grok43Effort: "low",
-    run: (model: string) => requestXaiCodeExecution({ ...connection, model, task: "fixture" }),
+    run: (model: string) => {
+      const config = {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: { apiKey: connection.apiKey },
+                codeExecution: { model, timeoutSeconds: connection.timeoutSeconds },
+              },
+            },
+          },
+        },
+      };
+      const tool = createCodeExecutionTool({ config, runtimeConfig: config });
+      if (!tool) {
+        throw new Error("Expected xAI code execution tool");
+      }
+      return tool.execute("code-execution:policy-fixture", { task: "fixture" });
+    },
   },
 ];
 
-it.each(callers)(
-  "keeps the $name default request within supported reasoning efforts",
-  async ({ run }) => {
-    const request = vi.fn<typeof fetch>(async () =>
-      Response.json({ output_text: "fixture result" }),
-    );
-    vi.stubGlobal("fetch", withFetchPreconnect(request));
-    await run("grok-4.6");
-    expect(request).toHaveBeenCalledOnce();
-    const init = request.mock.calls[0]?.[1];
-    expect(init).toEqual(expect.objectContaining({ body: expect.any(String) }));
-    const body = new Request("https://api.x.ai/v1/responses", init);
-    expect(await body.json()).toMatchObject({
-      model: "grok-4.6",
-      store: false,
-      reasoning: { effort: "low" },
-    });
-  },
-);
+// Releases newer than the setup default keep its tool effort.
+it.each(
+  callers.flatMap(({ name, run }) =>
+    ["grok-4.7", "grok-4.8"].map((model) => ({ name, run, model })),
+  ),
+)("keeps the $name $model request within supported reasoning efforts", async ({ run, model }) => {
+  const request = vi.fn<typeof fetch>(async () => Response.json({ output_text: "fixture result" }));
+  vi.stubGlobal("fetch", withFetchPreconnect(request));
+  await run(model);
+  expect(request).toHaveBeenCalledOnce();
+  const init = request.mock.calls[0]?.[1];
+  expect(init).toEqual(expect.objectContaining({ body: expect.any(String) }));
+  const body = new Request("https://api.x.ai/v1/responses", init);
+  expect(await body.json()).toMatchObject({
+    model,
+    store: false,
+    reasoning: { effort: "low" },
+  });
+});
 
 it.each(callers)("preserves an explicit model and omitted effort for $name", async ({ run }) => {
   const request = vi.fn<typeof fetch>(async () => Response.json({ output_text: "fixture result" }));

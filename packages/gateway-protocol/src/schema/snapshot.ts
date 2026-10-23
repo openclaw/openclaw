@@ -1,4 +1,3 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { AgentOwnershipSchema } from "./agents-models-skills.js";
@@ -6,7 +5,9 @@ import { closedObject } from "./closed-object.js";
 import { UpdateAvailableSchema, UpdateScheduleStateSchema } from "./config.js";
 import { GatewaySuspensionSchema } from "./gateway-suspend.js";
 import { NonEmptyString } from "./primitives.js";
+import { GatewayEventLoopHealthSchema } from "./runtime-vitals.js";
 import { SessionPersonSchema } from "./session-participant.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 /**
  * Gateway state snapshot schemas.
@@ -16,7 +17,10 @@ import { SessionPersonSchema } from "./session-participant.js";
  */
 /** One gateway-visible presence record for a node/client/runtime. */
 export const PresenceEntrySchema = closedObject({
+  /** Gateway-assigned id for this connection; changes after reconnect. */
+  connectionId: Type.Optional(NonEmptyString),
   host: Type.Optional(NonEmptyString),
+  clientId: Type.Optional(NonEmptyString),
   ip: Type.Optional(NonEmptyString),
   version: Type.Optional(NonEmptyString),
   platform: Type.Optional(NonEmptyString),
@@ -33,6 +37,8 @@ export const PresenceEntrySchema = closedObject({
   /** Server timestamps for the person's continuous online interval and last accepted activity. */
   onlineSince: Type.Optional(Type.Integer({ minimum: 0 })),
   lastActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
+  /** Latest accepted OpenClaw interaction on this connection, independent of person timing. */
+  connectionLastActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
   deviceId: Type.Optional(NonEmptyString),
   roles: Type.Optional(Type.Array(NonEmptyString)),
   scopes: Type.Optional(Type.Array(NonEmptyString)),
@@ -67,26 +73,11 @@ const HealthSnapshotSchema = closedObject({
   // Every field is optional because hello snapshots use an empty object until
   // the asynchronous health producer has populated the cache.
   ok: Type.Optional(Type.Literal(true)),
+  // Live health RPC readiness, independent of optional channel health.
+  coreReady: Type.Optional(Type.Boolean()),
   ts: Type.Optional(Type.Integer({ minimum: 0 })),
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
-  eventLoop: Type.Optional(
-    closedObject({
-      degraded: Type.Boolean(),
-      degradedSinceMs: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
-      reasons: Type.Array(
-        Type.Union([
-          Type.Literal("event_loop_delay"),
-          Type.Literal("event_loop_utilization"),
-          Type.Literal("cpu"),
-        ]),
-      ),
-      intervalMs: Type.Number({ minimum: 0 }),
-      delayP99Ms: Type.Number({ minimum: 0 }),
-      delayMaxMs: Type.Number({ minimum: 0 }),
-      utilization: Type.Number({ minimum: 0 }),
-      cpuCoreRatio: Type.Number({ minimum: 0 }),
-    }),
-  ),
+  eventLoop: Type.Optional(GatewayEventLoopHealthSchema),
   plugins: Type.Optional(
     closedObject({
       loaded: Type.Array(Type.String()),
@@ -165,16 +156,11 @@ const HealthSnapshotSchema = closedObject({
   ),
   modelPricing: Type.Optional(
     closedObject({
-      state: Type.Union([Type.Literal("ok"), Type.Literal("degraded"), Type.Literal("disabled")]),
+      state: stringLiteralUnion(["ok", "degraded", "disabled"]),
       sources: Type.Array(
         closedObject({
-          source: Type.Union([
-            Type.Literal("openrouter"),
-            Type.Literal("litellm"),
-            Type.Literal("bootstrap"),
-            Type.Literal("refresh"),
-          ]),
-          state: Type.Union([Type.Literal("ok"), Type.Literal("degraded")]),
+          source: stringLiteralUnion(["openrouter", "litellm", "bootstrap", "refresh"]),
+          state: stringLiteralUnion(["ok", "degraded"]),
           lastFailureAt: Type.Optional(Type.Integer({ minimum: 0 })),
           detail: Type.Optional(Type.String()),
         }),
@@ -185,7 +171,15 @@ const HealthSnapshotSchema = closedObject({
   ),
   configReload: Type.Optional(
     closedObject({
-      hotReloadStatus: Type.Union([Type.Literal("active"), Type.Literal("disabled")]),
+      hotReloadStatus: stringLiteralUnion(["active", "disabled"]),
+    }),
+  ),
+  // The running process reports the Node binary it will use for child workers.
+  // A deleted Homebrew Cellar path stays reachable at the Gateway port.
+  childRuntime: Type.Optional(
+    closedObject({
+      execPath: Type.String(),
+      available: Type.Boolean(),
     }),
   ),
   // Channel plugins own their nested account/probe summaries, so this is the
@@ -249,14 +243,7 @@ export const SnapshotSchema = closedObject({
   sessionDefaults: Type.Optional(SessionDefaultsSchema),
   /** Credential-free browser sign-in endpoint advertised to authenticated operators. */
   controlUiIdentityUrl: Type.Optional(NonEmptyString),
-  authMode: Type.Optional(
-    Type.Union([
-      Type.Literal("none"),
-      Type.Literal("token"),
-      Type.Literal("password"),
-      Type.Literal("trusted-proxy"),
-    ]),
-  ),
+  authMode: Type.Optional(stringLiteralUnion(["none", "token", "password", "trusted-proxy"])),
   updateAvailable: Type.Optional(UpdateAvailableSchema),
   updateSchedule: Type.Optional(UpdateScheduleStateSchema),
 });

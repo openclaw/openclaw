@@ -107,7 +107,7 @@ Four-layer defense model:
 3. Docker isolation: `DOCKER-USER` iptables chain prevents external port exposure
 4. Systemd hardening: `NoNewPrivileges`, `PrivateTmp`, unprivileged user
 
-Verify your external attack surface:
+Check which ports are publicly reachable:
 
 ```bash
 nmap -p- YOUR_SERVER_IP
@@ -115,7 +115,7 @@ nmap -p- YOUR_SERVER_IP
 
 Only port 22 (SSH) should be open. Gateway and Docker stay locked down.
 
-Docker is installed for agent sandboxes (isolated tool execution), not for running the gateway. See [Multi-Agent Sandbox and Tools](/tools/multi-agent-sandbox-tools) for sandbox configuration.
+Docker is installed for agent sandboxes (isolated tool execution), not for running the gateway. See [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) for sandbox configuration.
 
 ## Manual installation
 
@@ -161,7 +161,7 @@ cd openclaw-ansible
 ./run-playbook.sh
 ```
 
-This is idempotent and safe to run multiple times.
+You can run this multiple times without duplicating its effects.
 
 ## Troubleshooting
 
@@ -224,4 +224,4 @@ For detailed security architecture and troubleshooting, see the openclaw-ansible
 - [openclaw-ansible](https://github.com/openclaw/openclaw-ansible): full deployment guide
 - [Docker](/install/docker): containerized gateway setup
 - [Sandboxing](/gateway/sandboxing): agent sandbox configuration
-- [Multi-Agent Sandbox and Tools](/tools/multi-agent-sandbox-tools): per-agent isolation
+- [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools): per-agent isolation

@@ -1,9 +1,17 @@
-import { withPluginMetadataSnapshotScope } from "../current-plugin-metadata-snapshot.js";
+import {
+  runOutsidePluginMetadataSnapshotScope,
+  createPluginMetadataSnapshotFrame,
+} from "../current-plugin-metadata-snapshot.js";
+import { runWithPluginExecutionFrame } from "../plugin-instance-invocation.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import type { PluginRegistry } from "../registry-types.js";
-import { withPluginRuntimeRegistryScope } from "./gateway-request-scope.js";
-import { withPluginRuntimeGenerationRegistryScope } from "./generation-state.js";
+import { getPluginRuntimeExecutionFrame, PluginRuntimeExecutionFrame } from "./execution-frame.js";
+import {
+  runOutsidePluginRuntimeRegistryScope,
+  createRegistryScope,
+} from "./gateway-request-scope.js";
+import { runOutsidePluginRuntimeGenerationRegistryScope } from "./generation-state.js";
 
 export { getPluginRuntimeGenerationRegistry } from "./generation-state.js";
 
@@ -16,17 +24,28 @@ export function withPluginRuntimeGenerationScope<T>(
   run: () => T,
 ): T {
   const pluginRegistry = generation.pluginRegistry ?? createEmptyPluginRegistry();
-  return withPluginMetadataSnapshotScope(
+  const frame = createPluginMetadataSnapshotFrame(
     generation.metadataSnapshot,
-    () =>
-      withPluginRuntimeGenerationRegistryScope(pluginRegistry, () =>
-        withPluginRuntimeRegistryScope(
-          pluginRegistry,
-          run,
-          generation.metadataSnapshot.declaredProviderOwners,
-        ),
-      ),
     // The prepared generation already owns discovery and policy compatibility.
     { trustConfigIdentity: true },
+  );
+  return runWithPluginExecutionFrame(
+    new PluginRuntimeExecutionFrame(
+      frame,
+      createRegistryScope(
+        pluginRegistry,
+        getPluginRuntimeExecutionFrame(frame)?.gatewayScope,
+        generation.metadataSnapshot.declaredProviderOwners,
+      ),
+      pluginRegistry,
+    ),
+    run,
+  );
+}
+
+/** Re-admission drops the old generation while retaining the exact Gateway caller. */
+export function runOutsidePluginRuntimeGenerationScope<T>(run: () => T): T {
+  return runOutsidePluginRuntimeGenerationRegistryScope(() =>
+    runOutsidePluginMetadataSnapshotScope(() => runOutsidePluginRuntimeRegistryScope(run)),
   );
 }

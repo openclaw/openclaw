@@ -1,7 +1,8 @@
 import { fork } from "node:child_process";
+import { on, once } from "node:events";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
@@ -10,14 +11,14 @@ import {
 } from "./tailscale-route-owner-protocol.js";
 import { runTailscaleRouteOwner } from "./tailscale-route-owner.worker.js";
 
-function spawnRouteOwnerFixture() {
+function spawnRouteOwnerFixture(waitForReady: boolean, abortSignal: AbortSignal) {
+  abortSignal.throwIfAborted();
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.tailscaleRouteOwner);
-  const workerPath = fileURLToPath(workerUrl);
   const fixturePath = fileURLToPath(
     new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
   );
   const worker = fork(
-    workerPath,
+    fileURLToPath(workerUrl),
     [
       TAILSCALE_ROUTE_OWNER_ARG,
       JSON.stringify({ argv: [fixturePath, "serve", "--yes", "--bg=false", "18789"] }),
@@ -29,110 +30,102 @@ function spawnRouteOwnerFixture() {
   );
   const messages: TailscaleRouteOwnerMessage[] = [];
   worker.on("message", (message: TailscaleRouteOwnerMessage) => messages.push(message));
-  return { messages, worker };
+  const ready = waitForReady
+    ? (async () => {
+        const observers = new AbortController();
+        const signal = AbortSignal.any([abortSignal, observers.signal]);
+        const incoming = on(worker, "message", { signal });
+        try {
+          await Promise.race([
+            (async () => {
+              for await (const args of incoming) {
+                const message: TailscaleRouteOwnerMessage = args[0];
+                if (message.type === "ready") {
+                  return;
+                }
+                if (message.type === "failed") {
+                  throw new Error(`route owner failed: ${JSON.stringify(message)}`);
+                }
+              }
+            })(),
+            once(worker, "exit", { signal }).then((exit) => {
+              throw new Error(`route owner exited before readiness: ${JSON.stringify(exit)}`);
+            }),
+          ]);
+        } finally {
+          observers.abort();
+        }
+      })()
+    : undefined;
+  return { messages, ready, worker };
 }
 
-describe("Tailscale route owner", () => {
-  it("reports readiness and terminates the foreground claim when its owner stops", async () => {
-    const messages: TailscaleRouteOwnerMessage[] = [];
-    const owner = runTailscaleRouteOwner(
-      {
-        argv: [
-          process.execPath,
-          "-e",
-          'process.stdout.write("Press Ctrl+C to exit.\\n"); setInterval(() => {}, 1000)',
-        ],
-      },
-      (message) => messages.push(message),
-    );
-
-    await vi.waitFor(() => {
-      expect(messages).toContainEqual({ type: "ready" });
-    });
+type ClaimCase = { name: string; script: string; stopping: boolean };
+it.each`
+  name                                                      | script                                                                             | stopping
+  ${"reports readiness and stops the foreground claim"}     | ${'process.stdout.write("Press Ctrl+C to exit.\\n"); setInterval(() => {}, 1000)'} | ${true}
+  ${"reports output when the claim exits before readiness"} | ${'process.stderr.write("route denied\\n"); process.exit(7)'}                      | ${false}
+`("$name", async ({ script, stopping }: ClaimCase) => {
+  const messages: TailscaleRouteOwnerMessage[] = [];
+  const owner = runTailscaleRouteOwner({ argv: [process.execPath, "-e", script] }, (message) =>
+    messages.push(message),
+  );
+  if (stopping) {
+    await vi.waitFor(() => expect(messages).toContainEqual({ type: "ready" }));
     owner.stop();
-
-    await expect(owner.exited).resolves.toMatchObject({ stopping: true });
+  }
+  await expect(owner.exited).resolves.toMatchObject(
+    stopping ? { stopping: true } : { code: 7, stopping: false },
+  );
+  if (stopping) {
     expect(messages.some((message) => message.type === "failed")).toBe(false);
-  });
-
-  it("reports command output when the claim exits before readiness", async () => {
-    const messages: TailscaleRouteOwnerMessage[] = [];
-    const owner = runTailscaleRouteOwner(
-      {
-        argv: [process.execPath, "-e", 'process.stderr.write("route denied\\n"); process.exit(7)'],
-      },
-      (message) => messages.push(message),
-    );
-
-    await expect(owner.exited).resolves.toMatchObject({ code: 7, stopping: false });
+  } else {
     expect(messages).toContainEqual(
       expect.objectContaining({ type: "failed", code: 7, stderr: "route denied\n" }),
     );
-  });
+  }
+});
 
-  it.runIf(process.platform !== "win32").each([false, true])(
-    "terminates the claim when the Gateway IPC owner disappears (ready=%s)",
-    async (waitForReady) => {
-      const { messages, worker } = spawnRouteOwnerFixture();
-      try {
-        if (waitForReady) {
-          await vi.waitFor(() => {
-            expect(messages).toContainEqual({ type: "ready" });
-          });
-        }
-        const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-          (resolve) => {
-            worker.once("exit", (code, signal) => resolve({ code, signal }));
-          },
-        );
-        worker.disconnect();
-
-        await expect(exit).resolves.toEqual({ code: 0, signal: null });
-      } finally {
-        if (worker.exitCode === null && worker.signalCode === null) {
-          worker.kill("SIGKILL");
-        }
+it.runIf(process.platform !== "win32").for([
+  { waitForReady: false, interrupt: false },
+  { waitForReady: true, interrupt: false },
+  { waitForReady: true, interrupt: true },
+])(
+  "releases the claim (ready=$waitForReady, interrupt=$interrupt)",
+  async ({ waitForReady, interrupt }, { signal }) => {
+    const { messages, ready, worker } = spawnRouteOwnerFixture(waitForReady, signal);
+    let routePid: number | undefined;
+    try {
+      if (waitForReady) {
+        await ready;
       }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "terminates the claim before exiting on an interactive interrupt",
-    async () => {
-      const { messages, worker } = spawnRouteOwnerFixture();
-      let routePid: number | undefined;
-      try {
-        await vi.waitFor(() => {
-          expect(messages).toContainEqual({ type: "ready" });
-        });
+      if (interrupt) {
         const spawned = messages.find((message) => message.type === "spawned");
         if (!spawned) {
           throw new Error("route owner did not report its claim process");
         }
         routePid = spawned.pid;
-        const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-          (resolve) => {
-            worker.once("exit", (code, signal) => resolve({ code, signal }));
-          },
-        );
-        worker.kill("SIGINT");
-
-        await expect(exit).resolves.toEqual({ code: 0, signal: null });
-        await vi.waitFor(() => {
-          expect(() => process.kill(spawned.pid, 0)).toThrow();
-        });
-      } finally {
-        if (worker.exitCode === null && worker.signalCode === null) {
-          worker.kill("SIGKILL");
-        }
-        if (routePid) {
-          try {
-            process.kill(routePid, "SIGKILL");
-          } catch {
-            // Already released by the worker.
-          }
-        }
       }
-    },
-  );
-});
+      const exit = once(worker, "exit");
+      if (interrupt) {
+        worker.kill("SIGINT");
+      } else {
+        worker.disconnect();
+      }
+      await expect(exit).resolves.toEqual([0, null]);
+      if (routePid) {
+        const pid = routePid;
+        await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+      }
+    } finally {
+      if (worker.exitCode === null && worker.signalCode === null) {
+        worker.kill("SIGKILL");
+      }
+      if (routePid) {
+        try {
+          process.kill(routePid, "SIGKILL");
+        } catch {}
+      }
+    }
+  },
+);

@@ -1,84 +1,32 @@
-import path from "node:path";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import {
-  appendSqliteTrajectoryRuntimeEvents,
-  closeOpenClawAgentDatabasesForTest,
-  formatSqliteSessionFileMarker,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { createParitySessionFixture } from "./runtime-parity-session.test-support.js";
 import { captureRuntimeParityCell } from "./runtime-parity.js";
-import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-const tempDirs = createTempDirHarness();
+const seedSession = createParitySessionFixture();
 
-afterEach(async () => {
-  // Fixtures point a state dir at these temp workspaces, so the shared and per-agent
-  // SQLite handles stay cached and Windows fails the removal with EBUSY. The agent close
-  // releases its leases through shared state and reopens it, so the store is released second.
-  closeOpenClawAgentDatabasesForTest();
-  resetPluginStateStoreForTests();
-  await tempDirs.cleanup();
-});
-
-async function seedSession(params: {
-  messages: Array<Record<string, unknown>>;
-  parentSessionKey?: string;
-  sessionId: string;
-  sessionKey: string;
-  tempRoot?: string;
-  trajectoryEvents?: Array<{ data?: Record<string, unknown>; type: string }>;
-  updatedAt: number;
-}) {
-  const tempRoot = params.tempRoot ?? (await tempDirs.makeTempDir("qa-runtime-selection-"));
-  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(tempRoot, "state") };
-  const storePath = resolveStorePath(undefined, { agentId: "qa", env });
-  await upsertSessionEntry({
-    agentId: "qa",
-    env,
-    sessionKey: params.sessionKey,
-    storePath,
-    entry: {
-      sessionId: params.sessionId,
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: "qa",
-        sessionId: params.sessionId,
-        storePath,
-      }),
-      updatedAt: params.updatedAt,
-      ...(params.parentSessionKey ? { parentSessionKey: params.parentSessionKey } : {}),
+function toolEvents(
+  name: string,
+  args: Record<string, unknown>,
+  result: Record<string, unknown>,
+  success: boolean,
+) {
+  const tool = { toolCallId: `${name.replaceAll("_", "-")}-1`, name };
+  return [
+    { type: "tool.call", data: { ...tool, arguments: args } },
+    {
+      type: "tool.result",
+      data: { ...tool, status: success ? "completed" : "failed", success, result },
     },
+  ];
+}
+
+function captureSession(tempRoot: string, sessionKey: string) {
+  return captureRuntimeParityCell({
+    runtime: "codex",
+    gateway: { tempRoot },
+    scenarioResult: { status: "pass", details: `RUNTIME_PARITY_SESSION_KEY=${sessionKey}` },
+    wallClockMs: 10,
   });
-  for (const message of params.messages) {
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "qa",
-      env,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath,
-      message: message as never,
-    });
-  }
-  if (params.trajectoryEvents?.length) {
-    appendSqliteTrajectoryRuntimeEvents(
-      { agentId: "qa", env, sessionId: params.sessionId, storePath },
-      params.trajectoryEvents.map((event, index) => ({
-        traceSchema: "openclaw-trajectory",
-        schemaVersion: 1,
-        traceId: params.sessionId,
-        source: "runtime",
-        type: event.type,
-        ts: new Date(index + 1).toISOString(),
-        seq: index + 1,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        runId: "run-1",
-        data: event.data,
-      })),
-    );
-  }
-  return tempRoot;
 }
 
 describe("runtime parity session selection", () => {
@@ -98,37 +46,15 @@ describe("runtime parity session selection", () => {
       parentSessionKey: rootSessionKey,
       messages: [{ role: "user", content: "failure target=web_fetch" }],
       updatedAt: now - 1_000,
-      trajectoryEvents: [
-        {
-          type: "tool.call",
-          data: {
-            toolCallId: "web-fetch-1",
-            name: "web_fetch",
-            arguments: { __qaFailureMode: "denied-input" },
-          },
-        },
-        {
-          type: "tool.result",
-          data: {
-            toolCallId: "web-fetch-1",
-            name: "web_fetch",
-            status: "failed",
-            success: false,
-            result: { error: "url required" },
-          },
-        },
-      ],
+      trajectoryEvents: toolEvents(
+        "web_fetch",
+        { __qaFailureMode: "denied-input" },
+        { error: "url required" },
+        false,
+      ),
     });
 
-    const cell = await captureRuntimeParityCell({
-      runtime: "codex",
-      gateway: { tempRoot },
-      scenarioResult: {
-        status: "pass",
-        details: "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:web_fetch:failure",
-      },
-      wallClockMs: 10,
-    });
+    const cell = await captureSession(tempRoot, "agent:qa:runtime-tool:web_fetch:failure");
 
     expect(cell.toolCalls).toEqual([expect.objectContaining({ tool: "web_fetch" })]);
   });
@@ -141,26 +67,12 @@ describe("runtime parity session selection", () => {
       sessionKey: parentSessionKey,
       messages: [{ role: "user", content: "tool search qa check target=sessions_spawn" }],
       updatedAt: now - 1_000,
-      trajectoryEvents: [
-        {
-          type: "tool.call",
-          data: {
-            toolCallId: "sessions-spawn-1",
-            name: "sessions_spawn",
-            arguments: { task: "reply exactly RUNTIME-TOOL-FIXTURE", mode: "run" },
-          },
-        },
-        {
-          type: "tool.result",
-          data: {
-            toolCallId: "sessions-spawn-1",
-            name: "sessions_spawn",
-            status: "completed",
-            success: true,
-            result: { status: "accepted", childSessionKey: "agent:qa:subagent:child" },
-          },
-        },
-      ],
+      trajectoryEvents: toolEvents(
+        "sessions_spawn",
+        { task: "reply exactly RUNTIME-TOOL-FIXTURE", mode: "run" },
+        { status: "accepted", childSessionKey: "agent:qa:subagent:child" },
+        true,
+      ),
     });
     await seedSession({
       tempRoot,
@@ -171,23 +83,11 @@ describe("runtime parity session selection", () => {
       updatedAt: now,
     });
 
-    const cell = await captureRuntimeParityCell({
-      runtime: "codex",
-      gateway: { tempRoot },
-      scenarioResult: {
-        status: "pass",
-        details: `RUNTIME_PARITY_SESSION_KEY=${parentSessionKey}`,
-      },
-      wallClockMs: 10,
-    });
+    const cell = await captureSession(tempRoot, parentSessionKey);
 
     expect(cell.transcriptBytes).toContain("target=sessions_spawn");
     expect(cell.transcriptBytes).not.toContain("RUNTIME-TOOL-FIXTURE");
-    expect(cell.toolCalls).toEqual([
-      expect.objectContaining({
-        tool: "sessions_spawn",
-      }),
-    ]);
+    expect(cell.toolCalls).toEqual([expect.objectContaining({ tool: "sessions_spawn" })]);
     expect(cell.toolCalls[0]).not.toHaveProperty("errorClass");
     expect(cell.toolCalls[0]?.resultHash).not.toBe("");
   });

@@ -6,10 +6,8 @@ import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import { runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
-import {
-  registerClonedProjectRegistry,
-  registerProjectRegistry,
-} from "../projects/project-registry.js";
+import { registerProjectRegistry } from "../projects/project-registry.js";
+import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const execFileAsync = promisify(execFile);
@@ -103,7 +101,13 @@ describe("doctor project clone shape", () => {
         }
         expect(findings).toHaveLength(1);
         const finding = findings[0]!;
-        expect(finding).toMatchObject({ checkId, severity: "warning", path: clone });
+        expect(finding).toMatchObject({
+          checkId,
+          severity: "warning",
+          category: shape === "missing" ? "fix-now" : "recommended",
+          docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
+          path: clone,
+        });
         expect(finding.message).toContain("Stored project");
         if (shape === "missing") {
           expect(finding.message).toContain("Skipped");

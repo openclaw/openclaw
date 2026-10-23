@@ -1,7 +1,11 @@
 import { vi } from "vitest";
-// Test fixture helpers for constructing ACP runtime session metadata.
+// Test fixtures for ACP runtime sessions, bindings, and reply delivery.
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type {
+  SessionBindingService,
+  SessionBindingServiceV2,
+} from "../../../infra/outbound/session-binding-service.js";
 import type { ReplyDispatcher } from "../reply-dispatcher.types.js";
 
 const settledCounts = (delivered: number) => ({
@@ -77,5 +81,71 @@ export function createAcpSessionMeta(overrides?: Partial<SessionAcpMeta>): Sessi
       lastUpdatedAt: Date.now(),
     },
     ...overrides,
+  };
+}
+
+export type AcpTestSessionBinding = {
+  bindingId: string;
+  targetSessionKey: string;
+  targetKind: "subagent" | "session";
+  conversation: {
+    channel: string;
+    accountId: string;
+    conversationId: string;
+    parentConversationId?: string;
+  };
+  status: "active";
+  boundAt: number;
+  metadata?: {
+    agentId?: string;
+    label?: string;
+    boundBy?: string;
+    webhookId?: string;
+  };
+};
+
+export function createAcpTestSessionBinding(
+  overrides?: Partial<AcpTestSessionBinding>,
+): AcpTestSessionBinding {
+  return {
+    bindingId: "default:thread-created",
+    targetSessionKey: "agent:codex:acp:s1",
+    targetKind: "session",
+    conversation: {
+      channel: "discord",
+      accountId: "default",
+      conversationId: "thread-created",
+      parentConversationId: "parent-1",
+    },
+    status: "active",
+    boundAt: Date.now(),
+    metadata: {
+      agentId: "codex",
+      boundBy: "user-1",
+    },
+    ...overrides,
+  };
+}
+
+export function createAcpCommandSessionBindingService(
+  mocks: Pick<
+    SessionBindingService,
+    "bind" | "getCapabilities" | "listBySession" | "resolveByConversation" | "unbind"
+  >,
+): SessionBindingServiceV2 {
+  return {
+    bind: (input) => mocks.bind(input),
+    getCapabilities: (params) => mocks.getCapabilities(params),
+    inspectByConversationAsync: async (ref) => ({
+      status: "available",
+      binding: mocks.resolveByConversation(ref),
+    }),
+    listBySession: (targetSessionKey) => mocks.listBySession(targetSessionKey),
+    listBySessionAsync: async (targetSessionKey) => mocks.listBySession(targetSessionKey),
+    resolveByConversation: (ref) => mocks.resolveByConversation(ref),
+    resolveByConversationAsync: async (ref) => mocks.resolveByConversation(ref),
+    touch: vi.fn(),
+    touchAsync: vi.fn(async () => {}),
+    unbind: (input) => mocks.unbind(input),
   };
 }

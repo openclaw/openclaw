@@ -1,4 +1,3 @@
-// Signal plugin module implements setup surface behavior.
 import {
   createSetupTranslator,
   createDetectedBinaryStatus,
@@ -76,8 +75,7 @@ export const signalSetupWizard: ChannelSetupWizard = {
     }
     const currentCliPath =
       (typeof credentialValues.cliPath === "string" ? credentialValues.cliPath : undefined) ??
-      (transport.kind === "managed-native" ? transport.cliPath : undefined) ??
-      "signal-cli";
+      transport.cliPath;
     const cliDetected = await detectBinary(currentCliPath);
     const wantsInstall = await prompter.confirm({
       message: cliDetected ? t("wizard.signal.reinstallPrompt") : t("wizard.signal.installPrompt"),

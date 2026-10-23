@@ -1,4 +1,3 @@
-// Telegram plugin module defines durable ingress queue payload shape.
 import type { PreparedTelegramPollAnswer } from "./poll-answer-context.js";
 
 export type TelegramSpooledUpdatePayload = {

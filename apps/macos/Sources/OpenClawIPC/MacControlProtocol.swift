@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawNativeState
 
 public struct MacControlRequest: Codable, Sendable {
     public var operation: String
@@ -17,6 +18,8 @@ public struct MacControlRequest: Codable, Sendable {
     public var browser: Bool?
     public var idOrName: String?
     public var deadline: Date?
+    public var credentialRoot: String?
+    public var credentialOperation: ClientCredentialOperation?
 
     public init(operation: String) {
         self.operation = operation
@@ -72,10 +75,6 @@ public struct MacControlPrimaryStatus: Codable, Sendable {
         self.connection = connection
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case mode, transport, sshTarget, url, remotePort, tunnel, connection
-    }
-
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.mode, forKey: .mode)
@@ -101,6 +100,7 @@ public struct MacControlIdentity: Codable, Sendable {
 }
 
 public struct MacControlGatewayStatus: Codable, Sendable {
+    public var kind: String
     public var id: String
     public var name: String
     public var url: String
@@ -113,6 +113,7 @@ public struct MacControlGatewayStatus: Codable, Sendable {
         name: String,
         url: String,
         auth: String,
+        kind: String = "remote",
         identity: MacControlIdentity? = nil,
         connection: MacControlConnectionStatus)
     {
@@ -120,6 +121,7 @@ public struct MacControlGatewayStatus: Codable, Sendable {
         self.name = name
         self.url = url
         self.auth = auth
+        self.kind = kind
         self.identity = identity
         self.connection = connection
     }
@@ -137,15 +139,34 @@ public struct MacControlAppStatus: Codable, Sendable {
     }
 }
 
+public struct MacControlLocalGatewayStatus: Codable, Sendable {
+    public var hosting: Bool
+    public var port: Int
+    public var running: Bool
+
+    public init(hosting: Bool, port: Int, running: Bool) {
+        self.hosting = hosting
+        self.port = port
+        self.running = running
+    }
+}
+
 public struct MacControlStatus: Codable, Sendable {
     public var primary: MacControlPrimaryStatus
     public var gateways: [MacControlGatewayStatus]
     public var app: MacControlAppStatus
+    public var localGateway: MacControlLocalGatewayStatus?
 
-    public init(primary: MacControlPrimaryStatus, gateways: [MacControlGatewayStatus], app: MacControlAppStatus) {
+    public init(
+        primary: MacControlPrimaryStatus,
+        gateways: [MacControlGatewayStatus],
+        app: MacControlAppStatus,
+        localGateway: MacControlLocalGatewayStatus? = nil)
+    {
         self.primary = primary
         self.gateways = gateways
         self.app = app
+        self.localGateway = localGateway
     }
 }
 

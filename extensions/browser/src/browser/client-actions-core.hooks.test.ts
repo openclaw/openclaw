@@ -6,7 +6,7 @@ const clientFetchMocks = vi.hoisted(() => ({
 
 vi.mock("./client-fetch.js", () => clientFetchMocks);
 
-import { browserArmDialog, browserArmFileChooser } from "./client-actions-core.js";
+import { browserArmDialog, browserArmFileChooser } from "./client-actions.js";
 
 function lastFetchCall(): { url: string; options: { body?: string; timeoutMs?: number } } {
   const call = clientFetchMocks.fetchBrowserJson.mock.calls.at(-1);

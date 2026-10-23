@@ -3,25 +3,27 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { CustodianTurnAdmission } from "../../components/custodian-alert-contract.ts";
 import { t } from "../../i18n/index.ts";
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { performCustodianAgentHandoff } from "./custodian-navigation.ts";
-import * as nudgeActions from "./custodian-nudge-actions.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { initialWizardValue } from "../model-setup/state.ts";
+import { CustodianAutoSetup } from "./custodian-auto-setup.ts";
+import { CustodianInputDrafts } from "./custodian-input-drafts.ts";
+import {
+  navigateFromCustodianSetup,
+  performCustodianAgentHandoff,
+} from "./custodian-navigation.ts";
 import {
   createCustodianSessionId,
-  CustodianSessionOwner,
   loadCustodianSessionId,
   persistCustodianSessionId,
 } from "./custodian-session-identity.ts";
-import {
-  resolveCustodianConfiguredInferenceState,
-  type CustodianConfiguredInferenceState,
-} from "./custodian-session-variant.ts";
+import { CustodianSessionOwner } from "./custodian-session-owner.ts";
+import type { CustodianConfiguredInferenceState } from "./custodian-session-variant.ts";
 import {
   custodianWizardSubmission,
-  initialCustodianWizardValue,
   isCustodianWizardCancelAvailable,
 } from "./custodian-wizard-step.ts";
 import * as eventNudgeState from "./event-nudge.ts";
+import type { CustodianSendOutcome } from "./event-nudge.ts";
 import {
   custodianChatParams,
   custodianFailure,
@@ -39,8 +41,6 @@ import {
 } from "./transcript.ts";
 
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
-
-type StoreListener = () => void;
 
 /** One process-local conversation owner shared by the full page and dock surface. */
 export class CustodianSessionStore {
@@ -63,21 +63,22 @@ export class CustodianSessionStore {
   eventNudge: eventNudgeState.CustodianEventNudge | null = null;
   eventNudgePending: eventNudgeState.CustodianEventNudge | null = null;
   eventNudgeClosed = false;
+  healthNudgeSource: eventNudgeState.CustodianHealthNudgeSource | null = null;
   channelOnboardingNudgeClosed = false;
   earlierBoundaryAfterId: number | null = null;
   abandonedTurnOutcomeUnknown = false;
 
+  readonly autoSetup = new CustodianAutoSetup(() => {
+    this.synchronizeClient();
+    this.emit();
+  });
+
   private inferenceState: "unverified" | "ready" = "unverified";
-  private inputDrafts = { ordinary: { value: "" }, sensitive: { value: "" } };
+  private inputDrafts = new CustodianInputDrafts();
   private context: ApplicationContext | null = null;
   private variant: CustodianSessionVariant = "caretaker";
   private sessionVariant: CustodianSessionVariant | null = null;
-  private restoredIdentity = loadCustodianSessionId();
-  private sessionId = this.restoredIdentity.sessionId;
-  // True while the id may address a live session whose per-session queue can
-  // hold an in-flight turn from a previous page; cleared after one barrier
-  // refresh and on any fresh mint.
-  private rejoinBarrierPending = this.restoredIdentity.restored;
+  private sessionId = loadCustodianSessionId();
   private requestEpoch = 0;
   private requestAbort: AbortController | null = null;
   private nextMessageId = 1;
@@ -90,42 +91,67 @@ export class CustodianSessionStore {
   private gatewayCleanup: (() => void) | null = null;
   private agentCleanup: (() => void) | null = null;
   private eventCleanup: (() => void) | null = null;
-  private readonly listeners = new Set<StoreListener>();
+  private readonly listeners = new Set<() => void>();
 
-  subscribe(listener: StoreListener): () => void {
+  subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
   connect(context: ApplicationContext, variant: CustodianSessionVariant): void {
     const contextChanged = this.context !== context;
-    const variantChanged = this.variant !== variant;
-    if (!contextChanged && !variantChanged) {
+    if (!contextChanged && this.variant === variant) {
       return;
     }
+    // Subscriptions may publish synchronously, so install the requested mode first.
+    this.variant = variant;
     if (contextChanged) {
       this.gatewayCleanup?.();
       this.agentCleanup?.();
       this.eventCleanup?.();
       this.context = context;
+      this.inputDrafts.connect(context, () => this.emit());
       const recover = this.transcript.watchAvailability(() => void this.refreshTranscriptIfIdle());
+      // Every Gateway transition retires conversation requests and reconciles reconnect recovery synchronously.
       this.gatewayCleanup = context.gateway.subscribe(() => {
         // Reconnect hydration supersedes the queued availability recovery.
         recover();
         this.synchronizeClient();
+        this.synchronizeHealthNudge();
         this.emit();
       });
+      // Agent receipts reconcile configured inference and conversation admission before another turn can start.
       this.agentCleanup = context.agents.subscribe(() => {
         this.synchronizeClient();
+        this.synchronizeHealthNudge();
         this.emit();
       });
-      this.eventCleanup = context.gateway.subscribeEvents((event) =>
-        nudgeActions.receiveEventNudge(this, event),
-      );
+      this.eventCleanup = context.gateway.subscribeEvents((event) => {
+        if (this.variant !== "caretaker" || this.eventNudgeClosed) {
+          return;
+        }
+        if (event.event === "health") {
+          if (this.healthNudgeSource) {
+            this.healthNudgeSource.pending = false;
+          }
+          this.eventNudge = eventNudgeState.classifyCustodianHealthNudge(event.payload);
+        } else if (event.event === "tick") {
+          this.synchronizeHealthNudge();
+        }
+        this.emit();
+      });
     }
-    this.variant = variant;
     this.synchronizeClient();
+    this.synchronizeHealthNudge();
     this.emit();
+  }
+
+  private synchronizeHealthNudge(): void {
+    eventNudgeState.synchronizeCustodianHealthNudge(
+      this,
+      () => this.sessionOwner.key(this.context?.gateway ?? null),
+      () => this.emit(),
+    );
   }
 
   get input(): string {
@@ -139,14 +165,6 @@ export class CustodianSessionStore {
   setInput(value: string): void {
     this.input = value;
     this.emit();
-  }
-
-  private resetPromptInput(sensitive: boolean): void {
-    // Retire prompt input at admission or replacement, even if the reply fails.
-    // Ordinary composer drafts survive explicit actions and prompt replacement.
-    this.inputDrafts.sensitive = { value: "" };
-    [this.wizardValue, this.wizardSecretVisible] = [undefined, false];
-    this.sensitive = sensitive;
   }
 
   setWizardValue(value: unknown): void {
@@ -165,6 +183,15 @@ export class CustodianSessionStore {
 
   get activeVariant(): CustodianSessionVariant {
     return this.variant;
+  }
+
+  get operationEpoch(): number {
+    return this.requestEpoch;
+  }
+
+  reportError(error: unknown): void {
+    this.error = custodianErrorMessage(error);
+    this.emit();
   }
 
   hasUnresolvedQuestion(): boolean {
@@ -212,7 +239,7 @@ export class CustodianSessionStore {
       this.activeClient !== null &&
       this.chatAvailable &&
       !this.sending &&
-      this.configuredInferenceState === "ready" &&
+      (this.configuredInferenceState === "ready" || this.configuredInferenceState === "utility") &&
       this.inferenceState === "ready"
     );
   }
@@ -221,12 +248,13 @@ export class CustodianSessionStore {
     return isCustodianWizardCancelAvailable(this.context);
   }
 
-  retry(): void {
+  retry(): Promise<void> {
     const client = this.activeClient;
     const params = this.retryParams;
     if (client && params && !hasCustodianUserInput(params) && this.chatAvailable && !this.sending) {
-      void this.initializeSession(client, params, false);
+      return this.initializeSession(client, params, false);
     }
+    return Promise.resolve();
   }
 
   async send(
@@ -234,7 +262,7 @@ export class CustodianSessionStore {
     display?: string,
     questionReply = this.hasUnresolvedQuestion(),
     admission?: CustodianTurnAdmission,
-  ): Promise<eventNudgeState.CustodianSendOutcome> {
+  ): Promise<CustodianSendOutcome> {
     // Trim decides emptiness only; sensitive values may carry meaningful whitespace.
     const input = text ?? this.input;
     const message = this.sensitive ? input : input.trim();
@@ -244,7 +272,10 @@ export class CustodianSessionStore {
       return "rejected";
     }
     const displayText = this.sensitive ? t("custodian.sensitiveReply") : (display ?? message);
-    const params = { sessionId: this.sessionId, ...custodianChatParams(this.variant, message) };
+    const params = {
+      sessionId: this.sessionId,
+      ...custodianChatParams(this.variant, message, this.inputDrafts.pluginReference),
+    };
     return await this.sendUserTurn(client, params, displayText, questionReply, () => {
       if (admission && (!admission.isCurrent() || !admission.admit())) {
         return false;
@@ -263,16 +294,16 @@ export class CustodianSessionStore {
     displayText: string,
     questionReply: boolean,
     admit?: () => boolean,
-  ): Promise<eventNudgeState.CustodianSendOutcome> {
+  ): Promise<CustodianSendOutcome> {
     const questionState = [this.answeredQuestions, this.questionReplyUncertain] as const;
     let replyEpoch: number | undefined;
-    const reply = this.requestReply(client, params, () => {
+    const outcome = await this.requestReply(client, params, () => {
       const ordinaryDraft = this.inputDrafts.ordinary;
       if (admit && !admit()) {
         return false;
       }
       const consumedDraft = this.inputDrafts.ordinary;
-      this.resetPromptInput(this.sensitive);
+      this.inputDrafts.resetPrompt(this, this.sensitive);
       replyEpoch = this.requestEpoch;
       if (questionReply) {
         this.questionReplyUncertain = true;
@@ -289,7 +320,6 @@ export class CustodianSessionStore {
         }
       };
     });
-    const outcome = await reply;
     if (questionReply && this.requestEpoch === replyEpoch) {
       this.questionReplyUncertain = eventNudgeState.questionUncertainty(questionState[1], outcome);
       if (outcome === "rejected") {
@@ -300,28 +330,26 @@ export class CustodianSessionStore {
     return outcome;
   }
 
-  requestNudgeUpdate(): void {
-    this.emit();
-  }
-
   sendEventNudge(): Promise<void> {
-    return nudgeActions.sendEventNudge(this);
+    return eventNudgeState.sendCustodianEventNudge(this, () => this.emit());
   }
 
   dismissEventNudge(): void {
-    nudgeActions.dismissEventNudge(this);
+    [this.eventNudge, this.eventNudgeClosed] = [null, true];
+    this.emit();
   }
 
   dismissChannelOnboardingNudge(): void {
-    nudgeActions.dismissChannelOnboardingNudge(this, () => this.context?.replace("custodian"));
+    this.channelOnboardingNudgeClosed = true;
+    this.emit();
+    this.context?.replace("custodian");
   }
 
   openChannelsFromOnboarding(): void {
-    nudgeActions.openChannelsFromOnboarding(
-      this,
-      () => this.revokeNavigationAuthority(),
-      () => this.context?.navigate("channels"),
-    );
+    this.channelOnboardingNudgeClosed = true;
+    this.revokeNavigationAuthority();
+    this.emit();
+    this.context?.navigate("channels");
   }
 
   async dismissQuestion(message: CustodianMessage): Promise<void> {
@@ -346,27 +374,27 @@ export class CustodianSessionStore {
     }
   }
 
-  answerQuestion(message: CustodianMessage, label: string): void {
+  answerQuestion(message: CustodianMessage, label: string): Promise<CustodianSendOutcome> {
     const question = message.question;
     if (!question) {
-      return;
+      return Promise.resolve("rejected");
     }
     const option = question.options.find((candidate) => candidate.label === label);
-    void this.send(option?.reply ?? label, label, true);
+    return this.send(option?.reply ?? label, label, true);
   }
 
-  answerWizardStep(message: CustodianMessage, value: unknown): void {
+  answerWizardStep(message: CustodianMessage, value: unknown): Promise<CustodianSendOutcome> {
     if (!message.step || !this.wizardInputPending) {
-      return;
+      return Promise.resolve("rejected");
     }
     const submission = custodianWizardSubmission(message.step, value);
     const client = this.activeClient;
     if (!submission || !client || !this.canSend) {
       this.emit();
-      return;
+      return Promise.resolve("rejected");
     }
     const displayText = message.step.sensitive ? t("custodian.sensitiveReply") : submission.display;
-    void this.sendUserTurn(
+    return this.sendUserTurn(
       client,
       { sessionId: this.sessionId, wizardAnswer: submission.answer },
       displayText,
@@ -374,20 +402,14 @@ export class CustodianSessionStore {
     );
   }
 
-  cancelWizardStep(message: CustodianMessage): void {
+  cancelWizardStep(message: CustodianMessage): Promise<CustodianSendOutcome> {
     const step = message.step;
-    const client = this.activeClient;
-    if (
-      !step ||
-      !this.wizardInputPending ||
-      !client ||
-      !this.canSend ||
-      !this.wizardCancelAvailable
-    ) {
+    const client = this.canSend ? this.activeClient : null;
+    if (!step || !this.wizardInputPending || !client || !this.wizardCancelAvailable) {
       this.emit();
-      return;
+      return Promise.resolve("rejected");
     }
-    void this.sendUserTurn(
+    return this.sendUserTurn(
       client,
       { sessionId: this.sessionId, wizardCancel: { stepId: step.id } },
       t("custodian.cancel"),
@@ -399,7 +421,7 @@ export class CustodianSessionStore {
     // Leaving setup revokes navigation authority from every in-flight reply.
     // The destination surface separately decides whether to retain or rotate context.
     this.revokeNavigationAuthority();
-    this.context?.navigate(destination);
+    navigateFromCustodianSetup(this.context, destination, this.configuredInferenceState);
   }
 
   private revokeNavigationAuthority(): void {
@@ -419,6 +441,7 @@ export class CustodianSessionStore {
   }
 
   private emit(): void {
+    this.inputDrafts.reconcile(this);
     this.transcript.settleRecovery(
       this.transcriptBlocked,
       () => void this.refreshTranscriptIfIdle(),
@@ -433,21 +456,16 @@ export class CustodianSessionStore {
     this.sessionClient = client;
     this.sessionOwnershipKey = this.sessionOwner.key(this.context?.gateway ?? null);
     this.sessionStarted = true;
-    void this.initializeSession(
-      client,
-      { sessionId: this.sessionId, ...custodianChatParams(this.variant) },
-      loadTranscript,
-    );
+    void this.initializeSession(client, this.initialChatParams(), loadTranscript);
+  }
+
+  private initialChatParams(): SystemAgentChatParams {
+    return { sessionId: this.sessionId, ...custodianChatParams(this.variant) };
   }
 
   private replaceSessionId(sessionId?: string): void {
-    if (sessionId === undefined) {
-      // A freshly minted id cannot address a live session; no barrier needed.
-      this.rejoinBarrierPending = false;
-    }
-    const next = sessionId ?? createCustodianSessionId();
-    this.sessionId = next;
-    persistCustodianSessionId(next);
+    this.sessionId = sessionId ?? createCustodianSessionId();
+    persistCustodianSessionId(this.sessionId);
   }
 
   private abandonPendingUserTurn(pendingParams: SystemAgentChatParams | null): void {
@@ -462,7 +480,7 @@ export class CustodianSessionStore {
   private restartVolatileSession(client: GatewayBrowserClient): void {
     this.replaceSessionId();
     this.answeredQuestions = retireCustodianQuestions(this.messages, this.answeredQuestions);
-    this.resetPromptInput(false);
+    this.inputDrafts.resetPrompt(this, false);
     this.wizardInputPending = this.questionReplyUncertain = false;
     this.earlierBoundaryAfterId = this.messages.at(-1)?.id ?? null;
     this.startSession(client, false);
@@ -476,19 +494,18 @@ export class CustodianSessionStore {
     const snapshot = context.gateway.snapshot;
     const client = snapshot.phase === "connected" ? snapshot.client : null;
     const chatSupported =
-      client !== null && canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin");
-    const chatUnsupported = isGatewayMethodAdvertised(snapshot, "openclaw.chat") === false;
-    const configuredInferenceState = resolveCustodianConfiguredInferenceState(this.context);
+      client !== null &&
+      canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin", {
+        requireAdvertisement: false,
+      });
+    const ownershipKey = this.sessionOwner.key(context.gateway);
+    this.autoSetup.synchronize(context, this.variant === "onboarding", ownershipKey);
+    const configuredInferenceState = this.autoSetup.configuredInferenceState;
     const inferenceStateChanged = configuredInferenceState !== this.configuredInferenceState;
     this.configuredInferenceState = configuredInferenceState;
     const variantChanged = this.sessionStarted && this.sessionVariant !== this.variant;
-    const ownershipKey = this.sessionOwner.key(context.gateway);
     const reconnected = this.sessionStarted && client !== null && this.activeClient === null;
-    const clientReplaced =
-      this.sessionStarted &&
-      client !== null &&
-      this.sessionClient !== null &&
-      client !== this.sessionClient;
+    const clientReplaced = this.sessionStarted && client !== null && client !== this.sessionClient;
     const ownershipChanged =
       this.sessionOwnershipKey !== null && ownershipKey !== this.sessionOwnershipKey;
     if (
@@ -525,7 +542,7 @@ export class CustodianSessionStore {
       if (!chatSupported) {
         this.sessionStarted = false;
         this.abandonPendingUserTurn(pendingParams);
-        this.error = chatUnsupported ? t("custodian.unsupportedGateway") : null;
+        this.error = t("custodian.accessRequired");
         return;
       }
       this.chatAvailable = true;
@@ -543,13 +560,7 @@ export class CustodianSessionStore {
         this.questionReplyUncertain = false;
         this.wizardInputPending = false;
         this.abandonedTurnOutcomeUnknown = false;
-        // The reconnect rejoin races the interrupted turn the same way a
-        // reload does; arm one barrier refresh behind it.
-        this.rejoinBarrierPending = true;
-        void this.initializeSession(client, {
-          sessionId: this.sessionId,
-          ...custodianChatParams(this.variant),
-        });
+        void this.initializeSession(client, this.initialChatParams());
       } else {
         void this.refreshTranscriptIfIdle();
       }
@@ -564,7 +575,7 @@ export class CustodianSessionStore {
       return;
     }
     if (!chatSupported) {
-      this.error = chatUnsupported ? t("custodian.unsupportedGateway") : null;
+      this.error = t("custodian.accessRequired");
       return;
     }
     if (configuredInferenceState === "unresolved") {
@@ -582,7 +593,7 @@ export class CustodianSessionStore {
       }
       return;
     }
-    this.clearConversation();
+    this.clearConversation(true);
     this.startSession(client, true);
   }
 
@@ -610,13 +621,6 @@ export class CustodianSessionStore {
     client: GatewayBrowserClient,
     epoch: number,
   ): Promise<boolean> {
-    const context = this.context;
-    if (
-      !context ||
-      isGatewayMethodAdvertised(context.gateway.snapshot, "openclaw.chat.history") !== true
-    ) {
-      return false;
-    }
     const isCurrent = () => epoch === this.requestEpoch && client === this.activeClient;
     const transcript = await this.transcript.loadMessages(
       client,
@@ -633,7 +637,7 @@ export class CustodianSessionStore {
     return true;
   }
 
-  private clearConversation(): void {
+  private clearConversation(preserveDraft = false): void {
     this.messages = [];
     this.dismissedQuestions = new Set();
     this.answeredQuestions = new Set();
@@ -641,8 +645,11 @@ export class CustodianSessionStore {
     this.error = null;
     this.transcript.reset();
     this.inferenceState = "unverified";
-    this.inputDrafts.ordinary = { value: "" };
-    this.resetPromptInput(false);
+    // Initial metadata may arrive after a local draft; only replacement owners clear it.
+    if (!preserveDraft) {
+      this.inputDrafts.ordinary = { value: "" };
+    }
+    this.inputDrafts.resetPrompt(this, false);
     this.wizardInputPending = this.questionReplyUncertain = false;
     this.earlierBoundaryAfterId = null;
   }
@@ -651,7 +658,7 @@ export class CustodianSessionStore {
     client: GatewayBrowserClient,
     params: SystemAgentChatParams,
     admit?: () => false | (() => void),
-  ): Promise<eventNudgeState.CustodianSendOutcome> {
+  ): Promise<CustodianSendOutcome> {
     const context = this.context;
     if (!context) {
       return "rejected";
@@ -659,7 +666,9 @@ export class CustodianSessionStore {
     const canRequest = () =>
       client === this.activeClient &&
       context.gateway.snapshot.client === client &&
-      canCallGatewayMethod(context.gateway.snapshot, "openclaw.chat", "operator.admin");
+      canCallGatewayMethod(context.gateway.snapshot, "openclaw.chat", "operator.admin", {
+        requireAdvertisement: false,
+      });
     if (!canRequest()) {
       return "rejected";
     }
@@ -695,28 +704,14 @@ export class CustodianSessionStore {
         return "sent";
       }
       this.replaceSessionId(result.sessionId);
-      this.resetPromptInput(result.sensitive === true);
+      this.inputDrafts.resetPrompt(this, result.sensitive === true);
       this.wizardInputPending = result.wizardInputPending === true;
       this.retryParams = null;
       this.inferenceState = "ready";
-      if (this.rejoinBarrierPending && !hasCustodianUserInput(params)) {
-        // Rejoin barrier: this input-free request queued behind any in-flight
-        // turn on the Gateway's per-session queue, so refreshing here shows
-        // rows a racing turn persisted after the initial history fetch. Runs
-        // before the reply/control is appended, so a projected live wizard or
-        // question renders on top of the reconciled rows. Once per restored id.
-        this.rejoinBarrierPending = false;
-        await this.refreshTranscriptHistory(client, epoch);
-        if (epoch !== this.requestEpoch || client !== this.activeClient) {
-          return "sent";
-        }
-      }
-      this.wizardValue = result.step ? initialCustodianWizardValue(result.step) : undefined;
+      this.wizardValue = result.step ? initialWizardValue(result.step) : undefined;
       const message = createCustodianReplyMessage(this.nextMessageId, result);
-      if (message) {
-        this.nextMessageId += 1;
-        this.messages = [...this.messages, message];
-      }
+      this.nextMessageId += 1;
+      this.messages = [...this.messages, message];
       if (result.handoff?.kind === "model-accounts") {
         this.exitSetup("profile");
       } else if (result.action === "open-agent") {
@@ -745,7 +740,7 @@ export class CustodianSessionStore {
         if (inferenceUnavailable) {
           this.inferenceState = "unverified";
           // Recheck the runtime without replaying a user turn that may have reached the Gateway.
-          this.retryParams = { sessionId: this.sessionId, ...custodianChatParams(this.variant) };
+          this.retryParams = this.initialChatParams();
         }
         if (sessionInvalidated && hasCustodianUserInput(params)) {
           // Retained transcript rows are display context only; the next turn needs a fresh id.

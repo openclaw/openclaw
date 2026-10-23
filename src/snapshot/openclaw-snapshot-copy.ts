@@ -1,11 +1,23 @@
+import assert from "node:assert/strict";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { resolveStateDir } from "../config/paths.js";
+import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-cold-storage-backup.js";
 import {
   createVerifiedSqliteSnapshot,
   type SqliteSnapshotValidator,
 } from "../infra/sqlite-snapshot.js";
+import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
-import { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db.js";
-import { assertOpenClawStateDatabaseForMaintenance } from "../state/openclaw-state-db.js";
+import {
+  assertOpenClawAgentDatabaseForMaintenance,
+  assertOpenClawAgentDatabaseOwner,
+} from "../state/openclaw-agent-db-maintenance.js";
+import { assertSupportedAgentSchemaVersion } from "../state/openclaw-agent-db-schema-read.js";
+import {
+  assertOpenClawStateDatabaseForMaintenance,
+  assertOpenClawStateDatabaseOwner,
+} from "../state/openclaw-state-db-maintenance.js";
+import { assertSupportedStateSchemaVersion } from "../state/openclaw-state-db-schema-version.js";
 import {
   sanitizeOpenClawGlobalStateSnapshot,
   sanitizeOpenClawStateLeaseRows,
@@ -35,18 +47,20 @@ export function normalizeSnapshotIdentity(
 export function buildSnapshotValidator(
   identity: SnapshotDatabaseIdentity,
 ): SqliteSnapshotValidator {
-  if (identity.role === "global") {
-    return (database, pathname) =>
-      assertOpenClawStateDatabaseForMaintenance(database, { pathname });
-  }
-  if (identity.role === "agent") {
-    return (database, pathname) =>
-      assertOpenClawAgentDatabaseForMaintenance(database, {
-        agentId: identity.agentId,
+  return (database, pathname) => {
+    if (identity.role === "global") {
+      const version = assertSupportedStateSchemaVersion(database, pathname);
+      const owner = assertOpenClawStateDatabaseOwner(database, { pathname });
+      assert(version > 0 && owner.schema_version === version, "Invalid snapshot schema version.");
+    } else if (identity.role === "agent") {
+      const version = assertSupportedAgentSchemaVersion(database, pathname);
+      const owner = assertOpenClawAgentDatabaseOwner(database, {
         pathname,
+        agentId: identity.agentId,
       });
-  }
-  return () => undefined;
+      assert(version > 0 && owner.schemaVersion === version, "Invalid snapshot schema version.");
+    }
+  };
 }
 
 /** Produce the canonical sanitized, compact, verified copy used by every snapshot provider. */
@@ -54,18 +68,33 @@ export async function createOpenClawSnapshotCopy(params: {
   database: SnapshotDatabaseRef;
   targetPath: string;
 }): Promise<{ identity: SnapshotDatabaseIdentity; path: string; userVersion: number }> {
+  assertNotUpdateCapturePath(params.database.path, resolveStateDir());
   const identity = normalizeSnapshotIdentity(params.database.identity);
   const result = await createVerifiedSqliteSnapshot({
     sourcePath: params.database.path,
     targetPath: params.targetPath,
     requireNonEmptySource: identity.role !== "generic",
-    transform:
+    transform: async (database) => {
+      if (identity.role === "global") {
+        sanitizeOpenClawGlobalStateSnapshot(database);
+      } else if (identity.role === "agent") {
+        sanitizeOpenClawStateLeaseRows(database);
+      }
+      await embedSessionColdArchivesInSnapshot({
+        database,
+        sourceStorePath: params.database.path,
+      });
+    },
+    validate:
       identity.role === "global"
-        ? sanitizeOpenClawGlobalStateSnapshot
+        ? (database, pathname) => assertOpenClawStateDatabaseForMaintenance(database, { pathname })
         : identity.role === "agent"
-          ? sanitizeOpenClawStateLeaseRows
+          ? (database, pathname) =>
+              assertOpenClawAgentDatabaseForMaintenance(database, {
+                pathname,
+                agentId: identity.agentId,
+              })
           : undefined,
-    validate: buildSnapshotValidator(identity),
   });
   return { identity, ...result };
 }

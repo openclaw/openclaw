@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
@@ -29,19 +30,15 @@ function extractMessage(value: Record<string, unknown>): string {
 }
 
 function parseMetaName(raw?: unknown): LogContext {
-  if (typeof raw !== "string" || !raw.trimStart().startsWith("{")) {
+  const parsed = typeof raw === "string" ? safeParseJsonRecord(raw) : undefined;
+  if (!parsed) {
     return {};
   }
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return {
-      subsystem: typeof parsed.subsystem === "string" ? parsed.subsystem : undefined,
-      module: typeof parsed.module === "string" ? parsed.module : undefined,
-      plugin: typeof parsed.plugin === "string" ? parsed.plugin : undefined,
-    };
-  } catch {
-    return {};
-  }
+  return {
+    subsystem: typeof parsed.subsystem === "string" ? parsed.subsystem : undefined,
+    module: typeof parsed.module === "string" ? parsed.module : undefined,
+    plugin: typeof parsed.plugin === "string" ? parsed.plugin : undefined,
+  };
 }
 
 function resolveContext(
@@ -69,7 +66,7 @@ export function parseLogLine(raw: string): ParsedLogLine | null {
     }
     const meta = isRecord(parsed["_meta"]) ? parsed["_meta"] : undefined;
     const context = resolveContext(parsed, meta);
-    const levelRaw = typeof meta?.logLevelName === "string" ? meta.logLevelName : undefined;
+    const levelRaw = typeof meta?.logLevelName === "string" ? meta.logLevelName : parsed.level;
     return {
       time:
         typeof parsed.time === "string"
@@ -78,7 +75,8 @@ export function parseLogLine(raw: string): ParsedLogLine | null {
             ? meta.date
             : undefined,
       level: normalizeOptionalLowercaseString(levelRaw),
-      subsystem: context.subsystem,
+      subsystem:
+        context.subsystem ?? (typeof parsed.subsystem === "string" ? parsed.subsystem : undefined),
       module: context.module,
       plugin: context.plugin,
       message: typeof parsed.message === "string" ? parsed.message : extractMessage(parsed),

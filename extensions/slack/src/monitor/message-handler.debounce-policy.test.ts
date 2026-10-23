@@ -5,7 +5,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { expect, it, vi } from "vitest";
-import { resolveSlackAccount } from "../accounts.js";
 import type { SlackMessageEvent } from "../types.js";
 import { createSlackMonitorContext } from "./context.js";
 import { createSlackMessageHandler } from "./message-handler.js";
@@ -38,6 +37,7 @@ it("updates Slack delay and flushes newly buffered top-level keys before immedia
       teamId: "TEAM",
       apiAppId: "APP",
       historyLimit: 0,
+      dmHistoryLimit: 0,
       sessionScope: "per-sender",
       mainKey: "main",
       dmEnabled: true,
@@ -46,6 +46,9 @@ it("updates Slack delay and flushes newly buffered top-level keys before immedia
       allowNameMatching: false,
       groupDmEnabled: false,
       groupDmChannels: [],
+      defaultRequireMention: true,
+      channelsConfig: undefined,
+      channelsConfigKeys: [],
       groupPolicy: "open",
       useAccessGroups: true,
       reactionMode: "off",
@@ -63,7 +66,6 @@ it("updates Slack delay and flushes newly buffered top-level keys before immedia
       typingReaction: "",
       mediaMaxBytes: 1024,
     }),
-    account: resolveSlackAccount({ cfg, accountId: "default" }),
     abortSignal: abort.signal,
   });
   let sequence = 0;
@@ -86,7 +88,7 @@ it("updates Slack delay and flushes newly buffered top-level keys before immedia
     await enqueue("second");
     expect(bodies()).toEqual(["immediate"]);
     await vi.advanceTimersByTimeAsync(25);
-    expect(bodies()).toEqual(["immediate", "first\nsecond"]);
+    await vi.waitFor(() => expect(bodies()).toEqual(["immediate", "first\nsecond"]));
     await enqueue("pending top level", "C1");
     publish(0);
     await enqueue("after disable", "C1");

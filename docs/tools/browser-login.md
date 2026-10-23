@@ -9,17 +9,28 @@ title: "Browser login"
 ## Manual login (recommended)
 
 When a site requires login, sign in manually in the host browser's `openclaw`
-profile. Keep passwords and reusable credentials out of chat: automated logins often
-trigger anti-bot defenses and can lock the account.
+profile. Automated logins often trigger anti-bot defenses and can lock the account.
 
-The shared [credential guidance](/concepts/system-prompt) also applies to browser
-sign-in, including short-lived codes and supported callback handoffs.
+For an owner-authorized task, the agent may use owner-supplied credentials through
+browser form fills. Keep credentials out of chat and replies.
 
 Use the host browser (manual login) for both reading (search/threads) and
 posting on X/Twitter and other bot-sensitive sites. Sandboxed browser sessions
 are more likely to trigger bot detection.
 
 Back to the main browser docs: [Browser](/tools/browser).
+
+## Passkeys in headless browsers
+
+Chrome's invisible passkey dialog can block clicks and key presses in headless
+mode. OpenClaw dismisses modal passkey requests in headless Chromium so the site
+can offer another sign-in method, such as a password or one-time code. Passkey
+autofill requests and headed browsers keep Chrome's normal behavior.
+
+Use a headed profile to sign in with a passkey or security key. If a page already
+requested a passkey before OpenClaw connected, navigate to the same URL to reload
+it. Attached and remote browsers must report their headless launch flags; a
+failed detection is logged. `existing-session` profiles are unchanged.
 
 ## Which Chrome profile is used?
 
@@ -34,15 +45,32 @@ For agent browser tool calls:
 - If you have multiple user-browser profiles, specify the profile explicitly
   instead of guessing.
 
-Two ways to access the `openclaw` profile:
+Local managed browsers are headless by default. For manual login, use a browser
+host with a desktop session and full Chrome/Chromium; headless shell cannot show
+a login window. If your profile uses headless shell, create a separate profile
+with `executablePath` set to a full browser before signing in. Do not reuse its
+data directory across shell/full distributions. See
+[Browser configuration](/tools/browser/configuration).
 
-1. Ask the agent to open the browser, then log in yourself.
-2. Open it via CLI:
+On the browser host, set `browser.headless` to `false`. If the selected profile
+has its own `headless` value, set that to `false` too. Remove a
+`OPENCLAW_BROWSER_HEADLESS=1` override from the Gateway process environment, or
+set it to `0`; it takes precedence over config. Do not pass `start --headless`.
+
+Stop an already-running browser before starting it in headed mode. For the
+default `openclaw` profile without a per-profile override:
 
 ```bash
+openclaw browser stop
+openclaw config set browser.headless false
 openclaw browser start
 openclaw browser open https://x.com
 ```
+
+Sign in through the visible window. You can also ask the agent to open the page
+after the headed configuration is in effect. Keep the same profile when switching
+between headed and headless modes of the same full browser. Do not use
+`reset-profile`, which removes its saved browser data.
 
 For a non-default profile, put `--browser-profile <name>` before the
 subcommand (default is `openclaw`):

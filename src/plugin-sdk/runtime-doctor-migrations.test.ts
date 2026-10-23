@@ -7,6 +7,7 @@ import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import {
   defineLegacyJsonStateMigration,
   definePluginDoctorMigrationFromPlans,
@@ -37,8 +38,43 @@ describe("defineLegacyJsonStateMigration retention", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("refuses malformed UTF-8 before importing or archiving legacy plugin state", async () => {
+    const sourcePath = path.join(stateDir, "legacy.json");
+    const source = Buffer.concat([
+      Buffer.from('[{"key":"entry","value":"'),
+      Buffer.from([0xff]),
+      Buffer.from('"}]'),
+    ]);
+    await fs.writeFile(sourcePath, source);
+    const migration = defineLegacyJsonStateMigration({
+      id: "utf8-fixture",
+      label: "Fixture entries",
+      resolvePath: () => sourcePath,
+      parse: (value) => value as { key: string; value: string }[],
+      namespace: "entries",
+      maxEntries: 2,
+      describeEntries: () => ({ preview: ["legacy entries"], change: () => "Migrated entries" }),
+      toRows: (entries) => entries,
+    });
+    const params = { config: {}, env, stateDir, oauthDir: stateDir, context };
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: [expect.stringContaining("UTF-8")],
+    });
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("UTF-8")],
+      warningDisposition: "recoverable",
+    });
+    expect(
+      await context.openPluginStateKeyedStore({ namespace: "entries", maxEntries: 2 }).entries(),
+    ).toEqual([]);
+    expect(await fs.readFile(sourcePath)).toEqual(source);
+    expect(await fs.readdir(stateDir)).not.toContain("legacy.json.migrated");
   });
 
   it.each(["imported", "pre-existing"])(
@@ -92,72 +128,57 @@ const migrationInput = {
   context: { openPluginStateKeyedStore: vi.fn() } as never,
 };
 
-describe("definePluginDoctorMigrationFromPlans", () => {
-  it("maps previews and delegates normalized plans to the existing executor", async () => {
-    const plans: ChannelLegacyStateMigrationPlan[] = [
-      {
-        kind: "plugin-state-import",
-        label: "Cache",
-        sourcePath: "/state/cache.json",
-        targetPath: "plugin state:cache",
-        pluginId: "demo",
-        namespace: "cache",
-        maxEntries: 10,
-        scopeKey: "",
-        readEntries: () => [],
-      },
-      {
-        kind: "move",
-        label: "Credentials",
-        sourcePath: "/oauth/creds.json",
-        targetPath: "/oauth/demo/creds.json",
-      },
-      {
-        kind: "copy",
-        label: "Backup",
-        sourcePath: "/state/backup.json",
-        targetPath: "/state/demo/backup.json",
-      },
-    ];
-    const migration = definePluginDoctorMigrationFromPlans({
-      id: "demo-state",
-      label: "Demo state",
-      resolvePlans: () => plans,
-    });
-
-    await expect(migration.detectLegacyState(migrationInput)).resolves.toEqual({
+const filePlan = (
+  kind: "move" | "copy",
+  label: string,
+  sourcePath: string,
+  targetPath: string,
+): ChannelLegacyStateMigrationPlan => ({ kind, label, sourcePath, targetPath });
+const plans: ChannelLegacyStateMigrationPlan[] = [
+  {
+    kind: "plugin-state-import",
+    label: "Cache",
+    sourcePath: "/state/cache.json",
+    targetPath: "plugin state:cache",
+    pluginId: "demo",
+    namespace: "cache",
+    maxEntries: 10,
+    scopeKey: "",
+    readEntries: () => [],
+  },
+  filePlan("move", "Credentials", "/oauth/creds.json", "/oauth/demo/creds.json"),
+  filePlan("copy", "Backup", "/state/backup.json", "/state/demo/backup.json"),
+];
+it.each([
+  { input: [], preview: null },
+  {
+    input: plans,
+    preview: {
       preview: [
         "- Cache: /state/cache.json",
         "- Credentials: /oauth/creds.json → /oauth/demo/creds.json",
         "- Backup: /state/backup.json → /state/demo/backup.json",
       ],
-    });
-    expect(executorModuleLoads).not.toHaveBeenCalled();
-
-    runLegacyMigrationPlans.mockResolvedValueOnce({
-      changes: ["migrated"],
-      warnings: ["warning"],
-    });
-    await expect(migration.migrateLegacyState(migrationInput)).resolves.toEqual({
-      changes: ["migrated"],
-      warnings: ["warning"],
-    });
-    expect(executorModuleLoads).toHaveBeenCalledTimes(1);
-    expect(runLegacyMigrationPlans).toHaveBeenCalledTimes(1);
-    expect(runLegacyMigrationPlans.mock.calls[0]?.[0]).toEqual([
-      { ...plans[0], stateDir: "/state" },
-      plans[1],
-      plans[2],
-    ]);
+    },
+  },
+])("adapts migration plans without eagerly loading the executor", async ({ input, preview }) => {
+  const migration = definePluginDoctorMigrationFromPlans({
+    id: "demo-state",
+    label: "Demo state",
+    resolvePlans: () => input,
   });
-
-  it("returns null when no legacy plans resolve", async () => {
-    const migration = definePluginDoctorMigrationFromPlans({
-      id: "empty-state",
-      label: "Empty state",
-      resolvePlans: () => [],
-    });
-
-    await expect(migration.detectLegacyState(migrationInput)).resolves.toBeNull();
-  });
+  await expect(migration.detectLegacyState(migrationInput)).resolves.toEqual(preview);
+  if (!input.length) {
+    return;
+  }
+  expect(executorModuleLoads).not.toHaveBeenCalled();
+  const result = { changes: ["migrated"], warnings: ["warning"] };
+  runLegacyMigrationPlans.mockResolvedValueOnce(structuredClone(result));
+  await expect(migration.migrateLegacyState(migrationInput)).resolves.toEqual(result);
+  expect(executorModuleLoads).toHaveBeenCalledTimes(1);
+  expect(runLegacyMigrationPlans).toHaveBeenCalledExactlyOnceWith([
+    { ...plans[0], stateDir: "/state" },
+    plans[1],
+    plans[2],
+  ]);
 });

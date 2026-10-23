@@ -1,156 +1,100 @@
 import { expect, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { resolveReplyDirectives } from "./get-reply-directives.js";
+import { prepareReplyConversation } from "./prompt-session-context.js";
+import { createTypingController } from "./typing.js";
 
-export function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+type DirectiveParams = Parameters<typeof resolveReplyDirectives>[0];
+
+export function replyDirectiveParams(
+  overrides: Pick<DirectiveParams, "ctx" | "sessionCtx" | "sessionEntry"> &
+    Partial<DirectiveParams>,
+): DirectiveParams {
+  const sessionKey = overrides.sessionKey ?? "agent:main:whatsapp:+2000";
+  const sessionStore = overrides.sessionStore ?? {};
   return {
-    sessionId: "session-id",
-    updatedAt: Date.now(),
+    cfg: {},
+    agentId: "main",
+    agentDir: "/tmp/main-agent",
+    workspaceDir: "/tmp",
+    agentCfg: {},
+    sessionStore,
+    sessionKey,
+    storePath: "/tmp/sessions.json",
+    sessionScope: "per-sender",
+    conversation: prepareReplyConversation({
+      ctx: overrides.sessionCtx,
+      sessionEntry: sessionStore[sessionKey] ?? overrides.sessionEntry,
+    }),
+    isGroup: false,
+    triggerBodyNormalized: "hello",
+    resetTriggered: false,
+    commandAuthorized: false,
+    defaultProvider: "openai",
+    defaultModel: "gpt-4o-mini",
+    aliasIndex: { byAlias: new Map(), byKey: new Map() },
+    provider: "openai",
+    model: "gpt-4o-mini",
+
+    typing: makeTypingController(),
     ...overrides,
   };
 }
 
+export function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return { sessionId: "session-id", updatedAt: Date.now(), ...overrides };
+}
+
 export function makeTypingController() {
-  return {
-    onReplyStart: async () => {},
-    startTypingLoop: async () => {},
-    startTypingOnText: async () => {},
-    refreshTypingTtl: () => {},
-    isActive: () => false,
-    markRunComplete: () => {},
-    markDispatchIdle: () => {},
-    cleanup: vi.fn(),
-  };
+  return { ...createTypingController({}), cleanup: vi.fn() };
 }
 
 export function mockCallInput(
   mock: { mock: { calls: unknown[][] } },
   index = 0,
 ): Record<string, unknown> {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected mock call ${index}`);
-  }
-  const input = call[0];
+  const input = mock.mock.calls[index]?.[0];
   if (!input || typeof input !== "object") {
     throw new Error(`expected mock input ${index}`);
   }
   return input as Record<string, unknown>;
 }
 
-export function expectContinueResult(
+export async function expectContinueResult(
   value: Awaited<ReturnType<typeof resolveReplyDirectives>>,
   fields: Record<string, unknown>,
 ) {
-  expect(value.kind).toBe("continue");
   if (value.kind !== "continue") {
     throw new Error(`expected continue result, got ${value.kind}`);
   }
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(value.result[key as keyof typeof value.result]).toEqual(expected);
-  }
+  const levels = Object.hasOwn(fields, "resolvedReasoningLevel")
+    ? await value.result.resolveModelLevels()
+    : {};
+  expect({ ...value.result, ...levels }).toMatchObject(fields);
 }
 
 export function parseInlineDirectivesForTargetSessionTest(body: string) {
   const normalized = body.trim();
   const modelDirective = normalized.match(/(?:^|\n)\/model\s+(\S+)/)?.[1];
-  if (modelDirective) {
-    return {
-      cleaned: normalized.replace(/(?:^|\n)\/model\s+\S+/, "").trim(),
-      hasThinkDirective: false,
-      hasVerboseDirective: false,
-      hasTraceDirective: false,
-      traceLevel: undefined,
-      rawTraceLevel: undefined,
-      hasFastDirective: false,
-      hasReasoningDirective: false,
-      hasElevatedDirective: false,
-      hasExecDirective: false,
-      hasModelDirective: true,
-      hasQueueDirective: false,
-      hasStatusDirective: false,
-      queueReset: false,
-      thinkLevel: undefined,
-      verboseLevel: undefined,
-      fastMode: undefined,
-      reasoningLevel: undefined,
-      elevatedLevel: undefined,
-      rawElevatedLevel: undefined,
-      rawModelDirective: modelDirective,
-    };
-  }
-  if (normalized === "/reasoning stream") {
-    return {
-      cleaned: "",
-      hasThinkDirective: false,
-      hasVerboseDirective: false,
-      hasTraceDirective: false,
-      traceLevel: undefined,
-      rawTraceLevel: undefined,
-      hasFastDirective: false,
-      hasReasoningDirective: true,
-      reasoningLevel: "stream",
-      rawReasoningLevel: "stream",
-      hasElevatedDirective: false,
-      hasExecDirective: false,
-      hasModelDirective: false,
-      hasQueueDirective: false,
-      hasStatusDirective: false,
-      queueReset: false,
-      thinkLevel: undefined,
-      verboseLevel: undefined,
-      fastMode: undefined,
-      elevatedLevel: undefined,
-      rawElevatedLevel: undefined,
-      rawModelDirective: undefined,
-    };
-  }
-  if (normalized === "/trace on") {
-    return {
-      cleaned: "",
-      hasThinkDirective: false,
-      hasVerboseDirective: false,
-      hasTraceDirective: true,
-      traceLevel: "on",
-      rawTraceLevel: "on",
-      hasFastDirective: false,
-      hasReasoningDirective: false,
-      hasElevatedDirective: false,
-      hasExecDirective: false,
-      hasModelDirective: false,
-      hasQueueDirective: false,
-      hasStatusDirective: false,
-      queueReset: false,
-      thinkLevel: undefined,
-      verboseLevel: undefined,
-      fastMode: undefined,
-      reasoningLevel: undefined,
-      elevatedLevel: undefined,
-      rawElevatedLevel: undefined,
-      rawModelDirective: undefined,
-    };
-  }
+  const reasoning = !modelDirective && normalized === "/reasoning stream";
   return {
-    cleaned: body,
+    cleaned: modelDirective
+      ? normalized.replace(/(?:^|\n)\/model\s+\S+/, "").trim()
+      : reasoning
+        ? ""
+        : body,
     hasThinkDirective: false,
     hasVerboseDirective: false,
     hasTraceDirective: false,
-    traceLevel: undefined,
-    rawTraceLevel: undefined,
     hasFastDirective: false,
-    hasReasoningDirective: false,
+    hasReasoningDirective: reasoning,
     hasElevatedDirective: false,
     hasExecDirective: false,
-    hasModelDirective: false,
+    hasModelDirective: Boolean(modelDirective),
     hasQueueDirective: false,
     hasStatusDirective: false,
     queueReset: false,
-    thinkLevel: undefined,
-    verboseLevel: undefined,
-    fastMode: undefined,
-    reasoningLevel: undefined,
-    elevatedLevel: undefined,
-    rawElevatedLevel: undefined,
-    rawModelDirective: undefined,
+    ...(modelDirective ? { rawModelDirective: modelDirective } : {}),
+    ...(reasoning ? { reasoningLevel: "stream", rawReasoningLevel: "stream" } : {}),
   };
 }

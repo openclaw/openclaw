@@ -60,7 +60,7 @@ describe("Crabline outbound target correlation", () => {
           threadId,
         });
       } finally {
-        await transport.cleanup?.();
+        await transport.cleanupAfterGatewayStop?.();
       }
     });
   });

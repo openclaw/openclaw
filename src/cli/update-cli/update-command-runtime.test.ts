@@ -1,0 +1,73 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as nodeSqlite from "../../../node-sqlite.mjs";
+import { ExitError } from "../../runtime.js";
+import { updateCommand } from "./update-command.js";
+
+const mocks = vi.hoisted(() => ({
+  stateAdmission: vi.fn(() => {
+    throw new Error("state admission reached on unsupported Node");
+  }),
+  runtime: { error: vi.fn(), writeJson: vi.fn(), exit: vi.fn() },
+}));
+vi.mock("../../state/openclaw-state-ownership-preflight.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-state-ownership-preflight.js")>()),
+  assertOpenClawStateWriteAllowedAtPath: mocks.stateAdmission,
+}));
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
+  defaultRuntime: mocks.runtime,
+}));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.clearAllMocks();
+});
+
+describe("unsupported CLI Node update admission", () => {
+  it("refuses a capability-passing Node below the security floor before stateful preparation", async () => {
+    vi.stubGlobal("process", {
+      ...process,
+      versions: { ...process.versions, bun: undefined, node: "24.15.0" },
+    });
+    await expect(updateCommand({ json: true })).rejects.toEqual(new ExitError(1));
+    expect(mocks.stateAdmission).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "error",
+        reason: "node-runtime-preflight",
+        error: expect.stringContaining("openclaw requires Node >=24.22.1 <25, or >=26.12.1"),
+      }),
+    );
+  });
+
+  it("refuses a failed SQLite capability probe before stateful preparation", async () => {
+    vi.stubGlobal("process", {
+      ...process,
+      versions: { ...process.versions, bun: undefined, node: "26.0.0" },
+    });
+    const capabilities = await nodeSqlite.detectCurrentSqliteCapabilities();
+    vi.spyOn(nodeSqlite, "detectCurrentSqliteCapabilities").mockResolvedValue({
+      ...capabilities,
+      text: false,
+    });
+    await expect(updateCommand({ json: true })).rejects.toEqual(new ExitError(1));
+    expect(mocks.stateAdmission).not.toHaveBeenCalled();
+    const refusal = mocks.runtime.writeJson.mock.calls[0]?.[0];
+    expect(refusal.error).toContain(`detected: Node 26.0.0 at ${process.execPath}`);
+    expect(refusal.error).toContain("Failing check node-runtime");
+    expect(refusal.error).toContain("Update install root:");
+    expect(refusal.error).toContain("Update binary:");
+    expect(refusal.error).toContain(">=24.22.1 <25");
+    expect(refusal.error).toContain(">=26.12.1");
+    expect(refusal.error).toContain("Node 26 recommended");
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "error",
+        mode: "unknown",
+        reason: "node-runtime-preflight",
+        error: expect.stringContaining("nvm install 26"),
+      }),
+    );
+  });
+});

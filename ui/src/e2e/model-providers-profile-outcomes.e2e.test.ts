@@ -1,15 +1,118 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { buildAuthHealthSummary } from "../../../src/agents/auth-health.js";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expandProvider } from "./model-providers.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI model provider profile outcomes" });
 const NOW = Date.now();
 
 suite.define(() => {
+  it("explains saved account health separately from catalog availability", async () => {
+    const health = buildAuthHealthSummary({
+      store: {
+        version: 1,
+        profiles: {
+          "xai:opaque-account": {
+            type: "oauth",
+            provider: "xai",
+            access: "synthetic-access",
+            refresh: "synthetic-refresh",
+            expires: Date.now() + 60 * 60_000,
+          },
+        },
+      },
+    });
+    const xai = health.providers[0]!;
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 1000, width: 1280 } },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "config.get": {
+              config: {},
+              sourceConfig: {},
+              hash: "accounts",
+              raw: "{}",
+              valid: true,
+              issues: [],
+            },
+            "models.authStatus": {
+              ts: NOW,
+              providers: [
+                {
+                  ...xai,
+                  displayName: "xAI",
+                  profiles: xai.profiles.map((profile) =>
+                    Object.assign({}, profile, { source: "saved" }),
+                  ),
+                },
+                {
+                  provider: "minimax",
+                  displayName: "MiniMax",
+                  status: "ok",
+                  profiles: [
+                    {
+                      profileId: "minimax:opaque-account",
+                      type: "oauth",
+                      status: "ok",
+                      source: "saved",
+                      displayName: "Work account",
+                    },
+                  ],
+                },
+              ],
+            },
+            "models.list": {
+              models: [{ id: "test-model", name: "Test model", provider: "xai", available: true }],
+              providerOutcomes: [
+                { provider: "xai", status: "ready" },
+                { provider: "minimax", status: "unavailable" },
+              ],
+            },
+            "usage.status": { updatedAt: NOW, providers: [] },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+        const xaiCard = page.locator('[data-provider-id="xai"]');
+        const minimaxCard = page.locator('[data-provider-id="minimax"]');
+        await expandProvider(page, "xai");
+        await expandProvider(page, "minimax");
+        await xaiCard.screenshot({ path: path.join(suite.artifactDir, "account-status.png") });
+        await minimaxCard.screenshot({ path: path.join(suite.artifactDir, "catalog-status.png") });
+        await expect
+          .poll(async () =>
+            (
+              await xaiCard.locator(".model-providers__head .settings-status").textContent()
+            )?.trim(),
+          )
+          .toBe("Ready");
+        expect(await xaiCard.locator(".model-providers__profile-copy strong").textContent()).toBe(
+          "Signed-in account",
+        );
+        // The row already reads Ready, so the healthy account does not repeat it.
+        expect(
+          (await xaiCard.locator(".model-providers__profile-status").textContent())?.trim(),
+        ).toBe("");
+        expect(
+          await minimaxCard.locator(".model-providers__head .settings-status").textContent(),
+        ).toContain("Models unavailable");
+        expect(
+          await minimaxCard.locator(".model-providers__profile-copy strong").textContent(),
+        ).toBe("Work account");
+        // The profile id stays reachable as the identity's title, not a separate disclosure.
+        expect(await xaiCard.locator("details").count()).toBe(0);
+        expect(
+          await xaiCard.locator(".model-providers__profile-copy strong").getAttribute("title"),
+        ).toBe("xai:opaque-account");
+      },
+    );
+  });
+
   it("lifts an account, makes room during dragging, and saves its dropped priority", async () => {
     const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     await suite.withPage(
@@ -46,16 +149,16 @@ suite.define(() => {
             },
             "models.authStatus": { ts: NOW, providers: [provider] },
             "usage.status": { updatedAt: NOW, providers: [] },
-            "sessions.usage": { aggregates: { byProvider: [] } },
           },
         });
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-        const card = page.locator('[data-provider-id="openai"]');
+        const card = await expandProvider(page, "openai");
         const alex = card.locator('[data-profile-id="openai:alex"]');
         const blair = card.locator('[data-profile-id="openai:blair"]');
         const grip = alex.locator(".model-providers__profile-grip");
         await expect.poll(() => grip.isEnabled()).toBe(true);
-        await grip.scrollIntoViewIfNeeded();
+        // The drag ends over the lower account, so keep both rows inside the viewport.
+        await blair.scrollIntoViewIfNeeded();
         const start = await grip.boundingBox();
         const first = await alex.boundingBox();
         const second = await blair.boundingBox();
@@ -165,15 +268,16 @@ suite.define(() => {
             "models.list": {
               cases: [
                 {
-                  match: { view: "configured", agentId: "writer", preparedOnly: true },
-                  response: { models: [readyModel] },
-                },
-                {
                   match: { view: "configured", agentId: "writer", refresh: true },
                   response: {
                     models: [readyModel],
+                    refreshFailed: providerOutcomes.some((outcome) => outcome.status !== "ready"),
                     providerOutcomes,
                   },
+                },
+                {
+                  match: { view: "configured", agentId: "writer" },
+                  response: { models: [readyModel] },
                 },
                 { match: { view: "configured" }, response: { models: [] } },
               ],
@@ -189,6 +293,7 @@ suite.define(() => {
                         provider: "openai",
                         displayName: "OpenAI",
                         status: "ok",
+                        apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
                         profiles: [
                           { profileId: "openai:rejected", type: "oauth", status: "ok" },
                           { profileId: "openai:ready", type: "oauth", status: "ok" },
@@ -201,17 +306,16 @@ suite.define(() => {
               ],
             },
             "usage.status": { updatedAt: NOW, providers: [] },
-            "sessions.usage": { aggregates: { byProvider: [] } },
           },
         });
 
         const response = await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         expect(response?.status()).toBe(200);
         await gateway.waitForRequest("agents.list");
-        const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
+        const pageScope = page.locator(".settings-sidebar__agent openclaw-agent-select");
         await pageScope.locator(".agent-select__trigger").click();
         await pageScope
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: "Writer" })
           .click();
         await expect
@@ -221,7 +325,7 @@ suite.define(() => {
               return (
                 params?.view === "configured" &&
                 params.agentId === "writer" &&
-                params.preparedOnly === true
+                params.refresh !== true
               );
             }),
           )
@@ -242,7 +346,11 @@ suite.define(() => {
             });
             return request?.params;
           })
-          .toEqual({ view: "configured", agentId: "writer", refresh: true });
+          .toEqual({
+            view: "configured",
+            agentId: "writer",
+            refresh: true,
+          });
         await expect
           .poll(async () =>
             (
@@ -250,6 +358,25 @@ suite.define(() => {
             )?.trim(),
           )
           .toBe(status);
+        if (!available) {
+          // A rejected credential opens its row without a click.
+          expect(
+            await openaiCard.locator(".provider-row__summary").getAttribute("aria-expanded"),
+          ).toBe("true");
+        }
+        await expandProvider(page, "openai");
+        if (!available) {
+          await openaiCard.screenshot({
+            path: path.join(suite.artifactDir, "provider-auth-rejected.png"),
+          });
+        }
+        expect(
+          (
+            await openaiCard
+              .locator('[data-profile-id="openai:ready"] .model-providers__profile-status')
+              .textContent()
+          )?.trim(),
+        ).toBe(available ? "" : "Credentials configured");
       },
     );
   });

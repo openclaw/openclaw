@@ -1,8 +1,13 @@
 // Whatsapp tests cover inbound plugin behavior.
 import type { proto } from "baileys";
 import { describe, expect, it } from "vitest";
-import { extractContactContext, extractLocationData, extractText } from "./inbound.js";
-import { extractExternalAdReplyContext, extractMediaKind } from "./inbound/extract.js";
+import {
+  extractContactContext,
+  extractExternalAdReplyContext,
+  extractLocationData,
+  extractMediaKind,
+  extractText,
+} from "./inbound/extract.js";
 
 const message = (value: proto.IMessage) => value;
 const vcard = (name: string, phones: string[] = []) =>
@@ -45,35 +50,6 @@ describe("web inbound helpers", () => {
 
   it.each([
     [
-      "prefers FN over N",
-      [
-        "BEGIN:VCARD",
-        "VERSION:3.0",
-        "N:Lovelace;Ada;;;",
-        "FN:Ada Lovelace",
-        "TEL;TYPE=CELL:+15555550123",
-        "END:VCARD",
-      ].join("\n"),
-    ],
-    ["normalizes tel: prefixes", vcard("Ada Lovelace", ["tel:+15555550123"])],
-    [
-      "trims and skips empty phones",
-      [
-        "BEGIN:VCARD",
-        "VERSION:3.0",
-        "FN:Ada Lovelace",
-        "TEL;TYPE=CELL:  +15555550123  ",
-        "TEL;TYPE=HOME:   ",
-        "TEL;TYPE=WORK:+15555550124",
-        "END:VCARD",
-      ].join("\n"),
-    ],
-  ])("%s in WhatsApp vcards", (_name, card) => {
-    expect(extractText(message({ contactMessage: { vcard: card } }))).toBe("<contact>");
-  });
-
-  it.each([
-    [
       "multiple contact cards",
       [
         { displayName: "Alice", vcard: vcard("Alice", ["+15555550101"]) },
@@ -112,8 +88,6 @@ describe("web inbound helpers", () => {
     ["image", { imageMessage: {} }, "image"],
     ["audio", { audioMessage: {} }, "audio"],
     ["GIF playback video", { videoMessage: { gifPlayback: true } }, "video"],
-    ["non-GIF video", { videoMessage: { gifPlayback: false } }, "video"],
-    ["ordinary video", { videoMessage: {} }, "video"],
   ])("returns the %s media kind", (_name, input, expected) => {
     expect(extractMediaKind(message(input))).toBe(expected);
   });

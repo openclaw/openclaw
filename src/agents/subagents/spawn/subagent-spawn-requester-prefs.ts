@@ -1,123 +1,87 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
 import { resolveFastModeState } from "../../fast-mode.js";
 import {
+  type ModelRef,
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "../../model-selection.js";
-import { resolveThinkingDefault } from "../../model-thinking-default.js";
 import {
-  loadSessionEntry,
-  resolveAgentConfig,
-  resolveGatewaySessionStoreTarget,
-} from "./subagent-spawn.runtime.js";
+  resolveConfiguredThinkingDefault,
+  resolveThinkingDefault,
+} from "../../model-thinking-default.js";
 
-export function readRequesterThinkingLevel(params: {
+type RequesterPreferencesContext = {
   cfg: OpenClawConfig;
-  requesterInternalKey: string;
   requesterAgentId?: string;
-}): string | undefined {
-  let entry: SessionEntry | undefined;
-  try {
-    const target = resolveGatewaySessionStoreTarget({
-      cfg: params.cfg,
-      key: params.requesterInternalKey,
-      agentId: params.requesterAgentId,
-    });
-    entry = loadSessionEntry({
-      storePath: target.storePath,
-      sessionKey: target.canonicalKey,
-      clone: false,
-    });
-  } catch {
-    entry = undefined;
-  }
-  if (typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()) {
-    return entry.thinkingLevel.trim();
-  }
-  const requesterAgentThinking = params.requesterAgentId
-    ? resolveAgentConfig(params.cfg, params.requesterAgentId)?.thinkingDefault
-    : undefined;
-  if (requesterAgentThinking) {
-    return requesterAgentThinking;
-  }
+  requesterEntry: SessionEntry | undefined;
+};
+
+function resolveRequesterModel(params: RequesterPreferencesContext) {
+  const entry = params.requesterEntry;
   const defaultModel = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.requesterAgentId,
   });
-  if (entry) {
-    const normalizedOverride = normalizeStoredOverrideModel({
-      providerOverride: entry.providerOverride,
-      modelOverride: entry.modelOverride,
-    });
-    const persistedModel = resolvePersistedSelectedModelRef({
-      defaultProvider: defaultModel.provider,
-      runtimeProvider: entry.modelProvider,
-      runtimeModel: entry.model,
-      overrideProvider: normalizedOverride.providerOverride,
-      overrideModel: normalizedOverride.modelOverride,
-    });
-    if (persistedModel) {
-      return resolveThinkingDefault({
-        cfg: params.cfg,
-        provider: persistedModel.provider,
-        model: persistedModel.model,
-      });
-    }
+  if (!entry) {
+    return { defaultModel, selectedModel: undefined };
   }
-  return resolveThinkingDefault({
-    cfg: params.cfg,
-    provider: defaultModel.provider,
-    model: defaultModel.model,
+  const normalizedOverride = normalizeStoredOverrideModel({
+    providerOverride: entry.providerOverride,
+    modelOverride: entry.modelOverride,
+    routeResolution: entry.modelOverrideRouteResolution,
   });
+  const selectedModel = resolvePersistedSelectedModelRef({
+    defaultProvider: defaultModel.provider,
+    runtimeProvider: entry.modelProvider,
+    runtimeModel: entry.model,
+    overrideProvider: normalizedOverride.providerOverride,
+    overrideModel: normalizedOverride.modelOverride,
+    overrideRouteResolution: entry.modelOverrideRouteResolution,
+  });
+  return { defaultModel, selectedModel };
 }
 
-export function readRequesterFastMode(params: {
-  cfg: OpenClawConfig;
-  requesterInternalKey: string;
-  requesterAgentId?: string;
-}): FastMode {
-  let entry: SessionEntry | undefined;
-  try {
-    const target = resolveGatewaySessionStoreTarget({
-      cfg: params.cfg,
-      key: params.requesterInternalKey,
-      agentId: params.requesterAgentId,
-    });
-    entry = loadSessionEntry({
-      storePath: target.storePath,
-      sessionKey: target.canonicalKey,
-      clone: false,
-    });
-  } catch {
-    entry = undefined;
-  }
-  const defaultModel = resolveDefaultModelForAgent({
+export function resolveRequesterPreferences(params: RequesterPreferencesContext) {
+  const entry = params.requesterEntry;
+  const { defaultModel, selectedModel } = resolveRequesterModel(params);
+  const model = selectedModel ?? defaultModel;
+  const thinkingParams = {
     cfg: params.cfg,
     agentId: params.requesterAgentId,
-  });
-  const normalizedOverride = entry
-    ? normalizeStoredOverrideModel({
-        providerOverride: entry.providerOverride,
-        modelOverride: entry.modelOverride,
-      })
-    : {};
-  const selectedModel = entry
-    ? resolvePersistedSelectedModelRef({
-        defaultProvider: defaultModel.provider,
-        runtimeProvider: entry.modelProvider,
-        runtimeModel: entry.model,
-        overrideProvider: normalizedOverride.providerOverride,
-        overrideModel: normalizedOverride.modelOverride,
-      })
-    : undefined;
+    provider: model.provider,
+    model: model.model,
+  };
+  const selectedThinkingLevel =
+    normalizeOptionalString(entry?.thinkingLevel) ??
+    resolveConfiguredThinkingDefault(thinkingParams);
+  return {
+    model: selectedModel ?? undefined,
+    thinkingLevel: selectedThinkingLevel ?? resolveThinkingDefault(thinkingParams),
+    thinkingExplicit: selectedThinkingLevel !== undefined,
+  };
+}
+
+export function resolveRequesterFastMode(
+  params: RequesterPreferencesContext & { requesterModel?: ModelRef; childModel: string },
+): FastMode | undefined {
+  const entry = params.requesterEntry;
+  let model = params.requesterModel;
+  if (!model) {
+    const { defaultModel, selectedModel } = resolveRequesterModel(params);
+    model = selectedModel ?? defaultModel;
+  }
+  if (params.childModel !== `${model.provider}/${model.model}`) {
+    return undefined;
+  }
   return resolveFastModeState({
     cfg: params.cfg,
-    provider: selectedModel?.provider ?? defaultModel.provider,
-    model: selectedModel?.model ?? defaultModel.model,
+    provider: model.provider,
+    model: model.model,
     agentId: params.requesterAgentId,
     sessionEntry: entry,
-  }).mode;
+  }).requestMode;
 }

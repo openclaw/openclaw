@@ -150,21 +150,31 @@ Button semantics:
   the approval service; they must not parse `/approve` command text or infer
   kind from the ID.
 - `action.type: "question"` identifies one choice for a live, runtime-authored
-  `ask_user` question. Like `approval`, this is an OpenClaw runtime action;
-  agents and plugins must not synthesize question IDs. Telegram, Discord, and
-  Slack map it to transport-private native callbacks and resolve the choice
-  through the Gateway. When the question becomes answered, expired, or
-  cancelled, those channels edit the delivered message, remove its actions,
-  and append the terminal status. WhatsApp, Signal, and iMessage render up to
-  four single-select choices as `1️⃣` through `4️⃣` reactions. Other question
-  shapes degrade to label text, and the user can answer with a plain-text
-  reply.
+  question. Like `approval`, this is an OpenClaw runtime action;
+  agents and plugins must not synthesize question IDs. Telegram, Discord,
+  Slack, Mattermost, and LINE direct chats map it to transport-private native
+  callbacks and resolve the choice through the Gateway. When the question becomes answered,
+  expired, or cancelled, Telegram, Discord, and Slack edit the delivered
+  message, remove its actions, and append the terminal status. Mattermost
+  retires its prompt only on the click it accepts, so a question that ends
+  elsewhere keeps its buttons; a later click gets private feedback. Denied
+  Mattermost clicks also receive private feedback and leave the prompt unchanged.
+  LINE group and multi-person chats keep readable choices because their postbacks
+  do not include the sender identity needed to admit an answer. Unknown LINE
+  destinations also use text. LINE cannot edit a message it already delivered, so a
+  tap after the question ends receives a notice.
+  LINE draws at most four controls on one card, matching its two-to-four option
+  bound. Other question shapes degrade to label text, and the user can answer
+  with a plain-text reply. These renderer contracts are separate from tool
+  availability: OpenClaw's built-in [`ask_user`](/tools/ask-user) is exposed only
+  on Discord, Slack, Telegram, and WebChat. Native agent runtimes can have their
+  own question tools. Bundled channels no longer use question reactions.
 - `intent: "custom-input"` switches a live question to its free-text answer
   path without resolving it. Producers must also state the free-text route in
   visible text. A channel can omit this one native control while keeping
   declared-choice controls native when it cannot target a text composer safely.
-  Telegram maps it to **Other…** and Force Reply. Discord and Slack keep the
-  visible text route.
+  Telegram maps it to **Other…** and Force Reply. Discord, Slack, Mattermost,
+  and LINE keep the visible text route.
 - `action.type: "url"` opens a normal link.
 - `action.type: "web-app"` launches a channel-native web app. Set `url` for a
   URL-backed app or `widgetId` for an OpenClaw-hosted widget whose launch
@@ -189,7 +199,7 @@ Button semantics:
   carries a `command` action.
 - `reusable` is optional. Channels that support reusable native callbacks may
   keep the action available after a successful interaction. Use it for
-  repeatable or idempotent actions such as refresh, inspect, or more details;
+  actions safe to repeat such as refresh, inspect, or more details;
   leave it unset for normal one-shot approvals and destructive actions.
 
 Select semantics:
@@ -209,7 +219,7 @@ Chart semantics:
   blocks are dropped during normalization rather than silently changing data.
 - Native chart rendering is opt-in through `presentationCapabilities.charts`.
   Other channels receive the chart title, axes, categories, series, and values
-  as deterministic text. This is also the accessibility fallback.
+  as plain text in a fixed format. This is also the accessibility fallback.
 
 Table semantics:
 
@@ -223,8 +233,8 @@ Table semantics:
   or row-header index drops the table block instead of truncating or repairing
   its data.
 - Native table rendering is opt-in through `presentationCapabilities.tables`.
-  Other channels receive the caption and every row as deterministic linear
-  text, with internal whitespace collapsed:
+  Other channels receive the caption and every row as plain
+  text in a fixed format, with internal whitespace collapsed:
 
   ```text
   Open pipeline (table)
@@ -235,7 +245,7 @@ Table semantics:
 There is no separate `report` discriminator. Compose a report from `title`,
 `tone`, `text`, `context`, `chart`, `table`, and action blocks. This keeps each
 block independently renderable and gives the complete report the same
-deterministic text fallback.
+plain-text fallback in a fixed format.
 
 ## Producer examples
 
@@ -439,7 +449,8 @@ const adapter: ChannelOutboundAdapter = {
   renderPresentation({ payload, presentation, ctx }) {
     return renderNativePayload(payload, presentation, ctx);
   },
-  async pinDeliveredMessage({ target, messageId, pin }) {
+  async pinDeliveredMessage({ target, messageId, pin, assertDirectAdapterHandoff }) {
+    assertDirectAdapterHandoff?.();
     await pinNativeMessage(target, messageId, { notify: pin.notify === true });
   },
 };
@@ -512,14 +523,14 @@ visible fallback.
 
 ## Core render flow
 
-On the canonical outbound path used by CLI and standard message actions, core:
+On the standard outbound path used by CLI and standard message actions, core:
 
 1. Normalizes the presentation payload.
 2. Resolves the target channel's outbound adapter.
 3. Reads `presentationCapabilities`.
 4. Applies generic capability limits such as action count, label length, and
    select option count when the adapter advertises them. Chart and table blocks
-   become deterministic text unless the adapter explicitly advertises
+   become plain text in a fixed format unless the adapter explicitly advertises
    `charts: true` or `tables: true`, respectively.
 5. Calls `renderPresentation` when the adapter can render the payload. Its
    `presentation` is adapted for native limits; `sourcePresentation` retains
@@ -530,7 +541,7 @@ On the canonical outbound path used by CLI and standard message actions, core:
    sent message.
 
 Channel-local reply or preview funnels that consume `ReplyPayload` directly
-must either enter that canonical path or materialize the same presentation
+must either enter that standard path or materialize the same presentation
 fallback before projecting the payload down to plain text/media.
 
 Core owns fallback behavior so producers can stay channel-agnostic. Channel
@@ -602,19 +613,19 @@ required and the channel cannot pin the sent message, delivery reports failure.
 
 Current bundled renderers:
 
-| Channel         | Native render target                      | Notes                                                                                                                                                                                                             |
-| --------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Discord         | Components and component containers       | Supports the documented Discord-specific `components` extension for native layouts that `presentation` cannot express. Portable shared sends should use `presentation`.                                           |
-| Feishu          | Interactive cards                         | Card header uses `title` once. Within native cards, disabled or unsupported buttons retain label-only text; rejected URL targets and opaque callback values are omitted.                                          |
-| Matrix          | Text fallback plus structured event field | Buttons/selects advertise as supported, but every block currently renders as `renderMessagePresentationFallbackText` output carried in a `com.openclaw.presentation` event field, not native interactive widgets. |
-| Mattermost      | Text plus interactive props               | Selects and dividers are not supported; those blocks degrade to text.                                                                                                                                             |
-| Microsoft Teams | Adaptive Cards                            | Plain `message` text is included with the card when both are provided. Selects, styles, and disabled state are not supported.                                                                                     |
-| Slack           | Block Kit                                 | Renders `chart` as native `data_visualization` and `table` as native `data_table`; preserves legacy `channelData.slack.blocks`, but new shared sends should use `presentation`.                                   |
-| Telegram        | Text plus inline keyboards                | Buttons/selects require inline button capability for the target surface; otherwise text fallback is used.                                                                                                         |
-| Plain channels  | Text fallback                             | Channels without a renderer still get readable output.                                                                                                                                                            |
+| Channel         | Native render target                      | Notes                                                                                                                                                                                                   |
+| --------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Discord         | Components and component containers       | Supports the documented Discord-specific `components` extension for native layouts that `presentation` cannot express. Portable shared sends should use `presentation`.                                 |
+| Feishu          | Interactive cards                         | Card header uses `title` once. Within native cards, disabled or unsupported buttons retain label-only text; rejected URL targets and opaque callback values are omitted.                                |
+| Matrix          | Text fallback plus structured event field | Buttons/selects advertise as supported, but every block renders as `renderMessagePresentationFallbackText` output carried in a `com.openclaw.presentation` event field, not native interactive widgets. |
+| Mattermost      | Text plus interactive props               | Selects and dividers are not supported; those blocks degrade to text.                                                                                                                                   |
+| Microsoft Teams | Adaptive Cards                            | Plain `message` text is included with the card when both are provided. Selects, styles, and disabled state are not supported.                                                                           |
+| Slack           | Block Kit                                 | Renders `chart` as native `data_visualization` and `table` as native `data_table`; preserves legacy `channelData.slack.blocks`, but new shared sends should use `presentation`.                         |
+| Telegram        | Text plus inline keyboards                | Buttons/selects require inline button capability for the target surface; otherwise text fallback is used.                                                                                               |
+| Plain channels  | Text fallback                             | Channels without a renderer still get readable output.                                                                                                                                                  |
 
-Provider-native payload compatibility is a transition affordance for existing
-reply producers. New native fields require the explicit exception review above.
+Provider-native payload compatibility is kept for existing reply producers only.
+New native fields require the explicit exception review above.
 
 ## Presentation vs InteractiveReply
 
@@ -625,7 +636,7 @@ helpers. It supports:
 - buttons
 - selects
 
-`MessagePresentation` is the canonical shared send contract. It adds:
+`MessagePresentation` is the shared send contract. It adds:
 
 - title
 - tone
@@ -672,19 +683,21 @@ Non-deprecated helpers worth knowing:
 - `isMessagePresentationInteractiveBlock(block)` narrows a block to the
   `buttons` | `select` union.
 - `resolveMessagePresentationButtonAction(button)` and
-  `resolveMessagePresentationOptionAction(option)` return the canonical typed
+  `resolveMessagePresentationOptionAction(option)` return the normalized typed
   action while accepting deprecated boundary fields. An explicit `action`
   always wins.
 - `resolveMessagePresentationActionValue(action)` /
   `resolveMessagePresentationControlValue(control)` read command/callback
-  scalar values only. A non-scalar canonical action never falls through to a
+  scalar values only. A non-scalar normalized action never falls through to a
   legacy shadow `value`, so approval IDs and link targets stay typed.
 - `renderMessagePresentationChartFallbackText(block)` /
   `renderMessagePresentationTableFallbackText(block)` render one structured
-  data block as deterministic text for channel-specific fallback paths.
+  data block as plain text in a fixed format for channel-specific fallback paths.
 
 The legacy `InteractiveReply*` types and conversion helpers are marked
-`@deprecated` in the SDK:
+`@deprecated` in the SDK. The compatibility registry records them as
+`message-presentation-legacy-bridges`, deprecated on 2026-07-25 with a
+`removeAfter` date of 2026-10-01:
 
 - `InteractiveReply`, `InteractiveReplyBlock`, `InteractiveReplyButton`, and
   `InteractiveReplyOption`
@@ -732,11 +745,27 @@ Semantics:
 - `pin.notify` defaults to `false`.
 - `pin.required` defaults to `false`.
 - Optional pin failures degrade and leave the sent message intact.
-- Required pin failures fail delivery.
+- Required pin failures report a partial delivery failure while preserving the
+  accepted message and its receipt.
 - Chunked messages pin the first delivered chunk, not the tail chunk.
 
 Manual `pin`, `unpin`, and `pins` message actions still exist for existing
 messages where the provider supports those operations.
+
+The `pinDeliveredMessage` context includes an optional
+`assertDirectAdapterHandoff` callback. A successful send does not keep its owner
+active indefinitely: the owner can close while the adapter prepares or waits to
+pin that message. Core checks the assertion before entering the pin hook, and
+the adapter must retain it through preparation, rate-limit queues, and retries,
+checking it synchronously immediately before each provider request. If the
+native pin helper performs those waits, forward the assertion into its existing
+request guard too.
+
+Let a submitted pin request settle even if authority closes while awaiting its
+response. Do not discard an accepted pin or repeat the message send. This
+optional context field preserves older callers that do not supply an assertion;
+it adds no configuration or pin permission and must not be serialized into a
+payload.
 
 ## Plugin author checklist
 

@@ -92,6 +92,23 @@ input.on("line", (line) => {
     case "account/login/start":
       sendResult(message.id, { type: message.params?.type });
       return;
+    case "model/list":
+      sendResult(message.id, {
+        data: ["gpt-5.6-luna"].map((model) => ({
+          id: model,
+          model,
+          displayName: model,
+          description: "Synthetic native approval proof model",
+          hidden: false,
+          isDefault: true,
+          defaultReasoningEffort: "low",
+          supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Low" }],
+          multiAgentVersion: "v2",
+          inputModalities: ["text"],
+        })),
+        nextCursor: null,
+      });
+      return;
     case "config/read":
       sendResult(message.id, { config: {}, origins: {}, layers: [] });
       return;

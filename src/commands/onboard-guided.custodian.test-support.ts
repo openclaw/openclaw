@@ -7,9 +7,9 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
-  runGuidedOnboarding as runGuidedOnboardingImpl,
-  type GuidedOnboardingDeps,
-} from "./onboard-guided.js";
+  runGuidedOnboardingWithFixtures as runGuidedOnboardingImpl,
+  type GuidedOrchestrationFixture as GuidedOnboardingDeps,
+} from "./onboard-guided-runtime.test-support.js";
 
 const runGuidedOnboarding = (...[opts, ...rest]: Parameters<typeof runGuidedOnboardingImpl>) =>
   runGuidedOnboardingImpl({ agentName: "main", ...opts }, ...rest);
@@ -63,6 +63,7 @@ const localOnboarding = vi.hoisted(() => {
       (params: {
         configPath: string;
         workspace: string;
+        teamCoordinatorId?: string;
         securityAcknowledgedAt: string;
         replace?: boolean;
         expectedRunId?: string;
@@ -78,6 +79,7 @@ const localOnboarding = vi.hoisted(() => {
           runId: params.runId,
           configPath: params.configPath,
           workspace: params.workspace,
+          ...(params.teamCoordinatorId ? { teamCoordinatorId: params.teamCoordinatorId } : {}),
           securityAcknowledgedAt: params.securityAcknowledgedAt,
           startedAtMs: 1,
         };
@@ -116,6 +118,13 @@ const withConfigMutationExclusive = vi.hoisted(() =>
 const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-log-");
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot, withConfigMutationExclusive }));
+vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../wizard/setup.shared.js")>()),
+  writeWizardConfigFile: vi.fn(async (config: OpenClawConfig) => {
+    localOnboarding.persisted.config = config;
+    return { nextConfig: config };
+  }),
+}));
 vi.mock("../state/local-onboarding-state.js", () => ({
   readLocalOnboardingState: localOnboarding.read,
   readLocalOnboardingStateForConfig: localOnboarding.readForConfig,
@@ -126,7 +135,7 @@ vi.mock("./onboard-agent.js", () => ({
   ensureOnboardingAgent: async ({ config }: { config: OpenClawConfig }) => ({
     config: {
       ...config,
-      agents: { ...config.agents, list: [{ id: "main", default: true }] },
+      agents: { ...config.agents, entries: { main: {} } },
     },
     agentId: "main",
     bootstrapPending: true,
@@ -187,8 +196,6 @@ function detection(
 function setupApplyResult() {
   return {
     configPath: "/tmp/openclaw.json",
-    configHashBefore: null,
-    configHashAfter: null,
     bootstrapPending: false,
     workspaceReady: true,
     gateway: { status: "ready" as const, action: "installed" as const },
@@ -221,6 +228,7 @@ function setupDeps(params: {
   runSystemAgentChat?: GuidedOnboardingDeps["runSystemAgentChat"];
   persistRiskAcknowledgement?: GuidedOnboardingDeps["persistRiskAcknowledgement"];
   runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
+  runMemorySetupFlow?: GuidedOnboardingDeps["runMemorySetupFlow"];
   runAppRecommendations?: GuidedOnboardingDeps["runAppRecommendations"];
   runBrowserHandoff?: GuidedOnboardingDeps["runBrowserHandoff"];
   applySetup?: GuidedOnboardingDeps["applySetup"];
@@ -236,7 +244,9 @@ function setupDeps(params: {
     createPrompter: () => params.prompter,
     persistAccessMode: vi.fn(async () => undefined),
     applySetup: params.applySetup ?? vi.fn(async () => setupApplyResult()),
-    launchHatchTui: vi.fn(async () => undefined),
+    launchHatchTui: vi.fn<typeof import("../tui/tui-launch.js").launchTuiCli>(
+      async () => undefined,
+    ),
     runForegroundGateway: vi.fn(async () => undefined),
     listManualOptions: vi.fn(async () => ({
       manualProviders: [],
@@ -263,17 +273,14 @@ function setupDeps(params: {
         return config.wizard?.securityAcknowledgedAt;
       }),
     runSetupMemoryImportStep,
+    runMemorySetupFlow:
+      params.runMemorySetupFlow ?? vi.fn(async (config: OpenClawConfig) => config),
     runAppRecommendations:
       params.runAppRecommendations ??
-      vi.fn(async ({ config }) => ({ config, commitResult: vi.fn() })),
-    runBrowserHandoff:
-      params.runBrowserHandoff ??
-      (vi.fn(async () => ({
-        handedOff: false as const,
-        reason: "timeout" as const,
-      })) as GuidedOnboardingDeps["runBrowserHandoff"]),
+      vi.fn(async ({ config }) => ({ config, commitResult: vi.fn(async () => undefined) })),
+    runBrowserHandoff: params.runBrowserHandoff ?? vi.fn(async () => false),
     runSystemAgentChat,
-    platform: "linux",
+    observeHandoff: vi.fn(),
     ...(params.handoffMode ? { handoffMode: params.handoffMode } : {}),
   } satisfies GuidedOnboardingDeps;
 }

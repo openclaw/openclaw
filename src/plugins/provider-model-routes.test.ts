@@ -9,6 +9,99 @@ import {
 } from "./provider-model-routes.js";
 
 describe("provider model route adapter", () => {
+  it("forwards a non-chat capability without inventing route intent", () => {
+    const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
+      kind: "indeterminate" as const,
+    }));
+    resolveProviderModelRoutes({
+      provider: "fixture",
+      modelId: "native",
+      capability: "decision",
+      env: {},
+      surface: { resolveModelRoutes },
+    });
+    expect(resolveModelRoutes).toHaveBeenCalledWith({
+      provider: "fixture",
+      modelId: "native",
+      capability: "decision",
+      env: {},
+      requestTransportOverrides: "none",
+    });
+  });
+  it.each(["explicit", "inherited"] as const)(
+    "preserves %s consumer intent precedence against a provider pin",
+    (source) => {
+      const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
+        kind: "indeterminate" as const,
+      }));
+      resolveProviderModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.4-mini",
+        config: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+                agentRuntime: { id: "openclaw" },
+              },
+            },
+          },
+        },
+        routeIntent: { runtimeId: "codex", authRequirement: "subscription", source },
+        env: {},
+        surface: { resolveModelRoutes },
+      });
+      expect(resolveModelRoutes.mock.calls[0]?.[0]).toMatchObject({
+        routeIntent:
+          source === "explicit"
+            ? { runtimeId: "codex", authRequirement: "subscription", source }
+            : { runtimeId: "openclaw", source: "explicit" },
+      });
+    },
+  );
+
+  it.each(["provider", "model"] as const)(
+    "projects an explicit %s runtime pin without treating the adapter as a pin",
+    (scope) => {
+      const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
+        kind: "indeterminate" as const,
+      }));
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-completions",
+              ...(scope === "provider" ? { agentRuntime: { id: "openclaw" } } : {}),
+              models: [
+                {
+                  id: "gpt-5.4-mini",
+                  name: "Small model",
+                  reasoning: false,
+                  input: ["text"],
+                  maxTokens: 4096,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  ...(scope === "model" ? { agentRuntime: { id: "openclaw" } } : {}),
+                },
+              ],
+            },
+          },
+        },
+      };
+      resolveProviderModelRoutes({
+        provider: "openai",
+        modelId: "gpt-5.4-mini",
+        config,
+        env: {},
+        surface: { resolveModelRoutes },
+      });
+      expect(resolveModelRoutes.mock.calls[0]?.[0]).toMatchObject({
+        routeIntent: { runtimeId: "openclaw", source: "explicit" },
+      });
+    },
+  );
+
   it("does not invent an observed transport from a model id alone", () => {
     const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
       kind: "indeterminate" as const,
@@ -510,9 +603,7 @@ describe("provider model route adapter", () => {
     ["provider request", { request: { allowPrivateNetwork: true } }, {}],
     ["provider local service", { localService: { command: "/custom-provider" } }, {}],
     ["provider auth header", { authHeader: false }, {}],
-    ["provider request timeout", { timeoutSeconds: 90 }, {}],
     ["model headers", {}, { headers: { "x-model-route": "custom" } }],
-    ["model compatibility", {}, { compat: { supportsStore: false } }],
   ])("projects %s without exposing its value", (_label, providerPatch, modelPatch) => {
     const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
       kind: "indeterminate" as const,

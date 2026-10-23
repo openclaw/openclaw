@@ -5,26 +5,54 @@ import {
   WorkerMachineOptionsSchema,
   WorkerOperatingSystemSchema,
 } from "../../../packages/gateway-protocol/src/schema/environments.js";
+import { validateProviderSettings } from "../../config/provider-settings.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
-  type WorkerDesktopEndpoint,
+  type WorkerExecutionMode,
   type WorkerLease,
   type WorkerLeaseStatus,
   type WorkerProvider,
+  type WorkerProfile,
   type WorkerMachineOption,
   type WorkerOperatingSystem,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
+import type { WorkerInstallationArtifact } from "./bundle.js";
+import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
-import { normalizeWorkerDesktopEndpoint, normalizeWorkerSshEndpoint } from "./store.js";
+import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
+import { normalizeWorkerSshEndpoint } from "./store-validation.js";
+import type { WorkerEnvironmentRecord } from "./store.js";
+
+export function requireWorkerProfile(value: unknown): WorkerProfile {
+  const error = validateProviderSettings(value, "Worker profile");
+  if (error) {
+    throw serviceError("invalid_profile", error);
+  }
+  // SAFETY: Validation accepts only bounded JSON objects and checks any secret references.
+  return value as WorkerProfile;
+}
+
+export function readWorkerProfileSelection(snapshot: WorkerProfile): {
+  machineClass?: string;
+  os?: string;
+  executionMode?: WorkerExecutionMode;
+} {
+  return {
+    ...(typeof snapshot.machineClass === "string" ? { machineClass: snapshot.machineClass } : {}),
+    ...(typeof snapshot.os === "string" ? { os: snapshot.os } : {}),
+    ...(snapshot.executionMode === "worker-turn" || snapshot.executionMode === "remote-exec"
+      ? { executionMode: snapshot.executionMode }
+      : {}),
+  };
+}
 
 export function requireInheritedWorkerProfileAuthorization(
   profileId: string,
   providerId: string,
   settings: unknown,
   configuredProviderId: string | undefined,
-  serviceError: (code: "profile_not_found" | "invalid_profile", message: string) => Error,
 ): void {
   if (
     providerId === DEVICE_WORKER_PROVIDER_ID &&
@@ -57,14 +85,10 @@ export function requireProviderOperationTimeoutMs(
   return timeoutMs;
 }
 
-function isWorkerMachineOptions(value: unknown): value is readonly WorkerMachineOption[] {
-  return Value.Check(WorkerMachineOptionsSchema, value);
-}
-
 export function normalizeWorkerMachineOptions(
   value: unknown,
 ): readonly WorkerMachineOption[] | undefined {
-  if (!isWorkerMachineOptions(value)) {
+  if (!Value.Check(WorkerMachineOptionsSchema, value)) {
     return undefined;
   }
   const ids = new Set<string>();
@@ -85,14 +109,7 @@ export function normalizeWorkerMachineOptions(
       defaultSystems.add(option.os);
     }
   }
-  return value.map((option) => ({
-    id: option.id,
-    label: option.label,
-    ...(option.os === undefined ? {} : { os: option.os }),
-    ...(option.cpu === undefined ? {} : { cpu: option.cpu }),
-    ...(option.memoryGb === undefined ? {} : { memoryGb: option.memoryGb }),
-    ...(option.default === undefined ? {} : { default: option.default }),
-  }));
+  return value;
 }
 
 export function normalizeWorkerOperatingSystems(
@@ -109,6 +126,8 @@ export function normalizeWorkerOperatingSystems(
       !Value.Check(WorkerOperatingSystemSchema, option) ||
       option.id.trim() !== option.id ||
       option.label.trim() !== option.label ||
+      (option.disabledReason !== undefined &&
+        option.disabledReason.trim() !== option.disabledReason) ||
       ids.has(option.id) ||
       (option.default === true && hasDefault)
     ) {
@@ -116,11 +135,7 @@ export function normalizeWorkerOperatingSystems(
     }
     ids.add(option.id);
     hasDefault ||= option.default === true;
-    systems.push({
-      id: option.id,
-      label: option.label,
-      ...(option.default === undefined ? {} : { default: option.default }),
-    });
+    systems.push(option);
   }
   return systems;
 }
@@ -207,10 +222,10 @@ export function requireWorkerLease(value: unknown): WorkerLease {
   }
   const common = {
     leaseId: value.leaseId.trim(),
-    ...(value.sharedHost === true ? { sharedHost: true } : {}),
+    ...(value.sharedHost === undefined ? {} : { sharedHost: value.sharedHost }),
     ...(value.desktop === undefined
       ? {}
-      : { desktop: normalizeWorkerDesktopEndpoint(value.desktop as WorkerDesktopEndpoint) }),
+      : { desktop: normalizeWorkerDesktopEndpoint(value.desktop) }),
   };
   if (hasSsh) {
     return {
@@ -223,4 +238,14 @@ export function requireWorkerLease(value: unknown): WorkerLease {
     throw new Error("Worker provider returned an invalid node device id");
   }
   return { ...common, node: { deviceId: deviceId.trim() } };
+}
+
+export function requireInstall(
+  record: WorkerEnvironmentRecord,
+): WorkerInstallationArtifact["install"] {
+  const install = record.profileSnapshot.install;
+  if (install !== undefined && install !== "bundle" && install !== "npm") {
+    throw serviceError("invalid_profile", "Worker profile has an invalid install method");
+  }
+  return install ?? "bundle";
 }

@@ -1,10 +1,28 @@
-// Qa Lab plugin module implements shared live-transport RTT behavior.
 import type { QaEvidenceTiming } from "../../evidence-summary.js";
 
 export type LiveTransportRttSample = {
   rttMs?: number;
   status: "pass" | "fail";
 };
+
+export function buildLiveTransportRttResult(
+  sample: { requestStartedAt: Date; responseObservedAt: Date; rttMs: number },
+  source: "approval-request-to-resolution" | "request-to-observed-message",
+) {
+  const requestStartedAt = sample.requestStartedAt.toISOString();
+  const responseObservedAt = sample.responseObservedAt.toISOString();
+  return {
+    requestStartedAt,
+    responseObservedAt,
+    rttMs: sample.rttMs,
+    rttMeasurement: {
+      finalMatchedReplyRttMs: sample.rttMs,
+      requestStartedAt,
+      responseObservedAt,
+      source,
+    },
+  };
+}
 
 function percentile(sortedValues: readonly number[], percentileValue: number) {
   if (sortedValues.length === 0) {

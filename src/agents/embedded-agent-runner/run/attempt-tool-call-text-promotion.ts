@@ -1,4 +1,3 @@
-/** Promotes safe standalone text tool calls into structured stream events. */
 import { randomUUID } from "node:crypto";
 import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 import {
@@ -10,37 +9,26 @@ import {
   type PlainTextToolCallMessageNormalization,
   type PlainTextToolCallNameMatcher,
 } from "../../../../packages/tool-call-repair/src/index.js";
+import { mapAssistantMessageStream } from "../../../llm/utils/stream-wrapper.js";
 import { findCodeRegions } from "../../../shared/text/code-regions.js";
 import type { StreamFn } from "../../runtime/index.js";
+import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
+import { isThinkingLikeBlock } from "../../thinking-block.js";
 import { couldNormalizeToolNamePrefixToAllowedTool } from "../../tool-policy.js";
 import { resolveToolCallName } from "./attempt-tool-call-name-resolution.js";
 
 type AssistantStream = Awaited<ReturnType<StreamFn>>;
 
-function createStandaloneTextToolCallId(): string {
-  return `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-}
-
-function isRetainableNonVisibleBlock(block: Record<string, unknown>): boolean {
-  return block.type === "thinking" || block.type === "redacted_thinking";
-}
-
 const STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS = new Set<unknown>(["stop", "toolUse"]);
-
-function createStandaloneToolCallNameMatcher(
-  allowedToolNames: Set<string>,
-): PlainTextToolCallNameMatcher {
-  return {
-    hasExactName: (name) => Boolean(resolveToolCallName(name, allowedToolNames, undefined, true)),
-    hasNamePrefix: (prefix) => couldNormalizeToolNamePrefixToAllowedTool(prefix, allowedToolNames),
-  };
-}
 
 function wrapStreamPromoteStandaloneTextToolCalls(
   stream: AssistantStream,
   allowedToolNames: Set<string>,
 ): AssistantStream {
-  const matcher = createStandaloneToolCallNameMatcher(allowedToolNames);
+  const matcher: PlainTextToolCallNameMatcher = {
+    hasExactName: (name) => Boolean(resolveToolCallName(name, allowedToolNames, undefined, true)),
+    hasNamePrefix: (prefix) => couldNormalizeToolNamePrefixToAllowedTool(prefix, allowedToolNames),
+  };
   const promotedIdBySource = new Map<string, string>();
   const normalizeTerminalMessage = (params: {
     allowPromotion: boolean;
@@ -69,24 +57,21 @@ function wrapStreamPromoteStandaloneTextToolCalls(
     ): Record<string, unknown> => {
       const sourceKey = `${ordinal}:${block.start}:${block.end}`;
       ordinal += 1;
-      let id = promotedIdBySource.get(sourceKey);
-      if (!id) {
-        id = createStandaloneTextToolCallId();
-        promotedIdBySource.set(sourceKey, id);
-      }
+      const id =
+        promotedIdBySource.get(sourceKey) || `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      promotedIdBySource.set(sourceKey, id);
       return {
         type: "toolCall",
         id,
         name,
         arguments: block.arguments,
-        partialArgs: JSON.stringify(block.arguments),
       };
     };
     const promoted = projectPlainTextToolCallMessage({
       allowedStopReasons: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS,
       allowedToolNames,
       createToolCallBlock: createStableToolCallBlock,
-      isRetainableNonTextBlock: isRetainableNonVisibleBlock,
+      isRetainableNonTextBlock: isThinkingLikeBlock,
       message: params.message,
       requireAssistantRole: true,
       resolveProtectedRanges: findCodeRegions,
@@ -101,22 +86,19 @@ function wrapStreamPromoteStandaloneTextToolCalls(
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    const reason =
-      message && typeof message === "object"
-        ? (message as { stopReason?: unknown }).stopReason
-        : undefined;
     return (normalizeTerminalMessage({
-      allowPromotion: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS.has(reason),
+      allowPromotion: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS.has(message.stopReason),
       message,
     })?.message ?? message) as Awaited<ReturnType<typeof originalResult>>;
   };
 
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  const wrappedAsyncIterator = async function* () {
+  const wrappedAsyncIterator = function () {
+    const sourceIterator = originalAsyncIterator();
     const source = {
-      [Symbol.asyncIterator]: originalAsyncIterator,
+      [Symbol.asyncIterator]: () => sourceIterator,
     } as AsyncIterable<unknown>;
-    yield* normalizePlainTextToolCallStreamEvents(source, {
+    const normalized = normalizePlainTextToolCallStreamEvents(source, {
       createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
       matcher,
       normalizeTerminalMessage,
@@ -125,6 +107,26 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       // protection is safe to trust from the fast path.
       protectedRangesFenceCompatible: true,
       resolveProtectedRanges: findCodeRegions,
+    })[Symbol.asyncIterator]();
+    let started = false;
+    return createStreamIteratorWrapper({
+      iterator: normalized,
+      next: (iterator) => {
+        started = true;
+        return iterator.next();
+      },
+      onReturn: async (iterator, value) => {
+        const unopened = !started;
+        started = true;
+        try {
+          return (await iterator.return?.(value)) ?? { done: true, value: undefined };
+        } finally {
+          // An unopened normalizer has not entered its for-await cleanup yet.
+          if (unopened) {
+            await sourceIterator.return?.(value);
+          }
+        }
+      },
     });
   };
   if (!Reflect.set(stream, Symbol.asyncIterator, wrappedAsyncIterator)) {
@@ -134,7 +136,6 @@ function wrapStreamPromoteStandaloneTextToolCalls(
   return stream;
 }
 
-/** Promotes standalone plain-text tool-call replies into structured toolCall blocks when safe. */
 export function wrapStreamFnPromoteStandaloneTextToolCalls(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
@@ -142,13 +143,8 @@ export function wrapStreamFnPromoteStandaloneTextToolCalls(
   if (!allowedToolNames || allowedToolNames.size === 0) {
     return baseFn;
   }
-  return (model, context, streamOptions) => {
-    const maybeStream = baseFn(model, context, streamOptions);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamPromoteStandaloneTextToolCalls(stream, allowedToolNames),
-      );
-    }
-    return wrapStreamPromoteStandaloneTextToolCalls(maybeStream, allowedToolNames);
-  };
+  return (model, context, streamOptions) =>
+    mapAssistantMessageStream(baseFn(model, context, streamOptions), (stream) =>
+      wrapStreamPromoteStandaloneTextToolCalls(stream, allowedToolNames),
+    );
 }

@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
+  clearWorkingProgress,
   resetWorkingProgress,
   resolveTurnRecap,
   resolveWorkingProgress,
@@ -11,7 +12,10 @@ const SESSION = "agent:main:main";
 
 describe("resolveWorkingProgress", () => {
   beforeEach(() => resetWorkingProgress());
-  afterEach(() => resetWorkingProgress());
+  afterEach(() => {
+    resetWorkingProgress();
+    vi.useRealTimers();
+  });
 
   it.each(["failed", "unconfirmed", "waiting-idle"] as const)(
     "does not let an older %s send identify an unknown active turn",
@@ -142,13 +146,33 @@ describe("resolveWorkingProgress", () => {
       ),
     ).toMatchObject({ runId: "active-run", startedAt: 1_000 });
   });
+
+  it("infers a new run only from activity received after the pane was idle", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(30_000);
+    clearWorkingProgress(SESSION);
+    vi.setSystemTime(61_000);
+    expect(
+      resolveWorkingProgress(
+        SESSION,
+        null,
+        null,
+        [],
+        [{ ts: 800 }, { runId: "first-run", ts: 900 }],
+        [
+          { runId: "first-run", __openclawToolStreamReceivedAt: 1_100 },
+          { runId: "second-run", __openclawToolStreamReceivedAt: 60_300 },
+        ],
+      ),
+    ).toMatchObject({ runId: "second-run", startedAt: 60_300 });
+  });
 });
 
 describe("resolveTurnRecap", () => {
   let host: { turnRecapWatch: TurnRecapWatch | null };
   const runId = "watched-run";
   const doneRow = { lastRunId: runId, status: "done" as const, runtimeMs: 14_000 };
-  const usage = (outputTokens: number, owner = runId) =>
+  const usage = (outputTokens: number | null, owner = runId) =>
     new Map([[owner, { outputTokens, seq: 1 }]]);
   const resolve = (params: Omit<Parameters<typeof resolveTurnRecap>[1], "sessionKey"> = {}) =>
     resolveTurnRecap(host, { sessionKey: SESSION, ...params });
@@ -186,6 +210,11 @@ describe("resolveTurnRecap", () => {
       runId,
       runtimeMs: 14_000,
       outputTokens: 680,
+    });
+    expect(resolve({ row: doneRow, usageByRun: usage(null) })).toEqual({
+      runId,
+      runtimeMs: 14_000,
+      outputTokens: null,
     });
   });
 
@@ -228,19 +257,57 @@ describe("resolveTurnRecap", () => {
     ).toEqual({ runId: nextRunId, runtimeMs: 14_000, outputTokens: 0 });
   });
 
-  it.each(["failed", "timeout", "killed"] as const)(
-    "stays quiet for a watched %s run",
-    (status) => {
-      watch();
-      expect(resolve({ row: { ...doneRow, status }, usageByRun: usage(695) })).toBeNull();
-      expect(
-        resolve({
-          row: { ...doneRow, lastRunId: "foreign-run" },
-          usageByRun: usage(900, "foreign-run"),
-        }),
-      ).toBeNull();
-    },
-  );
+  describe("for a run that resumed a handoff", () => {
+    const resumed = { runId, request: { askedAt: 1_000, runIds: ["handoff-run"] } };
+
+    it("reports the whole request: the wait and every run's tokens", () => {
+      const usageByRun = new Map([
+        ["handoff-run", { outputTokens: 4_100, seq: 1 }],
+        [runId, { outputTokens: 256, seq: 2 }],
+      ]);
+      resolve({ indicator: resumed });
+      // 97s from the request to the end, though the last run alone took 14s.
+      expect(resolve({ row: { ...doneRow, endedAt: 98_000 }, usageByRun })).toEqual({
+        runId,
+        runtimeMs: 97_000,
+        outputTokens: 4_356,
+      });
+    });
+
+    it("never reports a partial token total, or less time than its last run", () => {
+      resolve({ indicator: resumed });
+      expect(resolve({ row: { ...doneRow, endedAt: 9_000 }, usageByRun: usage(256) })).toEqual({
+        runId,
+        runtimeMs: 14_000,
+        outputTokens: null,
+      });
+    });
+  });
+
+  it("stays quiet for a watched failed run", () => {
+    watch();
+    expect(resolve({ row: { ...doneRow, status: "failed" }, usageByRun: usage(695) })).toBeNull();
+    expect(
+      resolve({
+        row: { ...doneRow, lastRunId: "foreign-run" },
+        usageByRun: usage(900, "foreign-run"),
+      }),
+    ).toBeNull();
+  });
+
+  it("retains a resumed request when the first identified event hides the working indicator", () => {
+    resolve({ indicator: { request: { askedAt: 1_000, runIds: ["handoff-run"] } } });
+    expect(resolve({ activeRunId: runId })).toBeNull();
+    const usageByRun = new Map([
+      ["handoff-run", { outputTokens: 4_100, seq: 1 }],
+      [runId, { outputTokens: 256, seq: 2 }],
+    ]);
+    expect(resolve({ row: { ...doneRow, endedAt: 78_000 }, usageByRun })).toEqual({
+      runId,
+      runtimeMs: 77_000,
+      outputTokens: 4_356,
+    });
+  });
 
   it("never invents a watch from history or an unidentified queued indicator", () => {
     expect(resolve({ row: doneRow, usageByRun: usage(695) })).toBeNull();
@@ -251,7 +318,7 @@ describe("resolveTurnRecap", () => {
   it("clears the previous recap when a new queued turn has no run identity yet", () => {
     watch();
     expect(resolve({ row: doneRow, usageByRun: usage(695) })).not.toBeNull();
-    expect(resolve({ indicator: {}, row: doneRow })).toBeNull();
+    expect(resolve({ indicator: {}, startingNewTurn: true, row: doneRow })).toBeNull();
     expect(resolve({ row: doneRow, usageByRun: usage(695) })).toBeNull();
   });
 

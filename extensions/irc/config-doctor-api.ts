@@ -1,4 +1,3 @@
-// Irc API module exposes the plugin doctor contract.
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,

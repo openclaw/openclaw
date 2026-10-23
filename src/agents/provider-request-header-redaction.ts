@@ -13,15 +13,10 @@ function collectSecretRepresentations(values: readonly string[]): SecretRepresen
     if (!candidate) {
       return;
     }
-    representations.set(
-      candidate,
-      representations.get(candidate) === true || percentEscapesCaseInsensitive,
-    );
-    const jsonEscaped = JSON.stringify(candidate).slice(1, -1);
-    if (jsonEscaped !== candidate) {
+    for (const representation of [candidate, JSON.stringify(candidate).slice(1, -1)]) {
       representations.set(
-        jsonEscaped,
-        representations.get(jsonEscaped) === true || percentEscapesCaseInsensitive,
+        representation,
+        representations.get(representation) === true || percentEscapesCaseInsensitive,
       );
     }
   };
@@ -56,7 +51,19 @@ function normalizePercentEscapeHexCase(value: string): string {
   return value.replace(/%[0-9A-F]{1,2}/giu, (escape) => escape.toUpperCase());
 }
 
-function redactExactSecretValues(
+/** Match only active values, without diagnostic patterns or replacement-string ambiguity. */
+export function createExactSecretValueMatcher(
+  values: readonly string[],
+): (text: string) => boolean {
+  const representations = collectSecretRepresentations(values);
+  if (representations.length === 0) {
+    return () => false;
+  }
+  const pattern = new RegExp(representations.map(secretRepresentationPattern).join("|"), "u");
+  return (text) => pattern.test(text);
+}
+
+export function redactExactSecretValues(
   text: string,
   values: readonly string[],
   sourceTruncated: boolean,
@@ -95,7 +102,7 @@ function redactExactSecretValues(
     : `${redacted.slice(0, -longestPartialSuffix)}${REDACTED_SECRET}`;
 }
 
-function collectRequestHeaderSecretValues(headers: HeadersInit): string[] {
+export function collectRequestHeaderSecretValues(headers: HeadersInit): string[] {
   // Arbitrary configured headers can carry credentials. Authorization intermediaries
   // can also reflect the credential without its scheme, so redact both scoped forms.
   const entries =
@@ -158,8 +165,10 @@ export async function readProviderResponseErrorText(
   response: Response,
   limitBytes: number,
   headers: HeadersInit,
+  signal?: AbortSignal,
 ): Promise<string> {
   const result = await readResponseTextPrefix(response, limitBytes, {
+    signal,
     chunkTimeoutMs: 10_000,
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`error body read stalled for ${chunkTimeoutMs}ms`),

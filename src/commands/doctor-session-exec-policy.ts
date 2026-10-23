@@ -1,6 +1,6 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "../agents/agent-scope.js";
-import { resolveExecTarget } from "../agents/bash-tools.exec-runtime.js";
+import { resolveExecTarget } from "../agents/bash-tools.exec-target.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,6 +11,7 @@ import {
   resolveExecModeFromPolicy,
 } from "../infra/exec-approvals-core.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+import type { ExistingAgentDatabaseTarget } from "../infra/session-sqlite-migration-readers.js";
 import { repairCanonicalSessionEntries } from "./doctor-session-delivery-state.js";
 
 type LegacySessionEntry = SessionEntry & { execSecurity?: unknown; execAsk?: unknown };
@@ -20,6 +21,8 @@ export function repairLegacySessionExecPolicy(params: {
   apply: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  targets?: readonly ExistingAgentDatabaseTarget[];
+  integrityCheck?: "quick" | "full";
 }): void {
   const messages: string[] = [];
   repairCanonicalSessionEntries({

@@ -1,14 +1,14 @@
 // Slack helper module supports prepare helpers behavior.
-import fs from "node:fs";
 import path from "node:path";
 import type { App } from "@slack/bolt";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
+import { installSlackTestRuntime } from "../../test-runtime.test-support.js";
 import type { SlackChannelConfigEntries } from "../channel-config.js";
 import { createSlackMonitorContext } from "../context.js";
 
@@ -25,24 +25,23 @@ export function createInboundSlackTestContext(params: {
   groupPolicy?: "open" | "disabled" | "allowlist";
   channelRuntime?: ChannelRuntimeSurface;
 }) {
+  const runtime = installSlackTestRuntime({
+    channel: { inbound: { buildContext: buildChannelInboundEventContext } },
+  });
   return createSlackMonitorContext({
     cfg: params.cfg,
     accountId: params.accountId ?? "default",
     botToken: "token",
     app: params.app ?? ({ client: params.appClient ?? {} } as App),
     runtime: {} as RuntimeEnv,
-    channelRuntime:
-      params.channelRuntime ??
-      createPluginRuntimeMock({
-        channel: { inbound: { buildContext: buildChannelInboundEventContext } },
-      }).channel,
+    channelRuntime: params.channelRuntime ?? runtime.channel,
     botUserId: "B1",
     botId: "B1",
     identityHealth: { lifecycle: "ready", lastError: null },
     teamId: "T1",
     apiAppId: "A1",
     historyLimit: 0,
-    dmHistoryLimit: params.dmHistoryLimit,
+    dmHistoryLimit: params.dmHistoryLimit ?? 0,
     sessionScope: "per-sender",
     mainKey: "main",
     dmEnabled: true,
@@ -53,6 +52,7 @@ export function createInboundSlackTestContext(params: {
     groupDmChannels: [],
     defaultRequireMention: params.defaultRequireMention ?? true,
     channelsConfig: params.channelsConfig,
+    channelsConfigKeys: Object.keys(params.channelsConfig ?? {}),
     groupPolicy: params.groupPolicy ?? "open",
     useAccessGroups: true,
     reactionMode: "off",
@@ -90,31 +90,11 @@ export function createSlackTestAccount(
 }
 
 export function createSlackSessionStoreFixture(prefix: string) {
-  let fixtureRoot = "";
-  let caseId = 0;
+  const sessionDirs = useSessionStoreTempDirs(afterAll, prefix);
 
   return {
-    setup() {
-      fixtureRoot = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), prefix));
-    },
-    cleanup() {
-      if (!fixtureRoot) {
-        return;
-      }
-      fs.rmSync(fixtureRoot, {
-        recursive: true,
-        force: true,
-        maxRetries: 5,
-        retryDelay: 50,
-      });
-      fixtureRoot = "";
-    },
     makeTmpStorePath() {
-      if (!fixtureRoot) {
-        throw new Error("fixtureRoot missing");
-      }
-      const dir = path.join(fixtureRoot, `case-${caseId++}`);
-      fs.mkdirSync(dir);
+      const dir = sessionDirs.make();
       return { dir, storePath: path.join(dir, "sessions.json") };
     },
   };

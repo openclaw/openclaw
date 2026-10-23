@@ -4,8 +4,10 @@ import {
   prepareSkillBundle,
   SKILL_LIBRARY_MAX_PATH_COMPONENTS,
 } from "../../skills/library/bundle.js";
+import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
+import { clearSkillFileHost } from "../../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
@@ -15,19 +17,19 @@ import {
 } from "./workspace-path-exclusions.js";
 
 type ResourceLocation = { directory: string; identity: string };
+type ResourceChunk = {
+  name: string;
+  offset: number;
+  size: number;
+  hash: string;
+  executable: boolean;
+  data: string;
+};
 type ResourceOperation =
   | { op: "discover" }
   | { op: "init"; directory: string }
   | ({ op: "cleanup" } & ResourceLocation)
-  | ({
-      op: "write";
-      name: string;
-      offset: number;
-      size: number;
-      hash: string;
-      executable: boolean;
-      data: string;
-    } & ResourceLocation);
+  | ({ op: "write"; files: ResourceChunk[] } & ResourceLocation);
 
 // Only the canonical workspace crosses argv validation; resource-relative names stay in stdin.
 // The next admitted turn reclaims uncertain copies; generation retention owns unused workspaces.
@@ -68,7 +70,7 @@ function discover(){
 try {
  const input=fs.readFileSync(0);if(input.length>${NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES})throw Error('resource request exceeds input limit');
  const request=JSON.parse(input.toString('utf8')),op=request?.op;
- const keys=op==='discover'?['op']:op==='init'?['op','directory']:op==='cleanup'?['op','directory','identity']:op==='write'?['op','directory','identity','name','offset','size','hash','executable','data']:[];
+ const keys=op==='discover'?['op']:op==='init'?['op','directory']:op==='cleanup'?['op','directory','identity']:op==='write'?['op','directory','identity','files']:[];
  if(!request||typeof request!=='object'||Array.isArray(request)||!keys.length||Object.keys(request).length!==keys.length||keys.some(key=>!Object.hasOwn(request,key)))throw Error('invalid resource operation');
  const directory=request.directory;
  if(op!=='discover'&&(typeof directory!=='string'||/^${WORKER_ATTACHMENT_DIRECTORY_PATTERN}$/.exec(directory)?.[0]!==directory))throw Error('invalid resource directory');
@@ -79,8 +81,13 @@ try {
   if(typeof request.identity!=='string'||request.identity.match(/^\d+:\d+$/)?.[0]!==request.identity)throw Error('invalid resource identity');
   if(op==='cleanup')cleanup(directory,request.identity);
   else {
-   enter(directory,request.identity);
-   const {name,offset,size,hash,executable,data}=request;
+   if(!Array.isArray(request.files)||!request.files.length)throw Error('invalid resource batch');
+   const fields=['name','offset','size','hash','executable','data'];
+   for(const file of request.files){
+   // Every chunk re-enters the captured directory; a previous file may have entered a child path.
+   enter(workspace);enter(directory,request.identity);
+   if(!file||typeof file!=='object'||Array.isArray(file)||Object.keys(file).length!==fields.length||fields.some(key=>!Object.hasOwn(file,key)))throw Error('invalid resource chunk');
+   const {name,offset,size,hash,executable,data}=file;
    if(typeof name!=='string'||typeof data!=='string'||typeof executable!=='boolean'||typeof hash!=='string'||hash.length!==64||!/^[a-f0-9]{64}$/.test(hash))throw Error('invalid resource chunk');
    // Bundle components cannot select Windows streams, drive-relative paths, aliases or devices.
    const parts=name.split('/');if(parts.some(p=>!p||p==='.'||p==='..'||/[\\:\x00]/.test(p)||/[ .]$/.test(p)||/^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(p)||/^(conin|conout)\$$/i.test(p))||parts.length>${SKILL_LIBRARY_MAX_PATH_COMPONENTS + 1})throw Error('invalid resource path');
@@ -91,6 +98,7 @@ try {
    try{const s=fs.fstatSync(fd);if(!s.isFile()||s.nlink!==1||s.size!==offset)throw Error('resource file changed');let n=0;while(n<bytes.length){const written=fs.writeSync(fd,bytes,n,bytes.length-n,offset+n);if(!written)throw Error('resource write stalled');n+=written;}
     if(offset+bytes.length===size){if(crypto.createHash('sha256').update(fs.readFileSync(fd)).digest('hex')!==hash)throw Error('resource digest mismatch');fs.fchmodSync(fd,executable?0o500:0o400);fs.fsyncSync(fd);}
    }finally{fs.closeSync(fd);}
+   }
   }
  }
 }catch(e){process.stderr.write(String(e.message));process.exitCode=1;}
@@ -99,20 +107,25 @@ try {
 /** Stages private turn inputs in the workspace generation, excluded from Git and reconciliation. */
 export async function transferSkillResources(params: {
   snapshot?: SkillSnapshot;
+  workspaceDir?: string;
   tunnel: Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand">;
   remoteWorkspaceDir: string;
+  // Placement ownership authorizes cleanup even after the run closes.
   assertCurrent: () => void;
+  assertRunCurrent?: () => void;
   signal?: AbortSignal;
   explicitSelections?: readonly import("../../skills/types.js").ExplicitSkillSelection[];
 }) {
   const check = () => {
     params.signal?.throwIfAborted();
+    params.assertRunCurrent?.();
     params.assertCurrent();
   };
   const delivery = await prepareSkillResourceDelivery(
     params.snapshot,
     check,
     params.explicitSelections,
+    params.workspaceDir,
   );
   const execute = async (operation: ResourceOperation) => {
     const cleanup = operation.op === "cleanup";
@@ -165,6 +178,21 @@ export async function transferSkillResources(params: {
   const cleanup = async () => {
     await execute({ op: "cleanup", ...location });
   };
+  const pending: Extract<ResourceOperation, { op: "write" }> = {
+    op: "write",
+    ...location,
+    files: [],
+  };
+  const flush = async () => {
+    if (pending.files.length) {
+      await execute(pending);
+      pending.files = [];
+    }
+  };
+  const availableChunkBytes = () =>
+    Math.floor(
+      (NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES - Buffer.byteLength(JSON.stringify(pending))) / 4,
+    ) * 3;
   try {
     check();
     const deliveredSourcePaths = new Set(
@@ -190,15 +218,14 @@ export async function transferSkillResources(params: {
     const skills = structuredClone(params.snapshot.skills).filter(
       (skill) => !skippedSkillNames.has(skill.name) || retainedSkillNames.has(skill.name),
     );
+    const deliveredSkills: NonNullable<SkillSnapshot["resolvedSkills"]> = [];
     const mounts: Array<{ hostPath: string; containerPath: string }> = [];
     for (const [index, skill] of delivery.skills.entries()) {
       const bundle = prepareSkillBundle(skill.files);
       for (const file of bundle.files) {
         let offset = 0;
         do {
-          const operation: Extract<ResourceOperation, { op: "write" }> = {
-            op: "write",
-            ...location,
+          const chunk: ResourceChunk = {
             name: `${index}/${file.path}`,
             offset,
             size: file.sizeBytes,
@@ -206,16 +233,24 @@ export async function transferSkillResources(params: {
             executable: file.executable,
             data: "",
           };
-          const available =
-            NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES - Buffer.byteLength(JSON.stringify(operation));
-          const chunkBytes = Math.floor(available / 4) * 3;
+          pending.files.push(chunk);
+          let chunkBytes = availableChunkBytes();
+          if (chunkBytes <= 0) {
+            pending.files.pop();
+            await flush();
+            pending.files.push(chunk);
+            chunkBytes = availableChunkBytes();
+          }
           if (chunkBytes <= 0) {
             throw new Error("Skill resource metadata exceeds the transfer limit.");
           }
           const bytes = file.bytes.subarray(offset, offset + chunkBytes);
-          operation.data = bytes.toString("base64");
-          await execute(operation);
+          chunk.data = bytes.toString("base64");
           offset += bytes.length;
+          // Fill the transport budget across files; only a continuing large file needs an early flush.
+          if (offset < file.bytes.length) {
+            await flush();
+          }
         } while (offset < file.bytes.length);
       }
       const selected = resolvedSkills.find((candidate) => candidate.filePath === skill.sourcePath);
@@ -226,16 +261,36 @@ export async function transferSkillResources(params: {
       }
       const remoteBase = `${params.remoteWorkspaceDir.replaceAll("\\", "/")}/${directory}/${index}`;
       mounts.push({ hostPath: sourceBase, containerPath: remoteBase });
+      const filePath = `${remoteBase}/SKILL.md`;
+      const sourceSkill =
+        selected ??
+        params.snapshot.discoverySkills?.find((candidate) => candidate.name === skill.name);
+      const delivered = clearSkillFileHost({
+        ...sourceSkill,
+        name: skill.name,
+        description: skill.description,
+        disableModelInvocation: sourceSkill?.disableModelInvocation ?? skill.modelVisible === false,
+        filePath,
+        baseDir: remoteBase,
+        source: sourceSkill?.source ?? "openclaw-resources",
+        sourceInfo:
+          sourceSkill?.sourceInfo ??
+          createSyntheticSourceInfo(filePath, {
+            source: "openclaw-resources",
+            baseDir: remoteBase,
+          }),
+        contentHash: bundle.revision,
+        readContent: bundle.files.find((file) => file.path === "SKILL.md")!.bytes.toString("utf8"),
+      });
+      delete delivered.locationNote;
+      deliveredSkills.push(delivered);
       if (selected) {
-        selected.filePath = `${remoteBase}/SKILL.md`;
-        selected.baseDir = remoteBase;
-        // Code Mode reads the same verified instructions even when the node has no filesystem bridge.
-        selected.readContent = bundle.files
-          .find((file) => file.path === "SKILL.md")!
-          .bytes.toString("utf8");
+        Object.assign(selected, delivered);
+        delete selected.fileHost;
         delete selected.locationNote;
       }
     }
+    await flush();
     check();
     return {
       source: params.snapshot,
@@ -243,6 +298,12 @@ export async function transferSkillResources(params: {
         ...params.snapshot,
         skills,
         resolvedSkills,
+        discoverySkills: [
+          ...deliveredSkills.filter((skill) => !skill.disableModelInvocation),
+          ...(params.snapshot.discoverySkills ?? resolvedSkills).filter(
+            (skill) => skill.filePath.startsWith("node://") && !skill.disableModelInvocation,
+          ),
+        ],
         prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
       },
       mounts,

@@ -1,5 +1,8 @@
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
+import { GITHUB_ITEM_KINDS } from "../github-item-kinds.js";
 import type { PeriodListEntry } from "../store.js";
 import type { GithubCounts, PersonReport, ReportDocument, SummaryDocument } from "../types.js";
+import type { PersonWorkSessions } from "../work-sessions.js";
 import { deltaMarkup, sparklineSvg, splitMarkup } from "./charts.js";
 import {
   affiliation,
@@ -18,7 +21,8 @@ import {
   shell,
   sourceBanners,
 } from "./page.js";
-import { escapeHtml, ITEM_LABELS, memberSummary, renderAvatar } from "./shared.js";
+import { memberSummary, metric, renderAvatar } from "./shared.js";
+import { renderPersonWorkSessions } from "./work-sessions.js";
 
 function activitySegments(github: GithubCounts, discord: number) {
   const prs = github.prsOpened + github.prsMerged + github.prsClosed;
@@ -40,10 +44,6 @@ function activitySegments(github: GithubCounts, discord: number) {
     },
     { label: "Discord", value: discord, tone: "muted" },
   ].filter((segment) => segment.value > 0);
-}
-
-function metric(label: string, value: string | number, detail = "", trend = ""): string {
-  return `<div class="oc-summary-metric"><span class="oc-summary-metric-copy"><small>${escapeHtml(label)}</small><strong>${escapeHtml(String(value))}</strong>${detail ? `<small>${escapeHtml(detail)}</small>` : ""}${trend}</span></div>`;
 }
 
 function distribution(ctx: PageContext, members: PersonReport[]): string {
@@ -95,7 +95,11 @@ function searchText(member: PersonReport): string {
   );
 }
 
-function personRow(ctx: PageContext, member: PersonReport): string {
+function personRow(
+  ctx: PageContext,
+  member: PersonReport,
+  workSessions?: PersonWorkSessions,
+): string {
   const top = (values: Record<string, number>, limit: number) =>
     Object.entries(values)
       .toSorted(([a, countA], [b, countB]) => countB - countA || a.localeCompare(b))
@@ -111,7 +115,7 @@ function personRow(ctx: PageContext, member: PersonReport): string {
     .slice(0, 3)
     .map(
       (item) =>
-        `<div class="theme"><span class="theme-kind">${ITEM_LABELS[item.kind]}</span> ${externalLink(item.url, item.title)}</div>`,
+        `<div class="theme"><span class="theme-kind">${GITHUB_ITEM_KINDS[item.kind].label}</span> ${externalLink(item.url, item.title)}</div>`,
     )
     .join("");
   const counts: Array<[string, number]> = [
@@ -127,9 +131,9 @@ function personRow(ctx: PageContext, member: PersonReport): string {
     ? `<details><summary>Discord excerpts</summary>${member.discord.excerpts.map((excerpt) => `<blockquote><small>#${escapeHtml(excerpt.channel)} · ${escapeHtml(date(excerpt.atMs, ctx.displayTimezone))}</small><br>${escapeHtml(excerpt.excerpt)}</blockquote>`).join("")}</details>`
     : "";
   const items = member.github.items.length
-    ? `<details><summary>${member.github.items.length} GitHub items</summary><ul class="oc-resource-list">${member.github.items.map((item) => `<li class="oc-resource-list-item resource-row"><span class="theme-kind">${ITEM_LABELS[item.kind]} · ${escapeHtml(item.repo)}</span>${externalLink(item.url, item.title)}</li>`).join("")}</ul></details>`
+    ? `<details><summary>${member.github.items.length} GitHub items</summary><ul class="oc-resource-list">${member.github.items.map((item) => `<li class="oc-resource-list-item resource-row"><span class="theme-kind">${GITHUB_ITEM_KINDS[item.kind].label} · ${escapeHtml(item.repo)}</span>${externalLink(item.url, item.title)}</li>`).join("")}</ul></details>`
     : "";
-  return `<article class="person oc-card" data-maintainer-card data-maintainer-search="${searchText(member)}"><div class="person-title"><div class="person-heading">${renderAvatar(member.login, member.display, "md")}<div><a class="handle" href="${escapeHtml(href(ctx.basePath, "people", member.login))}">@${escapeHtml(member.login)}</a><div class="person-name">${escapeHtml(member.display)}</div>${member.aliases.length ? `<div class="alias-line">${member.aliases.map((alias) => `@${escapeHtml(alias)}`).join(" · ")}</div>` : ""}</div></div>${affiliation(member)}<div class="role-line">${roleBadges(member)}</div></div><div class="person-body"><div class="chips">${chips}</div><p class="focus">${escapeHtml(memberSummary(member))}</p>${themes}${items}${excerpts}</div><div class="person-numbers">${counts.map(([label, count]) => `<div class="number-line"><span>${label}</span><strong>${count}</strong></div>`).join("")}</div></article>`;
+  return `<article class="person oc-card" data-maintainer-card data-maintainer-search="${searchText(member)}"><div class="person-title"><div class="person-heading">${renderAvatar(member.login, member.display, "md")}<div><a class="handle" href="${escapeHtml(href(ctx.basePath, "people", member.login))}">@${escapeHtml(member.login)}</a><div class="person-name">${escapeHtml(member.display)}</div>${member.aliases.length ? `<div class="alias-line">${member.aliases.map((alias) => `@${escapeHtml(alias)}`).join(" · ")}</div>` : ""}</div></div>${affiliation(member)}<div class="role-line">${roleBadges(member)}</div></div><div class="person-body"><div class="chips">${chips}</div><p class="focus">${escapeHtml(memberSummary(member))}</p>${themes}${items}${excerpts}${workSessions ? renderPersonWorkSessions(ctx, member.login, workSessions) : ""}</div><div class="person-numbers">${counts.map(([label, count]) => `<div class="number-line"><span>${label}</span><strong>${count}</strong></div>`).join("")}</div></article>`;
 }
 
 export function renderReportPage(
@@ -137,9 +141,10 @@ export function renderReportPage(
   report: ReportDocument,
   summary: SummaryDocument | null,
   history: PeriodListEntry[] = [],
+  workSessions: ReadonlyMap<string, PersonWorkSessions> = new Map(),
 ): string {
   const entry = { ...report.period, status: report.status, generatedAtMs: report.generatedAtMs };
-  const open = isOpen(ctx, entry);
+  const open = isOpen(entry);
   const period = report.period.period;
   const path = href(ctx.basePath, period, report.period.key);
   const incomplete =
@@ -216,7 +221,7 @@ export function renderReportPage(
     metric("Discord messages", report.totals.discord.messages),
   ].join("");
   const quietBlock = quiet.length
-    ? `<div class="quiet-maintainers"><div class="quiet-title"><h3>No visible activity</h3><span class="small">${quiet.length} members</span></div><ul class="quiet-list">${quiet.map((member) => `<li data-maintainer-quiet data-maintainer-search="${searchText(member)}"><a href="${escapeHtml(href(ctx.basePath, "people", member.login))}">@${escapeHtml(member.login)} — ${escapeHtml(member.display)}${member.affiliation ? ` — ${escapeHtml(member.affiliation)}` : ""}</a></li>`).join("")}</ul></div>`
+    ? `<div class="quiet-maintainers"><div class="quiet-title"><h3>No visible activity</h3><span class="small">${quiet.length} members</span></div><ul class="quiet-list">${quiet.map((member) => `<li data-maintainer-quiet data-maintainer-search="${searchText(member)}"><a href="${escapeHtml(href(ctx.basePath, "people", member.login))}">@${escapeHtml(member.login)} — ${escapeHtml(member.display)}${member.affiliation ? ` — ${escapeHtml(member.affiliation)}` : ""}</a>${workSessions.has(member.login.toLowerCase()) ? renderPersonWorkSessions(ctx, member.login, workSessions.get(member.login.toLowerCase())!) : ""}</li>`).join("")}</ul></div>`
     : "";
   const other = report.otherActors.length
     ? `<section class="oc-section">${sectionHeading("Other GitHub actors", "Outside the roster")}<ul class="oc-resource-list">${report.otherActors.map((actor) => `<li class="oc-resource-list-item resource-row"><span class="person-identity">${renderAvatar(actor.login, actor.login, "xs")}<span>@${escapeHtml(actor.login)}</span></span><span>${actor.github.total} GitHub events</span></li>`).join("")}</ul></section>`
@@ -230,7 +235,7 @@ export function renderReportPage(
   return shell(
     ctx,
     periodTitle(report.period),
-    `<header><div><h1>${escapeHtml(periodTitle(report.period))}</h1><p class="subtitle">Evidence report across ${repositories} GitHub repositories and ${channels} Discord channels for ${escapeHtml(report.orgs.join(", "))}. Roster: ${report.memberCount} people.</p><div class="actions"><a class="oc-action oc-action-ghost" href="${escapeHtml(path)}report.md">Markdown</a><a class="oc-action oc-action-ghost" href="${escapeHtml(path)}data.json">JSON</a></div></div><div class="oc-card oc-summary-metric"><span class="oc-summary-metric-copy"><small>Window</small><strong>${escapeHtml(formatWindow(report.period))}</strong><small>${open ? openPeriodStatus(ctx, entry) : `As of ${relativeTime(ctx, report.generatedAtMs)}`}</small></span></div></header>${partialBanner}${sourceBanners(report, summary)}<section class="oc-summary-strip" aria-label="Report totals">${totals}</section><section class="oc-section">${sectionHeading("Global Summary", "Overview", summary?.source === "model" ? "Model summary" : "Deterministic summary")}<div class="summary-markdown">${summary ? `${markdownBlocks(summary.globalSummary)}${highlights.length ? `<ul>${highlights.map((highlight) => `<li>${escapeHtml(highlight)}</li>`).join("")}</ul>` : ""}` : `<p>${report.activeMembers} of ${report.memberCount} members recorded ${github.total} GitHub events and ${report.totals.discord.messages} Discord messages in this window.</p>`}</div></section><section class="oc-section">${sectionHeading("Activity Mix", "Hard Numbers")}<div class="oc-summary-strip">${mix}</div><div class="mix-split">${splitMarkup(activitySegments(github, report.totals.discord.messages))}</div><div class="maintainer-distribution"><div class="distribution-heading"><div><div class="oc-eyebrow">Mapped activity</div><h3>Activity by Member</h3></div><p class="section-note">Bar length shows share; colors show activity type</p></div>${distribution(ctx, report.members)}</div></section><section class="oc-section collection-section" data-maintainer-filter-root><div class="oc-section-header people-head"><div><div class="oc-eyebrow">Members</div><h2>Members</h2></div><div class="people-tools js-only"><input class="person-filter oc-input" type="search" autocomplete="off" placeholder="Filter by name or handle" aria-label="Filter members by name, handle, or alias" data-maintainer-filter><div class="filter-status" data-maintainer-filter-status aria-live="polite">showing ${active.length} of ${active.length} active</div></div></div><div class="people">${active.map((member) => personRow(ctx, member)).join("") || '<div class="oc-empty"><p class="oc-empty-description">No visible GitHub or Discord activity in this window.</p></div>'}</div><div class="oc-empty" hidden data-maintainer-filter-empty><p class="oc-empty-description">No matching member in this report.</p></div>${quietBlock}</section>${other}${unmatched}`,
+    `<header><div><h1>${escapeHtml(periodTitle(report.period))}</h1><p class="subtitle">Evidence report across ${repositories} GitHub repositories and ${channels} Discord channels for ${escapeHtml(report.orgs.join(", "))}. Roster: ${report.memberCount} people.</p><div class="actions"><a class="oc-action oc-action-ghost" href="${escapeHtml(path)}report.md">Markdown</a><a class="oc-action oc-action-ghost" href="${escapeHtml(path)}data.json">JSON</a></div></div><div class="oc-card oc-summary-metric"><span class="oc-summary-metric-copy"><small>Window</small><strong>${escapeHtml(formatWindow(report.period))}</strong><small>${open ? openPeriodStatus(ctx, entry) : `As of ${relativeTime(ctx, report.generatedAtMs)}`}</small></span></div></header>${partialBanner}${sourceBanners(report, summary)}<section class="oc-summary-strip" aria-label="Report totals">${totals}</section><section class="oc-section">${sectionHeading("Global Summary", "Overview", summary?.source === "model" ? "Model summary" : "Summary without a model")}<div class="summary-markdown">${summary ? `${markdownBlocks(summary.globalSummary)}${highlights.length ? `<ul>${highlights.map((highlight) => `<li>${escapeHtml(highlight)}</li>`).join("")}</ul>` : ""}` : `<p>${report.activeMembers} of ${report.memberCount} members recorded ${github.total} GitHub events and ${report.totals.discord.messages} Discord messages in this window.</p>`}</div></section><section class="oc-section">${sectionHeading("Activity Mix", "Hard Numbers")}<div class="oc-summary-strip">${mix}</div><div class="mix-split">${splitMarkup(activitySegments(github, report.totals.discord.messages))}</div><div class="maintainer-distribution"><div class="distribution-heading"><div><div class="oc-eyebrow">Mapped activity</div><h3>Activity by Member</h3></div><p class="section-note">Bar length shows share; colors show activity type</p></div>${distribution(ctx, report.members)}</div></section><section class="oc-section collection-section" data-maintainer-filter-root><div class="oc-section-header people-head"><div><div class="oc-eyebrow">Members</div><h2>Members</h2></div><div class="people-tools js-only"><input class="person-filter oc-input" type="search" autocomplete="off" placeholder="Filter by name or handle" aria-label="Filter members by name, handle, or alias" data-maintainer-filter><div class="filter-status" data-maintainer-filter-status aria-live="polite">showing ${active.length} of ${active.length} active</div></div></div><div class="people">${active.map((member) => personRow(ctx, member, workSessions.get(member.login.toLowerCase()))).join("") || '<div class="oc-empty"><p class="oc-empty-description">No visible GitHub or Discord activity in this window.</p></div>'}</div><div class="oc-empty" hidden data-maintainer-filter-empty><p class="oc-empty-description">No matching member in this report.</p></div>${quietBlock}</section>${other}${unmatched}`,
     "report",
   );
 }

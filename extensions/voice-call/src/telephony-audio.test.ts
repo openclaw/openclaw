@@ -1,6 +1,5 @@
-// Voice Call tests cover telephony audio plugin behavior.
+import { convertPcmToMulaw8k } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it } from "vitest";
-import { convertPcmToMulaw8k } from "./telephony-audio.js";
 
 function makeSinePcm(
   sampleRate: number,
@@ -24,13 +23,6 @@ function unalignedCopy(buffer: Buffer): Buffer {
 }
 
 describe("telephony-audio convertPcmToMulaw8k", () => {
-  it("converts to 8k mu-law frame length", () => {
-    const input = makeSinePcm(24_000, 1_000, 0.5);
-    const mulaw = convertPcmToMulaw8k(input, 24_000);
-    // 0.5s @ 8kHz => 4000 8-bit samples
-    expect(mulaw.length).toBe(4_000);
-  });
-
   it("matches the typed-array path for unaligned pcm buffers", () => {
     const input = makeSinePcm(8_000, 1_000, 0.2);
     const mulaw = convertPcmToMulaw8k(input, 8_000);

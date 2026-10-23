@@ -7,10 +7,10 @@ import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-util
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
-const buildWorkspaceSkillsPrompt = (
+const buildWorkspaceSkillsPrompt = async (
   workspaceDir: string,
   opts?: Parameters<typeof buildSkillSnapshot>[1],
-): string => buildSkillSnapshot(workspaceDir, opts).prompt;
+): Promise<string> => (await buildSkillSnapshot(workspaceDir, opts)).prompt;
 
 describe("buildWorkspaceSkillsPrompt", () => {
   it("applies bundled allowlist without affecting workspace skills", async () => {
@@ -38,7 +38,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
         body: "# Workspace\n",
       });
 
-      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      const prompt = await buildWorkspaceSkillsPrompt(workspaceDir, {
         bundledSkillsDir: bundledDir,
         managedSkillsDir: path.join(workspaceDir, ".managed"),
         config: { skills: { allowBundled: ["missing-skill"] } },

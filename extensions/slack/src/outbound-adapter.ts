@@ -1,5 +1,4 @@
-// Slack plugin module implements outbound adapter behavior.
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   resolveOutboundSendDep,
@@ -21,6 +20,7 @@ import {
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import {
@@ -29,14 +29,11 @@ import {
 } from "./authored-text.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
-import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
+import { registerSlackQuestionDelivery } from "./question-delivery.js";
+import { resolveSlackQuestionActionIds } from "./reply-action-ids.js";
 import {
-  resolveSlackQuestionActionIds,
-  SLACK_QUESTION_FINALIZATION_BLOCKS,
-} from "./reply-action-ids.js";
-import {
-  parseSlackReplyBlockSegments,
+  normalizeSlackReplyPayload,
   resolveSlackReplyBlockResolution,
   resolveSlackReplyDeliveryMessages,
   type SlackReplyBlockResolution,
@@ -47,7 +44,7 @@ import type { SlackSendIdentity, SlackSendResult } from "./send.js";
 import { parseSlackTarget } from "./target-parsing.js";
 import { resolveSlackThreadTsValue } from "./thread-ts.js";
 
-type SlackSendFn = typeof import("./send.runtime.js").sendMessageSlack;
+type SlackSendFn = typeof import("./send.js").sendMessageSlack;
 
 function toSlackOutboundResult<T extends { channelId?: string }>(result: T) {
   const { channelId, ...delivery } = result;
@@ -60,6 +57,7 @@ function toSlackOutboundResult<T extends { channelId?: string }>(result: T) {
 }
 
 type SlackOutboundChannelData = Record<string, unknown> & {
+  authoredPresentationText?: string;
   authoredTextPlacement?: SlackAuthoredTextPlacement;
   blocks?: unknown;
   renderedPresentationProvenance?: unknown;
@@ -77,18 +75,6 @@ function createSlackRenderedPresentationProvenance(resolution: SlackReplyBlockRe
     .digest("base64url");
 }
 
-function hasValidSlackRenderedPresentationProvenance(params: {
-  provenance: string;
-  resolution: SlackReplyBlockResolution;
-}): boolean {
-  const expected = createSlackRenderedPresentationProvenance(params.resolution);
-  const actualBuffer = Buffer.from(params.provenance);
-  const expectedBuffer = Buffer.from(expected);
-  return (
-    actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer)
-  );
-}
-
 function readSlackRenderedPresentation(
   slackData: SlackOutboundChannelData | undefined,
 ): SlackReplyBlockResolution | undefined {
@@ -97,13 +83,14 @@ function readSlackRenderedPresentation(
     return undefined;
   }
   try {
-    const segments = parseSlackReplyBlockSegments(slackData?.renderedPresentationSegments);
-    const authoredTextPlacement = readSlackAuthoredTextPlacement(slackData?.authoredTextPlacement);
+    const segments = slackData?.renderedPresentationSegments;
+    const authoredTextPlacement = slackData?.authoredTextPlacement;
     if (!segments || !authoredTextPlacement) {
       return undefined;
     }
     const resolution = { authoredTextPlacement, segments };
-    return hasValidSlackRenderedPresentationProvenance({ provenance, resolution })
+    // A matching signature proves this exact shape came from our typed renderer.
+    return safeEqualSecret(provenance, createSlackRenderedPresentationProvenance(resolution))
       ? resolution
       : undefined;
   } catch {
@@ -113,7 +100,7 @@ function readSlackRenderedPresentation(
   }
 }
 
-const loadSlackSendRuntime = createLazyRuntimeModule(() => import("./send.runtime.js"));
+const loadSlackSendRuntime = createLazyRuntimeModule(() => import("./send.js"));
 
 function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentity | undefined {
   if (!identity) {
@@ -144,22 +131,7 @@ function resolveSlackOutboundBlockResolution(payload: ReplyPayload): SlackReplyB
     };
   }
 
-  const {
-    authoredTextPlacement: _authoredTextPlacement,
-    renderedPresentationProvenance: _renderedPresentationProvenance,
-    renderedPresentationSegments: _renderedPresentationSegments,
-    ...preservedSlackData
-  } = slackData ?? {};
-  return resolveSlackReplyBlockResolution(
-    {
-      ...payload,
-      channelData: {
-        ...payload.channelData,
-        slack: preservedSlackData,
-      },
-    },
-    { materializeAuthoredText: true },
-  );
+  return resolveSlackReplyBlockResolution(payload, { materializeAuthoredText: true });
 }
 
 function withSlackRenderedPresentation(
@@ -168,6 +140,7 @@ function withSlackRenderedPresentation(
   resolution: SlackReplyBlockResolution,
 ): ReplyPayload {
   const {
+    authoredPresentationText: _authoredPresentationText,
     authoredTextPlacement: _authoredTextPlacement,
     blocks: _blocks,
     renderedPresentationProvenance: _renderedPresentationProvenance,
@@ -186,10 +159,6 @@ function withSlackRenderedPresentation(
       },
     },
   };
-}
-
-function readSlackAuthoredTextPlacement(value: unknown): SlackAuthoredTextPlacement | undefined {
-  return value === "none" || value === "blocks" || value === "outside-blocks" ? value : undefined;
 }
 
 type SlackOutboundSendParams = ChannelOutboundContext &
@@ -240,6 +209,9 @@ async function prepareSlackOutboundSend(ctx: ChannelOutboundContext) {
       ...(params.onPlatformSendDispatch
         ? { onPlatformSendDispatch: params.onPlatformSendDispatch }
         : {}),
+      ...(params.assertDirectAdapterHandoff
+        ? { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff }
+        : {}),
       ...(params.onDeliveryResult
         ? {
             onDeliveryResult: async (progress) => {
@@ -257,11 +229,16 @@ export const slackOutbound: ChannelOutboundAdapter = {
   chunker: null,
   textChunkLimit: SLACK_TEXT_LIMIT,
   presentationCapabilities: SLACK_PRESENTATION_CAPABILITIES,
+  normalizePayload: ({ payload }) => normalizeSlackReplyPayload(payload),
   renderPresentation: ({ payload }) => {
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
-    const resolution = resolveSlackOutboundBlockResolution(payload);
+    const renderPayload =
+      payload.presentationTextMode === "fallback"
+        ? { ...payload, text: payload.text ?? slackData?.authoredPresentationText }
+        : payload;
+    const resolution = resolveSlackOutboundBlockResolution(renderPayload);
     return resolution.segments.length > 0
-      ? withSlackRenderedPresentation(payload, slackData, resolution)
+      ? withSlackRenderedPresentation(renderPayload, slackData, resolution)
       : null;
   },
   sendPayload: async (ctx) => {
@@ -286,12 +263,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
     };
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
     const renderedResolution = readSlackRenderedPresentation(slackData);
-    let resolution: SlackReplyBlockResolution;
-    if (renderedResolution) {
-      resolution = renderedResolution;
-    } else {
-      resolution = resolveSlackOutboundBlockResolution(payload);
-    }
+    const resolution = renderedResolution ?? resolveSlackOutboundBlockResolution(payload);
     if (resolution.segments.length === 0) {
       const sendPart = async (part: ChannelOutboundContext) =>
         toSlackOutboundResult(await send(part));
@@ -323,20 +295,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
         },
         finalize: async () => {
           for (const message of deliveryMessages) {
-            sentResults.push(
-              await send({
-                ...preparedCtx,
-                text: message.text,
-                ...(message.blocks ? { blocks: message.blocks } : {}),
-                ...(message.authoredTextPlacement
-                  ? { authoredTextPlacement: message.authoredTextPlacement }
-                  : {}),
-                ...(message.nativeDataFallbackBaseText
-                  ? { nativeDataFallbackBaseText: message.nativeDataFallbackBaseText }
-                  : {}),
-                ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
-              }),
-            );
+            sentResults.push(await send({ ...preparedCtx, ...message }));
           }
           return mergeSlackSendResults(sentResults);
         },
@@ -359,9 +318,9 @@ export const slackOutbound: ChannelOutboundAdapter = {
       text: payload.text,
     });
     const deliveryMessage = deliveryMessages.find(
-      (message) => resolveSlackQuestionActionIds(message.blocks).length > 0,
+      (message) => resolveSlackQuestionActionIds(message.blocks, questionId).length > 0,
     );
-    const questionActionIds = resolveSlackQuestionActionIds(deliveryMessage?.blocks);
+    const questionActionIds = resolveSlackQuestionActionIds(deliveryMessage?.blocks, questionId);
     const result = results.find(
       ({ channel, meta }) =>
         channel === "slack" &&
@@ -370,10 +329,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
           (actionId) => typeof actionId === "string" && questionActionIds.includes(actionId),
         ),
     );
-    const deliveredDisplayBlocks = (result?.meta as SlackSendResult["meta"] | undefined)?.[
-      SLACK_QUESTION_FINALIZATION_BLOCKS
-    ];
-    if (!deliveryMessage || !deliveredDisplayBlocks || !result?.messageId) {
+    if (!deliveryMessage || !result?.messageId) {
       return;
     }
     const channelId = result.target?.kind === "channel" ? result.target.id : undefined;
@@ -381,30 +337,18 @@ export const slackOutbound: ChannelOutboundAdapter = {
       return;
     }
     const teamId = parseSlackTarget(target.to, { defaultKind: "channel" })?.teamId;
-    // Aggregate fallback receipts retain their last platform id separately
-    // from the actual card whose question controls need finalization.
-    const questionMessageId =
-      typeof result.meta?.slackQuestionMessageId === "string"
-        ? result.meta.slackQuestionMessageId
-        : result.messageId;
-    questionGatewayRuntime.registerChannelDelivery({
+    registerSlackQuestionDelivery({
       questionId,
-      deliveryId: `slack:${target.accountId ?? "default"}:${channelId}:${questionMessageId}`,
-      finalize: async (statusLine) => {
+      accountId: target.accountId ?? undefined,
+      result: { ...result, channelId, meta: result.meta as SlackSendResult["meta"] },
+      text: deliveryMessage.text,
+      update: async (message) => {
         const { updateMessageSlack } = await loadSlackSendRuntime();
-        const escapedStatusLine = escapeSlackMrkdwn(statusLine);
-        const blocks = [
-          ...deliveredDisplayBlocks,
-          { type: "context", elements: [{ type: "mrkdwn", text: escapedStatusLine }] },
-        ];
         await updateMessageSlack({
           cfg,
           accountId: target.accountId ?? undefined,
-          channelId,
           teamId,
-          messageTs: questionMessageId,
-          text: `${deliveryMessage.text}\n\n${escapedStatusLine}`,
-          blocks,
+          ...message,
         });
       },
     });

@@ -1,5 +1,6 @@
 // Status scan test helpers provide shared mocks and config fixtures for scan suites.
 import type { Mock } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -16,7 +17,9 @@ type StatusScanSharedMocks = {
   readBestEffortConfigSnapshot: UnknownMock;
   resolveCommandSecretRefsViaGateway: UnknownMock;
   getUpdateCheckResult: UnknownMock;
-  getAgentLocalStatuses: UnknownMock;
+  getAgentLocalStatuses: Mock<
+    (cfg: OpenClawConfig) => Promise<{ defaultId: string | null; agents: unknown[] }>
+  >;
   getStatusSummary: UnknownMock;
   getMemorySearchManager: UnknownMock;
   buildGatewayConnectionDetails: UnknownMock;
@@ -63,8 +66,10 @@ function createStatusOsSummaryModuleMock(): StatusOsSummaryModuleMock {
   };
 }
 
-type StatusScanDepsRuntimeModuleMock = {
-  getTailnetHostname: UnknownMock;
+type StatusScanDepsRuntimeModuleMock = Pick<
+  typeof import("./status.scan.deps.runtime.js"),
+  "getMemoryProvider" | "isMemoryProviderNative"
+> & {
   getMemorySearchManager: StatusScanSharedMocks["getMemorySearchManager"];
 };
 
@@ -72,8 +77,13 @@ function createStatusScanDepsRuntimeModuleMock(
   mocks: Pick<StatusScanSharedMocks, "getMemorySearchManager">,
 ): StatusScanDepsRuntimeModuleMock {
   return {
-    getTailnetHostname: vi.fn(),
+    getMemoryProvider: vi.fn<StatusScanDepsRuntimeModuleMock["getMemoryProvider"]>(async () => ({
+      provider: null,
+    })),
     getMemorySearchManager: mocks.getMemorySearchManager,
+    isMemoryProviderNative: vi.fn<StatusScanDepsRuntimeModuleMock["isMemoryProviderNative"]>(
+      () => false,
+    ),
   };
 }
 
@@ -135,17 +145,30 @@ function createStatusUpdateModuleMock(mocks: Pick<StatusScanSharedMocks, "getUpd
 
 function createStatusAgentLocalModuleMock(
   mocks: Pick<StatusScanSharedMocks, "getAgentLocalStatuses">,
-): { getAgentLocalStatuses: StatusScanSharedMocks["getAgentLocalStatuses"] } {
+): {
+  collectStatusLocalSnapshot: (
+    cfg: OpenClawConfig,
+  ) => Promise<{ defaultId: string | null; publish: () => unknown; sessionStores: undefined }>;
+} {
   return {
-    getAgentLocalStatuses: mocks.getAgentLocalStatuses,
+    collectStatusLocalSnapshot: async (cfg) => {
+      const agentStatus = await mocks.getAgentLocalStatuses(cfg);
+      return {
+        defaultId: agentStatus.defaultId,
+        publish: () => agentStatus,
+        sessionStores: undefined,
+      };
+    },
   };
 }
 
-function createStatusSummaryModuleMock(mocks: Pick<StatusScanSharedMocks, "getStatusSummary">): {
-  getStatusSummary: StatusScanSharedMocks["getStatusSummary"];
-} {
+function createStatusSummaryModuleMock(mocks: Pick<StatusScanSharedMocks, "getStatusSummary">) {
   return {
     getStatusSummary: mocks.getStatusSummary,
+    prepareStatusSummary: async (...args: unknown[]) => {
+      const summary = await mocks.getStatusSummary(...args);
+      return { publish: () => ({ summary, sessionStores: undefined }) };
+    },
   };
 }
 
@@ -257,11 +280,10 @@ export async function loadStatusScanModuleForTest(
     vi.doMock("./status-all/channels.js", () => ({
       buildChannelsTable: mocks.buildChannelsTable,
     }));
-    vi.doMock("./status.scan.runtime.js", () => ({
-      statusScanRuntime: {
-        buildChannelsTable: mocks.buildChannelsTable,
-        collectChannelStatusIssues: vi.fn(() => []),
-      },
+    vi.doMock("./status.scan.runtime.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./status.scan.runtime.js")>()),
+      buildChannelsTable: mocks.buildChannelsTable,
+      collectChannelStatusIssues: vi.fn(() => []),
     }));
   }
 
@@ -285,6 +307,9 @@ export async function loadStatusScanModuleForTest(
   vi.doMock("../gateway/probe.js", () => ({
     probeGateway: mocks.probeGateway,
   }));
+  vi.doMock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
+    waitForGatewayDiagnosticReadiness: async () => undefined,
+  }));
   vi.doMock("../gateway/probe-target.js", () => ({
     resolveGatewayProbeTarget: mocks.resolveGatewayProbeTarget,
   }));
@@ -294,7 +319,10 @@ export async function loadStatusScanModuleForTest(
     buildGatewayConnectionDetailsWithResolvers: mocks.buildGatewayConnectionDetails,
   }));
   vi.doMock("../process/exec.js", () => createStatusExecModuleMock());
-  vi.doMock("../cli/plugin-registry.js", () => createStatusPluginRegistryModuleMock(mocks));
+  vi.doMock("../plugins/runtime/runtime-registry-loader.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../plugins/runtime/runtime-registry-loader.js")>()),
+    ...createStatusPluginRegistryModuleMock(mocks),
+  }));
   vi.doMock("../plugins/status.js", () => createStatusPluginStatusModuleMock(mocks));
 
   if (options.fastJson) {
@@ -321,27 +349,6 @@ export function createStatusSummary(
 ) {
   return {
     linkChannel: options.linkChannel,
-    tasks: {
-      total: 0,
-      active: 0,
-      terminal: 0,
-      failures: 0,
-      byStatus: {
-        queued: 0,
-        running: 0,
-        succeeded: 0,
-        failed: 0,
-        timed_out: 0,
-        cancelled: 0,
-        lost: 0,
-      },
-      byRuntime: {
-        subagent: 0,
-        acp: 0,
-        cli: 0,
-        cron: 0,
-      },
-    },
     sessions: {
       count: 0,
       paths: [],

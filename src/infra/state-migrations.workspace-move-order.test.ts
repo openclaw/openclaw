@@ -17,7 +17,14 @@ describe("Doctor workspace move ordering", () => {
   const { setup, detect, migrate } = useWorkspaceMigrationTestFixture();
 
   it("repairs the workspace owner before importing a carried legacy setup generation", async () => {
-    const context = setup();
+    const fixture = setup();
+    // This core workspace-ordering fixture has no plugin-owned migration inputs.
+    const bundledRoot = path.join(fixture.homeDir, "bundled-plugins");
+    fs.mkdirSync(bundledRoot);
+    const context = {
+      ...fixture,
+      env: { ...fixture.env, OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot },
+    };
     const alias = path.join(context.homeDir, "workspace-alias");
     const moved = path.join(context.homeDir, "moved-workspace");
     const symlinkType = process.platform === "win32" ? "junction" : "dir";
@@ -38,7 +45,7 @@ describe("Doctor workspace move ordering", () => {
     const raw = JSON.stringify(milestones);
     const sourceName = "openclaw-workspace-state.json";
     fs.writeFileSync(path.join(context.workspaceDir, sourceName), raw);
-    const source = detect(configured).sources.find((entry) => entry.kind === "setup")!;
+    const source = (await detect(configured)).sources.find((entry) => entry.kind === "setup")!;
     expect((await migrate(configured)).warnings).toEqual([]);
     expect(readReceipt(source, context.env)?.removedSource).toBe(true);
 
@@ -67,7 +74,7 @@ describe("Doctor workspace move ordering", () => {
       expect(fs.existsSync(carriedSource)).toBe(false);
       expect(fs.existsSync(`${carriedSource}.doctor-importing`)).toBe(false);
       const identity = resolveWorkspaceStateIdentity(moved);
-      expect(readWorkspaceStateSnapshot(alias, { env: context.env })).toMatchObject({
+      expect(await readWorkspaceStateSnapshot(alias, { env: context.env })).toMatchObject({
         identity,
         setup: milestones,
       });

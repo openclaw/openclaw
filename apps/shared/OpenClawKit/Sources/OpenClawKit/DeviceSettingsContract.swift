@@ -12,19 +12,23 @@ public enum DeviceSettingKey: String, CaseIterable, Sendable {
     case appearance = "app.appearance"
     case notificationsEnabled = "app.notificationsEnabled"
     case showDockIcon = "app.showDockIcon"
+    case nativeExperienceEnabled = "app.nativeExperienceEnabled"
     case iconStyle = "app.iconStyle"
     case iconAnimationsEnabled = "app.iconAnimationsEnabled"
     case launchAtLogin = "app.launchAtLogin"
+    case keepGatewayRunning = "app.keepGatewayRunning"
     case quickChatEnabled = "app.quickChatEnabled"
     case debugPaneEnabled = "app.debugPaneEnabled"
     case keepAwakeEnabled = "capabilities.keepAwakeEnabled"
     case healthSummaryEnabled = "capabilities.healthSummaryEnabled"
     case canvasEnabled = "capabilities.canvasEnabled"
     case cameraEnabled = "capabilities.cameraEnabled"
+    case desktopSharingEnabled = "capabilities.desktopSharingEnabled"
     case computerControlEnabled = "capabilities.computerControlEnabled"
     case computerControlProvider = "capabilities.computerControlProvider"
     case peekabooBridgeEnabled = "capabilities.peekabooBridgeEnabled"
     case activeComputerPresenceEnabled = "capabilities.activeComputerPresenceEnabled"
+    case unattendedDesktopEnabled = "capabilities.unattendedDesktopEnabled"
     case cookieSyncEnabled = "browser.cookieSync.enabled"
     case cookieSyncDomains = "browser.cookieSync.domains"
     case cookieSyncTargetProfile = "browser.cookieSync.targetProfile"
@@ -47,42 +51,26 @@ public enum DeviceSettingKey: String, CaseIterable, Sendable {
     case localeAdditional = "voice.locale.additional"
     case automaticUpdates = "updates.automatic"
 
-    private enum ValueType {
-        case boolean, string, strings, nullableString, provider, location, iconStyle, appearance
-    }
-
-    private var valueType: ValueType {
-        switch self {
-        case .appearance: .appearance
-        case .computerControlProvider: .provider
-        case .locationMode: .location
-        case .iconStyle: .iconStyle
-        case .cookieSyncTargetProfile, .localePrimary: .string
-        case .cookieSyncDomains, .localeAdditional: .strings
-        case .microphone: .nullableString
-        default: .boolean
-        }
-    }
-
     public func value(from raw: Any) -> DeviceSettingValue? {
-        switch self.valueType {
-        case .boolean:
+        switch self {
+        case .cookieSyncDomains, .localeAdditional:
+            guard let values = raw as? [String] else { return nil }
+            return .strings(values)
+        case .microphone where raw is NSNull:
+            return .null
+        case .cookieSyncTargetProfile, .localePrimary, .microphone,
+             .computerControlProvider, .locationMode, .iconStyle, .appearance:
+            guard let value = raw as? String else { return nil }
+            if self == .computerControlProvider, !["peekaboo", "cua"].contains(value) { return nil }
+            if self == .locationMode, DeviceSettingsLocationMode(rawValue: value) == nil { return nil }
+            if self == .iconStyle,
+               !["paper", "heritage", "clawmark", "origami", "pincer", "openC"].contains(value) { return nil }
+            if self == .appearance, DeviceSettingsAppearance(rawValue: value) == nil { return nil }
+            return .string(value)
+        default:
             // WKWebView bridges both numbers and booleans as NSNumber. A numeric 0/1 is not a toggle.
             guard let number = raw as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
             return .boolean(number.boolValue)
-        case .strings:
-            guard let values = raw as? [String] else { return nil }
-            return .strings(values)
-        case .nullableString where raw is NSNull:
-            return .null
-        case .string, .nullableString, .provider, .location, .iconStyle, .appearance:
-            guard let value = raw as? String else { return nil }
-            if self.valueType == .provider, !["peekaboo", "cua"].contains(value) { return nil }
-            if self.valueType == .location, DeviceSettingsLocationMode(rawValue: value) == nil { return nil }
-            if self.valueType == .iconStyle,
-               !["paper", "heritage", "clawmark", "origami", "pincer", "openC"].contains(value) { return nil }
-            if self.valueType == .appearance, DeviceSettingsAppearance(rawValue: value) == nil { return nil }
-            return .string(value)
         }
     }
 }
@@ -91,12 +79,13 @@ public enum DeviceSettingsPanel: String, CaseIterable, Sendable {
     case quickChatShortcut = "quick-chat-shortcut"
     case microphoneTest = "microphone-test"
     case browserImport = "browser-import"
+    case aiSetup = "ai-setup"
     case connection, gateways, debug, diagnostics, licenses, about, watch
 }
 
 public enum DeviceSettingsPermission: String, CaseIterable, Encodable, Sendable {
     case notifications, accessibility, screenRecording, microphone
-    case camera, speechRecognition, location, automation
+    case camera, speechRecognition, location, eventPosting
     case contacts, calendars, reminders, photos
 }
 
@@ -108,33 +97,41 @@ public enum DeviceSettingsAppearance: String, Encodable, Sendable {
     case system, light, dark
 }
 
-public enum DeviceSettingsLocationMode: String, CaseIterable, Encodable, Sendable {
-    case off, whileUsing, always
+public typealias DeviceSettingsLocationMode = OpenClawLocationMode
 
+extension OpenClawLocationMode {
     public init(_ mode: OpenClawLocationMode) {
-        switch mode {
-        case .off: self = .off
-        case .whileUsing: self = .whileUsing
-        case .always: self = .always
-        }
+        self = mode
     }
 
     public var nativeMode: OpenClawLocationMode {
-        switch self {
-        case .off: .off
-        case .whileUsing: .whileUsing
-        case .always: .always
-        }
+        self
     }
+}
+
+public enum ChromeExtensionSetupAction: String, Codable, CaseIterable, Sendable {
+    case inspect, install, verify
+}
+
+public struct NodePermissionRequest: Codable, Equatable, Sendable {
+    public var nodeId: String
+    public var nodeName: String?
+    public var command: String
+    public var capabilities: [String]
+    public var state: OpenClawPermissionState
 }
 
 public enum DeviceSettingsRequest: Equatable, Sendable {
     case status
     case set(DeviceSettingKey, DeviceSettingValue)
     case requestPermission(DeviceSettingsPermission)
+    case resolvePermission(NodePermissionRequest)
     case openSystemSettings(DeviceSettingsPermission)
     case open(DeviceSettingsPanel)
     case checkForUpdates
+    case chromeExtensionSetup(ChromeExtensionSetupAction)
+    case chromeExtensionStatus
+    /// Shipped contract-1 request; projects through the same canonical setup owner.
     case installChromeExtension
 
     public init?(body: Any) {
@@ -146,6 +143,13 @@ public enum DeviceSettingsRequest: Equatable, Sendable {
                   let rawValue = payload["value"], let value = key.value(from: rawValue)
             else { return nil }
             self = .set(key, value)
+        case "resolve-permission":
+            guard let request = payload["request"],
+                  let data = try? JSONSerialization.data(withJSONObject: request),
+                  let decoded = try? JSONDecoder().decode(NodePermissionRequest.self, from: data),
+                  !decoded.nodeId.isEmpty, !decoded.capabilities.isEmpty
+            else { return nil }
+            self = .resolvePermission(decoded)
         case "request-permission", "open-system-settings":
             guard let rawID = payload["id"] as? String, let id = DeviceSettingsPermission(rawValue: rawID)
             else { return nil }
@@ -155,9 +159,16 @@ public enum DeviceSettingsRequest: Equatable, Sendable {
             else { return nil }
             self = .open(panel)
         case "check-for-updates": self = .checkForUpdates
+        case "chrome-extension-status":
+            guard payload.count == 1 else { return nil }
+            self = .chromeExtensionStatus
         case "install-chrome-extension":
             guard payload.count == 1 else { return nil }
             self = .installChromeExtension
+        case "chrome-extension-setup":
+            guard payload.count == 2, let rawAction = payload["action"] as? String,
+                  let action = ChromeExtensionSetupAction(rawValue: rawAction) else { return nil }
+            self = .chromeExtensionSetup(action)
         default: return nil
         }
     }
@@ -168,6 +179,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
     public let device: Device
     public let app: App?
     public let capabilities: Capabilities?
+    public let desktopAvailability: DesktopAvailability?
     public let browser: Browser?
     public let permissions: Permissions
     public let voice: Voice
@@ -177,6 +189,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         device: Device,
         app: App? = nil,
         capabilities: Capabilities? = nil,
+        desktopAvailability: DesktopAvailability? = nil,
         browser: Browser? = nil,
         permissions: Permissions,
         voice: Voice,
@@ -185,6 +198,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         self.device = device
         self.app = app
         self.capabilities = capabilities
+        self.desktopAvailability = desktopAvailability
         self.browser = browser
         self.permissions = permissions
         self.voice = voice
@@ -201,6 +215,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         public let appBuild: String
         public let profileName: String?
         public let modelName: String?
+        public let nodeId: String?
 
         public init(
             platform: Platform = .macos,
@@ -208,7 +223,8 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             appVersion: String,
             appBuild: String,
             profileName: String? = nil,
-            modelName: String? = nil)
+            modelName: String? = nil,
+            nodeId: String? = nil)
         {
             self.platform = platform
             self.formFactor = formFactor
@@ -216,9 +232,10 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             self.appBuild = appBuild
             self.profileName = profileName
             self.modelName = modelName
+            self.nodeId = nodeId
         }
 
-        enum CodingKeys: CodingKey { case platform, formFactor, appVersion, appBuild, profileName, modelName }
+        enum CodingKeys: CodingKey { case platform, formFactor, appVersion, appBuild, profileName, modelName, nodeId }
 
         public func encode(to encoder: Encoder) throws {
             var values = encoder.container(keyedBy: CodingKeys.self)
@@ -229,6 +246,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             // The wire contract requires this key even when no profile is active.
             try values.encode(self.profileName, forKey: .profileName)
             try values.encodeIfPresent(self.modelName, forKey: .modelName)
+            try values.encodeIfPresent(self.nodeId, forKey: .nodeId)
         }
     }
 
@@ -247,10 +265,13 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
 
     public struct App: Encodable, Sendable {
         public let showDockIcon: Bool?
+        public let nativeExperienceEnabled: Bool?
         public let iconStyle: IconStyle?
         public let iconAnimationsEnabled: Bool?
         public let launchAtLogin: Bool?
         public let launchAtLoginAvailable: Bool?
+        public let keepGatewayRunning: Bool?
+        public let keepGatewayRunningAvailable: Bool?
         public let quickChatEnabled: Bool?
         // The shortcut can be absent on iOS or explicitly unset on Mac.
         public let quickChatShortcut: String??
@@ -260,10 +281,13 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
 
         public init(
             showDockIcon: Bool? = nil,
+            nativeExperienceEnabled: Bool? = nil,
             iconStyle: IconStyle? = nil,
             iconAnimationsEnabled: Bool? = nil,
             launchAtLogin: Bool? = nil,
             launchAtLoginAvailable: Bool? = nil,
+            keepGatewayRunning: Bool? = nil,
+            keepGatewayRunningAvailable: Bool? = nil,
             quickChatEnabled: Bool? = nil,
             quickChatShortcut: String?? = nil,
             debugPaneEnabled: Bool? = nil,
@@ -271,10 +295,13 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             notificationsEnabled: Bool? = nil)
         {
             self.showDockIcon = showDockIcon
+            self.nativeExperienceEnabled = nativeExperienceEnabled
             self.iconStyle = iconStyle
             self.iconAnimationsEnabled = iconAnimationsEnabled
             self.launchAtLogin = launchAtLogin
             self.launchAtLoginAvailable = launchAtLoginAvailable
+            self.keepGatewayRunning = keepGatewayRunning
+            self.keepGatewayRunningAvailable = keepGatewayRunningAvailable
             self.quickChatEnabled = quickChatEnabled
             self.quickChatShortcut = quickChatShortcut
             self.debugPaneEnabled = debugPaneEnabled
@@ -299,48 +326,70 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
     public struct Capabilities: Encodable, Sendable {
         public let canvasEnabled: Bool?
         public let cameraEnabled: Bool?
+        public let desktopSharingEnabled: Bool?
         public let computerControlEnabled: Bool?
         public let computerControlProvider: String?
         public let cuaDriverBundled: Bool?
         public let peekabooBridgeEnabled: Bool?
         public let activeComputerPresenceEnabled: Bool?
+        public let unattendedDesktopEnabled: Bool?
         public let keepAwakeEnabled: Bool?
         public let healthSummaryAvailable: Bool?
         public let healthSummaryEnabled: Bool?
+        public let aiSetupAvailable: Bool?
 
         public init(
             canvasEnabled: Bool? = nil,
             cameraEnabled: Bool? = nil,
+            desktopSharingEnabled: Bool? = nil,
             computerControlEnabled: Bool? = nil,
             computerControlProvider: String? = nil,
             cuaDriverBundled: Bool? = nil,
             peekabooBridgeEnabled: Bool? = nil,
             activeComputerPresenceEnabled: Bool? = nil,
+            unattendedDesktopEnabled: Bool? = nil,
             keepAwakeEnabled: Bool? = nil,
             healthSummaryAvailable: Bool? = nil,
-            healthSummaryEnabled: Bool? = nil)
+            healthSummaryEnabled: Bool? = nil,
+            aiSetupAvailable: Bool? = nil)
         {
             self.canvasEnabled = canvasEnabled
             self.cameraEnabled = cameraEnabled
+            self.desktopSharingEnabled = desktopSharingEnabled
             self.computerControlEnabled = computerControlEnabled
             self.computerControlProvider = computerControlProvider
             self.cuaDriverBundled = cuaDriverBundled
             self.peekabooBridgeEnabled = peekabooBridgeEnabled
             self.activeComputerPresenceEnabled = activeComputerPresenceEnabled
+            self.unattendedDesktopEnabled = unattendedDesktopEnabled
             self.keepAwakeEnabled = keepAwakeEnabled
             self.healthSummaryAvailable = healthSummaryAvailable
             self.healthSummaryEnabled = healthSummaryEnabled
+            self.aiSetupAvailable = aiSetupAvailable
+        }
+    }
+
+    public struct DesktopAvailability: Encodable, Sendable {
+        public enum State: String, Encodable, Sendable { case locked, unlocked, unknown }
+
+        public let state: State
+
+        public init(state: State) {
+            self.state = state
         }
     }
 
     public struct Browser: Encodable, Sendable {
         public let importAvailable: Bool
         public let cookieSync: CookieSync
+        public let chromeSetupActions: [ChromeExtensionSetupAction]?
 
         public init(
             importAvailable: Bool,
-            cookieSync: CookieSync)
+            cookieSync: CookieSync,
+            chromeSetupActions: [ChromeExtensionSetupAction]? = nil)
         {
+            self.chromeSetupActions = chromeSetupActions
             self.importAvailable = importAvailable
             self.cookieSync = cookieSync
         }
@@ -386,26 +435,32 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
 
     public struct Permissions: Encodable, Sendable {
         public let entries: [Entry]
+        public let additionalEntries: [Entry]?
         public let location: Location
 
         public init(
             entries: [Entry],
-            location: Location)
+            location: Location,
+            additionalEntries: [Entry]? = nil)
         {
             self.entries = entries
+            self.additionalEntries = additionalEntries
             self.location = location
         }
 
         public struct Entry: Encodable, Sendable {
             public let id: DeviceSettingsPermission
             public let status: DeviceSettingsPermissionStatus
+            public let state: OpenClawPermissionState?
 
             public init(
                 id: DeviceSettingsPermission,
-                status: DeviceSettingsPermissionStatus)
+                status: DeviceSettingsPermissionStatus,
+                state: OpenClawPermissionState? = nil)
             {
                 self.id = id
                 self.status = status
+                self.state = state
             }
         }
 
@@ -541,8 +596,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
     }
 
     public func javaScript() throws -> String {
-        let data = try JSONEncoder().encode(self)
-        let json = String(bytes: data, encoding: .utf8)!
+        let json = try String(bytes: JSONEncoder().encode(self), encoding: .utf8)!
         return "window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__ = \(json); " +
             "window.dispatchEvent(new CustomEvent('openclaw:native-device-settings-changed', " +
             "{detail: window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__}));"

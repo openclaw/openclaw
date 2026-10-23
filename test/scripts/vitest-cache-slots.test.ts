@@ -1,86 +1,163 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, expect, it, onTestFinished } from "vitest";
 import { createVitestCacheSlots } from "../../scripts/lib/vitest-cache-slots.mts";
-import type { VitestCacheAssignment } from "../../scripts/test-projects.test-support.mts";
+import { applyDefaultVitestCachePaths } from "../../scripts/test-projects.test-support.mts";
 import { createDeferred } from "../helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { loadVitestPerformanceConfig } from "../vitest/vitest.performance-config.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const spec = {
-  config: "test/vitest/vitest.tooling.config.ts",
+  config: "test/a.ts",
   env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/cache/original" },
   watchMode: false,
-  cacheAssignment: { kind: "scheduler", root: "/cache" } satisfies VitestCacheAssignment,
+  cacheAssignment: { kind: "scheduler" as const, root: "/cache" },
 };
-const cachePath = (assigned: typeof spec) => assigned.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH;
+const joined = { groupJoined: true };
 
-describe("Vitest cache slot ownership", () => {
-  it("holds concurrent leases until joined and reuses a failed command's completed slot", async () => {
-    const run = createVitestCacheSlots(2, "linux");
-    const first = createDeferred<{ groupJoined: boolean; code: number }>();
-    const second = createDeferred<{ groupJoined: boolean; code: number }>();
-    const paths: string[] = [];
-    const pending = [first, second].map((completion) =>
-      run(spec, (assigned) => {
-        paths.push(cachePath(assigned));
-        return completion.promise;
-      }),
-    );
-    expect(new Set(paths).size).toBe(2);
-    first.resolve({ groupJoined: true, code: 1 });
-    await expect(pending[0]).resolves.toMatchObject({ code: 1 });
-    await run(spec, async (assigned) => {
-      expect(cachePath(assigned)).toBe(paths[0]);
-      expect(cachePath(assigned)).not.toBe(paths[1]);
-      return { groupJoined: true };
+function cacheFixture() {
+  const lease = createVitestCacheSlots("linux");
+  function hold<R extends { groupJoined: boolean }>(result: R, entry = spec) {
+    const gate = createDeferred<R>();
+    let assignedPath = "";
+    const done = lease(entry, (assigned) => {
+      assignedPath = assigned.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH;
+      return gate.promise;
     });
-    await run({ ...spec, config: "test/vitest/vitest.cli.config.ts" }, async (assigned) => {
-      expect(paths).not.toContain(cachePath(assigned));
-      return { groupJoined: true };
+    const finish = () => {
+      gate.resolve(result);
+      return done;
+    };
+    onTestFinished(async () => {
+      await finish();
     });
-    second.resolve({ groupJoined: true, code: 0 });
-    await pending[1];
-  });
-
-  it.each(["child-only", "rejected"])(
-    "retires a %s lease without reusing its directory",
-    async (mode) => {
-      const run = createVitestCacheSlots(2, "linux");
-      let retired: string | undefined;
-      const attempt = run(spec, async (assigned) => {
-        retired = cachePath(assigned);
-        if (mode === "rejected") {
-          throw new Error("unverified descendants");
-        }
-        return { groupJoined: false };
-      });
-      if (mode === "rejected") {
-        await expect(attempt).rejects.toThrow("unverified descendants");
-      } else {
-        await attempt;
-      }
-      for (let index = 0; index < 3; index += 1) {
-        await run(spec, async (assigned) => {
-          expect(cachePath(assigned)).not.toBe(retired);
-          return { groupJoined: true };
-        });
-      }
+    return { path: assignedPath, finish };
+  }
+  return {
+    lease,
+    hold,
+    visit: async (entry = spec, groupJoined = true) => {
+      const held = hold({ groupJoined }, entry);
+      await held.finish();
+      return held.path;
     },
-  );
+  };
+}
 
-  it.each(["caller", "serial", "watch", "windows"])(
-    "preserves the %s cache owner",
-    async (mode) => {
-      const input = {
-        ...spec,
-        watchMode: mode === "watch",
-        cacheAssignment: mode === "caller" ? { kind: "caller" as const } : spec.cacheAssignment,
-      };
-      const run = createVitestCacheSlots(
-        mode === "serial" ? 1 : 2,
-        mode === "windows" ? "win32" : "linux",
+it.skipIf(process.platform === "win32")(
+  "reuses separately warmed configs through the default root in serial, reordered, and parallel project runs",
+  async () => {
+    const root = tempDirs.make("vitest-cache-layout-");
+    const env: NodeJS.ProcessEnv = {};
+    const run = async (configs: string[], parallel: boolean, seed = false) => {
+      const lease = createVitestCacheSlots("linux");
+      const specs = applyDefaultVitestCachePaths(
+        configs.map((config) => ({ config, env, watchMode: false })),
+        { env, cwd: root },
       );
-      await run(input, async (assigned) => {
-        expect(assigned).toBe(input);
-        return { groupJoined: false };
-      });
-    },
-  );
+      const visit = (entry: (typeof specs)[number]) =>
+        lease(entry, async (assigned) => {
+          const cache = loadVitestPerformanceConfig(assigned.env, "linux", root);
+          const directory = cache.fsModuleCachePath!;
+          const file = path.join(directory, `${entry.config}.js`);
+          if (seed) {
+            fs.mkdirSync(directory, { recursive: true });
+            fs.writeFileSync(file, entry.config);
+          } else {
+            expect(fs.readFileSync(file, "utf8")).toBe(entry.config);
+          }
+          return joined;
+        });
+      const batches = parallel ? [specs] : specs.map((entry) => [entry]);
+      for (const batch of batches) {
+        await Promise.all(batch.map(visit));
+      }
+    };
+    await run(["first.config.ts"], false, true);
+    await run(["second.config.ts"], false, true);
+    await run(["second.config.ts", "first.config.ts"], false);
+    await run(["first.config.ts", "first.config.ts"], false);
+    await run(["first.config.ts", "second.config.ts"], true);
+  },
+);
+
+it("preserves an explicit caller leaf alongside a shared root", async () => {
+  const env = {
+    OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: "/shared-cache",
+    OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/caller-owned-leaf",
+  };
+  const assigned = applyDefaultVitestCachePaths([{ ...spec, env, cacheAssignment: undefined }], {
+    env,
+  });
+  const lease = createVitestCacheSlots("linux");
+  await lease(assigned[0]!, async (entry) => {
+    expect(entry.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe("/caller-owned-leaf");
+    return joined;
+  });
 });
+
+it("reuses a failed command's joined cache while a same-config lease and another config remain active", async () => {
+  const { hold, visit } = cacheFixture();
+  const first = hold({ ...joined, code: 1 }, { ...spec, config: "a.config.ts" });
+  const peer = hold(joined, { ...spec, config: "a.config.ts" });
+  await expect(first.finish()).resolves.toMatchObject({ code: 1 });
+  const third = hold(joined, { ...spec, config: "c.config.ts" });
+  const reused = await visit({ ...spec, config: "a.config.ts" });
+  expect(reused).toBe(first.path);
+  expect(reused).not.toBe(third.path);
+  expect(new Set([first.path, peer.path, third.path]).size).toBe(3);
+  await peer.finish();
+});
+
+it.each([true, false])(
+  "isolates alias leases and respects join state (%s)",
+  async (groupJoined) => {
+    const { hold, visit } = cacheFixture();
+    const first = hold({ groupJoined });
+    const alias = {
+      ...spec,
+      config: groupJoined ? "test/x/../a.ts" : spec.config,
+      // Different spellings may name the same physical root.
+      cacheAssignment: {
+        ...spec.cacheAssignment,
+        root: groupJoined ? "/cache/x/.." : "/alias",
+      },
+    };
+    const secondPath = await visit(alias, groupJoined);
+    expect(secondPath).not.toBe(first.path);
+    await first.finish();
+    const thirdPath = await visit(groupJoined ? alias : spec);
+    if (groupJoined) {
+      expect(thirdPath).toBe(first.path);
+    } else {
+      expect(
+        new Set([first.path, secondPath, thirdPath].map((value) => path.basename(value))).size,
+      ).toBe(3);
+    }
+  },
+);
+
+it.each(["child-only", "rejected"])(
+  "retires a %s lease without reusing its directory",
+  async (mode) => {
+    const { lease: run, visit } = cacheFixture();
+    let retired: string | undefined;
+    const attempt = run(spec, async (assigned) => {
+      retired = assigned.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH;
+      if (mode === "rejected") {
+        throw new Error("unverified descendants");
+      }
+      return { groupJoined: false };
+    });
+    if (mode === "rejected") {
+      await expect(attempt).rejects.toThrow("unverified descendants");
+    } else {
+      await attempt;
+    }
+    for (let index = 0; index < 3; index += 1) {
+      expect(await visit()).not.toBe(retired);
+    }
+  },
+);

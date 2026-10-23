@@ -1,4 +1,3 @@
-// Pixverse plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { PIXVERSE_PROVIDER_ID } from "./constants.js";
 import { buildPixVerseApiKeyAuthMethod } from "./onboard.js";

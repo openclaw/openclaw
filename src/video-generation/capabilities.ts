@@ -1,4 +1,3 @@
-// Video generation capability helpers derive supported sizes, durations, and modes.
 import type {
   VideoGenerationMode,
   VideoGenerationModeCapabilities,
@@ -6,8 +5,6 @@ import type {
   VideoGenerationTransformCapabilities,
 } from "./types.js";
 
-// Video generation mode helpers derive the active mode from reference inputs
-// and expose the provider capability block that applies to that mode/model.
 function resolveVideoGenerationMode(params: {
   inputImageCount?: number;
   inputVideoCount?: number;
@@ -85,22 +82,10 @@ export function resolveVideoGenerationModeCapabilities(params: {
   if (!capabilities) {
     return { mode, capabilities: undefined };
   }
-  if (mode === "generate") {
+  if (mode) {
     return {
       mode,
-      capabilities: withModelLimits(capabilities.generate),
-    };
-  }
-  if (mode === "imageToVideo") {
-    return {
-      mode,
-      capabilities: withModelLimits(capabilities.imageToVideo),
-    };
-  }
-  if (mode === "videoToVideo") {
-    return {
-      mode,
-      capabilities: withModelLimits(capabilities.videoToVideo),
+      capabilities: withModelLimits(capabilities[mode]),
     };
   }
   const videoToVideoCapabilities = withModelLimits(capabilities.videoToVideo);

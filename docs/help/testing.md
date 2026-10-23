@@ -77,3 +77,4 @@ resolves. Each entry points at the page that now holds the content.
 - [Testing live](/help/testing-live)
 - [Testing updates and plugins](/help/testing-updates-plugins)
 - [CI](/ci)
+- [OpenClaw agent runtime workflow](/openclaw-agent-runtime) - the build, test, and live-validation loop for agent runtime code in `src/agents/`

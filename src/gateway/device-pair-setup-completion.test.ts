@@ -4,13 +4,13 @@ import {
   persistDeviceBootstrapTokenRecords,
   persistDevicePairingStoreState,
 } from "../infra/device-pairing-store.js";
-import type { PairedDevice } from "../infra/device-pairing.types.js";
+import type { DeviceBootstrapTokenRecord, PairedDevice } from "../infra/device-pairing.types.js";
 import {
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   broadcastSetupHandoffCompletion,
@@ -18,14 +18,37 @@ import {
   consumeSetupHandoff,
 } from "./device-pair-setup-completion.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { makeClient } from "./server-broadcast.test-helpers.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 
 const tempDirs = createTrackedTempDirs();
+const deviceId = "device-123";
+
+async function setupHandoff(
+  baseDir: string,
+  profile?: DeviceBootstrapTokenRecord["profile"],
+  setupId?: string,
+) {
+  const token = setupId ? "bootstrap-secret" : "generic";
+  const now = Date.now();
+  persistDeviceBootstrapTokenRecords(
+    { [token]: { token, setupId, ts: now, deviceId, profile, issuedAtMs: now } },
+    baseDir,
+  );
+  const ts = setupId ? 3 : undefined;
+  const handoff = await consumeSetupHandoff({ token, deviceId, baseDir, ts });
+  expect(handoff).not.toBeNull();
+  if (!setupId) {
+    return handoff!;
+  }
+  const confirmed = await confirmSetupHandoffDelivery({ handoff: handoff!, baseDir });
+  expect(confirmed).not.toBeNull();
+  return confirmed!;
+}
 
 afterEach(async () => {
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   await tempDirs.cleanup();
 });
 
@@ -37,7 +60,7 @@ describe("device pair setup completion", () => {
   ] as const)("broadcasts authoritative %s completion metadata", async (access, profile) => {
     const baseDir = await tempDirs.make(`openclaw-setup-completion-${access}-`);
     const paired: PairedDevice = {
-      deviceId: "device-123",
+      deviceId,
       publicKey: "public-key-123",
       displayName: "Client name",
       operatorLabel: "Operator name",
@@ -49,31 +72,9 @@ describe("device pair setup completion", () => {
       baseDir,
       "paired",
     );
-    persistDeviceBootstrapTokenRecords(
-      {
-        "bootstrap-secret": {
-          token: "bootstrap-secret",
-          setupId: "setup-exact",
-          ts: Date.now(),
-          deviceId: paired.deviceId,
-          profile,
-          issuedAtMs: Date.now(),
-        },
-      },
-      baseDir,
-    );
     const broadcast = vi.fn();
-
-    const handoff = await consumeSetupHandoff({
-      token: "bootstrap-secret",
-      deviceId: paired.deviceId,
-      baseDir,
-      ts: 3,
-    });
-    expect(handoff).not.toBeNull();
-    const confirmed = await confirmSetupHandoffDelivery({ handoff: handoff!, baseDir });
-    expect(confirmed).not.toBeNull();
-    broadcastSetupHandoffCompletion({ handoff: confirmed!, broadcast });
+    const handoff = await setupHandoff(baseDir, profile, "setup-exact");
+    broadcastSetupHandoffCompletion({ handoff, broadcast });
     expect(broadcast).toHaveBeenCalledWith(
       "device.pair.setup.completed",
       {
@@ -88,50 +89,21 @@ describe("device pair setup completion", () => {
     expect(JSON.stringify(broadcast.mock.calls)).not.toContain("bootstrap-secret");
   });
 
-  // The regression this whole recovery path exists for: a buffered operator
-  // socket silently loses the only success frame, so the recorded completion
-  // has to survive it or the operator sees expiry after a successful pairing.
   it("keeps the completion recoverable when a slow subscriber drops the frame", async () => {
     const baseDir = await tempDirs.make("openclaw-setup-completion-slow-");
-    const slowSocket = {
-      readyState: 1,
-      bufferedAmount: MAX_BUFFERED_BYTES + 1,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
-    const clients = new GatewayClientRegistry([
-      {
-        socket: slowSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
-        connId: "c-pairing-slow",
-        usesSharedGatewayAuth: false,
-      },
+    const { client, socket: slowSocket } = makeClient("c-pairing-slow", "operator", [
+      "operator.pairing",
     ]);
+    slowSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    const clients = new GatewayClientRegistry([client]);
     const { broadcast } = createGatewayBroadcaster({ clients });
 
-    persistDeviceBootstrapTokenRecords(
-      {
-        "bootstrap-secret": {
-          token: "bootstrap-secret",
-          setupId: "setup-dropped",
-          ts: Date.now(),
-          deviceId: "device-123",
-          profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-          issuedAtMs: Date.now(),
-        },
-      },
+    const handoff = await setupHandoff(
       baseDir,
+      FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      "setup-dropped",
     );
-    const handoff = await consumeSetupHandoff({
-      token: "bootstrap-secret",
-      deviceId: "device-123",
-      baseDir,
-      ts: 3,
-    });
-    expect(handoff).not.toBeNull();
-    const confirmed = await confirmSetupHandoffDelivery({ handoff: handoff!, baseDir });
-    expect(confirmed).not.toBeNull();
-    broadcastSetupHandoffCompletion({ handoff: confirmed!, broadcast });
+    broadcastSetupHandoffCompletion({ handoff, broadcast });
 
     expect(slowSocket.send).not.toHaveBeenCalled();
     expect(slowSocket.close).not.toHaveBeenCalled();
@@ -148,25 +120,10 @@ describe("device pair setup completion", () => {
 
   it("ignores generic bootstrap records without setup correlation", async () => {
     const baseDir = await tempDirs.make("openclaw-setup-completion-generic-");
-    persistDeviceBootstrapTokenRecords(
-      {
-        generic: {
-          token: "generic",
-          ts: Date.now(),
-          deviceId: "device-123",
-          issuedAtMs: Date.now(),
-        },
-      },
-      baseDir,
-    );
     const broadcast = vi.fn();
-    const handoff = await consumeSetupHandoff({
-      token: "generic",
-      deviceId: "device-123",
-      baseDir,
-    });
+    const handoff = await setupHandoff(baseDir);
     expect(handoff).toMatchObject({ record: { token: "generic" } });
-    broadcastSetupHandoffCompletion({ handoff: handoff!, broadcast });
+    broadcastSetupHandoffCompletion({ handoff, broadcast });
     expect(broadcast).not.toHaveBeenCalled();
   });
 });

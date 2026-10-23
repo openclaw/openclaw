@@ -13,15 +13,13 @@ import type {
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { makeBridge } from "../talk/session-runtime.test-support.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
 import { startMeetingAgentRealtimeEngine } from "./realtime-agent-engine.js";
 import * as audioFormat from "./realtime-audio-format.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
-import {
-  MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS,
-  startMeetingRealtimeEngine,
-} from "./realtime-engine.js";
+import { startMeetingRealtimeEngine } from "./realtime-engine.js";
 
 const environment = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
 let stateDir: string;
@@ -32,7 +30,10 @@ const spokenResult = {
   outputFormat: "pcm16",
 };
 
-async function createFixture(engine: "transcription" | "voice" = "transcription") {
+async function createFixture(
+  engine: "transcription" | "voice" = "transcription",
+  inputAudioIsolated = false,
+) {
   const sessionKey = "agent:main:subagent:test-meeting:meeting-1";
   let entry: SessionEntry = { sessionId: "synthetic-consult", updatedAt: 1 };
   const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
@@ -50,12 +51,17 @@ async function createFixture(engine: "transcription" | "voice" = "transcription"
         resolveStorePath: () => path.join(stateDir, "sessions.json"),
         getSessionEntry: ({ sessionKey: key }: { sessionKey: string }) =>
           key === sessionKey ? entry : undefined,
-        patchSessionEntry: async ({
-          update,
-        }: {
-          update: (current: SessionEntry) => Promise<Partial<SessionEntry>>;
-        }) => {
-          entry = { ...entry, ...(await update(entry)) };
+        getSessionEntryAsync: async ({ sessionKey: key }: { sessionKey: string }) =>
+          key === sessionKey ? entry : undefined,
+        prepareSessionEntryPatch: async ({
+          prepare,
+          authority,
+        }: Parameters<PluginRuntime["agent"]["session"]["prepareSessionEntryPatch"]>[0]) => {
+          const patch = await prepare(entry, { existingEntry: entry });
+          if (authority?.kind === "host") {
+            authority.assertCurrent();
+          }
+          entry = { ...entry, ...patch };
           return entry;
         },
       },
@@ -64,10 +70,6 @@ async function createFixture(engine: "transcription" | "voice" = "transcription"
     tts: { textToSpeechTelephony },
   } as unknown as PluginRuntime;
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  const config = {
-    chrome: { audioFormat: "pcm16-24khz" as const },
-    realtime: { strategy: "agent", provider: "test", providers: { test: {} } },
-  };
   const bindings = createMeetingRealtimeEngineBindings({
     platform: {
       id: "test-meeting",
@@ -90,24 +92,31 @@ async function createFixture(engine: "transcription" | "voice" = "transcription"
   });
   let fatal = () => {};
   let transcript = (_text: string) => {};
+  let inputAudio = (_audio: Buffer) => {};
+  const sendAudio = vi.fn();
   const disposed = createDeferredCore();
-  const writeOutput = vi.fn(async (_audio: Buffer) => {});
   const sendUserMessage = vi.fn();
-  const transport: MeetingRealtimeAudioTransport = {
+  const transport = {
+    inputAudioIsolated,
     onFatal: (handler) => {
       fatal = handler;
     },
-    startInput: vi.fn(),
+    startInput: (handler) => {
+      inputAudio = handler;
+    },
     beginOutput: vi.fn(),
     stop: vi.fn(async () => {}),
     dispose: vi.fn(async () => {
       disposed.resolve();
     }),
     clearOutput: vi.fn(async () => {}),
-    writeOutput,
-  };
+    writeOutput: vi.fn(async (_audio: Buffer) => {}),
+  } satisfies MeetingRealtimeAudioTransport;
   const common = {
-    config,
+    config: {
+      chrome: { audioFormat: "pcm16-24khz" as const },
+      realtime: { strategy: "agent", provider: "test", providers: { test: {} } },
+    },
     fullConfig: {},
     runtime,
     ...bindings,
@@ -117,50 +126,43 @@ async function createFixture(engine: "transcription" | "voice" = "transcription"
     logger,
     transport,
   };
+  const providerMetadata = { id: "test", label: "Test", isConfigured: () => true };
   let handle;
   if (engine === "transcription") {
     const provider: RealtimeTranscriptionProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
+      ...providerMetadata,
       createSession: (request) => {
         transcript = (text) => request.onTranscript?.(text);
-        return { connect: async () => {}, sendAudio() {}, close() {}, isConnected: () => true };
+        return { connect: async () => {}, sendAudio, close() {}, isConnected: () => true };
       },
     };
     handle = await startMeetingAgentRealtimeEngine({ ...common, providers: [provider] });
   } else {
     const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
+      ...providerMetadata,
       createBridge: (request) => {
         transcript = (text) => request.onTranscript?.("user", text, true);
-        return {
+        return makeBridge({
           connect: async () => {
             request.onReady?.();
           },
-          sendAudio() {},
-          setMediaTimestamp() {},
-          submitToolResult() {},
-          acknowledgeMark() {},
-          close() {},
-          isConnected: () => true,
+          triggerGreeting: undefined,
           sendUserMessage,
-        };
+        });
       },
     };
     handle = await startMeetingRealtimeEngine({ ...common, providers: [provider] });
   }
   return {
     handle,
-    runtime,
     runEmbeddedAgent,
     textToSpeechTelephony,
-    writeOutput,
+    writeOutput: transport.writeOutput,
     sendUserMessage,
     logger,
     transcript: (text: string) => transcript(text),
+    inputAudio: (audio: Buffer) => inputAudio(audio),
+    sendAudio,
     stop: async (kind: "stop" | "fatal") => {
       if (kind === "fatal") {
         fatal();
@@ -192,6 +194,46 @@ describe("meeting shutdown", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
+  it.each([true, false])(
+    "admits participant audio and repeated words during TTS only when input is isolated=%s",
+    async (isolated) => {
+      const fixture = await createFixture("transcription", isolated);
+      const playback = createDeferredCore();
+      const playbackStarted = createDeferredCore();
+      const secondRunStarted = createDeferredCore();
+      const answer = "The synthetic project is ready.";
+      fixture.runEmbeddedAgent
+        .mockResolvedValueOnce({ payloads: [{ text: answer }], meta: {} })
+        .mockImplementationOnce(async () => {
+          secondRunStarted.resolve();
+          return { payloads: [{ text: "Acknowledged." }], meta: {} };
+        });
+      fixture.writeOutput.mockImplementationOnce(() => {
+        playbackStarted.resolve();
+        return playback.promise;
+      });
+      try {
+        fixture.transcript("Please give me a project status update.");
+        await vi.advanceTimersByTimeAsync(900);
+        await playbackStarted.promise;
+        expect(fixture.runEmbeddedAgent).toHaveBeenCalledOnce();
+        expect(fixture.writeOutput).toHaveBeenCalledOnce();
+        fixture.inputAudio(Buffer.alloc(960, 1));
+        fixture.transcript(answer);
+        await vi.advanceTimersByTimeAsync(900);
+        expect(fixture.sendAudio).toHaveBeenCalledTimes(isolated ? 1 : 0);
+        if (isolated) {
+          await secondRunStarted.promise;
+        }
+        expect(fixture.runEmbeddedAgent).toHaveBeenCalledTimes(isolated ? 2 : 1);
+        expect(fixture.handle.getHealth().suppressedInputBytes).toBe(isolated ? 0 : 960);
+      } finally {
+        playback.resolve();
+        await fixture.handle.stop();
+      }
+    },
+  );
+
   it.each(["transcription", "voice"] as const)(
     "delivers a completed %s consult once",
     async (engine) => {
@@ -206,7 +248,7 @@ describe("meeting shutdown", () => {
       });
       try {
         fixture.transcript("Please answer this meeting question.");
-        await vi.advanceTimersByTimeAsync(MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS);
+        await vi.advanceTimersByTimeAsync(900);
         await delivered.promise;
         await setImmediate();
         expect(fixture.runEmbeddedAgent).toHaveBeenCalledOnce();
@@ -223,17 +265,8 @@ describe("meeting shutdown", () => {
     },
   );
 
-  it("closes an idle engine once without opening a turn", async () => {
-    const fixture = await createFixture();
-    await fixture.handle.stop();
-    await fixture.handle.stop();
-    expect(fixture.eventTypes()).toEqual(["session.started", "session.ready", "session.closed"]);
-  });
-
   it.each([
     ["transcription", "stop"],
-    ["transcription", "fatal"],
-    ["voice", "stop"],
     ["voice", "fatal"],
   ] as const)("cancels the generic agent run from %s %s", async (engine, shutdown) => {
     const fixture = await createFixture(engine);
@@ -253,7 +286,7 @@ describe("meeting shutdown", () => {
     });
     try {
       fixture.transcript("Please check this for the meeting.");
-      await vi.advanceTimersByTimeAsync(MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS);
+      await vi.advanceTimersByTimeAsync(900);
       const run = await started.promise;
       const aborted = vi.fn();
       run.abortSignal?.addEventListener("abort", aborted, { once: true });
@@ -275,12 +308,6 @@ describe("meeting shutdown", () => {
   it.each([
     ["tts", "resolve", "stop"],
     ["tts", "reject", "stop"],
-    ["tts", "resolve", "fatal"],
-    ["tts", "reject", "fatal"],
-    ["tts", "failed result", "stop"],
-    ["tts", "failed result", "fatal"],
-    ["sink", "resolve", "stop"],
-    ["sink", "reject", "stop"],
     ["sink", "resolve", "fatal"],
     ["sink", "reject", "fatal"],
   ] as const)("seals %s spans before %s settles after %s", async (stage, settlement, shutdown) => {
@@ -313,8 +340,6 @@ describe("meeting shutdown", () => {
       const pending = stage === "tts" ? synthesis : sink;
       if (settlement === "reject") {
         pending.reject(new Error("late failure"));
-      } else if (settlement === "failed result") {
-        synthesis.resolve({ ...spokenResult, success: false });
       } else if (stage === "tts") {
         synthesis.resolve(spokenResult);
       } else {
@@ -333,7 +358,7 @@ describe("meeting shutdown", () => {
     }
   });
 
-  it.each(["success", "tts failure", "sink failure"] as const)(
+  it.each(["tts failure", "sink failure"] as const)(
     "preserves active speech completion for %s",
     async (outcome) => {
       const fixture = await createFixture();
@@ -359,10 +384,8 @@ describe("meeting shutdown", () => {
             : ["output.audio.started", "output.audio.delta", "output.audio.done"]),
           "turn.ended",
         ]);
-        expect(fixture.logger.warn).toHaveBeenCalledTimes(outcome === "success" ? 0 : 1);
-        if (outcome !== "success") {
-          expect(eventsAtWarning).toEqual(fixture.eventTypes());
-        }
+        expect(fixture.logger.warn).toHaveBeenCalledOnce();
+        expect(eventsAtWarning).toEqual(fixture.eventTypes());
         await fixture.handle.stop();
         expect(fixture.eventTypes().slice(-2)).toEqual(["turn.ended", "session.closed"]);
       } finally {

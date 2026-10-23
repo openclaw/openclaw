@@ -1,14 +1,32 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import type { TsdownPlugin } from "tsdown";
+import {
+  WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS,
+  WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
+} from "../../src/shared/worker-bundle-hash.ts";
+import {
+  createFsSafeWindowsHelperAssetPlugin,
+  resolveFsSafePackageManifest,
+  resolveFsSafeWindowsHelper,
+} from "./fs-safe-windows-helper-asset.mts";
+import {
+  prepareWorkerDarwinNativeAssets,
+  transformWorkerDarwinNativeLoader,
+  type WorkerNativeAsset,
+} from "./fs-safe-worker-native-assets.mts";
 
 const WORKER_DEPLOY_BUILD_PLUGIN_NAME = "openclaw:worker-deploy";
 export const WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID = `${path.resolve("src/worker/worker-deploy-runtime.ts")}?optional-native`;
 
-const PLAYWRIGHT_PACKAGE_INIT = `    packageRoot = import_path9.default.join(__dirname, "..");
-    packageJSON = require(import_path9.default.join(packageRoot, "package.json"));
-    binPath = import_path9.default.join(packageRoot, "bin");`;
+const PLAYWRIGHT_PACKAGE_INIT = `    packageRoot = import_path8.default.join(__dirname, "..");
+    packageJSON = require(import_path8.default.join(packageRoot, "package.json"));
+    binPath = import_path8.default.join(packageRoot, "bin");`;
 const PLAYWRIGHT_BROWSER_REGISTRY_INIT =
-  '    registry = new Registry(require(import_path20.default.join(packageRoot, "browsers.json")));';
+  '    registry = new Registry(require(import_path19.default.join(packageRoot, "browsers.json")));';
 // Keep Browser and Playwright initialization behind the admitted Browser factory.
 const WORKER_BROWSER_RUNTIME_COMPOSITION = `export default {
   async createAttachedBrowserToolRuntime(params) {
@@ -23,53 +41,108 @@ export function getPlaywrightUserAgent() { return getUserAgent(); }`;
 const UNDICI_REQUIRE_BOOTSTRAP = [
   'import { createRequire } from "node:module";',
   "const requireUndici = createRequire(import.meta.url);\n",
-  'return requireUndici("undici/index.js") as typeof import("undici");',
+  'let undiciModule: typeof import("undici") | undefined;\n',
+  'return (undiciModule ??= requireUndici("undici/index.js") as typeof import("undici"));',
 ] as const;
 const WORKER_UNDICI_IMPORT = 'import * as bundledUndici from "undici/index.js";';
-const WS_REQUIRE_BOOTSTRAP = `require(
-  path.join(path.dirname(require.resolve("ws/package.json")), "index.js"),
-)`;
-const WS_DYNAMIC_IMPORT =
-  'pathToFileURL(path.join(path.dirname(require.resolve("ws/package.json")), "wrapper.mjs")).href';
+const FACADE_ACTIVATION_LOADER =
+  "function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule {";
+const WS_DIRECT_RUNTIME_FRAGMENTS = [
+  'require.resolve("ws/package.json")',
+  '"lib/websocket.js"',
+  '"lib/websocket-server.js"',
+  '"lib/stream.js"',
+] as const;
+const TREE_SITTER_INIT = "TreeSitter.Parser.init()";
+const TREE_SITTER_BASH_WASM = 'require.resolve("tree-sitter-bash/tree-sitter-bash.wasm")';
+const FS_SAFE_WATCH_WORKER = 'new URL("./watch-io-worker.js", import.meta.url)';
+const PHOTON_WASM_INIT = `const path = require('path').join(__dirname, 'photon_rs_bg.wasm');
+const bytes = require('fs').readFileSync(path);`;
+const FS_SAFE_NATIVE_BATCH = `    if (options.native) {
+        request.file = process.execPath;
+        request.args = ["--", fileURLToPath(new URL("./owner-dacl-batch-worker.js", import.meta.url))];
+        request.env = {
+            ...Object.fromEntries(Object.entries(invocation.env).filter(([key]) => !["NODE_OPTIONS", "NODE_PATH", "FS_SAFE_OWNER_DACL_BATCH_MODE"].includes(key.toUpperCase()))),
+            FS_SAFE_OWNER_DACL_BATCH_MODE: options.mode,
+        };
+    }`;
 
 export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
   return [
     path.join(playwrightRoot, "package.json"),
     path.join(playwrightRoot, "browsers.json"),
+    resolveFsSafeWindowsHelper(rootDir),
+    fs.realpathSync(path.resolve(rootDir, "node_modules/web-tree-sitter/web-tree-sitter.wasm")),
+    fs.realpathSync(path.resolve(rootDir, "node_modules/tree-sitter-bash/tree-sitter-bash.wasm")),
+    fs.realpathSync(
+      path.resolve(rootDir, "node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm"),
+    ),
+    resolveFsSafePackageManifest(rootDir),
+    path.join(rootDir, "pnpm-lock.yaml"),
   ] as const;
 }
 
-/** The worker archive stages entry files only; emitted runtime auxiliaries have no owner. */
+/** Only named entries and build-owned chunks travel in the sealed worker archive. */
 export function isUnstagedWorkerDeployRuntimeArtifact(
   fileName: string,
   entrypoints: ReadonlySet<string>,
 ): boolean {
-  return !entrypoints.has(fileName) && /\.(?:mjs|node|wasm)$/u.test(fileName);
+  const relative = fileName.startsWith("worker/") ? fileName.slice("worker/".length) : fileName;
+  return (
+    !entrypoints.has(fileName) &&
+    relative !== WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH &&
+    !Object.values<string>(WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS).includes(relative) &&
+    !WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(relative) &&
+    /\.(?:mjs|node|wasm|exe)$/u.test(fileName)
+  );
 }
 
 /** Composes bundled-plugin runtime and removes dependency package reads from the worker build. */
 export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
+  const require = createRequire(import.meta.url);
+  const resolveWsWrapperUrl = () =>
+    pathToFileURL(
+      fs.realpathSync(path.join(path.dirname(require.resolve("ws/package.json")), "wrapper.mjs")),
+    ).href;
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
   const coreBundlePath = fs.realpathSync(path.join(playwrightRoot, "lib/coreBundle.js"));
+  const photonRuntimePath = fs.realpathSync(
+    path.resolve(rootDir, "node_modules/@silvia-odwyer/photon-node/photon_rs.js"),
+  );
   const browserRuntimeBridgePath = fs.realpathSync(
     path.resolve("src/worker/worker-deploy-browser-runtime.ts"),
   );
+  const facadeRuntimePath = fs.realpathSync(path.resolve("src/plugin-sdk/facade-runtime.ts"));
   const playwrightRuntimePath = fs.realpathSync(
     path.resolve("extensions/browser/src/browser/playwright-core.runtime.ts"),
   );
   const undiciDispatcherOptionsPath = fs.realpathSync(
     path.resolve("src/infra/net/undici-dispatcher-options.ts"),
   );
-  const websocketRuntimePaths = new Set(
-    ["packages/gateway-client/src/websocket.ts", "src/gateway/server-runtime-state.ts"].map(
-      (source) => fs.realpathSync(path.resolve(source)),
+  const highlightRuntimePath = fs.realpathSync(
+    path.resolve("src/agents/utils/syntax-highlight.ts"),
+  );
+  const treeSitterRuntimePath = fs.realpathSync(
+    path.resolve("src/infra/command-explainer/tree-sitter-runtime.ts"),
+  );
+  const websocketRuntimePath = fs.realpathSync(
+    path.resolve("packages/gateway-client/src/websocket.ts"),
+  );
+  const fsSafeWindowsSecurityPath = fs.realpathSync(
+    path.join(
+      path.dirname(require.resolve("@openclaw/fs-safe/package.json")),
+      "dist/windows-security-command.js",
     ),
   );
-  const transcriptionWebsocketPath = fs.realpathSync(
-    path.resolve("src/realtime-transcription/websocket-session.ts"),
+  const fsSafeWatchIoPath = fs.realpathSync(
+    path.join(path.dirname(require.resolve("@openclaw/fs-safe/package.json")), "dist/watch-io.js"),
   );
-  const [packageJsonPath, browsersJsonPath] = resolveWorkerDeployGeneratorInputs(rootDir);
+  const fsSafeWatchWorkerPath = fs.realpathSync(
+    path.join(path.dirname(fsSafeWatchIoPath), "watch-io-worker.js"),
+  );
+  const [packageJsonPath, browsersJsonPath, , treeSitterWasmPath, bashWasmPath, photonWasmPath] =
+    resolveWorkerDeployGeneratorInputs(rootDir);
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
     name: string;
     version: string;
@@ -79,8 +152,30 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
     packageJSON = ${JSON.stringify({ name: packageJson.name, version: packageJson.version })};
     binPath = packageRoot;`;
 
+  const sealedBootstrapPath = fs.realpathSync(
+    path.join(rootDir, "src/infra/sealed-runtime-bootstrap.ts"),
+  );
+  let nativeAssets: WorkerNativeAsset[] = [];
+  const fsSafeAssets = createFsSafeWindowsHelperAssetPlugin(
+    rootDir,
+    `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}`,
+  );
   return {
+    ...fsSafeAssets,
     name: WORKER_DEPLOY_BUILD_PLUGIN_NAME,
+    async buildStart() {
+      fsSafeAssets.buildStart.call(this);
+      const manifest = resolveFsSafePackageManifest(rootDir);
+      this.addWatchFile(path.join(rootDir, "pnpm-lock.yaml"));
+      nativeAssets = await prepareWorkerDarwinNativeAssets(rootDir, manifest);
+      for (const asset of nativeAssets) {
+        this.emitFile({
+          type: "asset",
+          fileName: `worker/${asset.fileName}`,
+          source: asset.source,
+        });
+      }
+    },
     generateBundle(
       this: { error(message: string): never },
       _options: unknown,
@@ -92,7 +187,10 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
       );
       // Check the complete emitted graph: a root facade is outside the later worker-directory scan.
       for (const file of files) {
-        if (isUnstagedWorkerDeployRuntimeArtifact(file.fileName, entrypoints)) {
+        if (
+          !file.fileName.startsWith("worker/") ||
+          isUnstagedWorkerDeployRuntimeArtifact(file.fileName, entrypoints)
+        ) {
           this.error(`Worker deploy artifact emits unstaged runtime asset ${file.fileName}.`);
         }
       }
@@ -103,31 +201,117 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         : null;
     },
     transform(this: { error(message: string): never }, code: string, id: string) {
+      const fsSafeTransform = fsSafeAssets.transform.call(this, code, id);
+      if (fsSafeTransform !== null) {
+        return transformWorkerDarwinNativeLoader(fsSafeTransform, nativeAssets);
+      }
       let resolvedId: string;
       try {
         resolvedId = fs.realpathSync(path.resolve(id));
       } catch {
         return null;
       }
+      if (resolvedId === fsSafeWatchWorkerPath) {
+        // This entry registers its message listener despite the dependency's sideEffects:false.
+        return { code, moduleSideEffects: "no-treeshake" };
+      }
+      if (resolvedId === sealedBootstrapPath) {
+        const mode = 'configureFsSafeNative({ mode: "off" });';
+        if (code.split(mode).length !== 2) {
+          this.error("sealed filesystem bootstrap changed; update the worker deploy transform");
+        }
+        // Only bundle-owned Darwin assets are enabled; recovery bundles keep native code off.
+        return code.replace(
+          mode,
+          'configureFsSafeNative({ mode: process.platform === "darwin" ? "require" : "off" });',
+        );
+      }
       if (resolvedId === browserRuntimeBridgePath) {
         return WORKER_BROWSER_RUNTIME_COMPOSITION;
+      }
+      if (resolvedId === fsSafeWatchIoPath) {
+        if (code.split(FS_SAFE_WATCH_WORKER).length !== 2) {
+          this.error("fs-safe watch worker bootstrap changed; update the worker deploy transform");
+        }
+        // The archive carries the dependency worker as a bundled entry, not its source sibling.
+        return code.replace(
+          FS_SAFE_WATCH_WORKER,
+          'new URL("./worker-chunk-fs-safe-watch-io.mjs", import.meta.url)',
+        );
+      }
+      if (resolvedId === fsSafeWindowsSecurityPath) {
+        if (code.split(FS_SAFE_NATIVE_BATCH).length !== 2) {
+          this.error("fs-safe native batch bootstrap changed; update the worker deploy transform");
+        }
+        return code.replace(
+          FS_SAFE_NATIVE_BATCH,
+          `    if (options.native) {
+        throw new Error("Native filesystem inspection is unavailable in the sealed worker runtime");
+    }`,
+        );
+      }
+      if (resolvedId === facadeRuntimePath) {
+        if (code.split(FACADE_ACTIVATION_LOADER).length !== 2) {
+          this.error("facade activation loader changed; update the worker deploy transform");
+        }
+        // Workers ship no activation sidecar. A literal require keeps activation
+        // lazy inside the sealed graph instead of resolving a host module.
+        return code.replace(
+          FACADE_ACTIVATION_LOADER,
+          `${FACADE_ACTIVATION_LOADER}
+  try {
+    return require("./facade-activation-check.runtime.js");
+  } catch (error) {
+    return throwFacadeActivationCheckRuntimeUnavailable(error);
+  }`,
+        );
       }
       if (resolvedId === playwrightRuntimePath) {
         return WORKER_PLAYWRIGHT_RUNTIME;
       }
+      if (resolvedId === photonRuntimePath) {
+        if (!code.includes(PHOTON_WASM_INIT)) {
+          this.error("Photon WASM bootstrap changed; update the worker deploy transform");
+        }
+        return code.replace(
+          PHOTON_WASM_INIT,
+          `const bytes = Buffer.from(${JSON.stringify(fs.readFileSync(photonWasmPath).toString("base64"))}, "base64");`,
+        );
+      }
+      if (resolvedId === highlightRuntimePath) {
+        const load = 'createRequire(import.meta.url)("highlight.js")';
+        if (!code.includes(load)) {
+          this.error("highlight.js loader changed; update the worker deploy transform");
+        }
+        return code.replace(
+          load,
+          'createRequire(import.meta.url)("./worker-chunk-highlight.mjs").default',
+        );
+      }
+      if (resolvedId === treeSitterRuntimePath) {
+        if (!code.includes(TREE_SITTER_INIT) || !code.includes(TREE_SITTER_BASH_WASM)) {
+          this.error("tree-sitter bootstrap changed; update the worker deploy transform");
+        }
+        // Sealed workers cannot read dependency assets. Keep byte decoding in the lazy parser.
+        return code
+          .replace(
+            TREE_SITTER_INIT,
+            `TreeSitter.Parser.init({ wasmBinary: Buffer.from(${JSON.stringify(fs.readFileSync(treeSitterWasmPath).toString("base64"))}, "base64") })`,
+          )
+          .replace(
+            TREE_SITTER_BASH_WASM,
+            `Buffer.from(${JSON.stringify(fs.readFileSync(bashWasmPath).toString("base64"))}, "base64")`,
+          );
+      }
       // Installed ws paths avoid Bun's adapter; portable Node workers must bundle
       // that same transport instead of resolving a missing package at runtime.
-      if (websocketRuntimePaths.has(resolvedId)) {
-        if (!code.includes(WS_REQUIRE_BOOTSTRAP)) {
+      if (resolvedId === websocketRuntimePath) {
+        if (WS_DIRECT_RUNTIME_FRAGMENTS.some((fragment) => !code.includes(fragment))) {
           this.error("ws bootstrap changed; update the worker deploy transform");
         }
-        return `import * as bundledWebSocket from "ws";\n${code.replace(WS_REQUIRE_BOOTSTRAP, "bundledWebSocket")}`;
-      }
-      if (resolvedId === transcriptionWebsocketPath) {
-        if (!code.includes(WS_DYNAMIC_IMPORT)) {
-          this.error("ws dynamic bootstrap changed; update the worker deploy transform");
-        }
-        return code.replace(WS_DYNAMIC_IMPORT, '"ws"');
+        const wsWrapperUrl = resolveWsWrapperUrl();
+        return `import * as bundledWebSocket from ${JSON.stringify(wsWrapperUrl)};
+export const { WebSocket, WebSocketServer, createWebSocketStream } = bundledWebSocket;`;
       }
       if (resolvedId === undiciDispatcherOptionsPath) {
         if (UNDICI_REQUIRE_BOOTSTRAP.some((fragment) => !code.includes(fragment))) {
@@ -136,7 +320,8 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         return code
           .replace(UNDICI_REQUIRE_BOOTSTRAP[0], WORKER_UNDICI_IMPORT)
           .replace(UNDICI_REQUIRE_BOOTSTRAP[1], "")
-          .replace(UNDICI_REQUIRE_BOOTSTRAP[2], "return bundledUndici;");
+          .replace(UNDICI_REQUIRE_BOOTSTRAP[2], "")
+          .replace(UNDICI_REQUIRE_BOOTSTRAP[3], "return bundledUndici;");
       }
       if (
         resolvedId !== coreBundlePath ||
@@ -157,5 +342,5 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
           `    registry = new Registry(${JSON.stringify(browsersJson)});`,
         );
     },
-  };
+  } satisfies TsdownPlugin;
 }

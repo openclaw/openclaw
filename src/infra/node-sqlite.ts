@@ -1,15 +1,27 @@
-// Loads node:sqlite with OpenClaw warning handling.
-import { createRequire } from "node:module";
+// Opens SQLite files through the native-runtime and database-admission owners.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
-import { formatErrorMessage } from "./errors.js";
-import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
-import { installProcessWarningFilter } from "./warning-filter.js";
+import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js";
+import { rememberSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import {
+  bindSqliteDatabaseAdmission,
+  prepareSqliteDatabaseAdmission,
+} from "./sqlite-database-admission.js";
+import { assertSafeSqliteRuntime, requireNodeSqlite } from "./sqlite-native-runtime.js";
+import { registerSqliteReaderConnection } from "./sqlite-reader-lifecycle.js";
+import { trackSqliteSchema } from "./sqlite-schema-facts.js";
 
-const require = createRequire(import.meta.url);
-let validatedSqliteModule: typeof import("node:sqlite") | undefined;
-let extensionLoadingSupported = false;
+export {
+  captureSqliteNativeRuntimeAdmission,
+  installSqliteNativeRuntimeAdmission,
+  requireNodeSqlite,
+  supportsNodeSqliteExtensionLoading,
+  supportsNodeSqliteJsonb,
+} from "./sqlite-native-runtime.js";
+
+// Unqualified runtimes cannot confirm native disposal until the owning worker exits.
+export let bunSqliteNativeCleanupPending = false;
 
 type NodeSqliteDatabaseOptions = ConstructorParameters<
   typeof import("node:sqlite").DatabaseSync
@@ -31,86 +43,30 @@ export function resolveNodeSqliteLocation(location: string): string {
   return resolveSqliteFilesystemPath(location);
 }
 
+/** Preserve native Windows path prefixes before adding SQLite URI parameters. */
+function resolveSqliteFileUriPath(pathname: string, platform: NodeJS.Platform): string {
+  if (platform === "win32") {
+    const namespacedPath = path.win32.toNamespacedPath(path.win32.resolve(pathname));
+    // SQLite separates the query before decoding the Windows namespace prefix.
+    return `file:${encodeURIComponent(namespacedPath)}`;
+  }
+  return pathToFileURL(path.resolve(pathname)).href;
+}
+
+/** Open an existing writable database without SQLite's create-if-missing flag. */
+export function resolveExistingSqliteFileUri(
+  pathname: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return `${resolveSqliteFileUriPath(pathname, platform)}?mode=rw`;
+}
+
 /** Build an immutable SQLite URI without losing the Windows long-path namespace. */
 export function resolveImmutableSqliteFileUri(
   pathname: string,
   platform: NodeJS.Platform = process.platform,
 ): string {
-  if (platform === "win32") {
-    const namespacedPath = path.win32.toNamespacedPath(path.win32.resolve(pathname));
-    // SQLite decodes path escapes after separating the query string, so the
-    // encoded \\?\ prefix reaches the Windows VFS without becoming URI syntax.
-    return `file:${encodeURIComponent(namespacedPath)}?mode=ro&immutable=1`;
-  }
-  return `${pathToFileURL(path.resolve(pathname)).href}?mode=ro&immutable=1`;
-}
-
-function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): void {
-  if (isSqliteWalResetSafeVersion(version)) {
-    return;
-  }
-  const variables = (process.config as { variables?: Record<string, unknown> } | undefined)
-    ?.variables;
-  const isShared =
-    variables?.node_shared_sqlite === true || variables?.node_shared_sqlite === "true";
-  const wording = isShared ? "uses shared system" : "embeds";
-  const remediation = isShared
-    ? "Upgrade the system SQLite library to one of those safe versions, or use a Node build embedding a safe version."
-    : "Upgrade to Node 24.16.0+ or 26.1.0+ before retrying.";
-  throw new Error(
-    `OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x for WAL safety; ` +
-      `Node ${nodeVersion} ${wording} SQLite ${version}, which is affected by the upstream WAL-reset ` +
-      `database corruption bug. ${remediation}`,
-  );
-}
-
-function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
-  if (validatedSqliteModule === sqlite) {
-    return;
-  }
-  // Shared-SQLite Node builds can load a different library than process.versions
-  // reports, so query the loaded library before callers open real state databases.
-  const database = new sqlite.DatabaseSync(":memory:");
-  try {
-    const row = database.prepare("SELECT sqlite_version() AS version").get() as
-      | { version?: unknown }
-      | undefined;
-    const version = typeof row?.version === "string" ? row.version : "unknown";
-    assertSqliteWalResetSafeVersion(version, process.versions.node);
-    const capabilities = database
-      .prepare("SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted")
-      .get();
-    extensionLoadingSupported = capabilities?.omitted === 0;
-    validatedSqliteModule = sqlite;
-  } finally {
-    database.close();
-  }
-}
-
-// node:sqlite is optional across Node versions, so callers get a clear runtime
-// error instead of a low-level module resolution failure.
-/** Load node:sqlite after installing the process warning filter. */
-export function requireNodeSqlite(): typeof import("node:sqlite") {
-  installProcessWarningFilter();
-  try {
-    ensureSqliteLibrarySelected();
-    // Bun follow-up: Revalidate close/dispose file release after oven-sh/bun#40005 ships.
-    // Bun 1.4.2 retains native statements after close; node:sqlite exposes no finalizer.
-    const sqlite = require("node:sqlite") as typeof import("node:sqlite");
-    assertSafeSqliteRuntime(sqlite);
-    return sqlite;
-  } catch (err) {
-    const message = formatErrorMessage(err);
-    throw new Error(`SQLite support is unavailable or unsafe in this Node runtime. ${message}`, {
-      cause: err,
-    });
-  }
-}
-
-/** Whether the loaded SQLite library supports native extensions. */
-export function supportsNodeSqliteExtensionLoading(): boolean {
-  requireNodeSqlite();
-  return extensionLoadingSupported;
+  return `${resolveSqliteFileUriPath(pathname, platform)}?mode=ro&immutable=1`;
 }
 
 /** Open node:sqlite through OpenClaw's runtime and filesystem-location boundary. */
@@ -122,17 +78,49 @@ export function openNodeSqliteDatabase(
   // Callers may pass file: URIs or already-namespaced paths from specialized
   // resolvers; location normalization must remain idempotent for those forms.
   const resolvedLocation = resolveNodeSqliteLocation(location);
-  return options === undefined
-    ? new sqlite.DatabaseSync(resolvedLocation)
-    : new sqlite.DatabaseSync(resolvedLocation, options);
-}
-
-/** Compare versions only across reads on the same connection. */
-export function readSqliteDataVersion(database: import("node:sqlite").DatabaseSync): number {
-  // SAFETY: SQLite names this PRAGMA's column data_version; its numeric value is checked below.
-  const row = database.prepare("PRAGMA data_version").get() as { data_version?: unknown };
-  if (typeof row.data_version !== "number") {
-    throw new Error("SQLite did not return a numeric PRAGMA data_version");
+  const identity =
+    options?.open === false
+      ? undefined
+      : prepareSqliteDatabaseAdmission(resolvedLocation, { create: options?.readOnly !== true });
+  const database = new sqlite.DatabaseSync(resolvedLocation, options ?? {});
+  if (database.isOpen) {
+    try {
+      bindSqliteDatabaseAdmission(database, identity);
+    } catch (error) {
+      database.close();
+      throw error;
+    }
   }
-  return row.data_version;
+  database.open = () => {
+    const reopenedIdentity = prepareSqliteDatabaseAdmission(resolvedLocation, {
+      create: options?.readOnly !== true,
+    });
+    sqlite.DatabaseSync.prototype.open.call(database);
+    try {
+      bindSqliteDatabaseAdmission(database, reopenedIdentity);
+    } catch (error) {
+      database.close();
+      throw error;
+    }
+  };
+  // Schema tracking must precede the statement-cache authorizer wrapper.
+  trackSqliteSchema(
+    database,
+    {
+      DatabaseSync: sqlite.DatabaseSync,
+      StatementSync: sqlite.StatementSync,
+      iteratorBehavior: assertSafeSqliteRuntime(sqlite),
+    },
+    options?.readOnly !== true,
+  );
+  if (database.isOpen && options?.timeout !== undefined) {
+    rememberSqliteBusyTimeout(database, Math.max(0, options.timeout));
+  }
+  if (!getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources) {
+    registerNodeSqliteDisposeCallback(database, () => {
+      bunSqliteNativeCleanupPending = true;
+    });
+  }
+  registerSqliteReaderConnection(database);
+  return database;
 }

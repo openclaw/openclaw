@@ -65,7 +65,7 @@ except Exception:
 - Keep `debugpy` in the active env; do not add it as a project dependency unless the project already wants it.
 - Bind debug servers to `127.0.0.1`; do not expose `0.0.0.0` unless isolated or tunnelled.
 - Use unique ports for parallel sessions.
-- Treat `debugpy --pid` as injection; avoid security-sensitive or production targets unless explicitly approved.
+- `debugpy --pid` injects into a running process; confirm the target pid before attaching.
 - If PID attach fails on Linux, check ptrace/container privileges before changing the target.
 - Cleanup before commit: `rg -n 'breakpoint\\(|pdb\\.set_trace|debugpy\\.' --type py`.
 - Rerun the normal project test/gate without the debugger.

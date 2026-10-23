@@ -1,16 +1,28 @@
+import { Chalk } from "chalk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { stripAnsi, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
+import * as terminalTheme from "../../../packages/terminal-core/src/theme.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../../agents/auth-profiles/credential-fixtures.test-support.js";
+import { createModelRuntimeChoiceOwnerFixture } from "../../agents/model-runtime-choice.test-support.js";
 import * as catalog from "../../agents/prepared-model-catalog.js";
-import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
+import * as localStateOwner from "../../cli/local-state-owner.js";
 import * as runtimeConfig from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as gateway from "../../gateway/call.js";
 import * as gatewayLock from "../../infra/gateway-lock.js";
+import * as proxyLifecycle from "../../infra/net/proxy/proxy-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { modelsListCommand } from "./list.list-command.js";
+import type { ModelRow } from "./list.types.js";
 import * as configLoader from "./load-config.js";
 
 const runtime = {
@@ -48,44 +60,32 @@ const cfg: OpenClawConfig = {
     },
   },
 };
-function createOwner(): PreparedModelRuntimeSnapshot {
+function createOwner(
+  overrides: Partial<PreparedModelRuntimeSnapshot> = {},
+): PreparedModelRuntimeSnapshot {
   const entry = {
-    provider: "catalog-provider",
-    id: "Reader",
-    name: "Reader model",
+    ...model,
     api: "anthropic-messages" as const,
     baseUrl: "https://catalog.example.test",
     input: ["text" as const],
-    contextWindow: 128000,
   };
   const owner: PreparedModelRuntimeSnapshot = {
+    ...createModelRuntimeChoiceOwnerFixture(cfg),
     catalogOwner: { agentId: "work", workspaceDir: "/tmp/published-cli-work" },
     agentId: "work",
     agentDir: "/tmp/published-cli-agent",
     workspaceDir: "/tmp/published-cli-work",
-    activeProjectKeys: [],
-    config: cfg,
-    observationConfig: cfg,
-    isCurrent: () => true,
     authModes: { "catalog-provider": "api_key" },
-    metadataSnapshot: createPluginMetadataSnapshotFixture(),
-    allowGatewaySubagentBinding: false,
     modelCatalog: markPreparedModelCatalogFull({ entries: [entry], routeVariants: [entry] }),
-    configuredRuntimeModels: [],
-    inlineProviderModels: [],
     createStores() {
       throw new Error("Inventory must not start model execution");
     },
+    ...overrides,
   };
-  setPreparedModelRuntimeAuthStore(owner, {
-    version: 1,
-    profiles: {
-      "catalog-provider:test": {
-        type: "api_key",
-        provider: "catalog-provider",
-        key: "synthetic-catalog-key",
-      },
-    },
+  bindPreparedModelRuntimeAuth(owner, {
+    store: createAuthProfileStoreFixture({
+      "catalog-provider:test": createApiKeyCredential("catalog-provider", "synthetic-catalog-key"),
+    }),
   });
   return owner;
 }
@@ -93,12 +93,24 @@ let owner: PreparedModelRuntimeSnapshot;
 beforeEach(() => {
   vi.clearAllMocks();
   owner = createOwner();
-  vi.spyOn(runtimeConfig, "getRuntimeConfig").mockReturnValue(cfg);
-  vi.spyOn(configLoader, "loadModelsConfigWithSource").mockResolvedValue({
-    sourceConfig: cfg,
-    resolvedConfig: cfg,
-    diagnostics: [],
-  });
+  vi.spyOn(localStateOwner, "runWithLocalStateOwner").mockImplementation(async ({ runLocal }) =>
+    runLocal({
+      config: cfg,
+      env: process.env,
+      signal: new AbortController().signal,
+      assertCurrent() {},
+    }),
+  );
+  vi.spyOn(runtimeConfig, "captureRuntimeConfigAsyncReader").mockReturnValue(
+    Object.assign(
+      async () => {
+        runtimeConfig.setRuntimeConfigSnapshot(cfg, cfg);
+        return cfg;
+      },
+      { assertCurrent() {} },
+    ),
+  );
+  vi.spyOn(configLoader, "loadModelsConfig").mockResolvedValue(cfg);
   vi.spyOn(gateway, "isImplicitLocalGatewayTarget").mockResolvedValue(true);
   vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
     pid: 123,
@@ -106,11 +118,16 @@ beforeEach(() => {
     createdAt: "fixture",
   });
   vi.spyOn(gateway, "callGateway").mockResolvedValue({ models: [model] });
+  vi.spyOn(proxyLifecycle, "startProxy").mockResolvedValue(null);
+  vi.spyOn(proxyLifecycle, "stopProxy").mockResolvedValue();
   vi.spyOn(catalog, "withPreparedModelCatalogOwner").mockImplementation(
     async (_params, read) => await read(owner),
   );
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  runtimeConfig.clearRuntimeConfigSnapshot();
+});
 
 async function list(options: Parameters<typeof modelsListCommand>[0]) {
   return withEnvAsync({ OPENCLAW_GATEWAY_PORT: undefined }, () =>
@@ -118,38 +135,88 @@ async function list(options: Parameters<typeof modelsListCommand>[0]) {
   );
 }
 
+function expectModelRows(models: Partial<ModelRow>[], details: Record<string, unknown> = {}) {
+  expect(runtime.writeJson).toHaveBeenCalledWith(
+    expect.objectContaining({
+      models: models.map((row) => expect.objectContaining(row)),
+      ...details,
+    }),
+    2,
+  );
+}
+
 describe("models list published transport", () => {
-  it("does not resolve local provider secrets for a selected Gateway", async () => {
-    vi.mocked(configLoader.loadModelsConfigWithSource).mockRejectedValue(
+  it.each(["ready", "unavailable"] as const)(
+    "reports configured ids missing from a %s listing without changing availability",
+    async (status) => {
+      vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
+      owner = createOwner({
+        modelCatalog: markPreparedModelCatalogFull({
+          ...createOwner().modelCatalog,
+          providerOutcomes: [
+            {
+              provider: "catalog-provider",
+              status,
+              unlistedConfiguredModelIds: ["Reader", "Absent"],
+            },
+          ],
+        }),
+      });
+      await list({ json: true });
+      expectModelRows(
+        [{ key: "catalog-provider/Reader", available: true, tags: ["default", "alias:work"] }],
+        {
+          providerOutcomes: [
+            {
+              provider: "catalog-provider",
+              status,
+              ...(status === "ready" ? { unlistedConfiguredModelIds: ["Reader", "Absent"] } : {}),
+            },
+          ],
+        },
+      );
+      const warnings = runtime.error.mock.calls
+        .map(([message]) => message)
+        .filter((message) => String(message).includes("last successful server catalog"));
+      expect(warnings).toEqual(
+        status === "ready"
+          ? ["Reader", "Absent"].map((id) =>
+              expect.stringContaining(`Configured model "catalog-provider/${id}" is not present`),
+            )
+          : [],
+      );
+    },
+  );
+
+  it("refreshes the selected Gateway's inventory without resolving local provider secrets", async () => {
+    vi.mocked(configLoader.loadModelsConfig).mockRejectedValue(
       new Error("Local provider secret unavailable"),
     );
-    await list({ json: true });
-    expect(configLoader.loadModelsConfigWithSource).not.toHaveBeenCalled();
-    expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }), 2);
-  });
-
-  it.each([false, true])("reads the selected Gateway with refresh=%s", async (refresh) => {
-    await list({ agent: "work", provider: "catalog-provider", local: true, json: true, refresh });
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      models: [model, { provider: "catalog-provider", id: "reader", name: "Unknown route" }],
+    });
+    await list({ agent: "work", provider: "catalog-provider", json: true, refresh: true });
+    expect(configLoader.loadModelsConfig).not.toHaveBeenCalled();
     expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
+    expect(proxyLifecycle.startProxy).not.toHaveBeenCalled();
+    expect(localStateOwner.runWithLocalStateOwner).not.toHaveBeenCalled();
     expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         requiredCapabilities: ["published-model-catalog"],
         localPortOverride: 19001,
+        timeoutMs: 210_000,
         params: {
           agentId: "work",
           view: "all",
           provider: "catalog-provider",
           includeDetails: true,
-          ...(refresh ? { refresh: true } : {}),
+          refresh: true,
         },
       }),
     );
-    expect(vi.mocked(gateway.callGateway).mock.calls[0]?.[0].timeoutMs).toBe(
-      refresh ? 210_000 : undefined,
-    );
     expect(runtime.writeJson).toHaveBeenCalledWith(
       {
-        count: 1,
+        count: 2,
         models: [
           {
             key: "catalog-provider/Reader",
@@ -161,52 +228,6 @@ describe("models list published transport", () => {
             available: true,
             tags: ["default", "alias:work"],
           },
-        ],
-      },
-      2,
-    );
-  });
-
-  it.each([
-    "Gateway rejected authorization",
-    "active gateway does not support required capability",
-    "Gateway connection unavailable",
-  ])("does not substitute local inventory for %s", async (message) => {
-    const failure = new Error(message);
-    vi.mocked(gateway.callGateway).mockRejectedValue(failure);
-    await expect(list({ all: true, json: true })).rejects.toBe(failure);
-    expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
-    expect(runtime.writeJson).not.toHaveBeenCalled();
-  });
-
-  it("uses a selected remote Gateway without reading a local lock owner", async () => {
-    vi.mocked(gateway.isImplicitLocalGatewayTarget).mockResolvedValue(false);
-    await list({ json: true });
-    expect(gatewayLock.readActiveGatewayLockIdentity).not.toHaveBeenCalled();
-    expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
-    expect(gateway.callGateway).toHaveBeenCalledExactlyOnceWith(
-      expect.not.objectContaining({ localPortOverride: expect.anything() }),
-    );
-  });
-
-  it("treats an explicit Gateway port as a selected target even without a local lock", async () => {
-    await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19002" }, () =>
-      modelsListCommand({ json: true }, runtime),
-    );
-    expect(gatewayLock.readActiveGatewayLockIdentity).not.toHaveBeenCalled();
-    expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
-    expect(gateway.callGateway).toHaveBeenCalledOnce();
-  });
-
-  it("preserves unknown auth and missing capability fields", async () => {
-    vi.mocked(gateway.callGateway).mockResolvedValue({
-      models: [{ provider: "catalog-provider", id: "reader", name: "Unknown route" }],
-    });
-    await list({ json: true });
-    expect(runtime.writeJson).toHaveBeenCalledWith(
-      {
-        count: 1,
-        models: [
           {
             key: "catalog-provider/reader",
             name: "Unknown route",
@@ -222,64 +243,170 @@ describe("models list published transport", () => {
     );
   });
 
-  it("keeps successful empty inventory empty", async () => {
-    vi.mocked(gateway.callGateway).mockResolvedValue({ models: [] });
-    await list({ json: true, refresh: true });
-    expect(runtime.writeJson).toHaveBeenCalledWith({ count: 0, models: [] }, 2);
+  it("does not substitute local inventory after Gateway authorization fails", async () => {
+    const failure = new Error("Gateway rejected authorization");
+    vi.mocked(gateway.callGateway).mockRejectedValue(failure);
+    await expect(list({ all: true, json: true })).rejects.toBe(failure);
     expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
-    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("shows a refresh warning while retaining the returned published rows", async () => {
+  it("treats an explicit Gateway port as a selected target even without a local lock", async () => {
+    await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19002" }, () =>
+      modelsListCommand({ json: true }, runtime),
+    );
+    expect(gatewayLock.readActiveGatewayLockIdentity).not.toHaveBeenCalled();
+    expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
+    expect(gateway.callGateway).toHaveBeenCalledOnce();
+  });
+
+  it("reports rejected discovery with empty provider inventory in text", async () => {
+    const outcome = { provider: "xai", profileId: "xai:work", status: "auth-rejected" };
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      models: [],
+      providerOutcomes: [outcome],
+    });
+
+    await list({ provider: "xai", agent: "work", json: false, plain: false });
+
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+      "Model discovery authentication was rejected for xai (profile xai:work). Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.",
+    );
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith("No models found.");
+  });
+
+  it("preserves model rows and public discovery facts without printing raw provider errors", async () => {
+    const providerOutcomes = [
+      { provider: "catalog-provider", status: "ready" },
+      { provider: "\u001b[31mxai\u001b[0m", status: "auth-rejected", profileId: "work\nnext" },
+      { provider: "offline", status: "unavailable" },
+    ];
     vi.mocked(gateway.callGateway).mockResolvedValue({
       models: [model],
-      providerOutcomes: [{ provider: "catalog-provider", status: "unavailable" }],
+      refreshFailed: true,
+      providerOutcomes: providerOutcomes.map((outcome) => ({
+        ...outcome,
+        message: "synthetic-private-provider-response",
+      })),
     });
-    await list({ refresh: true, json: true });
-    expect(runtime.error).toHaveBeenCalledWith(
+
+    await list({ json: true });
+
+    expectModelRows([{ key: "catalog-provider/Reader", available: true }], {
+      count: 1,
+      providerOutcomes,
+    });
+    expect(runtime.writeJson).toHaveBeenCalledOnce();
+    const warnings = [
       "Model discovery could not refresh all providers. Showing the available published model list.",
-    );
-    expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ count: 1 }), 2);
+      "Model discovery authentication was rejected for xai (profile work\\nnext). Open Models in the Control UI to check sign-in and catalog access, then retry with --refresh.",
+      "Model discovery is unavailable for offline. Retry with --refresh; if it still fails, check the provider in Models in the Control UI.",
+    ];
+    expect(runtime.error).toHaveBeenCalledTimes(warnings.length);
+    for (const warning of warnings) {
+      expect(runtime.error).toHaveBeenCalledWith(warning);
+    }
+    expect(JSON.stringify(runtime.error.mock.calls)).not.toContain("synthetic-private");
   });
 
   it.each([false, true])(
-    "uses the standalone owner only with no selected Gateway, refresh=%s",
-    async (refresh) => {
+    "releases standalone refresh routing (discovery fails=%s)",
+    async (fails) => {
       vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
-      await list({ agent: "work", all: true, json: true, refresh });
+      const handle = { proxyUrl: "http://proxy.example.test", stop: vi.fn(), kill: vi.fn() };
+      vi.mocked(proxyLifecycle.startProxy).mockResolvedValue(handle);
+      vi.mocked(catalog.withPreparedModelCatalogOwner).mockImplementation(async (_params, read) => {
+        expect(proxyLifecycle.startProxy).toHaveBeenCalledTimes(1);
+        expect(proxyLifecycle.stopProxy).not.toHaveBeenCalled();
+        if (fails) {
+          throw new Error("discovery failed");
+        }
+        return await read(createOwner());
+      });
+      const refresh = list({ agent: "work", all: true, json: true, refresh: true });
+      if (fails) {
+        await expect(refresh).rejects.toThrow("discovery failed");
+      } else {
+        await refresh;
+        expectModelRows([{ key: "catalog-provider/Reader", contextWindow: 128000 }], { count: 1 });
+      }
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Gateway is not running. Refreshing the local model catalog.",
+      );
       expect(gateway.callGateway).not.toHaveBeenCalled();
       expect(catalog.withPreparedModelCatalogOwner).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           agentId: "work",
-          readOnly: !refresh,
-          ...(refresh ? { refreshFullCatalog: true } : {}),
+          readOnly: false,
+          refreshFullCatalog: true,
+          persistOfflineRefresh: true,
         }),
         expect.any(Function),
       );
-      expect(runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          count: 1,
-          models: [
-            expect.objectContaining({ key: "catalog-provider/Reader", contextWindow: 128000 }),
-          ],
-        }),
-        2,
+      expect(localStateOwner.runWithLocalStateOwner).toHaveBeenCalledWith(
+        expect.objectContaining({ method: "models.list", onForeignOwner: "refuse" }),
       );
+      expect(proxyLifecycle.startProxy).toHaveBeenCalledExactlyOnceWith(cfg.proxy);
+      expect(proxyLifecycle.stopProxy).toHaveBeenCalledExactlyOnceWith(handle);
     },
   );
-  it("rejects conflicting output flags before reading any catalog", async () => {
-    await expect(list({ json: true, plain: true })).rejects.toThrow(
-      "Choose either --json or --plain",
-    );
-    expect(gateway.callGateway).not.toHaveBeenCalled();
-    expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
+
+  it("lists a Claude CLI model once when only the standalone owner's registry has Claude CLI", async () => {
+    const claudeCfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          work: {
+            workspace: "/tmp/published-cli-work",
+            models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
+          },
+        },
+        defaults: { model: { primary: "anthropic/claude-opus-5" } },
+      },
+    };
+    const entries = [
+      { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5" },
+      { provider: "claude-cli", id: "claude-opus-5", name: "Claude Opus 5" },
+      { provider: "claude-cli", id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+    ];
+    vi.mocked(configLoader.loadModelsConfig).mockResolvedValue(claudeCfg);
+    vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.cliBackends.push({
+      pluginId: "anthropic",
+      source: "test",
+      backend: { id: "claude-cli", modelProvider: "anthropic", config: { command: "claude" } },
+    });
+    owner = createOwner({
+      config: claudeCfg,
+      observationConfig: claudeCfg,
+      authModes: { "claude-cli": "oauth" },
+      metadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "anthropic",
+            providers: ["anthropic"],
+            cliBackends: ["claude-cli"],
+            syntheticAuthRefs: ["claude-cli"],
+            providerAuthAliases: { "claude-cli": "anthropic" },
+          },
+        ],
+      }),
+      modelCatalog: markPreparedModelCatalogFull({ entries, routeVariants: entries }),
+      pluginRegistry,
+    });
+    await list({ agent: "work", json: true });
+    expectModelRows([{ key: "anthropic/claude-opus-5" }, { key: "claude-cli/claude-haiku-4-5" }]);
+    expect(runtime.writeJson).toHaveBeenCalledOnce();
   });
 
-  it("rejects provider display labels before reading a catalog", async () => {
-    await expect(list({ provider: "Example Provider", json: true })).rejects.toThrow(
-      "Invalid provider filter",
-    );
+  it.each([
+    [{ json: true, plain: true }, "Choose either --json or --plain"],
+    [{ provider: "Example Provider", json: true }, "Invalid provider filter"],
+  ] as const)("rejects invalid options %j before reading a catalog", async (options, error) => {
+    await expect(list(options)).rejects.toThrow(error);
     expect(gateway.callGateway).not.toHaveBeenCalled();
+    expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
   });
 
   it("filters only proven local rows and renders their exact keys in plain output", async () => {
@@ -293,12 +420,117 @@ describe("models list published transport", () => {
     await list({ local: true, plain: true });
     expect(runtime.writeStdout).toHaveBeenCalledExactlyOnceWith("catalog-provider/Reader");
     expect(runtime.writeJson).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+});
+
+describe("model list terminal table", () => {
+  const makeModel = (provider: string, id: string): ModelChoice => ({
+    provider,
+    id,
+    name: `${provider}/${id}`,
+    input: ["text"],
+    contextWindow: 128_000,
+    local: false,
+    available: true,
+    tags: [],
+  });
+  it("prints context caps with sanitized tags in their original order", async () => {
+    const tags = [
+      "\u001b[31mdefault\u001b[0m",
+      "fallback#2",
+      "img-fallback#1",
+      "alias:a\tb",
+      "unknown",
+      "default",
+    ];
+    const originalTags = [...tags];
+    const rows: ModelChoice[] = [
+      {
+        ...makeModel("openai", "gpt-5.5"),
+        input: ["text", "image"],
+        contextWindow: 400_000,
+        contextTokens: 272_000,
+        tags,
+      },
+    ];
+
+    vi.mocked(gateway.callGateway).mockResolvedValue({ models: rows });
+    await list({});
+
+    expect(runtime.log.mock.calls).toEqual([
+      ["Model                                      Input      Ctx         Local Auth  Tags"],
+      [
+        "openai/gpt-5.5                             text+image 272k/400k   no    yes   default,fallback#2,img-fallback#1,alias:a\\tb,unknown,default",
+      ],
+    ]);
+    expect(rows[0]?.tags).toEqual(originalTags);
   });
 
-  it("keeps an empty plain list machine-readable", async () => {
-    vi.mocked(gateway.callGateway).mockResolvedValue({ models: [] });
-    await list({ plain: true });
-    expect(runtime.writeStdout).not.toHaveBeenCalled();
-    expect(runtime.log).not.toHaveBeenCalled();
+  it("keeps fixed-width rows aligned when model keys contain wide graphemes", async () => {
+    const wideKey = `${"a".repeat(39)}表`;
+    const rows = [makeModel("a", wideKey)];
+
+    vi.mocked(gateway.callGateway).mockResolvedValue({ models: rows });
+    await list({});
+
+    const [header, row] = runtime.log.mock.calls.map(([line]) => line);
+    expect(typeof header).toBe("string");
+    expect(typeof row).toBe("string");
+    const headerInputIndex = (header as string).indexOf("Input");
+    const rowInputIndex = (row as string).indexOf("text");
+    expect(headerInputIndex).toBeGreaterThan(0);
+    expect(rowInputIndex).toBeGreaterThan(0);
+    expect(visibleWidth((row as string).slice(0, rowInputIndex))).toBe(
+      visibleWidth((header as string).slice(0, headerInputIndex)),
+    );
+  });
+
+  it("sanitizes rich tags before selecting their color roles", async () => {
+    const color = new Chalk({ level: 1 });
+    vi.spyOn(terminalTheme, "isRich").mockReturnValue(true);
+    vi.spyOn(terminalTheme.theme, "success").mockImplementation(color.green);
+    vi.spyOn(terminalTheme.theme, "accentBright").mockImplementation(color.cyan);
+    vi.spyOn(terminalTheme.theme, "accent").mockImplementation(color.blue);
+    vi.spyOn(terminalTheme.theme, "error").mockImplementation(color.red);
+    vi.spyOn(terminalTheme.theme, "warn").mockImplementation(color.yellow);
+    vi.spyOn(terminalTheme.theme, "accentDim").mockImplementation(color.magenta);
+    vi.spyOn(terminalTheme.theme, "muted").mockImplementation(color.gray);
+    const tags = [
+      "\u001b[31mdefault\u001b[0m",
+      "image",
+      "configured",
+      "missing",
+      "fallback#2",
+      "img-fallback#1",
+      "alias:a\tb",
+      "unknown",
+    ];
+    const originalTags = [...tags];
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      models: [{ ...makeModel("openai", "gpt-5.5"), tags }],
+    });
+
+    await list({});
+
+    const row = runtime.log.mock.calls.at(-1)?.[0] as string;
+    expect(
+      row.endsWith(
+        [
+          "\u001b[32mdefault\u001b[39m",
+          "\u001b[36mimage\u001b[39m",
+          "\u001b[34mconfigured\u001b[39m",
+          "\u001b[31mmissing\u001b[39m",
+          "\u001b[33mfallback#2\u001b[39m",
+          "\u001b[33mimg-fallback#1\u001b[39m",
+          "\u001b[35malias:a\\tb\u001b[39m",
+          "\u001b[90munknown\u001b[39m",
+        ].join(","),
+      ),
+    ).toBe(true);
+    expect(stripAnsi(row)).toBe(
+      "openai/gpt-5.5                             text       128k        no    yes   default,image,configured,missing,fallback#2,img-fallback#1,alias:a\\tb,unknown",
+    );
+    expect(tags).toEqual(originalTags);
   });
 });

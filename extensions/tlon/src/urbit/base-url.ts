@@ -1,15 +1,10 @@
-// Tlon plugin module implements base url behavior.
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 
 type UrbitBaseUrlValidation =
   | { ok: true; baseUrl: string; hostname: string }
   | { ok: false; error: string };
 
-function hasScheme(value: string): boolean {
-  return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value);
-}
-
-export function normalizeUrbitHostname(hostname: string | undefined): string {
+function normalizeUrbitHostname(hostname: string | undefined): string {
   return (hostname ?? "").trim().toLowerCase().replace(/\.$/, "");
 }
 
@@ -19,12 +14,10 @@ export function validateUrbitBaseUrl(raw: string): UrbitBaseUrlValidation {
     return { ok: false, error: "Required" };
   }
 
-  const candidate = hasScheme(trimmed) ? trimmed : `https://${trimmed}`;
+  const candidate = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`;
 
-  let parsed: URL;
-  try {
-    parsed = new URL(candidate);
-  } catch {
+  const parsed = URL.parse(candidate);
+  if (!parsed) {
     return { ok: false, error: "Invalid URL" };
   }
 
@@ -43,14 +36,8 @@ export function validateUrbitBaseUrl(raw: string): UrbitBaseUrlValidation {
 
   // Normalize to origin so callers can't smuggle paths/query fragments into the base URL,
   // and strip a trailing dot from the hostname (DNS root label).
-  const isIpv6 = hostname.includes(":");
-  const host = parsed.port
-    ? `${isIpv6 ? `[${hostname}]` : hostname}:${parsed.port}`
-    : isIpv6
-      ? `[${hostname}]`
-      : hostname;
-
-  return { ok: true, baseUrl: `${parsed.protocol}//${host}`, hostname };
+  parsed.hostname = hostname;
+  return { ok: true, baseUrl: parsed.origin, hostname };
 }
 
 export function isBlockedUrbitHostname(hostname: string): boolean {

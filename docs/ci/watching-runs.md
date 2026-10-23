@@ -3,7 +3,7 @@ summary: "Wait on a pull request head, recover a stuck run, and clear the eviden
 title: "Watch a CI run"
 read_when:
   - You are debugging a failing GitHub Actions check
-  - You need to rerun or recover a pull request run
+  - You need to diagnose failures or recover a pull request run
 ---
 
 ## Watching pull request CI
@@ -23,10 +23,12 @@ binary. `OPENCLAW_GH_BIN` is an explicit operator-owned override for supporting
 callers; choose it only when its authentication and protections are appropriate.
 PATH-based read helpers, including this watcher, ignore that override.
 Authoritative REST reads request revalidation with `Cache-Control: max-age=0`
-and supply concrete repository paths. Writer identity comes from the authenticated
-GraphQL viewer, not a relay's REST caller profile.
+and supply concrete repository paths. The watcher resolves its repository once,
+then revalidates mutable PR state on each read. Writer identity uses authenticated
+REST `GET /user --include`; included headers preserve the native writer route
+instead of accepting a relay's caller profile.
 
-Before entering a PR worktree, `scripts/pr` checks that viewer with one request.
+Before entering a PR worktree, `scripts/pr` checks that writer with one request.
 Rate-limit failures stop the operation before fetch or merge side effects and
 report only safe metadata from that same response: HTTP status, quota resource,
 remaining quota, limit, UTC reset time, and retry delay when available.
@@ -35,9 +37,9 @@ when that budget is exhausted. A future primary reset is not the unblock time fo
 a secondary throttle with quota remaining. Without a usable retry delay or an
 exhausted budget's reset, wait at least 60 seconds. A zero remaining balance alone
 does not attribute an HTTP 200 failure to rate limiting: malformed or missing
-viewer data and unrelated errors still fail, with exhaustion reported separately.
+identity data and unrelated errors still fail, with exhaustion reported separately.
 An unknown reset is reported as unknown; a separate pooled REST quota is not
-evidence about the failed viewer request. Refreshing credentials does not restore
+evidence about the failed identity request. Refreshing credentials does not restore
 quota. Only missing or rejected authentication suggests manually configuring or
 refreshing the intended active credential; forbidden, server, transport, and
 malformed responses remain blocking failures without login advice. The preflight
@@ -63,6 +65,64 @@ missing records are read under the watcher deadline, followed by a fresh PR and
 rollup observation before deciding. Each poll reads at most 32 missing run records;
 excess references stay pending and resume from the cache on the next poll. Known
 missing or foreign associations remain blocking, as do independent failed checks.
+
+`STATUS` lines report progress. In rollup mode, `rollup` is the effective check
+verdict and `github_rollup` is GitHub's raw aggregate. Superseded checks can leave
+`github_rollup=FAILURE` while `rollup=pending` or `rollup=green`. A green rollup
+still waits for the attached CI run to succeed. Terminal `GREEN` exits 0,
+`FAILING` exits 15, and `TIMEOUT` exits 16. Rollup timeouts include the last raw
+aggregate and pending count; `ci-run` timeouts identify that completion mode
+because it does not inspect the rollup.
+
+Ordinary active CI polls fetch the aggregate and global counts without loading
+check nodes or older-run metadata. `github_pending` reports those raw pending
+counts, including superseded checks and `Auto response`; unavailable counts show
+`unknown` and never establish completion. Failure analysis and pending checks
+after CI succeeds still collect complete details, reporting the effective
+`pending` and `superseded` counts. Before returning `GREEN`, the watcher rechecks
+the PR lifecycle and head; a summary success also requires the aggregate to remain
+successful after observing the attached run.
+
+After a poll needs detailed failure analysis, the next poll can request details
+directly instead of first repeating the summary query. This remembers only the
+query shape: every poll still collects fresh evidence, and reads made during
+history or queued-job reconciliation still require a new observation. Incomplete
+detailed responses remain blocking and are retried; missing contexts cannot be
+treated as an empty successful set.
+
+If the primary GraphQL budget is exhausted, the watcher switches to REST for the
+rest of that invocation. It collects check runs, latest status contexts, and
+workflow identities with complete, bounded pagination, then revalidates the PR.
+REST uses more requests and response data; the normal path retains the compact
+GraphQL query. In REST mode the raw aggregate and counts are derived from the
+collected checks. Missing or ambiguous workflow identity never permits dropping
+a check, and GitHub's check-suite limit cannot silently turn a partial list green.
+When those collected rows show a failure, REST adds workflow identity to that
+same observation instead of downloading the check and status pages again.
+Secondary throttling, authentication failures, malformed responses, and transport
+errors do not trigger this fallback or change the CLI's authentication route.
+
+Native immediate squash landing can also use REST after primary GraphQL
+exhaustion. This requires explicit evidence that classic branch protection is
+absent, effective rules do not require a merge queue, required checks match their
+configured publishers, the authenticated writer has repository admin access to
+read that policy, and the exact PR head is eligible to merge. Queue, auto,
+admin-bypass, or unverifiable policy states remain blocking. The selected transport is
+recorded before dispatch; an uncertain merge request is reconciled through the
+existing retained outcome instead of retried through another API.
+Because REST has no GitHub squash-message preview, its default message uses the
+current PR description and verified source credit. An explicit `--body-file`
+continues to supply the reviewed message, with required human credit preserved.
+Publishing an unsigned prepared commit through GitHub's `createCommitOnBranch`
+still requires GraphQL; the existing Git transport for verified signed commits
+is unchanged. A failed or uncertain publication never triggers another mutation
+through the fallback.
+
+An HTTP 407 proxy-authentication refusal exits immediately with
+`PROXY-AUTH-FAILED` and exit code 2. Retrying the same command cannot renew its
+proxy access. Start a new watcher from an active authenticated run, or repair the
+configured proxy authentication before retrying. Other transient transport failures
+retain the bounded retry behavior.
 
 GitHub can retain queued rerun placeholders while omitting the successful
 same-name job from the rollup. The watcher reconciles a placeholder only after
@@ -116,10 +176,32 @@ admission.
 only reconciles that outcome, even if the original body file was removed; it
 never dispatches another request or changes an accepted message.
 
+### Fix failed tests locally
+
+PR CI runs the broad suites to completion and publishes a failure table comparing
+failed jobs with scheduled `main` CI. After a run fails:
+
+1. Run `pnpm test:ci-failed <pr>` to read the failed jobs, their
+   pre-existing/new/unknown classification, failed test files, and one local
+   rerun command.
+2. Fix new failures and investigate unknown ones. Use
+   `pnpm test:ci-failed <pr> --run` until the selected tests pass locally.
+3. Push the repair once. Let the new head's PR CI provide broad proof.
+
+Do not run the full local suite or use `gh run rerun` to chase green. Pre-existing
+failures follow the
+[failure-table landing rule](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-pr-maintainer/references/landing.md#red-main-and-inherited-failures):
+matching signatures provide attribution; a job-name-only match still requires
+comparing the failed tests with the main run. The table does not waive a gate.
+See [failed CI test selection](/reference/scripts/pr-tooling#rerun-failed-ci-tests)
+for run targets, non-Vitest jobs, and options.
+
 ### Recover an existing PR run first
 
 For an existing terminal PR run with a diagnosed infrastructure failure or
-cancellation, prefer one failed-job retry over a new full-CI dispatch:
+cancellation that requires infrastructure recovery, prefer one failed-job retry
+over a new full-CI dispatch. This is infrastructure recovery after identifying
+the cause, not a retry of failed tests to obtain green:
 
 ```bash
 gh run rerun <original-run-id> --failed --repo openclaw/openclaw

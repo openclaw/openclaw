@@ -1,13 +1,10 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 export const NATIVE_HISTORY_STATE_EVENT = "openclaw:native-history-state";
 
 export type NativeHistoryState = {
   canGoBack: boolean;
   canGoForward: boolean;
-};
-
-type NativeEmbedHost = {
-  platform: "ios" | "macos" | "android";
-  formFactor: "phone" | "pad" | "desktop";
 };
 
 type NativeWebChromeWindow = Window & {
@@ -16,21 +13,31 @@ type NativeWebChromeWindow = Window & {
   __OPENCLAW_NATIVE_HISTORY__?: NativeHistoryState;
 };
 
+// Hosts listen from document start so they can enable the shared chrome before
+// application state reads their flag or the first shell renders.
+if (typeof window !== "undefined") {
+  window.dispatchEvent(new Event("openclaw:native-window-chrome-available"));
+}
+
 export function isNativeWebChromeHost(): boolean {
   return (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_WEB_CHROME__"] === true;
 }
 
-export function nativeEmbedHost(): NativeEmbedHost | null {
+export function nativeEmbedHost(): {
+  platform: "ios" | "macos" | "android";
+  formFactor: "phone" | "pad" | "desktop";
+  surface?: "conversation";
+} | null {
   // SAFETY: the host adds this optional document-start value; its shape is validated below.
   const host = (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_EMBED__"];
-  if (!host || typeof host !== "object" || Array.isArray(host)) {
+  if (!isRecord(host)) {
     return null;
   }
-  return "platform" in host &&
-    (host.platform === "ios" || host.platform === "macos" || host.platform === "android") &&
-    "formFactor" in host &&
-    (host.formFactor === "phone" || host.formFactor === "pad" || host.formFactor === "desktop")
-    ? { platform: host.platform, formFactor: host.formFactor }
+  const { platform, formFactor, surface } = host;
+  return (platform === "ios" || platform === "macos" || platform === "android") &&
+    (formFactor === "phone" || formFactor === "pad" || formFactor === "desktop") &&
+    (surface === undefined || surface === "conversation")
+    ? { platform, formFactor, ...(surface ? { surface } : {}) }
     : null;
 }
 

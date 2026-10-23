@@ -6,6 +6,7 @@ export function registerWorkerCli(program: Command): void {
     .command("worker")
     .description("Run the restricted cloud worker runtime")
     .addOption(new Option("--internal-worker-ipc").hideHelp())
+    .addOption(new Option("--internal-worker-native-inference").hideHelp())
     .action(async (options: { internalWorkerIpc?: boolean }) => {
       const { runWorkerProcess } = await import("../worker/worker-process.js");
       await runWorkerProcess({ internalWorkerIpc: options.internalWorkerIpc === true });

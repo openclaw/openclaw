@@ -1,17 +1,16 @@
-// Browser-safe redaction for tool details rendered by the Control UI.
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   parseRedactPatternSource,
-  readRedactMatch,
   redactPemBlock,
+  replaceRedactPattern,
   type RedactMatch,
 } from "../../../src/logging/redact-pattern-runtime.js";
 import { DEFAULT_REDACT_PATTERNS } from "../../../src/logging/redact-patterns.js";
 
 const URL_QUERY_PAIR_RE = /([?&])([^=&#\s]+)=([^&#\s"'<>]+)/gu;
-const SECRET_DETAIL_PATTERNS = DEFAULT_REDACT_PATTERNS.map(
-  (source) => new RegExp(...parseRedactPatternSource(source)),
+const SECRET_DETAIL_PATTERNS = DEFAULT_REDACT_PATTERNS.map((source) =>
+  typeof source === "string" ? new RegExp(...parseRedactPatternSource(source)) : source,
 );
 const SENSITIVE_TEXT_PATTERNS: Array<[RegExp, string]> = [
   [/\b(Authorization|Cookie|Set-Cookie)\s*:\s*[^\n\r]+/gi, "$1: [redacted]"],
@@ -31,10 +30,6 @@ const SENSITIVE_TEXT_PATTERNS: Array<[RegExp, string]> = [
   [
     /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
     "[redacted private key]",
-  ],
-  [
-    /(^|[\s"'`=])(?:\/Users\/|\/home\/|\/var\/folders\/|[A-Za-z]:\\)[^\s"'`,;]+/g,
-    "$1[redacted path]",
   ],
 ];
 
@@ -69,23 +64,17 @@ function redactMatch({ match, groups, input, offset }: RedactMatch): string {
   return `${match.slice(0, tokenOffset)}${masked}${match.slice(tokenOffset + token.length)}`;
 }
 
-function redactUrlQueryPairs(detail: string): string {
-  return detail.replace(URL_QUERY_PAIR_RE, (match, boundary: string, key: string, value: string) =>
-    isSensitiveUrlQueryParamName(key) ? `${boundary}${key}=${redactToken(value)}` : match,
-  );
-}
-
 export function redactToolDetail(detail: string): string {
-  let redacted = redactUrlQueryPairs(detail);
+  let redacted = detail.replace(
+    URL_QUERY_PAIR_RE,
+    (match, boundary: string, key: string, value: string) =>
+      isSensitiveUrlQueryParamName(key) ? `${boundary}${key}=${redactToken(value)}` : match,
+  );
   for (const pattern of SECRET_DETAIL_PATTERNS) {
-    redacted = redacted.replace(pattern, (...args: unknown[]) =>
-      redactMatch(readRedactMatch(args)),
-    );
+    redacted = replaceRedactPattern(redacted, pattern, redactMatch);
   }
   return SENSITIVE_TEXT_PATTERNS.reduce(
     (text, [pattern, replacement]) => text.replace(pattern, replacement),
     redacted,
   );
 }
-
-export const redactToolPayloadText = redactToolDetail;

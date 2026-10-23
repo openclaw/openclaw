@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "./path-array-index.js";
 
@@ -129,8 +130,8 @@ function findBracketPathClose(path: string, open: number): number {
   return -1;
 }
 
-/** Retains quoted numeric-key provenance alongside the public concrete path tokens. */
-export function parseConcreteConfigPathWithProvenance(raw: string): ParsedConcreteConfigPath {
+/** Reads diagnostic path identity without applying object-mutation key restrictions. */
+export function tokenizeConcreteConfigPath(raw: string): ParsedConcreteConfigPath {
   const trimmed = raw.trim();
   if (!trimmed) {
     throw new Error("Path is empty.");
@@ -178,9 +179,6 @@ export function parseConcreteConfigPathWithProvenance(raw: string): ParsedConcre
         throw new Error(`Invalid path (missing "]"): ${raw}`);
       }
       const inside = trimmed.slice(index + 1, close).trim();
-      if (!inside) {
-        throw new Error(`Invalid path (empty "[]"): ${raw}`);
-      }
       const segment = parseBracketPathSegment(inside, raw);
       if (
         typeof segment === "string" &&
@@ -207,12 +205,18 @@ export function parseConcreteConfigPathWithProvenance(raw: string): ParsedConcre
   if (current) {
     parts.push(current.trim());
   }
-  for (const segment of parts) {
+  return { tokens: parts, quotedNumericSegments };
+}
+
+/** Retains quoted numeric-key provenance while rejecting unsafe object-key segments. */
+export function parseConcreteConfigPathWithProvenance(raw: string): ParsedConcreteConfigPath {
+  const parsed = tokenizeConcreteConfigPath(raw);
+  for (const segment of parsed.tokens) {
     if (typeof segment === "string" && isBlockedObjectKey(segment)) {
       throw new Error(`Invalid path segment: ${segment}`);
     }
   }
-  return { tokens: parts, quotedNumericSegments };
+  return parsed;
 }
 
 /** Parses one concrete path while keeping explicit array brackets distinct from quoted keys. */
@@ -253,6 +257,29 @@ export function formatConcreteConfigPath(
         : undefined;
     return appendConfigPathSegment(path, concreteSegment);
   }, "");
+}
+
+/** Reads object paths, optionally restricting array keys to canonical config indexes. */
+export function readObjectPath(
+  root: unknown,
+  path: readonly string[],
+  arrayMode: "raw" | "canonical" | "bounded" = "raw",
+): unknown {
+  let current: unknown = root;
+  for (const key of path) {
+    const parent = asOptionalObjectRecord(current);
+    if (!parent) {
+      return undefined;
+    }
+    if (arrayMode !== "raw" && Array.isArray(parent)) {
+      const index = parseConfigPathArrayIndex(key);
+      if (index === undefined || (arrayMode === "bounded" && index >= parent.length)) {
+        return undefined;
+      }
+    }
+    current = parent[key];
+  }
+  return current;
 }
 
 /** Joins path segments into their dotted-path representation. */

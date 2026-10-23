@@ -1,36 +1,85 @@
-/**
- * Session memory hook handler
- *
- * Saves session context to memory when /new or /reset command is triggered
- * Creates a new dated memory file with a timestamp slug by default
- */
-
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  normalizeLowercaseStringOrEmpty,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
 import {
   resolveAgentIdByWorkspacePath,
+  resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { resolveUserTimezone } from "../../../agents/date-time.js";
+import { runEmbeddedAgent } from "../../../agents/embedded-agent.js";
 import { createMemoryWriteProvenanceObserver } from "../../../agents/memory-write-provenance.js";
+import { SessionManager } from "../../../agents/sessions/index.js";
+import { resolveAgentTimeoutMs } from "../../../agents/timeout.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
+import { withFileLock } from "../../../infra/file-lock.js";
 import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
-import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  parseAgentSessionKey,
+  toAgentStoreSessionKey,
+} from "../../../routing/session-key.js";
+import {
+  extractLeadingHttpStatus,
+  parseApiErrorPayload,
+} from "../../../shared/assistant-error-format.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
-import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import { isSessionAutoResetReason } from "../../session-auto-reset.js";
 import { captureSessionMemoryTranscript, type SessionMemoryTranscript } from "./capture.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
+const slugGeneratorLog = createSubsystemLogger("llm-slug-generator");
+const PROVIDER_ERROR_PREFIX_RE =
+  /^(?:provider\s+)?(?:api|llm|model|openai|anthropic|codex|gateway)\s+(?:request\s+)?(?:error|failed|failure)\b/i;
+const PROVIDER_ERROR_DETAIL_RE =
+  /\b(?:insufficient[_ -]?quota|quota (?:exceeded|exhausted)|exceeded your current quota|payment required|insufficient credits|credit balance|insufficient[_ -]?(?:balance|funds)|rate[_ -]?limit(?:ed)?|too many requests|invalid[_ -]?api[_ -]?key|incorrect api key|authentication failed|oauth token refresh failed|missing (?:token|projectid|credentials)|google cloud credentials|re-?authenticate|unauthorized|forbidden|permission_error|billing hard limit|spend(?:ing)? limit)\b/i;
+
+function isErrorSlugPayload(payload: { text?: string; isError?: boolean } | undefined): boolean {
+  if (!payload) {
+    return false;
+  }
+  if (payload.isError === true) {
+    return true;
+  }
+  const text = payload.text?.trim();
+  if (!text) {
+    return false;
+  }
+  if (parseApiErrorPayload(text)) {
+    return true;
+  }
+  const leadingStatus = extractLeadingHttpStatus(text);
+  if (leadingStatus) {
+    if ([401, 402, 403, 429].includes(leadingStatus.code)) {
+      return true;
+    }
+    if (
+      leadingStatus.code === 400 &&
+      (parseApiErrorPayload(leadingStatus.rest) ||
+        PROVIDER_ERROR_PREFIX_RE.test(leadingStatus.rest) ||
+        PROVIDER_ERROR_DETAIL_RE.test(leadingStatus.rest))
+    ) {
+      return true;
+    }
+  }
+  return PROVIDER_ERROR_PREFIX_RE.test(text) || PROVIDER_ERROR_DETAIL_RE.test(text);
+}
 
 function pickDateTimePart(
   parts: Intl.DateTimeFormatPart[],
@@ -132,14 +181,9 @@ async function saveSessionMemoryNow(
   transcript: SessionMemoryTranscript,
 ): Promise<void> {
   try {
-    log.debug("Session memory hook triggered", { action: event.action, type: event.type });
-
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
-    const contextWorkspaceDir =
-      typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
-        ? context.workspaceDir
-        : undefined;
+    const contextWorkspaceDir = readNonBlankString(context.workspaceDir);
     const workspaceDir =
       contextWorkspaceDir ||
       (cfg
@@ -166,15 +210,7 @@ async function saveSessionMemoryNow(
         ? context.previousSessionEntry || context.sessionEntry || {}
         : context.sessionEntry || {}
     ) as Record<string, unknown>;
-    const currentSessionId =
-      typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
-        ? sessionEntry.sessionId.trim()
-        : undefined;
-
-    log.debug("Session context resolved", {
-      sessionId: currentSessionId,
-      hasCfg: Boolean(cfg),
-    });
+    const currentSessionId = normalizeOptionalString(sessionEntry.sessionId);
 
     const hookConfig = resolveHookConfig(cfg, "session-memory");
     let slug: string | null = null;
@@ -190,43 +226,84 @@ async function saveSessionMemoryNow(
       const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
       if (transcript.status === "available" && transcript.content && cfg && allowLlmSlug) {
-        log.debug("Calling generateSlugViaLLM...");
-        // Use LLM to generate a descriptive slug
-        const slugModel = typeof hookConfig?.model === "string" ? hookConfig.model : undefined;
-        slug = await generateSlugViaLLM({
-          sessionContent: transcript.content,
-          cfg,
-          agentId,
-          model: slugModel,
-        });
-        log.debug("Generated slug", { slug });
+        try {
+          const helperWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+          const agentDir = resolveAgentDir(cfg, agentId);
+          const sessionId = `slug-generator-${randomUUID()}`;
+          const sessionKey = `agent:${agentId}:helper:incognito-${sessionId}`;
+          const prompt = `Based on this conversation, generate a short 1-2 word filename slug (lowercase, hyphen-separated, no file extension).
+
+Conversation summary:
+${truncateUtf16Safe(transcript.content, 2000)}
+
+Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
+          const timeoutMs =
+            cfg.agents?.defaults?.timeoutSeconds === undefined
+              ? 15_000
+              : resolveAgentTimeoutMs({ cfg });
+          const runId = `slug-gen-${Date.now()}`;
+          const preparedRunAdmission = prepareSystemAgentRunAdmission(
+            cfg,
+            runId,
+            agentId,
+            "hooks.slug-generator",
+          );
+          try {
+            const result = await runEmbeddedAgent({
+              preparedRunAdmission,
+              sessionId,
+              sessionKey,
+              sessionManager: SessionManager.inMemory(helperWorkspaceDir),
+              agentId,
+              workspaceDir: helperWorkspaceDir,
+              agentDir,
+              config: cfg,
+              prompt,
+              model: typeof hookConfig?.model === "string" ? hookConfig.model : undefined,
+              timeoutMs,
+              runId,
+              // Conversation-derived utility input must never regain caller-denied capabilities.
+              disableTools: true,
+              toolsAllow: [],
+              disableTrajectory: true,
+              cleanupBundleMcpOnRunEnd: true,
+              // Internal helper run: route failures lane-local so an upstream 400/billing
+              // here cannot poison the shared profile (#71709).
+              authProfileFailurePolicy: "local",
+            });
+            const payload = result.payloads?.[0];
+            const text = payload?.text;
+            if (text && !isErrorSlugPayload(payload)) {
+              slug =
+                normalizeLowercaseStringOrEmpty(text)
+                  .replace(/[^a-z0-9-]/g, "-")
+                  .replace(/-+/g, "-")
+                  .replace(/^-+|-+$/g, "")
+                  .slice(0, 30)
+                  .replace(/^-+|-+$/g, "") || null;
+            }
+          } finally {
+            preparedRunAdmission.close();
+          }
+        } catch (err) {
+          const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+          slugGeneratorLog.error(`Failed to generate slug: ${message}`);
+        }
       }
     }
 
-    // If no slug, use timestamp
     if (!slug) {
       slug = localTimestamp.timeSlug;
-      log.debug("Using fallback timestamp slug", { slug });
     }
-
-    // Create filename with date and slug
-    const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
-    const memoryFilePath = path.join(memoryDir, filename);
-    log.debug("Memory file path resolved", {
-      filename,
-      path: shortenHomePath(memoryFilePath),
-    });
 
     const timeStr = localTimestamp.time;
 
-    // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
     const boundaryDetail =
       event.type === "session"
         ? `- **Reason**: ${(context.reason as string) || "unknown"}`
         : `- **Source**: ${(context.commandSource as string) || "unknown"}`;
 
-    // Build Markdown entry
     const entryParts = [
       `# Session: ${dateStr} ${timeStr} ${userTimezone}`,
       "",
@@ -236,7 +313,6 @@ async function saveSessionMemoryNow(
       "",
     ];
 
-    // Include conversation content if available
     if (transcript.status === "available" && transcript.content) {
       entryParts.push("## Conversation Summary", "", transcript.content, "");
     } else if (transcript.status === "unavailable") {
@@ -262,16 +338,29 @@ async function saveSessionMemoryNow(
       sessionKey: event.sessionKey,
       now: () => now.getTime(),
     });
-    const commit = () => memoryRoot.write(filename, entry, { encoding: "utf-8" });
-    await provenanceObserver.write({
-      absolutePath: memoryFilePath,
-      contentBefore: "",
-      contentAfter: entry,
-      commit,
-    });
-    log.debug("Memory file written successfully");
+    // Allocation and provenance publication share one workspace lock: different
+    // slugs can also collide with another capture's numeric suffix. The existing
+    // lock owner recovers dead writers without making provenance rows reserve names.
+    const memoryFilePath = await withFileLock(
+      path.join(memoryDir, ".session-memory"),
+      {
+        retries: { retries: 1_200, factor: 1, minTimeout: 25, maxTimeout: 25 },
+        stale: 30_000,
+        staleRecovery: "remove-if-definitely-stale",
+      },
+      async () => {
+        const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
+        const allocatedPath = path.join(memoryDir, filename);
+        await provenanceObserver.write({
+          absolutePath: allocatedPath,
+          contentBefore: "",
+          contentAfter: entry,
+          commit: () => memoryRoot.create(filename, entry, { encoding: "utf-8", atomic: true }),
+        });
+        return allocatedPath;
+      },
+    );
 
-    // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
     const relPath = shortenHomePath(memoryFilePath);
     log.info(`Session context saved to ${relPath}`);
   } catch (err) {
@@ -287,7 +376,7 @@ async function saveSessionMemoryNow(
   }
 }
 
-const saveSessionToMemory: HookHandler = (event) => {
+const saveSessionToMemory: HookHandler = async (event) => {
   // Manual commands retain their shipped hook contract, including /reset soft.
   // Automatic rollover uses a distinct lifecycle event so command hooks do not
   // receive synthetic commands and manual reset cannot double-write memory.
@@ -299,45 +388,54 @@ const saveSessionToMemory: HookHandler = (event) => {
   if ((event.type !== "command" || !isResetCommand) && !isAutoReset) {
     return undefined;
   }
-  const agentId = requireSessionMemoryAgentId(event);
-
   const context = event.context;
   const sessionEntry = (
     event.type === "command"
       ? (context.previousSessionEntry ?? context.sessionEntry)
       : context.sessionEntry
-  ) as { sessionId?: string } | undefined;
+  ) as { sessionId?: string; incognito?: boolean } | undefined;
+  // Reset hooks run before the process-local session is retired. Never turn its
+  // live transcript or a previously captured excerpt into durable workspace memory.
+  if (isIncognitoSessionKey(event.sessionKey) || sessionEntry?.incognito === true) {
+    return undefined;
+  }
+  const agentId = requireSessionMemoryAgentId(event);
   const cfg = context.cfg as OpenClawConfig | undefined;
-  // Gateway and soft-reset hooks already run before mutation; chat resets carry
-  // the snapshot captured by session initialization before closing the window.
-  const transcript =
-    (context.previousSessionMemory as SessionMemoryTranscript | undefined) ??
-    (sessionEntry?.sessionId
-      ? captureSessionMemoryTranscript(
-          {
-            agentId,
-            sessionId: sessionEntry.sessionId,
-            sessionKey: event.sessionKey,
-            storePath:
-              typeof context.storePath === "string" && context.storePath.trim()
-                ? context.storePath.trim()
-                : resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
-          },
-          cfg,
-        )
-      : ({ status: "available", content: null, originClass: "agent" } as const));
+  const captureComplete = createDeferredCore();
+  const captureAndSave = async () => {
+    // Chat resets carry their pre-mutation excerpt; other hooks capture before returning.
+    const transcript =
+      (context.previousSessionMemory as SessionMemoryTranscript | undefined) ??
+      (sessionEntry?.sessionId
+        ? await captureSessionMemoryTranscript(
+            {
+              agentId,
+              sessionId: sessionEntry.sessionId,
+              sessionKey: event.sessionKey,
+              storePath:
+                normalizeOptionalString(context.storePath) ??
+                resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
+            },
+            cfg,
+          )
+        : ({ status: "available", content: null, originClass: "agent" } as const));
+    captureComplete.resolve();
+    await saveSessionMemoryNow(event, agentId, transcript);
+  };
+  // Reserve follow-up admission and register its settlement before capture can yield.
   const writePromise = isAutoReset
-    ? saveSessionMemoryNow(event, agentId, transcript)
-    : runWithGatewayIndependentRootWorkContinuation(
-        () => saveSessionMemoryNow(event, agentId, transcript),
-        "hooks:session-memory",
-      );
+    ? captureAndSave()
+    : runWithGatewayIndependentRootWorkContinuation(captureAndSave, "hooks:session-memory");
   pendingSessionMemoryWrites.add(writePromise);
-  void writePromise.finally(() => {
-    pendingSessionMemoryWrites.delete(writePromise);
-  });
-  // Automatic rollover dispatch is already detached from the successor turn.
-  // Keep its gateway admission alive until nested slug/model work finishes.
+  void writePromise.then(
+    () => pendingSessionMemoryWrites.delete(writePromise),
+    (error: unknown) => {
+      pendingSessionMemoryWrites.delete(writePromise);
+      captureComplete.reject(error);
+    },
+  );
+  // Manual reset waits for its excerpt but retains detached filename generation and writing.
+  await captureComplete.promise;
   if (isAutoReset) {
     return writePromise;
   }

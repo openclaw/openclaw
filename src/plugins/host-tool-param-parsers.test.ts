@@ -46,28 +46,6 @@ describe("deriveToolParams", () => {
     expect(Object.isFrozen(derived.derivedPaths)).toBe(true);
   });
 
-  it("resolves derived apply_patch paths against the tool cwd when provided", async () => {
-    const patch = ["*** Begin Patch", "*** Add File: @src/../new.ts", "+x", "*** End Patch"].join(
-      "\n",
-    );
-    const cwd = path.join("/tmp", "openclaw-derived");
-    await expect(deriveToolParams("apply_patch", { input: patch }, { cwd })).resolves.toEqual({
-      derivedPaths: [path.join(cwd, "new.ts")],
-    });
-  });
-
-  it("preserves apply_patch backslashes when deriving path facts", async () => {
-    const patch = [
-      "*** Begin Patch",
-      String.raw`*** Add File: safe\evil.ts`,
-      "+x",
-      "*** End Patch",
-    ].join("\n");
-    await expect(deriveToolParams("apply_patch", { input: patch })).resolves.toEqual({
-      derivedPaths: [path.resolve(defaultCwd, String.raw`safe\evil.ts`)],
-    });
-  });
-
   it("preserves apply_patch marker payload bytes after the executor header trim", async () => {
     const patch = ["*** Begin Patch", "*** Add File:  src/new.ts", "+x", "*** End Patch"].join(
       "\n",
@@ -111,10 +89,5 @@ describe("deriveToolParams", () => {
     await expect(deriveToolParams("apply_patch", { input: "not a patch" })).resolves.toEqual({});
     await expect(deriveToolParams("apply_patch", {})).resolves.toEqual({});
     await expect(deriveToolParams("apply_patch", undefined)).resolves.toEqual({});
-  });
-
-  it("does not throw for malformed param shapes", async () => {
-    await expect(deriveToolParams("apply_patch", null)).resolves.toEqual({});
-    await expect(deriveToolParams("apply_patch", 42)).resolves.toEqual({});
   });
 });

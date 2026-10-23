@@ -39,12 +39,12 @@ openclaw update --channel dev
 config after core update success. A refused or failed core update keeps the
 previous channel. The selected channel drives both install paths:
 
-| Channel           | npm/package installs                                                                                                                                                                   | git installs                                                                                       |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `stable`          | dist-tag `latest`                                                                                                                                                                      | switches to the npm package at `latest`                                                            |
-| `extended-stable` | resolves the public npm `extended-stable` selector, verifies the exact selected package, and installs that exact version. Fails closed with no fallback to `latest`, `beta`, or `dev`. | unsupported: OpenClaw leaves the checkout unchanged and asks you to use a package installation     |
-| `beta`            | dist-tag `beta`, falling back to `latest` when `beta` is missing or older                                                                                                              | switches to the npm package at `beta`, falling back to `latest` when beta is missing or older      |
-| `dev`             | switches to a Git checkout, builds it, and reinstalls the global CLI                                                                                                                   | fetches, rebases the checkout on the upstream `main` branch, builds, and reinstalls the global CLI |
+| Channel           | npm/package installs                                                                                                                                                                                    | git installs                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `stable`          | dist-tag `latest`                                                                                                                                                                                       | switches to the npm package at `latest`                                                            |
+| `extended-stable` | resolves the public npm `extended-stable` selector, verifies the exact selected package, and installs that exact version. Stops on verification errors, with no fallback to `latest`, `beta`, or `dev`. | unsupported: OpenClaw leaves the checkout unchanged and asks you to use a package installation     |
+| `beta`            | dist-tag `beta`, falling back to `latest` when `beta` is missing or older                                                                                                                               | switches to the npm package at `beta`, falling back to `latest` when beta is missing or older      |
+| `dev`             | switches to a Git checkout, builds it, and reinstalls the global CLI                                                                                                                                    | fetches, rebases the checkout on the upstream `main` branch, builds, and reinstalls the global CLI |
 
 An explicit `--channel stable` or `--channel beta` switches a Git installation
 to a package installation. A bare `openclaw update` in a Git checkout with a
@@ -72,6 +72,27 @@ Automatic update campaigns pin the upstream commit they announce, so the
 displayed list previews up to five commits from the exact target installed even
 if `main` advances during the countdown. A manual
 `openclaw update --channel dev` still targets the current upstream `main`.
+
+Complete Git tracking configuration takes precedence for Dev source selection.
+For detached installations without tracking, Gateway checks also preserve an
+unambiguous saved custom upstream when its receipt matches the installation root
+and current commit. Missing, stale, malformed, excluded, or unresolvable hints do
+not veto the normal `origin/main` default. A network failure on a valid custom
+source reports an unavailable comparison rather than silently switching to origin.
+Without local `main` or `origin`, a sole configured remote remains a supported
+source for `main`. Multiple remotes without tracking are ambiguous; OpenClaw
+does not choose the first one.
+
+Receipt hints do not rewrite Git configuration. To make a custom source persistent
+across Gateway checks, standalone CLI status, previews, and manual updates, configure
+Git tracking explicitly. For an existing local `main` branch, use
+`git branch --set-upstream-to=<remote>/<branch> main`. For a detached installation
+without local `main`, set `branch.main.remote` and `branch.main.merge` with
+`git config`, using the remote name and full source ref such as `refs/heads/main`.
+Standalone CLI status and dry-run do not hydrate receipt-only hints. Automatic
+campaigns carry their selected source and pinned commit into execution.
+Saved install history also supplies the installation time when it matches the
+current checkout; failure to write that optional history does not fail an update.
 
 <Tip>
 To keep stable and dev in parallel, use two separate checkouts and point each gateway at its own.
@@ -174,11 +195,15 @@ that check, without changing the ledger.
 
 ## Tagging best practices
 
-- Tag releases you want git checkouts to land on: `vYYYY.M.PATCH` for stable,
+- Tag releases you want git checkouts to land on: `vYYYY.M.PATCH` with patch
+  `1` through `32` for regular stable,
   `vYYYY.M.PATCH-beta.N` for beta. Named prerelease suffixes such as
   `-alpha.N`, `-rc.N`, and `-next.N` are not stable or beta targets.
 - Legacy numeric stable tags such as `vYYYY.M.PATCH-1` and `v1.0.1-1` are still
-  recognized as stable git tags for compatibility.
+  recognized as stable git tags for compatibility, except monthly patches `33`
+  and higher. Those patches are reserved for extended-stable; final tags and
+  numeric correction variants are never regular stable targets or beta's stable
+  fallback. Extended-stable remains a package-only update channel.
 - `vYYYY.M.PATCH.beta.N` (dot-separated) is also recognized for compatibility;
   prefer `-beta.N`.
 - Keep tags immutable: never move or reuse a tag.
@@ -199,3 +224,4 @@ Beta and dev builds may **not** include a macOS app release. That is fine:
 
 - [Updating](/install/updating)
 - [Installer internals](/install/installer)
+- [Release policy](/reference/RELEASING) - how releases are cut and published into these channels

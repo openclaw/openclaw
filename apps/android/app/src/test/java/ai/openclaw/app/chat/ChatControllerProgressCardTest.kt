@@ -215,7 +215,7 @@ class ChatControllerProgressCardTest {
             cacheScope = { ChatCacheScope("gateway-test", 1) },
             currentDefaultAgentId = { "main" },
             sessionRouting = { routing },
-            gatewayAdvertisesCapability = { it == "progress-card-agent-scope-v1" },
+            gatewayAdvertisesCapability = { it == "progress-card-agent-scope-v1" || it == "session-scoped-model-catalog" },
             requestGateway = { method, params ->
               if (method == "progressCard.get") {
                 val key =
@@ -280,7 +280,7 @@ class ChatControllerProgressCardTest {
           cacheScope = { ChatCacheScope("gateway-test", 1) },
           currentDefaultAgentId = { "main" },
           sessionRouting = { GatewaySessionRouting("agent:main:workbench", "workbench") },
-          gatewayAdvertisesCapability = { it == "progress-card-agent-scope-v1" },
+          gatewayAdvertisesCapability = { it == "progress-card-agent-scope-v1" || it == "session-scoped-model-catalog" },
           requestGateway = { method, params ->
             if (method == "progressCard.get") {
               val request = chatControllerTestJson.parseToJsonElement(requireNotNull(params)).jsonObject
@@ -321,7 +321,7 @@ class ChatControllerProgressCardTest {
           cacheScope = { ChatCacheScope("gateway-test", 1) },
           currentDefaultAgentId = { "main" },
           sessionRouting = { GatewaySessionRouting("agent:main:workbench", "workbench") },
-          gatewayAdvertisesCapability = { it == "progress-card-agent-scope-v1" },
+          gatewayAdvertisesCapability = { it == "progress-card-agent-scope-v1" || it == "session-scoped-model-catalog" },
           requestGateway = { method, params ->
             if (method == "progressCard.get") {
               val request = chatControllerTestJson.parseToJsonElement(requireNotNull(params)).jsonObject
@@ -362,7 +362,7 @@ class ChatControllerProgressCardTest {
             cacheScope = { ChatCacheScope("gateway-test", 1) },
             currentDefaultAgentId = { "main" },
             sessionRouting = { GatewaySessionRouting("agent:main:workbench", "workbench") },
-            gatewayAdvertisesCapability = { ownerCapability },
+            gatewayAdvertisesCapability = { if (it == "progress-card-agent-scope-v1") ownerCapability else it == "session-scoped-model-catalog" },
             requestGateway = { method, params ->
               if (method == "progressCard.get") {
                 val request = chatControllerTestJson.parseToJsonElement(requireNotNull(params)).jsonObject
@@ -491,9 +491,10 @@ class ChatControllerProgressCardTest {
     }
 
   @Test
-  fun matchingChangeFetchesAndPublishesTypedCard() =
+  fun connectionAndInvalidationsRefreshProgressWithoutHealthPolling() =
     runTest {
       val gateway = ScriptedGateway(chatControllerTestJson)
+      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
       gateway.respondWith(
         "progressCard.get",
         cardResponse(
@@ -504,7 +505,7 @@ class ChatControllerProgressCardTest {
       )
       val controller = newController(gateway)
 
-      controller.handleGatewayEvent("progressCard.changed", changedEvent("main", "1"))
+      controller.onGatewayConnected()
       runCurrent()
 
       assertEquals(
@@ -520,6 +521,35 @@ class ChatControllerProgressCardTest {
         ),
         controller.progressCard.value,
       )
+      assertEquals(1, gateway.callCount("progressCard.get"))
+
+      repeat(3) {
+        controller.handleGatewayEvent("health", null)
+        runCurrent()
+      }
+      assertEquals(1, gateway.callCount("progressCard.get"))
+
+      gateway.respond("progressCard.get") { error("Temporary progress read failure") }
+      controller.handleGatewayEvent("progressCard.changed", changedEvent("main", "2"))
+      runCurrent()
+      assertEquals(2, gateway.callCount("progressCard.get"))
+      assertEquals("Inspecting", controller.progressCard.value?.markdown)
+
+      gateway.respondWith("progressCard.get", cardResponse(revision = 2, markdown = "Updated"))
+      controller.handleGatewayEvent("health", null)
+      runCurrent()
+      assertEquals(3, gateway.callCount("progressCard.get"))
+      assertEquals("Updated", controller.progressCard.value?.markdown)
+
+      controller.handleGatewayEvent("health", null)
+      runCurrent()
+      assertEquals(3, gateway.callCount("progressCard.get"))
+
+      gateway.respondWith("progressCard.get", cardResponse(revision = 3, markdown = "Recovered"))
+      controller.handleGatewayEvent("seqGap", null)
+      runCurrent()
+      assertEquals(4, gateway.callCount("progressCard.get"))
+      assertEquals("Recovered", controller.progressCard.value?.markdown)
     }
 
   @Test

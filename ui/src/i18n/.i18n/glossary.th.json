@@ -38,5 +38,9 @@
   {
     "source": "iMessage",
     "target": "iMessage"
+  },
+  {
+    "source": "Question dismissed.",
+    "target": "ปิดคำถามแล้ว"
   }
 ]

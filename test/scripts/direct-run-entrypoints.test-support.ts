@@ -21,34 +21,31 @@ function hasUnjoinedTree(error: unknown) {
 }
 
 export const TSX_SHIM_WRAPPERS = [
-  "scripts/run-vitest.mjs",
   "scripts/lib/plugin-npm-package-manifest.mjs",
   "scripts/e2e/kitchen-sink-rpc-walk.mjs",
-  "scripts/perf/summarize-cpuprofile.mjs",
 ] as const;
 
 export function writeEsmPluginFixture(fixtureRoot: string) {
   const pluginRoot = path.join(fixtureRoot, "compiled-plugin");
-  const dependencyRoot = path.join(pluginRoot, "node_modules", "import-only");
-  mkdirSync(dependencyRoot, { recursive: true });
-  writeFileSync(path.join(pluginRoot, "package.json"), JSON.stringify({ type: "module" }));
-  writeFileSync(
-    path.join(dependencyRoot, "package.json"),
-    JSON.stringify({ type: "module", exports: { import: "./index.js" } }),
-  );
-  writeFileSync(path.join(dependencyRoot, "index.js"), 'export const value = "import-only";');
-  const pluginPath = path.join(pluginRoot, "index.js");
-  writeFileSync(
-    pluginPath,
-    `export { value } from "import-only";
+  const files = {
+    "package.json": JSON.stringify({ type: "module" }),
+    "node_modules/import-only/package.json": JSON.stringify({
+      type: "module",
+      exports: { import: "./index.js" },
+    }),
+    "node_modules/import-only/index.js": 'export const value = "import-only";',
+    "loader.cjs": 'module.exports = { load: () => require("./index.js") };',
+    "index.js": `export { value } from "import-only";
 globalThis.pluginEvaluations = (globalThis.pluginEvaluations ?? 0) + 1;
 export const instance = {};
 `,
-  );
-  writeFileSync(
-    path.join(pluginRoot, "loader.cjs"),
-    'module.exports = { load: () => require("./index.js") };',
-  );
+  };
+  for (const [name, content] of Object.entries(files)) {
+    const file = path.join(pluginRoot, name);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, content);
+  }
+  const pluginPath = path.join(pluginRoot, "index.js");
   return `
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -73,18 +70,29 @@ console.log(JSON.stringify({ value: first.value, evaluations: globalThis.pluginE
 }
 
 export async function withShimFixture<T>(
-  wrapper: (typeof TSX_SHIM_WRAPPERS)[number] | "scripts/run-node.mjs",
+  wrapper:
+    | (typeof TSX_SHIM_WRAPPERS)[number]
+    | "scripts/run-vitest.mjs"
+    | "scripts/check-changed.mjs"
+    | "scripts/run-tsgo.mjs"
+    | "scripts/run-oxlint.mjs"
+    | "scripts/run-tsgo-core-test-shards.mjs"
+    | "scripts/run-node.mjs"
+    | "scripts/crabbox-wrapper.mjs",
   run: (paths: {
     checkoutRoot: string;
     fixtureRoot: string;
     implementationPath: string;
     wrapperPath: string;
-    runNode: (args: string[], env: NodeJS.ProcessEnv, cwd: string) => Promise<NodeResult>;
+    runNode: (
+      args: string[],
+      env: NodeJS.ProcessEnv,
+      cwd: string,
+      onReady?: NonNullable<Parameters<typeof runNodeScript>[3]>["onReady"],
+    ) => Promise<NodeResult>;
   }) => T,
 ) {
-  // spawnOwnedVitestProcess gives POSIX Vitest a disposable temp namespace.
-  // Own a sibling so unverified writers survive its cleanup, outside repo module resolution.
-  // Windows has no enclosing namespace and keeps the ordinary temporary root.
+  // Own a sibling of Vitest's POSIX temp namespace so unjoined writers survive its cleanup.
   const fixtureParent = process.platform === "win32" ? tmpdir() : path.dirname(tmpdir());
   const fixtureRoot = realpathSync(mkdtempSync(path.join(fixtureParent, "openclaw-tsx-cli-shim-")));
   const checkoutRoot = path.join(fixtureRoot, "checkout");
@@ -94,38 +102,41 @@ export async function withShimFixture<T>(
     wrapper === "scripts/run-vitest.mjs" ? "-child.mts" : ".mts",
   );
   const commands: Array<Promise<NodeResult>> = [];
-  let outcome: { value: Awaited<T> } | { error: unknown };
-  try {
-    mkdirSync(path.dirname(wrapperPath), { recursive: true });
-    mkdirSync(path.join(checkoutRoot, "scripts", "lib"), { recursive: true });
-    copyFileSync(wrapper, wrapperPath);
-    copyFileSync("scripts/tsx.mjs", path.join(checkoutRoot, "scripts", "tsx.mjs"));
-    copyFileSync(
+  const outcome = (async () => {
+    for (const source of [
+      wrapper,
+      "scripts/tsx.mjs",
+      "scripts/windows-cmd-helpers.mjs",
       "scripts/lib/tsx-cli-shim.mjs",
-      path.join(checkoutRoot, "scripts", "lib", "tsx-cli-shim.mjs"),
-    );
-    copyFileSync(
       "scripts/lib/local-check-runtime.mts",
-      path.join(checkoutRoot, "scripts", "lib", "local-check-runtime.mts"),
-    );
+      "scripts/lib/tooling-dependencies.mjs",
+      "scripts/lib/managed-child-process.mts",
+      "scripts/lib/managed-cleanup-handoff.mts",
+      "scripts/lib/vitest-resource-ownership.mts",
+      "scripts/lib/vitest-worker-descriptor.mts",
+      "scripts/lib/windows-taskkill.mjs",
+    ]) {
+      const target = path.join(checkoutRoot, source);
+      mkdirSync(path.dirname(target), { recursive: true });
+      copyFileSync(source, target);
+    }
     writeFileSync(path.join(checkoutRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
-    outcome = {
-      value: await run({
-        checkoutRoot,
-        fixtureRoot,
-        implementationPath,
-        wrapperPath,
-        runNode(args, env, cwd) {
-          const command = runNodeScript(args, env, 10_000, { cwd });
-          commands.push(command);
-          return command;
-        },
-      }),
-    };
-  } catch (error) {
-    outcome = { error };
-  }
-  const callbackError = "error" in outcome ? outcome.error : undefined;
+    return run({
+      checkoutRoot,
+      fixtureRoot,
+      implementationPath,
+      wrapperPath,
+      runNode(args, env, cwd, onReady) {
+        const command = runNodeScript(args, env, 10_000, { cwd, onReady });
+        commands.push(command);
+        return command;
+      },
+    });
+  })();
+  const callbackError = await outcome.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
   // Callback rejection must not release files still owned by an in-flight command.
   const results = await Promise.all(commands);
   const unjoined = [callbackError, ...results.map((result) => result.error)].find(hasUnjoinedTree);
@@ -133,7 +144,7 @@ export async function withShimFixture<T>(
     const outputPath = path.join(fixtureRoot, "command-output.log");
     writeFileSync(outputPath, results.map(formatShimResult).join("\n\n"));
     throw new Error(
-      `Child cleanup unverified; retained fixture ${fixtureRoot} and output ${outputPath}. Stop remaining writers before removing this directory.`,
+      `${callbackError instanceof Error ? `${callbackError.message}\n` : ""}Child cleanup unverified; retained fixture ${fixtureRoot} and output ${outputPath}. Stop remaining writers before removing this directory.`,
       {
         cause:
           callbackError && callbackError !== unjoined
@@ -143,8 +154,5 @@ export async function withShimFixture<T>(
     );
   }
   rmSync(fixtureRoot, { recursive: true, force: true });
-  if ("error" in outcome) {
-    throw outcome.error;
-  }
-  return outcome.value;
+  return await outcome;
 }

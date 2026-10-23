@@ -4,12 +4,41 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 
-// Detection only locates legacy files; loading this barrel brings in session DB machinery.
+// Empty Doctor scans must not load the session accessor and state-database graph.
 vi.mock("openclaw/plugin-sdk/session-store-runtime", () => {
-  throw new Error("legacy file detection must not load the session runtime");
+  throw new Error("empty Doctor migrations must not load the session runtime");
+});
+vi.mock("openclaw/plugin-sdk/sqlite-runtime", () => {
+  throw new Error("empty Doctor migrations must not load the SQLite runtime");
 });
 
-it("detects Codex sidecars without loading session storage", async () => {
+it("normalizes config without loading sidecar migration code", async () => {
+  vi.resetModules();
+  vi.doMock("./src/migration/session-binding-sidecars.js", () => {
+    throw new Error("config normalization must not load sidecar migrations");
+  });
+  try {
+    const { normalizeCompatibilityConfig } = await import("./doctor-contract-api.js");
+    const result = normalizeCompatibilityConfig({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: {
+              config: { codexDynamicToolsProfile: "openclaw-compat", retained: true },
+            },
+          },
+        },
+      },
+    });
+    expect(result.config.plugins?.entries?.codex?.config).toEqual({ retained: true });
+    expect(result.changes).toHaveLength(1);
+  } finally {
+    vi.doUnmock("./src/migration/session-binding-sidecars.js");
+    vi.resetModules();
+  }
+});
+
+it("detects Codex legacy state without loading session storage", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-doctor-cold-"));
   const stateDir = path.join(root, "state");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -17,15 +46,23 @@ it("detects Codex sidecars without loading session storage", async () => {
     throw new Error("detection must not open plugin state");
   });
   const params = {
-    config: { agents: { list: [{ id: "main" }] } },
+    config: { agents: { entries: { main: {} } } },
     env,
     stateDir,
     oauthDir: path.join(stateDir, "oauth"),
     context: { openPluginStateKeyedStore: openStore },
   };
   const migration = stateMigrations[0]!;
+  const nativeMigration = stateMigrations.find(
+    (entry) => entry.id === "codex-native-task-assignments",
+  )!;
   try {
     await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+    await expect(nativeMigration.detectLegacyState(params)).resolves.toBeNull();
+    await expect(nativeMigration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
     const sessionsDir = path.join(root, "import", "main");
     await fs.mkdir(sessionsDir, { recursive: true });
     await fs.writeFile(

@@ -1,4 +1,5 @@
 // Recovers queued session deliveries after process crashes.
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
   createDeliveryRecoveryCoordinator,
   createEmptyDeliveryRecoverySummary,
@@ -15,6 +16,8 @@ import {
   loadPendingSessionDeliveries,
   markSessionDeliverySettlement,
   moveSessionDeliveryToFailed,
+} from "./session-delivery-queue-storage.js";
+import {
   SessionDeliveryAcknowledgementFinalizeError,
   SessionDeliveryAttemptStartError,
   SessionDeliveryDeadLetteredError,
@@ -23,15 +26,16 @@ import {
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
   type SessionDeliverySettledOutcome,
-} from "./session-delivery-queue-storage.js";
+} from "./session-delivery-queue.records.js";
 
 export type DeliverSessionDeliveryFn = (
   entry: QueuedSessionDelivery,
-  context?: { stateDir?: string },
+  context: { queueContext: OpenClawStateWorkerContext },
 ) => Promise<void>;
 export type SettleSessionDeliveryFn = (
   entry: QueuedSessionDelivery,
   outcome: SessionDeliverySettledOutcome,
+  queueContext: OpenClawStateWorkerContext,
 ) => Promise<void> | void;
 
 export interface SessionDeliveryRecoveryLogger {
@@ -44,45 +48,24 @@ const MAX_SESSION_DELIVERY_RETRIES = 5;
 
 const recoveryCoordinator = createDeliveryRecoveryCoordinator<QueuedSessionDelivery>();
 
-async function notifySessionDeliverySettled(params: {
-  entry: QueuedSessionDelivery;
-  log: SessionDeliveryRecoveryLogger;
-  onSettled?: SettleSessionDeliveryFn;
-  outcome: SessionDeliverySettledOutcome;
-}): Promise<boolean> {
-  try {
-    await params.onSettled?.(params.entry, params.outcome);
-    return true;
-  } catch (error) {
-    params.log.error(
-      `session delivery: settled callback failed for ${params.entry.id}: ${String(error)}`,
-    );
-    return false;
-  }
-}
-
 async function finalizeSessionDeliverySettlement(params: {
   entry: QueuedSessionDelivery;
   log: SessionDeliveryRecoveryLogger;
   onSettled?: SettleSessionDeliveryFn;
   outcome: SessionDeliverySettledOutcome;
-  stateDir?: string;
+  queueContext: OpenClawStateWorkerContext;
 }): Promise<boolean> {
-  const callbackSettled = await notifySessionDeliverySettled(params);
-  if (!callbackSettled) {
-    return false;
-  }
+  let phase = "settled callback";
   try {
-    if (params.outcome === "recovered") {
-      await completeSessionDelivery(params.entry.id, params.stateDir);
-    } else {
-      await moveSessionDeliveryToFailed(params.entry.id, params.stateDir);
-    }
+    params.queueContext.admission.assertCurrent();
+    await params.onSettled?.(params.entry, params.outcome, params.queueContext);
+    phase = `${params.outcome} finalization`;
+    const finalize =
+      params.outcome === "recovered" ? completeSessionDelivery : moveSessionDeliveryToFailed;
+    await finalize(params.entry.id, params.queueContext);
     return true;
   } catch (error) {
-    params.log.error(
-      `session delivery: ${params.outcome} finalization failed for ${params.entry.id}: ${String(error)}`,
-    );
+    params.log.error(`session delivery: ${phase} failed for ${params.entry.id}: ${String(error)}`);
     return false;
   }
 }
@@ -91,18 +74,6 @@ function resolvePendingSettlementOutcome(
   entry: QueuedSessionDelivery,
 ): SessionDeliverySettledOutcome | undefined {
   return entry.settlementOutcome ?? (entry.acknowledgedAt !== undefined ? "recovered" : undefined);
-}
-
-function resolveSessionDeliveryMaxRetries(entry: QueuedSessionDelivery): number {
-  return entry.maxRetries ?? MAX_SESSION_DELIVERY_RETRIES;
-}
-
-function canReconcileStartedAgentAttemptAtRetryLimit(entry: QueuedSessionDelivery): boolean {
-  return (
-    entry.kind === "agentTurn" &&
-    entry.deliveryStartedAt !== undefined &&
-    entry.retryCount === resolveSessionDeliveryMaxRetries(entry)
-  );
 }
 
 function resolveSessionRetryEligibility(entry: QueuedSessionDelivery, now: number) {
@@ -119,9 +90,10 @@ function resolveSessionRetryEligibility(entry: QueuedSessionDelivery, now: numbe
 }
 
 type SessionDeliveryDrainContext = {
+  now?: () => number;
   logLabel: string;
   log: SessionDeliveryRecoveryLogger;
-  stateDir?: string;
+  queueContext: OpenClawStateWorkerContext;
   deliver: DeliverSessionDeliveryFn;
   onSettled?: SettleSessionDeliveryFn;
 };
@@ -137,31 +109,29 @@ async function processPendingSessionDelivery(opts: {
   const pendingSettlementOutcome = resolvePendingSettlementOutcome(entry);
   if (pendingSettlementOutcome) {
     const finalized = await finalizeSessionDeliverySettlement({
+      ...context,
       entry,
-      log: context.log,
-      onSettled: context.onSettled,
       outcome: pendingSettlementOutcome,
-      stateDir: context.stateDir,
     });
     return { status: pendingSettlementOutcome, finalized };
   }
-  if (
-    !canReconcileStartedAgentAttemptAtRetryLimit(entry) &&
-    entry.retryCount >= resolveSessionDeliveryMaxRetries(entry)
-  ) {
-    await markSessionDeliverySettlement(entry, "moved-to-failed", context.stateDir);
+  const maxRetries = entry.maxRetries ?? MAX_SESSION_DELIVERY_RETRIES;
+  const canReconcileStartedAgentAttempt =
+    entry.kind === "agentTurn" &&
+    entry.deliveryStartedAt !== undefined &&
+    entry.retryCount === maxRetries;
+  if (!canReconcileStartedAgentAttempt && entry.retryCount >= maxRetries) {
+    await markSessionDeliverySettlement(entry, "moved-to-failed", context.queueContext);
     const finalized = await finalizeSessionDeliverySettlement({
+      ...context,
       entry,
-      log: context.log,
-      onSettled: context.onSettled,
       outcome: "moved-to-failed",
-      stateDir: context.stateDir,
     });
     return { status: "max-retries", finalized };
   }
 
   if (!opts.bypassBackoff) {
-    const retryEligibility = resolveSessionRetryEligibility(entry, Date.now());
+    const retryEligibility = resolveSessionRetryEligibility(entry, (context.now ?? Date.now)());
     if (!retryEligibility.eligible) {
       return {
         status: "backoff",
@@ -175,15 +145,20 @@ async function processPendingSessionDelivery(opts: {
 
   let result: SessionDeliverySettledOutcome;
   try {
-    await context.deliver(entry, { stateDir: context.stateDir });
+    context.queueContext.admission.assertCurrent();
+    await context.deliver(entry, { queueContext: context.queueContext });
     // Keep metadata pending until owner cleanup succeeds. Recovery sees this
     // marker and finalizes without replaying the external side effect.
-    await markSessionDeliverySettlement(entry, "recovered", context.stateDir);
+    await markSessionDeliverySettlement(entry, "recovered", context.queueContext);
     result = "recovered";
   } catch (err) {
     if (err instanceof SessionDeliveryDeadLetteredError) {
+      // Terminal receipts retain no error, and settlement can fail; record the decision first.
+      context.log.warn(
+        `${context.logLabel}: dead-letter decision for entry ${entry.id}: ${formatErrorMessage(err)}`,
+      );
       try {
-        await markSessionDeliverySettlement(entry, "moved-to-failed", context.stateDir);
+        await markSessionDeliverySettlement(entry, "moved-to-failed", context.queueContext);
       } catch (markError) {
         if (markError instanceof SessionDeliveryAcknowledgementFinalizeError) {
           return { status: "deferred" };
@@ -204,7 +179,7 @@ async function processPendingSessionDelivery(opts: {
         return { status: "failed" };
       }
       try {
-        await failSessionDelivery(entry.id, errMsg, context.stateDir, {
+        await failSessionDelivery(entry.id, errMsg, context.queueContext, {
           releaseAttemptOwnership: err instanceof SessionDeliverySafeRetryError,
         });
       } catch (failErr) {
@@ -219,38 +194,11 @@ async function processPendingSessionDelivery(opts: {
     }
   }
   const finalized = await finalizeSessionDeliverySettlement({
+    ...context,
     entry,
-    log: context.log,
-    onSettled: context.onSettled,
     outcome: result,
-    stateDir: context.stateDir,
   });
   return { status: result, finalized };
-}
-
-async function processDrainedSessionDelivery(
-  entry: QueuedSessionDelivery,
-  context: SessionDeliveryDrainContext,
-  bypassBackoff?: boolean,
-) {
-  const result = await processPendingSessionDelivery({
-    entry,
-    context,
-    bypassBackoff,
-    onFailed: (failedEntry, errMsg) => {
-      context.log.warn(`${context.logLabel}: retry failed for entry ${failedEntry.id}: ${errMsg}`);
-    },
-  });
-  if (result.status === "max-retries" && result.finalized) {
-    context.log.warn(
-      `${context.logLabel}: entry ${entry.id} exceeded max retries and was moved to failed`,
-    );
-  } else if (result.status === "backoff") {
-    context.log.info(
-      `${context.logLabel}: entry ${entry.id} not ready for retry yet — backoff ${result.remainingMs}ms remaining`,
-    );
-  }
-  return result;
 }
 
 /** Drain one exact queued session delivery and return its final pending state. */
@@ -258,19 +206,39 @@ export async function drainPendingSessionDelivery(
   opts: SessionDeliveryDrainContext & { id: string; bypassBackoff?: boolean },
 ): Promise<QueuedSessionDelivery | null> {
   const claim = await recoveryCoordinator.withClaim(opts.id, async () => {
-    const entry = await loadPendingSessionDelivery(opts.id, opts.stateDir);
+    const entry = await loadPendingSessionDelivery(opts.id, opts.queueContext);
     if (!entry) {
       return null;
     }
-    const result = await processDrainedSessionDelivery(entry, opts, opts.bypassBackoff);
+    const result = await processPendingSessionDelivery({
+      entry,
+      context: opts,
+      bypassBackoff: opts.bypassBackoff,
+      onFailed: (failedEntry, errMsg) => {
+        opts.log.warn(`${opts.logLabel}: retry failed for entry ${failedEntry.id}: ${errMsg}`);
+      },
+    });
+    if (result.status === "max-retries" && result.finalized) {
+      opts.log.warn(
+        `${opts.logLabel}: entry ${entry.id} exceeded max retries and was moved to failed`,
+      );
+    } else if (result.status === "moved-to-failed" && result.finalized) {
+      opts.log.warn(`${opts.logLabel}: entry ${entry.id} was dead-lettered and moved to failed`);
+    } else if (result.status === "backoff") {
+      opts.log.info(
+        `${opts.logLabel}: entry ${entry.id} not ready for retry yet — backoff ${result.remainingMs}ms remaining`,
+      );
+    }
     if (result.status === "already-gone" || ("finalized" in result && result.finalized)) {
       return null;
     }
-    return result.status === "backoff" ? entry : loadPendingSessionDelivery(opts.id, opts.stateDir);
+    return result.status === "backoff"
+      ? entry
+      : loadPendingSessionDelivery(opts.id, opts.queueContext);
   });
   if (claim.status === "claimed-by-other-owner") {
     opts.log.info(`${opts.logLabel}: entry ${opts.id} is already being recovered`);
-    return loadPendingSessionDelivery(opts.id, opts.stateDir);
+    return loadPendingSessionDelivery(opts.id, opts.queueContext);
   }
   return claim.value;
 }
@@ -280,11 +248,11 @@ export async function recoverPendingSessionDeliveries(opts: {
   deliver: DeliverSessionDeliveryFn;
   log: SessionDeliveryRecoveryLogger;
   onSettled?: SettleSessionDeliveryFn;
-  stateDir?: string;
+  queueContext: OpenClawStateWorkerContext;
   maxRecoveryMs?: number;
   maxEnqueuedAt?: number;
 }): Promise<DeliveryRecoverySummary> {
-  const pending = (await loadPendingSessionDeliveries(opts.stateDir)).filter(
+  const pending = (await loadPendingSessionDeliveries(opts.queueContext)).filter(
     (entry) => opts.maxEnqueuedAt == null || entry.enqueuedAt <= opts.maxEnqueuedAt,
   );
   if (pending.length === 0) {
@@ -305,13 +273,13 @@ export async function recoverPendingSessionDeliveries(opts: {
     }
     return "continue" as const;
   };
-  const onFailed = (_failedEntry: QueuedSessionDelivery, errMsg: string) => {
+  const onFailed = (failedEntry: QueuedSessionDelivery, errMsg: string) => {
     summary.failed += 1;
-    opts.log.warn(`Session delivery retry failed: ${errMsg}`);
+    opts.log.warn(`Session delivery retry failed for entry ${failedEntry.id}: ${errMsg}`);
   };
   await recoveryCoordinator.scan({
     entries: pending,
-    loadEntry: (id) => loadPendingSessionDelivery(id, opts.stateDir),
+    loadEntry: (id) => loadPendingSessionDelivery(id, opts.queueContext),
     deadlineMs: deadline,
     onDeadlineExceeded,
     onEntry: async (currentEntry) => {
@@ -338,6 +306,11 @@ export async function recoverPendingSessionDeliveries(opts: {
       if (result.status === "recovered" && result.finalized) {
         summary.recovered += 1;
         opts.log.info(`Recovered session delivery ${currentEntry.id}`);
+      } else if (result.status === "moved-to-failed" && result.finalized) {
+        summary.failed += 1;
+        opts.log.warn(
+          `Session delivery: entry ${currentEntry.id} was dead-lettered and moved to failed`,
+        );
       }
       return "continue";
     },

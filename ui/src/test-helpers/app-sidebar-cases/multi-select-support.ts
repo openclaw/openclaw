@@ -49,14 +49,11 @@ export async function sessionMenu(sidebar: SidebarLifecycleState): Promise<TestS
   return menu;
 }
 
-export async function mountMultiSelect(methods?: string[] | null, patchManyError?: Error) {
+export async function mountMultiSelect(methods?: string[] | null) {
   const harness = createSessionsHarness("main", MULTI_SELECT_KEYS);
   const request = vi.fn((method: string, params?: unknown) => {
     if (method !== "sessions.patchMany") {
       return Promise.reject(new Error(`unexpected request: ${method}`));
-    }
-    if (patchManyError) {
-      return Promise.reject(patchManyError);
     }
     const patchParams = params as {
       targets: Array<{ key: string; agentId?: string }>;

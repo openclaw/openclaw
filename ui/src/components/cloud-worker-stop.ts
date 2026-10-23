@@ -10,7 +10,11 @@ export type CloudWorkerStopAction = {
 export function resolveCloudWorkerStopAction(
   placement: GatewaySessionRow["placement"],
 ): CloudWorkerStopAction | null {
-  if (!placement || !isCloudWorkerPlacementState(placement.state)) {
+  if (
+    !placement ||
+    !isCloudWorkerPlacementState(placement.state) ||
+    (placement.state === "failed" && placement.recoveryAction === "restart")
+  ) {
     return null;
   }
   return {

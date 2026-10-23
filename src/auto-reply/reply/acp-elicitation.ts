@@ -56,6 +56,7 @@ export function parseAcpElicitationRequest(
       fallbackMessage: "ACP needs input",
       options: {
         protocolName: "ACP",
+        allowEmptyForm: true,
         minimumChoiceCount: 2,
         booleanLabels: ["True", "False"],
         metadata: {
@@ -96,10 +97,7 @@ function readScope(
       ...(toolCallId === undefined ? {} : { toolCallId: normalizedToolCallId ?? null }),
     };
   }
-  if (requestId === null) {
-    return { requestId };
-  }
-  if (typeof requestId === "number") {
+  if (requestId === null || typeof requestId === "number") {
     return { requestId };
   }
   const normalizedRequestId = readCorrelationText(requestId);

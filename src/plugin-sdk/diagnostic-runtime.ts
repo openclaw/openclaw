@@ -1,5 +1,3 @@
-// Diagnostic flag/event helpers for plugins that want narrow runtime gating.
-
 import { redactSensitiveText } from "../logging/redact.js";
 
 const LOW_CARDINALITY_DIAGNOSTIC_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
@@ -31,6 +29,8 @@ export function normalizeDiagnosticLane(value: string | undefined, fallback = "u
   return LOW_CARDINALITY_DIAGNOSTIC_VALUE_RE.test(lane) ? lane : fallback;
 }
 
+export { createSubsystemLogger } from "../logging/subsystem.js";
+
 export { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 export type {
   DiagnosticEventMetadata,
@@ -40,6 +40,7 @@ export type {
 } from "../infra/diagnostic-events.js";
 export type { DiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
 export {
+  areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,

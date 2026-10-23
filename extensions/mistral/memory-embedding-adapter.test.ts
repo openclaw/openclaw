@@ -1,141 +1,144 @@
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { MemoryEmbeddingProviderCreateOptions } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { describe, expect, it } from "vitest";
-import { createMistralEmbeddingProvider } from "./embedding-provider.js";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
-import { MISTRAL_BASE_URL } from "./model-definitions.js";
 
-function createOptions(params?: {
-  baseUrl?: string;
-  apiKey?: string;
-  headers?: Record<string, string>;
-  config?: MemoryEmbeddingProviderCreateOptions["config"];
-}): MemoryEmbeddingProviderCreateOptions {
+function createOptions(
+  remote: MemoryEmbeddingProviderCreateOptions["remote"] = {},
+  config: MemoryEmbeddingProviderCreateOptions["config"] = {},
+): MemoryEmbeddingProviderCreateOptions {
   return {
-    config: params?.config ?? ({} as MemoryEmbeddingProviderCreateOptions["config"]),
+    config,
     provider: "mistral",
     model: "mistral-embed",
     fallback: "none",
-    remote: {
-      apiKey: params?.apiKey ?? "fixture-mistral-key-before",
-      ...(params?.baseUrl ? { baseUrl: params.baseUrl } : {}),
-      ...(params?.headers ? { headers: params.headers } : {}),
-    },
+    remote: { apiKey: "fixture-mistral-key-before", ...remote },
   };
 }
 
-describe("Mistral memory embedding index identity", () => {
-  it.each([undefined, MISTRAL_BASE_URL, `${MISTRAL_BASE_URL}/`, "https://API.MISTRAL.AI:443/v1/"])(
-    "preserves the exact existing default identity for %s",
-    async (baseUrl) => {
-      const result = await mistralMemoryEmbeddingProviderAdapter.create(createOptions({ baseUrl }));
+async function identity(...params: Parameters<typeof createOptions>) {
+  return (await mistralMemoryEmbeddingProviderAdapter.create(createOptions(...params))).runtime
+    ?.cacheKeyData;
+}
 
-      expect(result.runtime?.cacheKeyData).toEqual({
-        provider: "mistral",
-        model: "mistral-embed",
-      });
+async function outboundHeaders(...params: Parameters<typeof createOptions>) {
+  let headers: IncomingHttpHeaders = {};
+  const server = createServer((request, response) => {
+    headers = request.headers;
+    request.resume();
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ data: [{ index: 0, embedding: [1, 2] }] }));
+  });
+  onTestFinished(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected loopback TCP address");
+  }
+  const options = createOptions(...params);
+  const { provider } = await mistralMemoryEmbeddingProviderAdapter.create({
+    ...options,
+    remote: { ...options.remote, baseUrl: `http://127.0.0.1:${address.port}/v1` },
+  });
+  assert(provider, "expected configured Mistral embedding provider");
+  await expect(provider.embed("fixture input")).resolves.toEqual([1, 2]);
+  return headers;
+}
+
+describe("Mistral memory embedding index identity", () => {
+  it.each([undefined, "https://API.MISTRAL.AI:443/v1/"])(
+    "keeps default identity for %s",
+    async (baseUrl) => {
+      const key = await identity({ baseUrl });
+      expect(key).toEqual({ provider: "mistral", model: "mistral-embed" });
     },
   );
 
   it("partitions endpoints and tenants without including rotated authentication headers", async () => {
     const endpoint = "https://mistral-region-a.example.test/v1";
-    const firstOptions = createOptions({
-      baseUrl: endpoint,
-      headers: {
-        "X-Tenant": "tenant-a",
-        "X-Deployment": "deployment-a",
-        "X-Api-Key": "fixture-proxy-key-before",
-        "api-key": "fixture-azure-key-before",
-        "User-Agent": "tenant-router/1",
-        version: "tenant-api-v1",
-      },
-    });
-    const first = await mistralMemoryEmbeddingProviderAdapter.create(firstOptions);
-    const rotated = await mistralMemoryEmbeddingProviderAdapter.create(
-      createOptions({
-        baseUrl: endpoint,
-        apiKey: "fixture-mistral-key-after",
-        headers: {
-          version: "tenant-api-v1",
-          "User-Agent": "tenant-router/1",
-          "Api-Key": "fixture-azure-key-after",
-          "x-aPI-kEY": "fixture-proxy-key-after",
-          "X-Deployment": "deployment-a",
-          "X-Tenant": "tenant-a",
-        },
-      }),
-    );
-    const otherTenant = await mistralMemoryEmbeddingProviderAdapter.create(
-      createOptions({
-        baseUrl: endpoint,
-        headers: { "X-Tenant": "tenant-b", "X-Deployment": "deployment-a" },
-      }),
-    );
-    const otherEndpoint = await mistralMemoryEmbeddingProviderAdapter.create(
-      createOptions({
-        baseUrl: "https://mistral-region-b.example.test/v1",
-        headers: { "X-Tenant": "tenant-a", "X-Deployment": "deployment-a" },
-      }),
-    );
-    const { client } = await createMistralEmbeddingProvider(firstOptions);
-
-    expect(client.headers).toMatchObject({
-      Authorization: "Bearer fixture-mistral-key-before",
+    const tenantHeaders = { "X-Tenant": "tenant-a", "X-Deployment": "deployment-a" };
+    const routingHeaders = {
+      ...tenantHeaders,
+      "User-Agent": "tenant-router/1",
+      version: "tenant-api-v1",
+    };
+    const headers = {
+      ...routingHeaders,
       "X-Api-Key": "fixture-proxy-key-before",
       "api-key": "fixture-azure-key-before",
-      "X-Deployment": "deployment-a",
-      "X-Tenant": "tenant-a",
+    };
+    const firstParams = { baseUrl: endpoint, headers };
+    const first = await identity(firstParams);
+    const rotated = await identity({
+      baseUrl: endpoint,
+      apiKey: "fixture-mistral-key-after",
+      headers: {
+        version: "tenant-api-v1",
+        "User-Agent": "tenant-router/1",
+        "Api-Key": "fixture-azure-key-after",
+        "x-aPI-kEY": "fixture-proxy-key-after",
+        "X-Deployment": "deployment-a",
+        "X-Tenant": "tenant-a",
+      },
     });
-    expect(first.runtime?.cacheKeyData).toMatchObject({
+    expect(await outboundHeaders(firstParams)).toMatchObject(
+      Object.fromEntries(
+        Object.entries({ Authorization: "Bearer fixture-mistral-key-before", ...headers }).map(
+          ([name, value]) => [name.toLowerCase(), value],
+        ),
+      ),
+    );
+    expect(first).toMatchObject({
       provider: "mistral",
       model: "mistral-embed",
       baseUrl: endpoint,
-      headers: expect.arrayContaining([
-        ["X-Deployment", "deployment-a"],
-        ["X-Tenant", "tenant-a"],
-        ["User-Agent", "tenant-router/1"],
-        ["version", "tenant-api-v1"],
-      ]),
+      headers: expect.arrayContaining(Object.entries(routingHeaders)),
     });
-    expect(first.runtime?.cacheKeyData).toEqual(rotated.runtime?.cacheKeyData);
-    expect(first.runtime?.cacheKeyData).not.toEqual(otherTenant.runtime?.cacheKeyData);
-    expect(first.runtime?.cacheKeyData).not.toEqual(otherEndpoint.runtime?.cacheKeyData);
-    expect(JSON.stringify(first.runtime?.cacheKeyData)).not.toContain("fixture-");
+    expect(first).toEqual(rotated);
+    expect(first).not.toEqual(
+      await identity({ baseUrl: endpoint, headers: { ...tenantHeaders, "X-Tenant": "tenant-b" } }),
+    );
+    expect(first).not.toEqual(
+      await identity({
+        baseUrl: "https://mistral-region-b.example.test/v1",
+        headers: tenantHeaders,
+      }),
+    );
+    expect(JSON.stringify(first)).not.toContain("fixture-");
   });
 
   it("partitions provider-owned headers without leaking them to a remote destination", async () => {
     const providerBaseUrl = "https://provider-region.example.test/v1";
-    const config = {
-      models: {
-        providers: {
-          mistral: {
-            baseUrl: providerBaseUrl,
-            apiKey: "fixture-provider-key",
-            headers: { "X-Provider-Tenant": "provider-a" },
-            models: [],
-          },
-        },
-      },
-    } as MemoryEmbeddingProviderCreateOptions["config"];
-    const providerOwned = await mistralMemoryEmbeddingProviderAdapter.create(
-      createOptions({ config }),
-    );
-    const remoteOptions = createOptions({
-      config,
+    const mistral = {
+      baseUrl: providerBaseUrl,
+      apiKey: "fixture-provider-key",
+      headers: { "X-Provider-Tenant": "provider-a" },
+      models: [],
+    };
+    const config = { models: { providers: { mistral } } };
+    const remoteParams = {
       baseUrl: "https://remote-region.example.test/v1",
       headers: { "X-Tenant": "remote-a" },
-    });
-    const remoteOwned = await mistralMemoryEmbeddingProviderAdapter.create(remoteOptions);
-    const { client } = await createMistralEmbeddingProvider(remoteOptions);
+    };
+    const requestHeaders = await outboundHeaders(remoteParams, config);
 
-    expect(providerOwned.runtime?.cacheKeyData).toMatchObject({
+    expect(await identity({}, config)).toMatchObject({
       baseUrl: providerBaseUrl,
       headers: [["X-Provider-Tenant", "provider-a"]],
     });
-    expect(remoteOwned.runtime?.cacheKeyData).toMatchObject({
+    expect(await identity(remoteParams, config)).toMatchObject({
       baseUrl: "https://remote-region.example.test/v1",
       headers: [["X-Tenant", "remote-a"]],
     });
-    expect(client.headers).not.toHaveProperty("X-Provider-Tenant");
-    expect(client.headers["X-Tenant"]).toBe("remote-a");
+    expect(requestHeaders).not.toHaveProperty("x-provider-tenant");
+    expect(requestHeaders["x-tenant"]).toBe("remote-a");
   });
 });

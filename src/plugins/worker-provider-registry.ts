@@ -1,4 +1,3 @@
-/** Deterministic lookup helpers for plugin-registered cloud-worker providers. */
 import { normalizeCapabilityProviderId } from "./provider-registry-shared.js";
 import type { PluginRegistry } from "./registry-types.js";
 import type { WorkerProvider } from "./types.js";
@@ -17,19 +16,16 @@ export function validateWorkerProviderContract(
   if (missingMethod) {
     return { ok: false, message: `worker provider registration missing method: ${missingMethod}` };
   }
-  for (const method of ["renew", "maintain", "prepareProvision"] as const) {
+  for (const method of [
+    "renew",
+    "maintain",
+    "prepareProvision",
+    "listMachineOptions",
+    "runSetupCommand",
+  ] as const) {
     if (provider[method] !== undefined && typeof provider[method] !== "function") {
       return { ok: false, message: `worker provider registration ${method} must be a function` };
     }
-  }
-  if (
-    provider.listMachineOptions !== undefined &&
-    typeof provider.listMachineOptions !== "function"
-  ) {
-    return {
-      ok: false,
-      message: "worker provider registration listMachineOptions must be a function",
-    };
   }
   if (
     provider.provisionBeforeInstallation !== undefined &&

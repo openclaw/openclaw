@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-// Runs the Vitest plan for one bundled plugin by id or path.
 import { formatErrorMessage } from "./lib/error-format.mts";
 import { mergeExtensionTestPlans, resolveExtensionTestPlan } from "./lib/extension-test-plan.mts";
 import { isDirectScriptRun } from "./lib/vitest-batch-runner.mts";
-import { runExtensionBatchPlan } from "./test-extension-batch.mts";
+import { runVitestCli } from "./lib/vitest-process.mts";
+import { runExtensionBatchPlan } from "./test-extension-batch-run.mts";
 
 const ALLOW_NO_TESTS_FLAG = "--allow-no-tests";
 
@@ -15,10 +15,6 @@ function printUsage(): void {
   console.error(
     `       node --import tsx scripts/test-extension.mts [extension-name|path] [${ALLOW_NO_TESTS_FLAG}] [vitest args...]`,
   );
-}
-
-function printNoTestsMessage(plan: { extensionDir: string }): void {
-  console.error(`[test-extension] No tests found for ${plan.extensionDir}.`);
 }
 
 async function run(): Promise<void> {
@@ -46,7 +42,7 @@ async function run(): Promise<void> {
   }
 
   if (!plan.hasTests) {
-    printNoTestsMessage(plan);
+    console.error(`[test-extension] No tests found for ${plan.extensionDir}.`);
     if (!allowNoTests) {
       process.exit(1);
     }
@@ -64,5 +60,5 @@ async function run(): Promise<void> {
 }
 
 if (isDirectScriptRun(import.meta.url)) {
-  await run();
+  await runVitestCli(undefined, run);
 }

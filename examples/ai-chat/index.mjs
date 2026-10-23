@@ -18,8 +18,8 @@ const MODELS = {
     maxTokens: 8192,
   },
   openai: {
-    id: "gpt-5.6-sol",
-    name: "GPT-5.6 Sol",
+    id: "gpt-6-astra",
+    name: "GPT-6 Astra",
     api: "openai-responses",
     provider: "openai",
     baseUrl: "https://api.openai.com/v1",

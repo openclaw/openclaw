@@ -1,14 +1,15 @@
+// This suite owns wizard-to-discovery cancellation. Context-enrichment
+// cancellation stays in setup-model-selection.test.ts: the default enrichment
+// path is separate from the wizard's tool inspection.
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { promptAndConfigureOllama } from "./setup.js";
 
-function createOllamaSetupPrompter(mode: "local-only" | "cloud-only"): WizardPrompter {
+function createOllamaSetupPrompter(mode: "local-only" | "cloud-local"): WizardPrompter {
   return {
     select: vi.fn().mockResolvedValueOnce(mode),
-    text: vi
-      .fn()
-      .mockResolvedValueOnce(mode === "cloud-only" ? "test-ollama-key" : "http://127.0.0.1:11434"),
+    text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
     note: vi.fn(async () => undefined),
   } as unknown as WizardPrompter;
 }
@@ -24,7 +25,7 @@ describe("Ollama setup cancellation", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["local-only", "cloud-only"] as const)(
+  it.each(["local-only", "cloud-local"] as const)(
     "aborts pending %s model discovery with the setup session",
     async (mode) => {
       const controller = new AbortController();
@@ -60,7 +61,6 @@ describe("Ollama setup cancellation", () => {
         cfg: {},
         env: {},
         prompter: createOllamaSetupPrompter(mode),
-        allowSecretRefPrompt: false,
         signal: controller.signal,
       });
       await tagsStarted;

@@ -1,91 +1,142 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
+import * as exec from "../../process/exec.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 
-describe("retireStandaloneGitWrapper", () => {
-  it("removes only the installer wrapper for the previous checkout", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wrapper-retire-"));
-    const oldRoot = path.join(home, "old checkout");
-    const unrelatedWrapper = path.join(home, "earlier", "openclaw");
-    const wrapper = path.join(home, ".local", "bin", "openclaw");
-    const secondWrapper = path.join(home, "legacy", "bin", "openclaw");
-    const oldWrapperContents = `#!/usr/bin/env bash\nset -euo pipefail\nexec /usr/bin/node ${oldRoot.replaceAll(" ", "\\ ")}/dist/entry.js "$@"\n`;
-    await Promise.all([
-      fs.mkdir(path.dirname(unrelatedWrapper), { recursive: true }),
-      fs.mkdir(path.dirname(wrapper), { recursive: true }),
-      fs.mkdir(path.dirname(secondWrapper), { recursive: true }),
-    ]);
-    await fs.writeFile(unrelatedWrapper, "#!/usr/bin/env bash\necho unrelated\n", { mode: 0o755 });
-    await Promise.all([
-      fs.writeFile(wrapper, oldWrapperContents, { mode: 0o755 }),
-      fs.writeFile(secondWrapper, oldWrapperContents, { mode: 0o755 }),
-    ]);
-    try {
-      await expect(
-        retireStandaloneGitWrapper({
-          previousRoot: oldRoot,
-          platform: "linux",
-          searchDirs: [
-            path.dirname(unrelatedWrapper),
-            path.dirname(wrapper),
-            path.dirname(secondWrapper),
-          ],
-        }),
-      ).resolves.toEqual({});
-      await expect(fs.readFile(unrelatedWrapper, "utf8")).resolves.toContain("unrelated");
-      await expect(fs.stat(wrapper)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.stat(secondWrapper)).rejects.toMatchObject({ code: "ENOENT" });
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+const installerWrapper = (root: string) =>
+  `#!/usr/bin/env bash\nset -euo pipefail\nexec /usr/bin/node ${root.replaceAll(" ", "\\ ")}/dist/entry.js "$@"\n`;
+async function fixture(platform: NodeJS.Platform = "linux") {
+  const base = dirs.make("openclaw-wrapper-");
+  const root = platform === "win32" ? "C:\\old checkout" : path.join(base, "old checkout");
+  const wrapper = path.join(base, platform === "win32" ? "openclaw.cmd" : "openclaw");
+  const original =
+    platform === "win32"
+      ? `@echo off\r\nnode "${path.win32.join(root, "dist", "entry.js")}" %*\r\n`
+      : installerWrapper(root);
+  const write = (contents: string) => fs.writeFile(wrapper, contents, { mode: 0o755 });
+  await write(original);
+  const retire = (searchDirs = [base], assertCurrent?: () => void) =>
+    retireStandaloneGitWrapper({ previousRoot: root, platform, searchDirs, assertCurrent });
+  return { base, root, wrapper, original, write, retire };
+}
 
-      await fs.writeFile(
-        wrapper,
-        "#!/usr/bin/env node\nimport '../lib/node_modules/openclaw/openclaw.mjs';\n",
-        { mode: 0o755 },
-      );
-      await expect(
-        retireStandaloneGitWrapper({
-          previousRoot: oldRoot,
-          platform: "linux",
-          searchDirs: [path.dirname(wrapper)],
-        }),
-      ).resolves.toEqual({});
-      await expect(fs.stat(wrapper)).resolves.toBeDefined();
+describe("retireStandaloneGitWrapper", () => {
+  it.each([
+    ...["replacement", "content change", "oversized file", "directory", "revoked finalizer"].map(
+      (change) => ({ change, stage: "pkg inspection" }),
+    ),
+    ...["replacement", "revoked finalizer"].map((change) => ({ change, stage: "wrapper read" })),
+  ])("preserves a wrapper after $change during $stage", async ({ change, stage }) => {
+    const platform = stage === "pkg inspection" ? "freebsd" : "linux";
+    const { base, wrapper, original, write, retire } = await fixture(platform);
+    const replacement = "#!/bin/sh\necho replacement\n";
+    let revoked = false;
+    const assertCurrent = vi.fn(() => {
+      if (revoked) {
+        throw new Error("finalizer revoked");
+      }
+    });
+    const changeWrapper = async () => {
+      if (change === "replacement" || change === "directory") {
+        await fs.rename(wrapper, path.join(base, "saved"));
+        if (change === "directory") {
+          await fs.mkdir(wrapper);
+        } else {
+          await write(original);
+        }
+      } else if (change === "oversized file" || change === "content change") {
+        await write(change === "oversized file" ? "x".repeat(4097) : replacement);
+      } else {
+        revoked = true;
+      }
+    };
+    const readFile = fs.readFile;
+    const observation =
+      stage === "pkg inspection"
+        ? vi.spyOn(exec, "runCommandBuffered").mockImplementationOnce(async () => {
+            await changeWrapper();
+            return pkgQueryResult();
+          })
+        : vi.spyOn(fs, "readFile").mockImplementationOnce(async (file, options) => {
+            const contents = await readFile(file, options);
+            await changeWrapper();
+            return contents;
+          });
+    try {
+      const retiring = withMockedPlatform(platform, () => retire([base], assertCurrent));
+      const result =
+        change === "revoked finalizer"
+          ? await expect(retiring).rejects.toThrow("finalizer revoked")
+          : await retiring;
+      if (change === "directory") {
+        expect((await fs.lstat(wrapper)).isDirectory()).toBe(true);
+      } else {
+        await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(
+          change === "content change"
+            ? replacement
+            : change === "oversized file"
+              ? "x".repeat(4097)
+              : original,
+        );
+      }
+      if (change !== "revoked finalizer") {
+        expect(result).toMatchObject({ error: expect.stringContaining("Could not retire") });
+      }
+      expect(assertCurrent).toHaveBeenCalledTimes(change === "revoked finalizer" ? 1 : 0);
     } finally {
-      await fs.rm(home, { recursive: true, force: true });
+      observation.mockRestore();
     }
   });
 
-  it("removes only the exact PowerShell installer wrapper on Windows", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wrapper-retire-win-"));
-    const oldRoot = "C:\\Users\\operator\\openclaw";
-    const wrapper = path.join(home, ".local", "bin", "openclaw.cmd");
-    await fs.mkdir(path.dirname(wrapper), { recursive: true });
-    await fs.writeFile(
-      wrapper,
-      `@echo off\r\nnode "${path.win32.join(oldRoot, "dist", "entry.js")}" %*\r\n`,
-    );
+  it("preserves a pkg-owned legacy wrapper even when its contents match", async () => {
+    const { wrapper, original, retire } = await fixture("freebsd");
+    const query = vi
+      .spyOn(exec, "runCommandBuffered")
+      .mockResolvedValue(pkgQueryResult(`${wrapper}\n`));
     try {
-      await expect(
-        retireStandaloneGitWrapper({
-          previousRoot: oldRoot,
-          platform: "win32",
-          searchDirs: [path.dirname(wrapper)],
-        }),
-      ).resolves.toEqual({});
-      await expect(fs.stat(wrapper)).rejects.toMatchObject({ code: "ENOENT" });
-
-      await fs.writeFile(wrapper, "@echo off\r\necho unrelated\r\n");
-      await expect(
-        retireStandaloneGitWrapper({
-          previousRoot: oldRoot,
-          platform: "win32",
-          searchDirs: [path.dirname(wrapper)],
-        }),
-      ).resolves.toEqual({});
-      await expect(fs.readFile(wrapper, "utf8")).resolves.toContain("unrelated");
+      await withMockedPlatform("freebsd", () =>
+        expect(retire()).rejects.toThrow("installed by FreeBSD pkg"),
+      );
+      await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(original);
     } finally {
-      await fs.rm(home, { recursive: true, force: true });
+      query.mockRestore();
     }
+  });
+  it("removes only the installer wrapper for the previous checkout", async () => {
+    const { base: home, root: oldRoot, wrapper, write, retire } = await fixture();
+    const unrelatedWrapper = path.join(home, "earlier", "openclaw");
+    const secondWrapper = path.join(home, "legacy", "bin", "openclaw");
+    await Promise.all(
+      [unrelatedWrapper, secondWrapper].map((file) =>
+        fs.mkdir(path.dirname(file), { recursive: true }),
+      ),
+    );
+    await fs.writeFile(unrelatedWrapper, "#!/usr/bin/env bash\necho unrelated\n", { mode: 0o755 });
+    await fs.writeFile(secondWrapper, installerWrapper(oldRoot), { mode: 0o755 });
+    await expect(
+      retire([unrelatedWrapper, wrapper, secondWrapper].map((file) => path.dirname(file))),
+    ).resolves.toEqual({});
+    await expect(fs.readFile(unrelatedWrapper, "utf8")).resolves.toContain("unrelated");
+    await expect(fs.stat(wrapper)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(secondWrapper)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await write("#!/usr/bin/env node\nimport '../lib/node_modules/openclaw/openclaw.mjs';\n");
+    await expect(retire()).resolves.toEqual({});
+    await expect(fs.stat(wrapper)).resolves.toBeDefined();
+  });
+
+  it("removes only the exact PowerShell installer wrapper on Windows", async () => {
+    const { wrapper, write, retire } = await fixture("win32");
+    await expect(retire()).resolves.toEqual({});
+    await expect(fs.stat(wrapper)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await write("@echo off\r\necho unrelated\r\n");
+    await expect(retire()).resolves.toEqual({});
+    await expect(fs.readFile(wrapper, "utf8")).resolves.toContain("unrelated");
   });
 });

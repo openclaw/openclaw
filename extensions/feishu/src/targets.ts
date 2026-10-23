@@ -1,5 +1,3 @@
-// Feishu plugin module implements targets behavior.
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { FeishuIdType } from "./types.js";
 
 const CHAT_ID_PREFIX = "oc_";
@@ -31,32 +29,13 @@ export function normalizeFeishuTarget(raw: string): string | null {
   }
 
   const withoutProvider = stripFeishuProviderPrefix(trimmed);
-  const lowered = normalizeLowercaseStringOrEmpty(withoutProvider);
-  if (lowered.startsWith("chat:")) {
-    return withoutProvider.slice("chat:".length).trim() || null;
-  }
-  if (lowered.startsWith("group:")) {
-    return withoutProvider.slice("group:".length).trim() || null;
-  }
-  if (lowered.startsWith("channel:")) {
-    return withoutProvider.slice("channel:".length).trim() || null;
-  }
-  if (lowered.startsWith("user:")) {
-    return withoutProvider.slice("user:".length).trim() || null;
-  }
-  if (lowered.startsWith("dm:")) {
-    return withoutProvider.slice("dm:".length).trim() || null;
-  }
-  if (lowered.startsWith("open_id:")) {
-    return withoutProvider.slice("open_id:".length).trim() || null;
-  }
-
-  return withoutProvider;
+  const prefix = /^(chat|group|channel|user|dm|open_id):/i.exec(withoutProvider);
+  return prefix ? withoutProvider.slice(prefix[0].length).trim() || null : withoutProvider;
 }
 
 export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_id" {
   const trimmed = id.trim();
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const lowered = trimmed.toLowerCase();
   if (
     lowered.startsWith("chat:") ||
     lowered.startsWith("group:") ||

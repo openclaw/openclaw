@@ -2,7 +2,7 @@ import { STATUS_CODES } from "node:http";
 import type { Duplex } from "node:stream";
 
 export type WebSocketUpgradeRejection = {
-  status: 400 | 401 | 403 | 404 | 426 | 429 | 503;
+  status: 400 | 401 | 403 | 404 | 426 | 429 | 502 | 503 | 504;
   reason?: string;
   body?: { contentType: string; text: string };
   headers?: Record<string, string>;

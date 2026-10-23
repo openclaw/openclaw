@@ -1,5 +1,11 @@
+import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
+import { isImageWithMediaPayload } from "./media-payload.js";
 import { resolveModelBoundThinkingReplayMode } from "./providers/anthropic-model-contract.js";
-import { isImageWithMediaPayload } from "./providers/tool-result-text.js";
+import {
+  FAILED_ASSISTANT_REPLAY_TEXT,
+  resolveFailedAssistantReplay,
+} from "./replay-turn-classification.js";
+import { OPENAI_RESPONSES_APIS } from "./transports/openai-responses-contracts.js";
 import type {
   Api,
   AssistantMessage,
@@ -145,20 +151,25 @@ export function transformMessages<TApi extends Api>(
         )
       : messages;
   const supportsImages = model.input.includes("image");
+  const missingResultText = OPENAI_RESPONSES_APIS.has(model.api)
+    ? "aborted"
+    : DEFAULT_MISSING_TOOL_RESULT_TEXT;
   const result: Message[] = [];
-  const pendingAsyncCalls = new Map<string, ToolCall>();
-  let pendingToolCalls: ToolCall[] = [];
+  type PendingToolCall = { call: ToolCall; timestamp: number };
+  const pendingAsyncCalls = new Map<string, PendingToolCall>();
+  let pendingToolCalls: PendingToolCall[] = [];
   let existingToolResultIds = new Set<string>();
   const flushToolCalls = () => {
-    for (const call of pendingToolCalls) {
+    for (const { call, timestamp } of pendingToolCalls) {
       if (!existingToolResultIds.has(call.id)) {
         result.push({
           role: "toolResult",
           toolCallId: call.id,
           toolName: call.name,
-          content: [{ type: "text", text: "No result provided" }],
+          content: [{ type: "text", text: missingResultText }],
+          details: { openclawSyntheticMissingToolResult: true },
           isError: true,
-          timestamp: Date.now(),
+          timestamp,
         });
       }
     }
@@ -171,20 +182,30 @@ export function transformMessages<TApi extends Api>(
       message = { ...message, content: [] };
     }
     if (message.role === "assistant") {
+      const failedReplay = resolveFailedAssistantReplay(message, { pairingAware: false });
       message = transformAssistant(message, model, toolCallIdMap, normalizeToolCallId);
       flushToolCalls();
-      if (message.stopReason === "error" || message.stopReason === "aborted") {
+      if (failedReplay === "drop") {
         continue;
       }
-      pendingToolCalls = message.content.filter((block): block is ToolCall => {
+      if (failedReplay === "marker") {
+        result.push({
+          ...message,
+          content: [{ type: "text", text: FAILED_ASSISTANT_REPLAY_TEXT }],
+        });
+        continue;
+      }
+      pendingToolCalls = message.content.flatMap((block): PendingToolCall[] => {
         if (block.type !== "toolCall") {
-          return false;
+          return [];
         }
+        // Rebuilt replay results retain their owner's time, including delayed async calls.
+        const pending = { call: block, timestamp: message.timestamp ?? 0 };
         if (block.async) {
-          pendingAsyncCalls.set(block.id, block);
-          return false;
+          pendingAsyncCalls.set(block.id, pending);
+          return [];
         }
-        return true;
+        return [pending];
       });
     } else {
       if (!supportsImages && typeof message.content !== "string") {

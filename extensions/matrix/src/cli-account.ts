@@ -1,13 +1,14 @@
 import type { Command } from "commander";
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import * as cli from "./cli-shared.js";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { listMatrixOwnDevices } from "./matrix/actions/devices.js";
 import { updateMatrixOwnProfile } from "./matrix/actions/profile.js";
 import { resolveMatrixConfigPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
-import { isOpenClawManagedMatrixDevice } from "./matrix/device-health.js";
+import { listStaleOpenClawMatrixDevices } from "./matrix/device-health.js";
+import type { MatrixProfileSyncResult } from "./matrix/profile.js";
 import { getMatrixRuntime } from "./runtime.js";
+import type { maybeBootstrapNewEncryptedMatrixAccount } from "./setup-bootstrap.js";
 import type { MatrixSetupInput } from "./setup-config.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
@@ -22,180 +23,12 @@ type MatrixCliAccountAddResult = {
     staleOpenClawDeviceIds: string[];
     error?: string;
   };
-  verificationBootstrap: {
+  verificationBootstrap: Awaited<ReturnType<typeof maybeBootstrapNewEncryptedMatrixAccount>>;
+  profile: Omit<MatrixProfileSyncResult, "skipped" | "uploadedAvatarSource"> & {
     attempted: boolean;
-    success: boolean;
-    recoveryKeyCreatedAt: string | null;
-    backupVersion: string | null;
-    error?: string;
-  };
-  profile: {
-    attempted: boolean;
-    displayNameUpdated: boolean;
-    avatarUpdated: boolean;
-    resolvedAvatarUrl: string | null;
-    convertedAvatarFromHttp: boolean;
     error?: string;
   };
 };
-
-async function addMatrixAccount(params: {
-  account?: string;
-  name?: string;
-  avatarUrl?: string;
-  homeserver?: string;
-  proxy?: string;
-  userId?: string;
-  accessToken?: string;
-  password?: string;
-  deviceName?: string;
-  initialSyncLimit?: string;
-  allowPrivateNetwork?: boolean;
-  useEnv?: boolean;
-  enableEncryption?: boolean;
-}): Promise<MatrixCliAccountAddResult> {
-  const initialSyncLimit = cli.parseOptionalInt(params.initialSyncLimit, "--initial-sync-limit", {
-    min: 0,
-  });
-  const runtime = getMatrixRuntime();
-  const cfg = runtime.config.current() as CoreConfig;
-  if (!matrixSetupAdapter.applyAccountConfig) {
-    throw new Error("Matrix account setup is unavailable.");
-  }
-
-  const input: MatrixSetupInput = {
-    name: params.name,
-    avatarUrl: params.avatarUrl,
-    homeserver: params.homeserver,
-    dangerouslyAllowPrivateNetwork: params.allowPrivateNetwork,
-    proxy: params.proxy,
-    userId: params.userId,
-    accessToken: params.accessToken,
-    password: params.password,
-    deviceName: params.deviceName,
-    initialSyncLimit,
-    useEnv: params.useEnv === true,
-  };
-  const accountId =
-    matrixSetupAdapter.resolveAccountId?.({
-      cfg,
-      accountId: params.account,
-      input,
-    }) ?? normalizeAccountId(params.account?.trim() || params.name?.trim());
-  const validationError = matrixSetupAdapter.validateInput?.({
-    cfg,
-    accountId,
-    input,
-  });
-  if (validationError) {
-    throw new Error(validationError);
-  }
-  const publishConfig = cli.createMatrixCliAccountConfigPublisher({ accountId, previousCfg: cfg });
-
-  const applyAccountConfig = (current: CoreConfig): CoreConfig => {
-    const next = matrixSetupAdapter.applyAccountConfig({ cfg: current, accountId, input });
-    return params.enableEncryption === true
-      ? updateMatrixAccountConfig(next, accountId, { encryption: true })
-      : next;
-  };
-  let updated = applyAccountConfig(cfg);
-  let convertedAvatarUrl: string | undefined;
-  const accountConfig = resolveMatrixAccountConfig({ cfg: updated, accountId });
-
-  try {
-    let verificationBootstrap: MatrixCliAccountAddResult["verificationBootstrap"] = {
-      attempted: false,
-      success: false,
-      recoveryKeyCreatedAt: null,
-      backupVersion: null,
-    };
-    if (accountConfig.encryption === true) {
-      const { maybeBootstrapNewEncryptedMatrixAccount } = await import("./setup-bootstrap.js");
-      verificationBootstrap = await maybeBootstrapNewEncryptedMatrixAccount({
-        previousCfg: cfg,
-        cfg: updated,
-        accountId,
-      });
-    }
-
-    const desiredDisplayName = input.name?.trim();
-    const desiredAvatarUrl = input.avatarUrl?.trim();
-    let profile: MatrixCliAccountAddResult["profile"] = {
-      attempted: false,
-      displayNameUpdated: false,
-      avatarUpdated: false,
-      resolvedAvatarUrl: null,
-      convertedAvatarFromHttp: false,
-    };
-    if (desiredDisplayName || desiredAvatarUrl) {
-      try {
-        const synced = await updateMatrixOwnProfile({
-          cfg: updated,
-          accountId,
-          displayName: desiredDisplayName,
-          avatarUrl: desiredAvatarUrl,
-        });
-        if (synced.convertedAvatarFromHttp && synced.resolvedAvatarUrl) {
-          convertedAvatarUrl = synced.resolvedAvatarUrl;
-          updated = updateMatrixAccountConfig(updated, accountId, {
-            avatarUrl: synced.resolvedAvatarUrl,
-          });
-        }
-        profile = {
-          attempted: true,
-          displayNameUpdated: synced.displayNameUpdated,
-          avatarUpdated: synced.avatarUpdated,
-          resolvedAvatarUrl: synced.resolvedAvatarUrl,
-          convertedAvatarFromHttp: synced.convertedAvatarFromHttp,
-        };
-      } catch (err) {
-        profile = {
-          attempted: true,
-          displayNameUpdated: false,
-          avatarUpdated: false,
-          resolvedAvatarUrl: null,
-          convertedAvatarFromHttp: false,
-          error: formatErrorMessage(err),
-        };
-      }
-    }
-
-    let deviceHealth: MatrixCliAccountAddResult["deviceHealth"];
-    try {
-      const addedDevices = await listMatrixOwnDevices({ accountId, cfg: updated });
-      deviceHealth = {
-        currentDeviceId: addedDevices.find((device) => device.current)?.deviceId ?? null,
-        staleOpenClawDeviceIds: addedDevices
-          .filter((device) => !device.current && isOpenClawManagedMatrixDevice(device.displayName))
-          .map((device) => device.deviceId),
-      };
-    } catch (err) {
-      deviceHealth = {
-        currentDeviceId: null,
-        staleOpenClawDeviceIds: [],
-        error: formatErrorMessage(err),
-      };
-    }
-
-    return {
-      accountId,
-      configPath: resolveMatrixConfigPath(updated, accountId),
-      useEnv: input.useEnv === true,
-      encryptionEnabled: accountConfig.encryption === true,
-      deviceHealth,
-      verificationBootstrap,
-      profile,
-    };
-  } finally {
-    // Gateway reload must not start a competing crypto client before setup retires.
-    await publishConfig((current) => {
-      const next = applyAccountConfig(current);
-      return convertedAvatarUrl
-        ? updateMatrixAccountConfig(next, accountId, { avatarUrl: convertedAvatarUrl })
-        : next;
-    });
-  }
-}
 
 export function registerMatrixAccountCommands(root: Command): void {
   const account = root.command("account").description("Manage matrix channel accounts");
@@ -226,43 +59,172 @@ export function registerMatrixAccountCommands(root: Command): void {
     .option("--verbose", "Show setup details")
     .option("--json", "Output as JSON")
     .action(
-      async (options: {
-        account?: string;
-        name?: string;
-        avatarUrl?: string;
-        homeserver?: string;
-        proxy?: string;
-        allowPrivateNetwork?: boolean;
-        userId?: string;
-        accessToken?: string;
-        password?: string;
-        deviceName?: string;
-        initialSyncLimit?: string;
-        enableE2ee?: boolean;
-        encryption?: boolean;
-        useEnv?: boolean;
-        verbose?: boolean;
-        json?: boolean;
-      }) => {
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
-          run: async () =>
-            await addMatrixAccount({
-              account: options.account,
+      async (
+        options: cli.MatrixCliOptions & {
+          name?: string;
+          avatarUrl?: string;
+          homeserver?: string;
+          proxy?: string;
+          userId?: string;
+          accessToken?: string;
+          password?: string;
+          deviceName?: string;
+          initialSyncLimit?: string;
+          allowPrivateNetwork?: boolean;
+          useEnv?: boolean;
+          enableE2ee?: boolean;
+          encryption?: boolean;
+        },
+      ) => {
+        await cli.runMatrixCliCommand(options, {
+          run: async (): Promise<MatrixCliAccountAddResult> => {
+            const enableEncryption = options.enableE2ee === true || options.encryption === true;
+            const initialSyncLimit = cli.parseOptionalInt(
+              options.initialSyncLimit,
+              "--initial-sync-limit",
+              {
+                min: 0,
+              },
+            );
+            const runtime = getMatrixRuntime();
+            const cfg = runtime.config.current() as CoreConfig;
+            const input: MatrixSetupInput = {
               name: options.name,
               avatarUrl: options.avatarUrl,
               homeserver: options.homeserver,
+              dangerouslyAllowPrivateNetwork: options.allowPrivateNetwork === true,
               proxy: options.proxy,
-              allowPrivateNetwork: options.allowPrivateNetwork === true,
               userId: options.userId,
               accessToken: options.accessToken,
               password: options.password,
               deviceName: options.deviceName,
-              initialSyncLimit: options.initialSyncLimit,
-              enableEncryption: options.enableE2ee === true || options.encryption === true,
+              initialSyncLimit,
               useEnv: options.useEnv === true,
-            }),
+            };
+            const accountId = matrixSetupAdapter.resolveAccountId({
+              cfg,
+              accountId: options.account,
+              input,
+            });
+            const validationError = matrixSetupAdapter.validateInput({
+              cfg,
+              accountId,
+              input,
+            });
+            if (validationError) {
+              throw new Error(validationError);
+            }
+            const publishConfig = cli.createMatrixCliAccountConfigPublisher({
+              accountId,
+              previousCfg: cfg,
+            });
+
+            const applyAccountConfig = (current: CoreConfig): CoreConfig => {
+              const next = matrixSetupAdapter.applyAccountConfig({
+                cfg: current,
+                accountId,
+                input,
+              });
+              return enableEncryption
+                ? updateMatrixAccountConfig(next, accountId, { encryption: true })
+                : next;
+            };
+            let updated = applyAccountConfig(cfg);
+            let convertedAvatarUrl: string | undefined;
+            const accountConfig = resolveMatrixAccountConfig({ cfg: updated, accountId });
+
+            try {
+              let verificationBootstrap: MatrixCliAccountAddResult["verificationBootstrap"] = {
+                attempted: false,
+                success: false,
+                recoveryKeyCreatedAt: null,
+                backupVersion: null,
+              };
+              if (accountConfig.encryption === true) {
+                const { maybeBootstrapNewEncryptedMatrixAccount } =
+                  await import("./setup-bootstrap.js");
+                verificationBootstrap = await maybeBootstrapNewEncryptedMatrixAccount({
+                  previousCfg: cfg,
+                  cfg: updated,
+                  accountId,
+                });
+              }
+
+              const desiredDisplayName = input.name?.trim();
+              const desiredAvatarUrl = input.avatarUrl?.trim();
+              let profile: MatrixCliAccountAddResult["profile"] = {
+                attempted: false,
+                displayNameUpdated: false,
+                avatarUpdated: false,
+                resolvedAvatarUrl: null,
+                convertedAvatarFromHttp: false,
+              };
+              if (desiredDisplayName || desiredAvatarUrl) {
+                try {
+                  const synced = await updateMatrixOwnProfile({
+                    cfg: updated,
+                    accountId,
+                    displayName: desiredDisplayName,
+                    avatarUrl: desiredAvatarUrl,
+                  });
+                  if (synced.convertedAvatarFromHttp && synced.resolvedAvatarUrl) {
+                    convertedAvatarUrl = synced.resolvedAvatarUrl;
+                    updated = updateMatrixAccountConfig(updated, accountId, {
+                      avatarUrl: synced.resolvedAvatarUrl,
+                    });
+                  }
+                  profile = {
+                    attempted: true,
+                    displayNameUpdated: synced.displayNameUpdated,
+                    avatarUpdated: synced.avatarUpdated,
+                    resolvedAvatarUrl: synced.resolvedAvatarUrl,
+                    convertedAvatarFromHttp: synced.convertedAvatarFromHttp,
+                  };
+                } catch (err) {
+                  profile = {
+                    ...profile,
+                    attempted: true,
+                    error: formatErrorMessage(err),
+                  };
+                }
+              }
+
+              let deviceHealth: MatrixCliAccountAddResult["deviceHealth"];
+              try {
+                const addedDevices = await listMatrixOwnDevices({ accountId, cfg: updated });
+                deviceHealth = {
+                  currentDeviceId: addedDevices.find((device) => device.current)?.deviceId ?? null,
+                  staleOpenClawDeviceIds: listStaleOpenClawMatrixDevices(addedDevices).map(
+                    (device) => device.deviceId,
+                  ),
+                };
+              } catch (err) {
+                deviceHealth = {
+                  currentDeviceId: null,
+                  staleOpenClawDeviceIds: [],
+                  error: formatErrorMessage(err),
+                };
+              }
+
+              return {
+                accountId,
+                configPath: resolveMatrixConfigPath(updated, accountId),
+                useEnv: input.useEnv === true,
+                encryptionEnabled: accountConfig.encryption === true,
+                deviceHealth,
+                verificationBootstrap,
+                profile,
+              };
+            } finally {
+              // Gateway reload must not start a competing crypto client before setup retires.
+              await publishConfig((current) => {
+                const next = applyAccountConfig(current);
+                return convertedAvatarUrl
+                  ? updateMatrixAccountConfig(next, accountId, { avatarUrl: convertedAvatarUrl })
+                  : next;
+              });
+            }
+          },
           onText: (result) => {
             console.log(`Saved matrix account: ${cli.formatMatrixCliText(result.accountId)}`);
             console.log(`Config path: ${cli.formatMatrixCliText(result.configPath)}`);
@@ -316,8 +278,9 @@ export function registerMatrixAccountCommands(root: Command): void {
                 }
               }
             }
-            const bindHint = `openclaw agents bind --agent <id> --bind matrix:${result.accountId}`;
-            console.log(`Bind this account to an agent: ${bindHint}`);
+            console.log(
+              `Bind this account to an agent: openclaw agents bind --agent <id> --bind matrix:${result.accountId}`,
+            );
           },
           errorPrefix: "Account setup failed",
         });

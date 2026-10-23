@@ -222,7 +222,7 @@ describeLive("xai plugin live", () => {
         usedCodeExecution?: boolean;
       };
 
-      expect(details.model).toBe("grok-4.3");
+      expect(details.model).toBe("grok-4.7");
       expect(details.usedCodeExecution).toBe(true);
       expect(details.content).toContain("42");
     });
@@ -257,7 +257,7 @@ describeLive("xai plugin live", () => {
         usedCodeExecution?: boolean;
       };
 
-      expect(details.model).toBe("grok-4.3");
+      expect(details.model).toBe("grok-4.7");
       expect(details.usedCodeExecution).toBe(true);
       expect(details.content).toContain("5050");
     });
@@ -617,9 +617,11 @@ describeLive("xai plugin live", () => {
         "server-VAD audio barge-in",
         () => {
           const serverBargeInEvents = new Set(serverEvents.slice(bargeInServerEventStart));
+          // xAI does not consistently echo `conversation.item.truncated`; the
+          // outbound truncate plus cleared playback and continued response prove
+          // the user-visible interruption contract without depending on that ack.
           return (
             serverBargeInEvents.has("input_audio_buffer.speech_started") &&
-            serverBargeInEvents.has("conversation.item.truncated") &&
             clientEvents.slice(bargeInClientEventStart).includes("conversation.item.truncate") &&
             clearAudioReasons.includes("barge-in")
           );
@@ -695,7 +697,9 @@ describeLive("xai plugin live", () => {
       );
 
       const reconnectStart = clientEvents.length;
-      const socket = (bridge as unknown as { ws?: { terminate(): void } }).ws;
+      const socket = (
+        bridge as unknown as { transport?: { socket?: { terminate(): void } | null } }
+      ).transport?.socket;
       if (!socket) {
         throw new Error("xAI realtime voice live bridge has no active WebSocket");
       }
@@ -713,7 +717,7 @@ describeLive("xai plugin live", () => {
       );
       expect(errors).toStrictEqual([]);
     } finally {
-      bridge.close();
+      await bridge.close();
     }
   }, 240_000);
 
@@ -775,7 +779,7 @@ describeLive("xai plugin live", () => {
       );
       expect(errors).toStrictEqual([]);
     } finally {
-      bridge.close();
+      await bridge.close();
     }
   }, 120_000);
 

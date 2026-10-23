@@ -1,22 +1,25 @@
 import CoreLocation
 import Foundation
+import OpenClawIPC
 import OpenClawKit
 
 @MainActor
 protocol MacNodeRuntimeMainActorServices: Sendable {
+    func missingPermissions(_ capabilities: [Capability], disabled: [Capability]) async -> OpenClawNodeError?
+
     func snapshotScreen(
         screenIndex: Int?,
         maxWidth: Int?,
         quality: Double?,
-        format: OpenClawScreenSnapshotFormat?) async throws
+        format: OpenClawScreenSnapshotFormat?,
+        desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws
         -> ScreenSnapshotResult
 
     func recordScreen(
         screenIndex: Int?,
         durationMs: Int?,
         fps: Double?,
-        includeAudio: Bool?,
-        outPath: String?) async throws -> (path: String, hasAudio: Bool)
+        includeAudio: Bool?) async throws -> (path: String, hasAudio: Bool)
 
     func locationAuthorizationStatus() -> CLAuthorizationStatus
     func locationAccuracyAuthorization() -> CLAccuracyAuthorization
@@ -27,44 +30,53 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
 
     func performComputerAct(
         _ params: OpenClawComputerActParams,
-        lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
+        lifecycleGeneration: UInt64,
+        desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws -> OpenClawComputerActResult
+    func releaseExecutionInput(_ permit: MacDesktopAvailabilityCoordinator.Permit) async
     func releaseHeldInput(lifecycleGeneration: UInt64) async
 }
 
 @MainActor
 final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+    let desktopAvailability = MacDesktopAvailabilityCoordinator.shared
     private let screenSnapshotter = ScreenSnapshotService()
     private let screenRecorder = ScreenRecordService()
     private let locationService = MacNodeLocationService()
     private let computerAction = ComputerActionService()
 
+    func missingPermissions(_ capabilities: [Capability], disabled: [Capability]) async -> OpenClawNodeError? {
+        await PermissionManager.missingPermissions(capabilities, disabled: disabled)
+    }
+
     func snapshotScreen(
         screenIndex: Int?,
         maxWidth: Int?,
         quality: Double?,
-        format: OpenClawScreenSnapshotFormat?) async throws
+        format: OpenClawScreenSnapshotFormat?,
+        desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws
         -> ScreenSnapshotResult
     {
-        try await self.screenSnapshotter.snapshot(
+        try self.desktopAvailability.validate(desktopPermit)
+        let result = try await self.screenSnapshotter.snapshot(
             screenIndex: screenIndex,
             maxWidth: maxWidth,
             quality: quality,
             format: format)
+        try self.desktopAvailability.validate(desktopPermit)
+        return result
     }
 
     func recordScreen(
         screenIndex: Int?,
         durationMs: Int?,
         fps: Double?,
-        includeAudio: Bool?,
-        outPath: String?) async throws -> (path: String, hasAudio: Bool)
+        includeAudio: Bool?) async throws -> (path: String, hasAudio: Bool)
     {
         try await self.screenRecorder.record(
             screenIndex: screenIndex,
             durationMs: durationMs,
             fps: fps,
-            includeAudio: includeAudio,
-            outPath: outPath)
+            includeAudio: includeAudio)
     }
 
     func locationAuthorizationStatus() -> CLAuthorizationStatus {
@@ -88,11 +100,19 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
 
     func performComputerAct(
         _ params: OpenClawComputerActParams,
-        lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
+        lifecycleGeneration: UInt64,
+        desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws -> OpenClawComputerActResult
     {
-        try await self.computerAction.perform(
+        try self.desktopAvailability.validate(desktopPermit)
+        return try await self.computerAction.perform(
             params,
-            lifecycleGeneration: lifecycleGeneration)
+            lifecycleGeneration: lifecycleGeneration,
+            inputScopeId: desktopPermit.inputScopeId,
+            checkScopeAllowed: { try self.desktopAvailability.validate(desktopPermit) })
+    }
+
+    func releaseExecutionInput(_ permit: MacDesktopAvailabilityCoordinator.Permit) async {
+        await self.computerAction.releaseHeldInput(inputScopeId: permit.inputScopeId)
     }
 
     func releaseHeldInput(lifecycleGeneration: UInt64) async {

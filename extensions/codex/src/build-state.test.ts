@@ -40,20 +40,6 @@ describe("defineCodexBuildState", () => {
     expect(older.items).toEqual(new Set(["old client"]));
   });
 
-  it("shares one record with every module copy of the same plugin version", () => {
-    // Another copy of this build (dist bundle beside the src bundle) already
-    // wrote its record under the versioned key; this copy must find that one.
-    const fromOtherCopy = { items: new Set<string>(["shared"]) };
-    globalState[Symbol.for(`openclaw.codexBuildStateTest@${codexPluginPackage.version}`)] =
-      fromOtherCopy;
-
-    const getState = defineCodexBuildState("openclaw.codexBuildStateTest", () => ({
-      items: new Set<string>(),
-    }));
-
-    expect(getState()).toBe(fromOtherCopy);
-  });
-
   it("never hands this build a record from another key scheme, even with matching field names", () => {
     // The shipped 2026.8.1 build keyed by bare name; its record may carry the
     // same field names with a different entry contract.

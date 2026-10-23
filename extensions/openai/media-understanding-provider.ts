@@ -1,13 +1,15 @@
-// Openai provider module implements model/runtime integration.
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import { OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL } from "./default-models.js";
 
 export const openaiMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "openai",
   capabilities: ["image", "audio"],
-  nativeDocumentInputs: ["pdf"],
-  defaultModels: { image: "gpt-5.6-sol", audio: OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL },
+  defaultModels: { image: "gpt-6-astra", audio: OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL },
   autoPriority: { image: 20, audio: 20 },
+  async analyzePdf(req) {
+    const { analyzeOpenAiPdf } = await import("./pdf-analysis.js");
+    return analyzeOpenAiPdf(req);
+  },
   async describeImage(req) {
     const { describeImageWithModel } = await import("openclaw/plugin-sdk/media-understanding");
     return describeImageWithModel(req);
@@ -23,5 +25,9 @@ export const openaiMediaUnderstandingProvider: MediaUnderstandingProvider = {
   async transcribeAudioWithContext(context) {
     const { transcribeOpenAiAudioWithContext } = await import("./audio-transcription.js");
     return transcribeOpenAiAudioWithContext(context);
+  },
+  async isAudioConfigured(context) {
+    const { isOpenAiAudioConfigured } = await import("./audio-transcription.js");
+    return isOpenAiAudioConfigured(context);
   },
 };

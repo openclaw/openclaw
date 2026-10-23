@@ -1,59 +1,81 @@
 import { vi } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PreparedAgentRunAdmission } from "./admitted-run-context.js";
-import type { AgentHarness } from "./harness/types.js";
-import { createEmptyPluginMetadataSnapshot } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
+import type { RunCliAgentParams } from "./cli-runner/types.js";
+import type {
+  AgentHarnessSelectionDecision,
+  AgentHarnessSelectionDecisionParams,
+} from "./harness/selection-decision.js";
+import type {
+  AgentHarness,
+  AgentHarnessIsolatedCompletionParamsV2,
+  AgentHarnessIsolatedCompletionResult,
+} from "./harness/types.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
-export type IsolatedCliRunParams = {
+export type IsolatedCliRunParams = RunCliAgentParams & {
   preparedRunAdmission: PreparedAgentRunAdmission;
-  prompt: string;
-  runId: string;
-  sessionId: string;
 };
 
 // Vitest can hoist a local declaration, but rejects an exported declaration.
 const isolatedCompletionMocks = vi.hoisted(() => ({
   acquireAgentRunPreparedModelRuntime: vi.fn(),
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),
-  getRegisteredAgentHarness: vi.fn(),
+  resolveAgentHarnessSelectionDecision:
+    vi.fn<(params: AgentHarnessSelectionDecisionParams) => AgentHarnessSelectionDecision>(),
   ensureAuthProfileStore: vi.fn(),
-  isCliRuntimeAliasForProvider: vi.fn<(params: { runtime?: string; provider?: string }) => boolean>(
-    () => false,
-  ),
+  cliBackendAcceptsAuthProfileForwarding: vi.fn<() => boolean>(),
+  resolveCliExecutionAuthProfileId: vi.fn<() => Promise<string | undefined>>(),
+  hasAvailableAuthForProvider: vi.fn<() => Promise<boolean>>(),
+  isCliRuntimeAliasForProvider:
+    vi.fn<(params: { runtime?: string; provider?: string }) => boolean>(),
   prepareSimpleCompletionModel: vi.fn(),
   prepareAgentRuntimeAuth: vi.fn(),
   resolveModelAsync: vi.fn(),
-  resolveCliRuntimeCanonicalProvider: vi.fn<() => string | undefined>(() => undefined),
-  resolveCliBackendConfig: vi.fn<
-    () => { config: { command: string; modelAliases?: Record<string, string> } } | undefined
-  >(() => ({ config: { command: "test-cli" } })),
-  resolveCliRuntimeExecutionProvider: vi.fn<() => string | undefined>(() => undefined),
-  resolveEmbeddedCliBackendDispatchEligibility: vi.fn(() => undefined),
-  resolveEffectiveAgentRuntime: vi.fn(() => "codex"),
+  resolveCliRuntimeCanonicalProvider: vi.fn<() => string | undefined>(),
+  resolveCliBackendConfig:
+    vi.fn<
+      () => { config: { command: string; modelAliases?: Record<string, string> } } | undefined
+    >(),
+  resolveCliRuntimeExecutionProvider: vi.fn<() => string | undefined>(),
+  resolveEmbeddedCliBackendDispatchEligibility: vi.fn<() => { provider: string } | undefined>(),
   runCliAgent: vi.fn<(params: IsolatedCliRunParams) => Promise<unknown>>(),
 }));
 
 export { isolatedCompletionMocks };
 
-vi.mock("./agent-scope.js", () => ({
+vi.mock("./agent-scope.js", async () => ({
+  ...(await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js")),
   resolveAgentDir: () => "/tmp/agent",
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
   resolveDefaultAgentId: () => "main",
+  resolveSessionAgentIds: () => ({ defaultAgentId: "main", sessionAgentId: "main" }),
 }));
 vi.mock("./cli-backends.js", () => ({
   resolveCliBackendConfig: isolatedCompletionMocks.resolveCliBackendConfig,
   resolveCliRuntimeCanonicalProvider: isolatedCompletionMocks.resolveCliRuntimeCanonicalProvider,
 }));
+// mock-isolation: Exercise the credential handoff without reading host auth stores.
+vi.mock("./cli-execution-auth.js", () => ({
+  cliBackendAcceptsAuthProfileForwarding:
+    isolatedCompletionMocks.cliBackendAcceptsAuthProfileForwarding,
+  resolveCliExecutionAuthProfileId: isolatedCompletionMocks.resolveCliExecutionAuthProfileId,
+}));
+// mock-isolation: Fixture dispatch decisions must not discover host subscription credentials.
 vi.mock("./embedded-agent-runner/cli-backend-dispatch-eligibility.js", () => ({
   resolveEmbeddedCliBackendDispatchEligibility:
+    isolatedCompletionMocks.resolveEmbeddedCliBackendDispatchEligibility,
+  resolveEmbeddedCliBackendDispatchEligibilityAsync:
     isolatedCompletionMocks.resolveEmbeddedCliBackendDispatchEligibility,
 }));
 vi.mock("./embedded-agent-runner/model.js", () => ({
   resolveModelAsync: isolatedCompletionMocks.resolveModelAsync,
 }));
-vi.mock("./harness/registry.js", () => ({
-  getRegisteredAgentHarness: isolatedCompletionMocks.getRegisteredAgentHarness,
+vi.mock("./harness/selection-decision.js", () => ({
+  resolveAgentHarnessSelectionDecision:
+    isolatedCompletionMocks.resolveAgentHarnessSelectionDecision,
 }));
 vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: isolatedCompletionMocks.ensureSelectedAgentHarnessPlugin,
@@ -62,13 +84,23 @@ vi.mock("./model-runtime-aliases.js", () => ({
   isCliRuntimeAliasForProvider: isolatedCompletionMocks.isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider: isolatedCompletionMocks.resolveCliRuntimeExecutionProvider,
 }));
+// mock-isolation: Completion auth availability comes only from the fixture, never host accounts.
 vi.mock("./model-auth.js", () => ({
   ensureAuthProfileStore: isolatedCompletionMocks.ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: isolatedCompletionMocks.ensureAuthProfileStore,
+  hasAvailableAuthForProvider: isolatedCompletionMocks.hasAvailableAuthForProvider,
 }));
+// mock-isolation: Runtime admission uses fixture leases, never host registry or credential state.
 vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: isolatedCompletionMocks.acquireAgentRunPreparedModelRuntime,
+  acquireReadOnlyPreparedModelRuntime: isolatedCompletionMocks.acquireAgentRunPreparedModelRuntime,
 }));
-vi.mock("./simple-completion-runtime.js", () => ({
+vi.mock("./simple-completion-runtime.js", async () => ({
+  // Selection stays real so utility completions can be prepared end to end;
+  // only host credential preparation is owned by the test.
+  ...(await vi.importActual<typeof import("./simple-completion-runtime.js")>(
+    "./simple-completion-runtime.js",
+  )),
   prepareSimpleCompletionModel: isolatedCompletionMocks.prepareSimpleCompletionModel,
 }));
 vi.mock("./runtime-plan/prepare-auth.js", async () => {
@@ -77,25 +109,8 @@ vi.mock("./runtime-plan/prepare-auth.js", async () => {
   );
   return { ...actual, prepareAgentRuntimeAuth: isolatedCompletionMocks.prepareAgentRuntimeAuth };
 });
-vi.mock("./runtime-plan/resolve-auth.js", () => ({
-  scopeAuthProfileStoreToPreparedPlan: (
-    store: { version: number; profiles: Record<string, unknown> },
-    plan: { forwardedAuthProfileCandidateIds?: string[] },
-  ) => ({
-    ...store,
-    profiles: Object.fromEntries(
-      (plan.forwardedAuthProfileCandidateIds ?? []).flatMap((profileId) => {
-        const profile = store.profiles[profileId];
-        return profile ? [[profileId, profile]] : [];
-      }),
-    ),
-  }),
-}));
-vi.mock("./thinking-runtime.js", () => ({
-  resolveEffectiveAgentRuntime: isolatedCompletionMocks.resolveEffectiveAgentRuntime,
-}));
 vi.mock("./cli-runner.runtime.js", () => ({ runCliAgent: isolatedCompletionMocks.runCliAgent }));
-vi.mock("../infra/private-temp-workspace.js", () => ({
+vi.mock("@openclaw/fs-safe/temp", () => ({
   withTempWorkspace: async (_options: unknown, run: (value: { dir: string }) => unknown) =>
     await run({ dir: "/tmp/isolated" }),
 }));
@@ -103,7 +118,7 @@ vi.mock("../infra/tmp-openclaw-dir.js", () => ({
   resolvePreferredOpenClawTmpDir: () => "/tmp",
 }));
 
-// Static re-exports bypass Vitest's import hoisting and can load runtime before mocks.
+// Static re-exports can load runtime before mocks.
 const { runIsolatedCompletion } = await import("./isolated-completion.js");
 export { runIsolatedCompletion };
 
@@ -120,20 +135,15 @@ export function isolatedAssistant(
     api: "openai-responses" as const,
     provider: "openai",
     model: "gpt-test",
-    usage: {
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 2,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
     stopReason,
     timestamp: Date.now(),
   };
 }
 
-export function isolatedRequest() {
+export function isolatedRequest(
+  overrides: Partial<Parameters<typeof runIsolatedCompletion>[0]> = {},
+) {
   return {
     config: {},
     provider: "openai",
@@ -142,11 +152,54 @@ export function isolatedRequest() {
     prompt: "Do the task.",
     timeoutMs: 1_000,
     agentHarnessRuntimeOverride: "codex",
+    ...overrides,
   };
+}
+
+export const isolatedReply = (text = "done") => ({
+  assistant: isolatedAssistant([{ type: "text", text }]),
+});
+export const isolatedErrorReply = (errorMessage: string) => ({
+  assistant: { ...isolatedAssistant([], "error"), errorMessage },
+});
+
+export function prepareQuotaProfiles() {
+  const profileIds = ["openai:first", "openai:backup"];
+  const store = {
+    version: 1,
+    profiles: Object.fromEntries(
+      profileIds.map((id) => [id, { type: "token", provider: "openai", token: id }]),
+    ),
+  };
+  isolatedCompletionMocks.ensureAuthProfileStore.mockReturnValue(store);
+  isolatedCompletionMocks.prepareAgentRuntimeAuth.mockReturnValue({
+    plan: nativeAuthPlan,
+    attempts: profileIds.map((profileId) => ({
+      kind: "profile",
+      profileId,
+      plan: { ...nativeAuthPlan, forwardedAuthProfileId: profileId },
+    })),
+  });
+  return store;
+}
+
+export function registerIsolatedRuntime(
+  runtime: "v1" | "v2" | "v2-native",
+  dispatch: (
+    params: Pick<AgentHarnessIsolatedCompletionParamsV2, "abortSignal" | "timeoutMs">,
+  ) => Promise<AgentHarnessIsolatedCompletionResult>,
+) {
+  registerIsolatedHarness({
+    ...(runtime === "v1"
+      ? { runIsolatedCompletion: dispatch }
+      : { runIsolatedCompletionV2: dispatch }),
+    ...(runtime === "v2-native" ? { authBootstrap: "harness" } : {}),
+  });
 }
 
 export const nativeAuthPlan = {
   providerForAuth: "openai",
+  authProfileProviderForAuth: "openai",
   modelId: "gpt-test",
   harnessAuthProvider: "openai",
   modelRoute: {
@@ -160,7 +213,9 @@ export const nativeAuthPlan = {
 };
 
 export function resetIsolatedCompletionTestState(): void {
+  const mocks = isolatedCompletionMocks;
   vi.clearAllMocks();
+  mocks.hasAvailableAuthForProvider.mockResolvedValue(false);
   preparedModelRuntime = {
     config: {},
     agentDir: "/tmp/agent",
@@ -169,47 +224,60 @@ export function resetIsolatedCompletionTestState(): void {
     workspaceDir: "/tmp/workspace",
     createStores: () => ({ modelRegistry: {} }),
   };
-  releaseRuntimeLease = vi.fn();
-  isolatedCompletionMocks.acquireAgentRunPreparedModelRuntime.mockResolvedValue({
+  releaseRuntimeLease = vi.fn(async () => {});
+  mocks.acquireAgentRunPreparedModelRuntime.mockResolvedValue({
     snapshot: preparedModelRuntime,
-    release: releaseRuntimeLease,
+    [Symbol.asyncDispose]: releaseRuntimeLease,
   });
-  isolatedCompletionMocks.isCliRuntimeAliasForProvider.mockReturnValue(false);
-  isolatedCompletionMocks.resolveCliBackendConfig.mockReturnValue({
-    config: { command: "test-cli" },
+  mocks.isCliRuntimeAliasForProvider.mockReturnValue(false);
+  mocks.cliBackendAcceptsAuthProfileForwarding.mockReturnValue(false);
+  mocks.resolveCliExecutionAuthProfileId.mockResolvedValue(undefined);
+  mocks.resolveCliBackendConfig.mockReturnValue({ config: { command: "test-cli" } });
+  mocks.resolveCliRuntimeCanonicalProvider.mockReturnValue(undefined);
+  mocks.resolveAgentHarnessSelectionDecision.mockReturnValue({
+    policy: { runtime: "openclaw" },
+    selectedHarnessId: "openclaw",
+    selectedReason: "forced_openclaw",
+    candidates: [],
+    builtIn: true,
   });
-  isolatedCompletionMocks.resolveCliRuntimeCanonicalProvider.mockReturnValue(undefined);
-  isolatedCompletionMocks.resolveEffectiveAgentRuntime.mockReturnValue("codex");
-  isolatedCompletionMocks.resolveCliRuntimeExecutionProvider.mockReturnValue(undefined);
-  isolatedCompletionMocks.resolveEmbeddedCliBackendDispatchEligibility.mockReturnValue(undefined);
-  isolatedCompletionMocks.prepareSimpleCompletionModel.mockResolvedValue({
+  mocks.resolveCliRuntimeExecutionProvider.mockReturnValue(undefined);
+  mocks.resolveEmbeddedCliBackendDispatchEligibility.mockReturnValue(undefined);
+  mocks.prepareSimpleCompletionModel.mockResolvedValue({
     model: { provider: "openai", id: "gpt-test", api: "openai-responses" },
     auth: { apiKey: "secret", source: "profile:openai:test", mode: "oauth" },
     sourceAuthFingerprint: "fingerprint",
   });
-  const runtimeModel = {
-    provider: "openai",
-    id: "gpt-test",
-    api: "openai-chatgpt-responses",
-    baseUrl: nativeAuthPlan.modelRoute.baseUrl,
-  };
-  isolatedCompletionMocks.resolveModelAsync.mockResolvedValue({ model: runtimeModel });
-  isolatedCompletionMocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
-  const plan = nativeAuthPlan;
-  isolatedCompletionMocks.prepareAgentRuntimeAuth.mockReturnValue({
-    plan,
-    attempts: [{ kind: "implicit", plan }],
+  mocks.resolveModelAsync.mockResolvedValue({
+    model: {
+      provider: "openai",
+      id: "gpt-test",
+      api: "openai-chatgpt-responses",
+      baseUrl: nativeAuthPlan.modelRoute.baseUrl,
+    },
+  });
+  mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
+  mocks.prepareAgentRuntimeAuth.mockReturnValue({
+    plan: nativeAuthPlan,
+    attempts: [{ kind: "implicit", plan: nativeAuthPlan }],
   });
 }
 
 export function registerIsolatedHarness(overrides: Partial<AgentHarness>): void {
-  isolatedCompletionMocks.getRegisteredAgentHarness.mockReturnValue({
-    harness: {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: vi.fn(),
-      ...overrides,
-    } satisfies AgentHarness,
+  const harness: AgentHarness = {
+    id: "codex",
+    label: "Codex",
+    supports: () => ({ supported: true }),
+    runAttempt: vi.fn(),
+    ...overrides,
+  };
+  isolatedCompletionMocks.resolveAgentHarnessSelectionDecision.mockReturnValue({
+    policy: { runtime: harness.id },
+    selectedHarnessId: harness.id,
+    selectedReason: "forced_plugin",
+    candidates: [],
+    builtIn: false,
+    harness,
+    ownerPluginId: harness.pluginId ?? harness.id,
   });
 }

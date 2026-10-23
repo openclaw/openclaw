@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import {
@@ -12,6 +13,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import {
   resetAgentRunRegistryForTest,
   validateAgentRunDelegatedAuthority,
@@ -25,13 +27,15 @@ import {
 import { createWorkerComputerTool } from "../../worker/computer-runtime.js";
 import { parseNodeWorkerComputerInput } from "../../worker/node-computer-protocol.js";
 import { WorkerConnection } from "../../worker/worker-connection.js";
+import { createWorkerGatewayToolProxies } from "../../worker/worker-gateway-tools.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
+import { gatewayTestTextTransport } from "../server/connection-transport.test-support.js";
 import {
   attachWorkerWsMessageHandler,
   type WorkerConnectionService,
 } from "../server/ws-connection/worker-connection.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
-import { createWorkerComputerService } from "./computer-transport.js";
+import { createWorkerComputerService } from "./computer-service.js";
 import {
   COMPUTER_USE,
   connectionIdentity,
@@ -78,11 +82,8 @@ describe("worker computer connection lifetime", () => {
     async (boundary) => {
       const h = createHarness();
       const service = createWorkerComputerService(h.options);
-      const computer = await service.prepare(h.claim);
-      if (!computer) {
-        throw new Error("Expected session computer");
-      }
-      computer.bind(h.run);
+      const computer = expectDefined(await service.prepare(h.claim), "Expected session computer");
+      computer.bind(h.run, h.workerSource);
       const identity = {
         ...connectionIdentity(h),
         protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
@@ -98,7 +99,6 @@ describe("worker computer connection lifetime", () => {
       const durableEntered = createDeferred();
       const durableResume = createDeferred();
       const durableDone = createDeferred();
-      let durableSignal: AbortSignal | undefined;
       let pendingComputer: ReturnType<typeof rpc> | undefined;
       let freshComputer: Promise<unknown> | undefined;
       let computerRequests = 0;
@@ -111,12 +111,39 @@ describe("worker computer connection lifetime", () => {
           computerRequests += 1;
           return (pendingComputer = rpc(who, request, signal));
         },
-        executeSessionTool: async (_who, _tool, _request, signal) => {
-          durableSignal = signal;
+        getToolSurface: async () => ({
+          ok: true,
+          result: {
+            generation: "surface",
+            presentation: createToolSurfacePresentationForTest(),
+            tools: [
+              {
+                id: "send",
+                execution: "gateway",
+                replay: true,
+                timeout: { argument: "timeoutSeconds", defaultSeconds: 30, paddingMs: 60_000 },
+                definition: {
+                  name: "sessions_send",
+                  label: "Send",
+                  description: "Send a message to another session.",
+                  parameters: { type: "object" },
+                },
+              },
+            ],
+            policy: {
+              workspaceOnly: true,
+              readOnly: false,
+              applyPatchEnabled: false,
+              applyPatchWorkspaceOnly: true,
+              imageSanitization: {},
+            },
+          },
+        }),
+        invokeGatewayTool: async () => {
           durableEntered.resolve();
           await durableResume.promise;
           durableDone.resolve();
-          return { ok: true, result: { resultJson: "{}" } };
+          return { ok: true, result: { content: [] } };
         },
       };
       const connectionWork = new GatewayConnectionWork();
@@ -131,6 +158,7 @@ describe("worker computer connection lifetime", () => {
         let closed = false;
         const cleanup = attachWorkerWsMessageHandler({
           socket,
+          transport: gatewayTestTextTransport(socket),
           connectionWork,
           connId: "fixture-connection",
           service: serverService,
@@ -138,7 +166,9 @@ describe("worker computer connection lifetime", () => {
           send: (frame) => {
             if (socket.readyState === WebSocket.OPEN) {
               socket.send(JSON.stringify(frame));
+              return { kind: "sent" };
             }
+            return { kind: "unavailable" };
           },
           close: (code, reason) => socket.close(code, reason),
           isClosed: () => closed,
@@ -200,14 +230,16 @@ describe("worker computer connection lifetime", () => {
         requestComputer: (request) => connection.requestComputer(request),
         registerRunCleanup: (close) => cleanups.push(close),
       });
+      const type = (id: string, text: string) => tool.execute(id, { action: "type", text });
       try {
-        await connection.start();
-        const durable = connection
-          .requestSessionsSend({
-            toolCallId: "durable-send",
-            sessionKey: "agent:main:child",
-            message: "continue",
-          })
+        const hello = await connection.start();
+        const surface = expectDefined(
+          hello.toolSurface,
+          "Expected the admitted Gateway tool surface",
+        );
+        const send = createWorkerGatewayToolProxies(surface, connection)[0]!;
+        const durable = send
+          .execute("durable-send", { sessionKey: "agent:main:child", message: "continue" })
           .catch((error: unknown) => error);
         await durableEntered.promise;
         if (boundary === "ordinary-close") {
@@ -220,7 +252,7 @@ describe("worker computer connection lifetime", () => {
               )
               .filter((input) => input.operation === "act"),
           });
-          await tool.execute("before-close", { action: "type", text: "allowed before close" });
+          await type("before-close", "allowed before close");
           const beforeClose = readComputerEffects();
           expect(beforeClose).toMatchObject({
             computerRequests: 2,
@@ -230,18 +262,18 @@ describe("worker computer connection lifetime", () => {
             ],
           });
           expect(server.clients.size).toBe(1);
-          const workerSocket = [...server.clients][0];
-          if (!workerSocket) {
-            throw new Error("Expected the admitted worker socket");
-          }
+          const workerSocket = expectDefined(
+            [...server.clients][0],
+            "Expected the admitted worker socket",
+          );
           const received = createDeferred<string>();
           workerSocket.once("message", (data) => received.resolve(rawDataToString(data)));
           connectionWork.beginClose();
           expect(getGatewaySuspendAdmissionPhase()).toBe("accepting");
           expect(isGatewayRestartDraining()).toBe(false);
-          freshComputer = tool
-            .execute("after-close", { action: "type", text: "must not type after close" })
-            .catch((error: unknown) => error);
+          freshComputer = type("after-close", "must not type after close").catch(
+            (error: unknown) => error,
+          );
           const frame: unknown = JSON.parse(await received.promise);
           expect(frame).toMatchObject({
             type: "req",
@@ -263,8 +295,7 @@ describe("worker computer connection lifetime", () => {
           durableResume.resolve();
           await durableDone.promise;
           await draining;
-          expect(await durable).toMatchObject({ ok: true });
-          expect(durableSignal).toBeUndefined();
+          expect(await durable).toMatchObject({ content: [] });
           expect(workerSocket.readyState).toBe(WebSocket.OPEN);
           expect(h.options.placements.validateTurnClaim(h.claim)).toBe(true);
           expect(validateAgentRunDelegatedAuthority(h.authority)).toBe(true);
@@ -276,7 +307,7 @@ describe("worker computer connection lifetime", () => {
           await resume.promise;
         };
         if (boundary === "completed") {
-          await tool.execute("completed", { action: "type", text: "allowed" });
+          await type("completed", "allowed");
           expect(h.nativeExecutionIds).toHaveLength(2);
           // No computer request remains pending. Socket closure must still release
           // the captured execution, and shutdown must join its eventual close ACK.
@@ -297,9 +328,7 @@ describe("worker computer connection lifetime", () => {
           } else {
             h.state.beforeDispatch = pause;
           }
-          const failed = tool
-            .execute("deadline", { action: "type", text: "must not type" })
-            .catch((error: unknown) => error);
+          const failed = type("deadline", "must not type").catch((error: unknown) => error);
           await entered.promise;
           expect(await failed).toMatchObject({ message: "worker computer response timed out" });
           await disconnected.promise;
@@ -313,13 +342,10 @@ describe("worker computer connection lifetime", () => {
         h.state.beforePolicy = undefined;
         h.state.beforeDispatch = undefined;
         await connection.waitForReady();
-        const retained = await tool
-          .execute("retained", { action: "type", text: "still forbidden" })
-          .catch((error: unknown) => error);
+        const retained = await type("retained", "still forbidden").catch((error: unknown) => error);
         durableResume.resolve();
         await durableDone.promise;
-        expect(await durable).toMatchObject({ ok: true });
-        expect(durableSignal).toBeUndefined();
+        expect(await durable).toMatchObject({ content: [] });
         expect(retained).toBeInstanceOf(Error);
         if (boundary !== "completed") {
           await service.close();

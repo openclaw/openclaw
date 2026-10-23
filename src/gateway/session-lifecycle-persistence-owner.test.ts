@@ -1,11 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const persistLifecycle = vi.hoisted(() => vi.fn());
 const ownerStatus = vi.hoisted(() => vi.fn());
+const runtimeConfig = vi.hoisted<{ value: OpenClawConfig }>(() => ({ value: {} }));
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
+  getRuntimeConfig: () => runtimeConfig.value,
+}));
 
+// mock-isolation: Hold persistence settlement without opening a database.
 vi.mock("./session-lifecycle-state.js", () => ({
-  persistGatewaySessionLifecycleEvent: persistLifecycle,
+  prepareGatewaySessionLifecycleEvent: (params: unknown) => () => persistLifecycle(params),
 }));
 vi.mock("../infra/agent-run-registry.js", () => ({
   getAgentRunContextOwnerStatus: ownerStatus,
@@ -32,28 +39,12 @@ const terminal = {
 
 describe("session lifecycle persistence owner", () => {
   beforeEach(() => {
+    runtimeConfig.value = {};
     persistLifecycle.mockReset();
     ownerStatus.mockReset().mockReturnValue("active");
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("starts one terminal write before the chat handler consumes it", async () => {
-    persistLifecycle.mockResolvedValue(undefined);
-    const owner = createSessionLifecyclePersistenceOwner();
-
-    const prepared = owner.observe(terminal);
-    const consumed = owner.persist(terminal);
-
-    expect(consumed).toBe(prepared);
-    expect(persistLifecycle).toHaveBeenCalledOnce();
-    await consumed;
-    await owner.drain();
-  });
-
-  it("distinguishes reused run ids by their exact owner claim", async () => {
+  it.each([false, true])("separates distinct runtime events (new claim: %s)", async (newClaim) => {
     persistLifecycle.mockResolvedValue(undefined);
     const owner = createSessionLifecyclePersistenceOwner();
     const first = {
@@ -62,20 +53,20 @@ describe("session lifecycle persistence owner", () => {
     };
     const successor = {
       ...terminal,
-      event: { ...terminal.event, contextClaimId: "claim-2" },
+      event: { ...terminal.event, contextClaimId: newClaim ? "claim-2" : "claim-1" },
     };
 
     const firstPrepared = owner.observe(first);
     const successorPrepared = owner.observe(successor);
 
     expect(successorPrepared).not.toBe(firstPrepared);
-    expect(persistLifecycle).toHaveBeenCalledTimes(2);
     expect(owner.persist(successor)).toBe(successorPrepared);
     await Promise.all([firstPrepared, successorPrepared]);
+    expect(persistLifecycle).toHaveBeenCalledTimes(2);
     await owner.drain();
   });
 
-  it("preserves private restart-recovery metadata for the durable write", async () => {
+  it("preserves private lifecycle metadata for the durable write", async () => {
     persistLifecycle.mockResolvedValue(undefined);
     const event = {
       runId: "run-recovery",
@@ -88,69 +79,78 @@ describe("session lifecycle persistence owner", () => {
     Object.defineProperties(event, {
       lifecycleGeneration: { value: "generation-recovery", enumerable: false },
       mainSessionRestartRecovery: { value: true, enumerable: false },
+      controlUiVisible: { value: true, enumerable: false },
+      contextClaimId: { value: "claim-recovery", enumerable: false },
     });
     const owner = createSessionLifecyclePersistenceOwner();
 
-    await owner.observe({ sessionKey: terminal.sessionKey, event });
+    await owner.observe({ sessionKey: terminal.sessionKey, clientRunId: "client-recovery", event });
 
     expect(persistLifecycle).toHaveBeenCalledWith({
       sessionKey: terminal.sessionKey,
+      clientRunId: "client-recovery",
       event: expect.objectContaining({
         lifecycleGeneration: "generation-recovery",
         mainSessionRestartRecovery: true,
+        controlUiVisible: true,
+        contextClaimId: "claim-recovery",
       }),
     });
     await owner.drain();
   });
 
-  it("persists a keyed error after the chat retry grace expires", async () => {
-    persistLifecycle.mockResolvedValue(undefined);
-    const owner = createSessionLifecyclePersistenceOwner();
-    const error = {
-      ...terminal,
-      event: {
-        ...terminal.event,
-        data: { phase: "error", error: "fallback exhausted", endedAt: 2_000 },
-      },
-    };
+  it.each([false, true])(
+    "settles a start before its terminal while draining (global alias: %s)",
+    async (globalAlias) => {
+      if (globalAlias) {
+        runtimeConfig.value = {
+          agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+          session: { scope: "global" },
+        };
+      }
+      const releaseStart = createDeferred();
+      const phases: unknown[] = [];
+      persistLifecycle.mockImplementation(async (params: PersistenceParams) => {
+        if (params.event.data?.phase === "start") {
+          await releaseStart.promise;
+        }
+        phases.push(params.event.data?.phase);
+      });
+      const owner = createSessionLifecyclePersistenceOwner();
+      const start = owner.persist({
+        ...terminal,
+        sessionKey: globalAlias ? "agent:research:main" : terminal.sessionKey,
+        event: { ...terminal.event, data: { phase: "start", startedAt: 1_000 } },
+      });
+      const end = owner.observe({
+        ...terminal,
+        ...(globalAlias ? { agentId: "research", sessionKey: "global" } : {}),
+      });
+      const draining = owner.drain();
+      try {
+        expect(persistLifecycle).toHaveBeenCalledOnce();
+        releaseStart.resolve();
+        await Promise.all([start, end, draining]);
+        expect(phases).toEqual(["start", "end"]);
+      } finally {
+        releaseStart.resolve();
+        await Promise.allSettled([start, end, draining]);
+      }
+    },
+  );
 
-    await owner.persist(error);
-
-    expect(persistLifecycle).toHaveBeenCalledOnce();
-    expect(persistLifecycle).toHaveBeenCalledWith(error);
-  });
-
-  it("keeps terminal writes alive until shutdown drains them", async () => {
-    const deferred = createDeferred();
-    persistLifecycle.mockReturnValue(deferred.promise);
-    const owner = createSessionLifecyclePersistenceOwner();
-    void owner.observe(terminal);
-
-    let drained = false;
-    const drain = owner.drain().then(() => {
-      drained = true;
-    });
-    await Promise.resolve();
-    expect(drained).toBe(false);
-
-    deferred.resolve();
-    await drain;
-    expect(drained).toBe(true);
-  });
-
-  it("keeps a pending write available after its lookup grace expires", async () => {
-    vi.useFakeTimers();
+  it("reuses the original event's write before and after settlement", async () => {
     const deferred = createDeferred();
     persistLifecycle.mockReturnValue(deferred.promise);
     const owner = createSessionLifecyclePersistenceOwner();
     const prepared = owner.observe(terminal);
-    await vi.advanceTimersByTimeAsync(60_000);
 
-    const consumed = owner.persist(terminal);
-
-    expect(consumed).toBe(prepared);
+    expect(owner.observe(terminal)).toBe(prepared);
+    expect(owner.persist(terminal)).toBe(prepared);
     deferred.resolve();
-    await consumed;
+    await prepared;
+    expect(owner.persist(terminal)).toBe(prepared);
+    expect(persistLifecycle).toHaveBeenCalledOnce();
     await owner.drain();
   });
 
@@ -167,6 +167,9 @@ describe("session lifecycle persistence owner", () => {
     expect(consumed).toBe(prepared);
     deferred.resolve();
     await Promise.all([consumed, draining]);
+    await expect(owner.persist(terminal)).rejects.toMatchObject({
+      code: "ERR_STALE_GATEWAY_LIFECYCLE",
+    });
   });
 
   it("rejects a terminal write when its exact claim retires before commit", async () => {
@@ -180,14 +183,15 @@ describe("session lifecycle persistence owner", () => {
       sessionStatus = "done";
     });
     const owner = createSessionLifecyclePersistenceOwner();
-    const persistence = owner.observe({
+    const observed = {
       ...terminal,
       authority: {
         claimId: "claim-1",
         lifecycleGeneration: "generation-1",
         runId: "run-1",
       },
-    });
+    };
+    const persistence = owner.observe(observed);
     await commitReached.promise;
 
     ownerStatus.mockReturnValue(undefined);
@@ -198,6 +202,11 @@ describe("session lifecycle persistence owner", () => {
       code: "ERR_STALE_GATEWAY_LIFECYCLE",
     });
     expect(sessionStatus).toBe("running");
+    expect(owner.persist(observed)).toBe(persistence);
+    await expect(owner.persist(observed)).rejects.toMatchObject({
+      code: "ERR_STALE_GATEWAY_LIFECYCLE",
+    });
+    expect(persistLifecycle).toHaveBeenCalledOnce();
   });
 
   it("rejects a deferred error when its exact claim retires before commit", async () => {
@@ -236,15 +245,19 @@ describe("session lifecycle persistence owner", () => {
     { name: "native cancellation", data: { phase: "error", aborted: true, stopReason: "aborted" } },
     { name: "fallback exhaustion", data: { phase: "error", fallbackExhaustedFailure: true } },
     { name: "settled execution failure", data: { phase: "error", executionSettled: true } },
-  ])("does not restart $name after its prepared promise expires", async ({ data }) => {
-    vi.useFakeTimers();
+  ])("reuses settled $name only for the original runtime event", async ({ data }) => {
     persistLifecycle.mockResolvedValue(undefined);
     const owner = createSessionLifecyclePersistenceOwner();
     const event = { ...terminal, event: { ...terminal.event, data } };
-    await owner.observe(event);
-    await vi.advanceTimersByTimeAsync(60_000);
+    const prepared = owner.observe(event);
+    await prepared;
 
-    await expect(owner.persist(event)).rejects.toMatchObject({
+    expect(owner.persist(event)).toBe(prepared);
+    await expect(owner.persist({ ...event, event: { ...event.event } })).rejects.toMatchObject({
+      code: "ERR_STALE_GATEWAY_LIFECYCLE",
+    });
+    const { seq: _seq, ...withoutSequence } = event.event;
+    await expect(owner.persist({ ...event, event: withoutSequence })).rejects.toMatchObject({
       code: "ERR_STALE_GATEWAY_LIFECYCLE",
     });
     expect(persistLifecycle).toHaveBeenCalledOnce();

@@ -1,15 +1,20 @@
+import { writeFile } from "node:fs/promises";
 // Control UI tests cover mobile pairing setup through the mocked Gateway.
 import path from "node:path";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type { Page } from "playwright";
 import qrcode from "qrcode";
 import { beforeEach, expect, it } from "vitest";
+import type { OpenClawModalDialog } from "../components/modal-dialog.tsx";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
+  tooltipTitleText,
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -36,7 +41,116 @@ async function captureUiProof(page: Page, fileName: string) {
   await page.screenshot({ animations: "disabled", path: path.join(uiProofArtifactDir, fileName) });
 }
 
+async function expectPairingLayout(page: Page, mode: "node" | "qr") {
+  const layout = await page.evaluate((currentMode) => {
+    const setup = document.querySelector<HTMLElement>(".device-pair-setup")!;
+    const setupBounds = setup.getBoundingClientRect();
+    const elements = document.querySelectorAll<HTMLElement>(
+      `.device-pair-setup, .device-pair-setup__body, .device-pair-setup__access label, .device-pair-setup__meta, .device-pair-setup__fallback, .device-pair-setup__footer, ${
+        currentMode === "node"
+          ? ".device-pair-setup__command, .login-gate__command, .login-gate__command code, .device-pair-setup .chat-copy-btn"
+          : ".device-pair-setup__qr-frame, .device-pair-setup__qr"
+      }`,
+    );
+    const copy = setup.querySelector<HTMLElement>(".chat-copy-btn");
+    const code = setup.querySelector<HTMLElement>(".login-gate__command code");
+    const qr = setup.querySelector<HTMLElement>(".device-pair-setup__qr");
+    const outside = [...elements]
+      .filter((element) => {
+        const bounds = element.getBoundingClientRect();
+        return (
+          element.scrollWidth > element.clientWidth + 1 ||
+          bounds.left < setupBounds.left - 1 ||
+          bounds.right > setupBounds.right + 1
+        );
+      })
+      .map((element) => element.className);
+    if (
+      copy &&
+      code &&
+      code.getBoundingClientRect().right > copy.getBoundingClientRect().left + 1
+    ) {
+      outside.push("copy-overlap");
+    }
+    if (getComputedStyle(setup).overflowX === "hidden") {
+      outside.push("clipped-overflow");
+    }
+    let qrState = qr === null;
+    if (currentMode === "qr") {
+      qrState = qr ? Math.abs(qr.clientWidth - qr.clientHeight) <= 1 : false;
+    }
+    return {
+      accessCards: document.querySelectorAll(".device-pair-setup__access label").length,
+      outside,
+      pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+      qrState,
+    };
+  }, mode);
+
+  expect(layout).toEqual({
+    accessCards: 3,
+    outside: [],
+    pageOverflow: false,
+    qrState: true,
+  });
+}
+
 suite.define(() => {
+  it("keeps setup creation admin-only while preserving device approval access", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.read", "operator.pairing"],
+        presenceUsers: [{ self: true, id: "pairing-operator", name: "Pairing operator" }],
+        methodResponses: {
+          "device.pair.list": {
+            paired: [],
+            pending: [
+              {
+                requestId: "synthetic-browser-request",
+                deviceId: "synthetic-browser",
+                displayName: "Synthetic browser",
+                role: "operator",
+                roles: ["operator"],
+                scopes: ["operator.read"],
+                ts: Date.now(),
+              },
+            ],
+          },
+          "device.pair.approve": { requestId: "synthetic-browser-request" },
+          "node.list": { nodes: [] },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.locator(".sidebar-identity-card").click();
+      const menu = page.locator(".sidebar-identity-menu");
+      const pair = menu.locator('[data-value="command:pair-mobile"]');
+      await pair.waitFor();
+      if (captureUiProofEnabled) {
+        const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [pair], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(uiProofArtifactDir, "pairing-operator-menu.png"), frame.png);
+      }
+      expect(await pair.getAttribute("disabled")).not.toBeNull();
+      expect(await tooltipTitleText(pair)).toBe(
+        "Administrator access is required to create setup codes.",
+      );
+      await page.keyboard.press("Escape");
+      await page.goto(`${suite.server.baseUrl}settings/devices`);
+      const pending = page.locator(".device-entry", { hasText: "Synthetic browser" });
+      await pending.waitFor();
+      expect(
+        await page.getByRole("button", { name: "Pair device", exact: true }).isDisabled(),
+      ).toBe(true);
+      await gateway.setMethodResponse("device.pair.list", { pending: [], paired: [] });
+      await pending.getByRole("button", { name: "Approve Synthetic browser", exact: true }).click();
+      const approved = await gateway.waitForRequest("device.pair.approve");
+      expect(approved.params).toEqual({ requestId: "synthetic-browser-request" });
+      await pending.waitFor({ state: "hidden" });
+      expect(await gateway.getRequests("device.pair.setupCode")).toEqual([]);
+    });
+  });
+
   it("opens pairing from a catalog command without creating a transcript turn", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const baselineText = "Pairing command baseline transcript.";
@@ -140,13 +254,7 @@ suite.define(() => {
   });
 
   it("retires exact setup credentials across success, expiry, regeneration, and errors", async () => {
-    const setupCode = Buffer.from(
-      JSON.stringify({
-        url: "wss://gateway.example.test",
-        bootstrapToken: "e2e-bootstrap-token",
-      }),
-      "utf8",
-    ).toString("base64url");
+    const setupCode = `eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.${"Ab9_".repeat(54)}.SyntheticSignatureForLayoutOnly`;
     const qrDataUrl = await qrcode.toDataURL(setupCode, { margin: 2, width: 360 });
     const setupResult = (
       setupId: string,
@@ -167,6 +275,7 @@ suite.define(() => {
     await suite.withPage(
       {
         locale: "en-US",
+        permissions: ["clipboard-read", "clipboard-write"],
         serviceWorkers: "block",
         viewport: { height: 844, width: 390 },
       },
@@ -239,6 +348,7 @@ suite.define(() => {
         await gateway.resolveDeferred("device.pair.setupCode", setupResult("setup-full", "full"));
         await qr.waitFor();
         await captureUiProof(page, "03-mobile-waiting.png");
+        await expectPairingLayout(page, "qr");
 
         await gateway.emitGatewayEvent("device.pair.setup.completed", {
           setupId: "setup-unrelated",
@@ -273,6 +383,8 @@ suite.define(() => {
         );
         await page.getByRole("button", { name: "Create setup code" }).click();
         await qr.waitFor();
+        await captureUiProof(page, "04-desktop-waiting.png");
+        await expectPairingLayout(page, "qr");
         expect((await gateway.getRequests("device.pair.setupCode")).at(-1)?.params).toEqual({
           bootstrapProfile: "limited",
         });
@@ -414,23 +526,92 @@ suite.define(() => {
         await qr.waitFor();
         await page.locator(".device-pair-setup__close").click();
         await dialog.waitFor({ state: "hidden" });
-        await gateway.setMethodResponse(
-          "device.pair.setupCode",
-          setupResult("setup-node", "node", Date.now() + 60_000, "Node_AbC123"),
+        const nodeCommand = `openclaw node run --pair "oc-pair://${setupCode}"`;
+        const setup = page.locator(".device-pair-setup");
+        for (const viewport of [
+          { height: 900, width: 1280 },
+          { height: 844, width: 390 },
+        ]) {
+          await page.setViewportSize(viewport);
+          await gateway.setMethodResponse(
+            "device.pair.setupCode",
+            setupResult(`setup-node-${viewport.width}`, "node", Date.now() + 60_000),
+          );
+          await pairFromSettings.click();
+          try {
+            await dialog.waitFor();
+          } catch (reopenError) {
+            try {
+              const state = await evaluateControlUiContext(page, (context) => {
+                const overlay = context.overlays.snapshot;
+                const gatewaySnapshot = context.gateway.snapshot;
+                return {
+                  gatewayPhase: gatewaySnapshot.phase,
+                  admin: gatewaySnapshot.hello?.auth?.scopes?.includes("operator.admin") ?? false,
+                  pairingOpen: overlay.devicePairSetupOpen,
+                  pairingPhase: overlay.devicePairSetupLifecycle.phase,
+                  modalLayers: document.openClawModalLayers?.size ?? 0,
+                  hosts: Array.from(
+                    document.querySelectorAll<OpenClawModalDialog>("openclaw-modal-dialog"),
+                    (host) => ({
+                      open: host.open,
+                      connected: host.isConnected,
+                      dialogs: Array.from(host.querySelectorAll("dialog"), (native) => ({
+                        open: native.open,
+                        inert: native.inert,
+                        phase: native.dataset.phase,
+                        visible: native.getClientRects().length > 0,
+                      })),
+                    }),
+                  ),
+                };
+              });
+              console.warn(
+                "[mobile-pairing] reopen timeout",
+                JSON.stringify({ viewport, pageErrorCount: pageErrors.length, state }),
+              );
+            } catch {
+              console.warn("[mobile-pairing] reopen timeout diagnostics unavailable");
+            }
+            throw reopenError;
+          }
+          await page.locator('input[name="device-pair-access"]').nth(2).check();
+          await page.getByRole("button", { name: "Create setup code" }).click();
+          await page.getByText(nodeCommand, { exact: true }).waitFor();
+          await captureUiProof(page, `11-node-${viewport.width}.png`);
+          await expectPairingLayout(page, "node");
+          const copy = setup.locator(".chat-copy-btn");
+          await copy.focus();
+          expect(await copy.evaluate((element) => element === document.activeElement)).toBe(true);
+          await page.evaluate(() => navigator.clipboard.writeText("before-copy"));
+          await copy.click();
+          await expect
+            .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+            .toBe(nodeCommand);
+          const manageDevices = page.getByRole("button", { name: "Manage devices" });
+          await manageDevices.scrollIntoViewIfNeeded();
+          await manageDevices.click({ trial: true });
+          if (viewport.width === 1280) {
+            await page.locator(".device-pair-setup__close").click();
+            await dialog.waitFor({ state: "hidden" });
+          }
+        }
+        // The body scrolls while completion actions stay outside it in the pinned footer.
+        const scrollBody = setup.locator(".device-pair-setup__body");
+        await scrollBody.hover();
+        await page.mouse.wheel(0, 1000);
+        await expect
+          .poll(() => scrollBody.evaluate((element) => element.scrollTop))
+          .toBeGreaterThan(0);
+        const footerBounds = await setup.locator(".device-pair-setup__footer").boundingBox();
+        expect(footerBounds).not.toBeNull();
+        expect(footerBounds!.y + footerBounds!.height).toBeLessThanOrEqual(
+          page.viewportSize()!.height,
         );
-        await pairFromSettings.click();
-        await dialog.waitFor();
-        const nodeAccess = page.locator('input[name="device-pair-access"]').nth(2);
-        await nodeAccess.check();
-        await page.getByRole("button", { name: "Create setup code" }).click();
         expect((await gateway.getRequests("device.pair.setupCode")).at(-1)?.params).toEqual({
           bootstrapProfile: "node",
           includeQr: false,
         });
-        await page
-          .getByText('openclaw node run --pair "oc-pair://Node_AbC123"', { exact: true })
-          .waitFor();
-        expect(await qr.count()).toBe(0);
         await page.getByRole("button", { name: "Manage devices" }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/devices");
         expect(pageErrors).toEqual([]);

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { ContentBlockSchema, ToolSchema } from "@modelcontextprotocol/core";
+import type { CallToolResult, ContentBlock, Tool } from "@modelcontextprotocol/server";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Plugin MCP tool handlers route plugin tool calls through the active runtime.
 import {
@@ -7,7 +9,7 @@ import {
   rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "../agents/agent-tools.before-tool-call.js";
-import { BEFORE_TOOL_CALL_HOOK_CONTEXT } from "../agents/before-tool-call-metadata.js";
+import { getBeforeToolCallHookContext } from "../agents/before-tool-call-metadata.js";
 import { isToolResultError } from "../agents/tool-result-error.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -19,20 +21,16 @@ type CallPluginToolParams = {
   arguments?: unknown;
 };
 
-type ToolWithBeforeToolCallHookContext = AnyAgentTool & {
-  [BEFORE_TOOL_CALL_HOOK_CONTEXT]?: unknown;
-};
-
-function toMcpContentBlock(block: unknown): unknown {
+function toMcpContentBlock(block: unknown): ContentBlock {
   if (!isRecord(block)) {
     return { type: "text", text: coerceChatContentText(block) };
   }
   if (block.type !== "image") {
-    return block;
+    return ContentBlockSchema.parse(block);
   }
 
   if (typeof block.data === "string" && typeof block.mimeType === "string") {
-    return block;
+    return ContentBlockSchema.parse(block);
   }
 
   const source = block.source;
@@ -52,17 +50,12 @@ function toMcpContentBlock(block: unknown): unknown {
   return { type: "text", text: coerceChatContentText(block) };
 }
 
-function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
+function resolveJsonSchemaForTool(tool: AnyAgentTool): Tool["inputSchema"] {
   const params = tool.parameters;
   if (params && typeof params === "object" && "type" in params) {
-    return params as Record<string, unknown>;
+    return ToolSchema.shape.inputSchema.parse(params);
   }
   return { type: "object", properties: {} };
-}
-
-function resolveBeforeToolCallRunId(tool: AnyAgentTool): string | undefined {
-  const context = (tool as ToolWithBeforeToolCallHookContext)[BEFORE_TOOL_CALL_HOOK_CONTEXT];
-  return isRecord(context) && typeof context.runId === "string" ? context.runId : undefined;
 }
 
 export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
@@ -76,7 +69,7 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
   });
   const toolMap = new Map<string, { tool: AnyAgentTool; runId: string | undefined }>();
   for (const tool of wrappedTools) {
-    toolMap.set(tool.name, { tool, runId: resolveBeforeToolCallRunId(tool) });
+    toolMap.set(tool.name, { tool, runId: getBeforeToolCallHookContext(tool)?.runId });
   }
   // "cron" remains an inbound scheduler alias (owner decision, RFC 0026).
   // Capture the first advertised name without adding another listTools entry;
@@ -85,14 +78,19 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
   const automationsEntry = automationsName ? toolMap.get(automationsName) : undefined;
 
   return {
-    listTools: async () => ({
+    listTools: async (): Promise<{
+      tools: { name: string; description: string; inputSchema: Tool["inputSchema"] }[];
+    }> => ({
       tools: wrappedTools.map((tool) => ({
         name: tool.name,
         description: tool.description ?? "",
         inputSchema: resolveJsonSchemaForTool(tool),
       })),
     }),
-    callTool: async (params: CallPluginToolParams, signal?: AbortSignal) => {
+    callTool: async (
+      params: CallPluginToolParams,
+      signal?: AbortSignal,
+    ): Promise<CallToolResult> => {
       const entry =
         toolMap.get(params.name) ??
         (isAutomationsToolName(params.name) ? automationsEntry : undefined);

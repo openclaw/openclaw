@@ -1,11 +1,7 @@
-// Kilocode provider module implements model/runtime integration.
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import {
-  discoverKilocodeModels,
-  KILOCODE_BASE_URL as LOCAL_KILOCODE_BASE_URL,
-} from "./provider-models.js";
+import { discoverKilocodeModels, KILOCODE_BASE_URL } from "./provider-models.js";
 
 export function buildKilocodeProvider(): ModelProviderConfig {
   return buildManifestModelProviderConfig({
@@ -17,10 +13,9 @@ export function buildKilocodeProvider(): ModelProviderConfig {
 export async function buildKilocodeProviderWithDiscovery(
   options: { discoveryMode?: "strict" } = {},
 ): Promise<ModelProviderConfig> {
-  const models = await discoverKilocodeModels(options);
   return {
-    baseUrl: LOCAL_KILOCODE_BASE_URL,
+    baseUrl: KILOCODE_BASE_URL,
     api: "openai-completions",
-    models,
+    models: await discoverKilocodeModels(options),
   };
 }

@@ -5,7 +5,6 @@ import { sanitizeForConsole } from "./console-sanitize.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
-  shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
 
 const OBSERVATION_BEARER_TOKEN = "sk-redact-test-token";
@@ -39,7 +38,6 @@ describe("buildApiErrorObservationFields", () => {
     );
 
     expect(observed.rawErrorPreview).not.toContain(OBSERVATION_BEARER_TOKEN);
-    expect(observed.rawErrorPreview).toContain(OBSERVATION_BEARER_TOKEN.slice(0, 6));
     expect(observed.rawErrorHash).toMatch(/^sha256:/);
   });
 
@@ -53,12 +51,23 @@ describe("buildApiErrorObservationFields", () => {
     expect(observed.rawErrorPreview).toContain("Cookie: session=");
   });
 
-  it("redacts provider error types as well as message previews", () => {
+  it("masks a bare pass: credential in the provider message preview", () => {
+    const observed = buildApiErrorObservationFields(
+      JSON.stringify({
+        error: { type: "invalid_request", message: "pass: opaque-pass-secret-1234567890 rejected" },
+      }),
+    );
+    expect(observed.providerErrorMessagePreview).toBe("pass: opaque…7890 rejected");
+  });
+
+  it("redacts structured provider codes and types as well as message previews", () => {
     const observed = buildApiErrorObservationFields(
       JSON.stringify({
         error: { type: `x-api-key: ${OBSERVATION_BEARER_TOKEN}`, message: "Request failed" },
       }),
+      { code: `x-api-key: ${OBSERVATION_BEARER_TOKEN}` },
     );
+    expect(observed.providerErrorCode).toBe("x-api-key: ***");
     expect(observed.providerErrorType).toBe("x-api-key: ***");
   });
 
@@ -215,14 +224,6 @@ describe("buildApiErrorObservationFields", () => {
 
     expect(observed.httpCode).toBe("401");
     expect(observed.providerRuntimeFailureKind).toBe("unclassified");
-  });
-
-  it("centralizes raw console suffix suppression for auth failures", () => {
-    expect(shouldSuppressRawErrorConsoleSuffix("auth_html")).toBe(true);
-    expect(shouldSuppressRawErrorConsoleSuffix("auth_scope")).toBe(true);
-    expect(shouldSuppressRawErrorConsoleSuffix("auth_refresh")).toBe(true);
-    expect(shouldSuppressRawErrorConsoleSuffix("timeout")).toBe(false);
-    expect(shouldSuppressRawErrorConsoleSuffix(undefined)).toBe(false);
   });
 });
 

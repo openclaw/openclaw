@@ -1,18 +1,42 @@
-// Gateway Protocol schema module defines OpenClaw chat payloads.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import {
+  SYSTEM_AGENT_PLUGIN_CAPABILITY_MAX_CHARS,
+  SYSTEM_AGENT_PLUGIN_CAPABILITY_MAX_ITEMS,
+  SYSTEM_AGENT_PLUGIN_ID_MAX_CHARS,
+  SYSTEM_AGENT_PLUGIN_NAME_MAX_CHARS,
+  SYSTEM_AGENT_SETTING_PATH_MAX_SEGMENTS,
+  SYSTEM_AGENT_SETTING_SEGMENT_MAX_CHARS,
+} from "../system-agent-context.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import {
   SetupInferenceActivationRejectionSchema,
   SetupInferenceFailureStatusSchema,
 } from "./setup-inference.js";
+import { withSince } from "./since.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 import { WizardAnswerSchema, WizardStartResultSchema, WizardStepSchema } from "./wizard.js";
+
+export {
+  SystemAgentSetupAutoParamsSchema,
+  SystemAgentSetupAutoCandidateSchema,
+  SystemAgentSetupAutoResultSchema,
+  type SystemAgentSetupAutoParams,
+  type SystemAgentSetupAutoCandidate,
+  type SystemAgentSetupAutoResult,
+} from "./setup-inference.js";
 
 export const SystemAgentWizardCancelSchema = closedObject({
   /** The visible step this action belongs to; stale controls must not affect a newer step. */
   stepId: NonEmptyString,
 });
+
+const PluginCapabilityNamesSchema = Type.Optional(
+  Type.Array(Type.String({ minLength: 1, maxLength: SYSTEM_AGENT_PLUGIN_CAPABILITY_MAX_CHARS }), {
+    maxItems: SYSTEM_AGENT_PLUGIN_CAPABILITY_MAX_ITEMS,
+  }),
+);
 
 /**
  * OpenClaw chat lets clients (macOS app onboarding, future UIs) hold the
@@ -29,9 +53,7 @@ export const SystemAgentChatParamsSchema = closedObject({
   /** Direct client control for cancelling the currently rendered hosted wizard. */
   wizardCancel: Type.Optional(SystemAgentWizardCancelSchema),
   /** Seeds a purpose-specific first greeting for a fresh conversation. */
-  welcomeVariant: Type.Optional(
-    Type.Union([Type.Literal("onboarding"), Type.Literal("new-agent")]),
-  ),
+  welcomeVariant: Type.Optional(stringLiteralUnion(["onboarding", "new-agent"])),
   /** Drop any in-flight approval/wizard state and start the session over. */
   reset: Type.Optional(Type.Boolean()),
   /** Ephemeral Control UI location hint for interpreting the current user turn. */
@@ -42,6 +64,37 @@ export const SystemAgentChatParamsSchema = closedObject({
         maxLength: 64,
         pattern: "^[A-Za-z0-9/_-]{1,64}$",
       }),
+      plugin: Type.Optional(
+        closedObject({
+          id: Type.String({
+            minLength: 1,
+            maxLength: SYSTEM_AGENT_PLUGIN_ID_MAX_CHARS,
+            pattern: "^[A-Za-z0-9@][A-Za-z0-9@._/-]{0,127}$",
+          }),
+          name: Type.String({ minLength: 1, maxLength: SYSTEM_AGENT_PLUGIN_NAME_MAX_CHARS }),
+          installed: Type.Optional(Type.Boolean()),
+          declared: Type.Optional(
+            closedObject({
+              tools: PluginCapabilityNamesSchema,
+              providers: PluginCapabilityNamesSchema,
+              channels: PluginCapabilityNamesSchema,
+              contracts: PluginCapabilityNamesSchema,
+              skills: PluginCapabilityNamesSchema,
+              mcpServers: PluginCapabilityNamesSchema,
+              incomplete: Type.Optional(Type.Boolean()),
+            }),
+          ),
+          setting: Type.Optional(
+            closedObject({
+              path: Type.Array(
+                Type.String({ minLength: 1, maxLength: SYSTEM_AGENT_SETTING_SEGMENT_MAX_CHARS }),
+                { minItems: 1, maxItems: SYSTEM_AGENT_SETTING_PATH_MAX_SEGMENTS },
+              ),
+              label: Type.String({ minLength: 1, maxLength: SYSTEM_AGENT_PLUGIN_NAME_MAX_CHARS }),
+            }),
+          ),
+        }),
+      ),
     }),
   ),
   /** Host-only regular-agent delegation context. Never model-authored. */
@@ -86,6 +139,8 @@ export const SystemAgentChatQuestionSchema = closedObject({
 export const SystemAgentChatResultSchema = closedObject({
   sessionId: NonEmptyString,
   reply: NonEmptyString,
+  /** Passive caretaker welcome that a purpose-specific view may replace. Notices stay visible. */
+  optionalWelcome: Type.Optional(Type.Boolean()),
   /** The next reply is a hosted-wizard secret and clients must mask its input/echo. */
   sensitive: Type.Optional(Type.Boolean()),
   /** The hosted wizard will consume the next message as its current step answer. */
@@ -118,7 +173,7 @@ export const SystemAgentChatHistoryParamsSchema = closedObject({
 });
 
 export const SystemAgentChatHistoryTurnSchema = closedObject({
-  role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
+  role: stringLiteralUnion(["user", "assistant"]),
   text: Type.String(),
   at: Type.Number(),
 });
@@ -127,20 +182,20 @@ export const SystemAgentChatHistoryResultSchema = closedObject({
   turns: Type.Array(SystemAgentChatHistoryTurnSchema),
 });
 
-export const SystemChangeKindSchema = Type.Union([
-  Type.Literal("operation"),
-  Type.Literal("config-write"),
-  Type.Literal("external-edit"),
+export const SystemChangeKindSchema = stringLiteralUnion([
+  "operation",
+  "config-write",
+  "external-edit",
 ]);
 
-export const SystemChangeSourceSchema = Type.Union([
-  Type.Literal("system-agent"),
-  Type.Literal("doctor"),
-  Type.Literal("config-rpc"),
-  Type.Literal("cli"),
-  Type.Literal("plugin-install"),
-  Type.Literal("external"),
-  Type.Literal("unknown"),
+export const SystemChangeSourceSchema = stringLiteralUnion([
+  "system-agent",
+  "doctor",
+  "config-rpc",
+  "cli",
+  "plugin-install",
+  "external",
+  "unknown",
 ]);
 
 export const SystemChangeEntrySchema = closedObject({
@@ -179,6 +234,9 @@ export const SystemAgentSetupDetectParamsSchema = closedObject({
 const ProviderAutoSetupInferenceKind = Type.TemplateLiteral("provider-auto:${string}", {
   pattern: "^provider-auto:.+$",
 });
+const SavedAuthSetupInferenceKind = Type.TemplateLiteral("saved-auth:${string}", {
+  pattern: "^saved-auth:.+$",
+});
 
 const SetupInferenceHttpsUrl = Type.String({
   minLength: 1,
@@ -194,6 +252,7 @@ const SetupInferenceKind = Type.Union([
   Type.Literal("codex-cli"),
   Type.Literal("gemini-cli"),
   ProviderAutoSetupInferenceKind,
+  SavedAuthSetupInferenceKind,
 ]);
 
 const SetupInferenceStatus = Type.Union([
@@ -210,6 +269,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
       label: NonEmptyString,
       detail: Type.String(),
       modelRef: NonEmptyString,
+      modelTarget: Type.Optional(Type.Literal("utility")),
       recommended: Type.Boolean(),
       /** true: verified; false: definitively logged out; absent: unknown. */
       credentials: Type.Optional(Type.Boolean()),
@@ -238,6 +298,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
     closedObject({
       /** Opaque provider-auth choice sent back during activation. */
       id: NonEmptyString,
+      modelTarget: Type.Optional(Type.Literal("utility")),
       /** Canonical provider identity for clients with bundled brand artwork. */
       brandId: Type.Optional(NonEmptyString),
       /** Provider family shown above the specific credential method. */
@@ -253,6 +314,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
     Type.Array(
       closedObject({
         id: NonEmptyString,
+        modelTarget: Type.Optional(Type.Literal("utility")),
         /** Canonical provider identity for clients with bundled brand artwork. */
         brandId: Type.Optional(NonEmptyString),
         label: NonEmptyString,
@@ -260,12 +322,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
         groupLabel: Type.Optional(Type.String()),
         icon: Type.Optional(SetupInferenceHttpsUrl),
         website: Type.Optional(SetupInferenceHttpsUrl),
-        kind: Type.Union([
-          Type.Literal("oauth"),
-          Type.Literal("device-code"),
-          Type.Literal("install"),
-          Type.Literal("custom"),
-        ]),
+        kind: stringLiteralUnion(["oauth", "device-code", "install", "custom"]),
         featured: Type.Boolean(),
       }),
     ),
@@ -275,6 +332,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
     Type.Array(
       closedObject({
         id: NonEmptyString,
+        modelTarget: Type.Optional(Type.Literal("utility")),
         /** Canonical provider identity for clients with bundled brand artwork. */
         brandId: Type.Optional(NonEmptyString),
         label: NonEmptyString,
@@ -313,11 +371,15 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
   workspace: NonEmptyString,
   codexAppServerDetected: Type.Optional(Type.Boolean()),
   configuredModel: Type.Optional(Type.String()),
+  setupModel: Type.Optional(Type.String()),
+  utilityModel: Type.Optional(Type.String()),
   setupComplete: Type.Boolean(),
 });
 
 /** Live verification of the Gateway's current default-agent inference route. */
 export const SystemAgentSetupVerifyParamsSchema = closedObject({
+  /** Primary verification must not fall back to setup-only utility inference. */
+  modelTarget: Type.Optional(Type.Union([Type.Literal("primary"), Type.Literal("utility")])),
   /** Agent whose configured inference route is being verified. */
   agentId: Type.Optional(NonEmptyString),
 });
@@ -326,6 +388,7 @@ export const SystemAgentSetupVerifyResultSchema = Type.Union([
   closedObject({
     ok: Type.Literal(true),
     modelRef: NonEmptyString,
+    modelTarget: Type.Optional(Type.Literal("utility")),
     latencyMs: Type.Number(),
   }),
   closedObject({
@@ -336,18 +399,10 @@ export const SystemAgentSetupVerifyResultSchema = Type.Union([
 ]);
 
 export const SystemAgentSetupActivateParamsSchema = closedObject({
+  modelTarget: Type.Optional(Type.Literal("utility")),
   /** Agent that owns the verified and persisted inference route. */
   agentId: Type.Optional(NonEmptyString),
-  kind: Type.Union([
-    Type.Literal("existing-model"),
-    Type.Literal("openai-api-key"),
-    Type.Literal("anthropic-api-key"),
-    Type.Literal("claude-cli"),
-    Type.Literal("codex-cli"),
-    Type.Literal("gemini-cli"),
-    ProviderAutoSetupInferenceKind,
-    Type.Literal("api-key"),
-  ]),
+  kind: Type.Union([...SetupInferenceKind.anyOf, Type.Literal("api-key")]),
   /** Exact detected model for this route; prevents detect/activate drift. */
   modelRef: Type.Optional(NonEmptyString),
   /** Manual step only: opaque provider-auth choice returned by detection. */
@@ -371,6 +426,7 @@ export const SystemAgentSetupActivateResultSchema = closedObject({
   ok: Type.Boolean(),
   /** Present on success: the model ref that answered the live test. */
   modelRef: Type.Optional(Type.String()),
+  modelTarget: Type.Optional(Type.Literal("utility")),
   latencyMs: Type.Optional(Type.Number()),
   /** Human-readable setup summary lines (workspace, model, gateway). */
   lines: Type.Optional(Type.Array(Type.String())),
@@ -385,17 +441,30 @@ export const SystemAgentSetupActivateResultSchema = closedObject({
 
 /** Starts one provider-owned interactive login as a gateway wizard session. */
 export const SystemAgentSetupAuthStartParamsSchema = closedObject({
+  expectedOwnerId: Type.Optional(withSince("2026.9.9", Type.String({ minLength: 1 }))),
+  modelTarget: Type.Optional(Type.Literal("utility")),
   /** Client-generated so cancellation remains possible if the start reply is lost. */
   sessionId: NonEmptyString,
   /** Agent that owns credentials and model selection created by this setup flow. */
   agentId: Type.Optional(NonEmptyString),
   authChoice: NonEmptyString,
+  /** Opt in to selecting the verified model when models.authLogin starts AI Setup. */
+  selectModel: Type.Optional(Type.Literal(true)),
   workspace: Type.Optional(Type.String()),
   /** Fresh-install opt-in for native provider conversation discovery. */
   nativeSessionCatalogsEnabled: Type.Optional(Type.Boolean()),
 });
 
 export const SystemAgentSetupAuthStartResultSchema = WizardStartResultSchema;
+
+/** Enable a runtime with agent-scoped consent in the same config write. */
+export const SystemAgentSetupRuntimeStartParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+  agentId: NonEmptyString,
+  runtimeId: NonEmptyString,
+  configPatch: Type.Record(Type.String(), Type.Unknown()),
+});
+export const SystemAgentSetupRuntimeStartResultSchema = WizardStartResultSchema;
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
@@ -425,4 +494,11 @@ export type SystemAgentSetupActivateStartParams = Static<
 >;
 export type SystemAgentSetupActivateStartResult = Static<
   typeof SystemAgentSetupActivateStartResultSchema
+>;
+
+export type SystemAgentSetupRuntimeStartParams = Static<
+  typeof SystemAgentSetupRuntimeStartParamsSchema
+>;
+export type SystemAgentSetupRuntimeStartResult = Static<
+  typeof SystemAgentSetupRuntimeStartResultSchema
 >;

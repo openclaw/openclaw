@@ -21,13 +21,12 @@ export function isFeishuBackoffError(err: unknown): boolean {
     if (response.status === 429) {
       return true;
     }
-    if (typeof response.data?.code === "number" && FEISHU_BACKOFF_CODES.has(response.data.code)) {
+    if (getBackoffCodeFromResponse(response.data) !== undefined) {
       return true;
     }
   }
 
-  const code = (err as { code?: number }).code;
-  return typeof code === "number" && FEISHU_BACKOFF_CODES.has(code);
+  return getBackoffCodeFromResponse(err) !== undefined;
 }
 
 export function getBackoffCodeFromResponse(response: unknown): number | undefined {

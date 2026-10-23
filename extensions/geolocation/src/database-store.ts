@@ -1,6 +1,6 @@
 /**
  * Owns the on-disk MMDB copy: downloads it on first use, reuses it until it
- * ages past the refresh window, and keeps one opened reader per process.
+ * ages past the refresh window, and releases the opened reader between bursts.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
@@ -8,40 +8,12 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { gunzip } from "node:zlib";
 import { type CityResponse, Reader } from "maxmind";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { tempFile } from "openclaw/plugin-sdk/file-access-runtime";
+import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { expandDatabaseUrls, type GeolocationSettings } from "./config.js";
 
 const gunzipAsync = promisify(gunzip);
-
-/**
- * Reads the body chunk by chunk and fails as soon as the running total passes
- * the cap, so an oversized response is rejected mid-flight instead of after it
- * has already been allocated in full.
- */
-async function readBoundedBody(response: Response, limit: number): Promise<Buffer> {
-  const body = response.body;
-  if (!body) {
-    throw new Error("response had no body");
-  }
-  const reader = body.getReader();
-  const chunks: Buffer[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      total += value.byteLength;
-      if (total > limit) {
-        throw new Error(`response exceeded the ${limit} byte cap`);
-      }
-      chunks.push(Buffer.from(value));
-    }
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
-  return Buffer.concat(chunks);
-}
 
 // A city-level MMDB is ~125 MB today and its gzip is ~20 MB. Both ceilings are
 // enforced while reading, not after: a replaced or compromised source must not
@@ -50,18 +22,17 @@ async function readBoundedBody(response: Response, limit: number): Promise<Buffe
 const MAX_COMPRESSED_BYTES = 256 * 1024 * 1024;
 const MAX_DATABASE_BYTES = 512 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+const READER_IDLE_MS = 60_000;
 
-/** The database's own record contract; re-exported so callers need one import. */
-export type GeolocationCityRecord = CityResponse;
+type DatabaseReader = { reader: Reader<CityResponse>; cached: boolean };
 
 export type GeolocationDatabase = {
-  lookup: (ip: string) => GeolocationCityRecord | null;
+  lookup: (ip: string) => CityResponse | null;
 };
 
 type StoreDeps = {
   stateDir: string;
   settings: GeolocationSettings;
-  now: () => Date;
   fetchImpl: typeof fetch;
   logger?: { info: (msg: string) => void; warn: (msg: string) => void };
 };
@@ -82,8 +53,8 @@ async function readFileAge(file: string, now: Date): Promise<number | undefined>
   }
 }
 
-async function downloadDatabase(deps: StoreDeps, target: string): Promise<Reader<CityResponse>> {
-  const urls = expandDatabaseUrls(deps.settings.databaseUrl, deps.now());
+async function downloadDatabase(deps: StoreDeps, target: string): Promise<DatabaseReader> {
+  const urls = expandDatabaseUrls(deps.settings.databaseUrl, new Date());
   const failures: string[] = [];
   for (const url of urls) {
     try {
@@ -94,7 +65,13 @@ async function downloadDatabase(deps: StoreDeps, target: string): Promise<Reader
         failures.push(`${url} -> HTTP ${response.status}`);
         continue;
       }
-      const raw = await readBoundedBody(response, MAX_COMPRESSED_BYTES);
+      if (!response.body) {
+        throw new Error("response had no body");
+      }
+      const raw = await readByteStreamWithLimit(response.body.values(), {
+        maxBytes: MAX_COMPRESSED_BYTES,
+        onOverflow: ({ maxBytes }) => new Error(`response exceeded the ${maxBytes} byte cap`),
+      });
       // maxOutputLength makes zlib stop inflating at the ceiling rather than
       // allocating whatever the compressed stream claims to expand into.
       const body = url.endsWith(".gz")
@@ -104,14 +81,29 @@ async function downloadDatabase(deps: StoreDeps, target: string): Promise<Reader
       // a working database on disk. The reader is returned so the caller does
       // not read and parse the same bytes a second time.
       const reader = new Reader<CityResponse>(body);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      const staging = `${target}.partial`;
-      await fs.writeFile(staging, body);
-      await fs.rename(staging, target);
+      let cached = false;
+      try {
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        const directory = await fs.realpath(path.dirname(target));
+        await using staged = await tempFile({
+          rootDir: directory,
+          prefix: "ip-city",
+          onCleanupError: (error) => {
+            throw error;
+          },
+        });
+        await fs.writeFile(staged.path, body, { flag: "wx" });
+        await fs.rename(staged.path, path.join(directory, path.basename(target)));
+        cached = true;
+      } catch (err) {
+        deps.logger?.warn(
+          `geolocation: could not cache the downloaded database, serving it from memory: ${coerceErrorMessage(err)}`,
+        );
+      }
       deps.logger?.info(`geolocation: downloaded ${body.byteLength} bytes from ${url}`);
-      return reader;
+      return { reader, cached };
     } catch (err) {
-      failures.push(`${url} -> ${err instanceof Error ? err.message : String(err)}`);
+      failures.push(`${url} -> ${coerceErrorMessage(err)}`);
     }
   }
   throw new Error(`geolocation database download failed: ${failures.join("; ")}`);
@@ -123,35 +115,55 @@ async function downloadDatabase(deps: StoreDeps, target: string): Promise<Reader
  */
 export function createGeolocationDatabaseStore(deps: StoreDeps) {
   const target = databasePath(deps.stateDir, deps.settings.databaseUrl);
-  let opened: { reader: Reader<CityResponse>; loadedAt: number } | undefined;
+  let opened: Reader<CityResponse> | undefined;
+  let refreshAfter = Number.NEGATIVE_INFINITY;
   let inFlight: Promise<GeolocationDatabase> | undefined;
+  let idleTimer: NodeJS.Timeout | undefined;
+
+  const releaseReader = () => {
+    opened = undefined;
+    idleTimer = undefined;
+  };
 
   const openFromDisk = async (): Promise<GeolocationDatabase> => {
-    const age = await readFileAge(target, deps.now());
-    let downloaded: Reader<CityResponse> | undefined;
+    const refreshDue = Date.now() > refreshAfter;
+    const age = await readFileAge(target, new Date());
+    let downloaded: DatabaseReader | undefined;
     if (age === undefined) {
       downloaded = await downloadDatabase(deps, target);
-    } else if (age > deps.settings.refreshMs) {
+    } else if (refreshDue && age > deps.settings.refreshMs) {
       try {
         downloaded = await downloadDatabase(deps, target);
       } catch (err) {
         // A refresh failure must not take lookups down; the cached copy is old
         // but still answers.
         deps.logger?.warn(
-          `geolocation: refresh failed, serving the cached database: ${err instanceof Error ? err.message : String(err)}`,
+          `geolocation: refresh failed, serving the cached database: ${coerceErrorMessage(err)}`,
         );
       }
     }
-    const reader = downloaded ?? new Reader<CityResponse>(await fs.readFile(target));
-    opened = { reader, loadedAt: deps.now().getTime() };
+    const { reader, cached } = downloaded ?? {
+      reader: new Reader<CityResponse>(await fs.readFile(target)),
+      cached: true,
+    };
+    opened = reader;
+    // Idle eviction must neither retry a failed refresh early nor extend its backoff.
+    if (refreshDue) {
+      refreshAfter = Date.now() + deps.settings.refreshMs;
+    }
+    clearTimeout(idleTimer);
+    // A failed publication leaves memory as the only usable copy. Otherwise the
+    // disk cache can reopen this large buffer after a minute without lookups.
+    idleTimer = cached ? setTimeout(releaseReader, READER_IDLE_MS).unref() : undefined;
     return { lookup: (ip: string) => reader.get(ip) };
   };
 
   return {
     async load(): Promise<GeolocationDatabase> {
       const current = opened;
-      if (current && deps.now().getTime() - current.loadedAt <= deps.settings.refreshMs) {
-        return { lookup: (ip: string) => current.reader.get(ip) };
+      if (current && Date.now() <= refreshAfter) {
+        idleTimer?.refresh();
+        return { lookup: (ip: string) => current.get(ip) };
       }
       // One download at a time: concurrent first lookups must not each fetch.
       inFlight ??= openFromDisk().finally(() => {
@@ -159,6 +171,5 @@ export function createGeolocationDatabaseStore(deps: StoreDeps) {
       });
       return await inFlight;
     },
-    databaseFile: target,
   };
 }

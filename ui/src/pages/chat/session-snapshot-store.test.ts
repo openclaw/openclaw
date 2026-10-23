@@ -1,10 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { queryObjects } from "node:v8";
-import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
+import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseSidebarSnapshot } from "../../components/sidebar-snapshot-data.ts";
+import { sidebarSnapshot } from "../../components/sidebar-snapshot.test-support.ts";
+import {
+  requestResult,
+  transactionComplete as transactionDone,
+} from "../../lib/chat/control-ui-database.runtime.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
 import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
@@ -14,16 +20,29 @@ import {
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import {
-  CHAT_SNAPSHOT_DB_NAME,
-  CHAT_SNAPSHOT_METADATA_STORE_NAME,
-  CHAT_SNAPSHOT_STORE_NAME,
+  CHAT_SNAPSHOT_DB_NAME as DB,
+  CHAT_SNAPSHOT_METADATA_STORE_NAME as METADATA,
+  CHAT_SNAPSHOT_STORE_NAME as SNAPSHOTS,
+  SIDEBAR_SNAPSHOT_STORE_NAME as SIDEBAR,
+  readStoredChatSnapshotRecord,
 } from "./session-snapshot-database.ts";
 import {
   clearStoredChatSnapshots,
   deleteStoredChatSnapshot,
 } from "./session-snapshot-invalidation.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
+import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
+const snapshotHost = {
+  settings: { gatewayUrl: "wss://cache.example" },
+  client: { recoveryScope: "account-a", recoveryScopeReady: true },
+  assistantAgentId: "main",
+  agentsList: null,
+  hello: null,
+};
+const key = (sessionKey: string) => resolveChatSnapshotKey(snapshotHost, { sessionKey });
+const rawKey = (cacheKey: string) => cacheKey.slice(cacheKey.indexOf("\u0000") + 1);
 function snapshot(message: unknown, sessionId = "session-1"): ChatSessionSnapshot {
   return {
     displayedLeafEntryId: "leaf-1",
@@ -33,30 +52,41 @@ function snapshot(message: unknown, sessionId = "session-1"): ChatSessionSnapsho
   };
 }
 
-function transactionDone(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    transaction.addEventListener("complete", () => resolve());
-    const rejectTransaction = () => reject(transaction.error ?? new Error("transaction failed"));
-    transaction.addEventListener("error", rejectTransaction);
-    transaction.addEventListener("abort", rejectTransaction);
+function cacheSnapshot(memory: ChatMessageCache, sessionKey: string, value = snapshot(sessionKey)) {
+  cacheChatSessionSnapshot(memory, snapshotHost, { sessionKey: rawKey(sessionKey) }, value);
+}
+async function persist(
+  store: SessionSnapshotStore,
+  sessionKey: string,
+  value: ChatSessionSnapshot,
+) {
+  store.write(sessionKey, value);
+  await store.flush();
+}
+const envelope = (sessionKey: string, value: ChatSessionSnapshot, projectionVersion = 3) => ({
+  projectionVersion,
+  sessionKey,
+  savedAt: 1,
+  sessionId: "session-1",
+  snapshot: value,
+});
+
+async function openDatabase(version?: number, stores: string[] = []) {
+  const request = indexedDB.open(DB, version);
+  request.addEventListener("upgradeneeded", () => {
+    for (const name of stores) {
+      request.result.createObjectStore(name, { keyPath: "sessionKey" });
+    }
   });
+  return requestResult(request);
 }
 
 async function putRawRecord(record: unknown, metadata?: unknown): Promise<void> {
-  const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME);
-  const database = await new Promise<IDBDatabase>((resolve, reject) => {
-    request.addEventListener("success", () => resolve(request.result));
-    request.addEventListener("error", () =>
-      reject(request.error ?? new Error("database open failed")),
-    );
-  });
-  const transaction = database.transaction(
-    [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME],
-    "readwrite",
-  );
+  const database = await openDatabase();
+  const transaction = database.transaction([SNAPSHOTS, METADATA], "readwrite");
   const completed = transactionDone(transaction);
-  transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).put(record);
-  transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).put(
+  transaction.objectStore(SNAPSHOTS).put(record);
+  transaction.objectStore(METADATA).put(
     metadata ?? {
       savedAt: Date.now(),
       sessionKey: (record as { sessionKey: string }).sessionKey,
@@ -67,60 +97,14 @@ async function putRawRecord(record: unknown, metadata?: unknown): Promise<void> 
   database.close();
 }
 
-async function putVersionOneRecord(sessionKey: string): Promise<void> {
-  const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME, 1);
-  request.addEventListener("upgradeneeded", () => {
-    request.result.createObjectStore(CHAT_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
-  });
-  const database = await new Promise<IDBDatabase>((resolve, reject) => {
-    request.addEventListener("success", () => resolve(request.result));
-    request.addEventListener("error", () =>
-      reject(request.error ?? new Error("database open failed")),
-    );
-  });
-  const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readwrite");
-  const completed = transactionDone(transaction);
-  transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).put({ sessionKey });
-  await completed;
-  database.close();
-}
-
-async function readRawRecord(sessionKey: string): Promise<{ savedAt: number } | undefined> {
-  const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME);
-  const database = await new Promise<IDBDatabase>((resolve, reject) => {
-    request.addEventListener("success", () => resolve(request.result));
-    request.addEventListener("error", () =>
-      reject(request.error ?? new Error("database open failed")),
-    );
-  });
-  const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readonly");
-  const result = await new Promise<{ savedAt: number } | undefined>((resolve, reject) => {
-    const get = transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).get(sessionKey);
-    get.addEventListener("success", () => resolve(get.result));
-    get.addEventListener("error", () => reject(get.error ?? new Error("record read failed")));
-  });
-  await transactionDone(transaction);
-  database.close();
-  return result;
-}
-
-async function readRawMetadata(
+async function readRawRecord(
   sessionKey: string,
-): Promise<{ savedAt: number; weight: number } | undefined> {
-  const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME);
-  const database = await new Promise<IDBDatabase>((resolve, reject) => {
-    request.addEventListener("success", () => resolve(request.result));
-    request.addEventListener("error", () =>
-      reject(request.error ?? new Error("database open failed")),
-    );
-  });
-  const transaction = database.transaction(CHAT_SNAPSHOT_METADATA_STORE_NAME, "readonly");
-  const result = await new Promise<{ savedAt: number; weight: number } | undefined>(
-    (resolve, reject) => {
-      const get = transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).get(sessionKey);
-      get.addEventListener("success", () => resolve(get.result));
-      get.addEventListener("error", () => reject(get.error ?? new Error("metadata read failed")));
-    },
+  storeName = SNAPSHOTS,
+): Promise<{ savedAt: number; weight?: number } | undefined> {
+  const database = await openDatabase();
+  const transaction = database.transaction(storeName, "readonly");
+  const result = await requestResult<{ savedAt: number; weight?: number } | undefined>(
+    transaction.objectStore(storeName).get(sessionKey),
   );
   await transactionDone(transaction);
   database.close();
@@ -128,66 +112,406 @@ async function readRawMetadata(
 }
 
 describe("persistent chat session snapshots", () => {
+  let writer: SessionSnapshotStore;
+  const connected = new Set<SessionSnapshotStore>();
+  function makeStore(memory?: ChatMessageCache, connect = false) {
+    const store = new SessionSnapshotStore(memory);
+    if (memory) {
+      observeChatCache(memory, store);
+    }
+    if (connect) {
+      store.connect();
+      connected.add(store);
+    }
+    return store;
+  }
   beforeEach(() => {
     vi.stubGlobal("indexedDB", new IDBFactory());
     vi.stubGlobal("localStorage", createStorageMock());
+    writer = makeStore();
   });
 
   afterEach(async () => {
+    for (const store of connected) {
+      store.disconnect();
+      await store.whenIdle();
+    }
+    connected.clear();
     await clearStoredChatSnapshots();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
-  it("shares sanitized snapshots across store owners", async () => {
-    const writer = new SessionSnapshotStore();
-    writer.write("agent:main:shared", snapshot({ text: "cached", callback: () => true }));
-    const savedAt = writer.readSavedAt("agent:main:shared");
-    expect(savedAt).not.toBeNull();
-    await writer.flush();
-    expect(writer.readSavedAt("agent:main:shared")).toBe(savedAt);
+  it("restores a board snapshot and its original ticket receipt with the conversation", async () => {
+    const sessionKey = key("agent:main:dashboard");
+    const value: ChatSessionSnapshot = {
+      ...snapshot("dashboard conversation"),
+      board: {
+        receivedAtMs: 100,
+        snapshot: {
+          sessionKey: "agent:main:dashboard",
+          revision: 1,
+          tabs: [{ tabId: "overview", title: "Overview", position: 0, chatDock: "right" }],
+          widgets: [
+            {
+              name: "chart",
+              tabId: "overview",
+              contentKind: "html",
+              sizeW: 12,
+              sizeH: 8,
+              position: 0,
+              grantState: "none",
+              revision: 1,
+              frameUrl: "/__openclaw__/board/dashboard/chart/index.html?bt=synthetic-ticket",
+              viewTicket: "synthetic-ticket",
+              viewTicketTtlMs: 1200000,
+            },
+          ],
+        },
+      },
+    };
+    await persist(writer, sessionKey, value);
+    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(value);
+    await deleteStoredChatSnapshot(sessionKey);
+    expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+  });
 
+  it("does not present a cached board after its pending read is invalidated", async () => {
+    const sessionKey = key("agent:main:retired-dashboard");
+    await persist(writer, sessionKey, {
+      ...snapshot("retired conversation"),
+      historyState: { stateRevision: {}, commands: [] },
+      board: {
+        snapshot: { sessionKey: rawKey(sessionKey), revision: 1, tabs: [], widgets: [] },
+        receivedAtMs: 100,
+      },
+    });
+    const reader = new SessionSnapshotStore();
+    const presentBoard = vi.fn();
+    const reading = reader.read(sessionKey, presentBoard);
+    reader.forget(sessionKey);
+    expect(await reading).toBeNull();
+    expect(presentBoard).not.toHaveBeenCalled();
+  });
+
+  it("persists board removal before any transcript is in memory", async () => {
+    const memory: ChatMessageCache = new Map();
+    const store = makeStore(memory);
+    const sessionKey = key("agent:main:removed-dashboard");
+    await persist(writer, sessionKey, {
+      ...snapshot("saved conversation"),
+      board: {
+        snapshot: { sessionKey: rawKey(sessionKey), revision: 1, tabs: [], widgets: [] },
+        receivedAtMs: 100,
+      },
+    });
+    cacheChatBoardSnapshotAfterHydration(
+      { ...snapshotHost, chatMessagesBySession: memory },
+      { sessionKey: rawKey(sessionKey) },
+      null,
+      100,
+      () => true,
+    );
+    await store.flush();
+    expect((await new SessionSnapshotStore().read(sessionKey))?.board).toBeNull();
+  });
+
+  it("discards an invalid persisted board receipt", async () => {
+    const sessionKey = key("agent:main:invalid-board");
+    await persist(writer, sessionKey, snapshot("initialize database"));
+    await putRawRecord({
+      ...envelope(sessionKey, snapshot("conversation")),
+      snapshot: {
+        ...snapshot("conversation"),
+        board: {
+          receivedAtMs: -1,
+          snapshot: { sessionKey: "dashboard", revision: 1, tabs: [], widgets: [] },
+        },
+      },
+    });
+    const presentBoard = vi.fn();
+    expect(await new SessionSnapshotStore().read(sessionKey, presentBoard)).toBeNull();
+    expect(presentBoard).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "persists raw metadata with its receipts unless privacy projection changes it (pairing: %s)",
+    async (pairing) => {
+      const sessionKey = key("agent:main:metadata");
+      const value: ChatSessionSnapshot = {
+        ...snapshot("history"),
+        deltaCursor: "cursor-1",
+        historyState: {
+          stateRevision: {
+            pendingInputs: "inputs-1",
+            sessionInfo: "info-1",
+            commands: "commands-1",
+          },
+          commands: [
+            {
+              name: "skill",
+              description: "Run skill",
+              source: "skill",
+              scope: "text",
+              acceptsArgs: true,
+            },
+          ],
+          pendingInputs: {
+            items: [
+              {
+                id: "input-1",
+                acceptedAt: 1,
+                state: "queued",
+                queued: true,
+                message: {
+                  role: "user",
+                  content: pairing
+                    ? [{ type: "openclaw_pairing_qr", data: "synthetic-private-pairing" }]
+                    : "Follow up.",
+                },
+              },
+            ],
+            total: 1,
+            queuedCount: 1,
+          },
+          sessionInfo: {
+            key: "agent:main:metadata",
+            kind: "direct",
+            sessionId: "session-1",
+            updatedAt: 1,
+          },
+        },
+      };
+      const store = new SessionSnapshotStore();
+      store.write(sessionKey, value);
+      await store.flush();
+      const restored = await new SessionSnapshotStore().read(sessionKey);
+      expect(restored?.deltaCursor).toBe("cursor-1");
+      expect(restored?.historyState).toEqual(pairing ? undefined : value.historyState);
+      expect(JSON.stringify(await readStoredChatSnapshotRecord(sessionKey))).not.toContain(
+        "synthetic-private-pairing",
+      );
+    },
+  );
+
+  it("restores persisted startup state from before command receipts were added", async () => {
+    const sessionKey = key("agent:main:existing-snapshot");
+    await persist(writer, sessionKey, snapshot("initialize database"));
+    const previous: ChatSessionSnapshot = {
+      ...snapshot("Existing conversation"),
+      deltaCursor: "existing-cursor",
+      historyState: {
+        stateRevision: { pendingInputs: "inputs-1", sessionInfo: "info-1" },
+        pendingInputs: { items: [], total: 0 },
+        sessionInfo: {
+          key: "agent:main:existing-snapshot",
+          kind: "direct",
+          sessionId: "session-1",
+          updatedAt: 1,
+        },
+      },
+    };
+    await putRawRecord(envelope(sessionKey, previous));
+    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(previous);
+  });
+
+  it("restores bounded sidebar facts with legacy defaults and strips live-only fields", async () => {
+    const store = makeStore(undefined, true);
+    const sidebarKey = `${key("").split("\u0000")[0]}\u0000sidebar:operator`;
+    const row = { key: "agent:main:cedar", kind: "direct", label: "Cedar" };
+    const roster = {
+      agentId: "main",
+      result: {
+        ts: 1,
+        path: "sessions",
+        count: 1,
+        defaults: { model: null, modelProvider: null, contextTokens: null },
+        sessions: [{ ...row, hasActiveRun: true }],
+      },
+      groups: [],
+      groupSettings: [],
+      sectionOrder: [],
+    };
+    async function putSidebarModel(model: unknown): Promise<void> {
+      const database = await openDatabase();
+      const transaction = database.transaction(SIDEBAR, "readwrite");
+      const completed = transactionDone(transaction);
+      transaction.objectStore(SIDEBAR).put({
+        sessionKey: sidebarKey,
+        projectionVersion: 1,
+        savedAt: Date.now(),
+        model,
+      });
+      await completed;
+      database.close();
+    }
+    expect(await store.writeSidebar(sidebarKey, sidebarSnapshot, parseSidebarSnapshot)).toBe(true);
+    // Older or foreign writers can leave data that is not an admitted live model.
+    await putSidebarModel({
+      ...sidebarSnapshot,
+      peoplePresenceFilter: undefined,
+      offlineUsers: undefined,
+      roster,
+      footer: { id: "operator", scopes: ["operator.admin"] },
+      token: "synthetic-disallowed-field",
+    });
+    const restored = await store.readSidebar(sidebarKey, parseSidebarSnapshot);
+    expect(restored).toMatchObject({ peoplePresenceFilter: "online", offlineUsers: [] });
+    expect(restored?.roster?.result.sessions).toEqual([row]);
+    expect(restored?.footer).toEqual({ id: "operator" });
+    expect(restored).not.toHaveProperty("token");
+    await putSidebarModel({
+      ...sidebarSnapshot,
+      roster: {
+        ...roster,
+        result: { ...roster.result, sessions: [{ ...row, incognito: true }] },
+      },
+    });
+    expect(await store.readSidebar(sidebarKey, parseSidebarSnapshot)).toBeNull();
+  });
+
+  it.each([
+    { snapshot: { ...snapshot("message"), unexpected: true } },
+    { snapshot: { ...snapshot("message"), pagination: { hasMore: false, nextOffset: 1 } } },
+    { snapshot: { ...snapshot("message"), pagination: { hasMore: true, nextOffset: -1 } } },
+    {
+      snapshot: {
+        ...snapshot("message"),
+        historyState: {
+          stateRevision: { sessionInfo: "info-1" },
+          sessionInfo: { key: "s", kind: "direct", owner: { actor: { type: "unknown" } } },
+        },
+      },
+    },
+    { sessionId: "different-session" },
+  ])(
+    "rejects malformed durable snapshot envelopes without exposing cached history ($snapshot)",
+    async (corrupt) => {
+      const sessionKey = key("agent:main:corrupt-envelope");
+      await persist(writer, sessionKey, snapshot("message"));
+      const persisted = await readStoredChatSnapshotRecord(sessionKey);
+      if (!persisted || typeof persisted !== "object") {
+        throw new Error("expected the writer to persist a snapshot envelope");
+      }
+      await putRawRecord({ ...persisted, ...corrupt });
+      expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+      expect(await readStoredChatSnapshotRecord(sessionKey)).toBeUndefined();
+    },
+  );
+
+  it("retires one Gateway cache without touching another Gateway or account", async () => {
+    const memory: ChatMessageCache = new Map();
+    const store = makeStore(memory, true);
+    const target = { sessionKey: "agent:main:shared" };
+    const other = { ...snapshotHost, settings: { gatewayUrl: "wss://other.example" } };
+    const second = {
+      ...snapshotHost,
+      client: { recoveryScope: "account-b", recoveryScopeReady: true },
+    };
+    for (const host of [snapshotHost, other, second]) {
+      cacheChatSessionSnapshot(memory, host, target, snapshot(host.settings.gatewayUrl));
+    }
+    await store.flush();
+    const firstKey = resolveChatSnapshotKey(snapshotHost, target);
+    await clearStoredChatSnapshots(firstKey.slice(0, firstKey.indexOf("\u0000") + 1));
+    expect(memory.has(firstKey)).toBe(false);
+    expect(await store.read(firstKey)).toBeNull();
+    expect(await store.read(resolveChatSnapshotKey(other, target))).not.toBeNull();
+    expect(await store.read(resolveChatSnapshotKey(second, target))).not.toBeNull();
+  });
+
+  it("keeps Incognito history in memory without persisting snapshots or metadata", async () => {
+    const memory: ChatMessageCache = new Map();
+    writer = makeStore(memory);
+    const privateKeys = ["dashboard", "subagent", "internal-session-effects"].map((kind) =>
+      key(`agent:main:${kind}:incognito-private`),
+    );
+    const ordinaryKey = key("agent:main:dashboard:ordinary");
+    cacheSnapshot(memory, ordinaryKey);
+    const ordinaryFlush = writer.flush();
+    for (const sessionKey of privateKeys) {
+      cacheSnapshot(memory, sessionKey);
+    }
+    await Promise.all([ordinaryFlush, writer.flush()]);
     const reader = new SessionSnapshotStore();
     await reader.loadSavedAtIndex();
-    expect(await reader.read("agent:main:shared")).toEqual(snapshot({ text: "cached" }));
-    expect(reader.readSavedAt("agent:main:shared")).toBe(savedAt);
+    for (const sessionKey of privateKeys) {
+      expect(memory.get(sessionKey)?.snapshot).toEqual(snapshot(sessionKey));
+      expect(await readRawRecord(sessionKey)).toBeUndefined();
+      expect(await readRawRecord(sessionKey, METADATA)).toBeUndefined();
+      expect(writer.readSavedAt(sessionKey)).toBeNull();
+      expect(reader.readSavedAt(sessionKey)).toBeNull();
+      expect(await reader.read(sessionKey)).toBeNull();
+    }
+    expect(await reader.read(ordinaryKey)).toEqual(snapshot(ordinaryKey));
+    expect(reader.readSavedAt(ordinaryKey)).not.toBeNull();
   });
 
-  it("keeps lightweight eviction metadata alongside each snapshot", async () => {
-    const sessionKey = "agent:main:metadata";
-    const writer = new SessionSnapshotStore();
-    writer.write(sessionKey, snapshot("cached"));
-    await writer.flush();
-
-    const record = await readRawRecord(sessionKey);
-    const metadata = await readRawMetadata(sessionKey);
-    expect(metadata?.savedAt).toBe(record?.savedAt);
-    expect(metadata?.weight).toBeGreaterThan(0);
-
-    await writer.delete(sessionKey);
-    expect(await readRawMetadata(sessionKey)).toBeUndefined();
+  it("refuses Incognito records through direct reads and routed prewarm", async () => {
+    const privateKey = key("agent:main:dashboard:incognito-existing");
+    await persist(writer, key("agent:main:ordinary"), snapshot("ordinary"));
+    // A foreign/older writer must not make private records readable by this UI.
+    await putRawRecord(envelope(privateKey, snapshot("private")));
+    expect(await readStoredChatSnapshotRecord(privateKey)).toBeUndefined();
+    prewarmChatSnapshot(privateKey);
+    expect(await new SessionSnapshotStore().read(privateKey)).toBeNull();
   });
 
-  it("round-trips the optional history delta cursor", async () => {
-    const sessionKey = "agent:main:cursor";
-    const writer = new SessionSnapshotStore();
-    const cached = { ...snapshot("cached"), deltaCursor: "cursor-1" };
-    writer.write(sessionKey, cached);
-    await writer.flush();
+  it.each(["direct", "prewarmed"])(
+    "discards a superseded unbounded projection (%s)",
+    async (mode) => {
+      const sessionKey = key("agent:main:old-projection");
+      await persist(writer, sessionKey, snapshot("current"));
+      await putRawRecord(envelope(sessionKey, snapshot("old"), 2));
+      if (mode === "prewarmed") {
+        prewarmChatSnapshot(sessionKey);
+      }
+      expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+    },
+  );
 
-    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(cached);
+  it("purges all legacy unscoped history rather than adopting an unknown account", async () => {
+    const privateKey = "agent:main:dashboard:incognito-old";
+    const orphanedKey = "agent:main:subagent:incognito-metadata-only";
+    const ordinaryKey = "agent:main:dashboard:retained";
+    const database = await openDatabase(2, [SNAPSHOTS, METADATA]);
+    database.close();
+    for (const sessionKey of [privateKey, ordinaryKey]) {
+      const { projectionVersion: _version, ...legacy } = envelope(sessionKey, snapshot(sessionKey));
+      await putRawRecord(legacy);
+    }
+    await putRawRecord(
+      {
+        sessionKey: ordinaryKey,
+        savedAt: 1,
+        sessionId: "session-1",
+        snapshot: snapshot(ordinaryKey),
+      },
+      { sessionKey: orphanedKey, savedAt: 1, weight: 0 },
+    );
+    // A direct routed prewarm must not expose previously persisted private history.
+    prewarmChatSnapshot(privateKey);
+    const reader = new SessionSnapshotStore();
+    expect(await reader.read(privateKey)).toBeNull();
+    await reader.loadSavedAtIndex();
+    expect(await readStoredChatSnapshotRecord(privateKey)).toBeUndefined();
+    expect(await readRawRecord(privateKey)).toBeUndefined();
+    expect(await readRawRecord(privateKey, METADATA)).toBeUndefined();
+    expect(await readRawRecord(orphanedKey, METADATA)).toBeUndefined();
+    expect(reader.readSavedAt(privateKey)).toBeNull();
+    expect(reader.readSavedAt(orphanedKey)).toBeNull();
+    expect(await reader.read(ordinaryKey)).toBeNull();
+    expect(reader.readSavedAt(ordinaryKey)).toBeNull();
   });
 
   it("does not let an append miss replace a richer persisted snapshot", async () => {
-    const sessionKey = "agent:main:append-miss";
+    const sessionKey = key("agent:main:append-miss");
     const persisted = {
       ...snapshot("unused", "session-rich"),
       deltaCursor: "cursor-rich",
       messages: ["one", "two", "three", "four", "five"],
     };
-    const writer = new SessionSnapshotStore();
-    writer.write(sessionKey, persisted);
-    await writer.flush();
+    await persist(writer, sessionKey, persisted);
 
     const memoryCache: ChatMessageCache = new Map();
     const store = new SessionSnapshotStore(memoryCache);
@@ -196,8 +520,8 @@ describe("persistent chat session snapshots", () => {
     try {
       appendChatMessageToCache(
         memoryCache,
-        { assistantAgentId: "main", agentsList: null, hello: null },
-        { sessionKey },
+        snapshotHost,
+        { sessionKey: rawKey(sessionKey) },
         "newest",
       );
       await store.flush();
@@ -209,61 +533,29 @@ describe("persistent chat session snapshots", () => {
     }
   });
 
-  it("seeds the savedAt index once for every synchronous lookup", async () => {
-    const writer = new SessionSnapshotStore();
-    writer.write("agent:main:first", snapshot("first"));
-    writer.write("agent:main:second", snapshot("second"));
-    await writer.flush();
-    const open = vi.spyOn(indexedDB, "open");
-    const reader = new SessionSnapshotStore();
-
-    await reader.loadSavedAtIndex();
-    expect(reader.readSavedAt("agent:main:first")).not.toBeNull();
-    expect(reader.readSavedAt("agent:main:second")).not.toBeNull();
-    expect(reader.readSavedAt("agent:main:missing")).toBeNull();
-    await reader.loadSavedAtIndex();
-
-    expect(open).toHaveBeenCalledOnce();
-  });
-
   it("defers snapshot sanitization until flush", async () => {
-    const sessionKey = "agent:main:deferred-sanitize";
-    const writer = new SessionSnapshotStore();
-    writer.write(sessionKey, snapshot("persisted"));
-    await writer.flush();
-
-    writer.write(sessionKey, snapshot(1n));
-
-    await writer.flush();
+    const sessionKey = key("agent:main:deferred-sanitize");
+    await persist(writer, sessionKey, snapshot("persisted"));
+    await persist(writer, sessionKey, snapshot(1n));
     expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
   });
 
   it("suppresses unchanged writes only for the latest hydration", async () => {
     let now = 1;
     vi.spyOn(Date, "now").mockImplementation(() => now);
-    const sessionKey = "agent:main:hydrate-only";
-    const writer = new SessionSnapshotStore();
-    writer.write(sessionKey, snapshot("persisted"));
-    await writer.flush();
+    const sessionKey = key("agent:main:hydrate-only");
+    await persist(writer, sessionKey, snapshot("persisted"));
     expect((await readRawRecord(sessionKey))?.savedAt).toBe(1);
-
     now = 2;
     const memoryCache: ChatMessageCache = new Map();
-    const reader = new SessionSnapshotStore(memoryCache);
-    observeChatCache(memoryCache, reader);
+    const reader = makeStore(memoryCache);
     const previousHydration = await reader.read(sessionKey);
     const hydrated = await reader.read(sessionKey);
     if (!previousHydration || !hydrated) {
       throw new Error("expected hydrated snapshot");
     }
-    cacheChatSessionSnapshot(
-      memoryCache,
-      { assistantAgentId: "main", agentsList: null, hello: null },
-      { sessionKey },
-      hydrated,
-    );
+    cacheSnapshot(memoryCache, sessionKey, hydrated);
     await reader.flush();
-
     expect((await readRawRecord(sessionKey))?.savedAt).toBe(1);
     reader.write(sessionKey, previousHydration);
     await reader.flush();
@@ -271,276 +563,171 @@ describe("persistent chat session snapshots", () => {
   });
 
   it("releases hydrated snapshots after the message cache evicts them", async () => {
-    const sessionKey = "agent:main:evicted-hydration";
+    const sessionKey = key("agent:main:evicted-hydration");
     const memoryCache: ChatMessageCache = new Map();
-    const store = new SessionSnapshotStore(memoryCache);
-    observeChatCache(memoryCache, store);
-    store.write(sessionKey, snapshot("persisted"));
-    await store.flush();
-
+    const store = makeStore(memoryCache);
+    await persist(store, sessionKey, snapshot("persisted"));
     const { evicted, collectionControl } = await (async () => {
       const hydrated = await store.read(sessionKey);
       if (!hydrated) {
         throw new Error("expected hydrated snapshot");
       }
-      cacheChatSessionSnapshot(
-        memoryCache,
-        { assistantAgentId: "main", agentsList: null, hello: null },
-        { sessionKey },
-        hydrated,
-      );
+      cacheSnapshot(memoryCache, sessionKey, hydrated);
       return {
         evicted: new WeakRef(hydrated),
         collectionControl: new WeakRef({ unowned: true }),
       };
     })();
     for (let index = 0; index < MAX_CACHED_CHAT_SESSIONS; index += 1) {
-      cacheChatSessionSnapshot(
-        memoryCache,
-        { assistantAgentId: "main", agentsList: null, hello: null },
-        { sessionKey: `agent:main:newer-${index}` },
-        snapshot(index),
-      );
+      cacheSnapshot(memoryCache, key(`agent:main:newer-${index}`), snapshot(index));
     }
     await store.flush();
     expect(memoryCache.has(sessionKey)).toBe(false);
-    await collectGarbageForTest(() => {
-      queryObjects(SessionSnapshotStore);
-    });
+    await collectGarbageForTest();
     expect(collectionControl.deref()).toBeUndefined();
     expect(evicted.deref()).toBeUndefined();
-    expect(store.readSavedAt("agent:main:newer-0")).not.toBeNull();
+    expect(store.readSavedAt(key("agent:main:newer-0"))).not.toBeNull();
   });
 
   it("evicts the oldest sessions by count and total serialized weight", async () => {
     let now = 0;
     vi.spyOn(Date, "now").mockImplementation(() => ++now);
-    const writer = new SessionSnapshotStore();
     for (let index = 0; index <= 20; index += 1) {
-      writer.write(`agent:main:count-${index}`, snapshot(index, `count-${index}`));
+      writer.write(key(`agent:main:count-${index}`), snapshot(index, `count-${index}`));
       await writer.flush();
     }
     const reader = new SessionSnapshotStore();
-    expect(writer.readSavedAt("agent:main:count-0")).toBeNull();
-    expect(await reader.read("agent:main:count-0")).toBeNull();
-    expect(await reader.read("agent:main:count-20")).not.toBeNull();
-
+    expect(writer.readSavedAt(key("agent:main:count-0"))).toBeNull();
+    expect(await reader.read(key("agent:main:count-0"))).toBeNull();
+    expect(await reader.read(key("agent:main:count-20"))).not.toBeNull();
     await clearStoredChatSnapshots();
     const large = "x".repeat(9 * 1024 * 1024);
     for (let index = 0; index < 3; index += 1) {
-      writer.write(`agent:main:weight-${index}`, snapshot(large, `weight-${index}`));
+      writer.write(key(`agent:main:weight-${index}`), snapshot(large, `weight-${index}`));
       await writer.flush();
     }
     const weightReader = new SessionSnapshotStore();
-    expect(await weightReader.read("agent:main:weight-0")).toBeNull();
-    expect(await weightReader.read("agent:main:weight-2")).not.toBeNull();
+    expect(await weightReader.read(key("agent:main:weight-0"))).toBeNull();
+    expect(await weightReader.read(key("agent:main:weight-2"))).not.toBeNull();
   });
 
-  it("seeds timestamps without hydrating unrelated snapshots", async () => {
-    const writer = new SessionSnapshotStore();
-    writer.write("agent:main:valid", snapshot("valid"));
-    await writer.flush();
-    await putRawRecord({
-      sessionKey: "agent:main:corrupt",
-      sessionId: "session-1",
-      savedAt: Date.now(),
-      snapshot: { messages: "not-an-array" },
-    });
-
-    const reader = new SessionSnapshotStore();
-    await reader.loadSavedAtIndex();
-    expect(reader.readSavedAt("agent:main:valid")).not.toBeNull();
-    expect(reader.readSavedAt("agent:main:corrupt")).not.toBeNull();
-    expect(await reader.read("agent:main:corrupt")).toBeNull();
-    expect(await reader.read("agent:main:valid")).toBeNull();
-  });
-
-  it("resets the whole database when the savedAt seed finds malformed metadata", async () => {
-    const writer = new SessionSnapshotStore();
-    writer.write("agent:main:valid", snapshot("valid"));
-    await writer.flush();
-    await putRawRecord(
-      {
-        sessionKey: "agent:main:corrupt",
-        sessionId: "session-1",
-        savedAt: Date.now(),
-        snapshot: snapshot("corrupt metadata"),
-      },
-      { sessionKey: "agent:main:corrupt", savedAt: "invalid", weight: 0 },
-    );
-
-    const reader = new SessionSnapshotStore();
-    await reader.loadSavedAtIndex();
-    expect(reader.readSavedAt("agent:main:corrupt")).toBeNull();
-    expect(await reader.read("agent:main:valid")).toBeNull();
-  });
-
-  it("deletes only the invalidated session record", async () => {
-    const writer = new SessionSnapshotStore();
-    writer.write("agent:main:deleted", snapshot("deleted"));
-    writer.write("agent:main:retained", snapshot("retained"));
-    await writer.flush();
-
-    await writer.delete("agent:main:deleted");
-    expect(writer.readSavedAt("agent:main:deleted")).toBeNull();
-    expect(writer.readSavedAt("agent:main:retained")).not.toBeNull();
-
-    const reader = new SessionSnapshotStore();
-    expect(await reader.read("agent:main:deleted")).toBeNull();
-    expect(await reader.read("agent:main:retained")).not.toBeNull();
-  });
-
-  it("preserves an unrelated in-flight transcript while deleting another session", async () => {
-    const writer = new SessionSnapshotStore();
-    writer.connect();
-    try {
-      const retainedSession = "agent:main:retained";
-      writer.write(retainedSession, snapshot("important transcript"));
-
-      await Promise.all([writer.flush(), writer.delete("agent:main:deleted")]);
-
-      expect(await new SessionSnapshotStore().read(retainedSession)).toEqual(
-        snapshot("important transcript"),
+  it.each(["snapshot", "metadata"] as const)(
+    "resets corrupt %s without hydrating unrelated transcripts",
+    async (corruption) => {
+      const valid = key("agent:main:valid");
+      const corrupt = key("agent:main:corrupt");
+      await persist(writer, valid, snapshot("valid"));
+      await putRawRecord(
+        {
+          projectionVersion: 3,
+          sessionKey: corrupt,
+          sessionId: "session-1",
+          savedAt: Date.now(),
+          snapshot:
+            corruption === "snapshot" ? { messages: "not-an-array" } : snapshot("corrupt metadata"),
+        },
+        corruption === "metadata"
+          ? { sessionKey: corrupt, savedAt: "invalid", weight: 0 }
+          : undefined,
       );
-      expect(writer.readSavedAt(retainedSession)).not.toBeNull();
-    } finally {
-      writer.disconnect();
-      await writer.whenIdle();
-    }
-  });
+      const reader = new SessionSnapshotStore();
+      await reader.loadSavedAtIndex();
+      if (corruption === "snapshot") {
+        expect(reader.readSavedAt(valid)).not.toBeNull();
+        expect(reader.readSavedAt(corrupt)).not.toBeNull();
+        expect(await reader.read(corrupt)).toBeNull();
+      } else {
+        expect(reader.readSavedAt(corrupt)).toBeNull();
+      }
+      expect(await reader.read(valid)).toBeNull();
+    },
+  );
 
-  it.each(["session", "all"])(
-    "does not restore an in-flight transcript after %s invalidation",
+  it.each(["unrelated", "session", "cache-eviction", "all"] as const)(
+    "settles an in-flight transcript through %s invalidation",
     async (scope) => {
-      const sessionKey = "agent:main:deleted";
-      const writer = new SessionSnapshotStore();
+      const sessionKey = key("agent:main:in-flight");
+      const value = snapshot("important transcript");
       writer.connect();
-      try {
-        writer.write(sessionKey, snapshot("deleted transcript"));
-
-        await Promise.all([
-          writer.flush(),
-          scope === "session" ? writer.delete(sessionKey) : clearStoredChatSnapshots(),
-        ]);
-
-        expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+      connected.add(writer);
+      writer.write(sessionKey, value);
+      await Promise.all([
+        writer.flush(),
+        scope === "all"
+          ? clearStoredChatSnapshots()
+          : writer.delete(
+              scope === "unrelated" ? key("agent:main:other") : sessionKey,
+              scope === "cache-eviction" ? scope : undefined,
+            ),
+      ]);
+      expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(
+        scope === "unrelated" ? value : null,
+      );
+      if (scope === "unrelated") {
+        expect(writer.readSavedAt(sessionKey)).not.toBeNull();
+      } else {
         expect(writer.readSavedAt(sessionKey)).toBeNull();
-      } finally {
-        writer.disconnect();
-        await writer.whenIdle();
       }
     },
   );
 
-  it("does not restore deleted metadata while seeding the snapshot index", async () => {
-    const sessionKey = "agent:main:deleted-during-seed";
-    const writer = new SessionSnapshotStore();
-    writer.write(sessionKey, snapshot("deleted transcript"));
-    await writer.flush();
-
-    const reader = new SessionSnapshotStore();
-    reader.connect();
-    try {
-      let deletion: Promise<void> | undefined;
-      const originalGetAll = Reflect.get(
-        IDBObjectStore.prototype,
-        "getAll",
-      ) as IDBObjectStore["getAll"];
-      vi.spyOn(IDBObjectStore.prototype, "getAll").mockImplementationOnce(function (
-        this: IDBObjectStore,
-        ...args
-      ) {
-        const request = originalGetAll.apply(this, args);
-        request.addEventListener("success", () => {
-          deletion = writer.delete(sessionKey);
-        });
-        return request;
-      });
-
-      await reader.loadSavedAtIndex();
-      expect(deletion).toBeDefined();
-      await deletion;
-
-      expect(reader.readSavedAt(sessionKey)).toBeNull();
-    } finally {
-      reader.disconnect();
-      await reader.whenIdle();
-    }
-  });
-
   it("upgrades a version one database before deleting an invalidated snapshot", async () => {
-    const sessionKey = "agent:main:legacy-delete";
-    await putVersionOneRecord(sessionKey);
-
+    const sessionKey = key("agent:main:legacy-delete");
+    const legacy = await openDatabase(1, [SNAPSHOTS]);
+    const write = legacy.transaction(SNAPSHOTS, "readwrite");
+    write.objectStore(SNAPSHOTS).put({ sessionKey });
+    await transactionDone(write);
+    legacy.close();
     await new SessionSnapshotStore().delete(sessionKey);
-
-    const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME);
-    const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      request.addEventListener("success", () => resolve(request.result));
-      request.addEventListener("error", () =>
-        reject(request.error ?? new Error("database open failed")),
-      );
-    });
-    expect(database.version).toBe(2);
-    expect(Array.from(database.objectStoreNames)).toEqual([
-      CHAT_SNAPSHOT_METADATA_STORE_NAME,
-      CHAT_SNAPSHOT_STORE_NAME,
-    ]);
-    const transaction = database.transaction(
-      [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME],
-      "readonly",
-    );
-    const snapshotRequest = transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).get(sessionKey);
-    const metadataRequest = transaction
-      .objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME)
-      .get(sessionKey);
+    const database = await openDatabase();
+    expect(database.version).toBe(8);
+    expect(Array.from(database.objectStoreNames)).toEqual([SIDEBAR, METADATA, SNAPSHOTS]);
+    const transaction = database.transaction([SNAPSHOTS, METADATA], "readonly");
+    const snapshotRequest = transaction.objectStore(SNAPSHOTS).get(sessionKey);
+    const metadataRequest = transaction.objectStore(METADATA).get(sessionKey);
     const completed = transactionDone(transaction);
-    await Promise.all([
-      new Promise<void>((resolve) => {
-        snapshotRequest.addEventListener("success", () => resolve());
-      }),
-      new Promise<void>((resolve) => {
-        metadataRequest.addEventListener("success", () => resolve());
-      }),
-      completed,
-    ]);
+    await Promise.all([requestResult(snapshotRequest), requestResult(metadataRequest), completed]);
     expect(snapshotRequest.result).toBeUndefined();
     expect(metadataRequest.result).toBeUndefined();
     database.close();
   });
 
-  it("broadcasts invalidation and clears active memory for current and legacy peers", async () => {
-    const sessionKey = "agent:main:cross-tab";
-    const memoryCache: ChatMessageCache = new Map();
-    const store = new SessionSnapshotStore(memoryCache);
-    store.connect();
-    observeChatCache(memoryCache, store);
-    cacheChatSessionSnapshot(
-      memoryCache,
-      { assistantAgentId: "main", agentsList: null, hello: null },
-      { sessionKey },
-      snapshot("local"),
-    );
-    await store.flush();
-    const setItem = vi.spyOn(localStorage, "setItem");
+  it("upgrades unbounded transcripts without discarding the current sidebar", async () => {
+    const oldDatabase = await openDatabase(7, [SNAPSHOTS, METADATA, SIDEBAR]);
+    const transaction = oldDatabase.transaction([...oldDatabase.objectStoreNames], "readwrite");
+    for (const name of oldDatabase.objectStoreNames) {
+      transaction.objectStore(name).put({ sessionKey: "old", payload: "retained" });
+    }
+    await transactionDone(transaction);
+    oldDatabase.close();
+    const reader = new SessionSnapshotStore();
+    await reader.loadSavedAtIndex();
+    expect(await readRawRecord("old")).toBeUndefined();
+    expect(await readRawRecord("old", METADATA)).toBeUndefined();
+    expect(await readRawRecord("old", SIDEBAR)).toEqual({ sessionKey: "old", payload: "retained" });
+  });
 
-    try {
-      await clearStoredChatSnapshots();
-      const currentBroadcastValue = setItem.mock.calls.findLast(
-        ([key]) => key === "openclaw.control.chatSnapshots.invalidate.v1",
+  it.each(["all", "session"] as const)(
+    "broadcasts %s invalidation without clearing unrelated peer memory",
+    async (scope) => {
+      const deleted = key("agent:main:deleted-in-peer");
+      const retained = key("agent:main:retained-in-peer");
+      const memory: ChatMessageCache = new Map();
+      const store = makeStore(memory, true);
+      cacheSnapshot(memory, deleted);
+      cacheSnapshot(memory, retained);
+      await store.flush();
+      const setItem = vi.spyOn(localStorage, "setItem");
+      await (scope === "all" ? clearStoredChatSnapshots() : deleteStoredChatSnapshot(deleted));
+      const broadcast = setItem.mock.calls.findLast(
+        ([storageKey]) => storageKey === "openclaw.control.chatSnapshots.invalidate.v1",
       )?.[1];
-      if (currentBroadcastValue === undefined) {
-        throw new Error("expected full-cache invalidation broadcast");
+      expect(broadcast).toBeDefined();
+      if (scope === "all") {
+        expect(broadcast).toBe("{}");
       }
-      expect(currentBroadcastValue).toBe("{}");
-
-      for (const peerValue of [currentBroadcastValue, "1"]) {
-        cacheChatSessionSnapshot(
-          memoryCache,
-          { assistantAgentId: "main", agentsList: null, hello: null },
-          { sessionKey },
-          snapshot("refilled"),
-        );
+      for (const peerValue of scope === "all" ? [broadcast, "1"] : [broadcast]) {
+        cacheSnapshot(memory, deleted);
         await store.flush();
         window.dispatchEvent(
           new StorageEvent("storage", {
@@ -548,69 +735,58 @@ describe("persistent chat session snapshots", () => {
             newValue: peerValue,
           }),
         );
-
-        expect(memoryCache.size).toBe(0);
-        expect(store.readSavedAt(sessionKey)).toBeNull();
+        expect(store.readSavedAt(deleted)).toBeNull();
+        expect(memory.has(deleted)).toBe(false);
+        if (scope === "all") {
+          expect(memory.size).toBe(0);
+        } else {
+          expect(store.readSavedAt(retained)).not.toBeNull();
+          expect(memory.has(retained)).toBe(true);
+        }
       }
-    } finally {
-      store.disconnect();
-      await store.whenIdle();
-    }
+    },
+  );
+
+  it("retains persisted snapshots through a temporary database open failure", async () => {
+    const sessionKey = key("agent:main:temporary-open-failure");
+    const value = snapshot("Retained conversation");
+    writer.write(sessionKey, value);
+    await writer.flush();
+    vi.spyOn(indexedDB, "open").mockImplementationOnce(() => {
+      throw new DOMException("temporarily unavailable", "UnknownError");
+    });
+
+    const reader = new SessionSnapshotStore();
+    expect(await reader.read(sessionKey)).toBeNull();
+    expect(await reader.read(sessionKey)).toEqual(value);
   });
 
-  it("keeps unrelated peer-tab memory when one session snapshot is deleted", async () => {
-    const deletedSessionKey = "agent:main:deleted-in-peer";
-    const retainedSessionKey = "agent:main:retained-in-peer";
-    const memoryCache: ChatMessageCache = new Map();
-    const store = new SessionSnapshotStore(memoryCache);
-    store.connect();
-    observeChatCache(memoryCache, store);
-    const cacheSnapshot = (sessionKey: string) =>
-      cacheChatSessionSnapshot(
-        memoryCache,
-        { assistantAgentId: "main", agentsList: null, hello: null },
-        { sessionKey },
-        snapshot(sessionKey),
-      );
-    cacheSnapshot(deletedSessionKey);
-    cacheSnapshot(retainedSessionKey);
+  it("rebuilds a missing snapshot store after a non-fatal read failure", async () => {
+    const request = indexedDB.open(DB, 8);
+    request.addEventListener("upgradeneeded", () => {
+      for (const name of [METADATA, SIDEBAR]) {
+        request.result.createObjectStore(name, { keyPath: "sessionKey" });
+      }
+    });
+    const database = await requestResult(request);
+    database.close();
+    const sessionKey = key("agent:main:missing-snapshot-store");
+    const store = new SessionSnapshotStore();
+    expect(await store.read(sessionKey)).toBeNull();
+
+    const value = snapshot("Rebuilt conversation");
+    store.write(sessionKey, value);
     await store.flush();
-    const setItem = vi.spyOn(localStorage, "setItem");
-
-    try {
-      await deleteStoredChatSnapshot(deletedSessionKey);
-      const broadcastValue = setItem.mock.calls.findLast(
-        ([key]) => key === "openclaw.control.chatSnapshots.invalidate.v1",
-      )?.[1];
-      expect(broadcastValue).toBeDefined();
-
-      cacheSnapshot(deletedSessionKey);
-      await store.flush();
-      window.dispatchEvent(
-        new StorageEvent("storage", {
-          key: "openclaw.control.chatSnapshots.invalidate.v1",
-          newValue: broadcastValue,
-        }),
-      );
-
-      expect(store.readSavedAt(deletedSessionKey)).toBeNull();
-      expect(store.readSavedAt(retainedSessionKey)).not.toBeNull();
-      expect(memoryCache.has(deletedSessionKey)).toBe(false);
-      expect(memoryCache.has(retainedSessionKey)).toBe(true);
-    } finally {
-      store.disconnect();
-      await store.whenIdle();
-    }
+    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(value);
   });
 
   it("keeps every operation non-fatal when IndexedDB is unavailable or throws", async () => {
     vi.stubGlobal("indexedDB", undefined);
     const unavailable = new SessionSnapshotStore();
-    unavailable.write("agent:main:none", snapshot("none"));
+    unavailable.write(key("agent:main:none"), snapshot("none"));
     await expect(unavailable.flush()).resolves.toBeUndefined();
-    await expect(unavailable.read("agent:main:none")).resolves.toBeNull();
-    await expect(unavailable.delete("agent:main:none")).resolves.toBeUndefined();
-
+    await expect(unavailable.read(key("agent:main:none"))).resolves.toBeNull();
+    await expect(unavailable.delete(key("agent:main:none"))).resolves.toBeUndefined();
     vi.stubGlobal("indexedDB", {
       open: () => {
         throw new DOMException("denied", "SecurityError");
@@ -620,9 +796,9 @@ describe("persistent chat session snapshots", () => {
       },
     });
     const denied = new SessionSnapshotStore();
-    denied.write("agent:main:denied", snapshot("denied"));
+    denied.write(key("agent:main:denied"), snapshot("denied"));
     await expect(denied.flush()).resolves.toBeUndefined();
-    await expect(denied.read("agent:main:denied")).resolves.toBeNull();
+    await expect(denied.read(key("agent:main:denied"))).resolves.toBeNull();
     await expect(clearStoredChatSnapshots()).resolves.toBeUndefined();
   });
 });

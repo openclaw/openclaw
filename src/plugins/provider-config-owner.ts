@@ -1,4 +1,3 @@
-// Resolves provider config ownership between core and plugins.
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -10,7 +9,17 @@ import type { PluginManifestProviderEndpoint } from "./manifest-types.js";
 import {
   matchesPluginProviderEndpoint,
   normalizePluginProviderBaseUrl,
+  prepareProviderEndpoints,
 } from "./plugin-metadata-provider-facts.js";
+
+export function hasConfiguredModelProvider(params: {
+  provider: string;
+  config?: OpenClawConfig;
+}): boolean {
+  return (
+    findNormalizedProviderValue(params.config?.models?.providers, params.provider) !== undefined
+  );
+}
 
 /** Limits implicit catalogs to endpoints declared by their provider owner. */
 export function isProviderCatalogSourceAllowed(params: {
@@ -38,7 +47,7 @@ export function isProviderCatalogSourceAllowed(params: {
     provider?.baseUrl,
     ...(provider?.models ?? []).map((model) => model.baseUrl),
   ].filter((baseUrl): baseUrl is string => Boolean(baseUrl));
-  const endpoints = params.plugin.providerEndpoints ?? [];
+  const endpoints = prepareProviderEndpoints(params.plugin.providerEndpoints);
   // Adapters without native declarations keep their existing discovery contract.
   // Authored rows do not pass through this implicit-source decision.
   if (baseUrls.length === 0 && endpoints.length === 0) {
@@ -62,6 +71,7 @@ export const CORE_BUILT_IN_MODEL_APIS = new Set([
   "anthropic-messages",
   "azure-openai-responses",
   "google-generative-ai",
+  "google-interactions",
   "google-vertex",
   "mistral-conversations",
   "openai-chatgpt-responses",
@@ -83,10 +93,7 @@ export function resolveProviderConfigApiOwnerHint(params: {
     return undefined;
   }
   const providerConfig =
-    providers[params.provider] ??
-    Object.entries(providers).find(
-      ([candidateId]) => normalizeProviderId(candidateId) === normalizedProvider,
-    )?.[1];
+    providers[params.provider] ?? findNormalizedProviderValue(providers, normalizedProvider);
   const api =
     typeof providerConfig?.api === "string" ? normalizeProviderId(providerConfig.api) : "";
   if (!api || api === normalizedProvider || CORE_BUILT_IN_MODEL_APIS.has(api)) {
@@ -95,32 +102,20 @@ export function resolveProviderConfigApiOwnerHint(params: {
   return api;
 }
 
-function providerConfigDeclaresModel(
-  providerConfig: { models?: readonly { id?: string }[] } | undefined,
-  model: string,
-): boolean {
-  const trimmedModel = model.trim();
-  return Boolean(
-    trimmedModel &&
-    providerConfig?.models?.some((candidate) => candidate.id?.trim() === trimmedModel),
-  );
-}
-
-/** Resolves provider/model refs used to scope model catalog discovery. */
+/** Resolves model refs used to scope model catalog discovery. */
 export function resolveModelCatalogScope(params: {
   cfg?: OpenClawConfig;
   provider: string;
   model: string;
-}): { providerRefs: string[]; modelRefs: string[] } {
+}): string[] {
   const provider = params.provider.trim();
   const model = params.model.trim();
   const providerConfig = findNormalizedProviderValue(params.cfg?.models?.providers, provider);
-  const modelRefs = providerConfigDeclaresModel(providerConfig, model)
-    ? [provider && model ? `${provider}/${model}` : model]
-    : [provider && model ? `${provider}/${model}` : model, model];
+  const qualifiedModel = provider && model ? `${provider}/${model}` : model;
+  const modelRefs =
+    model && providerConfig?.models?.some((candidate) => candidate.id?.trim() === model)
+      ? [qualifiedModel]
+      : [qualifiedModel, model];
   // Scope ordering feeds deterministic discovery and prompt/cache inputs.
-  return {
-    providerRefs: normalizeUniqueSingleOrTrimmedStringList([provider, providerConfig?.api]),
-    modelRefs: normalizeUniqueSingleOrTrimmedStringList(modelRefs),
-  };
+  return normalizeUniqueSingleOrTrimmedStringList(modelRefs);
 }

@@ -3,7 +3,6 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import type { PluginCompatibilityNotice } from "./status.js";
 import { createPluginRecord } from "./status.test-helpers.js";
-import type { PluginHookName } from "./types.js";
 
 export { createPluginRecord };
 
@@ -59,7 +58,9 @@ export const REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE =
   "references removed session/transcript file APIs; migrate to session identity, SessionTranscriptUpdate.target, and Gateway/runtime session helpers.";
 
 export function createCompatibilityNotice(
-  params: Pick<PluginCompatibilityNotice, "pluginId" | "code">,
+  params: Pick<PluginCompatibilityNotice, "pluginId"> & {
+    code: "hook-only" | "removed-session-transcript-file-api";
+  },
 ): PluginCompatibilityNotice {
   switch (params.code) {
     case "hook-only":
@@ -89,19 +90,6 @@ export function createBundledPluginRecord(id: string): PluginRecord {
     rootDir: `/bundled/${id}`,
     origin: "bundled",
   });
-}
-
-export function createTypedHook(params: {
-  pluginId: string;
-  hookName: PluginHookName;
-  source?: string;
-}): PluginRegistry["typedHooks"][number] {
-  return {
-    pluginId: params.pluginId,
-    hookName: params.hookName,
-    handler: () => undefined,
-    source: params.source ?? `/tmp/${params.pluginId}/index.ts`,
-  };
 }
 
 export function createCustomHook(params: {

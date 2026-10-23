@@ -6,33 +6,19 @@ import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { normalizeSafeBinProfileFixtures } from "../infra/exec-safe-bin-policy.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import type { OpenClawConfig } from "./types.js";
+import type { ExecToolConfig } from "./types.tools.js";
 
 /** Normalize exec safe-bin profiles and trusted dirs in global and per-agent config scopes. */
 export function normalizeExecSafeBinProfilesInConfig(cfg: OpenClawConfig): void {
-  const normalizeExec = (exec: unknown) => {
+  const normalizeExec = (exec: ExecToolConfig | undefined) => {
     if (!exec || typeof exec !== "object" || Array.isArray(exec)) {
       return;
     }
-    const typedExec = exec as {
-      safeBinProfiles?: Record<string, unknown>;
-      safeBinTrustedDirs?: string[];
-    };
-    const normalizedProfiles = normalizeSafeBinProfileFixtures(
-      typedExec.safeBinProfiles as Record<
-        string,
-        {
-          minPositional?: number;
-          maxPositional?: number;
-          allowedValueFlags?: readonly string[];
-          deniedFlags?: readonly string[];
-        }
-      >,
-    );
-    typedExec.safeBinProfiles =
+    const normalizedProfiles = normalizeSafeBinProfileFixtures(exec.safeBinProfiles);
+    exec.safeBinProfiles =
       Object.keys(normalizedProfiles).length > 0 ? normalizedProfiles : undefined;
-    const normalizedTrustedDirs = normalizeTrustedSafeBinDirs(typedExec.safeBinTrustedDirs);
-    typedExec.safeBinTrustedDirs =
-      normalizedTrustedDirs.length > 0 ? normalizedTrustedDirs : undefined;
+    const normalizedTrustedDirs = normalizeTrustedSafeBinDirs(exec.safeBinTrustedDirs);
+    exec.safeBinTrustedDirs = normalizedTrustedDirs.length > 0 ? normalizedTrustedDirs : undefined;
   };
 
   // Safe-bin config can be set globally or overridden per agent; normalize both persisted scopes.

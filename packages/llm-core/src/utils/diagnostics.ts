@@ -1,3 +1,7 @@
+import type { AssistantMessage } from "../types.js";
+
+export { readProviderRefusalReview, type ProviderRefusalReview } from "./provider-refusal.js";
+
 export interface DiagnosticErrorInfo {
   name?: string;
   message: string;
@@ -61,4 +65,28 @@ export function appendAssistantMessageDiagnostic(
   diagnostic: AssistantMessageDiagnostic,
 ): void {
   message.diagnostics = [...(message.diagnostics ?? []), diagnostic];
+}
+/** Records only the presence of hidden reasoning; never copies its content. */
+export function recordSuppressedReasoning(message: AssistantMessage): Error | undefined {
+  if (!message.diagnostics?.some((entry) => entry.type === "reasoning_suppressed")) {
+    appendAssistantMessageDiagnostic(message, {
+      type: "reasoning_suppressed",
+      timestamp: Date.now(),
+    });
+  }
+  if (
+    (message.stopReason !== "stop" && message.stopReason !== "length") ||
+    message.content.some(
+      (block) => block.type === "toolCall" || (block.type === "text" && block.text.trim()),
+    )
+  ) {
+    return undefined;
+  }
+  return new Error(
+    `${message.provider}/${message.model} returned only reasoning while configured reasoning: false. ` +
+      `Set reasoning: true for this model in models.providers.${message.provider}.models or choose a non-thinking model.` +
+      (message.stopReason === "length"
+        ? " The output token limit was reached before an answer."
+        : ""),
+  );
 }

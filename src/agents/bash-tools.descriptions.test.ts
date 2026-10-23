@@ -1,4 +1,5 @@
 /** Model-facing description contracts at the public Bash/process tool factory boundary. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as execApprovals from "../infra/exec-approvals.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
@@ -13,7 +14,29 @@ const processTool = createProcessTool();
 afterEach(() => vi.restoreAllMocks());
 
 describe("tool descriptions", () => {
-  it.each(["win32", "linux", "darwin"] as const)(
+  it.each(["auto", "ask"] as const)(
+    "includes denial guidance only for auto review through finalization: %s",
+    (mode) => {
+      const guidance =
+        "An automatic reviewer may deny a command and explain why; if denied, choose a materially safer alternative or ask the user, never work around the denial.";
+      for (const createTool of [createExecTool, createLazyExecTool]) {
+        const tool = createTool({ ...execDefaults, mode });
+        const [finalized] = finalizeAgentTools({
+          tools: [tool],
+          hookContext: {},
+          wrapBeforeToolCallHook: false,
+        });
+        for (const description of [
+          tool.description,
+          expectDefined(finalized, "finalized exec tool").description,
+        ]) {
+          expect(description.includes(guidance)).toBe(mode === "auto");
+        }
+      }
+    },
+  );
+
+  it.each(["win32"] as const)(
     "keeps exec descriptors stable across approval changes on %s",
     (platform) =>
       withMockedPlatform(platform, () => {
@@ -53,7 +76,7 @@ describe("tool descriptions", () => {
     const processWithCron = createProcessTool({ hasCronTool: true });
 
     expect(execWithCron.description).toContain(
-      "automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion",
+      "automatic completion wake, when enabled, occurs only after exit; otherwise process confirms completion",
     );
     expect(processWithCron.description).toContain("completion without auto-wake");
     expect(processWithCron.description).toContain("write, send-keys, submit, paste, kill");
@@ -69,17 +92,4 @@ describe("tool descriptions", () => {
     expect(processTool.description).toContain("completion without auto-wake");
     expect(processTool.description).toContain("write, send-keys, submit, paste, kill");
   });
-
-  it.each(["darwin", "linux", "win32"] as const)(
-    "limits shell-quoting guidance to Unix hosts: %s",
-    (platform) => {
-      withMockedPlatform(platform, () => {
-        expect(
-          execTool.description.includes(
-            "Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
-          ),
-        ).toBe(platform !== "win32");
-      });
-    },
-  );
 });

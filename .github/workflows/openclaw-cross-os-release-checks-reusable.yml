@@ -116,18 +116,8 @@ on:
         required: false
         default: ""
         type: string
-      advisory:
-        description: Also treat preparation and Linux failures as advisory for the caller
-        required: false
-        default: false
-        type: boolean
   workflow_call:
     inputs:
-      advisory:
-        description: Also treat preparation and Linux failures as advisory for the caller
-        required: false
-        default: false
-        type: boolean
       ref:
         description: Public OpenClaw ref to validate (tag, branch, or full commit SHA)
         required: true
@@ -252,15 +242,14 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.22.1"
   OPENCLAW_REPOSITORY: openclaw/openclaw
   OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}
 
 jobs:
   prepare:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 90
-    continue-on-error: ${{ inputs.advisory }}
     outputs:
       baseline_artifact_digest: ${{ steps.upload_baseline.outputs.artifact-digest }}
       baseline_artifact_id: ${{ steps.upload_baseline.outputs.artifact-id }}
@@ -467,7 +456,7 @@ jobs:
           submodules: recursive
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -478,6 +467,12 @@ jobs:
           package-manager-file: ${{ inputs.candidate_artifact_name == '' && 'source/package.json' || 'workflow/package.json' }}
           lockfile-path: ${{ inputs.candidate_artifact_name == '' && 'source/pnpm-lock.yaml' || 'workflow/pnpm-lock.yaml' }}
           cache-mode: ${{ inputs.candidate_artifact_name == '' && 'restore' || 'off' }}
+
+      - name: Install workflow validation dependencies
+        working-directory: workflow
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Resolve provider-owned companion requirements
         id: provider_requirements
@@ -571,13 +566,6 @@ jobs:
       - name: Ensure pnpm store cache directory exists
         run: mkdir -p "$(pnpm store path --silent)"
 
-      - name: Install workflow validation dependencies
-        if: inputs.candidate_artifact_name != '' || inputs.mode != 'fresh'
-        working-directory: workflow
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
-
       - name: Build candidate artifact once
         if: inputs.candidate_artifact_name == ''
         env:
@@ -610,7 +598,7 @@ jobs:
 
       - name: Download provided candidate artifact
         if: inputs.candidate_artifact_name != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ inputs.candidate_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/input
@@ -785,7 +773,7 @@ jobs:
 
       - name: Upload candidate artifact
         id: upload_candidate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package/${{ steps.candidate_metadata.outputs.file_name }}
@@ -794,7 +782,7 @@ jobs:
       - name: Upload source-built prerelease companion registry
         id: upload_prepublish_plugin_registry
         if: inputs.candidate_artifact_name == '' && steps.provider_requirements.outputs.json != '[]'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-cross-os-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/plugins/
@@ -803,7 +791,7 @@ jobs:
       - name: Upload baseline artifact
         if: ${{ inputs.mode != 'fresh' }}
         id: upload_baseline
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline/${{ steps.baseline_metadata.outputs.file_name }}
@@ -897,12 +885,13 @@ jobs:
   cross_os_release_checks:
     name: "${{ matrix.display_name }} / ${{ matrix.suite_label }}"
     needs: prepare
-    continue-on-error: ${{ inputs.advisory || matrix.os_id != 'ubuntu' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(matrix.runner))) || (matrix.runner) }}
+    # Windows upgrade can spend 45m installing the baseline, 42m updating, and
+    # 45m on fallback installation. Leave room for setup and candidate runtime proof.
+    timeout-minutes: ${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-upgrade' && 180 || 60 }}
     steps:
       - name: Checkout workflow repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -913,18 +902,17 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      # Windows Server 2025 with Node 24.19 can crash in libuv fs-event on RUNNER~1.
-      # Keep only packaged-fresh on the last validated Node until an upstream fix ships.
       - name: Setup Node.js
         id: node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: ${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.16.0' || env.NODE_VERSION }}
+          # Older workflow_ref harnesses omit the field; retire this adapter with those revisions.
+          node-version: ${{ matrix.node_version || env.NODE_VERSION }}
 
       - name: Setup pnpm
         uses: ./workflow/.github/actions/setup-pnpm-store-cache
         with:
-          node-version: ${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.16.0' || env.NODE_VERSION }}
+          node-version: ${{ matrix.node_version || env.NODE_VERSION }}
           package-manager-file: workflow/package.json
           lockfile-path: workflow/pnpm-lock.yaml
           cache-mode: off
@@ -942,19 +930,26 @@ jobs:
             openclaw-cross-os-npm-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ matrix.suite }}-
             openclaw-cross-os-npm-v1-seed-
 
+      # These bounded fallbacks repeat only artifact-service acquisition, before
+      # any test executes. Each retry preserves the prepared immutable inputs.
       - name: Download candidate artifact
         id: download_candidate
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.prepare.outputs.candidate_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate
           run-id: ${{ needs.prepare.outputs.candidate_artifact_run_id }}
           github-token: ${{ github.token }}
 
+      - name: Warn about candidate artifact acquisition retry
+        if: ${{ steps.download_candidate.outcome == 'failure' }}
+        shell: bash
+        run: echo "::warning::Candidate artifact download failed; retrying infrastructure acquisition once before tests."
+
       - name: Retry candidate artifact download
         if: ${{ steps.download_candidate.outcome == 'failure' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.prepare.outputs.candidate_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate
@@ -965,16 +960,21 @@ jobs:
         if: ${{ matrix.suite == 'packaged-upgrade' }}
         id: download_baseline
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.prepare.outputs.baseline_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline
           run-id: ${{ needs.prepare.outputs.baseline_artifact_run_id }}
           github-token: ${{ github.token }}
 
+      - name: Warn about baseline artifact acquisition retry
+        if: ${{ steps.download_baseline.outcome == 'failure' }}
+        shell: bash
+        run: echo "::warning::Baseline artifact download failed; retrying infrastructure acquisition once before tests."
+
       - name: Retry baseline artifact download
-        if: ${{ matrix.suite == 'packaged-upgrade' && steps.download_baseline.outcome == 'failure' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        if: ${{ steps.download_baseline.outcome == 'failure' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.prepare.outputs.baseline_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline
@@ -985,16 +985,21 @@ jobs:
         if: needs.prepare.outputs.prepublish_plugin_registry_json != ''
         id: download_prepublish_plugin_registry
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/plugins
           run-id: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
           github-token: ${{ github.token }}
 
+      - name: Warn about prerelease plugin registry artifact acquisition retry
+        if: ${{ steps.download_prepublish_plugin_registry.outcome == 'failure' }}
+        shell: bash
+        run: echo "::warning::Prerelease plugin registry artifact download failed; retrying infrastructure acquisition once before tests."
+
       - name: Retry prerelease plugin registry artifact download
-        if: needs.prepare.outputs.prepublish_plugin_registry_json != '' && steps.download_prepublish_plugin_registry.outcome == 'failure'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        if: ${{ steps.download_prepublish_plugin_registry.outcome == 'failure' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/plugins
@@ -1089,40 +1094,20 @@ jobs:
           if [[ -n "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_GUILD_ID}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_CHANNEL_ID}" ]]; then
             DISCORD_ARGS+=(--run-discord-roundtrip true)
           fi
-          run_cross_os_release_checks() {
-            bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh \
-              --candidate-tgz "${CANDIDATE_TGZ}" \
-              --candidate-version "${CANDIDATE_VERSION}" \
-              --source-sha "${SOURCE_SHA}" \
-              --baseline-spec "${BASELINE_SPEC}" \
-              --previous-version "${PREVIOUS_VERSION}" \
-              --baseline-tgz "${BASELINE_TGZ}" \
-              --provider "${PROVIDER}" \
-              --mode "${MODE}" \
-              --suite "${SUITE}" \
-              --ref "${REF}" \
-              "${PLUGIN_ARGS[@]}" \
-              "${DISCORD_ARGS[@]}" \
-              --output-dir "${OUTPUT_DIR}"
-          }
-
-          if run_cross_os_release_checks; then
-            exit 0
-          else
-            status=$?
-          fi
-
-          dashboard_log="${OUTPUT_DIR}/logs/${MODE}-dashboard.log"
-          if [[ "${OPENCLAW_RELEASE_CHECK_OS}" != "windows" ||
-                "$status" -ne 127 ||
-                ! -f "${dashboard_log}" ||
-                -f "${OUTPUT_DIR}/summary.json" ]] ||
-            ! grep -q 'attempt=.*url=http://127.0.0.1:' "${dashboard_log}"; then
-            exit "$status"
-          fi
-
-          echo "::warning::retrying Windows release checks after the outer process exited 127 after the dashboard probe and before summary generation"
-          run_cross_os_release_checks
+          bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh \
+            --candidate-tgz "${CANDIDATE_TGZ}" \
+            --candidate-version "${CANDIDATE_VERSION}" \
+            --source-sha "${SOURCE_SHA}" \
+            --baseline-spec "${BASELINE_SPEC}" \
+            --previous-version "${PREVIOUS_VERSION}" \
+            --baseline-tgz "${BASELINE_TGZ}" \
+            --provider "${PROVIDER}" \
+            --mode "${MODE}" \
+            --suite "${SUITE}" \
+            --ref "${REF}" \
+            "${PLUGIN_ARGS[@]}" \
+            "${DISCORD_ARGS[@]}" \
+            --output-dir "${OUTPUT_DIR}"
 
       - name: Save npm downloads
         if: github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' && steps.npm_downloads.outputs.cache-hit != 'true'
@@ -1148,7 +1133,7 @@ jobs:
 
       - name: Upload release-check artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-cross-os-release-checks-${{ matrix.artifact_name }}-${{ matrix.suite }}-${{ github.run_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}
