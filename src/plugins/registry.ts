@@ -42,6 +42,7 @@ import type {
   PluginRecord as RegistryPluginRecord,
   PluginRegistryParams,
 } from "./registry-types.js";
+import { registerSubagentProfile } from "./subagent-profile-registration.js";
 import type { OpenClawPluginApi, PluginRegistrationMode } from "./types.js";
 
 export type {
@@ -171,6 +172,12 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
       },
       resolvePath: (input: string) =>
         resolvePluginPath(input, registrationMode === "cli-metadata" ? undefined : record.rootDir),
+      ...(registrationCapabilities.capabilityHandlers && record.contracts?.subagentProfiles?.length
+        ? {
+            registerSubagentProfile: (profile: Parameters<typeof registerSubagentProfile>[2]) =>
+              registerSubagentProfile(state, record, profile),
+          }
+        : {}),
       handlers: {
         ...(registrationCapabilities.capabilityHandlers
           ? {

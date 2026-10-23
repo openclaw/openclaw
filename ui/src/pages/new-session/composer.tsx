@@ -12,7 +12,6 @@ import {
 } from "../../components/lobster-pet-contract.ts";
 import { createBackgroundLayoutRef } from "../../components/session-background-layout-context.tsx";
 import { createSidebarRendererLoader } from "../../components/sidebar-renderer-loader.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../lib/browser-platform.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
@@ -88,7 +87,7 @@ export type NewSessionComposerOptions = {
   requiresModifier: boolean;
   onChange: () => void;
   submitDisabledReason?: string;
-  blockedSubmitNotice?: string;
+  onBlockedSubmit?: () => void;
   dictationActive?: boolean;
   dictationPreview?: string;
   dictationStatus?: JSX.Element;
@@ -193,8 +192,7 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
       event.preventDefault();
       return;
     }
-    // A reasoned gate still consumes the press: the submission flow records the
-    // attempt and surfaces the reason instead of silently inserting a newline.
+    // A reasoned gate consumes the press and reveals its explanation.
     // Only silent gates (busy button, empty draft) keep Enter native.
     if (options.canSubmit || options.submitDisabledReason !== undefined) {
       event.preventDefault();
@@ -682,20 +680,6 @@ export function NewSessionComposer(props: {
           </div>
         </div>
       </div>
-      <Show when={options().blockedSubmitNotice}>
-        <div
-          class="new-session-page__blocked-submit agent-chat__composer-status"
-          data-tone="info"
-          role="status"
-        >
-          <div class="agent-chat__composer-status-band">
-            <span class="agent-chat__composer-status-icon" aria-hidden="true">
-              <Icon name="info" />
-            </span>
-            <span class="agent-chat__composer-status-text">{options().blockedSubmitNotice}</span>
-          </div>
-        </div>
-      </Show>
     </div>
   );
 }

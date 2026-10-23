@@ -352,11 +352,16 @@ describe("personal navigation rail", () => {
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual([...retained, "route:usage"]);
     const pin = rail(sidebar, "route:usage")!;
+    const person = rail(sidebar, "person:offline");
+    const pinLink = pin.querySelector<HTMLAnchorElement>("a")!;
     const reorder = createDataTransferStub();
-    drag(pin.querySelector("a")!, "dragstart", reorder);
+    drag(pinLink, "dragstart", reorder);
     drag(rail(sidebar, "person:offline")!, "drop", reorder);
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual(["route:usage", ...retained]);
+    expect(rail(sidebar, "route:usage")).toBe(pin);
+    expect(rail(sidebar, "person:offline")).toBe(person);
+    expect(pin.querySelector("a")).toBe(pinLink);
     await sidebar.sidebarMenus.preloadMenuRenderer();
     pin.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await sidebar.updateComplete;

@@ -138,7 +138,7 @@ it("updates the earlier-history control directly from pane loading state", () =>
 
   pane.history.loadingOlder = true;
   flush();
-  expect(button.disabled).toBe(true);
+  expect(button.getAttribute("aria-disabled")).toBe("true");
   expect(button.getAttribute("aria-busy")).toBe("true");
 
   pane.history.loadingOlder = false;

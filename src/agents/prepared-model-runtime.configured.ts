@@ -13,6 +13,7 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
@@ -104,6 +105,11 @@ export function collectPreparedModelRuntimeProviderIds(
   if (includeCredentialProviders) {
     for (const providerId of Object.keys(credentials)) {
       addProviderId(providerId);
+    }
+    for (const [providerId, providerConfig] of Object.entries(config.models?.providers ?? {})) {
+      if (hasConfiguredSecretInput(providerConfig.apiKey)) {
+        addProviderId(providerId);
+      }
     }
   }
   for (const ref of configuredModelRefs) {

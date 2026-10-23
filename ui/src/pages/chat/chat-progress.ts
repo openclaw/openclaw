@@ -34,6 +34,7 @@ export function matchesCompactionOperation(message: unknown, status: CompactionS
 }
 
 const workingProgressBySession = new Map<string, WorkingProgress>();
+const idleObservedAtBySession = new Map<string, number>();
 let anonymousWorkingProgressId = 0;
 
 export function buildGuardianNoticeItem(
@@ -192,12 +193,18 @@ export function resolveWorkingProgress(
     pendingSends.find((item) => item.sendState === "submitting" || item.sendState === "sending") ??
     pendingSends[0];
   const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
-  const segmentRunId = streamSegments
+  const idleObservedAt = runId ? undefined : idleObservedAtBySession.get(sessionKey);
+  const observedSinceIdle = (at: unknown) =>
+    idleObservedAt === undefined || (typeof at === "number" && at > idleObservedAt);
+  const currentSegments = streamSegments.filter((segment) => observedSinceIdle(segment.ts));
+  const toolProgress = toolMessages
+    .map(asRecord)
+    .filter((message) => observedSinceIdle(message?.["__openclawToolStreamReceivedAt"]));
+  const segmentRunId = currentSegments
     .map((segment) => segment.runId)
     .findLast(
       (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
     );
-  const toolProgress = toolMessages.map(asRecord);
   const toolRunId = toolProgress
     .map((message) => message?.runId)
     .findLast(
@@ -225,7 +232,7 @@ export function resolveWorkingProgress(
       )
       // Send performance fields use performance.now(); the elapsed timer renders against Date.now().
       .map((item) => item.createdAt),
-    ...streamSegments
+    ...currentSegments
       .filter((segment) => !explicitRunId || segment.runId === explicitRunId)
       .map((segment) => segment.ts),
     ...toolProgress
@@ -249,10 +256,12 @@ export function resolveWorkingProgress(
 
 export function clearWorkingProgress(sessionKey: string): void {
   workingProgressBySession.delete(sessionKey);
+  idleObservedAtBySession.set(sessionKey, Date.now());
 }
 
 export function resetWorkingProgress(): void {
   workingProgressBySession.clear();
+  idleObservedAtBySession.clear();
   anonymousWorkingProgressId = 0;
 }
 

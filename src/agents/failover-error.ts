@@ -63,6 +63,8 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "WorkerRunnerCapacityError",
   "WorkerWorkspaceReconciliationError",
   "ActiveTurnClaimError",
+  "CliHistoryOwnerChangedError",
+  "SessionTranscriptReadFenceError",
   "SqliteWorkerError",
 ]);
 

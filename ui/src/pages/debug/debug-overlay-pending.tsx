@@ -7,10 +7,6 @@ import type { DebugOverlayMode } from "./debug-overlay-state.ts";
 
 export interface DebugOverlayFrameHost {
   readonly elements: { pendingDebugOverlayFrame?: HTMLElement };
-  readonly lazyCustomElements: {
-    retry(): void;
-    close(): void;
-  };
   readonly pendingDebugOverlayMode: DebugOverlayMode;
   togglePendingDebugOverlayMode(): void;
 }
@@ -19,6 +15,8 @@ export function renderPendingDebugOverlay(props: {
   host: DebugOverlayFrameHost;
   state: LazyElementState;
   mode: DebugOverlayMode;
+  onRetry: () => void;
+  onClose: () => void;
 }) {
   let frame!: HTMLElement;
   onSettled(() => {
@@ -34,7 +32,7 @@ export function renderPendingDebugOverlay(props: {
       ref={(element) => (frame = element)}
       mode={props.mode}
       onToggleMode={() => props.host.togglePendingDebugOverlayMode()}
-      onClose={() => props.host.lazyCustomElements.close()}
+      onClose={props.onClose}
       body={
         <Show
           when={error()}
@@ -52,7 +50,7 @@ export function renderPendingDebugOverlay(props: {
               error={state().error}
               stale={state().stale}
               subtitle={state().element.label}
-              onRetry={() => props.host.lazyCustomElements.retry()}
+              onRetry={props.onRetry}
             />
           )}
         </Show>

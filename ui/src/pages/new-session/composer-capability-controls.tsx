@@ -124,6 +124,7 @@ export function StartControl(props: {
     nativeTerminal?: boolean;
     canSubmit: boolean;
     submitDisabledReason?: string;
+    onBlockedSubmit?: () => void;
     attachmentDraft: { reads: { pendingReads: number } };
   };
   onSubmit: () => void;
@@ -132,22 +133,26 @@ export function StartControl(props: {
     props.options.submitting
       ? t("newSession.starting")
       : t(props.options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
-  const reasonedBlock = () =>
-    !props.options.canSubmit && props.options.submitDisabledReason !== undefined;
   const busy = () =>
     props.options.submitting || props.options.attachmentDraft.reads.pendingReads > 0;
   return (
-    <openclaw-tooltip content={props.options.submitDisabledReason ?? label()}>
+    <openclaw-tooltip
+      content={props.options.submitDisabledReason ?? label()}
+      onPointerDown={(event) => {
+        if (event.button === 0 && !props.options.canSubmit) {
+          props.options.onBlockedSubmit?.();
+        }
+      }}
+    >
       <button
         type="button"
         class={[
           "chat-send-btn new-session-page__start-submit",
           {
-            "new-session-page__start-submit--blocked": reasonedBlock(),
             "new-session-page__start-submit--busy": busy(),
           },
         ]}
-        disabled={!props.options.canSubmit && !reasonedBlock()}
+        disabled={!props.options.canSubmit}
         aria-disabled={props.options.canSubmit ? "false" : "true"}
         aria-busy={busy() ? "true" : "false"}
         aria-label={label()}

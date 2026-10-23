@@ -23,8 +23,10 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { persistCliSessionBindingResult } from "../cli-session-store.js";
 import { claimAgentSessionWriter } from "../embedded-agent-runner/run/session-bootstrap.js";
+import { runWithModelFallback } from "../model-fallback-runner.js";
 import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
 import {
+  CliHistoryOwnerChangedError,
   prepareCliHistoryBoundary,
   prepareCliHistoryCompactionBoundary,
 } from "./history-boundary.js";
@@ -417,9 +419,23 @@ describe("CLI transcript account boundary", () => {
       await f.withRun("direct-cli-blocked", async (direct) => {
         direct.sessionEntry = loadSessionEntryReadOnly(f.target);
         const before = structuredClone(direct.sessionEntry);
-        await expect(prepareCliHistoryBoundary(direct, identity)).rejects.toThrow(
-          "CLI history owner changed before preparation",
+        const run = vi.fn(async (provider: string) =>
+          provider === "fixture-next"
+            ? "replayed"
+            : (await prepareCliHistoryBoundary(direct, identity), "prepared"),
         );
+        // The refusal is local session ownership; replaying on another model cannot repair it.
+        const refusal = runWithModelFallback({
+          cfg: undefined,
+          provider: "test-cli",
+          model: "fixture-model",
+          manifestPlugins: [],
+          fallbacksOverride: ["fixture-next/fixture-model"],
+          run,
+        });
+        await expect(refusal).rejects.toBeInstanceOf(CliHistoryOwnerChangedError);
+        await expect(refusal).rejects.toThrow("CLI history owner changed before preparation");
+        expect(run).toHaveBeenCalledOnce();
         expect(direct.sessionEntry).toEqual(before);
       });
     });

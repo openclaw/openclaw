@@ -983,6 +983,15 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     },
   });
 
+  const subscriptionLogHandlers = (errorLabel: string, endedLabel: string) => ({
+    err: (error: unknown) => {
+      runtime.error?.(`[tlon] ${errorLabel} error: ${String(error)}`);
+    },
+    quit: () => {
+      runtime.log?.(`[tlon] ${endedLabel} ended`);
+    },
+  });
+
   try {
     runtime.log?.("[tlon] Subscribing to firehose updates...");
 
@@ -999,12 +1008,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
             await handleEvent(event);
           }
         },
-        err: (error) => {
-          runtime.error?.(`[tlon] ${label} firehose error: ${String(error)}`);
-        },
-        quit: () => {
-          runtime.log?.(`[tlon] ${label} firehose subscription ended`);
-        },
+        ...subscriptionLogHandlers(`${label} firehose`, `${label} firehose subscription`),
       });
       runtime.log?.(`[tlon] Subscribed to ${source} firehose (${path})`);
     }
@@ -1031,12 +1035,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
           runtime.error?.(`[tlon] Error handling contacts event: ${formatErrorMessage(error)}`);
         }
       },
-      err: (error) => {
-        runtime.error?.(`[tlon] Contacts subscription error: ${String(error)}`);
-      },
-      quit: () => {
-        runtime.log?.("[tlon] Contacts subscription ended");
-      },
+      ...subscriptionLogHandlers("Contacts subscription", "Contacts subscription"),
     });
     runtime.log?.("[tlon] Subscribed to contacts updates (/v1/news)");
 
@@ -1109,12 +1108,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
             throw error;
           }
         },
-        err: (error) => {
-          runtime.error?.(`[tlon] Groups-ui subscription error: ${String(error)}`);
-        },
-        quit: () => {
-          runtime.log?.("[tlon] Groups-ui subscription ended");
-        },
+        ...subscriptionLogHandlers("Groups-ui subscription", "Groups-ui subscription"),
       });
       runtime.log?.("[tlon] Subscribed to groups-ui for real-time channel detection");
     } catch (err) {
@@ -1226,12 +1220,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
               throw error;
             }
           },
-          err: (error) => {
-            runtime.error?.(`[tlon] Foreigns subscription error: ${String(error)}`);
-          },
-          quit: () => {
-            runtime.log?.("[tlon] Foreigns subscription ended");
-          },
+          ...subscriptionLogHandlers("Foreigns subscription", "Foreigns subscription"),
         });
         runtime.log?.(
           "[tlon] Subscribed to foreigns (/v1/foreigns) for auto-accepting group invites",

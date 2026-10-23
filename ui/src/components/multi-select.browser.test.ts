@@ -236,7 +236,9 @@ it("keeps a bare fallback separate from a real alternate model", async () => {
   await clickField(element);
   expect(values(element, "option")).toEqual([alternate]);
   await pressKey(element, "Enter");
-  expect(props.onChange).toHaveBeenCalledExactlyOnceWith([existing, alternate]);
+  await waitForSolid(() =>
+    expect(props.onChange).toHaveBeenCalledExactlyOnceWith([existing, alternate]),
+  );
 });
 it("selects the visible highlight when a catalog refresh shortens the open list", async () => {
   const { element, props, update } = await createMultiSelect();

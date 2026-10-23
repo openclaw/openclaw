@@ -168,6 +168,7 @@ if (
     "sessions.list",
     "sessions.describe",
     "sessions.patch",
+    "sessions.cleanup",
     "connect",
     "reconnect",
     "subscribe",
@@ -180,7 +181,7 @@ if (
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, sessions.describe, sessions.patch, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, or plugins.reload",
+    "--scenario must be sessions.list, sessions.describe, sessions.patch, sessions.cleanup, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, or plugins.reload",
   );
 }
 const retentionScenario = scenario === "attempt-retention";
@@ -570,6 +571,13 @@ const viewerIdentity = (index: number) =>
   `broadcast-viewer-${values["distinct-viewers"] ? index : 0}@example.invalid`;
 const viewerProfiles = new Set<string>();
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
+if (scenario === "sessions.cleanup") {
+  // Exercise live preservation admission repeatedly without consuming the fixture inventory.
+  cfg.session = {
+    ...cfg.session,
+    maintenance: { ...cfg.session?.maintenance, mode: "warn" },
+  };
+}
 applyMockOpenAiModelConfig(cfg, {
   mockPort,
   modelRef: "openai/gpt-4.1",
@@ -1768,6 +1776,9 @@ const env = {
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
   ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
   ...(values["broadcast-timing"] ? { OPENCLAW_BENCH_BROADCAST_TIMING: "1" } : {}),
+  ...(process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1"
+    ? { OPENCLAW_BENCH_WORKER_ATTRIBUTION: "1" }
+    : {}),
   ...(sessionProjectionSource
     ? { OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE: sessionProjectionSource }
     : {}),
@@ -3723,6 +3734,21 @@ try {
             } else if (scenario === "sessions.patch") {
               const params = sessionPatchParams(index, patchSequences[index]!++);
               assertSessionPatch(params, await rpc(workerClient, "sessions.patch", params));
+            } else if (scenario === "sessions.cleanup") {
+              const result = await rpc(workerClient, "sessions.cleanup", { agent: "main" });
+              if (
+                !isRecord(result) ||
+                result.agentId !== "main" ||
+                result.mode !== "warn" ||
+                result.dryRun !== false ||
+                result.applied !== true ||
+                result.wouldMutate !== false ||
+                typeof result.beforeCount !== "number" ||
+                result.beforeCount <= 0 ||
+                result.afterCount !== result.beforeCount
+              ) {
+                throw new Error("sessions.cleanup did not preserve the warning-mode fixture");
+              }
             } else {
               const result = await rpc(workerClient, "plugins.reload", {
                 plugins: [{ pluginId: reloadPluginId }],
@@ -4657,8 +4683,9 @@ try {
   }
   let cronRuns;
   if (stressCronJobId) {
-    await rpc(sender, "cron.update", { id: stressCronJobId, patch: { enabled: false } });
+    // Snapshot completed runs before disabling can cancel an in-flight scheduled turn.
     const history = await rpc(sender, "cron.runs", { id: stressCronJobId, limit: 200 });
+    await rpc(sender, "cron.update", { id: stressCronJobId, patch: { enabled: false } });
     if (
       !isRecord(history) ||
       !Array.isArray(history.entries) ||
@@ -4851,6 +4878,7 @@ try {
     pollSeed: values["poll-seed"] ?? null,
     diagnostics: values.diagnostics,
     broadcastTiming: values["broadcast-timing"],
+    workerAttribution: process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1",
     sessionProjectionSource,
     transportCounts: values["transport-counts"],
     compressed: proxyViewers,
@@ -4872,6 +4900,7 @@ try {
     recapBurstRepeats,
     recapBurstIntervalMs,
     runCount,
+    ...(scenario === "sessions.cleanup" ? { sessionMaintenanceMode: "warn" } : {}),
     chunks: chunkCount,
     chunkIntervalMs,
     peakStreams,

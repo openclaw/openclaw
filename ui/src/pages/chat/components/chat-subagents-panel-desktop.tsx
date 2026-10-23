@@ -14,7 +14,8 @@ import { endedWithoutFinishing, isUnfinishedSubagent } from "../chat-spawned-sub
 import "../../../styles/session-panel-rail.css";
 import "./chat-subagents-working.css";
 import "./chat-subagents-panel-desktop.css";
-import type { SubagentsPanelRow } from "../subagents-panel-data.ts";
+import type { SubagentsPanelData, SubagentsPanelRow } from "../subagents-panel-data.ts";
+import { ChatSubagentsNative } from "./chat-subagents-native.tsx";
 import type { createSubagentsPresentation } from "./chat-subagents-presentation.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -39,6 +40,8 @@ export type ChatSubagentsPanelDesktopProps = {
   loading: boolean;
   error: string | null;
   hasResult: boolean;
+  nativeSnapshot?: SubagentsPanelData["nativeSnapshot"];
+  nativeError?: SubagentsPanelData["nativeError"];
   active: boolean;
   /** Whether Show more has revealed the complete Done list, not its disclosure. */
   doneExpanded?: boolean;
@@ -268,9 +271,12 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
             </button>
           </div>
         </Show>
+        <ChatSubagentsNative snapshot={props.nativeSnapshot} error={props.nativeError ?? null} />
         <Show
           when={props.rows.length}
           fallback={
+            !props.nativeSnapshot &&
+            !props.nativeError &&
             (props.loading || (props.hasResult && !props.error)) && (
               <Show
                 when={props.loading}

@@ -109,6 +109,9 @@ the page topbar while the drawer is closed. Opening the drawer moves that action
 back to the rail, without a second header button. In team mode, creation opens the
 same agent picker as the rail. Native apps keep their native creation controls.
 
+In a single-owner list, session activity stays at the far-right edge, including
+when hover or keyboard focus reveals pin and archive actions.
+
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
 without a saved choice starts with **My sessions**. Before a profile is identified,
@@ -137,6 +140,11 @@ The browser keeps device-specific geometry and transient presentation, such as
 sidebar width and scroll position. Navigation changes on read-only connections
 or connections without a durable profile stay browser-local rather than writing
 another person’s layout or shared Gateway configuration.
+
+While New session loads agent defaults, restores saved choices, or checks the
+workspace, **Start session** stays disabled. Trying Enter or pressing the disabled
+button shows the current reason below the composer until preparation finishes.
+Your draft stays editable; press Enter or **Start session** again when it is ready.
 
 New session previews the first prompt immediately while the Gateway accepts it.
 A temporary selected row appears at the top of the sidebar session list

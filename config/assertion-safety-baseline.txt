@@ -1502,7 +1502,7 @@ src/cli/models-cli.ts	1
 src/cli/native-hook-relay-cli.ts	1
 src/cli/nodes-cli/register.pairing.ts	2
 src/cli/nodes-cli/register.status.ts	3
-src/cli/nodes-cli/rpc.ts	2
+src/cli/nodes-cli/rpc.ts	1
 src/cli/pairing-cli.ts	1
 src/cli/plugins-authoring-command.ts	2
 src/cli/plugins-update-command.ts	5
@@ -2438,7 +2438,6 @@ ui/src/pages/chat/chat-state-events.ts	6
 ui/src/pages/chat/chat-state-page.ts	2
 ui/src/pages/chat/chat-thread-items.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
-ui/src/pages/chat/components/chat-session-workspace.ts	1
 ui/src/pages/chat/components/chat-thread-interactions.ts	1
 ui/src/pages/chat/components/widget-export.ts	1
 ui/src/pages/chat/connect-error.ts	1

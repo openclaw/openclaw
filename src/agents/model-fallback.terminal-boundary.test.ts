@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
+import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
 import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
 import { WorkerNodeLostError } from "../worker/worker-node-loss.js";
 import {
@@ -103,6 +104,14 @@ it.each([
     false,
   ],
   ["transcript conflict", transcriptConflict, false],
+  [
+    "transcript admission identity change",
+    () =>
+      new SessionTranscriptReadFenceError(
+        "Current-turn transcript admission identity changed: fixture",
+      ),
+    false,
+  ],
   [
     "session reader invalidation",
     () =>
