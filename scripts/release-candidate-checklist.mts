@@ -51,6 +51,7 @@ import {
 } from "./openclaw-npm-extended-stable-release.mjs";
 import {
   PluginSdkApiAcknowledgementError,
+  validatePluginSdkApiReleaseNoteRemovals,
   validatePluginSdkApiReleaseEvidence,
 } from "./plugin-sdk-api-release-evidence.mjs";
 import { runReleasePublishPreflight } from "./release-publish-preflight.mts";
@@ -501,12 +502,14 @@ export function resolveEarlyPluginSdkApiReviewPaths({
 function runEarlyPluginSdkApiReview({
   npmDistTag,
   outputDir,
+  releaseNotes,
   targetRoot,
   targetSha,
   toolingSha,
 }: {
   npmDistTag: string;
   outputDir: string;
+  releaseNotes: string;
   targetRoot: string;
   targetSha: string;
   toolingSha: string;
@@ -579,6 +582,7 @@ function runEarlyPluginSdkApiReview({
     });
   } catch (error) {
     if (error instanceof PluginSdkApiAcknowledgementError) {
+      validatePluginSdkApiReleaseNoteRemovals({ evidence, npmDistTag, releaseNotes });
       throw formatPluginSdkApiAcknowledgementFailure(error, report);
     }
     throw error;
@@ -2178,12 +2182,13 @@ async function main() {
   if (androidVersionCheck) {
     console.log(androidVersionCheck.message);
   }
-  const { releaseNotesCheck, releaseNotesProvenance } = validateCandidateChangelog({
-    rootDir: targetRoot,
-    repository: options.repo,
-    tag: options.tag,
-    targetSha,
-  });
+  const { releaseNotesCheck, releaseNotesProvenance, releaseNotesText } =
+    validateCandidateChangelog({
+      rootDir: targetRoot,
+      repository: options.repo,
+      tag: options.tag,
+      targetSha,
+    });
   const windowsNodeSourceRelease = options.windowsNodeTag
     ? await validateWindowsSourceRelease(options.windowsNodeTag)
     : undefined;
@@ -2243,6 +2248,7 @@ async function main() {
     runEarlyPluginSdkApiReview({
       npmDistTag: options.npmDistTag,
       outputDir: options.outputDir,
+      releaseNotes: releaseNotesText,
       targetRoot,
       targetSha,
       toolingSha,
@@ -2391,6 +2397,11 @@ async function main() {
     });
   } catch (error) {
     if (error instanceof PluginSdkApiAcknowledgementError) {
+      validatePluginSdkApiReleaseNoteRemovals({
+        evidence: npmManifest.pluginSdkApi,
+        npmDistTag: options.npmDistTag,
+        releaseNotes: releaseNotesText,
+      });
       const reportPath = join(pluginSdkApiDir, "plugin-sdk-api-release-diff.md");
       let report = "";
       if (existsSync(reportPath)) {
@@ -2412,6 +2423,11 @@ async function main() {
     }
     throw error;
   }
+  validatePluginSdkApiReleaseNoteRemovals({
+    evidence: npmManifest.pluginSdkApi,
+    npmDistTag: options.npmDistTag,
+    releaseNotes: releaseNotesText,
+  });
   localGeneratedCheck ??= runLocalGeneratedCheckIfNeeded(options);
   // Only exact historical producers retain local, non-authoritative planning.
   // B recovery consumes its original hosted observations without another sweep.

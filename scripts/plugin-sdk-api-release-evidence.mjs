@@ -262,6 +262,49 @@ export class PluginSdkApiAcknowledgementError extends Error {
   }
 }
 
+export function validatePluginSdkApiReleaseNoteRemovals({
+  evidence: inputEvidence,
+  npmDistTag = "",
+  releaseNotes,
+}) {
+  const evidence = selectPluginSdkApiReleaseEvidence({ evidence: inputEvidence, npmDistTag });
+  if (!isReleaseEvidenceObject(evidence)) {
+    throw new Error("Plugin SDK API release evidence is missing or invalid");
+  }
+  const payload = diffPayload(evidence.diff);
+  const removals = [];
+  for (const entrypoint of payload.entrypointsRemoved) {
+    const reference = entrypoint?.importSpecifier;
+    if (typeof reference !== "string" || reference.length === 0) {
+      throw new Error("Plugin SDK API release evidence contains an invalid removed entrypoint");
+    }
+    removals.push(reference);
+  }
+  for (const exported of payload.exports) {
+    if (exported?.change !== "removed") {
+      continue;
+    }
+    if (typeof exported.exportName !== "string" || exported.exportName.length === 0) {
+      throw new Error("Plugin SDK API release evidence contains an invalid removed export");
+    }
+    removals.push(exported.exportName);
+  }
+  const uniqueRemovals = [...new Set(removals)];
+  if (uniqueRemovals.length === 0) {
+    return { removals: [] };
+  }
+  const notes = typeof releaseNotes === "string" ? releaseNotes : "";
+  const missing = uniqueRemovals.filter((reference) => !notes.includes(`\`${reference}\``));
+  if (missing.length > 0) {
+    throw new Error(
+      `Plugin SDK removals require release-note acknowledgement: ${missing
+        .map((reference) => `\`${reference}\``)
+        .join(", ")}`,
+    );
+  }
+  return { removals: uniqueRemovals };
+}
+
 export function validatePluginSdkApiReleaseEvidence({
   acknowledgement,
   currentSelectorRef = "",

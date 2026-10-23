@@ -42,6 +42,7 @@ import { validateReleaseButtonInputs } from "../../scripts/openclaw-release-read
 import {
   PluginSdkApiAcknowledgementError,
   createPluginSdkApiReleaseEvidence,
+  validatePluginSdkApiReleaseNoteRemovals,
   validatePluginSdkApiReleaseEvidence,
 } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import {
@@ -917,6 +918,7 @@ describe("release candidate checklist", () => {
           isRecord,
           requireString: (value: string) => value,
           validateCandidateChangelog: () => ({
+            releaseNotesText: "Fixture notes.",
             releaseNotesCheck: { status: "passed" },
             releaseNotesProvenance: { status: "passed", shippedBaselines: [] },
           }),
@@ -978,6 +980,7 @@ describe("release candidate checklist", () => {
           isDeepStrictEqual,
           sha256: () => "fixture-digest",
           validatePreflightManifest: () => {},
+          validatePluginSdkApiReleaseNoteRemovals,
           validatePluginSdkApiReleaseEvidence,
           PluginSdkApiAcknowledgementError,
           stripLeadingPackageManagerSeparator,
@@ -1941,9 +1944,7 @@ describe("release candidate checklist", () => {
       }),
     ).toThrow("does not contain ## 2026.7.1-beta.3");
     const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
-    const validationIndex = source.indexOf(
-      "const { releaseNotesCheck, releaseNotesProvenance } = validateCandidateChangelog({",
-    );
+    const validationIndex = source.indexOf("validateCandidateChangelog({");
     const fullMatrixDispatchIndex = source.indexOf(
       "options.fullReleaseRunId = dispatchFullReleaseUsingHelper(",
     );
@@ -1951,6 +1952,8 @@ describe("release candidate checklist", () => {
     expect(check).toMatchObject({ status: "passed", mode: "compact" });
     expect(validationIndex).toBeGreaterThanOrEqual(0);
     expect(fullMatrixDispatchIndex).toBeGreaterThan(validationIndex);
+    expect(source).toContain("validatePluginSdkApiReleaseNoteRemovals({");
+    expect(source).toContain("releaseNotes: releaseNotesText");
   });
 
   it("rejects contribution-record provenance outside the release tag history", () => {
