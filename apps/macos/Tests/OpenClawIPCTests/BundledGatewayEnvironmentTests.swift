@@ -27,18 +27,18 @@ struct BundledGatewayEnvironmentTests {
         #expect(status.kind == .incompatible(found: "2026.10.2", required: "2026.10.6"))
     }
 
-    @Test(arguments: [(false, false), (true, true)])
-    func `unfinished preparation keeps repair available even when the Gateway version matches`(
-        seedMatchesBundle: Bool, recoveryPending: Bool)
+    @Test(arguments: [("2026.10.6", false, false), ("2026.10.6", true, true), ("2026.10.7", false, true)])
+    func `unfinished preparation keeps repair available for compatible Gateways`(
+        version: String, seedMatchesBundle: Bool, recoveryPending: Bool)
     {
         let status = GatewayEnvironment.bundledEnvironmentStatus(
-            installed: .ready(location: "/fixture/service", version: "2026.10.6"),
+            installed: .ready(location: "/fixture/service", version: version),
             expected: "2026.10.6",
-            connectedVersion: "2026.10.6",
+            connectedVersion: version,
             seedMatchesBundle: seedMatchesBundle,
             recoveryPending: recoveryPending)
 
-        #expect(status.gatewayVersion == "2026.10.6")
+        #expect(status.gatewayVersion == version)
         guard case .error = status.kind else {
             Issue.record("Expected a repairable preparation failure, got \(status.kind)")
             return
@@ -57,16 +57,16 @@ struct BundledGatewayEnvironmentTests {
         #expect(status.kind == .missingGateway)
     }
 
-    @Test(arguments: [("2026.10.6", true, false), ("2026.10.7", false, false), ("2026.10.7", false, true)])
+    @Test(arguments: [("2026.10.6", true), ("2026.10.7", false)])
     func `a compatible newer Gateway does not offer a downgrade to the app runtime`(
-        version: String, seedMatchesBundle: Bool, recoveryPending: Bool)
+        version: String, seedMatchesBundle: Bool)
     {
         let status = GatewayEnvironment.bundledEnvironmentStatus(
             installed: .ready(location: "/fixture/service", version: version),
             expected: "2026.10.6",
             connectedVersion: version,
             seedMatchesBundle: seedMatchesBundle,
-            recoveryPending: recoveryPending)
+            recoveryPending: false)
 
         #expect(status.kind == .ok)
     }

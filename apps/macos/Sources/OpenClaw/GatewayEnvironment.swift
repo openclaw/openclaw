@@ -180,12 +180,11 @@ enum GatewayEnvironment {
             GatewayLaunchAgentManager.InstalledServiceCLI(
                 prefix: $0.cliCommand, sqliteLibrary: $0.sqliteLibrary.path)
         }
-        let status: CLIInstaller.Status
-        if let cli {
-            status = await CLIInstaller.managedStatus(
+        let status: CLIInstaller.Status = if let cli {
+            await CLIInstaller.managedStatus(
                 expectedVersion: expected, installedCLI: cli, usesBundledRuntime: false)
         } else {
-            status = .missing(location: "")
+            .missing(location: "")
         }
         let seedMatchesBundle = runtime.map { (try? BundledRuntime.resolve(root: $0.root, bundle: .main)) != nil }
             ?? false
@@ -208,11 +207,10 @@ enum GatewayEnvironment {
         seedMatchesBundle: Bool,
         recoveryPending: Bool) -> GatewayEnvironmentStatus
     {
-        let installedVersion: String?
-        switch installed {
-        case let .ready(_, version): installedVersion = version
-        case let .incompatible(_, found, _): installedVersion = found
-        case .missing, .unusable: installedVersion = nil
+        let installedVersion: String? = switch installed {
+        case let .ready(_, version): version
+        case let .incompatible(_, found, _): found
+        case .missing, .unusable: nil
         }
         let version = connectedVersion ?? installedVersion
         let newerGateway = if let version, let expected {
@@ -233,7 +231,7 @@ enum GatewayEnvironment {
         } else if case .missing = installed {
             kind = .missingGateway
             message = "The bundled Gateway has not been prepared."
-        } else if !installed.isReady || (!newerGateway && (!seedMatchesBundle || recoveryPending)) {
+        } else if !installed.isReady || recoveryPending || (!newerGateway && !seedMatchesBundle) {
             message = "The managed runtime does not match the updated Mac app."
             kind = .error(message)
         } else {
