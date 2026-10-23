@@ -66,6 +66,13 @@ export function prepareSteeringDelivery(params: {
       }),
     );
   const fallbackEntry = params.entry;
+  const sourceTurnId = (entry: SessionEntry | null | undefined) =>
+    params.sourceTurnId ??
+    normalizeOptionalString(
+      (executionSelection?.expected.recoveryDeliveryClaim ?? entry)
+        ?.restartRecoveryDeliverySourceRunId,
+    ) ??
+    "";
   const assertEntry = (
     current: Parameters<typeof resolveRestartRecoverySteeringBlockReason>[0],
   ) => {
@@ -79,9 +86,8 @@ export function prepareSteeringDelivery(params: {
     const reason = resolveRestartRecoverySteeringBlockReason(
       entry,
       params.sessionId ?? entry?.sessionId ?? "",
-      params.sourceTurnId ??
-        normalizeOptionalString(entry?.restartRecoveryDeliverySourceRunId) ??
-        "",
+      sourceTurnId(entry),
+      executionSelection?.expected.recoveryDeliveryClaim,
     );
     if (reason) {
       throw new MessageInjectionTargetUnavailableError(
@@ -178,9 +184,8 @@ export function prepareSteeringDelivery(params: {
             !resolveRestartRecoverySteeringBlockReason(
               after ?? fallbackEntry,
               params.sessionId ?? after?.sessionId ?? "",
-              params.sourceTurnId ??
-                normalizeOptionalString(after?.restartRecoveryDeliverySourceRunId) ??
-                "",
+              sourceTurnId(after),
+              executionSelection?.expected.recoveryDeliveryClaim,
             ),
         });
         unregister = registerOpenClawAgentDatabaseAsyncResource({

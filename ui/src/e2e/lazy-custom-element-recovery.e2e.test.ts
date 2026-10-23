@@ -691,7 +691,12 @@ suite.define(() => {
           await page.locator(".sidebar-rail").waitFor({ state: "attached" });
           await held.request;
           const element = page.locator("openclaw-macos-titlebar-controls");
-          expect(await element.evaluate((node) => node.matches(":defined"))).toBe(false);
+          expect(await element.count()).toBe(0);
+          expect(
+            await page.evaluate(
+              () => customElements.get("openclaw-macos-titlebar-controls") === undefined,
+            ),
+          ).toBe(true);
           await page.evaluate(() => {
             window.dispatchEvent(
               new CustomEvent("openclaw:native-history-state", {

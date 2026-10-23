@@ -383,7 +383,6 @@ export async function finalizeWorkerTurnResult(
     takeFinishingOutcome: () => ReturnType<
       Awaited<ReturnType<typeof prepareWorkerAgentRuntimeIdentity>>["takeFinishingOutcome"]
     >;
-    settleSteering: () => Promise<void>;
     signal: AbortSignal;
     startedAt: number;
     onReply: (result: EmbeddedAgentRunResult) => void;
@@ -537,7 +536,6 @@ export async function finalizeWorkerTurnResult(
     });
     throw workerFailure;
   }
-  await params.settleSteering();
   const durationMs = Date.now() - params.startedAt;
   const usageAccumulator = createUsageAccumulator();
   const assistants = workerMessages.filter(

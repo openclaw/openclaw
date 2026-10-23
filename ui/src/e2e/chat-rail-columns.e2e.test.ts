@@ -74,6 +74,7 @@ function scenario(): ControlUiMockGatewayScenario {
       "desktop.observe",
       "environments.list",
       "environments.status",
+      "sessions.companion.state",
       "sessions.diff",
       "terminal.open",
     ],
@@ -740,7 +741,7 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await clear.waitFor({ state: "hidden" });
         await gateway.resolveDeferred("sessions.companion.ask");
-        await openChatPanels(page);
+        await openChatPanels(page, "mobile");
         await companion
           .getByText("The mobile side chat stayed inside its panel.", { exact: true })
           .waitFor();
@@ -757,7 +758,7 @@ suite.define(() => {
         await captureRichPanel(page, "rails-side-chat-mobile-light");
         await page.keyboard.press("Escape");
         await clear.waitFor({ state: "hidden" });
-        await openChatPanels(page);
+        await openChatPanels(page, "mobile");
         await companion.waitFor();
         expect(await gateway.getRequests("sessions.companion.reset")).toHaveLength(resets);
         await companion
@@ -777,7 +778,7 @@ suite.define(() => {
         expect(reset.params).toEqual({ sessionKey, agentId: "main" });
         expect(await gateway.getRequests("sessions.companion.reset")).toHaveLength(resets + 1);
         await clear.waitFor({ state: "hidden" });
-        await openChatPanels(page);
+        await openChatPanels(page, "mobile");
         await companion
           .getByText("Answers come from this session's transcript and its project files.", {
             exact: true,

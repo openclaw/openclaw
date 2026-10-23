@@ -1,4 +1,5 @@
 import type { HeapSpaceInfo } from "node:v8";
+import type { getSessionRowSelectionMetrics } from "./gateway-work-metrics.js";
 import type { GcSample } from "./gc-observer.js";
 import type { WorkerMessageMetric } from "./worker-message-metrics.js";
 import type { WorkerPoolClass } from "./worker-pool-sizing.js";
@@ -163,6 +164,8 @@ export type DiagnosticMemoryUsage = {
   }[];
   /** Main-thread transport totals; unknown payload sizes remain separate from known zero bytes. */
   workerMessages?: WorkerMessageMetric[];
+  /** Process-lifetime selector totals with bounded shape and caller labels. */
+  sessionRowSelections?: ReturnType<typeof getSessionRowSelectionMetrics>;
 };
 
 export const DIAGNOSTIC_MEMORY_PRESSURE_METRICS = [

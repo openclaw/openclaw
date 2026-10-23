@@ -5,12 +5,14 @@ import {
   Errored,
   isPending,
   latest,
+  lazy,
   Loading,
   onSettled,
   Show,
 } from "solid-js";
 import "../../components/openclaw-mascot.tsx";
 import type { SidebarAttentionElementAttributes } from "../../components/sidebar-attention-element.ts";
+import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { channelSnapshotHasActiveChannel } from "../../lib/channels/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
@@ -29,6 +31,9 @@ import { CustodianSurface } from "./custodian-surface.tsx";
 import type { CustodianRouteData } from "./route.tsx";
 
 type Props = { onboarding: boolean; newAgentIntent: boolean; store: CustodianSessionStore };
+const SidebarAttention = lazy(() => import("../../components/sidebar-attention.tsx"), {
+  export: "SidebarAttention",
+});
 const propertyReceipts = new WeakMap<HTMLElement, (key: keyof Props) => void>();
 function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
   const context = useApplication();
@@ -250,7 +255,13 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
         </Show>
         <div class="custodian__header-actions">
           <Show when={props.onboarding}>
-            <openclaw-sidebar-attention />
+            <Errored
+              fallback={(error, reset) => <LazyViewError error={error()} onRetry={reset} inline />}
+            >
+              <Loading>
+                <SidebarAttention />
+              </Loading>
+            </Errored>
           </Show>
           <Show when={historyAvailable()}>
             <button

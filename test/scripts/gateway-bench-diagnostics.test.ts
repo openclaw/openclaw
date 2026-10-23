@@ -124,3 +124,37 @@ it("separates transcript hydration and model reads within shared database reserv
     ]);
   }
 });
+
+it("retains sparse projection counts separately for each published event", () => {
+  const source = channel("openclaw.benchmark.session-projection");
+  const finish = startGatewayBenchDiagnostics();
+  try {
+    source.publish({ operation: "session.message", publications: 1 });
+    source.publish({ operation: "session.message", audienceCacheMisses: 1 });
+    source.publish({ operation: "session.message", payloadCacheMisses: 1 });
+    source.publish({ operation: "session.message", projectedRecipients: 1, wirePayloads: 1 });
+    source.publish({ operation: "session.message", projectedRecipients: 1, wirePayloads: 0 });
+    source.publish({ operation: "sessions.changed", publications: 1 });
+  } finally {
+    const result = finish();
+    expect(result.groups).toMatchObject([
+      {
+        operation: "session.message",
+        outcome: "observed",
+        metrics: {
+          publications: { count: 1, total: 1 },
+          audienceCacheMisses: { count: 1, total: 1 },
+          payloadCacheMisses: { count: 1, total: 1 },
+          projectedRecipients: { count: 2, total: 2 },
+          wirePayloads: { count: 2, total: 1 },
+        },
+      },
+      {
+        operation: "sessions.changed",
+        outcome: "observed",
+        metrics: { publications: { count: 1, total: 1 } },
+      },
+    ]);
+    expect(result.collectionErrors).toBe(0);
+  }
+});

@@ -127,6 +127,24 @@ describe("pixverse video generation provider", () => {
     });
   });
 
+  it("releases the submission response before polling its video job", async () => {
+    const events: string[] = [];
+    postJsonRequestMock.mockResolvedValue({
+      response: successfulResponse({ video_id: 123 }),
+      release: vi.fn(async () => {
+        events.push("release");
+      }),
+    });
+    fetchWithTimeoutMock.mockImplementation(async () => {
+      events.push("poll");
+      return successfulResponse({ status: 1, url: videoUrl });
+    });
+
+    await generateVideo();
+
+    expect(events).toEqual(["release", "poll"]);
+  });
+
   it.each([
     [{ providerOptions: { seed: 1.5 } }, {}],
     [{}, { seed: 1.5 }],

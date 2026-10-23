@@ -1,5 +1,6 @@
 import path from "node:path";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
@@ -57,12 +58,7 @@ function preparationOwnerFor(source: RetainedNativeWorkerSource): PreparationOwn
     source.retain(owner, async () => {
       retained.closing = true;
       const outcomes = await Promise.allSettled([...retained.clients].map((close) => close()));
-      const errors = outcomes.flatMap((outcome) =>
-        outcome.status === "rejected" ? [outcome.reason] : [],
-      );
-      if (errors.length) {
-        throw new AggregateError(errors, "Plugin preparation workers failed to close");
-      }
+      throwSettledAggregate(outcomes, "Plugin preparation workers failed to close");
     });
   }
   if (owner.closing) {

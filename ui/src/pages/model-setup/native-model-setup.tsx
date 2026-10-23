@@ -192,7 +192,7 @@ export function createNativeModelSetup(options: NativeModelSetupOptions) {
     setRequest(read);
   }
 
-  // open() admits resources synchronously, including before the first settle.
+  // Retire the command owner's request, subscription, and pending mutation together.
   onCleanup(() => {
     saving.retire();
     generation += 1;

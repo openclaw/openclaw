@@ -5,6 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateExportHtmlVendorAssets } from "../../../scripts/runtime-postbuild.mts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { projectPluginInlineView } from "../../gateway/chat-display-projection.inline-view.js";
+import {
+  createPluginInlineViewResult,
+  bindPluginInlineViewInvocation,
+} from "../../plugins/inline-view.js";
 import { buildCommandTextFromArgs, findCommandByNativeName } from "../commands-registry.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import { commandFixture } from "./commands-handler-fixture.test-support.js";
@@ -150,6 +155,45 @@ describe("buildExportSessionReply", () => {
       hoisted.exportHtmlTemplateContents.set(`vendor/${fileName}`, contents);
     }
     hoisted.sessionTranscriptEvents = [];
+  });
+
+  it("retains version, payload, fallback and invocation through the native HTML data export", async () => {
+    const result = bindPluginInlineViewInvocation(
+      createPluginInlineViewResult(
+        "incidents",
+        "incident",
+        { incidentId: "INC-42" },
+        { version: 3, summary: "INC-42 is investigating." },
+      ),
+      "incidents",
+      "show_incident",
+      "call-1",
+    );
+    const message = {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "show_incident",
+      ...result,
+      __openclaw: { runId: "run-1" },
+    };
+    hoisted.sessionTranscriptEvents = [
+      {
+        type: "message",
+        id: "display-1",
+        parentId: null,
+        timestamp: "2026-10-19T12:00:00Z",
+        message,
+      },
+    ];
+    const params = makeParams();
+    await buildExportSessionReply(params);
+    const restored = sessionDataFromHtml(await writtenHtml(params));
+    expect(restored.entries).toEqual(hoisted.sessionTranscriptEvents);
+    expect(projectPluginInlineView(result.details, message)).toMatchObject({
+      version: 3,
+      summary: "INC-42 is investigating.",
+      payload: { incidentId: "INC-42" },
+    });
   });
 
   it.each(["monthly report.html", "reports/monthly  report.html"])(

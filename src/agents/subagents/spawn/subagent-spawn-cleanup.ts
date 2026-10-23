@@ -1,4 +1,4 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -174,8 +174,7 @@ function isDefinitiveAbortMiss(response: unknown, gatewayRunId: string): boolean
   const result = asNullableRecord(response);
   return (
     typeof result?.aborted === "boolean" &&
-    Array.isArray(result.runIds) &&
-    result.runIds.every((runId) => typeof runId === "string") &&
+    isStringArray(result.runIds) &&
     !result.runIds.includes(gatewayRunId)
   );
 }

@@ -467,6 +467,11 @@ The dry run inventories sources and checks read-only prerequisites. It does not
 create a recovery manifest, copy data, create destination namespaces, or complete
 checks that need private migration or a privilege probe. `--json` is available.
 
+Empty retained retired tables such as `fleet_cells` are skipped with an inspection
+note. Populated retired tables refuse the port so their rows cannot be silently
+discarded; preserve the SQLite store and archive the retired data through its owner
+before retrying. Unrecognized tables still require complete descriptor coverage.
+
 The real port includes registered shared-state, agent, Workboard, Logbook, and
 Team Reports stores, including retained roots and disabled plugin data. Keep
 matching separately installed plugins available so their schema owners can be
@@ -696,15 +701,18 @@ or restore a matched backup. Never edit version/fingerprint metadata. Doctor's
 state migrations take their own exact backup before mutation.
 
 First boot, ports, rebuilds, and migrations can take longer on slow disks or a
-remote server. Connection and lock waits allow 60 seconds; the engine sets a
-90-second statement timeout and a 120-second synchronous bridge deadline.
-These are not per-operation config options. A timeout is a failure to investigate,
-not permission to delete recovery state. Inspect server load, locks, network, and
-storage, and retry only after resolving the reported cause.
+remote server. Connection waits allow 60 seconds. On its own connections,
+OpenClaw sets session-level `lock_timeout` to 60 seconds and `statement_timeout`
+to 90 seconds. These liveness bounds override role and database defaults; the
+synchronous bridge also has a 120-second deadline. These are not per-operation
+config options. A timeout is a failure to investigate, not permission to delete
+recovery state. Inspect server load, locks, network, and storage, and retry only
+after resolving the reported cause.
 
-OpenClaw uses the server's `synchronous_commit` setting. PostgreSQL's default
-`on` makes acknowledged commits durable across PostgreSQL or operating-system
-crashes. For SQLite WAL `synchronous=NORMAL`-like throughput, operators can opt in
+OpenClaw inherits the operator's `synchronous_commit` and other durability
+settings. PostgreSQL's default `on` makes acknowledged commits durable across
+PostgreSQL or operating-system crashes. For SQLite WAL
+`synchronous=NORMAL`-like throughput, operators can opt in
 with `ALTER ROLE <openclaw_role> SET synchronous_commit = off` or the equivalent
 `ALTER DATABASE` setting. This can lose recently acknowledged commits on a server
 or operating-system crash, without corruption. Ports and backups always commit

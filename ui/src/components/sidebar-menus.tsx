@@ -123,24 +123,27 @@ export function createSidebarMenus(deps: {
   let pluginActionLifetime = new AbortController();
   let disposed = false;
   let catalogMenuView: CatalogMenuView | undefined;
-  const menuRendererImport = createSidebarRendererLoader(() =>
-    // A visible Create action can enter its pending chat synchronously.
-    Promise.all([import("./sidebar-menus-render.tsx"), PendingSessionCreate.preload()]).then(
-      ([renderer]) => {
-        if (!disposed) {
-          sessionMenuWork = renderer.createSessionMenuWork(host, (work) =>
-            setField("sessionMenuWork", work),
-          );
-          if (!pluginActionLifetime.signal.aborted && state.sessionMenu) {
-            sessionMenuWork.load(state.sessionMenu.session);
-          }
-        }
-        return renderer;
-      },
-    ),
+  const MenuRenderer = lazy(
+    async () => {
+      // A visible Create action can enter its pending chat synchronously.
+      const [{ SidebarMenusRenderer, CatalogSessionMenu, createSessionMenuWork }] =
+        await Promise.all([import("./sidebar-menus-render.tsx"), PendingSessionCreate.preload()]);
+      return { SidebarMenusRenderer, CatalogSessionMenu, createSessionMenuWork };
+    },
+    { export: "SidebarMenusRenderer" },
   );
-  const MenuRenderer = lazy(menuRendererImport.load, { export: "SidebarMenusRenderer" });
-  const LazyCatalogMenu = lazy(menuRendererImport.load, { export: "CatalogSessionMenu" });
+  const LazyCatalogMenu = lazy(MenuRenderer.preload, { export: "CatalogSessionMenu" });
+  const menuRendererImport = createSidebarRendererLoader(async () => {
+    const renderer = await MenuRenderer.preload();
+    if (!disposed) {
+      sessionMenuWork = renderer.createSessionMenuWork(host, (work) =>
+        setField("sessionMenuWork", work),
+      );
+      if (!pluginActionLifetime.signal.aborted && state.sessionMenu) {
+        sessionMenuWork.load(state.sessionMenu.session);
+      }
+    }
+  });
   const Boundary = menuRendererImport.Boundary;
   const CatalogMenu = (props: Parameters<typeof LazyCatalogMenu>[0]) => (
     <Boundary>
@@ -307,7 +310,7 @@ export function createSidebarMenus(deps: {
     },
 
     async preloadMenuRenderer() {
-      await Promise.all([MenuRenderer.preload(), LazyCatalogMenu.preload()]);
+      await Promise.all([menuRendererImport.load(), LazyCatalogMenu.preload()]);
     },
 
     closePositionedMenu(menu: PositionedMenu, options: { restoreFocus?: boolean } = {}) {

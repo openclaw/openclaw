@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
@@ -601,6 +601,50 @@ describe("buildCachedChatItems working spark", () => {
     expect(next.indicator.startedAt).toBe(3_000);
     expect(other.indicator.key).not.toBe(pending.indicator.key);
     expect(readingIndicator({ sessionKey, queue: [failed] })).toBeUndefined();
+  });
+
+  it("times an externally admitted run from its own start, not the previous run's activity", () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const sessionKey = "agent:main:external-runs";
+    const firstTool = resultMessage("first-call", "read", "first", 1_100, {
+      runId: "first-run",
+      __openclawToolStreamReceivedAt: 1_100,
+    });
+    const indicatorFor = (props: Partial<CachedChatItemsProps>) =>
+      requireItem(
+        buildItems({ sessionKey, toolMessages: [firstTool], ...props }),
+        "reading-indicator",
+      );
+    vi.setSystemTime(1_000);
+    expect(
+      indicatorFor({
+        runWorking: true,
+        runActive: true,
+        runId: "first-run",
+        stream: "",
+        streamStartedAt: 1_000,
+      }),
+    ).toMatchObject({ runId: "first-run", startedAt: 1_000 });
+    vi.setSystemTime(30_000);
+    expect(readingIndicator({ sessionKey, toolMessages: [firstTool] })).toBeUndefined();
+
+    vi.setSystemTime(60_000);
+    const admitted = indicatorFor({ runWorking: true, runActive: true });
+    expect(admitted.startedAt).toBe(60_000);
+    expect(admitted.runId).toBeUndefined();
+    vi.setSystemTime(60_500);
+    expect(
+      indicatorFor({
+        runWorking: true,
+        runActive: true,
+        runId: "second-run",
+        stream: "",
+        streamStartedAt: 60_500,
+      }),
+    ).toMatchObject({ key: admitted.key, runId: "second-run", startedAt: 60_000 });
   });
 
   it("yields to the initial-load skeleton on an empty thread", () => {

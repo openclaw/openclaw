@@ -644,10 +644,13 @@ describe("config form integrity", () => {
 
     expect(textarea.value).toBe('{"enabled":');
     expect(textarea.getAttribute("aria-invalid")).toBe("true");
+    const errorId = configFieldId(["accounts", "primary"], "json-error");
+    expect(textarea.getAttribute("aria-describedby")?.split(" ")).toContain(errorId);
     const error = expectElement(
-      container.querySelector<HTMLElement>("[role='alert']"),
-      "JSON error",
+      container.querySelector<HTMLElement>(`#${errorId}`),
+      "associated JSON error",
     );
+    expect(error.getAttribute("role")).toBe("alert");
     expect(error.hidden).toBe(false);
     expect(error.textContent).toContain("valid JSON");
     expect(onPatch).not.toHaveBeenCalled();

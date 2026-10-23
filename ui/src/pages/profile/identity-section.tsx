@@ -196,7 +196,12 @@ export function IdentitySection(props: IdentitySectionProps) {
               : t("profilePage.identity.gitCoauthorDescription")
           }
           checked={!isOwnerProfile() && props.gitCoauthorEnabled}
-          disabled={!canWrite() || props.busy !== null || isOwnerProfile()}
+          disabled={
+            !canWrite() ||
+            (props.busy !== null && props.busy !== "git-coauthor") ||
+            isOwnerProfile()
+          }
+          saving={props.busy === "git-coauthor"}
           onChange={props.onGitCoauthorChange}
         />
         <Show when={props.error}>

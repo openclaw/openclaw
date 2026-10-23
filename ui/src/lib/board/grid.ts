@@ -1,4 +1,5 @@
-export const BOARD_GRID_COLUMNS = 12;
+import { BOARD_GRID_COLUMNS } from "./grid-constants.ts";
+
 export const BOARD_GRID_ROW_HEIGHT = 56;
 export const BOARD_GRID_GAP = 12;
 export const BOARD_DOCUMENT_AUTO_MAX_ROWS = 240;

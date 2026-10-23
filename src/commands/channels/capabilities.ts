@@ -35,28 +35,6 @@ import {
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { formatChannelAccountLabel } from "./shared.js";
 
-type ChannelsCapabilitiesOptions = {
-  agent?: string;
-  channel?: string;
-  account?: string;
-  target?: string;
-  timeout?: string;
-  json?: boolean;
-};
-
-type ChannelCapabilitiesReport = {
-  plugin: ChannelPlugin;
-  channel: string;
-  accountId: string;
-  accountName?: string;
-  configured?: boolean;
-  enabled?: boolean;
-  support?: ChannelCapabilities;
-  actions: string[];
-  probe?: unknown;
-  diagnostics?: ChannelCapabilitiesDiagnostics;
-};
-
 const CHANNEL_CAPABILITIES_TIMEOUT_MAX_MS = 30_000;
 
 // These CLI waits need a referenced deadline so stalled plugins still produce a report.
@@ -147,7 +125,14 @@ async function resolveCapabilitiesRuntimeConfig(config: OpenClawConfig, runtime:
 
 /** Print or serialize configured channel capabilities, actions, and optional health probe details. */
 export async function channelsCapabilitiesCommand(
-  opts: ChannelsCapabilitiesOptions,
+  opts: {
+    agent?: string;
+    channel?: string;
+    account?: string;
+    target?: string;
+    timeout?: string;
+    json?: boolean;
+  },
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
@@ -220,7 +205,18 @@ export async function channelsCapabilitiesCommand(
     throw new ExpectedCliError({ message, humanOutput: danger(message), machineOutput: message });
   }
 
-  const reports: ChannelCapabilitiesReport[] = [];
+  const reports: {
+    plugin: ChannelPlugin;
+    channel: string;
+    accountId: string;
+    accountName?: string;
+    configured?: boolean;
+    enabled?: boolean;
+    support?: ChannelCapabilities;
+    actions: string[];
+    probe?: unknown;
+    diagnostics?: ChannelCapabilitiesDiagnostics;
+  }[] = [];
   for (const plugin of selected) {
     const accountOverride = normalizeOptionalString(opts.account);
     const target = rawTarget || undefined;

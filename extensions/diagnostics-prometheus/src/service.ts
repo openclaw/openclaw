@@ -580,11 +580,14 @@ function createMetricsHandler(store: PrometheusMetricStore): OpenClawPluginHttpR
     res.statusCode = 200;
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
-    res.setHeader("Content-Length", String(Buffer.byteLength(body)));
-    // Avoid Node concatenating and flattening a second copy of the scrape with
-    // the HTTP headers. The body is already a complete, immutable string.
+    res.setHeader("Content-Length", String(body.length));
     res.flushHeaders();
-    res.end(req.method === "HEAD" ? undefined : body);
+    res.end(req.method === "HEAD" ? undefined : body, (error?: Error | null) => {
+      // Only the completed response owns this backing store; prefixes stay in the metric store.
+      if (!error) {
+        body.buffer.transfer(0);
+      }
+    });
     return true;
   };
 }

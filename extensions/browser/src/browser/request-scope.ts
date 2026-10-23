@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { BrowserRequest } from "./routes/types.js";
 
 type BrowserRequestScope = {
-  managedOnly: true;
   assertCurrent: NonNullable<BrowserRequest["assertCurrent"]>;
 };
 const requestScope = new AsyncLocalStorage<BrowserRequestScope>();

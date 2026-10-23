@@ -647,6 +647,7 @@ try {
       }
       performance.setResourceTimingBufferSize(4096);
       const milestones = {
+        firstShellInteractiveMs: null as number | null,
         firstEnabledComposerMs: null as number | null,
         firstComposerFocusMs: null as number | null,
         firstNonemptyTranscriptMs: null as number | null,
@@ -670,6 +671,14 @@ try {
       const visible = (element: Element) =>
         element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
       const sample = () => {
+        if (
+          milestones.firstShellInteractiveMs === null &&
+          [...document.querySelectorAll("[data-sidebar-entry] a[href]")].some(
+            (element) => element.getAttribute("aria-disabled") !== "true" && visible(element),
+          )
+        ) {
+          milestones.firstShellInteractiveMs = performance.now();
+        }
         const composer = document.querySelector<HTMLTextAreaElement>(
           ".agent-chat__composer-combobox textarea, .new-session-page__message",
         );
@@ -692,6 +701,7 @@ try {
           milestones.firstNonemptyTranscriptMs = performance.now();
         }
         if (
+          milestones.firstShellInteractiveMs === null ||
           milestones.firstEnabledComposerMs === null ||
           (measuredRoute === "chat" && milestones.firstNonemptyTranscriptMs === null)
         ) {

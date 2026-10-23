@@ -34,8 +34,6 @@ export type ChatPaneMobileHeaderProps = {
   navDrawerOpen: boolean;
   onToggleNavigation: (source: HTMLElement) => void;
   onOpenDetails: (source: HTMLElement) => void;
-  /** Supplied navigation glyphs, rendered at 20px. */
-  navigationIcon: Element;
   /** Native menu trigger; local navigation remains available while disconnected. */
   actions?: Element;
   /** One owner-selected notice: Gateway status takes priority over device offline. */
@@ -128,7 +126,7 @@ export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
         onClick={(event) => props.onToggleNavigation(event.currentTarget)}
       >
         <span class="mobile-header__glyph" aria-hidden="true">
-          {props.navigationIcon}
+          <Icon name="sessionMenu" />
         </span>
       </button>
       <Show when={props.incognito}>

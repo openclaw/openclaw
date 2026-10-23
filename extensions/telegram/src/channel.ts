@@ -42,8 +42,14 @@ import {
   inspectTelegramAccount,
 } from "./account-inspect.js";
 import {
+  releaseRemovedTelegramAccountThrottler,
+  releaseRotatedTelegramAccountThrottler,
+  releaseStoppedTelegramAccountResources,
+} from "./account-throttler-lifecycle.js";
+import {
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
+  resolveTelegramAccountConfig,
   type ResolvedTelegramAccount,
 } from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
@@ -88,7 +94,6 @@ import {
 } from "./normalize.js";
 import { createTelegramOutboundAdapter } from "./outbound-adapter.js";
 import { parseTelegramThreadId } from "./outbound-params.js";
-import { releaseStoppedTelegramPollingLease } from "./polling-lease.js";
 import type { TelegramProbe } from "./probe.js";
 import * as probeModule from "./probe.js";
 import { isTelegramTextOnlyChannelData } from "./prompt-context-projection.js";
@@ -664,19 +669,19 @@ export const telegramPlugin = createChatChannelPlugin({
     },
     lifecycle: {
       onAccountConfigChanged: async ({ prevCfg, nextCfg, accountId }) => {
-        const previousToken = resolveTelegramAccount({ cfg: prevCfg, accountId }).token.trim();
-        const nextToken = resolveTelegramAccount({ cfg: nextCfg, accountId }).token.trim();
-        if (previousToken !== nextToken) {
+        const rotated = await releaseRotatedTelegramAccountThrottler(prevCfg, nextCfg, accountId);
+        if (rotated) {
           // Startup needs the previous identity to reset that bot's ingress before replacement.
           await deleteStartupBotInfoCache(accountId);
         }
       },
-      onAccountRemoved: async ({ accountId }) => {
+      onAccountRemoved: async ({ accountId, prevCfg }) => {
         const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
         await Promise.all([
           deleteTelegramUpdateOffset({ accountId }),
           deleteStartupBotInfoCache(accountId),
         ]);
+        await releaseRemovedTelegramAccountThrottler(prevCfg, accountId);
       },
     },
     heartbeat: {
@@ -731,7 +736,7 @@ export const telegramPlugin = createChatChannelPlugin({
       },
       auditAccount: async ({ account, timeoutMs, probe, cfg }) => {
         const groups =
-          cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
+          resolveTelegramAccountConfig(cfg, account.accountId)?.groups ??
           cfg.channels?.telegram?.groups;
         const { groupIds, unresolvedGroups, hasWildcardUnmentionedGroups } =
           auditModule.collectTelegramUnmentionedGroupIds(groups);
@@ -898,15 +903,8 @@ export const telegramPlugin = createChatChannelPlugin({
       },
       stopAccount: async ({ account, accountId, log }) => {
         const token = (account.token ?? "").trim();
-        if (!token) {
-          return;
-        }
-        const released = await releaseStoppedTelegramPollingLease({
-          token,
-          accountId,
-        });
-        if (released) {
-          log?.info?.(`[${accountId}] released stopped Telegram polling lease`);
+        if (token) {
+          await releaseStoppedTelegramAccountResources({ token, accountId, log });
         }
       },
       logoutAccount: async ({ accountId, cfg }) => {

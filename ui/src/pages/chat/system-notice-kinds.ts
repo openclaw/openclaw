@@ -1,4 +1,7 @@
 import type { toolIconData } from "../../components/icon-data-tools.ts";
+import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
+
+registerChatMessageMetadataEnglish();
 
 export type PendingInputStatus =
   | "queued"

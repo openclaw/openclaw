@@ -334,7 +334,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       const openrouterCard = page.locator(".model-providers__row", { hasText: "OpenRouter" });
       await openrouterCard.waitFor();
       await expandProvider(page, "openrouter");
-      await openrouterCard.getByRole("button", { name: "Set API key", exact: true }).waitFor();
+      await openrouterCard
+        .getByRole("button", { name: "Set API key: OpenRouter", exact: true })
+        .waitFor();
       expect(
         await openrouterCard.locator(".model-providers__profile-copy strong").getAttribute("title"),
       ).toBe("openrouter:default");
@@ -528,8 +530,19 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       }
 
       await expandProvider(page, "openai");
-      await openaiCard.getByRole("button", { name: "Set API key" }).click();
-      await openaiCard.getByLabel("API key").fill(openaiInputValue);
+      for (const action of ["Remove provider", "Add account", "Test connection", "Set API key"]) {
+        const control = page.getByRole("button", { name: `${action}: OpenAI`, exact: true });
+        expect(await control.count()).toBe(1);
+        expect((await control.textContent())?.trim()).toBe(action);
+      }
+      const anthropicCard = await expandProvider(page, "anthropic");
+      await anthropicCard
+        .getByRole("button", { name: "Set API key: Anthropic", exact: true })
+        .waitFor();
+      const setKey = openaiCard.getByRole("button", { name: "Set API key: OpenAI", exact: true });
+      await setKey.focus();
+      await page.keyboard.press("Enter");
+      await openaiCard.getByLabel("API key", { exact: true }).fill(openaiInputValue);
       const keyWriteCount = (await gateway.getRequests("models.authSetApiKey")).length;
       await gateway.deferNext("models.authSetApiKey");
       await openaiCard.getByRole("button", { name: "Save" }).click();
@@ -549,9 +562,19 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await resolveConfigMutation(gateway, keyedConfig, "model-providers-hash-key", "openai");
       await expect.poll(async () => openaiCard.textContent()).toContain("Secret saved.");
 
-      await openaiCard.getByRole("button", { name: "Test connection" }).click();
+      await gateway.deferNext("models.probe");
+      const testConnection = openaiCard.getByRole("button", {
+        name: "Test connection: OpenAI",
+        exact: true,
+      });
+      await testConnection.focus();
+      await page.keyboard.press("Enter");
       const probe = await gateway.waitForRequest("models.probe");
       expect(probe.params).toEqual({ provider: "openai", agentId: "main" });
+      const testing = openaiCard.getByRole("button", { name: "Testing…: OpenAI", exact: true });
+      await expect.poll(() => testing.isDisabled()).toBe(true);
+      await gateway.resolveDeferred("models.probe");
+      await expect.poll(() => testConnection.isEnabled()).toBe(true);
       await expect
         .poll(() => openaiCard.locator(".model-providers__probe-target span").nth(1).textContent())
         .toBe("Connected · Request round-trip: 87 ms");

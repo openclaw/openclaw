@@ -189,6 +189,7 @@ openclaw-appearance-background {
 
 openclaw-appearance-background > .settings-background-preview {
   display: none;
+  pointer-events: none;
 }
 
 .content[data-background-preview] openclaw-appearance-background > .settings-background-preview {

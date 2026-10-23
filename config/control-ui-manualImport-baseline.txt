@@ -30,7 +30,6 @@ ui/src/components/session-organizer.ts	3
 ui/src/components/session-placement.runtime.ts	1
 ui/src/components/sidebar-attention-store.ts	1
 ui/src/components/sidebar-menus-render.tsx	1
-ui/src/components/sidebar-menus.tsx	1
 ui/src/components/sidebar-people.ts	1
 ui/src/components/terminal/terminal-pending-actions.ts	1
 ui/src/components/tooltip-title.ts	1
@@ -41,7 +40,6 @@ ui/src/pages/chat/chat-outbox-recovery.tsx	1
 ui/src/pages/chat/chat-pane-board.ts	1
 ui/src/pages/chat/chat-pane-session-menu.ts	2
 ui/src/pages/chat/components/chat-attachment-reads.ts	1
-ui/src/pages/chat/components/chat-composer-plus-menu.tsx	1
 ui/src/pages/chat/components/chat-detail-panel.tsx	1
 ui/src/pages/chat/components/chat-diff-render.solid.tsx	1
 ui/src/pages/chat/durable-composer-persistence.ts	1

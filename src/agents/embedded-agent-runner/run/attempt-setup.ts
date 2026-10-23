@@ -287,6 +287,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       tokenBudget: attempt.contextTokenBudget,
       reserveTokens: () => settingsManager.getCompactionReserveTokens(),
       getSystemPrompt: input.getSystemPrompt,
+      getTools: () => activeSession.agent.state.tools,
       modelId: attempt.modelId,
       ...(input.repairToolUseResultPairing
         ? {

@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
 import type { BundledPluginReloadSource } from "./plugin-bundled-reload.js";
 import { getPluginCache } from "./plugin-cache.js";
@@ -70,12 +71,7 @@ function createPluginGenerationSourceCustody() {
       const results = await Promise.allSettled(
         [...this.sources.values()].map(({ source }) => source.disposeAsync()),
       );
-      const errors = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length) {
-        throw new AggregateError(errors, "Plugin source custody cleanup failed");
-      }
+      throwSettledAggregate(results, "Plugin source custody cleanup failed");
       this.sources.clear();
     },
   };

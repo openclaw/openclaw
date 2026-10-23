@@ -346,7 +346,11 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       runActive,
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
-      awaitingActivity: state.chatRunStartup == null,
+      awaitingActivity:
+        state.chatRunStartup == null &&
+        !(state.chatRunId
+          ? state.knownAgentRunIds.has(state.chatRunId)
+          : selectedSession?.activeRunIds?.some((runId) => state.knownAgentRunIds.has(runId))),
       environmentStartStatus:
         placement?.state === "provisioning" ? placement.startStatus : undefined,
       waitingApproval: state.waitingApprovalStatuses.size > 0,
@@ -367,7 +371,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         lockChatScroll(state);
         this.transcript.cancelScroll();
       },
-      onDismissProgressCard: progressPresentation ? this.hideProgressCard.bind(this) : undefined,
+      onDismissProgressCard: progressPresentation
+        ? this.hideProgressCard.bind(this, progressPresentation)
+        : undefined,
       ...conversationAttention,
       asyncQuestionStorage: nativeConversation
         ? this.chatState.composerPersistence.durableScope

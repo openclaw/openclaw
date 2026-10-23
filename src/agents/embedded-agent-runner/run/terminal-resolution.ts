@@ -6,6 +6,7 @@ import {
 } from "../../../auto-reply/reply-payload.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { classifyGatewayStorageFailure } from "../../../infra/sqlite-error-diagnostics.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import type { ProviderRouteOverridePresence } from "../../../plugin-sdk/provider-model-types.js";
@@ -16,6 +17,7 @@ import {
 import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
+import { renderStorageFailureSummary } from "../../failover/assistant-request-failure-copy.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
 import {
   createMissingReplyNotice,
@@ -82,18 +84,13 @@ const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
 
-type TerminalPresentationObservation = {
-  terminalPresentation?: string;
-  toolCallOrdinal?: number;
-};
-
 export function createTerminalToolPresentationTracker() {
   let latestOrdinal = -1;
   let nextOrdinal = 0;
   let value: string | undefined;
   return {
     allocateOrdinal: () => nextOrdinal++,
-    observe: (observation: TerminalPresentationObservation): void => {
+    observe: (observation: { terminalPresentation?: string; toolCallOrdinal?: number }): void => {
       const ordinal = observation.toolCallOrdinal ?? latestOrdinal + 1;
       if (ordinal >= latestOrdinal) {
         latestOrdinal = ordinal;
@@ -468,6 +465,14 @@ async function completeEmbeddedRun(
 ): Promise<TerminalResolution> {
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
+  const terminalFailure =
+    projectAgentRunAttemptTerminal(input.attempt.terminal).promptError ??
+    input.terminalState.outcome.error ??
+    input.incompleteTurnText ??
+    MISSING_REPLY_NOTICE_TEXT;
+  const storageFailureText = renderStorageFailureSummary(
+    classifyGatewayStorageFailure(terminalFailure),
+  );
   // Warning suppression is presentation only: an unrecovered terminal failure
   // must retain error metadata and must not enter successful auth/trace bookkeeping.
   const error =
@@ -475,12 +480,7 @@ async function completeEmbeddedRun(
     classifyAgentRunTerminalOutcome(input.terminalState.outcome) === "failure"
       ? {
           kind: "incomplete_turn" as const,
-          message: formatErrorMessage(
-            projectAgentRunAttemptTerminal(input.attempt.terminal).promptError ??
-              input.terminalState.outcome.error ??
-              input.incompleteTurnText ??
-              MISSING_REPLY_NOTICE_TEXT,
-          ),
+          message: storageFailureText ?? formatErrorMessage(terminalFailure),
           fallbackSafe: input.incompleteTurnFallbackSafe ?? false,
           terminalPresentation: input.terminalToolPresentation !== undefined,
         }
@@ -586,7 +586,7 @@ async function completeEmbeddedRun(
   const incompleteText =
     input.terminalToolPresentation && input.incompleteTurnText !== undefined
       ? input.terminalToolPresentation.concat("\n\n", input.incompleteTurnText)
-      : input.incompleteTurnText;
+      : (input.incompleteTurnText ?? (error ? storageFailureText : undefined));
   const terminalPayloads = suppressMissingReplyNotice
     ? retainSilentFinalPayloads(input.payloadsForTerminalPath ?? [])
     : incompleteText !== undefined

@@ -145,6 +145,8 @@ export type UiSettings = {
   chatShowTaskProgress?: boolean;
   // Browser-local presentation preference; false preserves active-card auto-expand.
   chatCollapseTaskProgress?: boolean;
+  // Browser-local Details dismissals, keyed by viewer, agent and session.
+  detailsDismissedProcesses?: Record<string, string[]>;
   chatSendShortcut?: ChatSendShortcut;
   chatFollowUpMode?: ChatFollowUpMode; // Default handling for messages sent while a run is active
   catalogOpenTarget?: CatalogOpenTarget;

@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
+import { installModelPickerLayout } from "../../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatModelControls } from "./chat-model-controls.tsx";
@@ -11,6 +12,7 @@ import { ChatModelControls } from "./chat-model-controls.tsx";
 type Props = Parameters<typeof ChatModelControls>[0];
 
 async function controls(overrides: Partial<Props>) {
+  installModelPickerLayout();
   const sessions = createSessionsListResult({ model: "primary", modelProvider: "example" });
   const selectedSession = {
     ...sessions.sessions[0]!,

@@ -16,17 +16,17 @@ import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import type { MessageRenderOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import {
-  prepareChatMessageRender,
+  prepareChatStreamRender,
   resolveMessageActionDetails,
 } from "./chat-message-markdown-view.tsx";
 import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
 import { ChatQuestionSummary } from "./chat-question-summary.tsx";
 import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
 import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
-import type { ReplyConnectorElements } from "./chat-reply-connector.ts";
+import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
 import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
+import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
 import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import type { BrowserTabPreview } from "./chat-tool-cards.ts";
@@ -65,20 +65,18 @@ export function StreamGroupParts(props: {
   options: StreamGroupOptions;
   presentation: "standalone" | "continuation";
 }) {
+  const firstBubbleKey = createMemo(() =>
+    props.options.firstBubbleKey !== undefined
+      ? props.options.firstBubbleKey
+      : (props.parts.find((candidate) => candidate.kind === "stream" && candidate.text.trim())
+          ?.key ?? null),
+  );
   return (
     <For each={props.parts} keyed={(part) => `${part.kind}:${part.key}`}>
       {(part) => (
         <StreamPartView
           part={part()}
-          options={{
-            ...props.options,
-            firstBubbleKey:
-              props.options.firstBubbleKey !== undefined
-                ? props.options.firstBubbleKey
-                : (props.parts.find(
-                    (candidate) => candidate.kind === "stream" && candidate.text.trim(),
-                  )?.key ?? null),
-          }}
+          options={{ ...props.options, firstBubbleKey: firstBubbleKey() }}
           presentation={props.presentation}
         />
       )}
@@ -162,16 +160,7 @@ function StreamingMessage(props: {
   options: StreamGroupOptions;
 }) {
   const part = () => props.part()!;
-  const prepared = createMemo(() =>
-    prepareChatMessageRender({
-      role: "assistant",
-      content: [
-        ...(part().thinking ? [{ type: "thinking", thinking: part().thinking }] : []),
-        { type: "text", text: part().text },
-      ],
-      timestamp: part().startedAt,
-    }),
-  );
+  const prepared = createMemo(() => prepareChatStreamRender(part()));
   const actions = createMemo(() =>
     resolveMessageActionDetails(prepared(), {
       messageId: part().key,

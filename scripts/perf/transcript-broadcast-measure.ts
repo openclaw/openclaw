@@ -60,6 +60,7 @@ const { values } = parseArgs({
     "worker-allocations": { type: "boolean", default: false },
     diagnostics: { type: "boolean", default: false },
     "broadcast-timing": { type: "boolean", default: false },
+    "session-projection-counts": { type: "boolean", default: false },
     "session-projection-source": { type: "string" },
     "transport-counts": { type: "boolean", default: false },
     compressed: { type: "boolean", default: false },
@@ -105,7 +106,7 @@ const { values } = parseArgs({
     "activity-summaries": { type: "boolean", default: false },
     "recap-burst-repeats": { type: "string", default: "0" },
     "recap-burst-interval-ms": { type: "string", default: "50" },
-    runs: { type: "string", default: "20" },
+    runs: { type: "string" },
     sessions: { type: "string", default: "100" },
     "history-turns": { type: "string", default: "0" },
     "history-last-turns": { type: "string", default: "0" },
@@ -116,6 +117,7 @@ const { values } = parseArgs({
     "duration-ms": { type: "string", default: "3600000" },
     "warmup-ms": { type: "string", default: "300000" },
     "round-interval-ms": { type: "string", default: "15000" },
+    "rpc-interval-ms": { type: "string", default: "0" },
     "soak-rounds": { type: "string" },
     "memory-interval-ms": { type: "string", default: "60000" },
     "retained-profile-ms": { type: "string", default: "600000" },
@@ -123,6 +125,8 @@ const { values } = parseArgs({
     chunks: { type: "string", default: "100" },
     "chunk-interval-ms": { type: "string", default: "10" },
     "prompt-kib": { type: "string", default: "128" },
+    "chat-attachment-kib": { type: "string", default: "0" },
+    "chat-active-hold-ms": { type: "string", default: "0" },
     "heap-snapshot": { type: "boolean", default: false },
     "session-census": { type: "boolean", default: false },
     "fingerprint-retention": { type: "boolean", default: false },
@@ -168,6 +172,7 @@ if (
     "sessions.list",
     "sessions.describe",
     "sessions.patch",
+    "sessions.cleanup",
     "connect",
     "reconnect",
     "subscribe",
@@ -177,10 +182,11 @@ if (
     "session-idle-retention",
     "memory-soak",
     "plugins.reload",
+    "plugin.scope",
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, sessions.describe, sessions.patch, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, or plugins.reload",
+    "--scenario must be sessions.list, sessions.describe, sessions.patch, sessions.cleanup, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, plugins.reload, or plugin.scope",
   );
 }
 const retentionScenario = scenario === "attempt-retention";
@@ -232,6 +238,18 @@ if (
   );
 }
 const toolScenario = scenario === "chat.send" || reasoningScenario;
+const chatActiveHoldMs = integer(values["chat-active-hold-ms"], "--chat-active-hold-ms", 0);
+if (chatActiveHoldMs && (scenario !== "chat.send" || values["session-event-wake"])) {
+  throw new Error("--chat-active-hold-ms requires direct --scenario chat.send");
+}
+const chatAttachmentBytes =
+  integer(values["chat-attachment-kib"], "--chat-attachment-kib", 0) * 1024;
+if (chatAttachmentBytes && (scenario !== "chat.send" || values["session-event-wake"])) {
+  throw new Error("--chat-attachment-kib requires direct --scenario chat.send");
+}
+const chatAttachmentContent = chatAttachmentBytes
+  ? Buffer.alloc(chatAttachmentBytes, "Synthetic attachment text.\n").toString("base64")
+  : undefined;
 const turnScenario =
   scenario === "chat.send" ||
   scenario === "transcript-broadcast" ||
@@ -243,14 +261,16 @@ if (
   !values["stream-start-allocations"] &&
   !values["workload-cpu-profile"] &&
   !values["operator-access-policy"] &&
+  !(scenario === "chat.send" && values.diagnostics) &&
   !(["sessions.list", "sessions.patch"].includes(scenario) && values["capture-responses"]) &&
   scenario !== "transcript-broadcast" &&
+  scenario !== "plugin.scope" &&
   !retentionScenario &&
   !idleScenario &&
   !soakScenario
 ) {
   throw new Error(
-    "--scenario requires --allocations, --workload-cpu-profile, or --capture-responses for sessions.list/sessions.patch",
+    "--scenario requires --allocations, --workload-cpu-profile, --diagnostics for chat.send, or --capture-responses for sessions.list/sessions.patch",
   );
 }
 const operations = integer(
@@ -295,7 +315,7 @@ const exactClients = integer(
 if (exactClients > clientCount) {
   throw new Error("--exact-clients must not exceed --clients");
 }
-const runCount = scenario === "chat.send" ? 1 : integer(values.runs, "--runs");
+const runCount = integer(values.runs ?? (scenario === "chat.send" ? "1" : "20"), "--runs");
 const sessionCount = idleScenario ? integer(values.sessions, "--sessions") : runCount;
 const historyBytesPerTurn = 16 * 1024;
 const historyReasoningBytes = 4 * 1024;
@@ -327,6 +347,7 @@ const rounds = integer(values.rounds, "--rounds");
 const durationMs = integer(values["duration-ms"], "--duration-ms");
 const warmupMs = integer(values["warmup-ms"], "--warmup-ms", 0);
 const roundIntervalMs = integer(values["round-interval-ms"], "--round-interval-ms");
+const rpcIntervalMs = integer(values["rpc-interval-ms"], "--rpc-interval-ms", 0);
 const soakRounds =
   values["soak-rounds"] === undefined ? undefined : integer(values["soak-rounds"], "--soak-rounds");
 if (soakRounds !== undefined && !soakScenario) {
@@ -367,10 +388,10 @@ if (values["stress-session-store"] && !values["stress-tools"]) {
 }
 if (
   values["operator-access-policy"] &&
-  (scenario !== "chat.send" || !values["stress-tools"] || listIntervalMs !== 0)
+  (scenario !== "chat.send" || !values["stress-tools"] || runCount !== 1 || listIntervalMs !== 0)
 ) {
   throw new Error(
-    "--operator-access-policy requires --scenario chat.send --stress-tools and no polling",
+    "--operator-access-policy requires --scenario chat.send --stress-tools --runs 1 and no polling",
   );
 }
 if (values["session-event-wake"] && !values["operator-access-policy"]) {
@@ -484,6 +505,26 @@ if (
 ) {
   throw new Error("--session-projection-source requires --entry src/entry.ts");
 }
+if (values["session-projection-counts"]) {
+  if (path.resolve(values.entry) !== path.resolve("src/entry.ts")) {
+    throw new Error("--session-projection-counts requires --entry src/entry.ts");
+  }
+  if (
+    values.allocations ||
+    values["worker-allocations"] ||
+    values["cpu-profile"] ||
+    values["workload-cpu-profile"] ||
+    values["broadcast-timing"] ||
+    values["transport-counts"] ||
+    values["stream-start-allocations"] ||
+    values["trace-gc"] ||
+    (soakScenario && retainedProfileMs > 0)
+  ) {
+    throw new Error(
+      "--session-projection-counts needs a separate pass without profiling or timing",
+    );
+  }
+}
 const sessionProjectionSource = values["session-projection-source"]
   ? realpathSync(path.resolve(values["session-projection-source"]))
   : undefined;
@@ -521,6 +562,13 @@ const promptContent = createCipheriv(
   Buffer.alloc(16),
 );
 const root = path.resolve(values["state-dir"]);
+if (
+  (process.env.OPENCLAW_PERF_MEDIA_IO === "1" ||
+    process.env.OPENCLAW_PERF_FSYNC_DELAY_MS !== undefined) &&
+  path.resolve(values.entry) !== path.resolve("scripts/perf/fsync-gateway-entry.ts")
+) {
+  throw new Error("Filesystem probe settings require --entry scripts/perf/fsync-gateway-entry.ts");
+}
 const fixture: unknown = JSON.parse(
   readFileSync(path.join(root, "team-shape-summary.json"), "utf8"),
 );
@@ -570,6 +618,13 @@ const viewerIdentity = (index: number) =>
   `broadcast-viewer-${values["distinct-viewers"] ? index : 0}@example.invalid`;
 const viewerProfiles = new Set<string>();
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
+if (scenario === "sessions.cleanup") {
+  // Exercise live preservation admission repeatedly without consuming the fixture inventory.
+  cfg.session = {
+    ...cfg.session,
+    maintenance: { ...cfg.session?.maintenance, mode: "warn" },
+  };
+}
 applyMockOpenAiModelConfig(cfg, {
   mockPort,
   modelRef: "openai/gpt-4.1",
@@ -753,9 +808,36 @@ globalThis.fetch = async (input, options) => {
   );
 }
 let reloadPluginId: string | undefined;
-if (scenario === "plugins.reload") {
+let scopePluginId: string | undefined;
+if (scenario === "plugins.reload" || scenario === "plugin.scope") {
   const plugin = writePluginFixtures(output, { count: 1, activationOnStartup: true });
-  reloadPluginId = plugin.pluginIds[0];
+  if (scenario === "plugins.reload") {
+    reloadPluginId = plugin.pluginIds[0];
+  } else {
+    scopePluginId = plugin.pluginIds[0];
+    const pluginSource = path.join(plugin.pluginsDir, scopePluginId!, "index.cjs");
+    writeFileSync(
+      pluginSource,
+      `const { getPluginRuntimeGatewayRequestScope } = require("openclaw/plugin-sdk/plugin-runtime");
+const id = ${JSON.stringify(scopePluginId)};
+const source = ${JSON.stringify(pluginSource)};
+function currentScope() {
+  const scope = getPluginRuntimeGatewayRequestScope();
+  if (scope?.pluginId !== id || scope.pluginSource !== source || !scope.pluginOrigin ||
+      !scope.pluginRegistry || !scope.client) throw new Error("Synthetic plugin scope is missing");
+  return scope;
+}
+module.exports = { id, register(api) {
+  api.registerGatewayMethod("benchmark.pluginScope", async ({ params, respond }) => {
+    const before = currentScope();
+    await Promise.resolve();
+    const after = currentScope();
+    if (before !== after) throw new Error("Synthetic plugin scope changed across await");
+    respond(true, { pluginId: id, sequence: params.sequence, scopeVerified: true });
+  }, { scope: "operator.read" });
+} };\n`,
+    );
+  }
   cfg.plugins = {
     ...cfg.plugins,
     enabled: true,
@@ -773,10 +855,14 @@ import fs from "node:fs";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
 import { isMainThread } from "node:worker_threads";
 if (isMainThread) {
-  const state = { active: false, counts: {}, installed: {}, firstAuthPolicyStacks: [],
+  const state = { active: false, counts: {}, callers: {}, installed: {}, firstAuthPolicyStacks: [],
     count(key) {
       if (!this.active) return;
       this.counts[key] = (this.counts[key] ?? 0) + 1;
+      if (key.endsWith(".assertSettled") || key.endsWith(".readProfileAuthority")) {
+        const caller = key + " <- " + new Error().stack.split("\n").slice(3, 6).join(" <- ").trim();
+        this.callers[caller] = (this.callers[caller] ?? 0) + 1;
+      }
       if (key === "auth-policy.stableStringify" && this.firstAuthPolicyStacks.length < 8)
         this.firstAuthPolicyStacks.push(new Error("auth-policy stringify caller").stack);
     } };
@@ -787,7 +873,8 @@ if (isMainThread) {
   const owners = new Set([
     "session-source-authority", "admitted-run-context", "operator-run-authority",
     "session-delivery-generation", "session-entry-source-authority", "session-event-handoff",
-    "session-tool-overrides", "auth-policy", "sqlite-worker-identity"
+    "session-tool-overrides", "auth-policy", "sqlite-worker-identity",
+    "user-profile-events", "user-profile-authority"
   ]);
   registerHooks({ load(url, context, nextLoad) {
     const loaded = nextLoad(url, context);
@@ -807,6 +894,14 @@ if (isMainThread) {
       (match, name) => match + count(name));
     source = source.replace(/function (assert\w+)\([^{}]*\)(?::[^{}]+)? \{/g,
       (match, name) => match + count(name));
+    if (owner === "user-profile-events") {
+      source = source.replace(/assertSettled\(this: void, profileIds: string \| readonly string\[\]\): void \{/g,
+        (match) => match + count("assertSettled"));
+    }
+    if (owner === "user-profile-authority") {
+      source = source.replace(/function readProfileAuthority\([^{}]+\{/g,
+        (match) => match + count("readProfileAuthority"));
+    }
     if (owner === "session-source-authority") {
       source = source.replace(/\(\) => \{\s*const scoped = sessionSourceScopes/g,
         (match) => match.replace("{", "{" + count("composedAssertion")));
@@ -903,10 +998,10 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     active = message.action === "start";
     if (active) { for (const key of Object.keys(counts)) counts[key] = 0; messages.clear(); }
     const host = globalThis[Symbol.for("openclaw.benchmark.authorityCounts")];
-    if (host) { host.active = active; if (active) { host.counts = {}; host.firstAuthPolicyStacks = []; } }
+    if (host) { host.active = active; if (active) { host.counts = {}; host.callers = {}; host.firstAuthPolicyStacks = []; } }
     process.send?.({ channel, id: message.id, counts: { ...counts }, profileId,
       sourceOverlay: globalThis[Symbol.for("openclaw.benchmark.sourceOverlay")],
-      ...(host ? { hostCounts: host.counts, installed: host.installed, firstAuthPolicyStacks: host.firstAuthPolicyStacks } : {}) });
+      ...(host ? { hostCounts: host.counts, hostCallers: host.callers, installed: host.installed, firstAuthPolicyStacks: host.firstAuthPolicyStacks } : {}) });
   }
   api.registerService({ id: "synthetic-authority-counters",
     start() {
@@ -1246,6 +1341,8 @@ function createPollRandom(round: number, client: number) {
   };
 }
 const sessionEventRuns = new Map<string, { resolve: (runId: string) => void }>();
+const queuedChatInputs = new Map<string, () => void>();
+const terminalChatInputs = new Map<string, (state: string) => void>();
 let cohort:
   | {
       id: string;
@@ -1331,8 +1428,11 @@ const mock = createServer((req, res) => {
         : [];
     const toolOutput = toolOutputs.at(-1);
     const continuation = toolScenario && toolOutput !== undefined;
+    const primaryMessage = cohort
+      ? `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`
+      : undefined;
     const primary =
-      cohort &&
+      primaryMessage !== undefined &&
       facts.purpose === "benchmark-turn" &&
       !facts.hasToolOutput &&
       !continuation &&
@@ -1341,11 +1441,12 @@ const mock = createServer((req, res) => {
       index <= runCount &&
       lastUser !== undefined &&
       (values["session-event-wake"]
-        ? lastUser.includes(
-            `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`,
-          )
-        : stripInboundMetadata(lastUser).trim().split("\n")[0] ===
-          `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`);
+        ? lastUser.includes(primaryMessage)
+        : chatAttachmentContent
+          ? lastUser
+              .split("\n")
+              .some((line) => stripInboundMetadata(line).trim() === primaryMessage)
+          : stripInboundMetadata(lastUser).trim().split("\n")[0] === primaryMessage);
     const requestPhase = primary
       ? `primary:${index}`
       : continuation
@@ -1768,6 +1869,14 @@ const env = {
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
   ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
   ...(values["broadcast-timing"] ? { OPENCLAW_BENCH_BROADCAST_TIMING: "1" } : {}),
+  ...(process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1"
+    ? { OPENCLAW_BENCH_WORKER_ATTRIBUTION: "1" }
+    : {}),
+  ...(process.env.OPENCLAW_PERF_MEDIA_IO === "1" ? { OPENCLAW_PERF_MEDIA_IO: "1" } : {}),
+  ...(process.env.OPENCLAW_PERF_FSYNC_DELAY_MS !== undefined
+    ? { OPENCLAW_PERF_FSYNC_DELAY_MS: process.env.OPENCLAW_PERF_FSYNC_DELAY_MS }
+    : {}),
+  ...(values["session-projection-counts"] ? { OPENCLAW_BENCH_SESSION_PROJECTION_COUNTS: "1" } : {}),
   ...(sessionProjectionSource
     ? { OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE: sessionProjectionSource }
     : {}),
@@ -2279,6 +2388,7 @@ async function controlAuthorityCounters(child: ChildProcess, action: "start" | "
               }
               return {
                 counts: message.hostCounts,
+                callers: message.hostCallers,
                 installed: message.installed,
                 firstAuthPolicyStacks: message.firstAuthPolicyStacks,
               };
@@ -2376,6 +2486,15 @@ async function rpc(
   if (!response.ok) {
     throw new Error(`${method}: ${JSON.stringify(response.error)}`);
   }
+  if (
+    method === "chat.send" &&
+    (!isRecord(params) ||
+      !isRecord(response.payload) ||
+      response.payload.status !== "started" ||
+      response.payload.runId !== params.idempotencyKey)
+  ) {
+    throw new Error("chat.send did not acknowledge the requested fresh turn");
+  }
   if (values["github-options-connected"] && method === "sessions.github.options") {
     validateDashboardRpc(method, response.payload);
     if (
@@ -2448,6 +2567,7 @@ function latencySummary(latenciesMs: number[]) {
     p50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1] ?? null,
     p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? null,
     p99Ms: sorted[Math.ceil(sorted.length * 0.99) - 1] ?? null,
+    maxMs: sorted.at(-1) ?? null,
     latenciesMs,
   };
 }
@@ -2815,6 +2935,77 @@ async function runRound(
     reject,
   };
   const current = cohort;
+  const activeInputs: {
+    sessionKey: string;
+    runId: string;
+    message: string;
+    terminal: Promise<string>;
+  }[] = [];
+  const createActiveInput = (sessionKey: string, message: string) => {
+    const runId = randomUUID();
+    const terminal = Promise.withResolvers<string>();
+    terminalChatInputs.set(runId, terminal.resolve);
+    const input = { sessionKey, runId, message, terminal: terminal.promise };
+    activeInputs.push(input);
+    return input;
+  };
+  const activeAckLatenciesMs: number[] = [];
+  let activeAcksBeforeRelease = 0;
+  let activeInputWork: Promise<void>[] = [];
+  if (chatActiveHoldMs) {
+    const beforeRelease = current.beforeRelease;
+    current.beforeRelease = async () => {
+      await beforeRelease?.();
+      // An older queued input must own custody before later steering attempts arrive.
+      await Promise.all(
+        roundKeys.map(async (sessionKey) => {
+          const input = createActiveInput(
+            sessionKey,
+            `Synthetic queued predecessor ${randomUUID()}.`,
+          );
+          const queued = Promise.withResolvers<void>();
+          queuedChatInputs.set(input.runId, queued.resolve);
+          try {
+            await rpc(client, "chat.send", {
+              sessionKey,
+              message: `/followup ${input.message}`,
+              idempotencyKey: input.runId,
+              queueMode: "followup",
+              deliver: false,
+            });
+            await Promise.race([queued.promise, current.ready]);
+          } finally {
+            queuedChatInputs.delete(input.runId);
+          }
+        }),
+      );
+      activeInputWork = roundKeys.flatMap((sessionKey) =>
+        Array.from({ length: 2 }, async () => {
+          const input = createActiveInput(
+            sessionKey,
+            `Synthetic active steering input ${randomUUID()}.`,
+          );
+          const started = performance.now();
+          await rpc(client, "chat.send", {
+            sessionKey,
+            message: input.message,
+            idempotencyKey: input.runId,
+            queueMode: "steer",
+            deliver: false,
+          });
+          activeAckLatenciesMs.push(performance.now() - started);
+          if (current.phases.streamsReleasedAtEpochMs === undefined) {
+            activeAcksBeforeRelease++;
+          }
+        }),
+      );
+      for (const work of activeInputWork) {
+        void work.catch(current.reject);
+      }
+      // Release independently of ACKs: a blocked baseline reports the held-turn delay.
+      await delay(chatActiveHoldMs);
+    };
+  }
   // Include the first response processing after the mock releases the whole cohort.
   const captureWork =
     profilePath || heapProfilePath || finishAdmissionDiagnostics
@@ -2895,6 +3086,19 @@ async function runRound(
             message,
             deliver: false,
             idempotencyKey: runId,
+            ...(chatAttachmentContent
+              ? {
+                  attachments: [
+                    {
+                      type: "file",
+                      mimeType: "text/plain",
+                      fileName: "synthetic-attachment.txt",
+                      origin: "paste",
+                      content: chatAttachmentContent,
+                    },
+                  ],
+                }
+              : {}),
             ...(image
               ? {
                   attachments: [
@@ -2927,12 +3131,91 @@ async function runRound(
       ? finishStressSubagent(client, subagentWork)
       : undefined;
     await Promise.all([cohortReady, captureWork, turns, subagentCompletion]);
+    if (chatActiveHoldMs) {
+      await Promise.all(activeInputWork);
+      // agent.wait reports queued custody immediately; wait for each public terminal event first.
+      const terminalDeadline = Promise.withResolvers<never>();
+      const terminalTimeout = setTimeout(
+        () => terminalDeadline.reject(new Error("active inputs did not complete within 170s")),
+        170_000,
+      );
+      try {
+        await Promise.race([
+          Promise.all(
+            activeInputs.map(async (input) => {
+              const state = await input.terminal;
+              if (state !== "final") {
+                throw new Error(`active input terminated with ${state}`);
+              }
+            }),
+          ),
+          terminalDeadline.promise,
+        ]);
+      } finally {
+        clearTimeout(terminalTimeout);
+      }
+      await Promise.all(
+        activeInputs.map(async ({ runId }) => {
+          const result = await rpc(client, "agent.wait", { runId, timeoutMs: 170_000 });
+          if (!isRecord(result) || result.status !== "ok") {
+            throw new Error(`active input did not settle successfully: ${JSON.stringify(result)}`);
+          }
+        }),
+      );
+      for (const sessionKey of roundKeys) {
+        const inputs = activeInputs.filter((input) => input.sessionKey === sessionKey);
+        const history = await rpc(client, "chat.history", {
+          sessionKey,
+          limit: 100,
+          inputRunIds: inputs.map((input) => input.runId),
+        });
+        if (
+          !isRecord(history) ||
+          !Array.isArray(history.messages) ||
+          !Array.isArray(history.inputReceipts)
+        ) {
+          throw new Error("active input history or custody receipts are missing");
+        }
+        for (const input of inputs) {
+          const messages = history.messages.filter(
+            (message: unknown) =>
+              isRecord(message) &&
+              message.role === "user" &&
+              isRecord(message["__openclaw"]) &&
+              message["__openclaw"].idempotencyKey === `${input.runId}:user` &&
+              contentText(message.content).includes(input.message),
+          );
+          const receipts = history.inputReceipts.filter(
+            (receipt: unknown) => isRecord(receipt) && receipt.runId === input.runId,
+          );
+          // Standalone promotion removes its pending row; only collected inputs retain receipts.
+          if (messages.length !== 1 || receipts.length !== 0) {
+            throw new Error(
+              `active input was not consumed exactly once: ${JSON.stringify({
+                runId: input.runId,
+                matchingMessages: messages.length,
+                receipts,
+              })}`,
+            );
+          }
+        }
+      }
+    }
     const subagent = await subagentCompletion;
     if (soakScenario) {
       completedSoakRounds++;
     }
     return {
       phases: current.phases,
+      ...(chatActiveHoldMs
+        ? {
+            activeChatSendAck: {
+              ...latencySummary(activeAckLatenciesMs),
+              acknowledgedBeforeRelease: activeAcksBeforeRelease,
+              consumedExactlyOnce: activeInputs.length,
+            },
+          }
+        : {}),
       turnLatencyMs: summarizeLatencies(turnLatencies),
       providerRequestMs: summarizeLatencies(
         [...current.turns.values()].flatMap((turn) => turn.providerRequestMs ?? []),
@@ -2947,6 +3230,9 @@ async function runRound(
       ...capture,
     };
   } finally {
+    for (const input of activeInputs) {
+      terminalChatInputs.delete(input.runId);
+    }
     if (stressSubagent) {
       stressSubagent.cancelled = true;
       stressSubagent.releaseChild();
@@ -3184,6 +3470,24 @@ async function connectClient(index: number) {
       }
       const payload = isRecord(event.payload) ? event.payload : undefined;
       if (
+        index === 0 &&
+        event.event === "chat" &&
+        typeof payload?.runId === "string" &&
+        typeof payload.state === "string" &&
+        ["final", "error", "aborted"].includes(payload.state)
+      ) {
+        terminalChatInputs.get(payload.runId)?.(payload.state);
+      }
+      if (
+        index === 0 &&
+        event.event === "chat" &&
+        typeof payload?.runId === "string" &&
+        isRecord(payload.message) &&
+        contentText(payload.message.content).includes("Your message is queued for a new turn")
+      ) {
+        queuedChatInputs.get(payload.runId)?.();
+      }
+      if (
         event.event === "agent" &&
         payload?.stream === "lifecycle" &&
         isRecord(payload.data) &&
@@ -3416,6 +3720,12 @@ try {
   for (let index = 0; index < clientCount; index++) {
     const client = await connectClient(index);
     if (index === 0) {
+      // Operator-created roots parent to main; a missing root suppresses ancestor envelopes.
+      await rpc(client, "sessions.create", {
+        key: "agent:main:main",
+        visibility: "shared",
+        displayName: "Synthetic broadcast root",
+      });
       if (!historyTurns) {
         const created = await rpc(client, "sessions.create", {
           key: parentKey,
@@ -3567,7 +3877,7 @@ try {
       validateDashboardRpc(method, await rpc(sender, method, params));
     }
   }
-  if (reloadPluginId) {
+  if (reloadPluginId || scopePluginId) {
     writeFileSync(
       path.join(output, "plugin-inventory.json"),
       JSON.stringify(await rpc(sender, "plugins.list", {}), null, 2),
@@ -3723,6 +4033,32 @@ try {
             } else if (scenario === "sessions.patch") {
               const params = sessionPatchParams(index, patchSequences[index]!++);
               assertSessionPatch(params, await rpc(workerClient, "sessions.patch", params));
+            } else if (scenario === "sessions.cleanup") {
+              const result = await rpc(workerClient, "sessions.cleanup", { agent: "main" });
+              if (
+                !isRecord(result) ||
+                result.agentId !== "main" ||
+                result.mode !== "warn" ||
+                result.dryRun !== false ||
+                result.applied !== true ||
+                result.wouldMutate !== false ||
+                typeof result.beforeCount !== "number" ||
+                result.beforeCount <= 0 ||
+                result.afterCount !== result.beforeCount
+              ) {
+                throw new Error("sessions.cleanup did not preserve the warning-mode fixture");
+              }
+            } else if (scenario === "plugin.scope") {
+              const sequence = offset + index;
+              const result = await rpc(workerClient, "benchmark.pluginScope", { sequence });
+              if (
+                !isRecord(result) ||
+                result.pluginId !== scopePluginId ||
+                result.sequence !== sequence ||
+                result.scopeVerified !== true
+              ) {
+                throw new Error("synthetic plugin RPC did not preserve its invocation scope");
+              }
             } else {
               const result = await rpc(workerClient, "plugins.reload", {
                 plugins: [{ pluginId: reloadPluginId }],
@@ -3735,6 +4071,9 @@ try {
           }
         }),
       );
+      if (rpcIntervalMs && offset + batchCount < operationCount) {
+        await delay(Math.max(0, batchStarted + rpcIntervalMs - performance.now()));
+      }
       if (scenario === "reconnect") {
         const startSpreadMs = Math.max(...reconnectStarted) - Math.min(...reconnectStarted);
         if (startSpreadMs > 5000) {
@@ -3809,10 +4148,20 @@ try {
   }
   const measurementStartedAt = Date.now();
   const measuredGateway = gateway;
+  const wholeChatDiagnosticsEnabled =
+    scenario === "chat.send" &&
+    values.diagnostics &&
+    !values.allocations &&
+    !values["cpu-profile"] &&
+    !values["workload-cpu-profile"] &&
+    !values["stream-start-allocations"];
   const finishWholeWorkloadDiagnostics =
-    (soakScenario || scenario === "plugins.reload") &&
+    (soakScenario || scenario === "plugins.reload" || wholeChatDiagnosticsEnabled) &&
     (values.diagnostics || values.allocations || values["trace-gc"])
-      ? await startGatewayDiagnostics(gateway, soakScenario ? "whole-soak" : "whole-reload")
+      ? await startGatewayDiagnostics(
+          gateway,
+          soakScenario ? "whole-soak" : scenario === "chat.send" ? "whole-chat" : "whole-reload",
+        )
       : undefined;
   const samples = [];
   const memorySamples: Array<{
@@ -3946,7 +4295,7 @@ try {
     recapPhase = undefined;
     activeWorkCounts = undefined;
     const finishGatewayDiagnostics =
-      values.diagnostics || values["transport-counts"]
+      values.diagnostics || values["transport-counts"] || values["session-projection-counts"]
         ? await startGatewayDiagnostics(gateway)
         : undefined;
     const finishControllerDiagnostics = values.diagnostics
@@ -4250,6 +4599,12 @@ try {
     if (values["broadcast-timing"] && !broadcastTimings?.length) {
       throw new Error("Broadcast timing observed no calls in the measured window");
     }
+    const projectionCounts = diagnostics?.gateway.groups.filter(
+      (group) => group.channel === "openclaw.benchmark.session-projection",
+    );
+    if (values["session-projection-counts"] && !projectionCounts?.length) {
+      throw new Error("Session projection counts observed no publications in the measured window");
+    }
     assertGatewayAlive();
     if (clients.some((client) => client.ws.readyState !== client.ws.OPEN)) {
       throw new Error("a subscriber was lost during the measured round");
@@ -4390,6 +4745,39 @@ try {
         ? { allocatedMbPerTurn: allocation.estimatedAllocatedBytesPerOperation / 1_000_000 }
         : {}),
       diagnostics,
+      ...(values["session-projection-counts"]
+        ? {
+            sessionProjectionCounts: Object.fromEntries(
+              (projectionCounts ?? []).map((group) => {
+                const publications = group.metrics.publications?.total ?? 0;
+                const audienceCacheMisses = group.metrics.audienceCacheMisses?.total ?? 0;
+                const payloadCacheMisses = group.metrics.payloadCacheMisses?.total ?? 0;
+                const projectedRecipients = group.metrics.projectedRecipients?.total ?? 0;
+                const wirePayloads = group.metrics.wirePayloads?.total ?? 0;
+                return [
+                  group.operation,
+                  {
+                    publications,
+                    audienceCacheMisses,
+                    payloadCacheMisses,
+                    projectedRecipients,
+                    wirePayloads,
+                    audienceCacheMissesPerPublication: publications
+                      ? audienceCacheMisses / publications
+                      : null,
+                    payloadCacheMissesPerPublication: publications
+                      ? payloadCacheMisses / publications
+                      : null,
+                    projectedRecipientsPerPublication: publications
+                      ? projectedRecipients / publications
+                      : null,
+                    wirePayloadsPerPublication: publications ? wirePayloads / publications : null,
+                  },
+                ];
+              }),
+            ),
+          }
+        : {}),
       ...(values["broadcast-timing"]
         ? {
             broadcastLatencyMs: Object.fromEntries(
@@ -4657,8 +5045,9 @@ try {
   }
   let cronRuns;
   if (stressCronJobId) {
-    await rpc(sender, "cron.update", { id: stressCronJobId, patch: { enabled: false } });
+    // Snapshot completed runs before disabling can cancel an in-flight scheduled turn.
     const history = await rpc(sender, "cron.runs", { id: stressCronJobId, limit: 200 });
+    await rpc(sender, "cron.update", { id: stressCronJobId, patch: { enabled: false } });
     if (
       !isRecord(history) ||
       !Array.isArray(history.entries) ||
@@ -4730,6 +5119,10 @@ try {
   }
   // Process exit plus drained log streams makes promotion accounting independent of pipe buffering.
   await cleanup();
+  const wholeChatGc =
+    wholeChatDiagnosticsEnabled && wholeWorkloadDiagnostics && values["trace-gc"]
+      ? readGatewayGcTrace(path.join(output, "gateway.stdout.log"), "whole-chat", "diagnostics")
+      : undefined;
   let wholeSoakGc;
   if (soakScenario && wholeWorkloadDiagnostics && (values.allocations || values["trace-gc"])) {
     const trace = readGatewayGcTrace(
@@ -4760,6 +5153,7 @@ try {
     sessionResets,
     warmupOperations: turnScenario ? undefined : warmupOperations,
     rpcConcurrency,
+    rpcIntervalMs,
     reconnectStaggerMs,
     rpcLatencyScope:
       "client request-to-response; handler and queue timings are in Gateway diagnostics",
@@ -4851,6 +5245,8 @@ try {
     pollSeed: values["poll-seed"] ?? null,
     diagnostics: values.diagnostics,
     broadcastTiming: values["broadcast-timing"],
+    workerAttribution: process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1",
+    sessionProjectionCounts: values["session-projection-counts"],
     sessionProjectionSource,
     transportCounts: values["transport-counts"],
     compressed: proxyViewers,
@@ -4864,7 +5260,18 @@ try {
     streamStartAllocations: values["stream-start-allocations"],
     activeWorkDiagnostics: values["active-work-diagnostics"],
     measurementStartedAt,
+    ...(env.OPENCLAW_PERF_MEDIA_IO || env.OPENCLAW_PERF_FSYNC_DELAY_MS
+      ? {
+          fsyncProbe: {
+            mediaIo: env.OPENCLAW_PERF_MEDIA_IO === "1",
+            delayMs: Number(env.OPENCLAW_PERF_FSYNC_DELAY_MS ?? 0),
+          },
+        }
+      : {}),
     ...(scenario === "plugins.reload" ? { wholeReloadDiagnostics: wholeWorkloadDiagnostics } : {}),
+    ...(wholeChatDiagnosticsEnabled
+      ? { wholeChatDiagnostics: wholeWorkloadDiagnostics, wholeChatGc }
+      : {}),
     initialFullFrame,
     clientCount,
     exactClients,
@@ -4872,6 +5279,37 @@ try {
     recapBurstRepeats,
     recapBurstIntervalMs,
     runCount,
+    ...(scenario === "chat.send" && !values["session-event-wake"]
+      ? {
+          chatSendAck: latencySummary(
+            samples.flatMap((sample) => sample.rpc["chat.send"]?.latenciesMs ?? []),
+          ),
+          chatAttachmentBytes,
+          ...(chatActiveHoldMs
+            ? {
+                chatActiveHoldMs,
+                activeChatSendAck: {
+                  ...latencySummary(
+                    samples.flatMap(
+                      (sample) => sample.streamStart?.activeChatSendAck?.latenciesMs ?? [],
+                    ),
+                  ),
+                  acknowledgedBeforeRelease: samples.reduce(
+                    (sum, sample) =>
+                      sum + (sample.streamStart?.activeChatSendAck?.acknowledgedBeforeRelease ?? 0),
+                    0,
+                  ),
+                  consumedExactlyOnce: samples.reduce(
+                    (sum, sample) =>
+                      sum + (sample.streamStart?.activeChatSendAck?.consumedExactlyOnce ?? 0),
+                    0,
+                  ),
+                },
+              }
+            : {}),
+        }
+      : {}),
+    ...(scenario === "sessions.cleanup" ? { sessionMaintenanceMode: "warn" } : {}),
     chunks: chunkCount,
     chunkIntervalMs,
     peakStreams,

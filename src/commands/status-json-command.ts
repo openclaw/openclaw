@@ -2,6 +2,7 @@ import { describeDatabaseEngineSelection } from "../infra/database-engine/report
 import { readUpdateRunStatus } from "../infra/update-run-status.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
+import { collectRecoveryDiskUsage } from "./recovery-disk-usage.js";
 import {
   buildGatewayStatusJsonPayload,
   resolveStatusUpdateChannelInfo,
@@ -104,6 +105,9 @@ export async function runStatusJsonCommand(params: {
   const databaseFamilies = describeDatabaseEngineSelection(surface.cfg, databaseEngines.stores);
   const payload = {
     ...scan.summary,
+    recoveryCopies:
+      scan.recoveryCopies ??
+      collectRecoveryDiskUsage({ cfg: scan.cfg, env: scan.env ?? process.env }),
     os: scan.osSummary,
     update: surface.update,
     updateChannel: channelInfo.channel,

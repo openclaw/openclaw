@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionMembersListEvidenceResult } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import { createPaneHeaderWorkspaceFixture } from "./chat-pane.test-support.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
@@ -16,34 +17,16 @@ import {
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-it.each([
-  { key: "agent:main:current", agentId: "main" },
-  { key: "global", agentId: "research" },
-])("updates the $key Public badge when another client changes sharing", async (target) => {
-  const row: GatewaySessionRow = {
-    ...target,
-    sessionId: "session-current",
-    kind: "direct",
-    visibility: "draft",
-    sharingRole: "owner",
-  };
-  const evidence = (token?: string): SessionMembersListEvidenceResult => ({
-    sessionKey: row.key,
-    members: [],
-    identities: [],
-    role: "owner",
-    allowedVisibilities: ["shared", "draft"],
-    ...(token ? { publicShare: { token, createdAt: 1 } } : {}),
-  });
+async function mountSharingHeader(
+  row: GatewaySessionRow,
+  read: () => Promise<SessionMembersListEvidenceResult>,
+) {
   const mounted = createMountedPanes([row], row.agentId, undefined, {
     "sessions.list": () => sessionsResult([row], 1),
   });
   const client = mounted.context.gateway.snapshot.client!;
   const originalRequest = client.request.bind(client);
-  let published = false;
-  const sharingRead = vi.fn(async () =>
-    evidence(published ? "synthetic-public-locator" : undefined),
-  );
+  const sharingRead = vi.fn(read);
   const request = vi
     .spyOn(client, "request")
     .mockImplementation(async (method, params, options) =>
@@ -80,6 +63,33 @@ it.each([
     await Promise.all(request.mock.results.map((result) => result.value));
     draw();
   };
+  return { mounted, sharingRead, request, container, draw, settle };
+}
+
+it.each([
+  { key: "agent:main:current", agentId: "main" },
+  { key: "global", agentId: "research" },
+])("updates the $key Public badge when another client changes sharing", async (target) => {
+  const row: GatewaySessionRow = {
+    ...target,
+    sessionId: "session-current",
+    kind: "direct",
+    visibility: "draft",
+    sharingRole: "owner",
+  };
+  const evidence = (token?: string): SessionMembersListEvidenceResult => ({
+    sessionKey: row.key,
+    members: [],
+    identities: [],
+    role: "owner",
+    allowedVisibilities: ["shared", "draft"],
+    ...(token ? { publicShare: { token, createdAt: 1 } } : {}),
+  });
+  let published = false;
+  const { mounted, sharingRead, container, draw, settle } = await mountSharingHeader(
+    row,
+    async () => evidence(published ? "synthetic-public-locator" : undefined),
+  );
   const indicator = () =>
     container.querySelector(".chat-pane__sharing-trigger[data-public='true']");
   const changed = (key: string | null = row.key, agentId = row.agentId) => {
@@ -110,4 +120,60 @@ it.each([
   staleRead.resolve(evidence("synthetic-retired-locator"));
   await settle();
   expect(indicator()).toBeNull();
+});
+
+it("refreshes participation after profile and config changes and rejects an older reply", async () => {
+  const row: GatewaySessionRow = {
+    key: "agent:main:permissions",
+    agentId: "main",
+    sessionId: "permissions",
+    kind: "direct",
+    visibility: "read-only",
+    sharingRole: "owner",
+  };
+  const evidence = (level: "read" | "send", fixed = false): SessionMembersListEvidenceResult => ({
+    sessionKey: row.key,
+    members: [],
+    role: "owner",
+    owner: { id: "owner", type: "human", label: "Owner" },
+    identities: [{ id: "person", type: "human", label: "Pat" }],
+    permissions: [{ identityId: "person", level, options: fixed ? [level] : ["read", "send"] }],
+    allowedVisibilities: ["read-only"],
+  });
+  const { mounted, sharingRead, request, container, draw, settle } = await mountSharingHeader(
+    row,
+    async () => evidence("read"),
+  );
+  draw();
+  await settle();
+  container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")!.click();
+  await waitForSolid(() => expect(container.textContent).toContain("Can read"));
+  const readsAfterOpen = sharingRead.mock.calls.length;
+  sharingRead.mockResolvedValue(evidence("send", true));
+  mounted.emitGatewayEvent("sessions.changed", { reason: "profile-identity" });
+  draw();
+  await settle();
+  expect(container.querySelector('[data-value="member:person"]')?.textContent).toContain(
+    "Can send",
+  );
+  expect(container.querySelector('[data-value="permission:person"]')).toBeNull();
+
+  const old = createDeferred<SessionMembersListEvidenceResult>();
+  sharingRead.mockImplementationOnce(() => old.promise);
+  mounted.emitGatewayEvent("sessions.changed", { reason: "profile-identity" });
+  draw();
+  sharingRead.mockResolvedValue(evidence("read"));
+  mounted.emitGatewayEvent("config.changed", { reason: "config-reload" });
+  draw();
+  old.resolve(evidence("send", true));
+  await settle();
+  expect(container.querySelector('[data-value="permission:person"]')?.textContent).toContain(
+    "Can read",
+  );
+  expect(sharingRead).toHaveBeenCalledTimes(readsAfterOpen + 3);
+  expect(
+    request.mock.calls.some(
+      ([method]) => method === "session.members.add" || method === "session.members.remove",
+    ),
+  ).toBe(false);
 });

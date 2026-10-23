@@ -138,7 +138,6 @@ function prepareSessionEntryDeletionInDatabase(
           archiveTranscript: params.archiveTranscript,
           database,
           entry,
-          reason: "deleted",
           referencedSessionIds: referencedAfterDelete,
         }),
       )

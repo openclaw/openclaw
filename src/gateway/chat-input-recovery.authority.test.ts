@@ -186,10 +186,14 @@ it.for([
     const recover = deliveryRecovery.recoverSessionSendDeliveries;
     const recoverySpy = vi
       .spyOn(deliveryRecovery, "recoverSessionSendDeliveries")
-      .mockImplementation(async (...args) => {
+      .mockImplementation((...args) => {
         recoveryStarted.resolve();
-        await releaseRecovery.promise;
-        await recover(...args);
+        const recovery = releaseRecovery.promise.then(() => recover(...args));
+        return {
+          initial: recovery.then((progress) => progress.initial),
+          pending: new Map(),
+          settled: recovery.then((progress) => progress.settled),
+        };
       });
     try {
       const provider = buildMockOpenAiResponsesProvider(

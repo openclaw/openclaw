@@ -24,6 +24,9 @@ import {
   runAgentCoreStream,
 } from "./runtime-deps.js";
 import { createStreamSteering } from "./stream-steering.js";
+import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
+import type { FinalizedToolCallOutcome } from "./tool-call-outcome.js";
+import { resolveAgentAssistantTurnId } from "./tool-execution-context.js";
 import { normalizeCoreContextMessages } from "./turn-interruption.js";
 import { withToolResultContentSource } from "./turn-taint.js";
 import type {
@@ -56,10 +59,8 @@ export type ExecutedToolCallBatch = {
   fatal?: { error: unknown };
 };
 
-type AssistantMessageUpdateEvent = Extract<AssistantMessageEvent, { contentIndex: number }>;
-
 function resolveAssistantMessageUpdate(
-  event: AssistantMessageUpdateEvent,
+  event: Extract<AssistantMessageEvent, { contentIndex: number }>,
   currentMessage: AssistantMessage,
 ): AssistantMessage {
   if ("partial" in event && event.partial) {
@@ -95,6 +96,38 @@ function ensureToolTurnIdentity(message: AssistantMessage): AssistantMessage {
   }
   // message_end persists this local identity before any tool can execute.
   return { ...message, turnId: uuidv7() };
+}
+
+export function emitToolExecutionStart(
+  batch: { emit: AgentEventSink },
+  toolCall: AgentToolCall,
+  hideFromChannelProgress: boolean,
+): ReturnType<AgentEventSink> {
+  return batch.emit({
+    type: "tool_execution_start",
+    toolCallId: toolCall.id,
+    toolName: toolCall.name,
+    args: toolCall.arguments,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+  });
+}
+
+export async function emitToolExecutionEnd(
+  finalized: FinalizedToolCallOutcome,
+  batch: { emit: AgentEventSink; assistantMessage: AssistantMessage },
+): Promise<void> {
+  const assistantTurnId = resolveAgentAssistantTurnId(batch.assistantMessage);
+  await batch.emit({
+    type: "tool_execution_end",
+    toolCallId: finalized.toolCall.id,
+    ...(assistantTurnId ? { assistantTurnId } : {}),
+    toolName: finalized.toolCall.name,
+    result: finalized.result,
+    isError: finalized.isError,
+    executionStarted: finalized.executionStarted,
+    ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
+    ...(finalized.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
+  });
 }
 
 export async function emitToolResultMessage(
@@ -260,12 +293,13 @@ export async function streamAgentResponse(
         }
       })
       .catch((error: unknown) => {
-        executionFailure ??= { error };
+        executionFailure = mergeToolExecutionFailure(executionFailure, error);
         executionAbort.abort(error);
       })
       .finally(releaseAdmission);
     executions = Promise.all([previousExecutions, execution]).then(() => {});
   };
+  let responseFailure: ExecutedToolCallBatch["fatal"];
   try {
     const stream = streamFunction(config.model, llmContext, {
       ...config,
@@ -479,9 +513,37 @@ export async function streamAgentResponse(
       },
       runtime,
     );
+  } catch (error) {
+    responseFailure = { error };
+    throw error;
   } finally {
     executionAbort.abort(new Error("Model response closed"));
     await executions;
-    await steering.finish();
+    if (executionFailure) {
+      responseFailure = mergeToolExecutionFailure(responseFailure, executionFailure.error);
+    }
+    if (responseFailure) {
+      for (const batch of batches) {
+        if (batch.fatal) {
+          responseFailure = mergeToolExecutionFailure(responseFailure, batch.fatal.error);
+        }
+      }
+    }
+    try {
+      await steering.finish();
+    } catch (error) {
+      if (!responseFailure) {
+        for (const batch of batches) {
+          if (batch.fatal) {
+            responseFailure = mergeToolExecutionFailure(responseFailure, batch.fatal.error);
+          }
+        }
+      }
+      responseFailure = mergeToolExecutionFailure(responseFailure, error);
+    }
+    if (responseFailure) {
+      // oxlint-disable-next-line eslint/no-unsafe-finally -- Rethrow the primary and drained failures together.
+      throw responseFailure.error;
+    }
   }
 }

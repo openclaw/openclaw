@@ -1,5 +1,6 @@
 /** Validate guest JavaScript before execution. */
 import { Script } from "node:vm";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseCodeModeScriptSyntax } from "./code-mode-script-syntax.js";
 import { ToolInputError } from "./tool-input-error.js";
 
@@ -220,7 +221,7 @@ export function prepareSource(code: string): string {
   }
   if (!parsed.ok) {
     // Keep parser text bounded: some diagnostics include a user-sized identifier.
-    const message = parsed.message.slice(0, 240);
+    const message = truncateUtf16Safe(parsed.message, 240);
     throw new ToolInputError(
       `SyntaxError at openclaw-code-mode:user.js:${parsed.line}:${parsed.column + 1}: ${message}. No tools were dispatched; correct the JavaScript source and submit it again.`,
     );

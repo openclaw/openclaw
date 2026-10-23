@@ -11,7 +11,9 @@ import {
 } from "../auto-reply/reply/reply-tool-authority.test-support.js";
 import { prepareSteeringDelivery } from "../auto-reply/reply/steering-delivery-preparation.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { resolveRestartRecoveryTerminalDeliveryDisposition } from "../config/sessions/restart-recovery-receipt-state.js";
 import {
+  loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
@@ -35,6 +37,13 @@ afterEach(() => testing.resetSessionControllerForTest());
 
 it.each([
   "resolved defaults",
+  "retained predecessor",
+  "retained predecessor pending",
+  "retained predecessor without source",
+  "claim replaced before preparation",
+  "claim replaced before preparation without source",
+  "claim replaced after preparation",
+  "claim replaced after preparation without source",
   "unqualified profile pin",
   "legacy profile pin",
   "legacy automatic profile",
@@ -72,6 +81,15 @@ it.each([
       updatedAt: 1,
       permissionMode: "full",
     };
+    if (change.startsWith("retained predecessor") || change.startsWith("claim replaced")) {
+      Object.assign(entry, {
+        restartRecoveryDeliveryRunId: "unresolved-predecessor",
+        restartRecoveryDeliverySourceRunId: "unresolved-predecessor",
+        ...(change === "retained predecessor pending"
+          ? { restartRecoveryDeliveryReceiptState: "terminal-pending" as const }
+          : {}),
+      });
+    }
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
     await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
     const run = createQueueTestRun({ prompt: "original work", originatingChannel: "webchat" });
@@ -279,6 +297,17 @@ it.each([
             scopes: ["operator.read"],
           });
         }
+        if (change.startsWith("claim replaced before preparation")) {
+          currentEntry = {
+            ...entry,
+            restartRecoveryDeliveryRunId: "later-source",
+            restartRecoveryDeliverySourceRunId: "later-source",
+          };
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: key, storePath },
+            currentEntry,
+          );
+        }
         const {
           traceAuthorized: _trace,
           allowCollaborativeSteering: _collaboration,
@@ -298,6 +327,7 @@ it.each([
               storePath,
               sessionKey: key,
               sessionId: entry.sessionId,
+              sourceTurnId: change.endsWith("without source") ? undefined : "current-execution",
               entry: currentEntry,
               assertCurrent: assertSource,
             }),
@@ -315,6 +345,10 @@ it.each([
         });
         const allowed = [
           "resolved defaults",
+          "retained predecessor",
+          "retained predecessor without source",
+          "claim replaced after preparation",
+          "claim replaced after preparation without source",
           "legacy automatic profile",
           "automatic profile rotation",
           "caps-only",
@@ -356,6 +390,12 @@ it.each([
           if (change === "activity after preparation") {
             expect(updated?.updatedAt).toBeGreaterThan(entry.updatedAt);
           }
+        }
+        if (change.startsWith("claim replaced after preparation")) {
+          await patchSessionEntryCore({ agentId: "main", sessionKey: key, storePath }, () => ({
+            restartRecoveryDeliveryRunId: "later-source",
+            restartRecoveryDeliverySourceRunId: "later-source",
+          }));
         }
         if (change === "replaced backend") {
           operation.attachBackend({
@@ -400,7 +440,9 @@ it.each([
           });
           const outcome = await attempt.outcome;
           const rejected =
-            change === "replaced backend" || change === "saved settings after preparation";
+            change === "replaced backend" ||
+            change === "saved settings after preparation" ||
+            change.startsWith("claim replaced after preparation");
           expect(outcome.status).toBe(rejected ? "rejected" : "accepted");
           expect(delivered).toHaveBeenCalledTimes(rejected ? 0 : 1);
           expect(replacement).not.toHaveBeenCalled();
@@ -410,5 +452,18 @@ it.each([
         }
       },
     );
+    if (change === "retained predecessor") {
+      const retained = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+      expect(
+        resolveRestartRecoveryTerminalDeliveryDisposition(retained, {
+          sessionId: entry.sessionId,
+          sourceTurnId: "current-execution",
+        }),
+      ).toBe("stale");
+      expect(retained).toMatchObject({
+        restartRecoveryDeliveryRunId: "unresolved-predecessor",
+        restartRecoveryDeliverySourceRunId: "unresolved-predecessor",
+      });
+    }
   });
 });

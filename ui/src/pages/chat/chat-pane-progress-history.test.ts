@@ -156,9 +156,23 @@ it("hides the history owner's card only in this pane without rekeying the compos
   emit(f.card);
   await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
   expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(2);
-  f.dismiss();
-  await pane.updateComplete;
-  expect(pane.chatProps?.progressCard).toBeNull();
+  const displayed = expectDefined(pane.chatProps?.progressCard, "displayed progress card");
+  const dismiss = expectDefined(pane.chatProps?.onDismissProgressCard, "local hide action");
+  const target = { sessionKey: f.card.sessionKey };
+  const lifetime = progress.getLifetime(target);
+  expect(lifetime).toBeDefined();
+  dismiss({ ...displayed });
+  flush();
+  expect(pane.chatProps?.progressCard).toBe(displayed);
+
+  // A background read can replace the saved object before the rendered action runs.
+  f.card = { ...f.card };
+  f.emitEvent("progressCard.changed", { sessionKey: f.card.sessionKey, revision: null });
+  await progress.getReadCompletion(target);
+  expect(progress.get(target)).toBe(f.card);
+  expect(progress.getLifetime(target)).toBe(lifetime);
+  dismiss(displayed);
+  await vi.waitFor(() => expect(pane.chatProps?.progressCard).toBeNull());
   expect(progress.get({ sessionKey: f.card.sessionKey })).toEqual(f.card);
   expect(request.mock.calls.every(([method]) => method !== "progressCard.put")).toBe(true);
   expect(state.chatMessage).toBe("Retained draft");
@@ -169,6 +183,56 @@ it("hides the history owner's card only in this pane without rekeying the compos
   await pane.updateComplete;
   expect(pane.chatProps?.progressCard).toBeNull();
 });
+
+it.each(["revision", "card lifetime", "session incarnation"] as const)(
+  "ignores a captured hide action after a new %s",
+  async (replacement) => {
+    let currentHistory = history;
+    const f = createHistoryProgressPane(undefined, () => currentHistory);
+    const { pane, state, progress } = f;
+    await loadChatHistory(state, { deferBranches: true });
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
+    const displayed = expectDefined(pane.chatProps?.progressCard, "displayed progress card");
+    const dismiss = expectDefined(pane.chatProps?.onDismissProgressCard, "local hide action");
+    const target = { sessionKey: f.card.sessionKey };
+    const lifetime = progress.getLifetime(target);
+    expect(lifetime).toBeDefined();
+
+    if (replacement === "session incarnation") {
+      currentHistory = {
+        ...history,
+        sessionId: "replacement-notes",
+        sessionInfo: {
+          ...expectDefined(history.sessionInfo, "accepted history session"),
+          sessionId: "replacement-notes",
+        },
+      };
+      await loadChatHistory(state, { deferBranches: true });
+      expect(state.currentSessionId).toBe("replacement-notes");
+    } else {
+      f.card = replacement === "revision" ? progressCard(3) : { ...f.card };
+      if (replacement === "card lifetime") {
+        progress.invalidate(target);
+        await progress.load(target);
+      } else {
+        f.emitEvent("progressCard.changed", { sessionKey: f.card.sessionKey, revision: null });
+        await progress.getReadCompletion(target);
+      }
+    }
+    await pane.updateComplete;
+    expect(pane.chatProps?.progressCard).toBe(f.card);
+    if (replacement === "card lifetime") {
+      expect(progress.getLifetime(target)).toBeDefined();
+      expect(progress.getLifetime(target)).not.toBe(lifetime);
+    } else {
+      expect(progress.getLifetime(target)).toBe(lifetime);
+    }
+    dismiss(displayed);
+    flush();
+    expect(pane.chatProps?.progressCard).toBe(f.card);
+    expect(progress.get(target)).toBe(f.card);
+  },
+);
 
 it("hides progress and its loading slot without clearing saved progress, then restores updates", async () => {
   const f = createHistoryProgressPane();
@@ -270,6 +334,7 @@ it.each([
   };
   onTestFinished(() => swarmPane.swarm.hydrator?.dispose());
   swarmPane.refreshSwarmRoster();
+  await vi.dynamicImportSettled();
   expect(request).not.toHaveBeenCalled();
   await loadChatHistory(state, { deferBranches: true });
   swarmPane.refreshSwarmRoster();

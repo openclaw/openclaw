@@ -463,10 +463,11 @@ describe("Model setup account connections", () => {
   const labelFor = (operation: "connect" | "setup") =>
     operation === "connect" ? "Radius account" : "Setup-only account";
   const modalTitle = (page: ParentNode) => page.querySelector("h2")?.textContent?.trim();
-  const waiting = "Waiting for approval in your browser…";
-  const waitForSignIn = (page: ParentNode) =>
+  const waitForSignIn = (page: ParentNode, operation: "connect" | "setup") =>
     waitForFast(() =>
-      expect(page.querySelector(".wizard-step__sign-in")?.textContent).toContain(waiting),
+      expect(page.querySelector('.wizard-sign-in [role="status"]')?.textContent).toBe(
+        "Waiting for " + labelFor(operation) + "…",
+      ),
     );
 
   async function startSignIn(page: TestModelSetupPage, operation: "connect" | "setup") {
@@ -578,9 +579,11 @@ describe("Model setup account connections", () => {
       const { page } = await mountDetection(context, client, setup, false);
       const setupButton = authButton(page, "setup-only")!;
       await startSignIn(page, operation);
-      await waitForSignIn(page);
+      await waitForSignIn(page, operation);
       const modal = page.querySelector("openclaw-modal-dialog")!;
-      expect(modalTitle(modal)).toBe(labelFor(operation));
+      expect(modal.querySelector(".wizard-sign-in__lead")?.textContent).toContain(
+        labelFor(operation) + " is open in a new tab.",
+      );
       if (failed) {
         expect(modal.textContent).not.toContain(guidance);
         expect(modal.textContent).not.toContain(url);
@@ -596,7 +599,7 @@ describe("Model setup account connections", () => {
           ),
         );
         expect(modalTitle(modal)).toBe(labelFor(operation));
-        expect(modal.querySelector(".wizard-step__sign-in")).toBeNull();
+        expect(modal.querySelector(".wizard-sign-in")).toBeNull();
         const alert = modal.querySelector("[role=alert]")!;
         expect(alert.textContent).toContain(guidance);
         expect(alert.textContent).toContain(url);

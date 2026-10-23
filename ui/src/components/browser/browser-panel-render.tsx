@@ -1,18 +1,19 @@
 import { createMemo } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { Match, onSettled, Switch } from "solid-js";
+import { For, Match, onSettled, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createTabFocus } from "../../lib/tabs.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { LinkFaviconFetcher } from "../../pages/chat/link-favicon-cache.ts";
+import { PanelTabStrip } from "../panel-tab-strip-solid.tsx";
 import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import type { BrowserPanel } from "./browser-panel-owner.ts";
-import { BrowserPanelTabs } from "./browser-panel-tabs.tsx";
+import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
 import { BrowserToolbar } from "./browser-panel-toolbar.tsx";
 import "../../styles/session-panel-rail.css";
 
@@ -70,22 +71,18 @@ function AnnotateBar(props: ControllerProps) {
   return (
     <div class="bp-annotatebar">
       <span class="bp-annotatebar__hint">{t("browser.annotateHint")}</span>
-      <button
-        class="bp-btn"
-        type="button"
-        disabled={props.controller.strokes.length === 0}
-        onClick={() => props.controller.input.undoStroke()}
-      >
-        {t("browser.annotateUndo")}
-      </button>
-      <button
-        class="bp-btn"
-        type="button"
-        disabled={props.controller.strokes.length === 0}
-        onClick={() => props.controller.input.clearStrokes()}
-      >
-        {t("browser.annotateClear")}
-      </button>
+      <For each={["undoStroke", "clearStrokes"] as const}>
+        {(action) => (
+          <button
+            class="bp-btn"
+            type="button"
+            disabled={props.controller.strokes.length === 0}
+            onClick={() => props.controller.input[action]()}
+          >
+            {t(action === "undoStroke" ? "browser.annotateUndo" : "browser.annotateClear")}
+          </button>
+        )}
+      </For>
       <button
         class="bp-btn"
         type="button"
@@ -358,6 +355,38 @@ export function BrowserPanelChrome(
       !props.controller.host.fixedTab &&
       (!props.embedded || (!props.tabsInHeader && props.controller.tabs.length > 0)),
   );
+  function BrowserTabs() {
+    const sourceTabs = createMemo(() => props.controller.tabs);
+    const tabs = createMemo(() =>
+      browserPanelHostedTabs(sourceTabs(), document).map((tab, index) => ({
+        id: tab.id,
+        domId: `${panelId}-tab-${tab.id}`,
+        label: tab.label,
+        title: `${t(sourceTabs()[index]?.kind === "native" ? "browser.nativeTab" : "browser.remoteTab")}: ${tab.url}`,
+        icon: tab.favicon ? (
+          <img class="tabstrip-tab__favicon" src={tab.favicon} alt="" />
+        ) : (
+          tab.icon
+        ),
+        closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
+      })),
+    );
+    return (
+      <PanelTabStrip
+        focusOwner={tabFocus}
+        tabs={tabs()}
+        activeId={props.controller.activeTargetId}
+        ariaControls={panelId}
+        onSelect={(id) => void props.controller.selectTab(id)}
+        onClose={(id) => props.controller.closeTab(id)}
+        onNew={() => props.controller.beginNewTab()}
+        newLabel={t("browser.newTab")}
+        newTabAction
+        newControl={props.embedded ? null : undefined}
+      />
+    );
+  }
+
   // Keep a usable page visible when an action fails. Only an empty desktop
   // viewport replaces its placeholder with the owner's actual failure.
   const emptyError = () =>
@@ -380,16 +409,7 @@ export function BrowserPanelChrome(
       {!props.embedded ? props.resizer : null}
       {rendersTabStrip() ? (
         <header class="rail-header bp-header">
-          <BrowserPanelTabs
-            focusOwner={tabFocus}
-            panelId={panelId}
-            tabs={props.controller.tabs}
-            activeTargetId={props.controller.activeTargetId}
-            onSelect={(id) => void props.controller.selectTab(id)}
-            onClose={(id) => props.controller.closeTab(id)}
-            onNew={() => props.controller.beginNewTab()}
-            hideNewControl={props.embedded}
-          />
+          <BrowserTabs />
           {!props.embedded ? (
             <HeaderActions
               controller={props.controller}

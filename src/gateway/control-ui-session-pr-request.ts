@@ -1,3 +1,4 @@
+import { recordSessionPrDiagnostic } from "./control-ui-session-pr-diagnostics.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 
 export type SessionPullRequestReadCredential = {
@@ -108,25 +109,29 @@ export function prepareSessionPullRequestGitHubRead(
       );
       const requestSignal =
         sourceSignals.length > 1 ? AbortSignal.any(sourceSignals) : sourceSignals[0];
-      const readJson = async (token: string | undefined) =>
-        gitHubPublicApi.readGitHubJsonResponse(
-          await gitHubPublicApi.fetchGitHubApi(
-            url,
-            fetchRequest,
-            token,
-            beforeRedirect,
-            identity,
-            undefined,
-            requestSignal,
-            undefined,
-            selected.apiBaseUrl,
-          ),
-          maxBytes,
+      const readJson = async (token: string | undefined) => {
+        recordSessionPrDiagnostic("github-fetch-started");
+        const response = await gitHubPublicApi.fetchGitHubApi(
+          url,
+          fetchRequest,
+          token,
+          beforeRedirect,
+          identity,
+          undefined,
+          requestSignal,
+          undefined,
+          selected.apiBaseUrl,
         );
+        recordSessionPrDiagnostic("github-fetch-returned");
+        const value = await gitHubPublicApi.readGitHubJsonResponse(response, maxBytes);
+        recordSessionPrDiagnostic("github-json-returned");
+        return value;
+      };
       const value = optionalAuth
         ? await gitHubPublicApi.withOptionalGitHubAuth(selected.token, readJson)
         : await readJson(selected.token);
       assertCurrent();
+      recordSessionPrDiagnostic("github-request-returned");
       return value;
     },
   };

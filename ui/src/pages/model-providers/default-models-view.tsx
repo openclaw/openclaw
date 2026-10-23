@@ -25,7 +25,7 @@ import { describeModelProviderAuth } from "../../lib/model-provider-auth-label.t
 import { formatCompletionRoute, type CompletionRoute } from "../../lib/model-runtime-label.ts";
 import { modelSettingFallbacks, modelSettingPrimary } from "../../lib/model-setting.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ModelProviderRowMessage } from "./config-mutation.ts";
+import type { ModelDefaultsSaveField, ModelProviderRowMessage } from "./config-mutation.ts";
 import type { ModelProviderCatalogReceipt } from "./core-load.ts";
 import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
 import { renderMutationMessage } from "./view-status.tsx";
@@ -51,6 +51,7 @@ export type DefaultModelsViewProps = {
   mutationBlockedReason: string | null;
   busy: Record<string, boolean>;
   defaultsSaving?: boolean;
+  defaultsSavingField?: ModelDefaultsSaveField | null;
   message?: ModelProviderRowMessage;
   onPrimaryChange: (model: string) => void;
   onFallbackChange: (model: string | null) => void;
@@ -134,14 +135,19 @@ function BehaviorSetting<Value extends string>(props: {
   onChange: (value: Value) => void;
   onReset: () => void;
 }) {
+  const saving = () =>
+    props.view.defaultsSavingField === props.field &&
+    (props.view.defaultsSaving || Boolean(props.view.busy.defaults));
   const control = (
     <SettingsSegmented<Value | "">
       value={props.value}
       ariaLabel={t(`quickSettings.model.${props.field}`)}
       options={[{ value: "" as const, label: t("quickSettings.model.default") }, ...props.options]}
       disabled={
-        props.view.defaultsSaving || Boolean(props.view.busy.defaults) || !props.view.canMutate
+        !props.view.canMutate ||
+        ((props.view.defaultsSaving || Boolean(props.view.busy.defaults)) && !saving())
       }
+      saving={saving()}
       onChange={(value) => (value === "" ? props.onReset() : props.onChange(value))}
       onReselect={(value) => {
         if (value === "" && props.overridden) {

@@ -6,13 +6,13 @@ import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { createSessionState } from "../sessions/session-capability.ts";
 import { agentCreationRejection } from "./creation.test-support.ts";
 import {
   buildToolsEffectiveRequestKey,
   createAgentCapability,
   readToolsEffective,
 } from "./index.ts";
-import type { AgentsState } from "./index.ts";
 import { setDefaultAgent } from "./mutations.ts";
 
 type AgentsConfigCapability = Parameters<typeof setDefaultAgent>[0];
@@ -44,32 +44,9 @@ function createGatewayHarness(client: GatewayBrowserClient) {
   };
 }
 
-function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
-  const request = vi.fn<TestRequest>();
-  const state: AgentsState = {
-    client: {
-      request,
-    } as unknown as AgentsState["client"],
-    connected: true,
-    requestGeneration: 0,
-    agentsLoading: false,
-    agentsError: null,
-    agentsList: null,
-    agentsSelectedId: "main",
-    sessions: {
-      state: {
-        result: null,
-        agentId: null,
-        modelOverrides: {},
-        loading: false,
-        error: null,
-        deletedSessions: [],
-        groups: [],
-        groupSettings: [],
-        sectionOrder: [],
-      },
-    },
-    sessionKey: "main",
+function createToolsState(): Parameters<typeof buildToolsEffectiveRequestKey>[0] {
+  return {
+    sessions: { state: createSessionState() },
     sessionsResult: {
       ts: 0,
       path: "",
@@ -86,38 +63,24 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<T
       ],
     },
     chatModelCatalog: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
-    agentsPanel: "overview",
   };
-  return { state, request };
 }
 
-function createSaveState(): {
-  state: AgentsState;
-  config: AgentsConfigCapability & {
-    state: {
-      configFormDirty: boolean;
-      configForm: Record<string, unknown>;
-      configFormOriginal: Record<string, unknown>;
-    };
-  };
-  request: ReturnType<typeof vi.fn<TestRequest>>;
-} {
-  const { state, request } = createState();
-  const configState = {
+function createSaveState() {
+  const state: {
+    configFormDirty: boolean;
+    configForm: Record<string, unknown>;
+    configFormOriginal: Record<string, unknown>;
+  } = {
     configFormDirty: true,
     configForm: { agents: { entries: { main: {} } } },
     configFormOriginal: { agents: { entries: { main: {} } } },
   };
-  const config = {
-    state: configState,
-    save: vi.fn(async () => true),
-    stageDefaultAgent: vi.fn(() => false),
-  } satisfies AgentsConfigCapability;
   return {
     state,
-    config,
-    request,
-  };
+    save: vi.fn<AgentsConfigCapability["save"]>(async () => true),
+    stageDefaultAgent: vi.fn<AgentsConfigCapability["stageDefaultAgent"]>(() => false),
+  } satisfies AgentsConfigCapability;
 }
 
 describe("createAgentCapability lifecycle", () => {
@@ -435,7 +398,7 @@ describe("readToolsEffective", () => {
 
 describe("buildToolsEffectiveRequestKey", () => {
   it("uses the catalog provider when the active session reports a stale provider", async () => {
-    const { state } = createState();
+    const state = createToolsState();
     const sessionsResult = state.sessionsResult!;
     state.sessionsResult = {
       ts: sessionsResult.ts,
@@ -459,7 +422,7 @@ describe("buildToolsEffectiveRequestKey", () => {
   });
 
   it("preserves already-qualified session models when the active session provider is stale and the catalog is empty", async () => {
-    const { state } = createState();
+    const state = createToolsState();
     const sessionsResult = state.sessionsResult!;
     state.sessionsResult = {
       ts: sessionsResult.ts,
@@ -485,7 +448,7 @@ describe("buildToolsEffectiveRequestKey", () => {
 
 describe("setDefaultAgent", () => {
   it("stages the default agent and persists a clean draft", async () => {
-    const { config } = createSaveState();
+    const config = createSaveState();
     const refreshAgents = vi.fn(async () => null);
     config.state.configForm = { agents: { entries: { main: {}, kimi: {} } } };
     config.state.configFormOriginal = { agents: { entries: { main: {}, kimi: {} } } };
@@ -502,7 +465,7 @@ describe("setDefaultAgent", () => {
   });
 
   it("does not persist when the agent is absent from the config list", async () => {
-    const { config } = createSaveState();
+    const config = createSaveState();
     const refreshAgents = vi.fn(async () => null);
     config.state.configForm = { agents: { entries: { main: {} } } };
     vi.mocked(config.stageDefaultAgent).mockReturnValue(false);
@@ -515,7 +478,7 @@ describe("setDefaultAgent", () => {
   });
 
   it("does not persist unrelated dirty agent config drafts", async () => {
-    const { config } = createSaveState();
+    const config = createSaveState();
     const refreshAgents = vi.fn(async () => null);
     config.state.configFormDirty = true;
     config.state.configFormOriginal = { agents: { entries: { main: {}, kimi: {} } } };
@@ -558,7 +521,7 @@ describe("setDefaultAgent", () => {
   });
 
   it("keeps the shared agent cache unchanged when saving fails", async () => {
-    const { config } = createSaveState();
+    const config = createSaveState();
     const refreshAgents = vi.fn(async () => null);
     config.state.configFormDirty = false;
     vi.mocked(config.stageDefaultAgent).mockImplementation(() => {
@@ -573,7 +536,7 @@ describe("setDefaultAgent", () => {
   });
 
   it("passes the originating action guard through the queued config save", async () => {
-    const { config } = createSaveState();
+    const config = createSaveState();
     const refreshAgents = vi.fn(async () => null);
     let canDispatch = true;
     config.state.configFormDirty = false;
@@ -594,27 +557,30 @@ describe("setDefaultAgent", () => {
 });
 
 describe("agent creation", () => {
-  it("reports a failed creation without publishing a roster row", async () => {
-    const roster = { defaultId: "main", agents: [{ id: "main", name: "Molty" }] };
-    const request = vi
-      .fn<TestRequest>()
-      .mockResolvedValueOnce(roster)
-      .mockRejectedValueOnce(agentCreationRejection("Provider rejected credentials"))
-      .mockResolvedValueOnce({ exists: true, valid: true, sourceConfig: {} });
-    const agents = createAgentCapability(
-      createGatewayHarness({ request } as unknown as GatewayBrowserClient).gateway,
-    );
-    await agents.ensureList();
-    await expect(agents.create("New agent")).rejects.toThrow("Provider rejected credentials");
-    expect(request).toHaveBeenCalledWith("agents.create", {
-      agentId: expect.stringMatching(/^bot-/),
-      name: "New agent",
-      onboarding: true,
-    });
-    expect(agents.state.agentsList).toEqual(roster);
-    expect(agents.state.pendingAgent).toBeUndefined();
-    agents.dispose();
-  });
+  it.each(["Provider rejected credentials", "Workspace could not be created"])(
+    "reports a failed creation and removes only its pending row: %s",
+    async (message) => {
+      const roster = { defaultId: "main", agents: [{ id: "main", name: "Molty" }] };
+      const request = vi
+        .fn<TestRequest>()
+        .mockResolvedValueOnce(roster)
+        .mockRejectedValueOnce(agentCreationRejection(message))
+        .mockResolvedValueOnce({ exists: true, valid: true, sourceConfig: {} });
+      const agents = createAgentCapability(
+        createGatewayHarness({ request } as unknown as GatewayBrowserClient).gateway,
+      );
+      await agents.ensureList();
+      await expect(agents.create("New agent")).rejects.toThrow(message);
+      expect(request).toHaveBeenCalledWith("agents.create", {
+        agentId: expect.stringMatching(/^bot-/),
+        name: "New agent",
+        onboarding: true,
+      });
+      expect(agents.state.agentsList).toEqual(roster);
+      expect(agents.state.pendingAgent).toBeUndefined();
+      agents.dispose();
+    },
+  );
 
   it("shows a pending agent immediately and publishes the verified receipt without another roster read", async () => {
     const creation = deferred<unknown>();
@@ -707,23 +673,6 @@ describe("agent creation", () => {
     await expect(agents.ensureList()).resolves.toEqual(currentRoster);
     expect(agents.state.agentsList?.agents.map((agent) => agent.id)).toEqual(["main", pending.id]);
     expect(agents.state.agentsError).toBeNull();
-    agents.dispose();
-  });
-
-  it("removes the pending row when creation fails without removing existing agents", async () => {
-    const roster = { defaultId: "main", agents: [{ id: "main", name: "Molty" }] };
-    const request = vi
-      .fn<TestRequest>()
-      .mockResolvedValueOnce(roster)
-      .mockRejectedValueOnce(agentCreationRejection("Workspace could not be created"))
-      .mockResolvedValueOnce({ exists: true, valid: true, sourceConfig: {} });
-    const agents = createAgentCapability(
-      createGatewayHarness({ request } as unknown as GatewayBrowserClient).gateway,
-    );
-    await agents.ensureList();
-    await expect(agents.create("New agent")).rejects.toThrow("Workspace could not be created");
-    expect(agents.state.pendingAgent).toBeUndefined();
-    expect(agents.state.agentsList).toEqual(roster);
     agents.dispose();
   });
 

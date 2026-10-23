@@ -581,8 +581,6 @@ export async function maybeRepairCodexSessionRoutes(params: {
     });
     return {
       scannedStores: targets.length,
-      repairedStores: 0,
-      repairedSessions: 0,
       warnings: [
         ...warnings,
         ...(stale.length > 0
@@ -643,8 +641,6 @@ export async function maybeRepairCodexSessionRoutes(params: {
   const repairedScope = `${repairedSessions} session${repairedSessions === 1 ? "" : "s"} across ${repairedStores} store${repairedStores === 1 ? "" : "s"}`;
   return {
     scannedStores: targets.length,
-    repairedStores,
-    repairedSessions,
     warnings,
     changes:
       repairedSessions > 0

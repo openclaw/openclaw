@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -26,6 +27,7 @@ async function focusModelSearch(container: HTMLElement) {
 }
 
 it("keeps one mounted model view live without depending on draft revisions", async () => {
+  installModelPickerLayout();
   const model = { id: "gpt-5.5", name: "GPT 5.5", provider: "openai", reasoning: true };
   const models = [model, { ...model, id: "fixture-alternative", name: "Alternative" }];
   const alternate = "openai/fixture-alternative";
@@ -187,12 +189,20 @@ it("keeps CLI targets and a typed search live while initial model metadata is pe
       ],
     });
     await waitForSolid(() =>
-      expect(container.querySelector('[data-chat-model-option="example/extra"]')).not.toBeNull(),
+      expect(
+        control.renderProps({ agent, agentId: "main", context: state.context, sending: false })
+          .modelCatalog,
+      ).toEqual(expect.arrayContaining([expect.objectContaining({ id: "extra" })])),
     );
     expect(container.querySelector("[data-chat-model-search]")).toBe(input);
     expect(document.activeElement).toBe(input);
     expect(input.value).toBe("Fixture CLI");
     expect(target()?.hidden).toBe(false);
+    input.value = "";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await waitForSolid(() =>
+      expect(container.querySelector('[data-chat-model-option="example/extra"]')).not.toBeNull(),
+    );
   } finally {
     control.reset();
   }

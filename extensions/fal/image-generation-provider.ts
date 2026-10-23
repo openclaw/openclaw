@@ -126,7 +126,6 @@ const FAL_IMAGE_MALFORMED_RESPONSE = "fal image generation response malformed";
 const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
 
 type FalImageSize = string | { width: number; height: number };
-type FalEditEndpointSuffix = "edit" | "image-to-image";
 type FalImageModelSchema = {
   geometry: "image_size" | "native_aspect_ratio";
   aspectRatios?: readonly string[];
@@ -136,7 +135,7 @@ type FalImageModelSchema = {
   maxInputImages: number;
   referenceLimitLabel: string;
   referenceLimitNoun: "reference image" | "style reference";
-  appendEditPath: false | FalEditEndpointSuffix;
+  appendEditPath: false | "edit" | "image-to-image";
   supportsCount: boolean;
   supportsOutputFormat: boolean;
 };

@@ -769,7 +769,6 @@ describe("abortChatRunsForProvider", () => {
     const result = abortChatRunsForProvider(ops, {
       cfg: { agents: { entries: { main: {}, writer: {} } } },
       providerId: "openrouter",
-      stopReason: "auth-revoked",
     });
 
     expect(updated).toBe(true);
@@ -799,7 +798,6 @@ describe("abortChatRunsForProvider", () => {
       cfg: { agents: { entries: { main: {}, writer: {} } } },
       providerId: "openrouter",
       agentId: "writer",
-      stopReason: "auth-revoked",
     });
 
     expect(result.runIds).toEqual(["run-writer"]);

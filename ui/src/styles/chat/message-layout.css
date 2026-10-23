@@ -438,8 +438,7 @@
 
 @media (hover: none), (pointer: coarse) {
   .chat-image-actions--overlay {
-    opacity: 1;
-    pointer-events: auto;
+    display: none;
   }
 }
 

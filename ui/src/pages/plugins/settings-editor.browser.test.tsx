@@ -678,7 +678,7 @@ describe("plugin map layout", () => {
       expect(editor.scrollWidth).toBeLessThanOrEqual(editor.clientWidth);
       editor
         .querySelector<HTMLButtonElement>(
-          '[data-setting="populated"] button[aria-label="Remove entry"]',
+          '[data-setting="populated"] button[aria-label="Remove entry: first"]',
         )!
         .click();
       expect(model.onConfigPatch).toHaveBeenCalledExactlyOnceWith(

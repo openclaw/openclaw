@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "./test-helpers/temp-dir.js";
 import { withEnv } from "./test-utils/env.js";
 import {
   VERSION,
   readBuildIdFromBuildInfoForModuleUrl,
+  readBuildProvenanceForModuleUrl,
   readVersionFromBuildInfoForModuleUrl,
   resolveCompatibilityHostVersion,
   readVersionFromPackageJsonForModuleUrl,
@@ -53,6 +54,36 @@ describe("version resolution", () => {
       "build-info.json": { buildId: "x".repeat(96) },
     });
     expect(readBuildIdFromBuildInfoForModuleUrl(moduleUrl)).toBe("x".repeat(96));
+    // Provenance names the file that actually supplied the ID, not the first candidate found.
+    expect(readBuildProvenanceForModuleUrl(moduleUrl)).toEqual({
+      buildId: "x".repeat(96),
+      buildInfoPath: await fs.realpath(fileURLToPath(new URL("../../build-info.json", moduleUrl))),
+    });
+  });
+
+  it("captures the build record beside the build id", async () => {
+    const moduleUrl = await versionFixture({
+      "build-info.json": {
+        version: "2026.10.22",
+        commit: "a".repeat(40),
+        builtAt: "2026-10-22T00:00:00.000Z",
+        buildId: "explicit-ui-build",
+      },
+    });
+    expect(readBuildProvenanceForModuleUrl(moduleUrl)).toEqual({
+      buildId: "explicit-ui-build",
+      version: "2026.10.22",
+      commit: "a".repeat(40),
+      builtAt: "2026-10-22T00:00:00.000Z",
+      buildInfoPath: await fs.realpath(fileURLToPath(new URL("../../build-info.json", moduleUrl))),
+    });
+  });
+
+  it("has no build provenance without a usable build id", async () => {
+    const missing = await versionFixture({ "package.json": { name: "openclaw", version: "1" } });
+    const empty = await versionFixture({ "build-info.json": { version: "1", buildId: " " } });
+    expect(readBuildProvenanceForModuleUrl(missing)).toBeNull();
+    expect(readBuildProvenanceForModuleUrl(empty)).toBeNull();
   });
 
   it("captures the runtime commit from startup provenance once", async () => {

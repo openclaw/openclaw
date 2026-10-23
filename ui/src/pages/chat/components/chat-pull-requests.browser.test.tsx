@@ -350,7 +350,7 @@ it.each([
     );
     const host = container.querySelector("openclaw-chat-details-session")!;
     await host.updateComplete;
-    await waitForSolid(() => expect(container.querySelector(".chat-pr")).not.toBeNull());
+    await waitForSolid(() => expect(container.querySelector("a.chat-pr__link")).not.toBeNull());
     const group = container.querySelector<HTMLDetailsElement>(
       '[data-details-group="pull-requests"]',
     )!;

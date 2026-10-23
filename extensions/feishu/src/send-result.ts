@@ -7,14 +7,6 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { FeishuSendResult } from "./types.js";
 
-type FeishuMessageApiResponse = {
-  code?: number;
-  msg?: string;
-  data?: {
-    message_id?: string;
-  };
-};
-
 export function resolveFeishuReceiptKind(msgType?: string): MessageReceiptPartKind {
   switch (msgType) {
     case "audio":
@@ -59,7 +51,13 @@ function createFeishuSendReceipt(params: {
 }
 
 export function toFeishuSendResult(
-  response: FeishuMessageApiResponse,
+  response: {
+    code?: number;
+    msg?: string;
+    data?: {
+      message_id?: string;
+    };
+  },
   chatId: string,
   kind?: MessageReceiptPartKind,
   errorPrefix = "Feishu send failed",

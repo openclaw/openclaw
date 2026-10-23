@@ -46,7 +46,7 @@ const options = {
 function result(stdout = "", code = 0): SpawnResult {
   return { stdout, stderr: "", code, signal: null, killed: false, termination: "exit" };
 }
-async function run() {
+async function run(timeout = String(options.timeoutMs / 1000)) {
   const program = new Command().exitOverride();
   registerCrabboxModelRunCommand({ program, config: options.config });
   await program.parseAsync(
@@ -60,13 +60,14 @@ async function run() {
       "--model",
       options.model,
       "--timeout",
-      String(options.timeoutMs / 1000),
+      timeout,
       "--",
       ...options.argv,
     ],
     { from: "user" },
   );
 }
+
 function nativeResult(output: SpawnResult) {
   mocks.run.mockResolvedValueOnce(result(capabilityHelp)).mockResolvedValueOnce(output);
 }
@@ -75,6 +76,18 @@ beforeEach(() => {
   mocks.version.mockReset().mockResolvedValue(result(CRABBOX_MIN_VERSION));
   mocks.withEgress.mockReset().mockImplementation(async (_options, invoke) => await invoke(egress));
 });
+
+it.each(["0x10", "1e3", "0b101", "0o17"])(
+  "rejects non-decimal timeout %s before external calls",
+  async (timeout) => {
+    await expect(run(timeout)).rejects.toThrow(
+      "--timeout must be an integer between 1 and 86400 seconds",
+    );
+    expect(mocks.version).not.toHaveBeenCalled();
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(mocks.withEgress).not.toHaveBeenCalled();
+  },
+);
 
 it("upgrades an outdated executable before capability and credential use", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("crabbox-model-managed-"));

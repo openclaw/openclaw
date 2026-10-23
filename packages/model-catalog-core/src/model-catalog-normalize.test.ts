@@ -321,3 +321,36 @@ it("rejects invalid ownership rather than downgrading to default agent scope", (
     ]),
   ).toThrow("credential ownership");
 });
+
+it("gives rows the provider family unless the row declares its own, dropping malformed values", () => {
+  const providers = normalize(
+    {
+      providers: {
+        OpenAI: {
+          family: " OpenAI ",
+          models: [{ id: "gpt-5.4" }, { id: "oss-120b", family: "Meta" }, { id: "bad", family: 7 }],
+        },
+        Router: { family: "open ai", models: [{ id: "x", family: "a".repeat(65) }] },
+      },
+    },
+    ["openai", "router"],
+  )?.providers;
+  expect(providers?.openai?.family).toBe("openai");
+  expect(providers?.router).toEqual({ models: [{ id: "x" }] });
+
+  const familyOf = (catalog: ModelCatalogProvider | undefined) =>
+    Object.fromEntries(
+      normalizeModelCatalogProviderRows({
+        provider: "openai",
+        providerCatalog: catalog ?? { models: [] },
+        source: "manifest",
+      }).map((row) => [row.id, row.family]),
+    );
+  expect(familyOf(providers?.openai)).toEqual({
+    "gpt-5.4": "openai",
+    "oss-120b": "meta",
+    bad: "openai",
+  });
+  // A provider without a declaration leaves undeclared rows unknown.
+  expect(familyOf(providers?.router)).toEqual({ x: undefined });
+});

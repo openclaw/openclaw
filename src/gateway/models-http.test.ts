@@ -87,6 +87,23 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     });
   });
 
+  it.each([
+    ["openclaw:main", "openclaw/main"],
+    ["agent:main", "openclaw/main"],
+    ["OpenClaw%2FMain", "openclaw/main"],
+    ["OPENCLAW", "openclaw"],
+    ["OpenClaw%2FDefault", "openclaw/default"],
+  ])("resolves accepted alias %s to listed model %s", async (pathId, listedId) => {
+    const res = await getModels(`/v1/models/${pathId}`);
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ id: listedId, object: "model" });
+  });
+
+  it("keeps unknown agents behind aliases out of the roster", async () => {
+    const res = await getModels("/v1/models/openclaw:nonexistent");
+    expect(res.status).toBe(404);
+  });
+
   it("keeps generic aliases available for ownerless explicit fleets", async () => {
     try {
       testState.agentsConfig = {

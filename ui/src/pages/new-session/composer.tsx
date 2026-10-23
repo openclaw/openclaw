@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, onSettled, Show, useContext } from "solid-js";
+import { createEffect, createMemo, lazy, onSettled, Show, useContext } from "solid-js";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
@@ -11,7 +11,7 @@ import {
   type LobsterComposerElements,
 } from "../../components/lobster-pet-contract.ts";
 import { createBackgroundLayoutRef } from "../../components/session-background-layout-context.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { createSidebarRendererLoader } from "../../components/sidebar-renderer-loader.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../lib/browser-platform.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
@@ -58,6 +58,7 @@ import {
   NewSessionDraftVisibility,
   NewSessionPlusMenu,
   NewSessionSelectionStatus,
+  StartControl,
 } from "./composer-capability-controls.tsx";
 import { createComposerPlaceholder } from "./composer-placeholder.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
@@ -86,7 +87,7 @@ export type NewSessionComposerOptions = {
   requiresModifier: boolean;
   onChange: () => void;
   submitDisabledReason?: string;
-  blockedSubmitNotice?: string;
+  onBlockedSubmit?: () => void;
   dictationActive?: boolean;
   dictationPreview?: string;
   dictationStatus?: JSX.Element;
@@ -191,8 +192,7 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
       event.preventDefault();
       return;
     }
-    // A reasoned gate still consumes the press: the submission flow records the
-    // attempt and surfaces the reason instead of silently inserting a newline.
+    // A reasoned gate consumes the press and reveals its explanation.
     // Only silent gates (busy button, empty draft) keep Enter native.
     if (options.canSubmit || options.submitDisabledReason !== undefined) {
       event.preventDefault();
@@ -331,46 +331,30 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
   };
 }
 
-function StartControl(props: { options: NewSessionComposerOptions }) {
-  const textarea = useContext(NewSessionComposerTextareaContext);
-  const label = () =>
-    props.options.submitting
-      ? t("newSession.starting")
-      : t(props.options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
-  const reasonedBlock = () =>
-    !props.options.canSubmit && props.options.submitDisabledReason !== undefined;
-  const busy = () =>
-    props.options.submitting || props.options.attachmentDraft.reads.pendingReads > 0;
-  return (
-    <openclaw-tooltip content={props.options.submitDisabledReason ?? label()}>
-      <button
-        type="button"
-        class={[
-          "chat-send-btn new-session-page__start-submit",
-          {
-            "new-session-page__start-submit--blocked": reasonedBlock(),
-            "new-session-page__start-submit--busy": busy(),
-          },
-        ]}
-        disabled={!props.options.canSubmit && !reasonedBlock()}
-        aria-disabled={props.options.canSubmit ? "false" : "true"}
-        aria-busy={busy() ? "true" : "false"}
-        aria-label={label()}
-        onClick={() => submitNewSession(props.options, textarea)}
-      >
-        <Icon
-          name={busy() ? "loader" : props.options.nativeTerminal ? "squareTerminal" : "arrowUp"}
-        />
-      </button>
-    </openclaw-tooltip>
-  );
-}
+// Only the first visit waits for idle; later composers reuse the loaded pet.
+const idleAdmission = Promise.withResolvers<void>();
+const LobsterPet = lazy(
+  async () => {
+    await idleAdmission.promise;
+    return import("../../components/lobster-pet.tsx");
+  },
+  { export: "LobsterPet" },
+);
 
 export function NewSessionComposer(props: {
   options: NewSessionComposerOptions;
   surroundings?: () => Pick<LobsterComposerElements, "root" | "obstacles"> | undefined;
 }) {
   const textarea = useContext(NewSessionComposerTextareaContext);
+  const petLoader = createSidebarRendererLoader(async () => {
+    idleAdmission.resolve();
+    await LobsterPet.preload();
+  });
+  const PetBoundary = petLoader.Boundary;
+  onSettled(() => {
+    petLoader.schedule();
+    return petLoader.dispose;
+  });
   const footerControl = createFooterControlRef();
   const inputHandle = createChatAttachmentInputHandle();
   const backgroundLayoutRef = createBackgroundLayoutRef("composer");
@@ -466,36 +450,38 @@ export function NewSessionComposer(props: {
           options().onChange();
         }}
       >
-        <openclaw-lobster-pet
-          prop:composerElements={composerElements}
-          prop:seed={lobsterPetSeed(`${textarea.critterVisit}:${options().draftOwnerKey}`)}
-          prop:mode={resolveLobsterPetMode(
-            !options().context?.gateway.snapshot.offlineStable,
-            options().context?.sessions.state.result?.sessions,
-          )}
-          prop:runOutcome={resolveLobsterRunOutcome(
-            options().context?.sessions.state.result?.sessions,
-          )}
-          prop:visitsEnabled={options().context?.theme.settings.lobsterPetVisits !== false}
-          prop:residentEnabled={options().context?.theme.branding.mascot !== "none"}
-          prop:critters={options().context?.theme.branding.critters}
-          prop:critterArtwork={options().context?.theme.branding.artwork?.critters}
-          prop:soundsEnabled={options().context?.theme.settings.lobsterPetSounds === true}
-          prop:gatewayVersion={
-            options().context?.config.current.serverVersion ??
-            options().context?.gateway.snapshot.hello?.server?.version ??
-            null
-          }
-          prop:onVisitsDisabled={() => options().context?.theme.refresh()}
-          prop:floorEnabled={
-            !frame().composerLocked &&
-            frame().visibleMessage.length === 0 &&
-            options().attachmentDraft.attachments.length === 0 &&
-            options().attachmentDraft.reads.pendingReads === 0 &&
-            !frame().menuVisible &&
-            !textarea.capabilityMenuOpen
-          }
-        />
+        <PetBoundary>
+          <LobsterPet
+            composerElements={composerElements}
+            seed={lobsterPetSeed(`${textarea.critterVisit}:${options().draftOwnerKey}`)}
+            mode={resolveLobsterPetMode(
+              !options().context?.gateway.snapshot.offlineStable,
+              options().context?.sessions.state.result?.sessions,
+            )}
+            runOutcome={resolveLobsterRunOutcome(
+              options().context?.sessions.state.result?.sessions,
+            )}
+            visitsEnabled={options().context?.theme.settings.lobsterPetVisits !== false}
+            residentEnabled={options().context?.theme.branding.mascot !== "none"}
+            critters={options().context?.theme.branding.critters}
+            critterArtwork={options().context?.theme.branding.artwork?.critters}
+            soundsEnabled={options().context?.theme.settings.lobsterPetSounds === true}
+            gatewayVersion={
+              options().context?.config.current.serverVersion ??
+              options().context?.gateway.snapshot.hello?.server?.version ??
+              null
+            }
+            onVisitsDisabled={() => options().context?.theme.refresh()}
+            floorEnabled={
+              !frame().composerLocked &&
+              frame().visibleMessage.length === 0 &&
+              options().attachmentDraft.attachments.length === 0 &&
+              options().attachmentDraft.reads.pendingReads === 0 &&
+              !frame().menuVisible &&
+              !textarea.capabilityMenuOpen
+            }
+          />
+        </PetBoundary>
         <HumanMentionMenuView args={[textarea.mentionMenu, frame().mentionMenuHost]} />
         <EmojiMenu args={[textarea.emojiMenu, "new-session", textarea.getTextarea()]} />
         <Show when={!options().nativeTerminal}>
@@ -686,26 +672,15 @@ export function NewSessionComposer(props: {
             >
               {options().voiceControl}
               <Show when={!options().dictationActive}>
-                <StartControl options={options()} />
+                <StartControl
+                  options={options()}
+                  onSubmit={() => submitNewSession(options(), textarea)}
+                />
               </Show>
             </div>
           </div>
         </div>
       </div>
-      <Show when={options().blockedSubmitNotice}>
-        <div
-          class="new-session-page__blocked-submit agent-chat__composer-status"
-          data-tone="info"
-          role="status"
-        >
-          <div class="agent-chat__composer-status-band">
-            <span class="agent-chat__composer-status-icon" aria-hidden="true">
-              <Icon name="info" />
-            </span>
-            <span class="agent-chat__composer-status-text">{options().blockedSubmitNotice}</span>
-          </div>
-        </div>
-      </Show>
     </div>
   );
 }

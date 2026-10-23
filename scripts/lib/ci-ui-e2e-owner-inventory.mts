@@ -682,7 +682,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     [
       ...chatTranscriptOwnerRoots,
       "ui/src/pages/chat/sidebar-layout.ts",
-      "ui/src/pages/question/question-page-registration.ts",
+      "ui/src/pages/question/question-page.tsx",
     ],
   ),
   pageWatch("ui/src/e2e/chat-prepared-identity.e2e.test.ts", ["chat"]),

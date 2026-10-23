@@ -13,25 +13,6 @@ type AgentSelectionGateway = {
   subscribe: (listener: (snapshot: AgentSelectionGateway["snapshot"]) => void) => () => void;
 };
 
-type AgentSelectionPersistence = {
-  load: (gatewayUrl: string) => string | null;
-  save: (gatewayUrl: string, selectedAgentId: string | null) => void;
-};
-
-type AgentSelectionRoster = {
-  readonly state: { agentsList: AgentsListResult | null };
-  subscribe: (listener: () => void) => () => void;
-};
-
-type AgentSelectionPreferences = {
-  readonly settings: Pick<
-    UiPreferences,
-    "gatewayUrl" | "sidebarAgentsMode" | "sidebarPreTeamScope"
-  >;
-  patch: (patch: Pick<UiPreferences, "sidebarPreTeamScope">) => void;
-  subscribe: (listener: () => void) => () => void;
-};
-
 type AgentSelectionState = {
   selectedId: string | null;
   /** Agent filter shared by agent-owned pages; null exposes all agents. */
@@ -66,9 +47,22 @@ export function selectApplicationSession(params: {
 
 export function createAgentSelectionCapability(
   gateway: AgentSelectionGateway,
-  roster: AgentSelectionRoster,
-  persistence?: AgentSelectionPersistence,
-  preferences?: AgentSelectionPreferences,
+  roster: {
+    readonly state: { agentsList: AgentsListResult | null };
+    subscribe: (listener: () => void) => () => void;
+  },
+  persistence?: {
+    load: (gatewayUrl: string) => string | null;
+    save: (gatewayUrl: string, selectedAgentId: string | null) => void;
+  },
+  preferences?: {
+    readonly settings: Pick<
+      UiPreferences,
+      "gatewayUrl" | "sidebarAgentsMode" | "sidebarPreTeamScope"
+    >;
+    patch: (patch: Pick<UiPreferences, "sidebarPreTeamScope">) => void;
+    subscribe: (listener: () => void) => () => void;
+  },
   options: { requireConfiguredAgent?: boolean } = {},
 ) {
   const reconcileSelectedId = (value: string | null): string | null => {

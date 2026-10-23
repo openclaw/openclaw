@@ -40,7 +40,6 @@ function createReadApi(runs = new Map<string, SubagentRunRecord>()) {
   return createSubagentRegistryPublicApi({
     runs,
     restoreOnce: unexpectedMutation,
-    startAnnounceCleanup: unexpectedMutation,
     settleRequesterTurn: unexpectedMutation,
     markRequesterYielded: unexpectedMutation,
   });

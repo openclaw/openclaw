@@ -67,6 +67,16 @@ credentials, and model preparation finish; rebuilding its transcript projections
 does not hold agent admission or another agent's preparation. Shutdown still joins
 accepted repair work, and repair failures are logged without withdrawing admission.
 
+When `agents.defaults.authInheritance.agentId` names an owner whose PostgreSQL
+database is still preparing, admitted agents start with their own credentials.
+Inherited credentials become available automatically when the owner's admission
+completes. Failed owner inspections remain visible and do not use this pending
+fallback. The Gateway stays running during preparation. After initial recovery,
+admitted agents can chat while a different agent's store is still preparing.
+Each pending agent remains gated until its saved inputs have been replayed into
+the ordered session queue. Its inherited credentials and fresh-chat admission
+become available through the existing preparation completion signal.
+
 Health and status collection groups fast session-store reads into short work
 slices, keeping busy background preparation from delaying every individual read.
 Slow reads finish their transaction before yielding to other Gateway work.
@@ -129,11 +139,18 @@ probes: they still wait for initialization and retain their normal authenticatio
 
 `/startupz` returns `503` with `status: "starting"` while startup sidecars or agent database inspection/preparation are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. After sidecars settle, pending inspection for any agent, including an optional agent, reports `pendingReason: "agent-database-inspection"`. This lets `openclaw update` candidate verification wait within its startup budget before checking readiness. A settled inspection failure does not keep startup pending; readiness and per-agent admission report the failure.
 
-Startup completion lets saved-input recovery run. Until that recovery releases
-fresh `chat.send` admission, `/readyz` returns `503` with
-`failing: ["chat-recovery"]`, and `coreReady` stays false. Gateway ready
-announcements wait for the same admission gate. This preserves saved-input
-ordering without reporting readiness before the first chat can be accepted.
+Startup completion lets saved-input recovery run. Its initial pass holds fresh
+chat admission, with `/readyz` reporting `503` and `failing: ["chat-recovery"]`.
+After that pass, recovery gates each deferred agent independently. Detailed
+readiness responses list those agents in `agentRecovery`; a required agent keeps
+`coreReady` false with `failing: ["chat-recovery:<id>"]`, while an optional agent
+does not hold readiness. A pending agent's database refusal remains unchanged.
+After database admission, fresh input still waits for saved input to enter the
+session queue first. Cross-agent subagent recovery gates all agents in its
+requester/child group until that group's saved custody is restored.
+If recovery fails before that handoff, its affected gates stay closed and waiting
+callers receive the recovery error. The Gateway logs the failure; repair the
+underlying store or authority problem and restart to retry saved-input recovery.
 
 A default or system agent database with pending startup inspection/preparation or a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending`. The HTTP listener, Control UI, and admitted agents remain available while readiness is false; pending optional agents do not hold readiness. Readiness waits for saved-input and subagent recovery to release fresh-chat admission, but does not wait for transcript maintenance. Agent-scoped `sessions.list`, plus `sessions.resolve`, `sessions.describe`, and `models.list`, wait up to 20 seconds for their selected agents to finish startup preparation, then recheck request authorization before reading. Requests targeting healthy agents proceed independently. Unscoped session lists continue returning admitted agents while other stores prepare. Writes still require completed admission. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
 

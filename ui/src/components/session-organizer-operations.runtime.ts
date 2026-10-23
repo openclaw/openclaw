@@ -409,7 +409,6 @@ export async function assignSessionCategory(
   session: SessionActionRow,
   category: string | null,
   scope: SidebarSessionMutationScope,
-  patch: { pinned?: boolean } = {},
   options: { resolveSession?: () => SessionActionRow | null } = {},
 ): Promise<SidebarSessionMutationResult> {
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -429,17 +428,13 @@ export async function assignSessionCategory(
     });
     return "failed";
   }
-  if (
-    (currentSession.category ?? null) === category &&
-    patch.pinned === undefined &&
-    !needsGroupPromotion(currentSession)
-  ) {
+  if ((currentSession.category ?? null) === category && !needsGroupPromotion(currentSession)) {
     return "completed";
   }
   return patchSession(
     deps,
     currentSession,
-    { category, ...patch, ...(needsGroupPromotion(currentSession) ? { sidebarRoot: true } : {}) },
+    { category, ...(needsGroupPromotion(currentSession) ? { sidebarRoot: true } : {}) },
     scope,
   );
 }

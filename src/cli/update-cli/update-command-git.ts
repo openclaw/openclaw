@@ -291,6 +291,7 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
   devTarget?: DevUpdateTarget;
 }): Promise<{
   schemaVersions?: OpenClawSchemaVersions;
+  nodeEngine?: string | null;
   metadataUnreadable?: string;
   failureCode?: "target-git-cache-stale";
 }> {
@@ -345,9 +346,7 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
     timeoutMs: params.timeoutMs,
   });
   return target.status === "ok"
-    ? target.schemaVersions
-      ? { schemaVersions: target.schemaVersions }
-      : {}
+    ? { schemaVersions: target.schemaVersions, nodeEngine: target.nodeEngine }
     : {
         metadataUnreadable: target.reason,
         ...(target.reason.startsWith("git show ")

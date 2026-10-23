@@ -146,6 +146,8 @@ function ModelOptionButton(
         props.entry.provider,
       ).toLocaleLowerCase()}
       role="option"
+      aria-posinset={search?.row(key())?.position}
+      aria-setsize={search?.row(key())?.size}
       hidden={hidden()}
       aria-selected={props.presentation.selected ? "true" : "false"}
       title={props.presentation.accessibleStatus || undefined}
@@ -250,6 +252,8 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
       data-chat-model-name={props.entry.label.toLocaleLowerCase()}
       data-chat-model-provider-label={props.groupLabel.toLocaleLowerCase()}
       role="option"
+      aria-posinset={search?.row(key())?.position}
+      aria-setsize={search?.row(key())?.size}
       aria-selected="false"
       type="button"
       disabled={props.disabled}

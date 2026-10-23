@@ -138,36 +138,6 @@ async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise<Buffer
   }
 }
 
-async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): Promise<{
-  audioStream: ReadableStream<Uint8Array>;
-  release: () => Promise<void>;
-}> {
-  const { createBoundedProviderBinaryStream } =
-    await import("openclaw/plugin-sdk/provider-binary-stream");
-  const { assertProviderBinaryResponseContent } = await import("openclaw/plugin-sdk/provider-http");
-  const { response, release } = await requestElevenLabsTts(params, true);
-  try {
-    assertProviderBinaryResponseContent(response, "ElevenLabs API error", "audio");
-    if (!response.body) {
-      throw new Error("ElevenLabs API response missing audio stream");
-    }
-    const boundedStream = createBoundedProviderBinaryStream(response.body, {
-      maxBytes: MAX_AUDIO_BYTES,
-      createOverflowError: ({ maxBytes }) =>
-        new Error(`ElevenLabs API error: audio response exceeds ${maxBytes} bytes`),
-      createReleaseError: () => new Error("ElevenLabs TTS stream released"),
-      cleanup: release,
-    });
-    return {
-      audioStream: boundedStream.stream,
-      release: boundedStream.release,
-    };
-  } catch (error) {
-    await release();
-    throw error;
-  }
-}
-
 function normalizeElevenLabsTtsModelId(value: string | undefined): string | undefined {
   switch (value) {
     case "eleven_turbo_v2_5":
@@ -518,17 +488,36 @@ export function buildElevenLabsSpeechProvider({
     streamSynthesize: async (req) => {
       const overrides = req.providerOverrides ?? {};
       const outputPlan = resolveElevenLabsOutputPlan(req);
-      const stream = await elevenLabsTTSStream(
-        resolveElevenLabsTtsRequest(req, {
-          outputFormat: outputPlan.outputFormat,
-          latencyTier: normalizeElevenLabsLatencyTier(overrides.latencyTier),
-        }),
-      );
-      return {
-        audioStream: stream.audioStream,
-        ...outputPlan,
-        release: stream.release,
-      };
+      const params = resolveElevenLabsTtsRequest(req, {
+        outputFormat: outputPlan.outputFormat,
+        latencyTier: normalizeElevenLabsLatencyTier(overrides.latencyTier),
+      });
+      const { createBoundedProviderBinaryStream } =
+        await import("openclaw/plugin-sdk/provider-binary-stream");
+      const { assertProviderBinaryResponseContent } =
+        await import("openclaw/plugin-sdk/provider-http");
+      const { response, release } = await requestElevenLabsTts(params, true);
+      try {
+        assertProviderBinaryResponseContent(response, "ElevenLabs API error", "audio");
+        if (!response.body) {
+          throw new Error("ElevenLabs API response missing audio stream");
+        }
+        const boundedStream = createBoundedProviderBinaryStream(response.body, {
+          maxBytes: MAX_AUDIO_BYTES,
+          createOverflowError: ({ maxBytes }) =>
+            new Error(`ElevenLabs API error: audio response exceeds ${maxBytes} bytes`),
+          createReleaseError: () => new Error("ElevenLabs TTS stream released"),
+          cleanup: release,
+        });
+        return {
+          audioStream: boundedStream.stream,
+          ...outputPlan,
+          release: boundedStream.release,
+        };
+      } catch (error) {
+        await release();
+        throw error;
+      }
     },
     synthesizeTelephony: async (req) => {
       const outputFormat = "pcm_22050";

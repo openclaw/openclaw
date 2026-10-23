@@ -130,6 +130,16 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `context engine id reserved by core: ${normalizedId}`);
       return;
     }
+    if (
+      record.declaredContextEngineIds &&
+      !record.declaredContextEngineIds.includes(normalizedId)
+    ) {
+      reportRegistrationError(
+        record,
+        `context engine "${normalizedId}" is not declared in manifest contextEngineIds`,
+      );
+      return;
+    }
     getPluginInstance(record)?.admitFactory(factory);
     const result = registerContextEngineInRegistry(
       registry,
@@ -144,7 +154,9 @@ export function createPluginRegistrars(state: PluginRegistryState) {
     if (!result.ok) {
       reportRegistrationError(
         record,
-        `context engine already registered: ${normalizedId} (${result.existingOwner})`,
+        result.existingOwner === null
+          ? `context engine has no approved selected owner: ${normalizedId}`
+          : `context engine already registered: ${normalizedId} (${result.existingOwner})`,
       );
       return;
     }
@@ -201,11 +213,13 @@ export function createPluginRegistrars(state: PluginRegistryState) {
         capability.providerRuntime !== undefined ||
         capability.recallToolNames !== undefined ||
         capability.deterministicRecallToolName !== undefined ||
-        capability.supportsPrivateTranscriptRecall !== undefined);
+        capability.supportsPrivateTranscriptRecall !== undefined ||
+        capability.learnToolNames !== undefined ||
+        capability.learnGuidanceBuilder !== undefined);
     if (dropsSlotOwnerFacts) {
       reportRegistrationWarning(
         record,
-        "memory plugin not selected for the memory slot; skipping its indexing runtime and recall registration (consolidation lifecycle preserved)",
+        "memory plugin not selected for the memory slot; skipping its indexing runtime, recall and learn registration (consolidation lifecycle preserved)",
       );
     }
     const {
@@ -214,6 +228,8 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       recallToolNames: _droppedRecallToolNames,
       deterministicRecallToolName: _droppedRecallToolName,
       supportsPrivateTranscriptRecall: _droppedPrivateRecall,
+      learnToolNames: _droppedLearnToolNames,
+      learnGuidanceBuilder: _droppedLearnGuidanceBuilder,
       ...consolidationCapability
     } = capability;
     if (memorySlotSelected && capability.runtime) {

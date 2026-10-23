@@ -315,14 +315,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         selectSession: (key) => this.onPaneSessionChange?.(this.paneId, key),
       });
       const assignCategory = (category: string | null) =>
-        operations.assignSessionCategory(
-          host,
-          session,
-          category,
-          scope,
-          {},
-          { resolveSession: resolveCurrentSession },
-        );
+        operations.assignSessionCategory(host, session, category, scope, {
+          resolveSession: resolveCurrentSession,
+        });
       switch (action.kind) {
         case "rename": {
           const state = this.state;

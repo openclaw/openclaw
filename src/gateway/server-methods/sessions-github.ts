@@ -134,34 +134,34 @@ async function isSessionPublicationSuperseded(
   if (!client || !prOwner) {
     return false;
   }
-  const readTarget = createControlUiSessionPrRead({
-    client,
-    sessionKey: session.sessionKey,
-    agentId: session.agentId,
-    getRuntimeConfig: context.getRuntimeConfig,
-    getSessionRowProjection: () => getSessionRowProjection(context),
-    isCurrentClient: () => {
-      assertCurrent();
-      return true;
-    },
-  });
-  assertCurrent();
-  const target = await readTarget?.();
-  assertCurrent();
-  if (!target) {
-    return false;
-  }
-  const assertReadCurrent = () => {
+  return isGitHubPublicationSuperseded(snapshot, async () => {
+    const readTarget = createControlUiSessionPrRead({
+      client,
+      sessionKey: session.sessionKey,
+      agentId: session.agentId,
+      getRuntimeConfig: context.getRuntimeConfig,
+      getSessionRowProjection: () => getSessionRowProjection(context),
+      isCurrentClient: () => {
+        assertCurrent();
+        return true;
+      },
+    });
     assertCurrent();
-    target.assertCurrent?.();
-  };
-  const published = await prOwner.read(target, assertReadCurrent, "publication");
-  assertReadCurrent();
-  return published.status === "ready" && !published.rateLimited
-    ? isGitHubPublicationSuperseded(snapshot, published.pullRequests, {
-        assertCurrent: assertReadCurrent,
-      })
-    : false;
+    const target = await readTarget?.();
+    assertCurrent();
+    if (!target) {
+      return undefined;
+    }
+    const assertReadCurrent = () => {
+      assertCurrent();
+      target.assertCurrent?.();
+    };
+    const published = await prOwner.read(target, assertReadCurrent, "publication");
+    assertReadCurrent();
+    return published.status === "ready" && !published.rateLimited
+      ? { pullRequests: published.pullRequests, assertCurrent: assertReadCurrent }
+      : undefined;
+  });
 }
 
 export const sessionsGitHubHandlers: GatewayRequestHandlers = {

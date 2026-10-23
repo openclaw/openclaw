@@ -4,11 +4,13 @@ import { createComponent, createSignal, merge } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { switchChatModel } from "./chat-session.ts";
 import { ChatModelControls } from "./components/chat-model-controls.tsx";
+import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
 
 const codexChoice = {
   agentRuntime: { id: "codex", source: "model" },
@@ -34,6 +36,7 @@ async function renderControls(
   options: Pick<ModelControlsProps, "onModelSelect" | "onModelSetup" | "modelSelectionLocked"> = {},
   container = document.createElement("div"),
 ) {
+  installModelPickerLayout();
   const props: ModelControlsProps = {
     activeRunId: null,
     connected: true,
@@ -70,6 +73,7 @@ async function renderControls(
   await waitForSolid(() =>
     expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
   );
+  expandModelProviders(container);
   return container;
 }
 

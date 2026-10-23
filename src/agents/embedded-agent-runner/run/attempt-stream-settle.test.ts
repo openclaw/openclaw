@@ -424,7 +424,6 @@ describe("attempt projection persistence through settlement", () => {
             images: [],
             modelPrompt: "continue",
             onFinalPromptText: () => {},
-            onSteeringAcknowledged: () => {},
             persistToolResultProjections: async () => {
               await persistToolResultProjections(projectionState, (customType, data) =>
                 manager.appendCustomEntryAsync(customType, data),

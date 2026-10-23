@@ -190,17 +190,14 @@ export const resolveManagedPluginActivityIconSource = withManagedPluginCache(
 export function resolveManagedSetupCatalogIconUrl(params: {
   config: OpenClawConfig;
   iconUrl: string;
-  env?: NodeJS.ProcessEnv;
 }): string | undefined {
   const requested = normalizeCatalogIconUrl(normalizeOptionalString(params.iconUrl) ?? "");
   if (!requested) {
     return undefined;
   }
-  const env = params.env ?? process.env;
   const allowedUrls = [
     ...resolveManifestProviderAuthChoices({
       config: params.config,
-      env,
       includeUntrustedWorkspacePlugins: false,
       includeWorkspacePlugins: false,
     }).map((choice) => choice.icon),

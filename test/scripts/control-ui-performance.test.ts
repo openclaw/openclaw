@@ -120,6 +120,12 @@ describe("Control UI performance budgets", () => {
 
   function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
     const rootDir = tempDirs.make("openclaw-control-ui-budget-cli-");
+    fs.mkdirSync(path.join(rootDir, "node_modules"));
+    fs.symlinkSync(
+      fs.realpathSync(path.resolve("ui/node_modules/pako")),
+      path.join(rootDir, "node_modules/pako"),
+      "junction",
+    );
     const baselinePath = path.join(rootDir, baselineName);
     fs.mkdirSync(path.dirname(baselinePath), { recursive: true });
     const { distDir, writeAsset, writeHtml } = createDistFixture(
@@ -169,6 +175,16 @@ describe("Control UI performance budgets", () => {
     expect(result.status, result.stderr).toBe(exitCode);
     return JSON.parse(result.stdout);
   }
+
+  it("attributes startup without requiring route preload templates", () => {
+    const fixture = createCliFixture();
+    const result = jsonCli(fixture, ["--module-attribution"]);
+    expect(result.moduleAttribution.startup).toMatchObject({
+      shippedGzipBytes: 65,
+      missingSourceMaps: ["assets/index-a.js"],
+    });
+    expect(Object.keys(result.moduleAttribution)).toEqual(["startup"]);
+  });
 
   beforeAll(async () => {
     const { rootDir } = createCliFixture();
@@ -251,7 +267,19 @@ describe("Control UI performance budgets", () => {
       "chat boot JS: 3 requests, 135 B gzip",
       "70 B beyond initial-entry JS",
       "new boot JS: 3 requests, 125 B gzip",
+      "chat boot CSS: 2 requests, 25 B gzip (25 B)",
+      "1 beyond initial-entry CSS; limit: 3 requests",
     );
+    expect(
+      evaluateBudgets(metrics, {
+        ...CONTROL_UI_PERFORMANCE_BUDGETS,
+        chatBootCssRequests: 1,
+        newBootCssRequests: 0,
+      }),
+    ).toEqual([
+      { metric: "chat boot CSS requests", actual: 2, limit: 1, unit: "count" },
+      { metric: "new boot CSS requests", actual: 1, limit: 0, unit: "count" },
+    ]);
     writeAsset("chat-d.js", 180, 50, 40);
     const smaller = collectMetrics(distDir);
     expect(formatReport(smaller, undefined, null, 512, metrics)).toContain(
@@ -274,6 +302,36 @@ describe("Control UI performance budgets", () => {
       "largest JS gzip",
     ]);
     expect(formatReport(metrics, budgets)).toContain("startup JS gzip: 40 B exceeds 30 B");
+  });
+
+  it("allows CSS consolidation but rejects total growth beyond build variance", () => {
+    const { distDir, writeAsset } = createStartupFixture();
+    writeAsset("shared.css", 4_000, 2_000);
+    writeAsset("route.css", 4_000, 2_000);
+    const base = collectMetrics(distDir);
+    fs.unlinkSync(path.join(distDir, "assets/route.css"));
+    writeAsset("shared.css", 8_000, 3_900);
+    const consolidated = collectMetrics(distDir);
+    expect(evaluateBudgets(consolidated, undefined, null, 512, base)).toEqual([]);
+    expect(formatReport(consolidated, undefined, null, 512, base)).toContain(
+      "total CSS gzip vs base: 4015 B -> 3915 B (-100 B; growth up to 64 B allowed)",
+    );
+    writeAsset("shared.css", 8_000, 4_064);
+    expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, base)).toEqual([]);
+    writeAsset("shared.css", 8_000, 4_065);
+    expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, base)).toEqual([
+      { metric: "total CSS gzip growth", actual: 65, limit: 64, unit: "bytes" },
+    ]);
+    writeAsset("shared.css", 8_064, 3_900);
+    const rawAtLimit = collectMetrics(distDir);
+    expect(evaluateBudgets(rawAtLimit, undefined, null, 512, base)).toEqual([]);
+    expect(formatReport(rawAtLimit, undefined, null, 512, base)).toContain(
+      "total CSS raw vs base: 8050 B -> 8114 B (+64 B; growth up to 64 B allowed)",
+    );
+    writeAsset("shared.css", 8_065, 3_900);
+    expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, base)).toEqual([
+      { metric: "total CSS raw growth", actual: 65, limit: 64, unit: "bytes" },
+    ]);
   });
 
   it("rejects the renderer in route boot preloads", () => {
@@ -315,17 +373,32 @@ describe("Control UI performance budgets", () => {
     );
   });
 
+  const largestCssCap = CONTROL_UI_PERFORMANCE_BUDGETS.largestCssGzipBytes;
   it.each<[string, number, number, number, number, string | null]>([
-    ["startup growth below 1.5 KiB", 47_615, 46_080, 50_000, 50_000, null],
-    ["startup growth at 1.5 KiB", 47_616, 46_080, 50_000, 50_000, "startup CSS"],
-    ["deferred growth below 1.5 KiB", 46_080, 46_080, 52_000, 50_465, null],
-    ["deferred growth at 1.5 KiB", 46_080, 46_080, 52_000, 50_464, "largest CSS"],
+    ["startup growth below 1.5 KiB with offset", 47_615, 46_080, 48_465, 50_000, null],
+    ["startup growth at 1.5 KiB with offset", 47_616, 46_080, 48_464, 50_000, "startup CSS"],
+    ["total growth at build variance", 46_080, 46_080, 52_000, 51_936, null],
+    ["total growth above build variance", 46_080, 46_080, 52_000, 51_935, "total CSS"],
     ["startup at the hard cap", 51_200, 51_200, 50_000, 50_000, null],
     ["startup newly above the hard cap", 51_201, 51_200, 50_000, 50_000, "startup CSS"],
     ["startup unchanged above the hard cap", 51_201, 51_201, 50_000, 50_000, null],
-    ["deferred at the hard cap", 46_080, 46_080, 53_400, 53_400, null],
-    ["deferred newly above the hard cap", 46_080, 46_080, 53_401, 53_400, "largest CSS"],
-    ["deferred unchanged above the hard cap", 46_080, 46_080, 53_401, 53_401, null],
+    ["deferred at the hard cap", 46_080, 46_080, largestCssCap, largestCssCap, null],
+    [
+      "deferred newly above the hard cap",
+      46_080,
+      46_080,
+      largestCssCap + 1,
+      largestCssCap,
+      "largest CSS",
+    ],
+    [
+      "deferred unchanged above the hard cap",
+      46_080,
+      46_080,
+      largestCssCap + 1,
+      largestCssCap + 1,
+      null,
+    ],
   ])("checks %s against built base assets", (_name, css, baseCss, lazy, baseLazy, metric) => {
     const current = createCliFixture(css, lazy);
     const base = createCliFixture(baseCss, baseLazy);
@@ -501,6 +574,36 @@ describe("Control UI performance budgets", () => {
       fs.truncateSync(gzipPath, originalBytes);
     }
   });
+
+  it.each([
+    { baselineBytes: 315_881, limit: 316_457 },
+    { baselineBytes: 311_544, limit: 312_120 },
+  ])(
+    "enforces unchanged startup allowances for a $baselineBytes B baseline",
+    ({ baselineBytes, limit }) => {
+      const fixture = createCliFixture();
+      // Synthetic assets and their baseline must not depend on the live build ratchet.
+      fs.writeFileSync(fixture.baselinePath, JSON.stringify(startupBaseline(baselineBytes)));
+      const assetsDir = path.join(fixture.distDir, "assets");
+      writeAssetAt(assetsDir, "index-a.js", 200_000, 200_000, 200_000);
+      writeAssetAt(assetsDir, "runtime-b.js", limit - 200_000);
+      fs.appendFileSync(path.join(fixture.distDir, "index.html"), preload("runtime-b.js"));
+
+      expect(jsonCli(fixture)).toMatchObject({
+        budgets: { startupJsGzipBytes: 325_131 },
+        startupBudgetBaseline: { startupJsGzipBytes: baselineBytes },
+        startupJsTolerance: 512,
+        startupJsBuildVariance: 64,
+        metrics: { startup: { js: { gzipBytes: limit, requests: 2 } } },
+        violations: [],
+      });
+
+      fs.appendFileSync(path.join(assetsDir, "index-a.js.gz"), "x");
+      expect(jsonCli(fixture, [], 1).violations).toEqual([
+        { metric: "startup JS gzip", actual: limit + 1, limit, unit: "bytes" },
+      ]);
+    },
+  );
 
   it("updates the baseline from generated or explicitly measured metrics", () => {
     const { run, baselinePath, distDir } = createCliFixture();

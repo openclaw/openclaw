@@ -4,7 +4,10 @@ import * as historyWorkerRuntime from "./session-history-worker-runtime.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
-import { readRecentUserAssistantTextForSession as readRecent } from "./transcript.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  readRecentUserAssistantTextForSession as readRecent,
+} from "./transcript.js";
 
 export function registerRecentTranscriptTextSnapshotTests(params: {
   fixture: { storePath(): string };
@@ -22,6 +25,30 @@ export function registerRecentTranscriptTextSnapshotTests(params: {
   const read = (
     options: Omit<Parameters<typeof readRecent>[0], "agentId" | "sessionKey" | "storePath"> = {},
   ) => readRecent({ ...scope(), ...options });
+  it("restores only confirmed final message-tool replies when requested", async () => {
+    await writeTranscriptStore();
+    const mirrors = [
+      { kind: "message-tool-source-reply", final: false, sourceTurnId: "source-turn" },
+      { kind: "message-tool-source-reply", final: true, sourceTurnId: "source-turn" },
+      { kind: "message-tool-source-reply", final: true },
+      { kind: "channel-final" },
+    ] as const;
+    for (const [index, deliveryMirror] of mirrors.entries()) {
+      expect(
+        await appendAssistantMessageToSessionTranscript({
+          ...scope(),
+          text: `reply ${index}`,
+          idempotencyKey: `delivery-${index}`,
+          deliveryMirror,
+        }),
+      ).toMatchObject({ ok: true });
+    }
+    await expect(read()).resolves.toEqual([]);
+    await expect(read({ includeMessageToolSourceReplies: true })).resolves.toEqual([
+      expect.objectContaining({ role: "assistant", text: "reply 1" }),
+    ]);
+  });
+
   it("reads recent context only from the active transcript branch", async () => {
     await writeTranscriptStore();
     const target = scope();

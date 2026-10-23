@@ -621,6 +621,7 @@ export const validateUpdateHoldResult = compile(S.UpdateHoldResultSchema);
 export const validateUpdateRunParams = compile(S.UpdateRunParamsSchema);
 export const validateUpdateRunRecord = compile(S.UpdateRunRecordSchema);
 export const validateUpdateRunResult = compile(S.UpdateRunResultSchema);
+export const validateUpdateRecoveryCleanupParams = compile(S.UpdateRecoveryCleanupParamsSchema);
 export const validateUpdateRunsGetParams = compile(S.UpdateRunsGetParamsSchema);
 export const validateUpdateRunsGetResult = compile(S.UpdateRunsGetResultSchema);
 export const validateUpdateRunsListParams = compile(S.UpdateRunsListParamsSchema);

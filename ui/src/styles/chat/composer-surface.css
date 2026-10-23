@@ -6,17 +6,22 @@
   container-type: inline-size;
 }
 
+.agent-chat__composer-shell,
+.new-session-page__blocked-submit.agent-chat__composer-status {
+  /* The new-session page reuses this shell outside .chat, where the tokens are
+     not defined; the fallbacks keep its geometry identical there. */
+  width: calc(100% - var(--chat-composer-side-inset, 36px));
+  max-width: var(--chat-thread-max-width, 48rem);
+  margin-inline: auto;
+}
+
 .agent-chat__composer-shell {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: end;
   gap: 6px;
-  /* The new-session page reuses this shell outside .chat, where the tokens are
-     not defined; the fallbacks keep its geometry identical there. */
-  width: calc(100% - var(--chat-composer-side-inset, 36px));
-  max-width: var(--chat-thread-max-width, 48rem);
-  margin: var(--chat-composer-top-margin, 8px) auto var(--chat-composer-bottom-gap, 14px);
+  margin-block: var(--chat-composer-top-margin, 8px) var(--chat-composer-bottom-gap, 14px);
 }
 .agent-chat__composer-notices {
   display: grid;
@@ -1099,6 +1104,7 @@
   /* New Session can load composer styles before the chat layout defaults. */
   .chat-thread-inner,
   .agent-chat__composer-shell,
+  .new-session-page__blocked-submit.agent-chat__composer-status,
   .chat-footer > openclaw-plugin-view > .chat-footer__context {
     /* Physical insets belong to the app; every route centers inside that
        usable canvas, including when its reading-width cap takes effect. */

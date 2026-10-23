@@ -5,7 +5,7 @@ import type {
   SessionTranscriptWriteScope,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { selectActiveTranscriptIdentityRows } from "./session-accessor.sqlite-projection-read.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
 import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
@@ -74,7 +74,7 @@ export function rememberCommittedTranscriptMessageSequencesInTransaction(
     committedTranscriptMessageSequences.set(only, postimage.anchor.activeMessagePosition + 1);
     return;
   }
-  const db = getSessionKysely(database.db);
+  const activeIdentities = selectActiveTranscriptIdentityRows(database);
   for (let offset = 0; offset < appendedMessages.length; offset += TRANSCRIPT_CURSOR_BATCH_SIZE) {
     const batch = appendedMessages.slice(offset, offset + TRANSCRIPT_CURSOR_BATCH_SIZE);
     const rows = readHotSessionTranscriptSnapshot(
@@ -84,13 +84,7 @@ export function rememberCommittedTranscriptMessageSequencesInTransaction(
       () =>
         executeSqliteQuerySync(
           database.db,
-          db
-            .selectFrom("transcript_event_identities as identity")
-            .innerJoin("session_transcript_active_events as active", (join) =>
-              join
-                .onRef("active.session_id", "=", "identity.session_id")
-                .onRef("active.event_seq", "=", "identity.seq"),
-            )
+          activeIdentities
             .innerJoin(
               "session_transcript_index_state as state",
               "state.session_id",

@@ -137,9 +137,11 @@ it("renders and updates the workspace rail inside the Files panel", async () => 
   expect(query(".chat-workspace-rail")).toBe(rail);
   expect(rail.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("notes");
   element(rail, 'button[aria-label="notes.txt"]').click();
-  expect(sessions.getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "notes.txt", {
-    agentId: "main",
-  });
+  await vi.waitFor(() =>
+    expect(sessions.getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "notes.txt", {
+      agentId: "main",
+    }),
+  );
 });
 
 it("navigates an existing file tab to an explicit line without resetting its editor or draft", async () => {
@@ -616,10 +618,12 @@ it("retires a preview across reconnect without refocusing Review over Files", as
 
 it("shows a current preview request failure without leaving Review loading", async () => {
   const { file, mount, preview, renderPanels, state, query } = createReviewFixture();
-  void openSessionWorkspaceFile(state, { path: preview.file.path });
+  const opening = openSessionWorkspaceFile(state, { path: preview.file.path });
   await renderPanels();
+  await vi.waitFor(() => expect(state.sessions.getFile).toHaveBeenCalledOnce());
   file.reject(new Error("Preview unavailable"));
   await expect(file.promise).rejects.toThrow("Preview unavailable");
+  await opening;
   state.updateSidebarLayout(openSlot(state.sidebarLayout, "workspace"));
   await renderPanels();
   expect(mount.textContent).toContain("Preview unavailable");

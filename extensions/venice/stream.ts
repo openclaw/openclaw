@@ -19,21 +19,6 @@ function stringifyHistoricalValue(value: unknown): string {
   }
 }
 
-function describeHistoricalToolCall(toolCall: Record<string, unknown>): {
-  id?: string;
-  name: string;
-  text: string;
-} {
-  const fn = asOptionalObjectRecord(toolCall.function);
-  const name = typeof fn?.name === "string" && fn.name.length > 0 ? fn.name : "unknown_tool";
-  const args = stringifyHistoricalValue(fn?.arguments) || "{}";
-  return {
-    ...(typeof toolCall.id === "string" ? { id: toolCall.id } : {}),
-    name,
-    text: `[Historical tool call: ${name}(${args})]`,
-  };
-}
-
 export function createVeniceStreamWrapper(
   baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
 ): ProviderWrapStreamFnContext["streamFn"] {
@@ -139,14 +124,21 @@ export function createVeniceStreamWrapper(
       // signature metadata and result rewriting to this assistant occurrence.
       const historicalBatch = historicalToolCallBatches[historicalBatchIndex++];
       let shouldDowngradeBatch = false;
-      const describedCalls: Array<ReturnType<typeof describeHistoricalToolCall>> = [];
+      const describedCalls: Array<{ id?: string; name: string; text: string }> = [];
       for (const [toolCallIndex, toolCall] of record.tool_calls.entries()) {
         const toolCallRecord = asOptionalObjectRecord(toolCall);
         if (!toolCallRecord) {
           continue;
         }
         const historicalCall = historicalBatch?.[toolCallIndex];
-        const describedCall = describeHistoricalToolCall(toolCallRecord);
+        const fn = asOptionalObjectRecord(toolCallRecord.function);
+        const name = typeof fn?.name === "string" && fn.name.length > 0 ? fn.name : "unknown_tool";
+        const args = stringifyHistoricalValue(fn?.arguments) || "{}";
+        const describedCall = {
+          ...(typeof toolCallRecord.id === "string" ? { id: toolCallRecord.id } : {}),
+          name,
+          text: `[Historical tool call: ${name}(${args})]`,
+        };
         const signature =
           historicalCall &&
           historicalCall.id === toolCallRecord.id &&

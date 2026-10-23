@@ -330,6 +330,11 @@ export function renderUpdateRunReport(
   if (opts.mode && opts.mode !== "unknown") {
     lines.push(`Update mode: ${opts.mode}`);
   }
+  const target =
+    run.target && (formatUpdateVersion(run.target) || run.target.tag || run.target.channel);
+  if (target) {
+    lines.push(`Update target: ${bounded(target, 120)}`);
+  }
   const admission = run.origin.admission;
   if (admission) {
     const candidateVersion = admission.candidateVersion
@@ -562,6 +567,7 @@ export function updateRunReportInputFromResult(
         ? recordedOutcome.reason
         : (result.reason ?? recorded?.reason ?? null),
     origin: recorded?.origin ?? {},
+    target: recorded?.target,
     before: recordedOutcome?.before ?? result.before ?? recorded?.before ?? {},
     after: recordedOutcome?.after ?? result.after ?? recorded?.after ?? {},
     repair: recorded?.repair ?? [],

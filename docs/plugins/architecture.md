@@ -267,6 +267,10 @@ available; captured Workers that need these shared imports retain that limitatio
 Rebuild before reload when the
 installation loads compiled output. Changes to host or SDK code require a Gateway restart.
 
+WebAssembly libraries remain ordinary captured assets even when they use a `.so`
+filename. Directory asset references reuse an active capture walk; filesystem
+directory cycles still fail capture.
+
 Source preparation workers wake synchronous host readers after posting results,
 callback requests, and consumption acknowledgements. The shared sequence is a
 progress hint only: the host still services the transport and checks the actual
@@ -466,9 +470,12 @@ and preserves the same cleanup contract for shipped `owner.sqlite` markers.
 Cleanup rechecks directory and token identity before removal. Live leases,
 unreadable entries, symlinks, and invalid tokens preserve files. An aged instance
 left without a token by interrupted allocation or older partial cleanup is
-reclaimed only after a complete process and open-file census proves inactivity,
-followed by a successful rename check. Allocation creates the token before
-creating payload, and disposal removes payload before its token.
+reclaimed directly on all platforms if it has no native payload and is not
+retained by the current process. The plugin source capture directory owner
+rechecks its directory identity and, where available, the current UID before removal.
+Recent tokenless roots and roots containing native payloads are preserved.
+Allocation creates the token before creating payload, and disposal removes
+payload before its token.
 The token belongs to its capture instance; captures do not create a global
 coordination database.
 Removal remains asynchronous and advisory. This subtree is excluded from state
@@ -484,21 +491,15 @@ If its payload directory is removed while the instance still holds custody, the
 next capture recreates that directory under the same lease. This does not restore
 previously deleted captured files or recreate a missing ownership directory.
 
-Startup and hourly cleanup also reclaim tokenless `openclaw-plugin-build-*` and
+Hourly cleanup also reclaims tokenless `openclaw-plugin-build-*` and
 `openclaw-model-catalog-*` roots in the selected state's temporary directory and
 the current system temporary directory. Roots must be older than one hour and
-have no custody token. On macOS and Linux, cleanup rechecks that each legacy root belongs
-to the current UID immediately before its rename, preserving other users' captures even in
-privileged runs. A live OpenClaw producer preserves tokenless roots. On Linux,
-cleanup also inspects process file descriptors, working directories, and mapped
-files, including holders that are not OpenClaw processes. Only a complete census
-with no holder permits removal. Restricted procfs mounts (`hidepid` restrictions
-or `subset=pid`) preserve roots with a `restricted-procfs` warning. Unreadable or incomplete inspection preserves
-the roots and emits one warning per sweep with the reason; cleanup retries on a
-later sweep without interrupting loading or updates. Platforms without complete
-open-file inspection, including macOS and Windows, preserve tokenless roots.
-Managed instances with custody tokens continue to use their native lease on all
-platforms. A rename check alone never establishes inactivity.
+have no custody token or native payload. The same directory identity, current-process
+retention, and UID checks apply on all platforms; no process or open-file census
+is required. Legacy producers that outlive the grace period receive best-effort
+cleanup. Inspection or removal failures are reported once per sweep and retried
+later without interrupting loading or updates. Managed instances with custody
+tokens continue to use their native lease on all platforms.
 
 Older `openclaw-plugin-build-*` directories in the system temporary directory
 have no owner record proving whether their producer is still alive. Doctor reports
@@ -988,6 +989,9 @@ Native OpenClaw plugins run **in-process** with the Gateway. They are not sandbo
 <Warning>
 Native plugin implications: a plugin can register tools, network handlers, hooks, and services; a plugin bug can crash or destabilize the gateway; and a malicious native plugin is equivalent to arbitrary code execution inside the OpenClaw process.
 </Warning>
+
+Plugin authors must handle asynchronous errors from their own clients and sockets;
+see [Handle native client errors](/plugins/sdk-runtime#handle-native-client-errors).
 
 Compatible bundles are safer by default because OpenClaw currently treats them as metadata/content packs. In current releases, that mostly means bundled skills.
 

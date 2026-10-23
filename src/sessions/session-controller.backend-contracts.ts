@@ -29,6 +29,8 @@ export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
   /** True when this queue item came from the channel's current user turn. */
   isInboundUserMessage?: boolean;
+  /** Host-captured human reply identity, independent of pending-question eligibility. */
+  isInboundUserReply?: boolean;
   /** User-authorized controls retain sender authority but are not answers to pending questions. */
   allowPendingUserInputAnswer?: false;
   terminalReplyExpectation?: ReplyExpectation;
@@ -254,6 +256,8 @@ export type ReplyBackendHandle = {
   readonly toolAuthorityFingerprint?: string;
   readonly sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   readonly terminalReplyExpectation?: ReplyExpectation;
+  /** The sink records a human reply obligation only upon accepted steering. */
+  readonly supportsUserReplyPromotion?: boolean;
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** True only when queueMessage preserves images supplied in its options. */
   readonly supportsQueueMessageImages?: boolean;

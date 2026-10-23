@@ -674,7 +674,7 @@ describe("standalone image metadata", () => {
       ["src/plugins/native-module-require.ts", "PLUGIN_SOURCE_MODULE_EXTENSIONS"],
       ["src/channels/plugins/module-loader.ts", "loadModule"],
       ["src/plugins/module-export.ts", "unwrapDefaultModuleExport"],
-      ["src/channels/plugins/merge-plugin-section.ts", "mergeChannelPluginSection"],
+      ["src/channels/plugins/merge-plugin-section.ts", undefined],
       ["src/plugins/loader-channel-setup.ts", undefined],
     ] as const) {
       vm.runInContext(

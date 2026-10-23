@@ -1,16 +1,36 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import {
   isStaleChunkImportError,
   retryControlUiImport,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed } from "../overlay-registry.ts";
 import { MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
 import type { MenuNavigationOptions, MenuRuntime } from "./menu-runtime.ts";
 
 export type { MenuNavigationOptions } from "./menu-runtime.ts";
+
+export type MenuControls = {
+  readonly elements: ReadonlySet<HTMLElement>;
+  ref(this: void): (element: HTMLElement) => void;
+};
+
+/** One tree's controls or items, registered by their rendering owners. */
+export function createMenuControls(): MenuControls {
+  const elements = new Set<HTMLElement>();
+  return {
+    elements,
+    ref() {
+      return elementRef((element: HTMLElement) => {
+        elements.add(element);
+        return () => elements.delete(element);
+      });
+    },
+  };
+}
 
 export type MenuBinding = {
   itemRef(): (element: HTMLElement) => void;
@@ -44,7 +64,7 @@ export function useMenuMachine(
   parent?: MenuBinding,
   options: MenuNavigationOptions = {},
 ): MenuBinding {
-  const itemNodes = new Set<HTMLElement>();
+  const { elements: itemNodes, ref: itemRef } = createMenuControls();
   const ownsTarget = (target: HTMLElement) =>
     ![...overlay.children].some((child) => child.open && containsComposed(child.surface, target)) &&
     (options.surface === "listbox"
@@ -62,7 +82,7 @@ export function useMenuMachine(
   let stopRuntime: (() => void) | undefined;
   let mounted = false;
   let loading = false;
-  let pending: Array<(loaded: MenuRuntime) => void> = [];
+  let pending: Array<{ run: (loaded: MenuRuntime) => void; keyboard?: boolean }> = [];
   const [revision, setRevision] = createSignal(0);
   const [error, setError] = createSignal<unknown>();
   const notify = () => setRevision((value) => value + 1);
@@ -74,7 +94,7 @@ export function useMenuMachine(
     if (runtime) {
       intent(runtime);
     } else if (overlay.open && loading) {
-      pending.push(intent);
+      pending.push({ run: intent });
     }
   };
   const load = async () => {
@@ -112,7 +132,7 @@ export function useMenuMachine(
       loading = false;
       notify();
       while (pending.length) {
-        pending.shift()?.(runtime);
+        pending.shift()?.run(runtime);
         // Vanilla queues the transition; Home/End queue the highlight again,
         // whose store notification publishes roving focus. Drain both before replay.
         await new Promise<void>((resolve) => {
@@ -212,21 +232,36 @@ export function useMenuMachine(
     const currentTarget = event.currentTarget;
     event.preventDefault();
     event.stopPropagation();
-    pending.push((loaded) => {
-      const replay = new KeyboardEvent(event.type, event);
-      Object.defineProperties(replay, {
-        target: {
-          value: target === "content" ? loaded.service.scope.getActiveElement() : originalTarget,
-        },
-        currentTarget: { value: currentTarget },
-      });
-      if (target === "content") {
-        loaded.content().onKeyDown(replay);
-      } else if (target === "trigger") {
-        loaded.trigger(parentRuntime()).onKeyDown(replay);
-      } else {
-        loaded.keydown(replay);
-      }
+    if (
+      target === "content" &&
+      options.surface !== "listbox" &&
+      ["Enter", " "].includes(event.key) &&
+      itemNodes.has(originalTarget) &&
+      !originalTarget.hasAttribute("aria-haspopup") &&
+      !pending.some((intent) => intent.keyboard)
+    ) {
+      // Leaf activation already has a native owner; only prior navigation needs replay.
+      originalTarget.click();
+      return;
+    }
+    pending.push({
+      keyboard: true,
+      run: (loaded) => {
+        const replay = new KeyboardEvent(event.type, event);
+        Object.defineProperties(replay, {
+          target: {
+            value: target === "content" ? loaded.service.scope.getActiveElement() : originalTarget,
+          },
+          currentTarget: { value: currentTarget },
+        });
+        if (target === "content") {
+          loaded.content().onKeyDown(replay);
+        } else if (target === "trigger") {
+          loaded.trigger(parentRuntime()).onKeyDown(replay);
+        } else {
+          loaded.keydown(replay);
+        }
+      },
     });
   };
   const keydown = (event: KeyboardEvent) =>
@@ -236,20 +271,7 @@ export function useMenuMachine(
   return {
     runtime: current,
     items,
-    itemRef() {
-      let item: HTMLElement | undefined;
-      onCleanup(() => {
-        if (item) {
-          itemNodes.delete(item);
-        }
-      });
-      return (element) => {
-        if (item) {
-          itemNodes.delete(item);
-        }
-        itemNodes.add((item = element));
-      };
-    },
+    itemRef,
     highlightedValue: () => current()?.read().highlightedValue ?? null,
     highlightedValueNow: () => runtime?.service.context.get("highlightedValue") ?? null,
     setHighlightedValue,

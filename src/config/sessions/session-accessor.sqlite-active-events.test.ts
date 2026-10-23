@@ -39,6 +39,7 @@ import {
   readSessionTranscriptHistoryEventById as messageById,
 } from "./session-accessor.sqlite-history.test-support.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
+import { readPreviousIndexedTranscriptEventSync as readPrevious } from "./session-accessor.sqlite-suffix-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { runWithSessionTranscriptReadFence as withReadFence } from "./session-transcript-read-fence.js";
 import {
@@ -339,7 +340,8 @@ describe("SQLite active transcript event projection", () => {
     if (!anchor) {
       throw new Error("expected admitted message anchor");
     }
-    expect(readLatest(scope)?.event).toMatchObject({ id: "later" });
+    const latest = readLatest(scope);
+    expect(latest?.event).toMatchObject({ id: "later" });
     expect(
       withReadFence({ ...anchor, logicalTurnId: "fenced-turn", role: "user" }, () =>
         readLatest(scope),
@@ -354,6 +356,7 @@ describe("SQLite active transcript event projection", () => {
     });
     await reconcile();
     expect(readLatest(scope)?.event).toMatchObject({ id: "prior" });
+    expect(readPrevious(scope, latest!.eventSeq + 1)?.event).toMatchObject({ id: "prior" });
   });
 
   it("streams only user control facts from an exact visible input within the read fence", async () => {
@@ -863,7 +866,7 @@ describe("SQLite active transcript event projection", () => {
     const liveWrite = await persistMessages([
       makeMessage("m100001", "m100000", "toolResult", "live-write"),
     ]);
-    expect(liveWrite.appendedCount).toBe(1);
+    expect(liveWrite.messages.filter((m) => m.appended)).toHaveLength(1);
     order.push("live-write");
     await reconciliation;
     expect(order).toEqual(["event-loop-responsive", "live-write", "reconciled"]);

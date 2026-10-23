@@ -1,18 +1,19 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, Show } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
-import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
+import { createTestTranscript, stubSettledAnimationFrames } from "../chat-view.test-helpers.ts";
+import {
+  mountChatThread as mountThread,
+  mountTestTranscript,
+} from "../test-helpers/chat-transcript-native.tsx";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import { ChatPositionRailView, type PositionRailViewParams } from "./chat-position-rail-view.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
-import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
-import { ChatThread } from "./chat-thread-view.tsx";
-import type { ChatTranscript } from "./chat-transcript-controller.ts";
+import { getTranscriptState } from "./chat-thread-interactions.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
@@ -23,33 +24,18 @@ import {
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
 
-function mountThread(container: HTMLElement, transcript: ChatTranscript) {
-  const [props, setProps] = createSignal<ChatThreadProps | null>(null);
-  const view = mountSolid(
-    () => (
-      <Show when={props()}>
-        {(current) => <ChatThread props={current()} transcript={transcript} />}
-      </Show>
-    ),
-    { container },
-  );
-  return {
-    unmount: view.unmount,
-    render(next: ChatThreadProps | null) {
-      setProps(next ? { ...next } : null);
-      flush();
-    },
-  };
-}
-
 describe("conversation position rail", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("does not recompute settled marker labels for live preview deltas", () => {
+  it("does not inspect settled markers or labels while the live preview is closed", () => {
     let roleReads = 0;
+    let idReads = 0;
     const marker = {
-      id: "answer",
+      get id() {
+        idReads++;
+        return "answer";
+      },
       anchorId: "answer",
       get role(): "assistant" {
         roleReads++;
@@ -87,8 +73,10 @@ describe("conversation position rail", () => {
         liveMarkers: [{ ...marker, message: message("answer", "assistant", text, 1) }],
       });
       roleReads = 0;
+      idReads = 0;
       flush();
       expect(roleReads).toBe(0);
+      expect(idReads).toBe(0);
     }
     view.unmount();
   });
@@ -96,7 +84,7 @@ describe("conversation position rail", () => {
   it.each(["mounted", "off-window", "focused"] as const)(
     "publishes current position and keyboard entry together for a %s observer target",
     (scenario) => {
-      const flushFrame = stubAnimationFrames();
+      const flushFrame = stubSettledAnimationFrames();
       const publishVisibility = stubRailVisibility();
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
@@ -165,8 +153,6 @@ describe("conversation position rail", () => {
         activeMessage.mockReturnValue(nextId);
         publishVisibility(root.querySelector(".chat-bubble")!);
 
-        // Observer delivery must not expose a new aria-current with the old Tab entry.
-        // Assert before advancing any frame, rather than waiting out that mismatch.
         expect(current()).not.toBeNull();
         expect(tabStops()).toEqual([scenario === "focused" ? focused : current()]);
         expect(document.activeElement).toBe(focused);
@@ -196,6 +182,8 @@ describe("conversation position rail", () => {
             focusedMarker.dispatchEvent(
               new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
             );
+            // The marker commits in Solid's microtask; no animation frame is required.
+            flush();
             expect(document.activeElement).toBe(marker(`message-${index}`));
             expect(tabStops()).toEqual([document.activeElement]);
           }
@@ -208,7 +196,7 @@ describe("conversation position rail", () => {
   );
 
   it("reveals only overflowing transcripts and retires focus when they fit again", () => {
-    const flushFrame = stubAnimationFrames();
+    const flushFrame = stubSettledAnimationFrames();
     stubRailVisibility();
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
@@ -297,7 +285,7 @@ describe("conversation position rail", () => {
     "keeps the reader's rail position through %s updates",
     (scenario) => {
       const navigatesBeforeResize = scenario === "composer-resize-reversal-navigation";
-      const flushFrame = stubAnimationFrames();
+      const flushFrame = stubSettledAnimationFrames();
       const publishVisibility = stubRailVisibility();
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
@@ -741,14 +729,18 @@ describe("conversation position rail", () => {
       expect(historyIntent).toHaveBeenCalledTimes(2);
       expect(preview()).toBeUndefined();
       markers()[4]!.focus();
+      flush();
       expect(preview()).toContain("Checkpoint 4");
       markers()[2]!.dispatchEvent(new Event("pointerenter"));
+      flush();
       expect(preview()).toContain("Checkpoint 2");
       container.querySelector(".chat-position-rail")!.dispatchEvent(new Event("pointerleave"));
+      flush();
       expect(preview()).toContain("Checkpoint 4");
       markers()[4]!.dispatchEvent(
         new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
       );
+      flush();
       expect(document.activeElement).toBe(markers()[5]);
       expect(preview()).toContain("Checkpoint 5");
       const focused = document.activeElement;
@@ -764,20 +756,24 @@ describe("conversation position rail", () => {
       focused!.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
       );
+      flush();
       expect(preview()).toBeUndefined();
       const thread = container.querySelector<HTMLElement>(".chat-thread")!;
       expect(document.activeElement).toBe(thread);
       markers()[2]!.dispatchEvent(new Event("pointerenter"));
+      flush();
       expect(preview()).toContain("Checkpoint 2");
       const hoverEscape = new KeyboardEvent("keydown", {
         key: "Escape",
         cancelable: true,
       });
       window.dispatchEvent(hoverEscape);
+      flush();
       expect(hoverEscape.defaultPrevented).toBe(true);
       expect(preview()).toBeUndefined();
       expect(document.activeElement).toBe(thread);
       markers()[0]!.focus();
+      flush();
       expect(preview()).toBeDefined();
       view.render(null);
       await Promise.resolve();
@@ -838,6 +834,7 @@ describe("conversation position rail", () => {
         rerender();
         transcript.start();
         container.querySelector<HTMLButtonElement>(".chat-position-rail__marker")!.focus();
+        flush();
         const preview = container.querySelector(".chat-position-rail__preview-copy")!;
         expect(container.querySelector(".chat-position-rail__preview-label")?.textContent).toBe(
           label,
@@ -926,6 +923,7 @@ describe("conversation position rail", () => {
       const markers = container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker");
       expect(markers).toHaveLength(1);
       markers[0]!.focus();
+      flush();
       expect(container.querySelector(".chat-position-rail__preview-copy")?.textContent).toContain(
         "The launch card is ready",
       );
@@ -978,6 +976,7 @@ describe("conversation position rail", () => {
       rerender();
       const provisional = marker();
       provisional.focus();
+      flush();
       expect(container.querySelector(".chat-position-rail__preview-copy")?.textContent).toContain(
         "Draft response",
       );

@@ -119,7 +119,11 @@ renews it; the Gateway owns its absolute 45-second cutoff. After the drain
 budget, transient write custody receives at most five more seconds before the
 controller defers and resumes its exact lease. Final custody reads retain the
 five-second RPC bound. The remaining grace permits handoff or cleanup; pending
-writes never become permission to stop. Adopt this controller closure alongside
+writes never become permission to stop. If the custody polling sleep exhausts
+the window, the controller reports `write custody wait expired` and the last
+observed blockers without starting another status RPC. This is a custody timeout,
+not evidence that `gateway.suspend.status` failed to respond.
+Adopt this controller closure alongside
 the Gateway's bounded-drain change; landing either does not deploy it.
 
 Activation audits the current and previous sealed release trees before closing

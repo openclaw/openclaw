@@ -5,7 +5,7 @@ import {
 import { createMemo, Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
-import type { AgentIdentityResult, GatewaySessionRow } from "../../api/types.ts";
+import type { AgentIdentityResult, GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
@@ -24,6 +24,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { resolveSessionDisplayKind } from "../../lib/session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
   resolveSessionPreferredFace,
@@ -33,10 +34,53 @@ import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-r
 import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import type { JSX as SolidJSX } from "../../types/solid-elements.js";
 import { CategoryCell } from "./category-cell.tsx";
-import { SessionStatusBadge } from "./session-status.tsx";
 import { categoryDropHandlers } from "./sessions-filters.tsx";
 import type { SessionsProps } from "./view-types.ts";
 import "../../components/tooltip.ts";
+
+const SESSION_RUN_STATUS_LABELS = {
+  queued: "sessionsView.statusQueued",
+  running: "sessionsView.statusRunning",
+  done: "sessionsView.statusDone",
+  failed: "sessionsView.statusFailed",
+  interrupted: "sessionsView.statusInterrupted",
+  killed: "sessionsView.statusKilled",
+  timeout: "sessionsView.statusTimeout",
+} as const satisfies Record<SessionRunStatus, string>;
+
+function SessionStatusBadge(props: { row: GatewaySessionRow }) {
+  const active = () => isSessionRunStateActive(props.row);
+  const idle = () =>
+    props.row.hasActiveRun === false && (!props.row.status || props.row.status === "running");
+  const label = () =>
+    t(
+      props.row.status === "queued"
+        ? "sessionsView.statusQueued"
+        : active()
+          ? "sessionsView.statusLive"
+          : idle()
+            ? "sessionsView.statusIdle"
+            : (props.row.status && SESSION_RUN_STATUS_LABELS[props.row.status]) ||
+              "sessionsView.statusUnknown",
+    );
+  const kind = (): "ok" | "warn" | "muted" | "danger" =>
+    props.row.status === "queued"
+      ? "warn"
+      : active() || props.row.status === "done"
+        ? "ok"
+        : idle() || !props.row.status || props.row.status === "interrupted"
+          ? "muted"
+          : "danger";
+  const detail = () => `${t("sessionsView.status")}: ${label()}`;
+  // The tooltip needs a focusable trigger for keyboard access.
+  return (
+    <openclaw-tooltip prop:content={detail()}>
+      <span tabindex="0" aria-label={detail()}>
+        <SettingsStatus kind={kind()} label={label()} />
+      </span>
+    </openclaw-tooltip>
+  );
+}
 
 const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
 const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;

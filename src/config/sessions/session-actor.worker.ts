@@ -462,8 +462,14 @@ export function createSessionActorWorker(
           registerSessionActorEntryPatchOwner(opened, prepareEntryPatch);
           registerParticipantOwner(opened);
           registerTranscriptRewriteOwner(opened);
-          const admit = (stage: "transaction" | "commit", publication: unknown) => {
-            withoutSqliteDatabaseWriteScope(opened.db, () => context.admit(stage, publication));
+          const admit: AgentWorkerOperationContext["admit"] = (
+            stage,
+            publication,
+            transferList,
+          ) => {
+            withoutSqliteDatabaseWriteScope(opened.db, () =>
+              context.admit(stage, publication, transferList),
+            );
           };
           // The writer owns both hydration and version validation. A replica miss
           // never requires a separate read command before this transaction.
@@ -508,7 +514,7 @@ export function createSessionActorWorker(
               }
               return operation(opened);
             },
-            admit(stage, publication) {
+            admit(stage, publication, transferList) {
               if (stage === "commit") {
                 commitPublication = publication;
                 // An append shares this transaction and message owner. Its final
@@ -517,11 +523,15 @@ export function createSessionActorWorker(
                   return;
                 }
               }
-              admit(stage, {
-                kind: "session-actor-admission",
-                snapshot: projectSessionActorAuthority(working.hot),
-                publication,
-              });
+              admit(
+                stage,
+                {
+                  kind: "session-actor-admission",
+                  snapshot: projectSessionActorAuthority(working.hot),
+                  publication,
+                },
+                transferList,
+              );
             },
           };
           return withSessionActorTransactionState(opened, working, () => {

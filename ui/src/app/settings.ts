@@ -38,13 +38,6 @@ import {
   type UiPreferences,
   type UiSettings,
 } from "./settings-contract.ts";
-import type {
-  ScopedSessionSelection,
-  PersistedUiSettings,
-  PersistedSettingsSource,
-  ProfileNavigation,
-  SettingsStorageFallback,
-} from "./settings-storage-types.ts";
 import { normalizeTerminalFontFamily } from "./terminal-font.ts";
 import { parseThemeSelection } from "./theme.ts";
 import { normalizeTypefaceOverride } from "./typography.ts";
@@ -66,6 +59,45 @@ export type {
   UiPreferences,
   UiSettings,
 } from "./settings-contract.ts";
+
+// The existing gateway-scoped browser record; profile snapshots contain references only.
+type ScopedSessionSelection = {
+  sessionKey: string;
+  lastActiveSessionKey: string;
+  selectedAgentId?: string;
+};
+
+type ProfileNavigation = { railShortcuts: string[] };
+type PersistedUiSettings = Omit<
+  UiSettings,
+  | "token"
+  | "sessionKey"
+  | "lastActiveSessionKey"
+  | "selectedAgentId"
+  | "navCollapsed"
+  | "sidebarEntries"
+  | "background"
+> &
+  Partial<ProfileNavigation> & {
+    token?: never;
+    sessionsByGateway?: Record<string, ScopedSessionSelection>;
+    navigationByProfile?: Record<string, Partial<ProfileNavigation> & Record<string, unknown>>;
+    // Retired sidebar order is preserved as opaque data, never used as rail shortcuts.
+    sidebarEntries?: unknown;
+    sidebarPinnedRoutes?: unknown;
+  };
+
+type PersistedSettingsSource = {
+  gatewayUrl: string;
+  parsed: PersistedUiSettings;
+  available: boolean;
+};
+
+type SettingsStorageFallback = {
+  key: string;
+  record: PersistedUiSettings;
+  pendingNavigation: Record<string, ProfileNavigation> | null;
+};
 
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
 const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
@@ -94,6 +126,18 @@ type BooleanSettingKey = {
   [K in keyof UiPreferences]-?: UiPreferences[K] extends boolean | undefined ? K : never;
 }[keyof UiPreferences] &
   keyof PersistedUiSettings;
+
+function normalizeDetailsDismissedProcesses(value: unknown): Record<string, string[]> | undefined {
+  const record = asOptionalRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const entries = Object.entries(record).flatMap(([scope, storedIds]) => {
+    const ids = normalizeUniqueTrimmedStringList(storedIds);
+    return ids?.length ? [[scope, ids] as const] : [];
+  });
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
 
 function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -390,6 +434,9 @@ export function loadUiPreferences(
       chatPersistCommentary: booleanSetting("chatPersistCommentary"),
       chatShowTaskProgress: booleanSetting("chatShowTaskProgress"),
       chatCollapseTaskProgress: booleanSetting("chatCollapseTaskProgress"),
+      detailsDismissedProcesses: normalizeDetailsDismissedProcesses(
+        parsed.detailsDismissedProcesses,
+      ),
       chatBubbleSessionKeys: normalizeChatBubbleSessionKeys(parsed.chatBubbleSessionKeys),
       chatBubbleDisabledSessionKeys: normalizeChatBubbleSessionKeys(
         parsed.chatBubbleDisabledSessionKeys,
@@ -541,6 +588,7 @@ export function saveSettings(
     chatPersistCommentary: next.chatPersistCommentary ?? true,
     chatShowTaskProgress: next.chatShowTaskProgress === false ? false : undefined,
     chatCollapseTaskProgress: next.chatCollapseTaskProgress === true ? true : undefined,
+    detailsDismissedProcesses: normalizeDetailsDismissedProcesses(next.detailsDismissedProcesses),
     chatBubbleSessionKeys: normalizeChatBubbleSessionKeys(next.chatBubbleSessionKeys),
     chatBubbleDisabledSessionKeys: normalizeChatBubbleSessionKeys(
       next.chatBubbleDisabledSessionKeys,

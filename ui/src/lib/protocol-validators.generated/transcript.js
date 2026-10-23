@@ -102,7 +102,7 @@ var isChatTranscriptMetadata = (() => {
         !Array.isArray(value) &&
         "actor" in value &&
         Object.getOwnPropertyNames(value).every(
-          (var_89, var_90) => External[0].test(var_89) || check_18(value[var_89]),
+          (var_91, var_92) => External[0].test(var_91) || check_18(value[var_91]),
         ) &&
         check_19(value.actor) &&
         (value.assignedBy === void 0 || !("assignedBy" in value) || check_19(value.assignedBy)) &&
@@ -114,7 +114,7 @@ var isChatTranscriptMetadata = (() => {
         !Array.isArray(value) &&
         "type" in value &&
         Object.getOwnPropertyNames(value).every(
-          (var_91, var_92) => External[1].test(var_91) || check_18(value[var_91]),
+          (var_93, var_94) => External[1].test(var_93) || check_18(value[var_93]),
         ) &&
         check_20(value.type) &&
         (value.id === void 0 || !("id" in value) || check_8(value.id)) &&
@@ -134,7 +134,7 @@ var isChatTranscriptMetadata = (() => {
         "type" in value &&
         "id" in value &&
         Object.getOwnPropertyNames(value).every(
-          (var_93, var_94) => External[2].test(var_93) || check_18(value[var_93]),
+          (var_95, var_96) => External[2].test(var_95) || check_18(value[var_95]),
         ) &&
         check_26(value.type) &&
         check_8(value.id),
@@ -146,7 +146,7 @@ var isChatTranscriptMetadata = (() => {
         "type" in value &&
         "id" in value &&
         Object.getOwnPropertyNames(value).every(
-          (var_95, var_96) => External[3].test(var_95) || check_18(value[var_95]),
+          (var_97, var_98) => External[3].test(var_97) || check_18(value[var_97]),
         ) &&
         check_22(value.type) &&
         check_8(value.id),
@@ -160,7 +160,7 @@ var isChatTranscriptMetadata = (() => {
         "idKind" in value &&
         "id" in value &&
         Object.getOwnPropertyNames(value).every(
-          (var_97, var_98) => External[4].test(var_97) || check_18(value[var_97]),
+          (var_99, var_100) => External[4].test(var_99) || check_18(value[var_99]),
         ) &&
         check_29(value.type) &&
         check_8(value.pluginId) &&
@@ -178,7 +178,7 @@ var isChatTranscriptMetadata = (() => {
         "senderKind" in value &&
         "id" in value &&
         Object.getOwnPropertyNames(value).every(
-          (var_99, var_100) => External[5].test(var_99) || check_18(value[var_99]),
+          (var_101, var_102) => External[5].test(var_101) || check_18(value[var_101]),
         ) &&
         check_31(value.type) &&
         check_32(value.pluginId) &&
@@ -199,7 +199,7 @@ var isChatTranscriptMetadata = (() => {
         "source" in value &&
         "id" in value &&
         Object.getOwnPropertyNames(value).every(
-          (var_101, var_102) => External[6].test(var_101) || check_18(value[var_101]),
+          (var_103, var_104) => External[6].test(var_103) || check_18(value[var_103]),
         ) &&
         check_37(value.type) &&
         check_2(value.actorType) &&
@@ -218,7 +218,7 @@ var isChatTranscriptMetadata = (() => {
         !Array.isArray(value) &&
         "identity" in value &&
         Object.getOwnPropertyNames(value).every(
-          (var_103, var_104) => External[7].test(var_103) || check_18(value[var_103]),
+          (var_105, var_106) => External[7].test(var_105) || check_18(value[var_105]),
         ) &&
         check_24(value.identity) &&
         (value.label === void 0 || !("label" in value) || check_8(value.label)) &&
@@ -239,7 +239,7 @@ var isChatTranscriptMetadata = (() => {
         "revision" in value &&
         "updatedAt" in value &&
         Object.getOwnPropertyNames(value).every(
-          (var_105, var_106) => External[0].test(var_105) || !1,
+          (var_107, var_108) => External[0].test(var_107) || !1,
         ) &&
         typeof value.sessionKey == "string" &&
         (value.sessionKey.length >= 2 ||

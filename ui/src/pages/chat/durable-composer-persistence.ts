@@ -32,7 +32,10 @@ type RestoredDraft = Pick<
 
 const reportedStorageOwners = new Set<string>();
 
-const durableComposerStore = import("../../lib/chat/composer-draft-store.runtime.ts");
+// Reuse the settled promise so later persistence operations retain their existing ordering.
+let durableComposerStore: Promise<typeof import("../../lib/chat/composer-draft-store.runtime.ts")>;
+const loadDurableComposerStore = () =>
+  (durableComposerStore ??= import("../../lib/chat/composer-draft-store.runtime.ts"));
 
 export function durableComposerScopeIdentity(scope: DurableComposerDraftScope): string {
   return JSON.stringify([scope.gatewayOwner, scope.recoveryScope, scope.scopeKey]);
@@ -94,7 +97,7 @@ export async function hydrateDurableComposerAttachments(
 }
 
 export async function writeDurableComposerSnapshot(snapshot: DurableChatComposerSnapshot) {
-  const { writeDurableComposerDraft } = await durableComposerStore;
+  const { writeDurableComposerDraft } = await loadDurableComposerStore();
   const payloadUnavailable = snapshot.storedAttachments === null;
   const result = await writeDurableComposerDraft(
     snapshot.scope,
@@ -148,7 +151,7 @@ export class DurableChatComposerPersistence {
 
   async retire(scope: DurableComposerDraftScope, minimumRevision: number) {
     this.resetRestoreScope();
-    const { retireDurableComposerDraft } = await durableComposerStore;
+    const { retireDurableComposerDraft } = await loadDurableComposerStore();
     const result = await retireDurableComposerDraft(scope, minimumRevision);
     if (result.status === "storage-failed") {
       reportDurableComposerStorageError(scope, this.onStorageError);
@@ -185,7 +188,7 @@ export class DurableChatComposerPersistence {
     };
     void (async () => {
       const { readDurableComposerDraft, prepareDurableComposerRecovery } =
-        await durableComposerStore;
+        await loadDurableComposerStore();
       if (baseline.scope.scopeKey.startsWith("chat:v3:")) {
         const recovery = await prepareDurableComposerRecovery(baseline.scope);
         if (recovery.status === "storage-failed") {

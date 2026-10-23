@@ -359,9 +359,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
           ? { ...staleChild, runId: "run-replacement", requesterSessionKey: "agent:other:main" }
           : undefined,
     );
-    await expectNoWake({ settledEntry: staleChild });
-    setChildren([{ ...staleChild, requesterSettleWake: undefined }, ...children]);
-    expect(await wake({ settledEntry: children[0] })).toBe(true);
+    expect(await wake({ settledEntry: staleChild })).toBe(true);
+    expect(deliverSpy).toHaveBeenCalledOnce();
     const message = expectMessage([], ["stale output", "old/owner"]);
     const routeBlock = message.slice(
       message.indexOf("Model route changed:"),

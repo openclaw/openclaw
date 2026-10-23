@@ -669,7 +669,11 @@ final class GatewayProcessManager {
                         let custody = try await self.retainManagedServiceForResume(
                             expectedServiceAuthority: expectedServiceAuthority)
                         guard self.launchAgentDisableGeneration == stopGeneration else { return }
-                        if custody.migrationPending {
+                        // Passive stop owns only the captured profile definition. A direct low-level
+                        // disable still handles label-based ghost recovery when explicitly requested.
+                        if custody.authority.definition.plist == nil {
+                            failure = nil
+                        } else if custody.migrationPending {
                             self.appendLog("[gateway] Pin migration pending; runtime preserved. Run openclaw doctor.\n")
                             failure = await GatewayLaunchAgentManager.runDaemonCommand(
                                 ["stop"], expectedServiceAuthority: custody.authority, checkCurrent: mutationCheck)

@@ -1,6 +1,7 @@
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { ControlUiSessionPullRequestSnapshot } from "../../../../src/gateway/control-ui-contract.js";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatDetailsEnglish } from "../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
@@ -18,6 +19,7 @@ import {
   ChatDetailsMobileControls,
   type ChatDetailsMobilePage,
 } from "./components/chat-details-mobile-content.tsx";
+import { createDetailsProcessesPresentation } from "./components/chat-details-processes-presentation.ts";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { chatPullRequestId, retainedPublication } from "./components/chat-pull-requests.ts";
 import { syncSessionPanelInputs, useSessionPanel } from "./components/chat-session-panel.tsx";
@@ -28,6 +30,7 @@ import { createSessionAutomationInventory } from "./components/chat-summary-auto
 import { ProcessesPanelData } from "./processes-panel-data.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 export type MobileDetailsBindings = {
   sharing?: PreparedChatSessionSharing;
@@ -108,13 +111,24 @@ function MobileHostContent(
         },
       )
     : () => undefined;
+  const detailsProcesses = createDetailsProcessesPresentation(() => ({
+    sessionKey: props.details.sessionKey,
+    agentId: props.details.currentAgentId ?? "main",
+    rows: processes()?.snapshot.rows ?? [],
+  }));
   const processData = createMemo(() => {
     const data = processes();
     if (!data) {
       return undefined;
     }
-    const { rows, error, errorKind, loading } = data.snapshot;
-    return { rows, error, errorKind, loading, refresh: () => data.refresh() };
+    const { error, errorKind, loading } = data.snapshot;
+    return {
+      rows: detailsProcesses.rows(),
+      error,
+      errorKind,
+      loading,
+      refresh: () => data.refresh(),
+    };
   });
   const route = () => props.host.destination.page?.details;
   const activePeople = createMemo(() =>

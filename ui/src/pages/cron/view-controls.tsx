@@ -133,7 +133,12 @@ export function EnabledSwitch(
     >
       <SettingsToggle
         checked={props.job.enabled}
-        disabled={props.busy || !props.connected || !props.canManage}
+        saving={props.toggleSavingJobId === props.job.id}
+        disabled={
+          !props.connected ||
+          !props.canManage ||
+          (props.busy && props.toggleSavingJobId !== props.job.id)
+        }
         ariaLabel={props.compact ? actionLabel() : stateLabel()}
         onChange={(checked) => {
           if (props.canManage) {

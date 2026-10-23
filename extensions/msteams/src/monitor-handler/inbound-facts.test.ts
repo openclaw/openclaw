@@ -68,7 +68,7 @@ describe("msteams inbound facts", () => {
     });
 
     expect(assembleMSTeamsInboundFacts(entry)).toMatchObject({
-      rawConversationId: "19:channel@thread.tacv2;messageid=thread-root",
+      conversation: { id: "19:channel@thread.tacv2;messageid=thread-root" },
       conversationId: "19:channel@thread.tacv2",
       conversationMessageId: "thread-root",
       threadId: "thread-root",

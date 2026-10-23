@@ -954,7 +954,6 @@ describe("scheduled Codex app authority", () => {
       scheduledRuntimeAuthority: authority(),
     });
 
-    expect(startup.pluginThreadConfigRequired).toBe(true);
     expect(startup.resolvedPluginPolicy).toBeDefined();
   });
 

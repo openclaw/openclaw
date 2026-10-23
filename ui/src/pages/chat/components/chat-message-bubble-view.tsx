@@ -9,7 +9,6 @@ import {
   Repeat,
   Show,
   Switch,
-  onCleanup,
   type Accessor,
   refresh,
   untrack,
@@ -22,14 +21,17 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import { PluginInlineView } from "../../../plugins/control-ui-inline-view.tsx";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
-import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import "../../../components/solid/person-reference.tsx";
+import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
@@ -50,6 +52,7 @@ import {
   ChatClawHubCard,
   MessageAttachment,
   MessageImages,
+  ToolPreview,
 } from "./chat-message-deferred.tsx";
 import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
 import type { MarkdownMedia, PositionedMedia } from "./chat-message-media-markdown.ts";
@@ -74,8 +77,9 @@ import {
 } from "./chat-tool-content.solid.tsx";
 import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
-import { WorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
-import { ToolPreview } from "./widget-card.ts";
+import { WorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.tsx";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 registerEnglishCatalog(registerChatComposerEnglish);
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -103,24 +107,24 @@ type ContentProps = {
 /** Message identity owns text/media DOM; option refreshes only publish new facts. */
 export function GroupedMessage(props: GroupedMessageProps) {
   const refreshMedia = () => void refresh(state);
-  const state = createMemo(() => {
-    observeChatMediaResourceSubscriber(props.options.mediaOwner, refreshMedia);
-    return prepareGroupedMessage(
-      props.preparation,
-      props.messageKey,
-      props.options,
-      props.onOpenSidebar,
-    );
-  });
+  const state = createMemo(() =>
+    prepareGroupedMessage(props.preparation, props.messageKey, props.options, props.onOpenSidebar),
+  );
   const messageElements = useContext(TranscriptMessageElementsContext);
   // The keyed message owns this DOM registration through acknowledgement and option refreshes.
   const initialMessageKey = untrack(() => props.messageKey);
   // Expiring pairing QR attachments schedule a timer at their resource owner.
   createEffect(
-    () => [props.messageKey, state().nextPairingQrExpiresAt] as const,
-    ([key, expiresAt]) => schedulePairingQrExpiryRefresh(key, expiresAt, refreshMedia),
+    () => [props.options.mediaOwner, props.messageKey, state().nextPairingQrExpiresAt] as const,
+    ([owner, key, expiresAt]) => {
+      if (expiresAt === undefined) {
+        return undefined;
+      }
+      observeChatMediaResourceSubscriber(owner, refreshMedia);
+      schedulePairingQrExpiryRefresh(key, expiresAt, refreshMedia);
+      return () => releaseChatMediaResourceOwner(refreshMedia);
+    },
   );
-  onCleanup(() => releaseChatMediaResourceOwner(refreshMedia));
   return (
     <Show
       when={state().workspaceConflict}
@@ -428,7 +432,11 @@ function MessageAvatar(props: { render?: () => JSX.Element }) {
 }
 
 function VideoPreview(props: ContentProps & { item: Accessor<AttachmentItem | undefined> }) {
-  const presented = usePanePresentation(() => props.options.transcriptVisible ?? true);
+  const parentPresented = useContext(ContentPresentation);
+  // Retained rows can resume with equal props; the parent owns that presentation transition.
+  const presented = usePanePresentation(
+    () => parentPresented() && (props.options.transcriptVisible ?? true),
+  );
   return (
     <div class="chat-image-frame chat-video-preview">
       <Show when={props.item()}>
@@ -518,6 +526,16 @@ function BubbleContents(props: ContentProps) {
           </div>
         </Show>
       </Show>
+      <For each={props.state().inlineViewBlocks} keyed={(block) => block.toolCallId}>
+        {(block) => (
+          <PluginInlineView
+            block={block()}
+            sessionKey={props.options.sessionKey ?? ""}
+            agentId={props.options.agentId}
+            presented={props.options.presented}
+          />
+        )}
+      </For>
       <Show when={props.state().hasToolCards}>
         <Show
           when={

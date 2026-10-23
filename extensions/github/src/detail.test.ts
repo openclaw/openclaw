@@ -760,6 +760,43 @@ describe("GitHub detail public read boundary", () => {
 });
 
 describe("progressive GitHub documents", () => {
+  it.each([200, 503])(
+    "overlaps discussion and review reads when discussion returns %s",
+    async (status) => {
+      vi.useFakeTimers();
+      try {
+        const { read } = fixture("pull", fullPull(), async (path) => {
+          if (!path.endsWith("/comments")) {
+            return undefined;
+          }
+          await new Promise((resolve) => {
+            setTimeout(resolve, 100);
+          });
+          return path.includes("/issues/")
+            ? json([commentItem()], status)
+            : json([
+                commentItem({
+                  id: 2,
+                  html_url: "https://github.com/octocat/repo/pull/1#discussion_r2",
+                }),
+              ]);
+        });
+        const started = Date.now();
+        const pending = read("discussion");
+        await vi.runAllTimersAsync();
+        const document = await pending;
+        expect(Date.now() - started).toBe(100);
+        expect(document.comments?.map((comment) => comment.id)).toEqual(
+          status === 200 ? ["discussion_r2", "issuecomment-1"] : ["discussion_r2"],
+        );
+        expect(document.commentsTotal).toBe(2);
+        expect(document.commentsTruncated).toBe(status !== 200);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("delivers the overview before slow checks, loads discussion independently, and reads files only on demand", async () => {
     const input = target("pull");
     const checks = createDeferred<Response>();

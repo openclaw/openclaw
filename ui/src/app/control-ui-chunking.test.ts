@@ -21,11 +21,12 @@ describe("Control UI build chunking", () => {
     const markdown = new URL("../../node_modules/markdown-it/dist/markdown-it.mjs", import.meta.url)
       .pathname;
     const entities = new URL("../../node_modules/entities/dist/index.js", import.meta.url).pathname;
+    const motion = new URL("../components/mascot-animator.ts", import.meta.url).pathname;
     const entry = "\0config-parser-fixture";
     const sources = new Map([
       [
         entry,
-        `export { validate } from ${JSON.stringify(zod)}; export { canCall } from ${JSON.stringify(gatewayMethods)}; export { signal } from ${JSON.stringify(solid)}; export { pending } from ${JSON.stringify(verdict)}; export const warm = () => import(${JSON.stringify(json5)}); export const sign = () => import(${JSON.stringify(signer)}); export const render = () => import(${JSON.stringify(markdown)});`,
+        `export { validate } from ${JSON.stringify(zod)}; export { canCall } from ${JSON.stringify(gatewayMethods)}; export { signal } from ${JSON.stringify(solid)}; export { pending } from ${JSON.stringify(verdict)}; export const warm = () => import(${JSON.stringify(json5)}); export const sign = () => import(${JSON.stringify(signer)}); export const render = () => import(${JSON.stringify(markdown)}); export const animate = () => import(${JSON.stringify(motion)});`,
       ],
       [zod, "export const validate = () => true;"],
       [json5, "export const parse = () => ({});"],
@@ -33,6 +34,7 @@ describe("Control UI build chunking", () => {
       [solid, "export const signal = () => 1;"],
       [verdict, "export const pending = () => false;"],
       [signer, "export const sign = () => 'signature';"],
+      [motion, "export class MascotAnimator {}"],
       [markdown, `export { decode as render } from ${JSON.stringify(entities)};`],
       [entities, "export const decode = () => 'decoded';"],
     ]);
@@ -78,6 +80,10 @@ describe("Control UI build chunking", () => {
     const signerChunk = chunks.find((chunk) => signer in chunk.modules)!;
     expect(dependencies.has(signerChunk.fileName)).toBe(false);
     expect(entryChunk.dynamicImports).toContain(signerChunk.fileName);
+    const motionChunk = chunks.find((chunk) => motion in chunk.modules)!;
+    expect(dependencies.has(motionChunk.fileName)).toBe(false);
+    expect(entryChunk.dynamicImports).toContain(motionChunk.fileName);
+    expect(motionChunk.fileName).toContain("mascot-motion-runtime");
     const markdownChunk = chunks.find((chunk) => markdown in chunk.modules)!;
     expect(dependencies.has(markdownChunk.fileName)).toBe(false);
     expect(entryChunk.dynamicImports).toContain(markdownChunk.fileName);
@@ -99,7 +105,10 @@ describe("Control UI build chunking", () => {
     const pluginActions = modulePath("../plugins/control-ui-actions.ts");
     const pluginLoader = modulePath("../plugins/control-ui-loader.ts");
     const sharedStyle = modulePath("../styles/select-picker.css");
+    const transcriptStyle = modulePath("../styles/chat/grouped.css");
     const sidebarStyle = modulePath("../styles/sidebar-reorder.css");
+    const optionalStyle = modulePath("../components/kbd.css");
+    const inlineStyle = `${optionalStyle}?inline`;
     const entry = "\0cold-load-fixture";
     const sources = new Map([
       [
@@ -108,19 +117,22 @@ describe("Control UI build chunking", () => {
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; export class Chat { label = action(label); } export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; export class Chat { label = action(label); } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
       [
         newSession,
-        `import ${JSON.stringify(sidebarStyle)}; import { label } from ${JSON.stringify(sharedUi)}; export class NewSession { label = label; }`,
+        `import ${JSON.stringify(sidebarStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; export class NewSession { label = label; }`,
       ],
-      [optional, 'export const panel = "optional-panel";'],
+      [optional, `import ${JSON.stringify(optionalStyle)}; export const panel = "optional-panel";`],
       [devices, 'export const page = "devices-page";'],
-      [sharedUi, 'export const label = "shared-ui";'],
+      [sharedUi, `import inline from ${JSON.stringify(inlineStyle)}; export const label = inline;`],
       [pluginActions, "export const action = (label) => label;"],
       [pluginLoader, `export { action } from ${JSON.stringify(pluginActions)};`],
       [sharedStyle, ".shared-fixture { color: red; }"],
+      [transcriptStyle, ".transcript-fixture { color: green; }"],
       [sidebarStyle, ".sidebar-fixture { color: blue; }"],
+      [optionalStyle, ".optional-fixture { color: orange; }"],
+      [inlineStyle, ".optional-fixture { color: orange; }"],
     ]);
     const result = await build({
       configFile: false,
@@ -172,12 +184,14 @@ describe("Control UI build chunking", () => {
     if (Array.isArray(result) || !("output" in result)) {
       throw new Error("Expected one in-memory build");
     }
-    const styles = result.output.filter(
-      (asset) => asset.type === "asset" && asset.fileName.endsWith(".css"),
-    );
-    expect(styles).toHaveLength(1);
-    expect(styles[0]).toMatchObject({ source: expect.stringContaining(".shared-fixture") });
-    expect(styles[0]).toMatchObject({ source: expect.stringContaining(".sidebar-fixture") });
+    const styles = result.output
+      .filter((asset) => asset.type === "asset")
+      .filter((asset) => asset.fileName.endsWith(".css"));
+    expect(styles).toHaveLength(2);
+    const sharedStyles = styles.find((style) => String(style.source).includes(".shared-fixture"));
+    expect(sharedStyles).toMatchObject({ source: expect.stringContaining(".sidebar-fixture") });
+    expect(sharedStyles).toMatchObject({ source: expect.stringContaining(".transcript-fixture") });
+    expect(sharedStyles?.source).not.toContain(".optional-fixture");
     const chunks = result.output.filter((asset) => asset.type === "chunk");
     const chatChunk = chunks.find((chunk) => chat in chunk.modules)!;
     const newSessionChunk = chunks.find((chunk) => newSession in chunk.modules)!;
