@@ -76,7 +76,6 @@ const ACTIVE_RUN_STATUSES = new Set(["requested", "queued", "pending", "waiting"
 const RELEASE_DECISION_FILE = "full-release-decision.json";
 const GH_NO_CACHE_HEADER = "Cache-Control: max-age=0";
 const ADMISSION_WORKFLOW = "openclaw-release-prepare.yml";
-const MAX_CANDIDATE_TOOLING_LAG_COMMITS = 20;
 const WITNESS_KIND = "openclaw.full-release-dispatch-inputs/v1";
 const WITNESS_FILE = "dispatch-inputs.json";
 const MAX_WITNESS_ARCHIVE_BYTES = 256 * 1024;
@@ -826,19 +825,21 @@ function resolveTrustedWorkflowSha(requestedSha: string, trustedWorkflowRef: str
 
 export function parseCandidateToolingLag(log: string) {
   return log
-    .split(/\r?\n/u)
+    .split("\x1e")
+    .map((record) => record.trim())
     .filter(Boolean)
-    .map((line) => {
-      const separator = line.indexOf("\t");
+    .map((record) => {
+      const [header = "", ...paths] = record.split(/\r?\n/u).filter(Boolean);
+      const separator = header.indexOf("\t");
       if (separator < 1) {
         throw new Error("Invalid candidate tooling lag record");
       }
-      const sha = line.slice(0, separator);
-      const subject = line.slice(separator + 1);
+      const sha = header.slice(0, separator);
+      const subject = header.slice(separator + 1);
       if (!SHA_PATTERN.test(sha) || !subject.trim()) {
         throw new Error("Invalid candidate tooling lag record");
       }
-      return { sha, subject };
+      return { sha, subject, paths };
     });
 }
 
@@ -847,18 +848,12 @@ export function formatCandidateToolingLagWarning(
   mainSha: string,
   commits: Array<{ sha: string; subject: string; paths?: string[] }>,
 ) {
-  const shown = commits.slice(0, MAX_CANDIDATE_TOOLING_LAG_COMMITS);
   return [
-    `WARNING: candidate-owned Q=C tooling ${candidateSha} lacks ${commits.length}${
-      commits.length > MAX_CANDIDATE_TOOLING_LAG_COMMITS ? "+" : ""
-    } patch-inequivalent commit(s) from main ${mainSha}. Main cannot repair this candidate harness; review and port applicable release fixes before dispatch:`,
-    ...shown.map(
+    `WARNING: candidate-owned Q=C tooling ${candidateSha} lacks ${commits.length} patch-inequivalent commit(s) from main ${mainSha}. Main cannot repair this candidate harness; review and port applicable release fixes before dispatch:`,
+    ...commits.map(
       ({ sha, subject, paths }) =>
         `- ${sha.slice(0, 12)} ${subject}${paths?.length ? ` — ${paths.join(", ")}` : ""}`,
     ),
-    ...(commits.length > shown.length
-      ? [`- …and at least ${commits.length - shown.length} more`]
-      : []),
   ].join("\n");
 }
 
@@ -884,17 +879,11 @@ function warnCandidateToolingLag(candidateSha: string) {
       "--cherry-pick",
       "--right-only",
       "--no-merges",
-      `--max-count=${MAX_CANDIDATE_TOOLING_LAG_COMMITS + 1}`,
-      "--format=%H%x09%s",
+      "--format=%x1e%H%x09%s",
+      "--name-only",
       `${candidateSha}...${mainSha}`,
     ]),
-  ).map((commit) => ({
-    sha: commit.sha,
-    subject: commit.subject,
-    paths: run("git", ["diff-tree", "--no-commit-id", "--name-only", "-r", commit.sha])
-      .split(/\r?\n/u)
-      .filter(Boolean),
-  }));
+  );
   if (commits.length > 0) {
     console.warn(formatCandidateToolingLagWarning(candidateSha, mainSha, commits));
   }

@@ -51,14 +51,14 @@ describe("full-release-validation-at-sha", () => {
     const candidateSha = "a".repeat(40);
     const mainSha = "b".repeat(40);
     const commits = parseCandidateToolingLag(
-      `${"c".repeat(40)}\tfix(release): retain large SDK evidence\n${"d".repeat(40)}\tfix(ci): retry FRV job listings\n`,
+      `\x1e${"c".repeat(40)}\tfix(release): retain large SDK evidence\nscripts/release-ci-summary.mjs\n\x1e${"d".repeat(40)}\tfix(ci): retry FRV job listings\n.github/workflows/full-release-validation.yml\n`,
     );
 
     expect(formatCandidateToolingLagWarning(candidateSha, mainSha, commits)).toBe(
       [
         `WARNING: candidate-owned Q=C tooling ${candidateSha} lacks 2 patch-inequivalent commit(s) from main ${mainSha}. Main cannot repair this candidate harness; review and port applicable release fixes before dispatch:`,
-        `- ${"c".repeat(12)} fix(release): retain large SDK evidence`,
-        `- ${"d".repeat(12)} fix(ci): retry FRV job listings`,
+        `- ${"c".repeat(12)} fix(release): retain large SDK evidence — scripts/release-ci-summary.mjs`,
+        `- ${"d".repeat(12)} fix(ci): retry FRV job listings — .github/workflows/full-release-validation.yml`,
       ].join("\n"),
     );
     expect(() => parseCandidateToolingLag("not-a-record")).toThrow(
@@ -86,6 +86,8 @@ describe("full-release-validation-at-sha", () => {
     expect(result.status, result.stderr).toBe(0);
     const comparison = fixture.gitCalls().find((args) => args[0] === "log");
     expect(comparison).not.toContain("--");
+    expect(comparison).not.toContainEqual(expect.stringMatching(/^--max-count=/u));
+    expect(comparison).toContain("--name-only");
     expect(comparison?.at(-1)).toMatch(/\.\.\./u);
   });
 
