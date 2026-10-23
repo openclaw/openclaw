@@ -54,6 +54,7 @@ describe("session workspace artifacts", () => {
       type: mimeType.startsWith("image/") ? "image" : "file",
       mimeType,
       title,
+      sizeBytes: atob(data).length,
       download: { mode: http ? ("url" as const) : ("bytes" as const) },
     };
     const request = vi.fn(async (_method: string, query: { transport?: string }) => ({
@@ -230,13 +231,25 @@ describe("session workspace artifacts", () => {
     },
   );
 
-  it.each(["close", "background"] as const)(
-    "retires a managed image transfer only when its tab is %s",
-    async (retirement) => {
-      const fixture = createArtifactHost("image/png", "iVBORw0KGgo=", { http: true });
+  it.each([
+    ["close", "image/png", "image"],
+    ["background", "image/png", "image"],
+    ["close", "text/csv", "file"],
+    ["background", "text/csv", "file"],
+  ] as const)(
+    "retires a managed transfer when its tab is %s (%s)",
+    async (retirement, mimeType, contentKind) => {
+      if (contentKind === "file") {
+        vi.stubGlobal("Blob", NodeBlob);
+      }
+      const fixture = createArtifactHost(mimeType, "", { http: true });
       const source = "/api/chat/media/outgoing/agent%3Amain%3Acurrent/lifecycle/full";
       fixture.request.mockResolvedValue({
-        artifact: { ...fixture.artifact, id: `managed-${retirement}` },
+        artifact: {
+          ...fixture.artifact,
+          id: `managed-${retirement}-${contentKind}`,
+          sizeBytes: 11,
+        },
         url: `${source}?mediaTicket=fixture`,
       });
       vi.stubGlobal(
@@ -265,10 +278,14 @@ describe("session workspace artifacts", () => {
       }
       const aborted = signal.aborted;
       // A transport can finish despite cancellation; closed tabs must not return.
-      transfer.resolve({
-        ok: true,
-        blob: async () => new Blob(["image bytes"], { type: "image/png" }),
-      } as Response);
+      transfer.resolve(
+        contentKind === "file"
+          ? new Response("file,bytes\n", { headers: { "Content-Type": mimeType } })
+          : ({
+              ok: true,
+              blob: async () => new Blob(["image bytes"], { type: mimeType }),
+            } as Response),
+      );
       await preview.readResult;
       expect(aborted).toBe(retirement === "close");
       const workspace = fixture.state.sessionWorkspaceState!;
@@ -277,10 +294,34 @@ describe("session workspace artifacts", () => {
         expect(workspace.previews).toEqual([]);
       } else {
         expect(workspace.previews).toEqual([preview]);
-        expect(preview.content.kind).toBe("image");
+        expect(preview.content.kind).toBe(contentKind);
       }
     },
   );
+
+  it("keeps unsupported managed images downloadable without fetching a preview", async () => {
+    vi.stubGlobal("Blob", NodeBlob);
+    const fixture = createArtifactHost("image/heic", "", { title: "photo.heic", http: true });
+    fixture.request.mockResolvedValue({
+      artifact: fixture.artifact,
+      url: "/api/chat/media/outgoing/agent%3Amain%3Acurrent/heic/full?mediaTicket=fixture",
+    });
+    const bytes = new Uint8Array([0, 1, 2, 3]);
+    fixture.fetchMock.mockResolvedValue(new Response(bytes));
+    createSessionWorkspaceProps(fixture.state).onOpenArtifact("artifact-1");
+    const content = await fixture.loadedContent();
+    expect(fixture.fetchMock).not.toHaveBeenCalled();
+    expect(content.kind).toBe("attachment");
+    if (content.kind !== "attachment" || !content.file) {
+      throw new Error("Missing original download");
+    }
+    const downloaded = await content.file.download(new AbortController().signal);
+    if (!downloaded || !("blob" in downloaded)) {
+      throw new Error("Missing original bytes");
+    }
+    expect(new Uint8Array(await downloaded.blob.arrayBuffer())).toEqual(bytes);
+    expect(fixture.request).toHaveBeenCalledTimes(2);
+  });
 
   it("uses listed artifact titles without changing tab identity", async () => {
     const { state, request, loadedContent, artifact } = createArtifactHost(
@@ -310,6 +351,7 @@ describe("session workspace artifacts", () => {
     ["application/json", JSON.stringify("Résumé 東京 🦀"), false, "Report", "json"],
     ["image/png", "iVBORw0KGgo=", true, "preview.png", undefined],
     ["text/html", "<h1>Actual artifact</h1>", true, "report.html", undefined],
+    ["image/svg+xml", '<svg xmlns="http://www.w3.org/2000/svg"/>', false, "preview.svg", ""],
   ] as const)("previews %s source %s", async (mimeType, source, http, title, language) => {
     const image = mimeType === "image/png";
     const proxy = mimeType === "text/html";
