@@ -190,21 +190,24 @@ export function resolveOperatorRolePolicy(
   const authority = client?.internal?.operatorRunAuthority;
   if (actor?.kind === "operator" && authority) {
     assertAdmittedRunOperatorAuthority(authority);
-    authority.assertCurrent();
+    const roleFacts = authority.readCurrentRoleFacts?.();
+    if (!roleFacts) {
+      authority.assertCurrent();
+    }
     if (authority.profileId !== actor.profileId) {
       throw new Error("Gateway requester profile changed");
     }
     if (!cfg.gateway?.roles || authority.profileId === GATEWAY_OWNER_PROFILE_ID) {
       return undefined;
     }
-    if (!authority.readCurrentRoleAssignment) {
+    if (!roleFacts) {
       throw new Error("Operator role assignment was not prepared");
     }
     return resolveOperatorRolePolicyForAssignment(
       authority.profileId,
-      authority.readCurrentRoleAssignment(),
+      roleFacts.assignedRole,
       cfg,
-      authority.readCurrentGithubLogin?.() ?? null,
+      roleFacts.githubLogin ?? null,
     );
   }
   const prepared = client?.preparedSessionProfile;

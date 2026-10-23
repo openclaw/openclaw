@@ -2574,6 +2574,12 @@ are nested invocations, not distinct permission decisions, and the named closure
 do not include every anonymous callback. The mode rejects allocation, CPU, GC,
 and diagnostics profiling; its timing is not acceptance evidence.
 
+The same pass counts profile-owner `assertSettled` checks and transferable
+`readProfileAuthority` reads, with their three-frame caller stacks in `host.callers`.
+Report both: a local settlement check can read the owner's cells directly without
+constructing a cross-thread descriptor, so fewer descriptor reads do not imply
+fewer live checks. Caller-stack collection belongs only to this count pass.
+
 Matched `--allocations` runs without `--authority-counts` additionally report
 `allocation.authority`: sampled bytes and sample records attributed to the
 outermost authority owner in each eight-frame allocation stack, matching the

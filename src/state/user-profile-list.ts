@@ -121,15 +121,14 @@ export function captureResidentUserProfileAccess(
   }
   const { rows, assertCurrent: guard } = catalog;
   const assertCurrent = () => {
-    if (profileCatalogs.get(pathname) !== catalog || catalog.rows !== rows) {
-      throw new UserProfileNotFoundError(profileId);
-    }
     guard(profileId);
     const profile = resolveCatalogProfile(rows, profileId);
-    if (!profile) {
+    if (!profile || profileCatalogs.get(pathname) !== catalog || catalog.rows !== rows) {
       throw new UserProfileNotFoundError(profileId);
     }
-    guard(profile.id);
+    if (profile.id !== profileId) {
+      guard(profile.id);
+    }
     return profile;
   };
   assertCurrent();
