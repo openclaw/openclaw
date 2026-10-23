@@ -642,7 +642,7 @@ if (entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
               mode: fs.statSync(file).mode & 0o777,
             };
           });
-        errors.push(...comparePackageDistContentInventory(expected, actual));
+        errors.push(...comparePackageDistContentInventory(expected, actual, warnings));
       }
 
       const parity = comparePackageDistInventory({

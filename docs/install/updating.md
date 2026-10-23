@@ -61,6 +61,13 @@ Dropped writes do not consume the legacy progress budget, so reporting resumes
 when the pipe becomes writable. The worker must contain this repair; it does not
 change an older worker that is already running.
 
+Package verification checks file hashes, sizes, and required execute bits. Extra
+execute bits on otherwise unchanged, non-executable dist files produce one
+warning with the affected file count instead of blocking the update. File
+permissions are left unchanged. Missing required execute bits, changed content,
+and unsafe file types still fail verification. The installed updater must contain
+this fix; a newer candidate cannot change an older updater's package verification.
+
 Supervisor-managed migrations also validate Doctor's repairable projection before
 rejecting retired config fields such as `agents.defaults.heartbeat`. They preserve
 the original config and database backups before Doctor migrates the state and

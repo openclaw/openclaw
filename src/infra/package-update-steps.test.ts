@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
@@ -300,6 +301,48 @@ describe("runGlobalPackageUpdateSteps", () => {
         unlinkSpy.mockRestore();
         renameSpy.mockRestore();
       }
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each([
+    { name: "original 0644", mode: 0o644, changed: false, warning: false },
+    { name: "extra execute bits", mode: 0o755, changed: false, warning: true },
+    { name: "restored 0644", mode: 0o644, changed: false, warning: false },
+    { name: "changed bytes", mode: 0o644, changed: true, warning: false },
+  ])(
+    "verifies staged npm content with $name",
+    async ({ name: caseName, mode, changed, warning }) => {
+      const { globalRoot, packageRoot } = await npmPackage(base);
+      const result = await runGlobalPackageUpdateSteps({
+        ...createNpmUpdateOptions(globalRoot),
+        packageRoot,
+        runStep: async ({ name, argv, cwd }) => {
+          const layout = resolveNpmGlobalPrefixLayoutFromPrefix(stagedNpmPrefix(argv));
+          const stagedRoot = path.join(layout.globalRoot, "openclaw");
+          await writePackageRoot(stagedRoot, "2.0.0");
+          const entry = path.join(stagedRoot, "dist/index.js");
+          await fs.chmod(entry, 0o644);
+          await writePackageDistInventory(stagedRoot);
+          if (caseName === "restored 0644") {
+            await fs.chmod(entry, 0o755);
+          }
+          await fs.chmod(entry, mode);
+          if (changed) {
+            await fs.writeFile(entry, "export const altered = true;\n");
+          }
+          return packageUpdateStepResult({ name, argv, cwd });
+        },
+      });
+
+      expect(result.failedStep?.name ?? null).toBe(changed ? "package-verify" : null);
+      expect(result.afterVersion).toBe(changed ? "1.0.0" : "2.0.0");
+      await expectText(packageRoot, "package.json").toContain(
+        changed ? '"version":"1.0.0"' : '"version":"2.0.0"',
+      );
+      const warnings = updateRunWarningMessages(result.steps.flatMap(updateRunStepsFromResultStep));
+      expect(warnings).toEqual(
+        warning ? [expect.stringContaining("1 packaged dist file(s) have extra execute bits")] : [],
+      );
     },
   );
 
