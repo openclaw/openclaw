@@ -654,6 +654,16 @@ includes these outcomes in `failures`; the update report and Doctor's update
 history retain recorded failures. The serving Gateway stays in place during
 these preflight checks.
 
+After an external reinstall changes the OpenClaw installation root, such as
+installing a newer Node version with nvm, mise, or Homebrew and reinstalling
+OpenClaw, Gateway startup repairs managed plugin host links before checking
+plugin availability. Stale or dangling links are rebound to the current
+installation, with a warning showing the old and new targets. Developer-owned
+path installs and links outside the plugin system's owned locations are left
+unchanged. If filesystem permissions prevent repair, startup reports the
+affected plugin and keeps it unavailable until the links can be repaired with
+`openclaw doctor --fix`.
+
 Directory permission checks remain in the **installed updater**. Older updaters cannot gain new
 admission behavior from the candidate they have not staged yet. If upgrading
 from an older release, check [Node requirements](/install/node) and the npm
