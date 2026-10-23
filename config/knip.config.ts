@@ -1095,6 +1095,10 @@ const config = {
       entry: ["index.mjs!"],
       project: ["**/*.{js,mjs,cjs,ts,mts,cts}!"],
     },
+    "examples/inline-incident": {
+      entry: ["index.ts!", "control-ui.ts!"],
+      project: ["**/*.{js,mjs,cjs,ts,mts,cts}!"],
+    },
     "qa/convex-credential-broker": {
       // Convex discovers these registered functions and schemas by filename.
       entry: ["convex/credentials.ts!", "convex/crons.ts!", "convex/http.ts!", "convex/schema.ts!"],
