@@ -21,9 +21,9 @@ export function ChatSidebarEditorMenu(props: {
           placement="bottom-end"
           open={props.open}
           onOpenChange={props.onOpenChange}
-          label={t("chat.sessionDiff.openInEditor")}
+          label={t("chat.detailPanel.openInEditor")}
           triggerClass="btn btn--sm sidebar-file-view__action"
-          triggerAttributes={{ title: t("chat.sessionDiff.openInEditor") }}
+          triggerAttributes={{ title: t("chat.detailPanel.openInEditor") }}
           trigger={<Icon name="externalLink" />}
           items={EDITOR_IDS.map((editor) => ({
             id: editor,

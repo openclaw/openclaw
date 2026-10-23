@@ -23,12 +23,12 @@ it("names the icon-only editor menu trigger in the active locale", async () => {
     await restoreI18n();
   });
   const trigger = () => view.container.querySelector(".sidebar-file-view__action");
-  const german = t("chat.sessionDiff.openInEditor");
+  const german = t("chat.detailPanel.openInEditor");
   await waitForSolid(() => expect(trigger()?.getAttribute("aria-label")).toBe(german));
   expect(trigger()?.getAttribute("title")).toBe(german);
 
   await i18n.setLocale("en");
-  const english = t("chat.sessionDiff.openInEditor");
+  const english = t("chat.detailPanel.openInEditor");
   expect(english).not.toBe(german);
   await waitForSolid(() => expect(trigger()?.getAttribute("aria-label")).toBe(english));
   expect(trigger()?.getAttribute("title")).toBe(english);
