@@ -823,37 +823,19 @@ function resolveTrustedWorkflowSha(requestedSha: string, trustedWorkflowRef: str
   return workflowSha;
 }
 
-export function parseCandidateToolingLag(log: string) {
-  return log
-    .split("\x1e")
-    .map((record) => record.trim())
-    .filter(Boolean)
-    .map((record) => {
-      const [header = "", ...paths] = record.split(/\r?\n/u).filter(Boolean);
-      const separator = header.indexOf("\t");
-      if (separator < 1) {
-        throw new Error("Invalid candidate tooling lag record");
-      }
-      const sha = header.slice(0, separator);
-      const subject = header.slice(separator + 1);
-      if (!SHA_PATTERN.test(sha) || !subject.trim()) {
-        throw new Error("Invalid candidate tooling lag record");
-      }
-      return { sha, subject, paths };
-    });
-}
-
 export function formatCandidateToolingLagWarning(
   candidateSha: string,
   mainSha: string,
-  commits: Array<{ sha: string; subject: string; paths?: string[] }>,
+  commitCount: number,
+  changedPathCount: number,
+  changedAreas: string[],
 ) {
   return [
-    `WARNING: candidate-owned Q=C tooling ${candidateSha} lacks ${commits.length} patch-inequivalent commit(s) from main ${mainSha}. Main cannot repair this candidate harness; review and port applicable release fixes before dispatch:`,
-    ...commits.map(
-      ({ sha, subject, paths }) =>
-        `- ${sha.slice(0, 12)} ${subject}${paths?.length ? ` — ${paths.join(", ")}` : ""}`,
-    ),
+    `WARNING: candidate-owned Q=C tooling ${candidateSha} is ${commitCount} non-merge commit(s) behind main ${mainSha}, with ${changedPathCount} net changed path(s). Main cannot repair this candidate harness; review and port applicable release fixes before dispatch.`,
+    ...(changedAreas.length > 0
+      ? ["Largest changed areas (share of net changed paths):", ...changedAreas]
+      : []),
+    `Inspect every exact path: git diff --name-status ${candidateSha} ${mainSha}`,
   ].join("\n");
 }
 
@@ -873,19 +855,38 @@ function warnCandidateToolingLag(candidateSha: string) {
   if (candidateSha === mainSha) {
     return;
   }
-  const commits = parseCandidateToolingLag(
+  const commitCount = Number(
     run("git", [
-      "log",
-      "--cherry-pick",
+      "rev-list",
+      "--count",
       "--right-only",
       "--no-merges",
-      "--format=%x1e%H%x09%s",
-      "--name-only",
       `${candidateSha}...${mainSha}`,
     ]),
   );
-  if (commits.length > 0) {
-    console.warn(formatCandidateToolingLagWarning(candidateSha, mainSha, commits));
+  const changedPaths = run("git", ["diff", "--no-renames", "--name-only", candidateSha, mainSha])
+    .split(/\r?\n/u)
+    .filter(Boolean);
+  if (commitCount > 0 && changedPaths.length > 0) {
+    const changedAreas = run("git", [
+      "diff",
+      "--no-renames",
+      "--dirstat=files,1",
+      candidateSha,
+      mainSha,
+    ])
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    console.warn(
+      formatCandidateToolingLagWarning(
+        candidateSha,
+        mainSha,
+        commitCount,
+        changedPaths.length,
+        changedAreas,
+      ),
+    );
   }
 }
 

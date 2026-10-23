@@ -16,7 +16,6 @@ import {
   fullReleaseConcurrencyBranchPrefix,
   formatCandidateToolingLagWarning,
   parseArgs,
-  parseCandidateToolingLag,
   releaseProfileForVersion,
   releaseDecisionStopsForeground,
   releaseEvidenceVerificationArgs,
@@ -50,19 +49,20 @@ describe("full-release-validation-at-sha", () => {
   it("reports patch-inequivalent main FRV tooling without changing Q=C", () => {
     const candidateSha = "a".repeat(40);
     const mainSha = "b".repeat(40);
-    const commits = parseCandidateToolingLag(
-      `\x1e${"c".repeat(40)}\tfix(release): retain large SDK evidence\nscripts/release-ci-summary.mjs\n\x1e${"d".repeat(40)}\tfix(ci): retry FRV job listings\n.github/workflows/full-release-validation.yml\n`,
-    );
 
-    expect(formatCandidateToolingLagWarning(candidateSha, mainSha, commits)).toBe(
+    expect(
+      formatCandidateToolingLagWarning(candidateSha, mainSha, 3508, 28162, [
+        "14.8% extensions/",
+        "1.3% scripts/",
+      ]),
+    ).toBe(
       [
-        `WARNING: candidate-owned Q=C tooling ${candidateSha} lacks 2 patch-inequivalent commit(s) from main ${mainSha}. Main cannot repair this candidate harness; review and port applicable release fixes before dispatch:`,
-        `- ${"c".repeat(12)} fix(release): retain large SDK evidence — scripts/release-ci-summary.mjs`,
-        `- ${"d".repeat(12)} fix(ci): retry FRV job listings — .github/workflows/full-release-validation.yml`,
+        `WARNING: candidate-owned Q=C tooling ${candidateSha} is 3508 non-merge commit(s) behind main ${mainSha}, with 28162 net changed path(s). Main cannot repair this candidate harness; review and port applicable release fixes before dispatch.`,
+        "Largest changed areas (share of net changed paths):",
+        "14.8% extensions/",
+        "1.3% scripts/",
+        `Inspect every exact path: git diff --name-status ${candidateSha} ${mainSha}`,
       ].join("\n"),
-    );
-    expect(() => parseCandidateToolingLag("not-a-record")).toThrow(
-      "Invalid candidate tooling lag record",
     );
   });
 
@@ -84,11 +84,11 @@ describe("full-release-validation-at-sha", () => {
     const result = fixture.run();
 
     expect(result.status, result.stderr).toBe(0);
-    const comparison = fixture.gitCalls().find((args) => args[0] === "log");
-    expect(comparison).not.toContain("--");
+    const comparison = fixture.gitCalls().find((args) => args[0] === "rev-list");
     expect(comparison).not.toContainEqual(expect.stringMatching(/^--max-count=/u));
-    expect(comparison).toContain("--name-only");
     expect(comparison?.at(-1)).toMatch(/\.\.\./u);
+    const treeDiffs = fixture.gitCalls().filter((args) => args[0] === "diff");
+    expect(treeDiffs).toContainEqual(expect.arrayContaining(["--no-renames", "--name-only"]));
   });
 
   it("rejects a missing purpose before remote creation on supporting tooling", () => {
