@@ -20,6 +20,7 @@ import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import type { UserChannelAuthorizationReference } from "../state/user-profiles.types.js";
 import { isBrowserOperatorUiClient } from "../utils/message-channel.js";
+import { createChannelOperatorRevocation } from "./channel-operator-revocation.js";
 import {
   onGatewayDeviceSourceRevoked,
   readGatewayDeviceSourceAuthority,
@@ -212,6 +213,7 @@ export function captureChannelOperatorRunAuthority(input: {
     getConfig: params.getRuntimeConfig,
     resolvePolicy: (cfg) => resolveRole(cfg)?.modelPolicy,
   });
+  const revocation = createChannelOperatorRevocation(params);
   return createAdmittedRunOperatorAuthority({
     profileId: params.profileId,
     channelRecoverySource: params.recoveryReference
@@ -220,7 +222,9 @@ export function captureChannelOperatorRunAuthority(input: {
     scopes: params.scopes,
     rolePolicy: prepareRunRolePolicy(sourceRolePolicy(role)),
     gatewayAccessGrant: params.gatewayAccessGrant,
-    assertCurrent: params.assertCurrent,
+    assertCurrent: revocation.assertCurrent,
+    signal: revocation.signal,
+    retain: revocation.retain,
     readCurrentRoleAssignment: () => params.assignedRole,
     readCurrentGithubLogin: () => params.githubLogin ?? null,
     get modelPolicy() {
@@ -234,11 +238,16 @@ export function captureChannelOperatorRunAuthority(input: {
         }
       });
       // Recheck through the channel assertion so cancellation keeps its revocation error.
-      params.signal?.addEventListener("abort", listener, { once: true });
+      const signals = [params.signal, revocation.signal];
+      for (const signal of signals) {
+        signal?.addEventListener("abort", listener, { once: true });
+      }
       return () => {
         releaseProfile();
         releasePolicy();
-        params.signal?.removeEventListener("abort", listener);
+        for (const signal of signals) {
+          signal?.removeEventListener("abort", listener);
+        }
       };
     },
   });
