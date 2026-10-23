@@ -65,6 +65,7 @@ if (isMainThread) {
   }
   const broadcastTiming = process.env.OPENCLAW_BENCH_BROADCAST_TIMING === "1";
   const workerAttribution = process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1";
+  const workerAttributionSourceHooks = new Set<string>();
   const sessionProjectionSource = process.env.OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE;
   let broadcastTimingInstalled = false;
   if (broadcastTiming || sessionProjectionSource || workerAttribution) {
@@ -88,23 +89,45 @@ if (isMainThread) {
     }
     const owner = new URL("../../src/gateway/server-broadcast.ts", import.meta.url).href;
     const workerOwners = new Map(
-      ["worker-message-metrics.ts", "sqlite-worker-operation-admission.ts"].map((file) => [
-        new URL(`../../src/infra/${file}`, import.meta.url).href,
-        file,
-      ]),
+      ["worker-message-metrics.ts", "sqlite-worker-operation-admission.ts", "worker-cpu.ts"].map(
+        (file) => [new URL(`../../src/infra/${file}`, import.meta.url).href, file],
+      ),
     );
+    workerOwners.set(
+      new URL("../../packages/worker-runtime/src/worker-task-pool-core.ts", import.meta.url).href,
+      "worker-task-pool-core.ts",
+    );
+    const transformWorkerSource = workerAttribution
+      ? (await import("esbuild")).transformSync
+      : undefined;
     registerHooks({
       load(url, context, nextLoad) {
         const loaded = nextLoad(url, context);
         const workerOwner = workerAttribution && workerOwners.get(url);
         if (workerOwner) {
+          const source = instrumentGatewayBenchWorkerSource(
+            workerOwner,
+            readFileSync(new URL(url), "utf8"),
+          );
+          workerAttributionSourceHooks.add(workerOwner);
+          if (workerOwner === "worker-task-pool-core.ts" && transformWorkerSource) {
+            // The package core uses parameter properties; Node's strip-only mode cannot load it.
+            return {
+              ...loaded,
+              format: "module",
+              source: transformWorkerSource(source, {
+                loader: "ts",
+                format: "esm",
+                target: "node26",
+                sourcemap: "inline",
+                sourcefile: fileURLToPath(url),
+              }).code,
+            };
+          }
           return {
             ...loaded,
             format: "module-typescript",
-            source: instrumentGatewayBenchWorkerSource(
-              workerOwner,
-              readFileSync(new URL(url), "utf8"),
-            ),
+            source,
           };
         }
         const projectionSource = projectionSources.get(url);
@@ -498,7 +521,10 @@ ${source}`;
           if (workerAttributionResult) {
             writeFileSync(
               `${message.profilePath}.worker-attribution.json`,
-              JSON.stringify(workerAttributionResult),
+              JSON.stringify({
+                ...workerAttributionResult,
+                sourceHooks: [...workerAttributionSourceHooks].toSorted(),
+              }),
               { mode: 0o600 },
             );
           }

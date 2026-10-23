@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session, type HeapProfiler as InspectorHeapProfiler } from "node:inspector/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -11,7 +11,17 @@ import { GCProfiler, serialize } from "node:v8";
 import type { SessionActorHotState } from "../../src/config/sessions/session-actor-contract.js";
 import type { SessionRowDatabaseFacts } from "../../src/config/sessions/session-row-facts.types.js";
 import type { InternalSessionEntry } from "../../src/config/sessions/types.js";
+import type { SamplingProfile } from "../../src/logging/diagnostic-heap-profile.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
+
+// Node's declarations omit samples that the current V8 protocol always returns.
+declare module "node:inspector" {
+  namespace HeapProfiler {
+    interface SamplingHeapProfile {
+      samples: SamplingProfile["samples"];
+    }
+  }
+}
 
 const { values } = parseArgs({
   options: {
@@ -59,7 +69,10 @@ const receiptSourceHash = hash("sha256", await readFile(receiptOwnerUrl), "hex")
 const databasePath = path.join(stateDir, "admission.sqlite");
 const database = sqlite.openNodeSqliteDatabase(databasePath);
 const identity = admission.getSqliteDatabaseAdmissionIdentityForPath(databasePath);
-assert(identity?.key.startsWith("file:"), "Replica requires admitted physical database identity");
+assert(
+  identity && identity.key.startsWith("file:"),
+  "Replica requires admitted physical database identity",
+);
 const inspector = new Session();
 inspector.connect();
 const sessionCount = 32;
@@ -67,11 +80,11 @@ const replicas: Array<ReturnType<typeof owner.createSessionActorReplica>> = [];
 const entries: InternalSessionEntry[] = [];
 const retained: SessionRowDatabaseFacts[] = [];
 
-function allocatedBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
+function allocatedBytes(node: InspectorHeapProfiler.SamplingHeapProfileNode): number {
   return node.selfSize + node.children.reduce((sum, child) => sum + allocatedBytes(child), 0);
 }
 
-function ownerBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
+function ownerBytes(node: InspectorHeapProfiler.SamplingHeapProfileNode): number {
   return node.callFrame.functionName === "readSessionActorRowFacts"
     ? allocatedBytes(node)
     : node.children.reduce((sum, child) => sum + ownerBytes(child), 0);

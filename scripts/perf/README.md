@@ -2662,14 +2662,16 @@ including transferred buffers, rather than bytes copied by structured clone.
 
 For a separate worker-message attribution pass, set
 `OPENCLAW_BENCH_WORKER_ATTRIBUTION=1` and use `--entry src/entry.ts`. The private
-preload instruments the existing metrics owner and SQLite admission receipt
-boundary in memory. Each CPU/heap capture adds `.worker-attribution.json` with
+preload instruments the existing metrics owner, SQLite admission receipt, worker
+receiver, and task-pool reply boundaries in memory. Each CPU/heap capture adds `.worker-attribution.json` with
 message counts, known payload bytes, and V8 re-serialized envelope bytes grouped
 by bounded message kind, protocol operation, receipt/publication kind, and known
-lifecycle script. Other script identities are `unknown`; this observer does not
-infer them from message contents or join requests to replies. It caps groups at
-512 and reports overflow. Direct metrics calls that do not expose their message
-value report `unavailableMessageValues`. Shared buffers contribute reference
+lifecycle script. Received dependency messages use `other` for unregistered
+scripts; boundaries without script identity use `unknown`. The observer does not
+infer identity from payload contents. It caps groups at 512 and reports overflow.
+Direct metrics calls that do not expose their message value report
+`unavailableMessageValues`. Outgoing dependency messages remain unsized so the
+observer never runs their getters or proxy traps. Shared buffers contribute reference
 encoding bytes and separate `sharedBackingBytes`, never copied backing bytes.
 MessagePorts and unsupported native objects report `failedSerializationMessages`,
 not empty messages. The size estimate includes transferred ArrayBuffer contents
@@ -2678,6 +2680,14 @@ Actor receipts also report the bounded phase and separate serialized sizes of
 authority snapshot entries, receipt postimage entries, and their skills snapshot,
 system-prompt report, and pending-delivery fields when present. These overlapping
 sections are diagnostic breakdowns; do not add them to total message bytes.
+The separate `taskReplies` table breaks validated task replies down by the task
+owner's worker URL and a fixed operation vocabulary. It refines the owner's
+existing diagnostic label during input preparation and reads it at reply receipt;
+there is no request/reply correlation map or retained payload. This table overlaps
+the transport groups and must not be added to their totals. Replies rejected before
+task/status validation are absent from this table. `sourceHooks` lists the source
+modules actually instrumented, including the package task-pool core reached by
+normal `@openclaw/worker-runtime` imports.
 
 Re-serialization adds allocation and CPU work: use that pass to locate traffic,
 then unset the flag for allocation, retained-heap, promotion, GC, and latency

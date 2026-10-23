@@ -9,6 +9,7 @@ import type {
 } from "../../src/infra/worker-message-metrics.ts";
 
 const observationChannel = channel("openclaw.benchmark.worker-message");
+const taskReplyChannel = channel("openclaw.benchmark.worker-task-reply");
 const scripts = new Set(
   Object.values(createRuntimeProcessEntrypoints(import.meta.url)).map((entry) =>
     basename(entry.distWorkerPath),
@@ -53,6 +54,55 @@ const labels = new Set([
   "patch",
   "read",
 ]);
+const taskOperations = new Set([
+  "task",
+  "prepare",
+  "prepare-session",
+  "prewarm",
+  "history-page",
+  "session-entry",
+  "session-entries",
+  "session-entry-current",
+  "session-entry-list",
+  "session-exact-entries",
+  "session-row-facts",
+  "session-row-presence",
+  "session-cleanup",
+  "session-memory-capture",
+  "session-store-projection",
+  "session-store-summary",
+  "session-store-target",
+  "session-target-inventory",
+  "combined-store-topology",
+  "historical-eviction-candidates",
+  "usage-cost",
+  "model-context",
+  "context-messages",
+  "transcript-search",
+  "transcript-match",
+  "transcript-hydration",
+  "transcript-maintenance",
+  "transcript-stats",
+  "transcript-watermark",
+  "transcript-message-presence",
+  "transcript-anchors",
+  "transcript-raw-delta",
+  "transcript-visible-delta",
+  "transcript-latest-assistant",
+  "projection-status",
+  "trajectory-events",
+  "trajectory-retention",
+  "board-snapshot",
+  "board-widget-document",
+  "branch-summaries",
+  "session-title-fields",
+  "session-preview",
+  "session-pending-input-receipts",
+  "session-pending-input-source",
+  "session-harness-completion-source",
+  "cli-process-history",
+  "sqlite-target",
+]);
 
 function property(value: unknown, key: string): unknown {
   return value !== null && typeof value === "object" && !types.isProxy(value)
@@ -64,11 +114,42 @@ export function gatewayBenchMessageLabel(value: unknown): string {
   return typeof value === "string" && labels.has(value) ? value : "other";
 }
 
+/** Reuse the task owner's diagnostic string slot, never retain its prepared input. */
+export function gatewayBenchTaskOperation(input: unknown, diagnosticLabel?: string): string {
+  const kind = property(input, "kind");
+  const fallback = diagnosticLabel?.split(".").at(-1);
+  return typeof kind === "string" && taskOperations.has(kind)
+    ? kind
+    : fallback && taskOperations.has(fallback)
+      ? fallback
+      : "task";
+}
+
+function scriptLabel(value: unknown): string {
+  if (value === "other") {
+    return "other";
+  }
+  const name =
+    typeof value === "string" ? basename(value).replace(/\.[cm]?[jt]s$/u, ".js") : undefined;
+  return name && scripts.has(name) ? name : "unknown";
+}
+
 type Observation = {
   kind: WorkerMessageKind;
   direction: WorkerMessageDirection;
   payloadBytes?: number;
   message?: unknown;
+  script?: string;
+};
+
+type TaskReply = {
+  script: string;
+  operation: string;
+  outcome: "ok" | "failed";
+  messages: number;
+  serializedMessages: number;
+  serializedBytes: number;
+  failedSerializationMessages: number;
 };
 
 type Group = {
@@ -114,9 +195,48 @@ class MessageSizer extends Serializer {
 /** Diagnostic pass only: serialization itself adds work and must not gate allocation/GC. */
 export function startGatewayBenchWorkerMessages() {
   const groups = new Map<string, Group>();
+  const taskReplies = new Map<string, TaskReply>();
   let overflowMessages = 0;
+  let overflowTaskReplies = 0;
+  const observeTaskReply = (event: unknown) => {
+    const { worker, operation, message } = event as {
+      worker: string;
+      operation?: string;
+      message: { status: "ok" | "failed" };
+    };
+    const script = scriptLabel(worker);
+    const label = operation && taskOperations.has(operation) ? operation : "task";
+    const key = `${script}:${label}:${message.status}`;
+    let group = taskReplies.get(key);
+    if (!group) {
+      if (taskReplies.size >= 512) {
+        overflowTaskReplies++;
+        return;
+      }
+      group = {
+        script,
+        operation: label,
+        outcome: message.status,
+        messages: 0,
+        serializedMessages: 0,
+        serializedBytes: 0,
+        failedSerializationMessages: 0,
+      };
+      taskReplies.set(key, group);
+    }
+    group.messages++;
+    try {
+      const serializer = new MessageSizer();
+      serializer.writeHeader();
+      serializer.writeValue(message);
+      group.serializedBytes += serializer.releaseBuffer().byteLength;
+      group.serializedMessages++;
+    } catch {
+      group.failedSerializationMessages++;
+    }
+  };
   const observe = (event: unknown) => {
-    const { kind, direction, payloadBytes, message } = event as Observation;
+    const { kind, direction, payloadBytes, message, script: receivedScript } = event as Observation;
     const envelope = property(message, "type");
     const body =
       envelope === "message" || envelope === "post" ? property(message, "value") : message;
@@ -130,11 +250,8 @@ export function startGatewayBenchWorkerMessages() {
     const receipt = property(facts, "receipt");
     const publication = property(facts, "publication");
     const filename = property(property(body, "filename"), "value");
-    const name =
-      typeof filename === "string"
-        ? basename(filename).replace(/\.[cm]?[jt]s$/u, ".js")
-        : undefined;
-    const script = name && scripts.has(name) ? name : "unknown";
+    // The worker owner has already normalized its script to a fixed vocabulary.
+    const script = receivedScript ?? scriptLabel(filename);
     const operation = gatewayBenchMessageLabel(
       property(body, "kind") ??
         property(body, "stage") ??
@@ -248,13 +365,18 @@ export function startGatewayBenchWorkerMessages() {
     }
   };
   observationChannel.subscribe(observe);
+  taskReplyChannel.subscribe(observeTaskReply);
   return () => {
     observationChannel.unsubscribe(observe);
+    taskReplyChannel.unsubscribe(observeTaskReply);
     return {
       scope: "main-isolate-worker-boundaries",
       byteMeaning: "V8 reserialization estimate, not heap bytes or native transport bytes",
       overflowMessages,
       groups: [...groups.values()],
+      taskReplyScope: "Validated task replies; overlaps transport groups, never add to totals",
+      overflowTaskReplies,
+      taskReplies: [...taskReplies.values()],
     };
   };
 }
@@ -271,18 +393,22 @@ export function instrumentGatewayBenchWorkerSource(file: string, source: string)
   if (file === "worker-message-metrics.ts") {
     replace(
       "  payloadBytes?: number,\n): void {",
-      "  payloadBytes?: number,\n  benchmarkMessage?: unknown,\n): void {",
+      "  payloadBytes?: number,\n  benchmarkMessage?: unknown,\n  benchmarkScript?: string,\n): void {",
     );
     replace(
       "  let directions = counters.get(kind);",
       `  if (benchmarkWorkerMessageChannel.hasSubscribers) {
-    benchmarkWorkerMessageChannel.publish({ kind, direction, payloadBytes, message: benchmarkMessage });
+    benchmarkWorkerMessageChannel.publish({ kind, direction, payloadBytes, message: benchmarkMessage, script: benchmarkScript });
   }
   let directions = counters.get(kind);`,
     );
     replace(
       "payloadBytes === undefined ? workerMessagePayloadBytes(message) : (payloadBytes ?? undefined),",
-      "payloadBytes === undefined ? workerMessagePayloadBytes(message) : (payloadBytes ?? undefined),\n      message,",
+      "payloadBytes === undefined ? workerMessagePayloadBytes(message) : (payloadBytes ?? undefined),\n      message,\n      benchmarkScript,",
+    );
+    replace(
+      "  payloadBytes?: number | null,\n): void {",
+      "  payloadBytes?: number | null,\n  benchmarkScript?: string,\n): void {",
     );
     instrumented = `import { channel as benchmarkWorkerDiagnosticChannel } from "node:diagnostics_channel";
 const benchmarkWorkerMessageChannel = benchmarkWorkerDiagnosticChannel("openclaw.benchmark.worker-message");
@@ -292,6 +418,35 @@ ${instrumented}`;
       "        ? message.payloadBytes\n        : undefined,\n    );",
       "        ? message.payloadBytes\n        : undefined,\n      message,\n    );",
     );
+  } else if (file === "worker-cpu.ts") {
+    replace(
+      'recordWorkerMessage("other", "from_worker");',
+      'recordWorkerMessage("other", "from_worker", undefined, args[0], source.script);',
+    );
+    replace(
+      'observeWorkerMessage(args[0], "from_worker");',
+      'observeWorkerMessage(args[0], "from_worker", "other", undefined, source.script);',
+    );
+    replace(
+      'recordWorkerMessage("lifecycle", "from_worker", workerMessagePayloadBytes(args[0]));',
+      'recordWorkerMessage("lifecycle", "from_worker", workerMessagePayloadBytes(args[0]), args[0], source.script);',
+    );
+  } else if (file === "worker-task-pool-core.ts") {
+    replace(
+      "task.diagnosticLabel = this.host.describeTask?.(this.options.workerUrl, input);",
+      "task.diagnosticLabel = benchmarkTaskOperation(input, this.host.describeTask?.(this.options.workerUrl, input));",
+    );
+    replace(
+      "    const reply = message as WorkerReply<Output>;",
+      `    if (benchmarkTaskReplyChannel.hasSubscribers) {
+      benchmarkTaskReplyChannel.publish({ worker: this.options.workerUrl.pathname, operation: task.diagnosticLabel, message });
+    }
+    const reply = message as WorkerReply<Output>;`,
+    );
+    instrumented = `import { channel as benchmarkTaskDiagnosticChannel } from "node:diagnostics_channel";
+import { gatewayBenchTaskOperation as benchmarkTaskOperation } from ${JSON.stringify(import.meta.url)};
+const benchmarkTaskReplyChannel = benchmarkTaskDiagnosticChannel("openclaw.benchmark.worker-task-reply");
+${instrumented}`;
   }
   return instrumented;
 }
