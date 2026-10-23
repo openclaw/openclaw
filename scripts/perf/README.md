@@ -1022,7 +1022,8 @@ pairs 1–2 and 3–4. Four pairs can expose a false rejection; they cannot prec
 estimate the false-positive rate. A guard-interrupted pair is discarded whole.
 
 Use `transcript-broadcast-measure.ts --diagnostics --trace-gc` **without**
-allocation or CPU profiling for natural GC. Each RPC round records `naturalGc`:
+allocation or CPU profiling for natural GC. Each RPC round without background
+polling records `naturalGc`:
 completed operation count, main-isolate trace promotion per operation, and GC
 milliseconds per operation split by kind. `diagnostics.gateway.gc` supplies
 collection counts, pause tails, and maxima; `eventLoopDelay` includes its sample

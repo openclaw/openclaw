@@ -5448,6 +5448,7 @@ try {
       Object.assign(sample, {
         ...(!turnScenario &&
         !connectionScenario &&
+        listIntervalMs === 0 &&
         values.diagnostics &&
         values["trace-gc"] &&
         !values.allocations &&
