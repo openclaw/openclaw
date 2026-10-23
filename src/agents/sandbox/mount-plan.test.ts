@@ -171,6 +171,20 @@ describe("managed mount plan", () => {
     expect(plan.binds).toContain("/host/agents-ro/skills:/workspace/.agents/skills:ro,z");
   });
 
+  it("keeps a writable Gateway child under a read-only Gateway ancestor writable", async () => {
+    fs.mkdirSync(path.join(root, "agent/.agents/output"));
+    const namespace = await resolveDockerSourceNamespace(engine);
+    vi.mocked(resolveDockerSourceNamespace).mockResolvedValue([
+      ...namespace!,
+      namespaceBind("/host/agents-ro", path.join(root, "agent/.agents"), false),
+      namespaceBind("/host/agents-output", path.join(root, "agent/.agents/output")),
+    ]);
+    const plan = await prepare("rw");
+    expect(plan.binds).toContain("/host/agents-ro:/workspace/.agents:ro,z");
+    expect(plan.binds).toContain("/host/agents-output:/workspace/.agents/output:z");
+    expect(plan.binds).toContain("/host/agents-ro/skills:/workspace/.agents/skills:ro,z");
+  });
+
   it("detects a retained container created before ancestor pinning as a mount change", async () => {
     const plan = await prepare("rw");
     await expectMounts(

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -13,7 +12,10 @@ import {
   resolveDockerSourceNamespace,
   translateSandboxMountSources,
 } from "./docker-mount-source.js";
-import { getSandboxHostPathPolicyKey } from "./host-paths.js";
+import {
+  getSandboxHostPathPolicyKey,
+  resolveSandboxHostPathViaExistingAncestor,
+} from "./host-paths.js";
 import { isPathInsideContainerRoot } from "./path-utils.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 import {
@@ -39,7 +41,9 @@ function gatewaySourceIsReadOnly(
   namespace: readonly InspectedSandboxMount[],
   hostPath: string,
 ): boolean {
-  const source = fs.realpathSync(hostPath);
+  // Ancestors may not exist yet; the covering bind of their nearest existing
+  // parent is the one the engine would project.
+  const source = resolveSandboxHostPathViaExistingAncestor(path.resolve(hostPath));
   const covering = namespace
     .filter((entry) => isPathInside(entry.destination, source))
     .toSorted((a, b) => b.destination.length - a.destination.length)[0];
@@ -77,7 +81,11 @@ export async function prepareSandboxMountPlan(params: {
     });
     await workspace.mkdir(relativeSkillMount);
   }
-  const ancestors = resolveProtectedMountAncestors(selection.mounts);
+  // A Gateway read-only bind under the workspace is already projected as its own
+  // mountpoint (with its writable children intact), so it needs no extra pin.
+  const ancestors = resolveProtectedMountAncestors(selection.mounts).filter(
+    (ancestor) => !namespace || !gatewaySourceIsReadOnly(namespace, ancestor.hostPath),
+  );
   for (const ancestor of ancestors) {
     // Bind sources must exist before create; engines would otherwise create them
     // root-owned (Docker) or refuse the bind (Podman). Symlinked ancestors fail closed.
@@ -129,20 +137,13 @@ export async function prepareSandboxMountPlan(params: {
     if (mount.source === "bind") {
       continue;
     }
-    // A pinning self-bind only needs to be a mountpoint. Keep the Gateway's own
-    // access for that directory so a read-only Gateway submount stays read-only.
-    const readOnly =
-      mount.readOnly ||
-      (namespace !== undefined &&
-        ancestors.includes(mount as (typeof ancestors)[number]) &&
-        gatewaySourceIsReadOnly(namespace, mount.hostPath));
     const translated = namespace
       ? translateSandboxMountSources({
           source: mount.hostPath,
           containerPath: target,
           allowedRoots,
           mounts: namespace,
-          readOnly,
+          readOnly: mount.readOnly,
           shadowedTargets: targets.filter(
             (other) => other !== target && isPathInside(target, other),
           ),
