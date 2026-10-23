@@ -3,7 +3,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
-import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { PanelRefreshStatus as PanelRefreshStatusView } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";

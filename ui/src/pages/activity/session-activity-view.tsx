@@ -16,7 +16,7 @@ import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { IpLocation } from "../../components/ip-location.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import "../../components/viewer-facepile.ts";
+import "../../components/solid/viewer-facepile.tsx";
 import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import {

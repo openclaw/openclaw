@@ -566,7 +566,6 @@ src/config/config-write-guard.ts
 src/config/config.ts
 src/config/defaults.ts
 src/config/deferred-plugin-migration-config.ts
-src/config/env-preserve-authored.ts
 src/config/env-preserve.ts
 src/config/env-substitution.ts
 src/config/env-vars.ts
@@ -1096,6 +1095,7 @@ src/infra/restart-stale-pids.ts
 src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
 src/infra/root-walk.ts
+src/infra/runtime-dependency-ownership.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-manifest.ts
 src/infra/runtime-process-url.ts
@@ -1314,7 +1314,6 @@ src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
 src/infra/worker-native-lifecycle.worker.ts
 src/infra/worker-native-port.ts
-src/infra/worker-native-resource.ts
 src/infra/worker-native-task-port.ts
 src/infra/worker-pool-sizing.ts
 src/infra/worker-request-diagnostics.ts
@@ -1556,6 +1555,7 @@ src/plugins/provider-thinking.ts
 src/plugins/registry-runtime-binding.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
+src/plugins/plugin-bundled-reload.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-state-operation-module-loader.ts
 src/plugins/plugin-state-operation-source.ts

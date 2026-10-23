@@ -19,7 +19,7 @@ import {
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
 import { createMenuControls, type MenuEntry, type MenuItem } from "./solid/menu.tsx";
-import "./viewer-facepile.ts";
+import "./solid/viewer-facepile.tsx";
 import { ThemeModeToggle } from "./theme-mode-toggle.tsx";
 
 type SidebarIdentityMenuParams = {

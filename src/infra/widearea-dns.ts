@@ -4,6 +4,7 @@ import path from "node:path";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { fnv1aUtf16 } from "../shared/fnv1a.js";
 import { CONFIG_DIR } from "../utils.js";
 import { ignoreMissingPath } from "./errno.js";
 
@@ -159,12 +160,7 @@ export function renderWideAreaGatewayZoneText(
     )
     .join("\n")}\n`;
   // Cheap stable hash; avoids importing crypto (and keeps deterministic across runtimes).
-  let h = 2166136261;
-  for (let i = 0; i < hashBody.length; i++) {
-    h ^= hashBody.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  const contentHash = (h >>> 0).toString(16).padStart(8, "0");
+  const contentHash = fnv1aUtf16(hashBody).toString(16).padStart(8, "0");
 
   return `; openclaw-content-hash: ${contentHash}\n${contentBody}`;
 }

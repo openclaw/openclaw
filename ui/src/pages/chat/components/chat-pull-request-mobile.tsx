@@ -23,7 +23,6 @@ registerGitHubEnglish();
 export type ChatPullRequestMobileRecoveryProps = {
   status: ControlUiSessionPullRequestSnapshot["status"];
   hasSnapshot: boolean;
-  lastUpdatedAt?: number;
   retrying: boolean;
   onRetry: () => void;
 };
@@ -58,17 +57,8 @@ export function ChatPullRequestMobileRecovery(
                   : "chat.pullRequests.couldNotLoad",
             )}
           </strong>
-          <Show when={props.hasSnapshot} fallback={<p>{t("chat.pullRequests.tryAgain")}</p>}>
-            <Show when={props.lastUpdatedAt !== undefined}>
-              <p>
-                {t("chat.pullRequests.lastUpdated", {
-                  time: new Date(props.lastUpdatedAt!).toLocaleTimeString(undefined, {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  }),
-                })}
-              </p>
-            </Show>
+          <Show when={!props.hasSnapshot}>
+            <p>{t("chat.pullRequests.tryAgain")}</p>
           </Show>
         </div>
         <button

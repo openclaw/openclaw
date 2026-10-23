@@ -82,7 +82,7 @@ describe("Control UI build chunking", () => {
     const modulePath = (relative: string) => new URL(relative, import.meta.url).pathname;
     const chat = modulePath("../pages/chat/chat-pane.tsx");
     const newSession = modulePath("../pages/new-session/new-session-page.tsx");
-    const optional = modulePath("../components/assistant-panel-content.ts");
+    const optional = modulePath("../components/assistant-panel-content-solid.tsx");
     const devices = modulePath("../pages/devices/devices-page.tsx");
     const sharedUi = modulePath("../components/select-picker-view.tsx");
     const pluginActions = modulePath("../plugins/control-ui-actions.ts");
@@ -283,7 +283,9 @@ describe("Control UI build chunking", () => {
     // Fetched shared chunks once co-located the chat view with modules New Session needs.
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-view.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/styles/chat.ts`)).toBe(false);
-    expect(bootGroup.test(`${repoRoot}/ui/src/components/assistant-panel-content.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/components/assistant-panel-content-solid.tsx`)).toBe(
+      false,
+    );
     // Opening state stays cheap; rendering the debug overlay belongs to its lazy graph.
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-state.ts`)).toBe(true);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-content.ts`)).toBe(false);

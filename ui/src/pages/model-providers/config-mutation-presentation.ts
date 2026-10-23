@@ -1,12 +1,4 @@
-import {
-  action,
-  affects,
-  createMemo,
-  createOptimistic,
-  createOptimisticStore,
-  onSettled,
-  refresh,
-} from "solid-js";
+import { action, affects, createMemo, createOptimistic, onSettled, refresh } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelProvidersData } from "./load.ts";
 
@@ -35,24 +27,19 @@ export function createModelProviderMutationPresentation(deps: {
   const configObject = createMemo(deps.readConfigObject);
   const presentation = createMemo(() => {
     const owner = scope();
-    const [apiKeySaving, setApiKeySaving] = createOptimisticStore<Record<string, boolean>>({});
     const [defaultsSaving, setDefaultsSaving] = createOptimistic(false);
-    return { owner, apiKeySaving, setApiKeySaving, defaultsSaving, setDefaultsSaving };
+    return { owner, defaultsSaving, setDefaultsSaving };
   });
   const isCurrent = (view: ReturnType<typeof presentation>, retired: Promise<void>) =>
     deps.isCurrent(view.owner) && retired === lifetime.promise;
   const present = action(function* (
     view: ReturnType<typeof presentation>,
     kind: "apiKey" | "defaults",
-    key: string,
     pending: Promise<unknown>,
     retired: Promise<void>,
   ) {
     if (isCurrent(view, retired)) {
       if (kind === "apiKey") {
-        view.setApiKeySaving((saving) => {
-          saving[key] = true;
-        });
         // Credential verification determines the accepted auth facts.
         affects(authStatus);
       } else {
@@ -69,7 +56,6 @@ export function createModelProviderMutationPresentation(deps: {
 
   async function run<T>(
     kind: "apiKey" | "defaults",
-    key: string,
     operation: () => Promise<T>,
     reportError: (error: unknown) => void,
   ): Promise<T | undefined> {
@@ -81,7 +67,7 @@ export function createModelProviderMutationPresentation(deps: {
       await new Promise<void>((resolve) => {
         onSettled(resolve);
       });
-      await present(view, kind, key, pending, retired);
+      await present(view, kind, pending, retired);
       return await pending;
     } catch (error) {
       if (isCurrent(view, retired)) {
@@ -102,7 +88,6 @@ export function createModelProviderMutationPresentation(deps: {
       lifetime = Promise.withResolvers<void>();
     },
     run,
-    apiKeySaving: () => presentation().apiKeySaving,
     defaultsSaving: () => presentation().defaultsSaving(),
   };
 }

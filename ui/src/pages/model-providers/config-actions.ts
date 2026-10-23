@@ -59,7 +59,6 @@ export function createModelProviderConfigActions(deps: {
     clearProbe(provider);
     const result = await mutations.run(
       "apiKey",
-      key,
       () =>
         runModelProviderApiKeyMutation(
           {
@@ -125,7 +124,6 @@ export function createModelProviderConfigActions(deps: {
     }
     const capturedAgentEpoch = getAgentEpoch();
     const settled = await mutations.run(
-      "defaults",
       "defaults",
       () =>
         runModelProviderDefaultsMutation(context, gateway, {

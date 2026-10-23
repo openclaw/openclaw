@@ -202,13 +202,16 @@ describe("pixverse video generation provider", () => {
     expect(createRequest.body?.img_id).toBe(111);
   });
 
-  it("reports PixVerse moderation failures from status polling", async () => {
+  it.each([
+    [6, "PixVerse video generation was deleted before completion"],
+    [7, "PixVerse video generation failed content moderation"],
+    [8, "PixVerse video generation failed"],
+    [undefined, "PixVerse video status response missing status"],
+  ] as const)("reports PixVerse poll status %s", async (status, message) => {
     mockPixVerseVideoSubmit(333);
-    mockPixVersePoll({ id: 333, status: 7 });
+    mockPixVersePoll({ id: 333, status });
 
-    await expect(generateVideo()).rejects.toThrow(
-      "PixVerse video generation failed content moderation",
-    );
+    await expect(generateVideo()).rejects.toThrow(message);
   });
 
   it.each([

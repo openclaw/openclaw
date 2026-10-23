@@ -3,7 +3,7 @@ import { relative, resolve } from "node:path";
 import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
+import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveUserPath } from "../utils.js";
@@ -72,67 +72,6 @@ type PendingWorkspaceFileAction = {
   byteLength: number;
   content?: Buffer;
 };
-
-async function inspectWorkspaceFileAction(params: {
-  sourceRoot: Root;
-  source: ClawSourceIdentity;
-  workspace: string;
-  sourcePath: string;
-  targetPath: string;
-  id: string;
-  manifestPath: string;
-}): Promise<PendingWorkspaceFileAction | { action: ClawAddPlanAction; blocker: ClawDiagnostic }> {
-  const requestedSource = resolve(params.source.packageRoot, params.sourcePath);
-  const requestedTarget = resolve(params.workspace, params.targetPath);
-  try {
-    await assertNoSymlinkParents({
-      rootDir: params.source.packageRoot,
-      targetPath: requestedSource,
-      allowMissing: false,
-      messagePrefix: "Workspace source",
-    });
-    const opened = await params.sourceRoot.open(params.sourcePath, {
-      hardlinks: "reject",
-      symlinks: "reject",
-    });
-    await opened[Symbol.asyncDispose]();
-    if (opened.stat.size > MAX_MANAGED_FILE_BYTES) {
-      throw new FsSafeError(
-        "too-large",
-        `file exceeds limit of ${MAX_MANAGED_FILE_BYTES} bytes (got ${opened.stat.size})`,
-      );
-    }
-    return {
-      sourcePath: params.sourcePath,
-      manifestPath: params.manifestPath,
-      byteLength: opened.stat.size,
-      action: {
-        kind: "workspaceFile",
-        id: params.id,
-        action: "write",
-        target: requestedTarget,
-        source: opened.realPath,
-        details: { expectedState: "absent" },
-        blocked: false,
-      },
-    };
-  } catch (error) {
-    const { code, message } = clawWorkspaceSourceFailure(error, params.sourcePath, "package");
-    const diagnostic = blocker(code, params.manifestPath, message);
-    return {
-      action: {
-        kind: "workspaceFile",
-        id: params.id,
-        action: "write",
-        target: requestedTarget,
-        source: requestedSource,
-        blocked: true,
-        reason: diagnostic.message,
-      },
-      blocker: diagnostic,
-    };
-  }
-}
 
 export async function buildClawAddPlan(params: {
   manifest: ClawManifest;
@@ -277,12 +216,57 @@ export async function buildClawAddPlan(params: {
     id: string;
     manifestPath: string;
   }): Promise<void> {
-    const result = await inspectWorkspaceFileAction({
-      sourceRoot,
-      source,
-      workspace,
-      ...fileParams,
-    });
+    let result: PendingWorkspaceFileAction | { action: ClawAddPlanAction; blocker: ClawDiagnostic };
+    const requestedSource = resolve(source.packageRoot, fileParams.sourcePath);
+    const requestedTarget = resolve(workspace, fileParams.targetPath);
+    try {
+      await assertNoSymlinkParents({
+        rootDir: source.packageRoot,
+        targetPath: requestedSource,
+        allowMissing: false,
+        messagePrefix: "Workspace source",
+      });
+      const opened = await sourceRoot.open(fileParams.sourcePath, {
+        hardlinks: "reject",
+        symlinks: "reject",
+      });
+      await opened[Symbol.asyncDispose]();
+      if (opened.stat.size > MAX_MANAGED_FILE_BYTES) {
+        throw new FsSafeError(
+          "too-large",
+          `file exceeds limit of ${MAX_MANAGED_FILE_BYTES} bytes (got ${opened.stat.size})`,
+        );
+      }
+      result = {
+        sourcePath: fileParams.sourcePath,
+        manifestPath: fileParams.manifestPath,
+        byteLength: opened.stat.size,
+        action: {
+          kind: "workspaceFile",
+          id: fileParams.id,
+          action: "write",
+          target: requestedTarget,
+          source: opened.realPath,
+          details: { expectedState: "absent" },
+          blocked: false,
+        },
+      };
+    } catch (error) {
+      const { code, message } = clawWorkspaceSourceFailure(error, fileParams.sourcePath, "package");
+      const diagnostic = blocker(code, fileParams.manifestPath, message);
+      result = {
+        action: {
+          kind: "workspaceFile",
+          id: fileParams.id,
+          action: "write",
+          target: requestedTarget,
+          source: requestedSource,
+          blocked: true,
+          reason: diagnostic.message,
+        },
+        blocker: diagnostic,
+      };
+    }
     const { action } = result;
     if (action.source) {
       action.source = planSourcePath(fileParams.sourcePath, action.source);

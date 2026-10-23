@@ -50,7 +50,6 @@ const CHECK_LABEL_KEYS = {
 
 function Checks(props: {
   pullRequest: ControlUiSessionPullRequest;
-  compact?: boolean;
   gateway?: ApplicationGateway;
   sessionKey?: string;
   sessionId?: string;
@@ -106,7 +105,6 @@ function Checks(props: {
   return (
     <ChatPullRequestChecks
       label={label()}
-      showLabel={props.compact}
       checksState={checks()?.state ?? "none"}
       presented={presented()}
       dismissed={props.dismissed}

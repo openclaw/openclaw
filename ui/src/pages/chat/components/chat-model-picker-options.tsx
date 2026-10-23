@@ -1,5 +1,5 @@
 import { createMemo, Show, useContext } from "solid-js";
-import { providerDisplayLabel } from "../../../components/provider-icon.ts";
+import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import "../../../components/tooltip.ts";
