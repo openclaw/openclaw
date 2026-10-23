@@ -237,6 +237,110 @@ const userFacingFilters: Partial<
   Record<`${"normal" | "error"}${"" | "-stream"}`, readonly TextFilter[]>
 > = {};
 
+const STREAM_RUNTIME_CONTEXT_START_MARKERS = [
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+  RUNTIME_CONTEXT_HEADER,
+] as const;
+const NORMALIZED_RUNTIME_CONTEXT_NOTICE = OPENCLAW_RUNTIME_CONTEXT_NOTICE.split(/\s+/u).join(" ");
+
+function createRuntimeContextStreamProjector() {
+  let active = false;
+  let lineState: "start" | "matching" | "ignored" = "start";
+  let lineCandidate = "";
+  let lineMatched = false;
+  let trailingWhitespace = false;
+  let noticeTail = "";
+
+  const feed = (value: string) => {
+    if (!active) {
+      for (const char of value) {
+        if (/\s/u.test(char)) {
+          if (noticeTail && !noticeTail.endsWith(" ")) {
+            noticeTail += " ";
+          }
+        } else {
+          noticeTail += char;
+        }
+      }
+      if (noticeTail.includes(NORMALIZED_RUNTIME_CONTEXT_NOTICE)) {
+        active = true;
+      }
+      noticeTail = noticeTail.slice(-(NORMALIZED_RUNTIME_CONTEXT_NOTICE.length - 1));
+    }
+
+    for (const char of value) {
+      if (active) {
+        return;
+      }
+      if (char === "\n" || char === "\r") {
+        active = lineState === "matching" && lineMatched;
+        lineState = "start";
+        lineCandidate = "";
+        lineMatched = false;
+        trailingWhitespace = false;
+        continue;
+      }
+      if (lineState === "ignored") {
+        continue;
+      }
+      if (lineState === "start") {
+        if (char === " " || char === "\t") {
+          continue;
+        }
+        lineState = "matching";
+      }
+      if (char === " " || char === "\t") {
+        if (
+          !trailingWhitespace &&
+          STREAM_RUNTIME_CONTEXT_START_MARKERS.some((marker) =>
+            marker.startsWith(lineCandidate + char),
+          )
+        ) {
+          lineCandidate += char;
+        } else {
+          trailingWhitespace = true;
+        }
+        continue;
+      }
+      if (trailingWhitespace) {
+        lineState = "ignored";
+        lineCandidate = "";
+        lineMatched = false;
+        trailingWhitespace = false;
+        continue;
+      }
+      lineCandidate += char;
+      lineMatched = STREAM_RUNTIME_CONTEXT_START_MARKERS.some((marker) => marker === lineCandidate);
+      if (
+        !STREAM_RUNTIME_CONTEXT_START_MARKERS.some((marker) => marker.startsWith(lineCandidate))
+      ) {
+        lineState = "ignored";
+        lineCandidate = "";
+        lineMatched = false;
+      }
+    }
+  };
+
+  return createConditionalTextProjector(
+    (text) => stripInternalRuntimeContext(text, { streaming: true }),
+    (input) => {
+      if (input.delta === null) {
+        active = false;
+        lineState = "start";
+        lineCandidate = "";
+        lineMatched = false;
+        trailingWhitespace = false;
+        noticeTail = "";
+        feed(input.text);
+      } else {
+        feed(input.delta);
+      }
+      return active || lineState === "matching";
+    },
+  );
+}
+
 export function userFacingTextFilters(
   errorContext = false,
   streaming = false,
@@ -251,13 +355,16 @@ export function userFacingTextFilters(
       transform: streaming
         ? (text) => stripInternalRuntimeContext(text, { streaming: true })
         : stripInternalRuntimeContext,
-      activationTokens: [
-        streaming ? "<" : INTERNAL_RUNTIME_CONTEXT_BEGIN,
-        INTERNAL_RUNTIME_CONTEXT_END,
-        OPENCLAW_RUNTIME_CONTEXT_NOTICE,
-        // Activate before any ambiguous carrier prefix can reach a user-visible stream.
-        streaming ? RUNTIME_CONTEXT_HEADER.charAt(0) : RUNTIME_CONTEXT_HEADER,
-      ],
+      ...(streaming
+        ? { create: createRuntimeContextStreamProjector }
+        : {
+            activationTokens: [
+              INTERNAL_RUNTIME_CONTEXT_BEGIN,
+              INTERNAL_RUNTIME_CONTEXT_END,
+              OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+              RUNTIME_CONTEXT_HEADER,
+            ],
+          }),
     },
     { transform: stripInboundMetadata, activationTokens: INBOUND_METADATA_MARKERS },
     minimaxToolCallTextFilter,

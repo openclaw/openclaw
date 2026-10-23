@@ -11,11 +11,13 @@ import {
   createAssistantVisibleStreamText,
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
+import * as internalRuntimeContext from "./internal-runtime-context.js";
 
 // Filter arrays cache their transforms, so keep the same spies for the entire module.
 const reasoning = vi.spyOn(reasoningTags, "stripReasoningTagsFromText");
 const final = vi.spyOn(finalTags, "stripFinalTags");
-const transforms = [reasoning, final];
+const runtimeContext = vi.spyOn(internalRuntimeContext, "stripInternalRuntimeContext");
+const transforms = [reasoning, final, runtimeContext];
 beforeEach(() => transforms.forEach((spy) => spy.mockClear()));
 afterAll(() => transforms.forEach((spy) => spy.mockRestore()));
 function characters(calls: ReadonlyArray<readonly [string, ...unknown[]]>) {
@@ -38,6 +40,41 @@ it.each([undefined, "final_answer"] as const)(
     expect(characters(final.mock.calls)).toBeLessThan(source.length * 2);
   },
 );
+
+it("does not re-scrub ordinary streamed prose", () => {
+  const line =
+    "The quick brown fox jumps over the lazy dog while the operator reviews one more log line. ";
+  const source = line.repeat(Math.ceil(65_535 / line.length)).slice(0, 65_535);
+  const stream = createAssistantVisibleStreamText();
+
+  stream.replace("");
+  appendChunks(stream, source, 4);
+
+  expect(stream.text).toBe(source);
+  expect(characters(runtimeContext.mock.calls)).toBeLessThan(source.length);
+}, 20_000);
+
+it("strips a reflowed runtime-context preface from a replacement-initialized stream", () => {
+  const source = [
+    "OpenClaw runtime",
+    "event.",
+    "This context is runtime-generated,",
+    "not user-authored. Keep internal details private.",
+    "",
+    "Visible reply.",
+  ].join("\n");
+  const stream = createAssistantVisibleStreamText();
+  stream.replace("");
+
+  let delivered = "";
+  for (let offset = 0; offset < source.length; offset += 3) {
+    const result = stream.append(source.slice(offset, offset + 3));
+    delivered = result.delta === null ? result.text : delivered + result.delta;
+  }
+
+  expect(stream.text).toBe("Visible reply.");
+  expect(delivered).toBe("Visible reply.");
+});
 
 it.each(["<think>hidden</think>Done.", "<final>Done.</final>"])(
   "bounds transform work for a late %s",
