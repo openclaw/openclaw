@@ -1,4 +1,5 @@
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
+import { isMobileBrowserPlatform } from "./browser-platform.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   resolveNewSessionShortcut,
@@ -90,16 +91,32 @@ const SEND_PREFERENCE_ENTRY_IDS = new Set(["sendMessage", "startNewSession"]);
 export function resolveKeyboardShortcutSections(
   sendShortcut: "enter" | "modifier-enter" = "enter",
 ): readonly KeyboardShortcutSection[] {
+  const mobile = isMobileBrowserPlatform();
   return KEYBOARD_SHORTCUT_SECTIONS.map((section) =>
     keyboardShortcutSection(
       section.id,
-      section.entries.map((entry) =>
-        entry.id === "newSession"
-          ? keyboardShortcutEntry(entry.id, resolveNewSessionShortcut())
-          : sendShortcut === "modifier-enter" && SEND_PREFERENCE_ENTRY_IDS.has(entry.id)
-            ? keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.modifiedEnter)
-            : entry,
-      ),
+      section.entries
+        .filter(
+          (entry) =>
+            !mobile ||
+            !(
+              SEND_PREFERENCE_ENTRY_IDS.has(entry.id) ||
+              entry.id === "paletteStartSession" ||
+              entry.id === "steerImmediately" ||
+              entry.id === "saveQueuedMessage"
+            ),
+        )
+        .map((entry) =>
+          mobile && entry.id === "newline"
+            ? keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.sendMessage)
+            : entry.id === "newSession"
+              ? keyboardShortcutEntry(entry.id, resolveNewSessionShortcut())
+              : !mobile &&
+                  sendShortcut === "modifier-enter" &&
+                  SEND_PREFERENCE_ENTRY_IDS.has(entry.id)
+                ? keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.modifiedEnter)
+                : entry,
+        ),
     ),
   );
 }

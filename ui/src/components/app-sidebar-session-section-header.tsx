@@ -1,7 +1,16 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, onSettled, Show } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import { writeSidebarSectionDragData } from "../lib/sessions/drag.ts";
-import { renderSidebarReorderMenu as SidebarReorderMenu } from "./sidebar-reorder.tsx";
+
+// Only the header's trailing icon actions (new session, menus, filters) keep pure
+// click gestures; the label, toggle, and status surfaces drag the section like a
+// session row drags itself.
+const DRAG_EXEMPT_CONTROL = ".sidebar-session-group-actions";
+
+function startsOnHeaderAction(target: Element): boolean {
+  return target.closest(DRAG_EXEMPT_CONTROL) !== null;
+}
+
 export function renderSidebarSessionSectionHeader(params: {
   sectionId: string;
   sectionHeaders: Map<string, HTMLElement>;
@@ -18,10 +27,6 @@ export function renderSidebarSessionSectionHeader(params: {
   onStartDrag: (sectionId: string) => void;
   onFinishDrag: () => void;
   onContextMenu?: JSX.EventHandler<HTMLDivElement, MouseEvent>;
-  reorder?: {
-    label: string;
-    onMove: (target: string, position: "before" | "after") => void | Promise<void>;
-  };
 }) {
   const draggable = createMemo(() => params.draggable !== false && !params.disabledReason);
   let header!: HTMLElement;
@@ -50,7 +55,7 @@ export function renderSidebarSessionSectionHeader(params: {
         const currentHeader = event.currentTarget;
         currentHeader.toggleAttribute(
           "data-section-drag-blocked",
-          Boolean(event.target.closest("button, a")),
+          startsOnHeaderAction(event.target),
         );
       }}
       onMouseUp={(event) => {
@@ -63,7 +68,7 @@ export function renderSidebarSessionSectionHeader(params: {
         }
         const currentHeader = event.currentTarget;
         const startedFromControl =
-          Boolean(event.target.closest("button, a")) ||
+          startsOnHeaderAction(event.target) ||
           currentHeader.hasAttribute("data-section-drag-blocked");
         currentHeader.removeAttribute("data-section-drag-blocked");
         if (startedFromControl) {
@@ -81,18 +86,7 @@ export function renderSidebarSessionSectionHeader(params: {
       }}
       onContextMenu={(event) => params.onContextMenu?.(event)}
     >
-      <span class="sidebar-session-group-drag-handle" aria-hidden="true" />
       {params.content}
-      <Show when={draggable() && params.reorder}>
-        {(reorder) => (
-          <SidebarReorderMenu
-            label={reorder().label}
-            onMove={(target, position) => reorder().onMove(target, position)}
-            sectionId={params.sectionId}
-            sections={params.sectionHeaders}
-          />
-        )}
-      </Show>
       {params.status ? (
         <button
           type="button"

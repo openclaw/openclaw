@@ -299,7 +299,6 @@ it("preserves same-route text delivery dedupe across refresh", async () => {
     messagingToolSentTargets: result.messagingToolSentTargets,
     messageProvider: "telegram",
     originatingTo: "telegram:123",
-    isHeartbeat: false,
     blockStreamingEnabled: false,
     blockReplyPipeline: null,
     replyToMode: "off",

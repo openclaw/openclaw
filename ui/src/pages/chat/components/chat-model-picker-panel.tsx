@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show, useContext } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
-import { providerDisplayLabel } from "../../../components/provider-icon.ts";
+import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -213,6 +213,11 @@ export function ChatModelPickerPanel(panel: {
     panel.params.onTargetSelect?.(groupId, value);
     panel.onSelectionClose(event);
   };
+  // Retain the route boundary across unrelated owner publications.
+  const renderDirect = (render: () => JSX.Element) => render();
+  const renderCatalogStatus = createMemo(
+    () => panel.params.renderModelCatalogStatus ?? renderDirect,
+  );
   function TargetOptions(props: { group: ChatModelPickerTargetGroup }) {
     const options = createMemo(() => props.group.completion.promise);
     return (
@@ -451,21 +456,24 @@ export function ChatModelPickerPanel(panel: {
               ) : undefined}
             </div>
           ) : undefined}
-          <ChatModelCatalogState
-            state={panel.params.modelCatalogState}
-            hasOptions={panel.params.modelOptions.length > 0}
-            hasSelectableOptions={state().hasSelectableModelOptions}
-            onModelSetup={panel.params.onModelSetup}
-            emptyLabel={
-              panel.params.modelOptions.some(
-                (option) =>
-                  option.unavailableReason === "missing-auth" &&
-                  resolveModelRuntimeRoute(option.provider, option.agentRuntimeId) === "claudeCli",
-              )
-                ? t("chat.modelControls.claudeCliNotReady")
-                : undefined
-            }
-          />
+          {renderCatalogStatus()(() => (
+            <ChatModelCatalogState
+              state={panel.params.modelCatalogState}
+              hasOptions={panel.params.modelOptions.length > 0}
+              hasSelectableOptions={state().hasSelectableModelOptions}
+              onModelSetup={panel.params.onModelSetup}
+              emptyLabel={
+                panel.params.modelOptions.some(
+                  (option) =>
+                    option.unavailableReason === "missing-auth" &&
+                    resolveModelRuntimeRoute(option.provider, option.agentRuntimeId) ===
+                      "claudeCli",
+                )
+                  ? t("chat.modelControls.claudeCliNotReady")
+                  : undefined
+              }
+            />
+          ))}
           {state().hasOptions || panel.params.accountSection ? (
             <>
               <div class="chat-controls__model-options">

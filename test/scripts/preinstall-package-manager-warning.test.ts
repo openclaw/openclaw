@@ -17,7 +17,7 @@ import { isSupportedNodeVersion } from "../../src/infra/runtime-guard.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const EXPECTED_NODE_ENGINE_RANGE = ">=24.16.0 <25 || >=26.1.0";
+const EXPECTED_NODE_ENGINE_RANGE = ">=24.22.1 <25 || >=26.12.1";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 const lifecyclePrefix = [
@@ -60,7 +60,7 @@ describe("install runtime enforcement", () => {
     expect(readPackageNodeEngine()).toBe(EXPECTED_NODE_ENGINE_RANGE);
   });
 
-  it.each(["v24.16.0+local.1"])("matches the CLI runtime guard for Node %s", (version) => {
+  it.each(["v24.22.1+local.1"])("matches the CLI runtime guard for Node %s", (version) => {
     expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(
       isSupportedNodeVersion(version),
     );
@@ -70,7 +70,7 @@ describe("install runtime enforcement", () => {
     const reportError = vi.fn();
     expect(
       enforce(
-        { version: "24.16.0", bunVersion: null, execPath: "/opt/node/bin/node" },
+        { version: "24.22.1", bunVersion: null, execPath: "/opt/node/bin/node" },
         reportError,
       ),
     ).toBe(true);
@@ -81,8 +81,8 @@ describe("install runtime enforcement", () => {
     ["27.0.0", true],
     ["v27.0.0-head", true],
     ["27.0.0-nightly20261018f88a1d25e9", true],
-    ["24.16.0-rc.1", false],
-    ["26.1.0-rc.1", false],
+    ["24.22.1-rc.1", false],
+    ["26.12.1-rc.1", false],
     ["27.0.0-nightly..1", false],
   ] as const)("enforces the package engine for Node %s", (version, accepted) => {
     const reportError = vi.fn();
@@ -180,7 +180,7 @@ describe("install runtime enforcement", () => {
           const isNode = _command === "/opt/node/bin/node";
           return runtimeReply(
             _command,
-            isNode ? (persistent === "old-node" ? "24.14.1" : "24.16.0") : "24.3.0",
+            isNode ? (persistent === "old-node" ? "24.14.1" : "24.22.1") : "24.3.0",
             isNode ? null : bun,
           );
         },
@@ -264,7 +264,7 @@ describe("install runtime enforcement", () => {
       }
       const run = vi.fn((command: string) =>
         command === executable
-          ? runtimeReply(executable, "24.16.0")
+          ? runtimeReply(executable, "24.22.1")
           : { error: Object.assign(new Error("absent executable"), { code: "ENOENT" }) },
       );
       const reportError = vi.fn();
@@ -344,7 +344,7 @@ describe("install runtime enforcement", () => {
     "preserves an inherited ancestor suffix in a prefix-only Bun %s lifecycle",
     (bunVersion) => {
       const run = vi.fn((command: string) =>
-        runtimeReply(command, command === "/opt/node/bin/node" ? "24.16.0" : "24.14.1"),
+        runtimeReply(command, command === "/opt/node/bin/node" ? "24.22.1" : "24.14.1"),
       );
       const runtime = probe({
         bunVersion,
@@ -358,7 +358,7 @@ describe("install runtime enforcement", () => {
         run,
       });
       expect(run.mock.calls.map(([command]) => command)).toEqual(["/opt/node/bin/node"]);
-      expect(runtime?.version).toBe("24.16.0");
+      expect(runtime?.version).toBe("24.22.1");
     },
   );
 

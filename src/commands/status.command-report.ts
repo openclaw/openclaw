@@ -326,6 +326,7 @@ export async function buildStatusCommandReportLines(
   const footerLines = [
     "FAQ: https://docs.openclaw.ai/faq",
     "Troubleshooting: https://docs.openclaw.ai/troubleshooting",
+    "Support: https://community.openclaw.ai/",
     ...(updateHint ? ["", theme.warn(updateHint)] : []),
     "Next steps:",
     `  Need to share?      ${formatCliCommand("openclaw status --all")}`,

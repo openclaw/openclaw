@@ -201,8 +201,14 @@ The Gateway also emits an always-on `main-thread stall` warning after a synchron
 callback blocks for at least 250 milliseconds. Each line names the longest-running
 known task segment from RPC handlers, scheduled jobs, diagnostic phases, timeline spans, or
 worker message handling, with elapsed and task milliseconds. Time awaiting I/O
-does not count as task execution. Labels cover the synchronous portion of explicit
-task scopes. Asynchronous continuations and unknown callbacks use best-effort unattributed
+does not count as task execution. Prepared session-row reads carry the enclosing
+operation across waits and append `session-rows:select`, `session-rows:prepare`, or
+`session-rows:consume`; agent roster batches append `agent-roster`. For example,
+`gateway:rpc:sessions.list:session-rows:select` identifies list selection, and
+scheduled work retains its `scheduler:<lane>:<task>` prefix. Labels contain only
+code-owned operation names, never session keys or request content. Labels cover
+the synchronous portion of explicit task scopes. Other asynchronous continuations
+and unknown callbacks use best-effort unattributed
 delay warnings from the event-loop sampler; the Gateway does not install
 process-wide async hooks to time every promise continuation. During healthy idle
 windows, the native histogram is disabled: an unscoped stall that finishes before
@@ -340,6 +346,10 @@ Stalled embedded-run diagnostics mark `terminalProgressStale=true`
 when the last bridge progress looked terminal (for example a raw response
 item or response-completion event) but the Gateway still considers the
 embedded run active.
+
+A stalled-session warning is an observation, not permission to stop a run.
+Recovery events follow the captured session controller's decision; diagnostic
+thresholds cannot shorten its provider, tool, retry, backend, or cleanup allowances.
 
 Inspect the live recorder:
 

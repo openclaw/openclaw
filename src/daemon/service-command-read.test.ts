@@ -114,6 +114,40 @@ describe("native service command inspection", () => {
     await fs.writeFile(filename, contents);
   }
 
+  it.each(["absent", "dangling", "empty"])(
+    "reinstall permits only absent plists while launchd retains a job (%s)",
+    async (condition) => {
+      const plist = resolveLaunchAgentPlistPath(env);
+      native.launchctl.mockImplementation(async (_command: string, args: string[]) =>
+        args[1]?.startsWith("system/")
+          ? missingJob
+          : launchResult(`${args[1]} = {\n\tstate = waiting\n}`),
+      );
+      if (condition === "dangling") {
+        await fs.mkdir(path.dirname(plist), { recursive: true });
+        await fs.symlink(path.join(root, "absent-definition"), plist);
+      } else if (condition === "empty") {
+        await writeFile(plist, renderPlist([]));
+      }
+      if (condition === "absent") {
+        await expect(
+          readLaunchAgentProgramArguments(env, { requireEffective: true }),
+        ).rejects.toThrow();
+      }
+      const command = readLaunchAgentProgramArguments(env, {
+        requireEffective: true,
+        allowMissingDefinition: true,
+      });
+      if (condition === "absent") {
+        await expect(command).resolves.toBeNull();
+      } else {
+        await expect(command).rejects.toThrow(
+          "Effective LaunchAgent service command could not be inspected",
+        );
+      }
+    },
+  );
+
   it("preserves nested native cleanup while proving a missing plist is absent", async () => {
     const failure = new AggregateError(
       [new CommandProcessCleanupError()],

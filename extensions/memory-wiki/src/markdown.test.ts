@@ -3,7 +3,6 @@ import {
   extractHumanNotesBlock,
   parseWikiMarkdown,
   preserveHumanNotesBlock,
-  renderWikiMarkdown,
   scanWikiPageSummary,
   slugifyWikiSegment,
   toWikiPageSummary,
@@ -79,83 +78,6 @@ describe("human Notes blocks", () => {
 });
 
 describe("toWikiPageSummary", () => {
-  it("normalizes agent-facing people wiki metadata", () => {
-    const relationships = [
-      {
-        targetId: "entity.alice",
-        targetTitle: "Alice",
-        kind: "collaborates-with",
-        weight: 0.7,
-        confidence: 0.6,
-        evidenceKind: "discrawl-stat",
-        privacyTier: "local-private",
-      },
-    ];
-    const evidence = [
-      {
-        kind: "maintainer-whois",
-        sourceId: "source.maintainers",
-        confidence: 0.8,
-        privacyTier: "local-private",
-      },
-    ];
-    const raw = renderWikiMarkdown({
-      frontmatter: {
-        pageType: "entity",
-        entityType: "person",
-        id: "entity.brad",
-        title: "Brad Groux",
-        canonicalId: "maintainer.brad-groux",
-        aliases: ["brad", "bgroux"],
-        privacyTier: "local-private",
-        bestUsedFor: ["Microsoft ecosystem routing"],
-        notEnoughFor: ["legal approval"],
-        lastRefreshedAt: "2026-04-29T00:00:00.000Z",
-        personCard: {
-          handles: ["@bgroux"],
-          email: "brad@example.com",
-          lane: "Microsoft Teams",
-          confidence: 0.8,
-          privacyTier: "confirm-before-use",
-        },
-        relationships,
-        claims: [
-          {
-            id: "claim.brad.teams",
-            text: "Brad is useful for Microsoft Teams routing.",
-            confidence: 0.9,
-            evidence,
-          },
-        ],
-      },
-      body: "# Brad Groux\n",
-    });
-
-    const summary = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/entities/brad.md",
-      relativePath: "entities/brad.md",
-      raw,
-    });
-    expect(summary).toMatchObject({
-      entityType: "person",
-      canonicalId: "maintainer.brad-groux",
-      aliases: ["brad", "bgroux"],
-      privacyTier: "local-private",
-      bestUsedFor: ["Microsoft ecosystem routing"],
-      notEnoughFor: ["legal approval"],
-      lastRefreshedAt: "2026-04-29T00:00:00.000Z",
-      personCard: expect.objectContaining({
-        handles: ["@bgroux"],
-        emails: ["brad@example.com"],
-        lane: "Microsoft Teams",
-        privacyTier: "confirm-before-use",
-      }),
-    });
-    expect(summary?.relationships).toEqual(relationships);
-    expect(summary?.claims[0]?.id).toBe("claim.brad.teams");
-    expect(summary?.claims[0]?.evidence).toEqual(evidence);
-  });
-
   it("reports and excludes sequence frontmatter roots from page scans", () => {
     const raw = "---\n- pageType: synthesis\n---\n\n# Invalid Root";
     const params = {

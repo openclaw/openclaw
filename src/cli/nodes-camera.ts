@@ -238,8 +238,6 @@ async function writeUrlToFile(filePath: string, url: string, opts: { expectedHos
   } finally {
     await release();
   }
-
-  return { path: filePath, bytes };
 }
 
 function validateCameraPayloadBase64(base64: string, maxBytes: number): string {
@@ -272,7 +270,7 @@ export async function writeBase64ToFile(
       await fs.writeFile(tempPath, buf, { flag: "wx" });
     },
   });
-  return { path: filePath, bytes: buf.length };
+  return { path: filePath };
 }
 
 function requireNodeRemoteIp(remoteIp?: string): string {
@@ -305,16 +303,12 @@ export async function writeCameraPayloadToFile(params: {
 export async function writeCameraClipPayloadToFile(params: {
   payload: ReturnType<typeof parseCameraClipPayload>;
   facing: CameraArtifactFacing;
-  tmpDir?: string;
-  id?: string;
   expectedHost?: string;
 }): Promise<string> {
   const filePath = cameraTempPath({
     kind: "clip",
     facing: params.facing,
     ext: params.payload.format,
-    tmpDir: params.tmpDir,
-    id: params.id,
   });
   await writeCameraPayloadToFile({
     filePath,

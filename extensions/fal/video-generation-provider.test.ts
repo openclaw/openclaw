@@ -231,22 +231,34 @@ describe("fal video generation provider", () => {
     expect(getSubmitBody()).not.toHaveProperty("duration");
   });
 
-  it("submits Seedance 2 image-to-video requests with a single image_url", async () => {
-    mockCompletedFalVideoJob();
+  it.each([
+    {
+      input: { url: "https://example.com/start-frame.png" },
+      url: "https://example.com/start-frame.png",
+    },
+    {
+      input: { buffer: Buffer.from("image"), mimeType: " \t" },
+      url: "data:image/png;base64,aW1hZ2U=",
+    },
+  ])(
+    "submits Seedance 2 image-to-video requests with a single image_url $url",
+    async ({ input, url }) => {
+      mockCompletedFalVideoJob();
 
-    await generateVideo({
-      model: "bytedance/seedance-2.0/fast/image-to-video",
-      prompt: "Animate this product still with a slow orbit",
-      durationSeconds: 6,
-      inputImages: [{ url: "https://example.com/start-frame.png" }],
-    });
+      await generateVideo({
+        model: "bytedance/seedance-2.0/fast/image-to-video",
+        prompt: "Animate this product still with a slow orbit",
+        durationSeconds: 6,
+        inputImages: [input],
+      });
 
-    expect(getSubmitBody()).toEqual({
-      prompt: "Animate this product still with a slow orbit",
-      image_url: "https://example.com/start-frame.png",
-      duration: "6",
-    });
-  });
+      expect(getSubmitBody()).toEqual({
+        prompt: "Animate this product still with a slow orbit",
+        image_url: url,
+        duration: "6",
+      });
+    },
+  );
 
   it("submits Seedance 2 reference-to-video requests with image, video, and audio URLs", async () => {
     mockCompletedFalVideoJob(releasedVideo(), { seed: 1234 });
@@ -258,21 +270,38 @@ describe("fal video generation provider", () => {
       aspectRatio: "9:16",
       resolution: "480P",
       audio: false,
-      inputImages: mixedReferences("https://example.com/reference-1.png", "image", "image/webp"),
-      inputVideos: mixedReferences(
-        "https://example.com/reference-1.mp4",
-        "video",
-        "video/quicktime",
-      ),
-      inputAudios: mixedReferences("https://example.com/reference-1.mp3", "audio", "audio/wav"),
+      inputImages: [
+        ...mixedReferences("https://example.com/reference-1.png", "image", "image/webp"),
+        { buffer: Buffer.from("image") },
+      ],
+      inputVideos: [
+        ...mixedReferences("https://example.com/reference-1.mp4", "video", "video/quicktime"),
+        { buffer: Buffer.from("video"), mimeType: " " },
+      ],
+      inputAudios: [
+        ...mixedReferences("https://example.com/reference-1.mp3", "audio", "audio/wav"),
+        { buffer: Buffer.from("audio") },
+      ],
     });
 
     expect(requireFetchGuardCall(1).url).toBe(`https://queue.fal.run/${referenceModel}`);
     expect(getSubmitBody()).toEqual({
       prompt: "Blend @Image1, @Image2, @Video1, @Video2, and @Audio1 into one short film",
-      image_urls: ["https://example.com/reference-1.png", dataUrl("image", "image/webp")],
-      video_urls: ["https://example.com/reference-1.mp4", dataUrl("video", "video/quicktime")],
-      audio_urls: ["https://example.com/reference-1.mp3", dataUrl("audio", "audio/wav")],
+      image_urls: [
+        "https://example.com/reference-1.png",
+        dataUrl("image", "image/webp"),
+        "data:image/png;base64,aW1hZ2U=",
+      ],
+      video_urls: [
+        "https://example.com/reference-1.mp4",
+        dataUrl("video", "video/quicktime"),
+        "data:video/mp4;base64,dmlkZW8=",
+      ],
+      audio_urls: [
+        "https://example.com/reference-1.mp3",
+        dataUrl("audio", "audio/wav"),
+        "data:audio/mpeg;base64,YXVkaW8=",
+      ],
       aspect_ratio: "9:16",
       resolution: "480p",
       duration: "8",

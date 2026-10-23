@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
 import type {
@@ -11,6 +11,19 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { createCronStreamWatchers } from "./cron-stream-watchers.js";
 import { runExit } from "./server-cron.process.test-support.js";
 type WatcherParams = Parameters<typeof createCronStreamWatchers>[0];
+
+export const streamBatchArgs = (text: string) => [
+  expect.any(Object),
+  text,
+  expect.any(String),
+  expect.any(String),
+];
+export const streamStateArgs = (patch: Partial<CronJob["state"]>) => [
+  "stream-job",
+  expect.objectContaining(patch),
+  expect.any(String),
+  expect.any(String),
+];
 
 export function job(overrides: Partial<CronJob> = {}): CronJob {
   const base: CronJob = {
@@ -105,6 +118,12 @@ export async function settle(): Promise<void> {
   for (let index = 0; index < 10; index += 1) {
     await Promise.resolve();
   }
+}
+
+export async function flushStreamOutput(ms = 50) {
+  await settle();
+  await vi.advanceTimersByTimeAsync(ms);
+  await settle();
 }
 
 export function createWatchers(

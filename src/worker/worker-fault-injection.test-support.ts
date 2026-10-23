@@ -59,6 +59,7 @@ import {
   WorkerFaultPlacementLifecycle,
 } from "./worker-fault-placement-lifecycle.test-support.js";
 import { bindWorkerFixtureTurnSource } from "./worker-fault-session-target.test-support.js";
+import { createWorkerLaunchDescriptorForTest } from "./worker-process.test-support.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
 import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
@@ -343,15 +344,13 @@ export class ComposedGatewayHarness {
       );
       this.turnSources.set(claim.claimId, source);
     }
-    const descriptor: WorkerLaunchDescriptor = {
-      version: 4,
+    const descriptor = createWorkerLaunchDescriptorForTest({
       connectionEndpoint: { kind: "unix", socketPath: this.socketPath },
       admission: {
         environmentId: ENVIRONMENT_ID,
         credential,
         sessionId: SESSION_ID,
         ownerEpoch: epoch,
-        rpcSetVersion: WORKER_RPC_SET_VERSION,
         handshake: workerHandshake(this.artifact),
       },
       assignment: {
@@ -363,9 +362,6 @@ export class ComposedGatewayHarness {
         prompt: "fault injection",
         workspaceDir: this.root,
         modelRef: MODEL_REF,
-        inferenceOptions: {},
-        suppressPromptTranscript: false,
-        initialMessages: [],
         transcript: { baseLeafId: params.baseLeafId ?? null, nextSeq: params.initialSeq ?? 1 },
         liveEvents: {
           ackedSeq: params.initialAckedSeq ?? 0,
@@ -375,7 +371,7 @@ export class ComposedGatewayHarness {
           allowedToolNames: ["read", "write", "edit", "apply_patch", "exec", "process"],
         },
       },
-    };
+    });
     source.setToolAssignment(descriptor.assignment);
     return descriptor;
   }

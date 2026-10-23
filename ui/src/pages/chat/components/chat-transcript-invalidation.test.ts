@@ -17,6 +17,7 @@ import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   activePlacementSession,
   createInitializationContext,
+  createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "../chat-pane.test-support.ts";
@@ -330,47 +331,48 @@ describe("chat transcript invalidation", () => {
     );
   });
 
-  it("updates persisted named references when the connection catalog changes without transcript edits", () => {
-    const props = threadProps("pane-named", "agent:main:named", [
-      { role: "assistant", content: "ClawSweeper PR **#1576 opened**", timestamp: 1_000 },
-    ]);
-    props.githubRepo = { owner: "openclaw", repo: "openclaw" };
+  it("keeps explicit destinations stable as history, catalog rows, and sessions change", () => {
+    const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
+    const original = {
+      role: "assistant",
+      content: "PR acme/research#126 and https://github.com/other/project/issues/126. PR #126.",
+      timestamp: 1_000,
+    };
+    const props = threadProps("pane-github", "agent:main:github", [original]);
     const { container, rerender } = threadFixture(props);
-    const chip = () => container.querySelector<HTMLAnchorElement>("a.markdown-github-item");
-    rerender();
-    expect(chip()).toBeNull();
-    props.githubRepositories = [
-      { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] },
+    const links = () =>
+      [...container.querySelectorAll<HTMLAnchorElement>("a.markdown-github-item")].map(
+        (a) => a.href,
+      );
+    const expected = [
+      "https://github.com/acme/research/pull/126",
+      "https://github.com/other/project/issues/126",
     ];
     rerender();
-    expect(chip()?.href).toBe("https://github.com/openclaw/clawsweeper/pull/1576");
-    props.githubRepositories = [{ aliases: ["ClawSweeper"] }];
+    expect(links()).toEqual(expected);
+    for (const type of ["toolResult", "toolCall", "reasoning"] as const) {
+      const catalogMessage = pane.catalogItemMessage({
+        id: type,
+        type,
+        text: "https://github.com/unrelated/example/pull/126",
+      });
+      props.messages = [catalogMessage, original];
+      rerender();
+      expect(links()).toContain(expected[0]);
+      expect(links()).toContain(expected[1]);
+      expect(container.textContent).toContain("PR #126");
+    }
+    props.messages = [
+      { role: "assistant", content: "https://github.com/history/older/pull/126", timestamp: 500 },
+      original,
+    ];
     rerender();
-    expect(chip()).toBeNull();
-    props.githubRepositories = [{ owner: "fork", repo: "clawsweeper", aliases: ["ClawSweeper"] }];
+    expect(links()).toContain(expected[0]);
+    expect(links()).toContain(expected[1]);
+    props.sessionKey = "agent:main:another-checkout";
+    props.messages = [original];
     rerender();
-    expect(chip()?.href).toBe("https://github.com/fork/clawsweeper/pull/1576");
-  });
-
-  it("updates settled GitHub reference chips when the session repository arrives or changes", () => {
-    vi.spyOn(Date, "now").mockReturnValue(60_000);
-    const props = threadProps("pane-github-repository", "agent:main:github-repository", [
-      { role: "assistant", content: "PR #141270", timestamp: 1_000 },
-    ]);
-    const { container, rerender } = threadFixture(props);
-    const chip = () => container.querySelector<HTMLAnchorElement>("a.markdown-github-item");
-    rerender();
-    expect(chip()).toBeNull();
-
-    props.githubRepo = { owner: "openclaw", repo: "openclaw" };
-    rerender();
-    expect(chip()?.href).toBe("https://github.com/openclaw/openclaw/pull/141270");
-    props.githubRepo = { owner: "other", repo: "checkout" };
-    rerender();
-    expect(chip()?.href).toBe("https://github.com/other/checkout/pull/141270");
-    props.githubRepo = null;
-    rerender();
-    expect(chip()).toBeNull();
+    expect(links()).toEqual(expected);
   });
 
   it("does not renormalize projected historical messages", () => {

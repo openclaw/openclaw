@@ -7,24 +7,16 @@ const consultRealtimeVoiceAgent = vi.hoisted(() => vi.fn(async () => ({ text: "d
 vi.mock("../talk/agent-consult-runtime.js", () => ({ consultRealtimeVoiceAgent }));
 
 import { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
-import type { MeetingPlatformRuntimeMetadata } from "./platform-adapter-contract.js";
+import { TEST_MEETING_PLATFORM_METADATA } from "./observation-provenance.test-support.js";
 
-const platform: MeetingPlatformRuntimeMetadata = {
-  id: "test-meeting",
-  displayName: "Test Meeting",
-  logScope: "[test-meeting]",
+const platform = {
+  ...TEST_MEETING_PLATFORM_METADATA,
   agentConsult: {
+    ...TEST_MEETING_PLATFORM_METADATA.agentConsult,
     surface: "a test meeting",
-    userLabel: "Participant",
-    assistantLabel: "Agent",
-    questionSourceLabel: "participant",
-    workingResponseLabel: "participant",
     extraSystemPrompt: "Answer briefly.",
   },
-  session: {
-    idPrefix: "test_meeting",
-    participantIdentity: () => "Test participant",
-  },
+  session: { idPrefix: "test_meeting", participantIdentity: () => "Test participant" },
 };
 
 function createBindings(agentId: string | undefined) {

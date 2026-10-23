@@ -27,6 +27,23 @@ import { createPackageIntegrityReader } from "./package-update-integrity.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as runtimeWorker from "./runtime-worker-url.js";
 
+export function snapshotActivationFiles(directory: string) {
+  return fs
+    .readdirSync(directory)
+    .toSorted()
+    .map((name) => {
+      const file = path.join(directory, name);
+      const { dev, ino, mode, mtimeNs } = fs.lstatSync(file, { bigint: true });
+      return {
+        name,
+        identity: `${dev}:${ino}`,
+        mode,
+        mtime: mtimeNs,
+        bytes: fs.readFileSync(file),
+      };
+    });
+}
+
 export function createPackageActivationLifetimeFixture() {
   const lifetime = createFixtureLifetime();
   const resolveRuntimeWorkerUrl = runtimeWorker.resolveRuntimeWorkerUrl;

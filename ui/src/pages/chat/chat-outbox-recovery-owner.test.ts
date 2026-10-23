@@ -118,6 +118,8 @@ async function mountRecovery(kind: "draft" | "queue" = "draft") {
       preview,
     ),
   );
+  // Wait for initial durable preparation before measuring later run-owner refreshes.
+  await waitForSolid(() => expect(recoveryIo.prepare).toHaveBeenCalled());
   const button = (action: "restore" | "discard") => {
     const label = t(
       action === "restore" ? "chat.outboxRecoveryRestore" : "chat.outboxRecoveryDelete",
@@ -179,7 +181,7 @@ it("clears a failed restore on retry and admits one review before Solid flushes"
     typeof import("../../components/confirm-dialog.ts")
   >("../../components/confirm-dialog.ts");
   // Exercise the already-loaded modal path that otherwise inherits the action transaction.
-  await import("../../components/modal-dialog.ts");
+  await import("../../components/modal-dialog.tsx");
   recoveryIo.confirm.mockImplementation((options) =>
     dialogs.track(showConfirmDialog({ ...options, signal: cancellation.signal })),
   );

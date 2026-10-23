@@ -16,7 +16,9 @@ import {
 import * as processGroups from "../process/supervisor/service-child-group-ownership.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
+  createDoctorRuntimeProjection,
   createDoctorHealthFlowContext,
+  doctorRuntimeProjectedPath as projectedPath,
   resolveDoctorHealthContributions,
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
@@ -62,22 +64,8 @@ afterEach(() => {
   mocks.serviceCommand.mockReset();
 });
 
-function projectedPath(directory: string, source: string): string {
-  const base = path.parse(source).root;
-  return path.join(
-    directory,
-    "tree",
-    Buffer.from(base).toString("hex"),
-    path.relative(base, source),
-  );
-}
-
 function projection(suffix: string, root = parent): string {
-  const directory = path.join(root, `openclaw-update-runtime-${suffix}`);
-  const projectedRoot = projectedPath(directory, packageRoot);
-  fs.mkdirSync(projectedRoot, { recursive: true });
-  fs.copyFileSync(path.join(packageRoot, "package.json"), path.join(projectedRoot, "package.json"));
-  return directory;
+  return createDoctorRuntimeProjection(root, packageRoot, suffix);
 }
 
 async function runDoctor(repair: boolean, maintenance = true): Promise<string> {
@@ -252,24 +240,15 @@ it("Doctor reclaims an npm-prefix runtime and releases its activation journal ha
 });
 
 it.each([
-  { reason: "Doctor does not hold Gateway maintenance", maintenance: false, census: { pids: [] } },
-  { reason: "PIDs: 4242", maintenance: true, census: { pids: [4242] } },
-  {
-    reason: "fixture census unavailable",
-    maintenance: true,
-    census: { error: "fixture census unavailable" },
-  },
-  {
-    reason: "the creating update still owns this runtime",
-    maintenance: true,
-    census: { pids: [] },
-    creator: true,
-  },
-])(
-  "Doctor preserves a projection when $reason",
-  async ({ reason, maintenance, census, creator }) => {
+  ["Doctor does not hold Gateway maintenance", false, { pids: [] }, false],
+  ["PIDs: 4242", true, { pids: [4242] }, false],
+  ["fixture census unavailable", true, { error: "fixture census unavailable" }, false],
+  ["the creating update still owns this runtime", true, { pids: [] }, true],
+] as const)(
+  "Doctor preserves a projection when %s",
+  async (reason, maintenance, census, creator) => {
     const directory = projection("Old002");
-    mocks.census.mockReturnValue(census);
+    mocks.census.mockReturnValue("error" in census ? census : { pids: [...census.pids] });
     const { registerRetainedUpdateRuntime } = await import("../infra/temp-artifact-cleanup.js");
     const release = creator ? registerRetainedUpdateRuntime(directory) : undefined;
     try {

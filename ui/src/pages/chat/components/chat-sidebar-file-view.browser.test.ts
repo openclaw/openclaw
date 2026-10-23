@@ -422,6 +422,29 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(await retired.save()).toBe(false);
   });
 
+  it("releases save progress when content changes before an admitted save settles", async () => {
+    const saving = createDeferred<{ ok: true; hash: string }>();
+    const save = vi.fn(() => saving.promise);
+    const panel = await mountFile(editableFile("before", { save }));
+    await beginEdit(panel, "submitted");
+    await click(panel, "Save");
+    await expect.poll(() => save.mock.calls.length).toBe(1);
+    await expect.poll(() => button(panel, "Saving…").disabled).toBe(true);
+
+    const replacement = editableFile("replacement");
+    files.push(replacement);
+    panel.content = replacement;
+    await panel.updateComplete;
+    await expect.poll(() => editorOf(panel).textContent).toContain("replacement");
+    await beginEdit(panel, "replacement draft");
+    expect(button(panel, "Save").disabled).toBe(false);
+
+    saving.resolve({ ok: true, hash: "hash-2" });
+    await expect.poll(() => editorOf(panel).textContent).toContain("replacement draft");
+    expect(save).toHaveBeenCalledOnce();
+    expect(button(panel, "Save").disabled).toBe(false);
+  });
+
   it("restores an unsaved draft after the detail panel is closed", async () => {
     const draftKey = "session-a\u0000notes.txt";
     const first = await mountFile(editableFile("before", {}, { draftKey }));

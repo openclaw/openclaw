@@ -20,6 +20,7 @@ import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
@@ -39,11 +40,22 @@ import {
 } from "./sidebar-layout.ts";
 
 // mock-isolation: isolate board data and presentation without registering the real board renderer.
-vi.mock("../../components/board/board-view.ts", () => {
+vi.mock("../../components/board/board-view.tsx", () => {
   if (!customElements.get("openclaw-board-view")) {
     customElements.define("openclaw-board-view", class extends HTMLElement {});
   }
-  return {};
+  return {
+    BoardView: (
+      props: Parameters<typeof import("../../components/board/board-view.tsx").BoardView>[0],
+    ) => (
+      <openclaw-board-view
+        ref={props.ref}
+        prop:active={props.active}
+        prop:session={props.session}
+        prop:snapshot={props.snapshot}
+      />
+    ),
+  };
 });
 
 const swarmModuleImport = await vi.hoisted(async () => {
@@ -745,7 +757,7 @@ describe("chat pane board shell", () => {
     expect(pane.resolveBoardProvider().snapshot$.value.sessionKey).toBe("agent:work:primary");
   });
 
-  it("keeps the board and its iframe connected when a retained pane hides and returns", () => {
+  it("keeps the board and its iframe connected when a retained pane hides and returns", async () => {
     const pane = createTestPane();
     pane.boardProvider = createMockBoardProvider(pane.state.sessionKey);
     const container = document.body.appendChild(document.createElement("div"));
@@ -755,6 +767,9 @@ describe("chat pane board shell", () => {
     try {
       pane.visuallyPresented = true;
       draw();
+      await waitForSolid(() =>
+        expect(container.querySelector("openclaw-board-view")?.active).toBe(true),
+      );
       const board = container.querySelector("openclaw-board-view")!;
       const frame = board.appendChild(document.createElement("iframe"));
       for (const visible of [false, true]) {
@@ -796,7 +811,7 @@ describe("chat pane board shell", () => {
       const provider = pane.resolveBoardProvider();
       await vi.waitFor(() => expect(provider.hasLoadedSnapshot).toBe(true));
       draw();
-      expect(target()).toEqual({ sessionKey: key, agentId: "research" });
+      await waitForSolid(() => expect(target()).toEqual({ sessionKey: key, agentId: "research" }));
       expect(request).toHaveBeenCalledWith("board.get", { sessionKey: key });
       let complete!: (value: typeof snapshot) => void;
       request.mockReturnValueOnce(

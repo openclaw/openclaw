@@ -2,6 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { closeHttpServer } from "../../test/helpers/gateway-integration-fixtures.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -169,10 +170,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 afterAll(async () => {
-  server.closeAllConnections();
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
+  await closeHttpServer(server);
   await lastHandled;
   await portClaim?.release();
   memorySessionActorOwners.closeDatabase(location);

@@ -169,15 +169,21 @@ function preparedGatewayAuthSnapshot(
 
 function singleProfileSnapshot(
   agentDir: string,
-  metadata: Omit<Partial<RuntimeAuthProfileStore>, "version" | "profiles"> = {},
+  metadata: Omit<Partial<RuntimeAuthProfileStore>, "version"> = {},
   profileId = "openai:default",
 ) {
-  return (key: string, port: number, keyRef?: SecretRef) =>
-    preparedGatewayAuthSnapshot(agentDir, port, {
-      version: 1,
-      profiles: { [profileId]: apiKeyProfile("openai", key, keyRef) },
-      ...metadata,
-    });
+  const { profiles, ...state } = metadata;
+  return (key: string, port: number, keyRef?: SecretRef, sourceConfig?: OpenClawConfig) =>
+    preparedGatewayAuthSnapshot(
+      agentDir,
+      port,
+      {
+        version: 1,
+        profiles: { ...profiles, [profileId]: apiKeyProfile("openai", key, keyRef) },
+        ...state,
+      },
+      sourceConfig,
+    );
 }
 
 type ActivateOptions = Omit<
@@ -628,79 +634,37 @@ describe("secrets runtime state", () => {
     expect(getAuthStore(agentDir)).toBeUndefined();
   });
 
-  it.each([true, false])(
-    "handles baseline external to inherited with mutation=%s",
-    (mutateCandidateOwner) => {
-      const agentDir = `/tmp/openclaw-auth-external-to-inherited-${mutateCandidateOwner}`;
-      const snapshot = ownedProfileSnapshot(agentDir);
-      const previous = activateBaseline(snapshot("sk-external-old", "external", 19_001));
-      const candidate = snapshot("sk-candidate", "inherited", 19_002);
+  it.each([
+    ["external", "inherited", true, "candidate", null, "inherited"],
+    ["external", "inherited", false, "refreshed", "old", "inherited"],
+    ["inherited", "external", true, "candidate", null, "external"],
+    ["inherited", "external", false, "refreshed", "old", "external"],
+    ["local", "local", false, "candidate", "candidate", "external"],
+  ] as const)(
+    "rolls back %s to %s with mutation=%s and current key=%s",
+    (baselineOwner, candidateOwner, mutated, currentKey, expectedKey, currentOwner) => {
+      const agentDir = `/tmp/openclaw-auth-ownership-${baselineOwner}-${candidateOwner}-${mutated}`;
+      const snapshot = ownedProfileSnapshot(agentDir, baselineOwner === "inherited");
+      const previous = activateBaseline(snapshot("old", baselineOwner, 19_001));
+      const candidate = snapshot("candidate", candidateOwner, 19_002);
       expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-      if (mutateCandidateOwner) {
+      if (mutated) {
         noteCredentialMutation(undefined, "openai:x");
       }
-      setAuthStore(
-        snapshot(mutateCandidateOwner ? "sk-candidate" : "sk-descendant", "inherited", 19_002)
-          .authStores[0]!.store,
-        agentDir,
-      );
-
+      setAuthStore(snapshot(currentKey, currentOwner, 19_002).authStores[0]!.store, agentDir);
       expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-      if (mutateCandidateOwner) {
-        expect(getAuthStore(agentDir)).toBeUndefined();
+      const restored = getAuthStore(agentDir);
+      if (expectedKey === null) {
+        expect(restored).toBeUndefined();
       } else {
-        const restored = getAuthStore(agentDir);
-        expect(restored?.profiles["openai:x"]).toMatchObject({ key: "sk-external-old" });
-        expect(restored?.runtimeExternalProfileIds).toContain("openai:x");
+        expect(restored?.profiles["openai:x"]).toMatchObject({ key: expectedKey });
+        expect((restored?.runtimeExternalProfileIds ?? []).includes("openai:x")).toBe(
+          expectedKey === "candidate" || baselineOwner === "external",
+        );
+        expect(restored?.runtimeLocalProfileIds ?? []).not.toContain("openai:x");
       }
     },
   );
-
-  it("invalidates candidate external ownership after a baseline inherited mutation", () => {
-    const agentDir = `/tmp/openclaw-auth-inherited-to-external`;
-    const snapshot = ownedProfileSnapshot(agentDir, true);
-    const previous = activateBaseline(snapshot("sk-baseline", "inherited", 19_001));
-    const candidate = snapshot("sk-external", "external", 19_002);
-    expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-    noteCredentialMutation(undefined, "openai:x");
-    setAuthStore(candidate.authStores[0]!.store, agentDir);
-
-    expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    expect(getAuthStore(agentDir)).toBeUndefined();
-  });
-
-  it("restores unchanged inherited ownership after a candidate external refresh", () => {
-    const agentDir = `/tmp/openclaw-auth-inherited-external-refresh`;
-    const snapshot = ownedProfileSnapshot(agentDir, true);
-    const baseline = snapshot("sk-baseline", "inherited", 19_001);
-    const previous = activateBaseline(baseline);
-    const candidate = snapshot("sk-external", "external", 19_002);
-    expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-    setAuthStore(
-      snapshot("sk-external-refresh", "external", 19_002).authStores[0]!.store,
-      agentDir,
-    );
-
-    expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    const restored = getAuthStore(agentDir);
-    expect(restored?.profiles["openai:x"]).toMatchObject({ key: "sk-baseline" });
-    expect(restored?.runtimeExternalProfileIds ?? []).not.toContain("openai:x");
-  });
-
-  it("preserves external owner metadata when bytes equal the local candidate", () => {
-    const agentDir = `/tmp/openclaw-auth-local-external-equal-bytes`;
-    const snapshot = ownedProfileSnapshot(agentDir);
-    const previous = activateBaseline(snapshot("sk-old", "local", 19_001));
-    const candidate = snapshot("sk-candidate", "local", 19_002);
-    expect(activateSnapshotIfCurrent(candidate)).toBe(true);
-    setAuthStore(snapshot("sk-candidate", "external", 19_002).authStores[0]!.store, agentDir);
-
-    expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    const restored = getAuthStore(agentDir);
-    expect(restored?.profiles["openai:x"]).toMatchObject({ key: "sk-candidate" });
-    expect(restored?.runtimeExternalProfileIds).toContain("openai:x");
-    expect(restored?.runtimeLocalProfileIds ?? []).not.toContain("openai:x");
-  });
 
   it("preserves an authoritative empty external overlay on rollback", () => {
     const agentDir = "/tmp/openclaw-auth-authoritative-empty-external";
@@ -764,29 +728,16 @@ describe("secrets runtime state", () => {
 
   it("removes a rejected candidate credential when its bounded lineage was evicted", () => {
     const agentDir = "/tmp/openclaw-auth-evicted-lineage";
-    const snapshot = (key: string, port: number) =>
-      preparedGatewayAuthSnapshot(agentDir, port, {
-        version: 1,
-        profiles: {
-          "openai:default": { type: "api_key", provider: "openai", key },
-          "anthropic:stable": {
-            type: "api_key",
-            provider: "anthropic",
-            key: "sk-stable",
-          },
-        },
-        runtimeLocalProfileIds: ["anthropic:stable", "openai:default"],
-      });
+    const snapshot = singleProfileSnapshot(agentDir, {
+      profiles: { "anthropic:stable": apiKeyProfile("anthropic", "sk-stable") },
+      runtimeLocalProfileIds: ["anthropic:stable", "openai:default"],
+    });
     activateSnapshot(snapshot("sk-old", 19_001));
     const previous = getSnapshot()!;
     const candidate = snapshot("sk-candidate", 19_002);
     expect(activateSnapshotIfCurrent(candidate)).toBe(true);
     for (let index = 0; index < 300; index += 1) {
-      noteAuthMutation(agentDir, {
-        credentialsChanged: true,
-        stateChanged: false,
-        profileIds: [`openai:unrelated-${index}`],
-      });
+      noteCredentialMutation(agentDir, `openai:unrelated-${index}`);
     }
 
     expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
@@ -1080,16 +1031,9 @@ describe("secrets runtime state", () => {
         providerPath: string,
         port: number,
       ) =>
-        preparedGatewayAuthSnapshot(
-          agentDir,
-          port,
-          {
-            version: 1,
-            profiles: { "openai:default": apiKeyProfile("openai", key, keyRef) },
-            runtimeLocalProfileIds: owner === "local" ? ["openai:default"] : [],
-          },
-          fileProviderConfig(port, providerPath),
-        );
+        singleProfileSnapshot(agentDir, {
+          runtimeLocalProfileIds: owner === "local" ? ["openai:default"] : [],
+        })(key, port, keyRef, fileProviderConfig(port, providerPath));
       const previous = activateBaseline(
         snapshot("sk-old", capturedOwner, "/tmp/old-secrets.json", 19_041),
       );
@@ -1123,22 +1067,15 @@ describe("secrets runtime state", () => {
       const candidateSourceConfig = fileSource("/tmp/rejected-secrets.json", true);
       const previousRef = { source: "file" as const, provider: "vault", id: "openai-a" };
       const currentRef = { source: "file" as const, provider: currentProvider, id: "openai-b" };
+      const makeSnapshot = singleProfileSnapshot(agentDir, {
+        runtimeLocalProfileIds: ["openai:default"],
+      });
       const snapshot = (
         key: string,
         keyRef: SecretRef,
         port: number,
         sourceConfig: OpenClawConfig,
-      ) =>
-        preparedGatewayAuthSnapshot(
-          agentDir,
-          port,
-          {
-            version: 1,
-            profiles: { "openai:default": apiKeyProfile("openai", key, keyRef) },
-            runtimeLocalProfileIds: ["openai:default"],
-          },
-          { ...sourceConfig, gateway: { port } },
-        );
+      ) => makeSnapshot(key, port, keyRef, { ...sourceConfig, gateway: { port } });
       const previous = activateBaseline(
         snapshot("sk-old", previousRef, 19_051, previousSourceConfig),
       );

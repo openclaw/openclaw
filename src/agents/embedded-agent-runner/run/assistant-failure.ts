@@ -20,7 +20,6 @@ import { parseImageDimensionError } from "../../embedded-agent-helpers/image-err
 import { pickFallbackThinkingLevel } from "../../embedded-agent-helpers/thinking.js";
 import {
   FailoverError,
-  isNonProviderRuntimeCoordinationError,
   recordModelFallbackStop,
   resolveFailoverStatus,
 } from "../../failover-error.js";
@@ -128,11 +127,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       body: failedAssistant.errorBody,
     });
   }
-  if (
-    isSessionTranscriptTurnMismatchErrorMessage(transcriptError) ||
-    (transcriptError !== undefined &&
-      isNonProviderRuntimeCoordinationError(new Error(transcriptError)))
-  ) {
+  if (isSessionTranscriptTurnMismatchErrorMessage(transcriptError)) {
     throw new Error(transcriptError);
   }
   if (classifyGatewayStorageFailure(failedAssistant)) {
@@ -383,6 +378,7 @@ export async function handleEmbeddedAssistantFailure(input: {
           profileId: failedProfileId,
           reason: assistantProfileFailureReason,
           modelId,
+          retryAfterMs: assistantSignal?.retryAfterMs,
         });
       } catch (err) {
         log.warn(`profile failure mark failed: ${String(err)}`);

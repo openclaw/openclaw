@@ -10,6 +10,11 @@ import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "../../test/helpers/gateway-restart-budget.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
@@ -55,6 +60,18 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
       let steerToolStarted = false;
       let steerContinuations = 0;
       let recoveredResponse: ServerResponse | undefined;
+      const recoveredResponseReady = createDeferred();
+      const parallelResponsesReady = createDeferred();
+      const releaseHeldResponse = (response: ServerResponse | undefined) => {
+        if (!response || response.destroyed || response.writableEnded) {
+          return;
+        }
+        writeOpenAiResponsesText(response, {
+          text: "RECEIVED",
+          messageId: randomUUID(),
+          responseId: randomUUID(),
+        });
+      };
       const continueSteer = (response: ServerResponse) => {
         // Keep the receiver alive while the sender finishes asynchronous admission.
         expect(++steerContinuations).toBeLessThanOrEqual(8);
@@ -91,6 +108,9 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
             parallelObserved[index]!.push(parallelInput[0]);
             if (parallelInput[2] === "1") {
               parallelResponses.set(index, response);
+              if (parallelResponses.size === parallelTargets.length) {
+                parallelResponsesReady.resolve();
+              }
               return;
             }
           }
@@ -182,6 +202,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           }
           if (!hold && marker === "CHAT_UPDATE_1" && !recoveredResponse) {
             recoveredResponse = response;
+            recoveredResponseReady.resolve();
             return;
           }
           writeOpenAiResponsesText(response, {
@@ -321,6 +342,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           { signal },
         );
       const archivedSource = "agent:main:dashboard:archived-source";
+      let restarting: Promise<void> | undefined;
       try {
         const diagnosticPlugin = gateway.state.path("recovery-proof");
         await writeRecoveryDiagnosticProbe(diagnosticPlugin);
@@ -535,22 +557,27 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
             setTimeout(resolve, startAt - Date.now());
           });
         }
-        await gateway.startGateway();
-        expect(gateway.child?.pid).not.toBe(firstPid);
-        client = await connect();
-        await expectPersistedSteer();
+        const startup = (restarting = gateway.startGateway());
+        const awaitWhileStarting = <T>(gate: PromiseLike<T>, message: string) =>
+          withinTest(awaitGateBeforeSettlement(gate, startup, message), signal);
         try {
-          await vi.waitFor(() => expect(recoveredResponse).toBeDefined(), { timeout: 60_000 });
+          await awaitWhileStarting(
+            recoveredResponseReady.promise,
+            "Gateway startup settled before recovery reached the first chat input",
+          );
         } catch (error) {
           throw new Error(
             `Recovery did not reach the first chat input: ${JSON.stringify({ observed, providerRequests })}\n${gateway.logs()}`,
             { cause: error },
           );
         }
+        // Both provider gates must be reached before `restarting` settles: readiness
+        // deliberately remains pending while the recovered response is held.
         // A held turn in one session must not keep other sessions from replaying.
-        await vi.waitFor(() => expect(parallelResponses.size).toBe(parallelTargets.length), {
-          timeout: 60_000,
-        });
+        await awaitWhileStarting(
+          parallelResponsesReady.promise,
+          "Gateway startup settled before parallel recovery reached every held response",
+        );
         expect(parallelObserved).toEqual(
           parallelTargets.map((_, index) => [`PARALLEL_INPUT_${index}_1`]),
         );
@@ -559,26 +586,25 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
             .logs()
             .slice(beforeRestartLogs)
             .match(/startup (?:trace|phase): sidecars\.subagent-recovery ([0-9.]+)ms/u);
-        await vi.waitFor(() => expect(recoveryTrace()).not.toBeNull(), { timeout: 10_000 });
+        await awaitWhileStarting(
+          vi.waitFor(() => expect(recoveryTrace()).not.toBeNull(), { timeout: 10_000 }),
+          "Gateway startup settled before recovery timing was recorded",
+        );
         const recoveryMs = Number(recoveryTrace()![1]);
         for (const response of parallelResponses.values()) {
-          writeOpenAiResponsesText(response, {
-            text: "RECEIVED",
-            messageId: randomUUID(),
-            responseId: randomUUID(),
-          });
+          releaseHeldResponse(response);
         }
-        // Stored text is trimmed; the original request identity must still dedupe
-        // an original-payload retry while recovery owns an active reservation.
-        const activeRetry = await client.request<{ runId: string }>("chat.send", chatRequests[0], {
+        releaseHeldResponse(recoveredResponse);
+        await startup;
+        expect(gateway.child?.pid).not.toBe(firstPid);
+        client = await connect();
+        await expectPersistedSteer();
+        // Stored text is trimmed; the recovery-to-fresh-admission handoff must
+        // still dedupe the original request identity immediately after readiness.
+        const handoffRetry = await client.request<{ runId: string }>("chat.send", chatRequests[0], {
           signal,
         });
-        expect(activeRetry.runId).toBe(chatRequests[0]!.idempotencyKey);
-        writeOpenAiResponsesText(recoveredResponse!, {
-          text: "RECEIVED",
-          messageId: randomUUID(),
-          responseId: randomUUID(),
-        });
+        expect(handoffRetry.runId).toBe(chatRequests[0]!.idempotencyKey);
         await vi.waitFor(
           () => expect(observed, JSON.stringify(providerRequests)).toEqual(expectedDelivery),
           {
@@ -738,6 +764,11 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         }).catch(() => console.error("[session-recovery-failure] diagnostics unavailable"));
         throw error;
       } finally {
+        for (const response of parallelResponses.values()) {
+          releaseHeldResponse(response);
+        }
+        releaseHeldResponse(recoveredResponse);
+        await restarting?.catch(() => undefined);
         await client?.stopAndWait();
         await gateway.cleanup();
         await closeProvider(providerServer);

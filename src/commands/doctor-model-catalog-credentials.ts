@@ -26,11 +26,14 @@ import {
 import { resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding } from "../flows/health-checks.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { listAgentModelsJsonPaths } from "../secrets/storage-scan.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { createAuthMigrationWarningRecorder } from "./doctor/auth-migration-findings.js";
 
 type PlaintextCredential = { key: string; provider: string; catalog: boolean };
 
@@ -238,19 +241,25 @@ async function persistCredentials(params: {
   return { migrated: added, removed: removedProfiles.length };
 }
 
-function collectAgentCatalogs(agentDir: string, warnings: string[]) {
+function collectAgentCatalogs(agentDir: string, warnings: string[], findings: HealthFinding[]) {
+  const reportWarning = createAuthMigrationWarningRecorder(warnings, findings);
   const localStore = loadPersistedAuthProfileStore(agentDir) ?? emptyStore();
   const providers: Record<string, unknown>[] = [];
   const rootPath = path.join(agentDir, "models.json");
   try {
-    const root = parseModelCatalogJson(fs.readFileSync(rootPath, "utf8"));
+    const root = parseModelCatalogJson(
+      decodeUtf8Input(fs.readFileSync(rootPath), `Model catalog ${rootPath}`),
+    );
     if (isRecord(root) && isRecord(root.providers)) {
       providers.push(root.providers);
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      warnings.push(
+      reportWarning(
         `Could not read model catalog ${shortenHomePath(rootPath)}: ${error instanceof Error ? error.message : String(error)}`,
+        "catalog-read-failed",
+        "Keep the model catalog. Correct the reported file access or JSON error, then rerun openclaw doctor --fix to verify credential migration.",
+        rootPath,
       );
     }
   }
@@ -266,12 +275,20 @@ function collectAgentCatalogs(agentDir: string, warnings: string[]) {
           providers.push(parsed.providers);
         }
       } catch {
-        warnings.push(`Could not parse generated model catalog for plugin ${catalog.pluginId}.`);
+        reportWarning(
+          `Could not parse generated model catalog for plugin ${catalog.pluginId}.`,
+          "catalog-parse-failed",
+          "Keep the agent database and recovery copy. Check the plugin catalog format with its maintainer before retrying openclaw doctor --fix; use openclaw models status to identify affected providers.",
+          catalog.pluginId,
+        );
       }
     }
   } catch (error) {
-    warnings.push(
+    reportWarning(
       `Could not read generated model catalogs for ${shortenHomePath(agentDir)}: ${error instanceof Error ? error.message : String(error)}`,
+      "catalog-owner-read-failed",
+      "Keep the agent database and recovery copy. Correct the reported database access error before rerunning openclaw doctor --fix; do not delete the credential database.",
+      agentDir,
     );
   }
   return { agentDir, localStore, providers };
@@ -283,8 +300,21 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   env?: NodeJS.ProcessEnv;
   prompter: DoctorPrompter;
   runtime: RuntimeEnv;
-}): Promise<{ detected: number; migrated: number; removed: number; warnings: string[] }> {
+  reportFindings?: (findings: readonly HealthFinding[], warnings?: readonly string[]) => void;
+}): Promise<{
+  detected: number;
+  migrated: number;
+  removed: number;
+  warnings: string[];
+  findings: readonly HealthFinding[];
+}> {
   const warnings: string[] = [];
+  const findings: HealthFinding[] = [];
+  const reportWarning = createAuthMigrationWarningRecorder(
+    warnings,
+    findings,
+    params.reportFindings,
+  );
   const env = params.env ?? process.env;
   const stateDir = resolveStateDir(env);
   const mainAgentDir = resolveSharedMainAuthAgentDir(env);
@@ -304,7 +334,7 @@ export async function maybeMigrateModelCatalogCredentials(params: {
     .map((modelsPath) => path.dirname(modelsPath))
     .filter((agentDir) => !isRetained(agentDir));
   const mainStore = loadPersistedSharedAuthProfileStore(env) ?? emptyStore();
-  const catalogs = agentDirs.map((agentDir) => collectAgentCatalogs(agentDir, warnings));
+  const catalogs = agentDirs.map((agentDir) => collectAgentCatalogs(agentDir, warnings, findings));
   const childStores = catalogs
     .filter((catalog) => catalog.agentDir !== mainAgentDir)
     .map((catalog) => catalog.localStore);
@@ -335,11 +365,12 @@ export async function maybeMigrateModelCatalogCredentials(params: {
     invalidMainProfiles.length +
     catalogImports.reduce((sum, entry) => sum + entry.invalidProfiles.length, 0);
 
+  params.reportFindings?.(findings, warnings);
   for (const warning of warnings) {
     params.runtime.error(warning);
   }
   if (detected === 0 && removable === 0) {
-    return { detected, migrated: 0, removed: 0, warnings };
+    return { detected, migrated: 0, removed: 0, warnings, findings };
   }
 
   if (detected > 0) {
@@ -361,7 +392,20 @@ export async function maybeMigrateModelCatalogCredentials(params: {
       initialValue: true,
     }));
   if (!shouldRepair) {
-    return { detected, migrated: 0, removed: 0, warnings };
+    const pending: HealthFinding[] = [
+      {
+        checkId: "core/doctor/auth-migration/model-credential-repair-pending",
+        severity: "warning",
+        category: "recommended",
+        message: `${detected} plaintext model credential${detected === 1 ? "" : "s"} and ${removable} unresolved marker${removable === 1 ? "" : "s"} remain pending repair.`,
+        fixHint:
+          "Run openclaw doctor --fix to copy and verify plaintext credentials in agent SQLite and remove unresolved markers. This prepares for catalog auth retirement; keep the original catalog values until verification completes.",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/running#auth-migration-recovery",
+      },
+    ];
+    findings.push(...pending);
+    params.reportFindings?.(pending);
+    return { detected, migrated: 0, removed: 0, warnings, findings };
   }
 
   function* migrationTargets() {
@@ -389,7 +433,12 @@ export async function maybeMigrateModelCatalogCredentials(params: {
       removed += result.removed;
     } catch (error) {
       const warning = `Could not migrate ${description}: ${error instanceof Error ? error.message : String(error)}`;
-      warnings.push(warning);
+      reportWarning(
+        warning,
+        "credential-import-failed",
+        "Keep the original catalog values and recovery copy. Correct the reported credential-store error and rerun openclaw doctor --fix. Check openclaw models status for the intended accounts.",
+        description,
+      );
       params.runtime.error(warning);
     }
   }
@@ -406,5 +455,5 @@ export async function maybeMigrateModelCatalogCredentials(params: {
       "Doctor changes",
     );
   }
-  return { detected, migrated, removed, warnings };
+  return { detected, migrated, removed, warnings, findings };
 }

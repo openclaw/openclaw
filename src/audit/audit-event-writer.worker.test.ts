@@ -29,7 +29,10 @@ import {
   createExecutionIdentityAdmissionToken,
   enqueueExecutionIdentityContextAtAdmission,
 } from "./execution-identity-admission.js";
-import { prepareExecutionIdentityContextAtAdmission } from "./execution-identity.test-support.js";
+import {
+  executionIdentityFacts as admissionFacts,
+  prepareExecutionIdentityContextAtAdmission,
+} from "./execution-identity.test-support.js";
 import { recordOutboundMessageProgressInDatabase } from "./message-delivery-progress-store.js";
 
 const pruneFault = useSqliteWorkerFault([
@@ -91,15 +94,6 @@ function writerFixture(
 
 function rowCounts(db: OpenClawStateDatabase["db"], tables: string[]) {
   return tables.map((table) => db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count);
-}
-
-function admissionFacts(runId: string) {
-  return {
-    runId,
-    agentId: "main",
-    ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-    runtime: { kind: "embedded" },
-  } as const;
 }
 
 describe("audit writer shared worker", () => {
@@ -303,17 +297,17 @@ describe("audit writer shared worker", () => {
     recordExecutionDecisionFactInDatabase(receipt, { ...options, now: 0 });
     recordOutboundMessageProgressInDatabase(
       {
-        sourceId: "prune-progress",
-        sourceSequence: 1,
-        occurredAt: 0,
         kind: "message",
         action: "message.outbound.queued",
         status: "started",
         outcome: "queued",
+        sourceId: "prune-progress",
+        sourceSequence: 1,
+        occurredAt: 0,
+        runId: "prune-run",
         actorType: "agent",
         actorId: "main",
         agentId: "main",
-        runId: "prune-run",
         direction: "outbound",
         channel: "qa-channel",
         conversationKind: "direct",

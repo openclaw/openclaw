@@ -116,7 +116,6 @@ describe("trusted-proxy pairing setup", () => {
       accessDowngraded: limited,
     });
     expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledExactlyOnceWith({
-      baseDir: undefined,
       profile: limited
         ? PAIRING_SETUP_BOOTSTRAP_PROFILE
         : FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,

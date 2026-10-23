@@ -191,21 +191,52 @@ function patchReuseOptions(
 ) {
   return { loadCiReuseCandidates: () => [candidate], execGit };
 }
+function reusedCiEvidence(id: number, fields: Record<string, unknown>) {
+  return {
+    headSha: sha,
+    workflows: [expect.objectContaining({ id, ...fields })],
+    reusedFromSha: previousSha,
+    reusedRunId: id,
+    patchIdMatched: true,
+  };
+}
+
+function forkRun(overrides: Partial<WorkflowRunFixture>) {
+  return {
+    head_branch: "fix/token-listener",
+    head_repository: { full_name: "contributor/openclaw" },
+    pull_requests: [],
+    ...overrides,
+  };
+}
+const forkMembership = {
+  pullRequestCommitShas: [previousSha, sha],
+  pullRequestHeadBranch: "fix/token-listener",
+  pullRequestHeadRepository: "contributor/openclaw",
+};
+
+function withGitRepository(prefix: string, check: (git: GitExec, root: string) => void) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  const git: GitExec = (args, options) => {
+    const result = spawnSync("git", args, { cwd: root, encoding: "utf8", input: options?.input });
+    expect(result.status, `git ${args.join(" ")}\n${result.stderr}`).toBe(0);
+    return result.stdout;
+  };
+  try {
+    git(["init", "-q", "-b", "main"]);
+    git(["config", "user.name", "OpenClaw Test"]);
+    git(["config", "user.email", "test@example.invalid"]);
+    git(["config", "commit.gpgSign", "false"]);
+    git(["config", "core.hooksPath", "/dev/null"]);
+    check(git, root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 describe("verify-pr-hosted-gates", () => {
   it("compares patch IDs against one main snapshot while the shared ref advances", () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "openclaw-patch-snapshot-")));
-    const git: GitExec = (args, options) => {
-      const result = spawnSync("git", args, { cwd: root, encoding: "utf8", input: options?.input });
-      expect(result.status, result.stderr).toBe(0);
-      return result.stdout;
-    };
-    try {
-      git(["init", "-q", "-b", "main"]);
-      git(["config", "user.name", "OpenClaw Test"]);
-      git(["config", "user.email", "test@example.invalid"]);
-      git(["config", "commit.gpgSign", "false"]);
-      git(["config", "core.hooksPath", "/dev/null"]);
+    withGitRepository("openclaw-patch-snapshot-", (git, root) => {
       writeFileSync(join(root, "subject.txt"), "base\n");
       git(["add", "."]);
       git(["commit", "-qm", "base"]);
@@ -236,9 +267,7 @@ describe("verify-pr-hosted-gates", () => {
       expect(evidence.patchIdMatched).toBe(true);
       expect(comparisons).toBe(2);
       expect(git(["rev-parse", "refs/remotes/origin/main"]).trim()).toBe(candidate);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    });
   });
 
   it("starts from an older target cwd without current normalization helpers", () => {
@@ -404,13 +433,9 @@ describe("verify-pr-hosted-gates", () => {
       path: ".github/workflows/ci.yml",
       display_title: `CI release gate ${previousSha}`,
     });
-    expect(collectHostedGateEvidence([], { ...patchReuseOptions(candidate) })).toEqual({
-      headSha: sha,
-      workflows: [expect.objectContaining({ id: 102, event: "workflow_dispatch" })],
-      reusedFromSha: previousSha,
-      reusedRunId: 102,
-      patchIdMatched: true,
-    });
+    expect(collectHostedGateEvidence([], { ...patchReuseOptions(candidate) })).toEqual(
+      reusedCiEvidence(102, { event: "workflow_dispatch" }),
+    );
   });
 
   it("short-circuits reuse discovery when exact-head CI already succeeds", () => {
@@ -611,98 +636,80 @@ describe("verify-pr-hosted-gates", () => {
   });
 
   it.each([
-    {
-      name: "scheduled CI at the age boundary",
-      runs: [makeRun("CI", 1, "2026-06-16T10:55:00Z")],
-      selected: { name: "CI", id: 1 },
-    },
-    {
-      name: "changelog-only head without CI",
-      runs: [],
-      selected: undefined,
-      changelogOnly: true,
-    },
-    {
-      name: "manual CI at the age boundary",
-      runs: [
+    [
+      "scheduled CI at the age boundary",
+      [makeRun("CI", 1, "2026-06-16T10:55:00Z")],
+      { name: "CI", id: 1 },
+    ],
+    ["changelog-only head without CI", [], undefined, true],
+    [
+      "manual CI at the age boundary",
+      [
         makeRun(`CI release gate ${sha}`, 1, "2026-06-16T10:55:00Z", {
           event: "workflow_dispatch",
           path: ".github/workflows/ci.yml@refs/heads/release-controls",
           display_title: `CI release gate ${sha}`,
         }),
       ],
-      selected: { name: `CI release gate ${sha}`, id: 1 },
-    },
-    {
-      name: "later success after failure",
-      runs: [makeRun("CI", 1, 50, { conclusion: "failure" }), makeRun("CI", 2, 52)],
-      selected: { name: "CI", id: 2, headSha: sha },
-    },
-    {
-      name: "target success before obsolete-head failure",
-      runs: [
+      { name: `CI release gate ${sha}`, id: 1 },
+    ],
+    [
+      "later success after failure",
+      [makeRun("CI", 1, 50, { conclusion: "failure" }), makeRun("CI", 2, 52)],
+      { name: "CI", id: 2, headSha: sha },
+    ],
+    [
+      "target success before obsolete-head failure",
+      [
         makeRun("CI", 1, 50),
         makeRun("CI", 2, 54, { head_sha: previousSha, conclusion: "failure" }),
       ],
-      selected: { name: "CI", id: 1, headSha: sha },
-    },
+      { name: "CI", id: 1, headSha: sha },
+    ],
     ...(
       [
         ["stale", makeRun("CI", 1, "2026-06-16T10:54:59Z")],
         ["cancelled", makeRun("CI", 1, 50, { conclusion: "cancelled" })],
         ["skipped", makeRun("CI", 1, 50, { conclusion: "skipped" })],
       ] satisfies Array<[string, WorkflowRunFixture]>
-    ).map(([state, run]) => ({
-      name: `manual fallback after ${state}`,
-      runs: [run, releaseGateRun(2, 49)],
-      selected: { name: `CI release gate ${sha}`, id: 2 },
-    })),
-    {
-      name: "newer manual over older pending",
-      runs: [pendingCiRun(1, 48, "in_progress"), releaseGateRun(2, 49)],
-      selected: { name: `CI release gate ${sha}`, id: 2 },
+    ).map(([state, run]): [string, WorkflowRunFixture[], { name: string; id: number }] => [
+      `manual fallback after ${state}`,
+      [run, releaseGateRun(2, 49)],
+      { name: `CI release gate ${sha}`, id: 2 },
+    ]),
+    [
+      "newer manual over older pending",
+      [pendingCiRun(1, 48, "in_progress"), releaseGateRun(2, 49)],
+      { name: `CI release gate ${sha}`, id: 2 },
+    ],
+  ] satisfies Array<
+    [string, WorkflowRunFixture[], { name: string; id: number; headSha?: string }?, boolean?]
+  >)(
+    "selects %s",
+    (
+      _name,
+      runs,
+      selected?: { name: string; id: number; headSha?: string },
+      changelogOnly?: boolean,
+    ) => {
+      expect(collectHostedGateEvidence(runs, { changelogOnly })).toEqual({
+        headSha: sha,
+        workflows: selected ? [expect.objectContaining(selected)] : [],
+      });
     },
-  ])("selects $name", ({ runs, selected, changelogOnly }) => {
-    expect(collectHostedGateEvidence(runs, { changelogOnly })).toEqual({
-      headSha: sha,
-      workflows: selected ? [expect.objectContaining(selected)] : [],
-    });
-  });
+  );
 
   it("accepts a recent green fork head when GitHub omits pull request links", () => {
-    const headBranch = "fix/token-listener";
-    const headRepository = "contributor/openclaw";
-    const priorRun = makeRun("CI", 1, 50, {
-      head_sha: previousSha,
-      head_branch: headBranch,
-      head_repository: { full_name: headRepository },
-      pull_requests: [],
-    });
+    const priorRun = makeRun("CI", 1, 50, forkRun({ head_sha: previousSha }));
     const evidence = collectHostedGateEvidence(
-      [
-        priorRun,
-        makeRun("CI", 2, 54, {
-          head_branch: headBranch,
-          head_repository: { full_name: headRepository },
-          pull_requests: [],
-          conclusion: "failure",
-        }),
-      ],
+      [priorRun, makeRun("CI", 2, 54, forkRun({ conclusion: "failure" }))],
       {
-        pullRequestCommitShas: [previousSha, sha],
-        pullRequestHeadBranch: headBranch,
-        pullRequestHeadRepository: headRepository,
+        ...forkMembership,
         ...patchReuseOptions(priorRun),
       },
     );
 
-    expect(evidence).toEqual({
-      headSha: sha,
-      workflows: [expect.objectContaining({ name: "CI", id: 1, headSha: previousSha })],
-      reusedFromSha: previousSha,
-      reusedRunId: 1,
-      patchIdMatched: true,
-    });
+    expect(evidence).toEqual(reusedCiEvidence(1, { name: "CI", headSha: previousSha }));
   });
 
   it.each([
@@ -715,24 +722,16 @@ describe("verify-pr-hosted-gates", () => {
       accepted: false,
     },
   ])("validates scheduled fallback membership for $name", ({ commits, links, accepted }) => {
-    const headBranch = "fix/token-listener";
-    const headRepository = "contributor/openclaw";
     const collect = () =>
       collectHostedGateEvidence(
         [
           makeRun("CI", 1, 50),
           makeRun(ARM, 2, 54, { status: "queued", conclusion: null }),
-          makeRun(ARM, 3, 53, {
-            head_sha: previousSha,
-            head_branch: headBranch,
-            head_repository: { full_name: headRepository },
-            pull_requests: links,
-          }),
+          makeRun(ARM, 3, 53, forkRun({ head_sha: previousSha, pull_requests: links })),
         ],
         {
+          ...forkMembership,
           pullRequestCommitShas: commits,
-          pullRequestHeadBranch: headBranch,
-          pullRequestHeadRepository: headRepository,
         },
       );
 
@@ -770,53 +769,35 @@ describe("verify-pr-hosted-gates", () => {
   });
 
   it.each([
-    {
-      name: "uppercase object id",
-      output: `${"A".repeat(40)}\n`,
-      error: "Expected pull request commit object ids from git rev-list.",
+    ["uppercase object id", `${"A".repeat(40)}\n`],
+    ["blank line", `${"a".repeat(40)}\n\n${"b".repeat(40)}\n`],
+    ["empty output", ""],
+    [
+      "missing head",
+      `${"c".repeat(40)}\n`,
+      `Expected pull request commit list to contain head ${"b".repeat(40)}.`,
+    ],
+    ["command failure", new Error("git rev-list failed")],
+  ] satisfies Array<[string, string | Error, string?]>)(
+    "rejects rev-list %s",
+    (_name, output, error?: string) => {
+      expect(() =>
+        loadPullRequestCommitShas({ baseSha: "a".repeat(40), headSha: "b".repeat(40) }, () => {
+          if (output instanceof Error) {
+            throw output;
+          }
+          return output;
+        }),
+      ).toThrow(
+        output instanceof Error
+          ? output
+          : (error ?? "Expected pull request commit object ids from git rev-list."),
+      );
     },
-    {
-      name: "blank line",
-      output: `${"a".repeat(40)}\n\n${"b".repeat(40)}\n`,
-      error: "Expected pull request commit object ids from git rev-list.",
-    },
-    {
-      name: "empty output",
-      output: "",
-      error: "Expected pull request commit object ids from git rev-list.",
-    },
-    {
-      name: "missing head",
-      output: `${"c".repeat(40)}\n`,
-      error: `Expected pull request commit list to contain head ${"b".repeat(40)}.`,
-    },
-    {
-      name: "command failure",
-      output: new Error("git rev-list failed"),
-      error: "git rev-list failed",
-    },
-  ])("rejects rev-list $name", ({ output, error }) => {
-    expect(() =>
-      loadPullRequestCommitShas({ baseSha: "a".repeat(40), headSha: "b".repeat(40) }, () => {
-        if (output instanceof Error) {
-          throw output;
-        }
-        return output;
-      }),
-    ).toThrow(output instanceof Error ? output : error);
-  });
+  );
 
   it("keeps complete membership when the PR head is behind the current base", () => {
-    const fixtureRoot = realpathSync(mkdtempSync(join(tmpdir(), "openclaw-pr-commit-set-")));
-    const git = (args: string[]) => {
-      const result = spawnSync("git", args, { cwd: fixtureRoot, encoding: "utf8" });
-      expect(result.status, `git ${args.join(" ")}\n${result.stderr}`).toBe(0);
-      return result.stdout;
-    };
-    try {
-      git(["init", "-q", "-b", "main"]);
-      git(["config", "user.name", "OpenClaw Test"]);
-      git(["config", "user.email", "test@example.invalid"]);
+    withGitRepository("openclaw-pr-commit-set-", (git) => {
       git(["commit", "-q", "--allow-empty", "-m", "root"]);
       git(["branch", "feature"]);
       git(["commit", "-q", "--allow-empty", "-m", "main one"]);
@@ -833,9 +814,7 @@ describe("verify-pr-hosted-gates", () => {
         headSha,
       ]);
       expect(Number(git(["rev-list", "--count", `${headSha}..${baseSha}`]).trim())).toBe(2);
-    } finally {
-      rmSync(fixtureRoot, { recursive: true, force: true });
-    }
+    });
   });
 
   it("requires recent evidence for scheduled gates observed on the target head", () => {
@@ -894,44 +873,29 @@ describe("verify-pr-hosted-gates", () => {
   });
 
   it.each([
-    {
-      name: "13-hour evidence with a pending run",
-      updatedAt: "2026-06-16T21:55:00Z",
-      current: [pendingCiRun(2, 54, "in_progress")],
+    [
+      "13-hour evidence with a pending run",
+      [pendingCiRun(2, 54, "in_progress")],
+      "2026-06-16T21:55:00Z",
+    ],
+    ["failed scheduled run", [makeRun("CI", 2, 54, { conclusion: "failure" })]],
+    ["skipped scheduled run", [makeRun("CI", 2, 54, { conclusion: "skipped" })]],
+    [
+      "failed manual gate",
+      [pendingCiRun(2, 53, "in_progress"), { ...releaseGateRun(3, 54), conclusion: "failure" }],
+    ],
+  ] satisfies Array<[string, WorkflowRunFixture[], string?]>)(
+    "reuses patch-identical CI after %s",
+    (_name, current, updatedAt = "2026-06-17T10:50:00Z") => {
+      const priorRun = priorSuccessfulCiRun({ id: 1, updated_at: updatedAt });
+      expect(
+        collectHostedGateEvidence([priorRun, ...current], {
+          recentSha: previousSha,
+          ...patchReuseOptions(priorRun),
+        }),
+      ).toEqual(reusedCiEvidence(1, { name: "CI", headSha: previousSha }));
     },
-    {
-      name: "failed scheduled run",
-      updatedAt: "2026-06-17T10:50:00Z",
-      current: [makeRun("CI", 2, 54, { conclusion: "failure" })],
-    },
-    {
-      name: "skipped scheduled run",
-      updatedAt: "2026-06-17T10:50:00Z",
-      current: [makeRun("CI", 2, 54, { conclusion: "skipped" })],
-    },
-    {
-      name: "failed manual gate",
-      updatedAt: "2026-06-17T10:50:00Z",
-      current: [
-        pendingCiRun(2, 53, "in_progress"),
-        { ...releaseGateRun(3, 54), conclusion: "failure" },
-      ],
-    },
-  ])("reuses patch-identical CI after $name", ({ updatedAt, current }) => {
-    const priorRun = priorSuccessfulCiRun({ id: 1, updated_at: updatedAt });
-    expect(
-      collectHostedGateEvidence([priorRun, ...current], {
-        recentSha: previousSha,
-        ...patchReuseOptions(priorRun),
-      }),
-    ).toEqual({
-      headSha: sha,
-      workflows: [expect.objectContaining({ name: "CI", id: 1, headSha: previousSha })],
-      reusedFromSha: previousSha,
-      reusedRunId: 1,
-      patchIdMatched: true,
-    });
-  });
+  );
 
   it.each([
     { name: "failed", overrides: { conclusion: "failure" } },

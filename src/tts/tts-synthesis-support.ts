@@ -1,5 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
-import { normalizeOptionalString as readTtsResultString } from "@openclaw/normalization-core/string-coerce";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -10,6 +10,7 @@ import {
 } from "../plugins/capability-provider-acquisition.js";
 import { buildCapabilityProviderIndex } from "../plugins/provider-registry-shared.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 import {
   createSpeechProviderRegistry,
   normalizeSpeechProviderId,
@@ -37,7 +38,6 @@ import {
   resolveTtsPersonaFromPrefs,
   resolveTtsConfig,
   resolveTtsPrefsPathAsync,
-  resolveTtsRuntimeConfig,
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
 import type { VoiceProviderCandidate } from "./voice-models.js";
@@ -124,7 +124,7 @@ type AcquiredTtsRequest =
 export async function acquireTtsRequest(
   params: TtsRequestSetupParams,
 ): Promise<AcquiredTtsRequest> {
-  const cfg = resolveTtsRuntimeConfig(params.cfg);
+  const cfg = selectLiveRuntimeConfig(params.cfg);
   const config = resolveTtsConfig(cfg, {
     agentId: params.agentId,
     channelId: params.channelId,
@@ -485,11 +485,9 @@ function resolveTtsResultDetail(
   keys: readonly string[],
 ): string | undefined {
   for (const config of [prepared.providerOverrides, prepared.providerConfig]) {
-    for (const key of keys) {
-      const value = readTtsResultString(config?.[key]);
-      if (value !== undefined) {
-        return value;
-      }
+    const value = config ? readTrimmedStringAlias(config, keys) : undefined;
+    if (value !== undefined) {
+      return value;
     }
   }
   return undefined;

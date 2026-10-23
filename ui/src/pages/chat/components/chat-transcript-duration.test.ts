@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
@@ -138,7 +138,7 @@ describe("completed-work duration", () => {
     disclosure?.click();
     await vi.advanceTimersByTimeAsync(0);
     expect(disclosure?.getAttribute("aria-expanded")).toBe("true");
-    expect(container.textContent).toContain("read");
+    await waitForSolid(() => expect(container.textContent).toContain("read"));
     disclosure?.click();
     await vi.advanceTimersByTimeAsync(0);
     expect(disclosure?.getAttribute("aria-expanded")).toBe("false");

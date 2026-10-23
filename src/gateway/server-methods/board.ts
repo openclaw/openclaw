@@ -52,7 +52,7 @@ import {
 import { createBoardWidgetApprovalResolver } from "../board-widget-approval.js";
 import { withAuthorizedBoardWidgetView } from "../board-widget-view.js";
 import {
-  requireMcpAppInteraction,
+  supportsMcpAppInteraction,
   resolveMcpAppActiveView,
   resolveMcpAppAllowedToolNames,
 } from "../mcp-app-operations.js";
@@ -273,15 +273,8 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
                 "MCP App view is missing its originating tool call",
               );
             }
-            resolveMcpAppInteraction = async () => {
-              try {
-                await requireMcpAppInteraction(view);
-                return true;
-              } catch {
-                // Reconstructed or revoked sources can still be pinned read-only.
-                return false;
-              }
-            };
+            // Reconstructed or revoked sources can still be pinned read-only.
+            resolveMcpAppInteraction = () => supportsMcpAppInteraction(view);
             let interactive = await resolveMcpAppInteraction();
             authority.assertActive();
             const allowedTools = interactive ? await resolveMcpAppAllowedToolNames(active) : [];

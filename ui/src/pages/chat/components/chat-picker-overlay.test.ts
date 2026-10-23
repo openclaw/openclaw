@@ -9,7 +9,7 @@ import {
   getRenderedModalDialog,
   installDialogPolyfill,
 } from "../../../test-helpers/modal-dialog.ts";
-import "../../../components/modal-dialog.ts";
+import "../../../components/modal-dialog.tsx";
 import {
   modelOption,
   mountModelPicker,

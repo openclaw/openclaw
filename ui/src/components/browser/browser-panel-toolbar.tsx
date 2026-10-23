@@ -17,7 +17,6 @@ registerEnglishCatalog(registerBrowserEnglish);
 
 export function BrowserToolbar(
   props: { controller: BrowserPanel } & {
-    embedded: boolean;
     mobilePresentation?: boolean;
     fetchFavicon?: LinkFaviconFetcher;
   },

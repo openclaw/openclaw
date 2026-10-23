@@ -14,7 +14,7 @@ suite.define(() => {
         const requested: string[] = [];
         page.on("request", (request) => requested.push(new URL(request.url()).pathname));
         const loginModuleRequest = controlUiE2eBuiltModuleRequest(
-          "ui/src/components/login-gate.ts",
+          "ui/src/components/login-gate-solid.tsx",
         );
         const loginRequests = () => requested.filter((path) => loginModuleRequest.test(path));
         const mediaModules = [

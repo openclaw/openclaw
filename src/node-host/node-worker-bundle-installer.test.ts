@@ -726,7 +726,8 @@ describe("node worker bundle installer", () => {
         ...process.env,
         NODE_COMPILE_CACHE: "/tmp/ambient-host-compile-cache",
         NODE_DISABLE_COMPILE_CACHE: "1",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node",
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node.work",
         OPENCLAW_SERVICE_KIND: "node",
       },
     });

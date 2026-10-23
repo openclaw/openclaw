@@ -4,6 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/types.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
@@ -22,7 +23,6 @@ import {
   normalizeConfiguredSpeechProviderId,
   readTtsPrefs as readPrefs,
   resolveTtsPersonaFromPrefs,
-  resolveTtsRuntimeConfig,
   type ResolvedTtsConfig,
   type TtsProviderPreference,
 } from "./tts-settings.js";
@@ -53,7 +53,7 @@ function resolveProviderRuntimeConfig(
   cfg: OpenClawConfig,
   registry: TtsProviderRegistry,
 ): OpenClawConfig {
-  return registry.runtimeConfig ?? resolveTtsRuntimeConfig(cfg);
+  return registry.runtimeConfig ?? selectLiveRuntimeConfig(cfg);
 }
 
 function resolvePositiveTimeoutMs(timeoutMs: number | undefined): number | undefined {
@@ -431,7 +431,7 @@ export function resolveTtsProviderOrder(
   cfg?: OpenClawConfig,
   providers?: readonly SpeechProviderPlugin[],
 ): TtsProvider[] {
-  const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : undefined;
+  const effectiveCfg = cfg ? selectLiveRuntimeConfig(cfg) : undefined;
   const normalizedPrimary =
     canonicalizeSpeechProviderIdFromInventory(primary, effectiveCfg, providers) ?? primary;
   const ordered = new Set<TtsProvider>([normalizedPrimary]);

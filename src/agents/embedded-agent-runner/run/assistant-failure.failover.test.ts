@@ -84,9 +84,11 @@ describe("assistant failure recovery", () => {
       errorCode: "invalid_prompt",
     },
   ])("stops unchanged retries and model fallback for $errorMessage", async (fields) => {
+    let attempts = 0;
     const run = vi.fn(async () => {
       const input = makeInput({ ...fields, content: [] });
       for (;;) {
+        attempts += 1;
         const outcome = await handleEmbeddedAssistantFailure(input);
         if (outcome.action !== "retry") {
           throw new Error("failure was not surfaced");
@@ -106,6 +108,7 @@ describe("assistant failure recovery", () => {
       }),
     ).rejects.toThrow();
     expect(run).toHaveBeenCalledOnce();
+    expect(attempts).toBe(1);
     expect(log.warn).toHaveBeenCalledWith(
       "Assistant attempt failed",
       expect.objectContaining({

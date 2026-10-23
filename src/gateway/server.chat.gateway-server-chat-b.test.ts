@@ -3996,12 +3996,11 @@ describe("gateway server chat", () => {
       });
       expect(dispatchOptions[0]?.runId).toBe("idem-sequential-a");
       expect(dispatchOptions[1]?.runId).toBe("idem-sequential-b");
-      expect(dispatchOptions[0]?.promptCacheKey).toEqual(
-        expect.stringMatching(/^openclaw-webchat-[a-f0-9]{32}$/u),
-      );
-      expect(dispatchOptions[1]?.promptCacheKey).toBe(dispatchOptions[0]?.promptCacheKey);
-      expect(dispatchOptions[0]?.promptCacheKey).not.toContain("main");
-      expect(dispatchOptions[0]?.promptCacheKey).not.toContain("sess-main");
+      // The session-boundary owner derives the key after transcript preparation.
+      expect(dispatchOptions.map((options) => options?.promptCacheKey)).toEqual([
+        undefined,
+        undefined,
+      ]);
       expect(context.addChatRun).toHaveBeenCalledTimes(2);
     });
   });

@@ -3,13 +3,17 @@ import {
   For,
   Loading,
   Show,
+  action,
+  affects,
   createEffect,
   createMemo,
+  createOptimistic,
   createSignal,
   createStore,
   isPending,
   latest,
   onSettled,
+  refresh,
 } from "solid-js";
 import type {
   PluginCredentialDescriptor,
@@ -23,7 +27,7 @@ import {
 } from "../../../../src/secrets/ref-contract.ts";
 import type { ConfigNodeRenderParams } from "../../components/config-form.node.shared.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -42,6 +46,7 @@ export type PluginCredentialEditorContext = {
   baseHash: string | null;
   gateway: Pick<GatewayPageBinding, "capture" | "isCurrent" | "epoch" | "connected" | "client">;
   canInspect: boolean;
+  getPresentationLifetime: () => Promise<void>;
   saveError?: string | null;
   /** Adapter stages through field.onPatch and awaits that exact config-owner write. */
   onCommit: (path: Array<string | number>, value: unknown) => Promise<boolean>;
@@ -77,6 +82,11 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     { loadingValue: true },
   );
   const loading = () => isPending(inspectionPending) || latest(inspectionPending);
+  const [operationRequest, setOperationRequest] = createSignal<{ promise: Promise<void> }>();
+  const operationComplete = createMemo(() => operationRequest()?.promise.then(() => null) ?? null, {
+    loadingValue: null,
+  });
+  // Revision and unacknowledged-write outcomes are separate from rejected commands.
   const [error, setError] = createSignal("");
   const [dialogOpen, setDialogOpen] = createSignal(false);
   const [reference, setReference] = createStore<SecretRef>({
@@ -86,7 +96,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   });
   const [literal, setLiteral] = createSignal("");
   const [revealed, setRevealed] = createSignal(false);
-  const [operation, setOperation] = createSignal<CredentialOperation>();
+  const [operation, setOperation] = createOptimistic<CredentialOperation | undefined>(undefined);
   const operationKind = () => {
     const value = operation();
     return value?.current() ? value.kind : undefined;
@@ -148,7 +158,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
       }
       if (sourceChanged || next.epoch !== previous?.epoch) {
         pending = undefined;
-        setOperation(undefined);
+        setOperationRequest(undefined);
       }
       setInspectionRequest(undefined);
       setInspection((current) =>
@@ -250,7 +260,6 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     ) {
       return;
     }
-    setError("");
     setInspectionRequest(undefined);
     return commitOrDiscardReference(value);
   }
@@ -267,12 +276,15 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   }
 
   async function commitOrDiscardReference(value: string | SecretRef | undefined) {
+    setError("");
     const gateway = props.context.gateway;
+    const retired = props.context.getPresentationLifetime();
     const capturedConnection = connection;
     const owner = JSON.stringify([props.context.pluginId, props.field.path]);
     const current = () =>
       pending === admitted &&
       active &&
+      props.context.getPresentationLifetime() === retired &&
       props.context.gateway === gateway &&
       capturedConnection !== null &&
       gateway.isCurrent(capturedConnection) &&
@@ -283,7 +295,6 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     };
     // Admission is synchronous; Solid publishes the pending presentation after this task.
     pending = admitted;
-    setOperation(admitted);
     if (value !== undefined) {
       referenceSubmitted ||= dialogOpen();
     }
@@ -315,17 +326,37 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         }
       } catch (cause) {
         if (current()) {
-          setError(formatUiError(cause));
-        }
-      } finally {
-        if (current()) {
-          pending = undefined;
-          setOperation(undefined);
+          throw cause;
         }
       }
     })();
-    return completed;
+    // Publish the completion before the action holds its saving presentation.
+    const result = Promise.resolve().then(() => presentOperation(admitted, completed, retired));
+    setOperationRequest({ promise: result });
+    // Feedback observes rejection; retired event callers only await settlement.
+    return result.catch(() => undefined);
   }
+
+  const presentOperation = action(function* (
+    admitted: CredentialOperation,
+    completed: Promise<void>,
+    retired: Promise<void>,
+  ) {
+    try {
+      if (admitted.current()) {
+        setOperation(admitted);
+        affects(inspectionComplete);
+      }
+      yield Promise.race([completed, retired]);
+      if (admitted.current()) {
+        yield refresh(inspectionComplete);
+      }
+    } finally {
+      if (pending === admitted) {
+        pending = undefined;
+      }
+    }
+  });
 
   const environment = () => {
     const credential = inspection();
@@ -360,23 +391,24 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     </>
   );
   const Feedback = (feedback: { dialog?: boolean }) => (
-    <Show
-      when={failure()}
-      fallback={
-        <Show when={inspectionRequest()} keyed>
-          {(request) => (
+    <Show when={!saving() && !cancelling()}>
+      <Show
+        when={failure()}
+        fallback={
+          <Loading on={inspectionRequest()}>
             <Errored
               fallback={(cause) => (
                 <Failure message={formatUiError(cause())} dialog={feedback.dialog} />
               )}
             >
-              <Loading on={request}>{inspectionComplete()}</Loading>
+              {operationComplete()}
+              {inspectionComplete()}
             </Errored>
-          )}
-        </Show>
-      }
-    >
-      {(message) => <Failure message={message()} dialog={feedback.dialog} />}
+          </Loading>
+        }
+      >
+        {(message) => <Failure message={message()} dialog={feedback.dialog} />}
+      </Show>
     </Show>
   );
   const configured = () =>

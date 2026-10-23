@@ -2,7 +2,11 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it, onTestFinished } from "vitest";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import {
+  nativePane,
+  openChatPanels,
+  selectChatLayoutAction,
+} from "../test-helpers/chat-layout-menu.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -71,9 +75,8 @@ async function withMobilePage(run: (page: Page) => Promise<void>, colorScheme?: 
 }
 
 async function openMobilePanelLauncher(page: Page) {
-  const header = page.locator(".agent-chat__header--mobile").filter({ visible: true });
-  const trigger = header.getByRole("button", { name: "Panels", exact: true });
-  await trigger.click();
+  await nativePane(page).locator(".agent-chat__header--mobile").waitFor();
+  const trigger = await openChatPanels(page);
   const host = page.locator(".chat-mobile-host").filter({ visible: true });
   await host
     .locator(".chat-mobile-host__header")
@@ -260,7 +263,7 @@ suite.define(() => {
           expect(
             await menu.getByRole("menuitem", { name: "Sharing options", exact: true }).count(),
           ).toBe(0);
-          await page.getByRole("button", { name: "People", exact: true }).waitFor();
+          await menu.getByRole("menuitem", { name: "People", exact: true }).waitFor();
         } else {
           await menu.getByRole("menuitem", { name: "Sharing options", exact: true }).waitFor();
         }
@@ -270,7 +273,8 @@ suite.define(() => {
         expect(peopleModule.requests()).toBe(0);
         expect(sharingModule?.requests() ?? failedRequests).toBe(0);
         if (colorScheme === "light") {
-          await page.getByRole("button", { name: "People", exact: true }).click();
+          await trigger.click();
+          await menu.getByRole("menuitem", { name: "People", exact: true }).click();
           await peopleModule.request;
           await host.getByRole("status", { name: "Loading…", exact: true }).waitFor();
           await captureUiProof(suite, page, "mobile-people-loading-light.png");
@@ -326,7 +330,8 @@ suite.define(() => {
           );
           expect(await sharing.isVisible()).toBe(false);
           // Full-document recovery preserves the session route; the operator reopens the sheet.
-          await page.getByRole("button", { name: "People", exact: true }).click();
+          await trigger.click();
+          await menu.getByRole("menuitem", { name: "People", exact: true }).click();
           await host.getByRole("button", { name: /^Sharing options/ }).click();
         }
         try {
@@ -371,7 +376,8 @@ suite.define(() => {
           .poll(() => trigger.evaluate((element) => element === document.activeElement))
           .toBe(true);
         if (colorScheme === "light") {
-          await page.getByRole("button", { name: "People", exact: true }).click();
+          await trigger.click();
+          await menu.getByRole("menuitem", { name: "People", exact: true }).click();
           await host.getByRole("button", { name: /^Sharing options/ }).click();
         } else {
           await trigger.click();

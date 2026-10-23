@@ -11,6 +11,8 @@ import {
 } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { SessionAutomationMobileList } from "./chat-automation-mobile.tsx";
+import { ChatDetailsMobileContent } from "./chat-details-mobile-content.tsx";
 import {
   ChatSummaryAutomations,
   createSessionAutomationInventory,
@@ -477,7 +479,7 @@ it.each([false, true])("preserves offline inventory: loaded=%s", async (loaded) 
     expect(element.textContent).not.toContain("Reconnect to load");
   }
   current.update({ sessionKey: loaded ? "agent:ops:other" : "unresolved-session" });
-  expect(element.textContent).not.toContain("Check the task");
+  await waitForSolid(() => expect(element.textContent).not.toContain("Check the task"));
   if (!loaded) {
     current.publish({ ...current.gateway.snapshot, phase: "connected" });
     flush();
@@ -560,7 +562,7 @@ it.each([false, true])("retires automation access and late pages: loaded=%s", as
   expect(current.element.textContent).not.toContain("Retired automation");
 });
 
-it("shares the session inventory with consumers without starting another catalog", async () => {
+it("shares the mobile session inventory with consumers without starting another catalog", async () => {
   const current = source(createGatewayRequestMock(async () => page([job()])));
   const view = mountSolid(() => {
     let host!: HTMLElement;
@@ -570,7 +572,7 @@ it("shares the session inventory with consumers without starting another catalog
       <section ref={(element) => (host = element)}>
         {inventory.lifecycle}
         <output>{inventory.loaded() ? inventory.total() : "unknown"}</output>
-        <ChatSummaryAutomations {...props} inventory={inventory} />
+        <SessionAutomationMobileList inventory={inventory} basePath="" onOpenAutomation={vi.fn()} />
       </section>
     );
   });
@@ -586,6 +588,102 @@ it("shares the session inventory with consumers without starting another catalog
     expect(view.container.querySelector('[aria-busy="false"]')).not.toBeNull();
   });
   expect(current.request).toHaveBeenCalledTimes(2);
+  view.unmount();
+});
+
+it("shares pending reads and failed refresh recovery between the mobile list and overview", async () => {
+  const first = createDeferred<Page>();
+  const refresh = createDeferred<Page>();
+  const recovery = createDeferred<Page>();
+  const current = source(sequence(first.promise, refresh.promise, recovery.promise));
+  const view = mountSolid(() => {
+    let host!: HTMLElement;
+    const props = { gateway: current.gateway, sessionKey: "agent:ops:task", presented: true };
+    const inventory = createSessionAutomationInventory(props, () => host);
+    return (
+      <section ref={(element) => (host = element)}>
+        {inventory.lifecycle}
+        <SessionAutomationMobileList inventory={inventory} basePath="" onOpenAutomation={vi.fn()} />
+        <ChatDetailsMobileContent
+          details={{
+            sessionKey: "agent:ops:task",
+            selectedSession: { key: "agent:ops:task", kind: "direct" },
+            currentAgentId: "ops",
+            messages: [],
+          }}
+          presented
+          page={{
+            kind: "root",
+            content: {
+              entries: {
+                labels: {
+                  people: "People",
+                  taskProgress: "Task progress",
+                  subagents: "Subagents",
+                  processes: "Processes",
+                  environment: "Environment",
+                  context: "Context",
+                  pullRequests: "Pull requests",
+                  automations: "Automations",
+                  generatedFiles: "Generated files",
+                  session: "Session",
+                },
+                people: { label: "People" },
+                versions: { label: "Versions", metadata: 1 },
+                onNavigate: vi.fn(),
+              },
+              processes: undefined,
+              subagents: {
+                workingLabel: "Working",
+                onOpenSubagent: vi.fn(),
+                onOpenSubagents: vi.fn(),
+              },
+              automations: { inventory, summary: { label: "Automations" } },
+            },
+          }}
+        />
+      </section>
+    );
+  });
+  await waitForSolid(() => {
+    expect(view.container.textContent).toContain("Loading automations…");
+    expect(current.request).toHaveBeenCalledTimes(1);
+    expect(
+      view.container.querySelector('.chat-details-mobile-root [data-details-group="automations"]'),
+    ).toBeNull();
+  });
+  first.resolve(page([job()]));
+  const rows = () => view.container.querySelectorAll<HTMLAnchorElement>("a");
+  await waitForSolid(() => expect(rows()).toHaveLength(1));
+  const retainedRows = [...rows()];
+  retainedRows[0]!.focus();
+  current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
+  await waitForSolid(() =>
+    expect(view.container.querySelectorAll('[aria-busy="true"]')).toHaveLength(1),
+  );
+  expect(current.request).toHaveBeenCalledTimes(2);
+  retainedRows.forEach((row, index) => expect(rows()[index]).toBe(row));
+  refresh.reject(new Error("private inventory failure"));
+  await waitForSolid(() => {
+    expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Couldn't update automations.",
+    );
+    expect(view.container.querySelector('[aria-busy="true"]')).toBeNull();
+  });
+  retainedRows.forEach((row, index) => expect(rows()[index]).toBe(row));
+  expect(document.activeElement).toBe(retainedRows[0]);
+  expect(view.container.textContent).not.toContain("private inventory failure");
+  view.container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+  await waitForSolid(() =>
+    expect(view.container.querySelectorAll('[aria-busy="true"]')).toHaveLength(1),
+  );
+  expect(current.request).toHaveBeenCalledTimes(3);
+  recovery.resolve(page([job({ name: "Recovered automation" })]));
+  await waitForSolid(() => {
+    expect(rows()[0]?.textContent).toContain("Recovered automation");
+    expect(view.container.querySelector('[role="alert"]')).toBeNull();
+  });
+  retainedRows.forEach((row, index) => expect(rows()[index]).toBe(row));
   view.unmount();
 });
 
@@ -668,9 +766,10 @@ it("retains reconnect facts and distinguishes auto-disabled from paused and stal
   expect(element.querySelectorAll(".session-run-spinner")).toHaveLength(1);
   const snapshot = current.gateway.snapshot;
   current.publish({ ...snapshot, phase: "reconnecting" });
-  flush();
-  expect(element.textContent).toContain("In progress");
-  expect(element.textContent).not.toContain("Running");
+  await waitForSolid(() => {
+    expect(element.textContent).toContain("In progress");
+    expect(element.textContent).not.toContain("Running");
+  });
   current.publish(snapshot);
   flush();
   expect(element.querySelectorAll(".chat-summary__automation")).toHaveLength(3);

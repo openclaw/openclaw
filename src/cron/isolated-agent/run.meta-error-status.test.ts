@@ -178,26 +178,24 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     },
   );
 
-  it("preserves a heartbeat-only accepted child handoff failure as a cron error", async () => {
-    const heartbeatPayload = { text: "HEARTBEAT_OK" };
+  it("preserves an empty accepted child handoff failure as a cron error", async () => {
+    await useRealOutcome();
     const error = "cron child-session handoff timed out before producing a final assistant payload";
-    mockChildRun([heartbeatPayload]);
-    mockAnnounceOutcome([heartbeatPayload], heartbeatPayload.text, {
-      deliveryDisposition: { kind: "heartbeat", controlOnly: true },
-    });
+    mockChildRun();
     mockDelivery({
       disposition: { kind: "error", error },
     });
     const result = await runTurn();
     expectObjectFields(result, { status: "error", error, delivered: false });
-    expect(result.summary).not.toBe(heartbeatPayload.text);
-    expect(result.outputText).not.toBe(heartbeatPayload.text);
+    expect(harness.dispatchCronDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ spawnOnlyHandoff: true }),
+    );
   });
 
-  it("records the child result after a no-delivery parent returns only a heartbeat", async () => {
+  it("records the child result after a no-delivery parent returns no payload", async () => {
     await useRealOutcome();
     const reply = "Finished the delegated report";
-    mockChildRun([{ text: "HEARTBEAT_OK" }]);
+    mockChildRun();
     harness.resolveCronDeliveryPlanMock.mockReturnValue({ mode: "none", requested: false });
     harness.listDescendantRunsForRequesterMock.mockResolvedValue([
       {

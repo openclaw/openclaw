@@ -113,7 +113,7 @@ it("keeps plugin discovery separate from skills and surfaces empty and failed lo
     jsonOutput.results.filter((entry) => entry.package.name === "@acme/calendar"),
   ).toHaveLength(1);
 
-  const skills = await searchSkillsFromClawHub({ query: "calendar", limit: 5, baseUrl });
+  const skills = await searchSkillsFromClawHub({ query: "calendar", limit: 5 });
   expect(skills).toEqual([expect.objectContaining({ score: 99, slug: "calendar-skill" })]);
 
   const empty = await search("empty");

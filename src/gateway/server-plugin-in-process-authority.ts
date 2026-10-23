@@ -210,11 +210,7 @@ export function captureOperatorToolGatewayContinuationContext(target?: {
         lifetime.signal.throwIfAborted();
         captured?.authority.assertCurrent();
         if (captured) {
-          if (
-            (resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== resolved.context
-          ) {
-            throw new Error("Gateway continuation instance binding is no longer active");
-          }
+          resolved.assertGatewayCurrent();
         } else {
           resolved.assertSourceCurrent();
         }
@@ -608,18 +604,19 @@ export function resolveInProcessGatewayDispatch(
     }
     bindInProcessSubagentResume(client.internal, resume);
   }
-  const assertSourceCurrent = composeSessionSourceAssertion(
-    [operatorRunAuthority?.assertCurrent],
-    (assertSource) => {
-      assertSource();
-      if ((resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== context) {
-        throw new Error(
-          `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
-        );
-      }
-    },
-  );
+  const assertGatewayCurrent = () => {
+    if ((resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== context) {
+      throw new Error(
+        `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
+      );
+    }
+  };
+  const assertSourceCurrent = composeSessionSourceAssertion([
+    operatorRunAuthority?.assertCurrent,
+    assertGatewayCurrent,
+  ]);
   return {
+    assertGatewayCurrent,
     assertSourceCurrent,
     assertInvocationCurrent,
     assertContextCurrent: composeSessionSourceAssertion([

@@ -26,10 +26,7 @@ import {
 } from "../../agents/model-catalog-lookup.js";
 import { recordModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
-import {
-  resolveScheduledToolCallerContext,
-  resolveScheduledToolPolicyContext,
-} from "../../agents/scheduled-tool-policy.js";
+import { resolveScheduledToolCallerContext } from "../../agents/scheduled-tool-policy.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveAgentLifecycleTerminalMetadata } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
@@ -43,9 +40,9 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { resolveCronJobToolPolicyContext } from "../execution-context-admission.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { prepareCronRunInference } from "../run-inference.js";
-import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { isCommandStyleCronMessage } from "./command-style-prompt.js";
@@ -96,14 +93,7 @@ export function createCronPromptExecutor(
 ) {
   const trigger = params.trigger === "event" ? "event" : "cron";
   const cronFallbacksOverride =
-    params.modelFallbacksOverride ??
-    resolveCronFallbacksOverride({
-      cfg: params.cfg,
-      job: params.job,
-      agentId: params.agentId,
-      useSubagentFallbacks: params.useSubagentFallbacks,
-      inheritDefaultFallbacksForAgentStringModel: params.inheritDefaultFallbacksForAgentStringModel,
-    });
+    params.modelFallbacksOverride ?? resolveCronFallbacksOverride(params);
   const fastModeStartedAtMs = Date.now();
   const fastModeAutoProgressState: FastModeAutoProgressState = {
     offAnnounced: false,
@@ -117,16 +107,10 @@ export function createCronPromptExecutor(
     isCommandStyleCronMessage(params.agentPayload?.message ?? ""))
       ? "lightweight"
       : undefined;
-  const scheduledToolPolicy = resolveScheduledToolPolicyContext({
-    toolsAllow: params.agentPayload?.toolsAllow,
-    scheduledToolPolicy: resolveCronScheduledToolPolicy({
-      toolsAllow: params.agentPayload?.toolsAllow,
-      scheduledToolPolicy: params.job.scheduledToolPolicy,
-      owner: params.job.owner,
-    }),
-    callerOrigin: params.job.toolsAllowProvenance?.callerOrigin,
-    execTarget: params.job.toolsAllowExecTarget,
-  });
+  const scheduledToolPolicy = resolveCronJobToolPolicyContext(
+    params.job,
+    params.agentPayload?.toolsAllow,
+  );
   const { sourceDelivery, runId } = params;
   const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
   if (scheduledToolPolicy?.mode === "account") {
@@ -210,6 +194,14 @@ export function createCronPromptExecutor(
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
     const cronAdmission = prepareCronRunAdmission({
+      scheduledExecution: params.occurrence.mint({
+        cfg: params.cfgWithAgentDefaults,
+        agentId: params.agentId,
+        runId,
+        runSessionKey: params.runSessionKey,
+        toolsAllow: params.agentPayload?.toolsAllow,
+        operatorAuthorityRestored: params.operatorAuthority !== undefined,
+      }),
       operatorAuthority: params.operatorAuthority,
       admissionSource: params.admissionSource,
       deliveryAttemptFence: params.deliveryAttemptFence,
@@ -510,22 +502,31 @@ export function createCronPromptExecutor(
                 const cliSessionBinding = params.cronSession.isNewSession
                   ? undefined
                   : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
-                const authProfileId = allowCliAuthProfileForwarding
-                  ? await resolveCliExecutionAuthProfileId({
-                      cliExecutionProvider: executionProvider,
-                      authProfileProvider: providerOverride,
-                      config: params.cfgWithAgentDefaults,
-                      agentDir: params.agentDir,
-                      sessionBinding: cliSessionBinding,
-                      selected: params.liveSelection.authProfileId
+                const resolveForwardedProfile = (
+                  selected: Parameters<typeof resolveCliExecutionAuthProfileId>[0]["selected"],
+                ) =>
+                  allowCliAuthProfileForwarding
+                    ? resolveCliExecutionAuthProfileId({
+                        cliExecutionProvider: executionProvider,
+                        authProfileProvider: providerOverride,
+                        config: params.cfgWithAgentDefaults,
+                        agentDir: params.agentDir,
+                        sessionBinding: cliSessionBinding,
+                        selected,
+                      })
+                    : Promise.resolve(undefined);
+                // A recorded account runs only when this backend forwards exactly that account.
+                const authProfileId = inference
+                  ? await inference.resolveCliAuthProfile(resolveForwardedProfile)
+                  : await resolveForwardedProfile(
+                      params.liveSelection.authProfileId
                         ? {
                             authProfileId: params.liveSelection.authProfileId,
                             authProfileIdSource:
                               params.liveSelection.authProfileIdSource === "user" ? "user" : "auto",
                           }
                         : undefined,
-                    })
-                  : undefined;
+                    );
                 if (trigger === "cron" && !binding && authProfileId) {
                   const refusal = new Error(
                     "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
@@ -555,6 +556,13 @@ export function createCronPromptExecutor(
                   ),
                   provider: executionProvider,
                   authProfileId,
+                  // Keep the recorded credential lifetime live through CLI preparation and launch.
+                  assertCurrent: inference
+                    ? () => {
+                        assertSettlementCurrent();
+                        inference.runParams.authProfileBinding?.assertCurrent();
+                      }
+                    : undefined,
                   nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,

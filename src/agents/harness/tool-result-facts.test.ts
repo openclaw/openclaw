@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../../auto-reply/heartbeat-tool-response.js";
 import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
@@ -92,20 +91,4 @@ it("records messaging tool side effects", () => {
       mediaUrls: ["/tmp/reply.png"],
     },
   ]);
-});
-
-it("accepts heartbeat response tool outcomes", () => {
-  const response = {
-    outcome: "needs_attention",
-    notify: true,
-    summary: "Build is blocked.",
-    notificationText: "Build is blocked on missing credentials.",
-    priority: "high",
-  };
-  const telemetry = recordTelemetry({
-    toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
-    result: textToolResult("Accepted.", { status: "accepted", ...response }),
-  });
-
-  expect(telemetry.heartbeatToolResponse).toEqual(response);
 });

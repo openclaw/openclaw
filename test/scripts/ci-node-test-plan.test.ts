@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   createChangedNodeTestShards as changedTests,
+  createNodeWorkerE2eTestShards,
   hasControlUiPerformanceAffectingChange,
   hasPromptSnapshotAffectingChange,
   hasSqliteSessionLifecycleAffectingChange,
@@ -107,6 +108,7 @@ const sumSeconds = (jobs: readonly CompactNodeTestShard[]) =>
 const sumOptionalSeconds = (jobs: readonly CompactNodeTestShard[]) =>
   jobs.reduce((sum, job) => sum + (job.predictedSeconds ?? 0), 0);
 const configPath = (name: string) => `test/vitest/vitest.${name}.config.ts`;
+const lintSuppressionInventoryTest = "test/scripts/lint-suppressions.test.ts";
 function planFiles(jobs: readonly CompactNodeTestShard[], patterns = optionalPatterns) {
   return jobs.flatMap(jobGroups).flatMap(patterns);
 }
@@ -545,22 +547,23 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         );
       }
       try {
-        const jobs = bundleTests({
+        const workerRows = createNodeWorkerE2eTestShards();
+        const compactRows = bundleTests({
           includeProofTests: true,
           includeReleaseOnlyPluginShards: false,
           includeReleaseOnlyToolingShards: true,
           includeReleaseOnlyRuntimeTests: false,
           includePrExemptRuntimeTests: true,
           compactMode: "pull-request",
-          compactNodeJobCap: 76,
+          compactNodeJobCap: 77 - workerRows.length,
           mainValidation: true,
           runnerBackend: "hybrid",
         });
-        // Main's 77 Node rows reserve one for the separate worker-E2E owner.
-        expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(76);
-        expect(jobs.length).toBeLessThanOrEqual(78);
+        const jobs = [...compactRows, ...workerRows];
+        expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
+        expect(jobs.length).toBeLessThanOrEqual(79);
         expect(
-          jobs
+          compactRows
             .flatMap(jobGroups)
             .filter((group) => group.shard_name === "synthetic-capacity-growth"),
         ).toHaveLength(extraGroup ? 1 : 0);
@@ -1946,6 +1949,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     for (const changedPath of [
       "src/auto-reply/reply/new.test.tsx",
       "src/infra/outbound/new.test.ts",
+      "src/media/new.test.ts",
       "test/tsconfig/tsconfig.core.test.messaging.json",
       "test/tsconfig/tsconfig.core.test.ui-e2e-chat.json",
     ]) {
@@ -2897,7 +2901,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const targets = [
       "src/config/allowed-values.test.ts",
       "src/commands/doctor-heartbeat-cadence-migration.test.ts",
-      "src/infra/heartbeat-runner.ack-token-heartbeat-acks.test.ts",
+      "src/infra/heartbeat-events.test.ts",
       "src/infra/runtime-guard.test.ts",
       heavyCli,
       "src/cli/directory-cli.test.ts",
@@ -2919,7 +2923,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const cliFiles = [heavyCli, "src/cli/directory-cli.test.ts", ...fillers("src/cli/fixture", 8)];
     const infraFiles = [
       ...targets.filter((file) => file.startsWith("src/infra/")),
-      ...fillers("src/infra/heartbeat-runner"),
+      ...fillers("src/infra/heartbeat"),
       ...fillers("src/infra/runtime-guard"),
       ...fillers("src/infra/os-summary", 10),
       ...fillers("src/infra/provider-usage", 10),
@@ -2930,7 +2934,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const inventory = [...configFiles, ...cliFiles, ...infraFiles, ...commandFiles];
     const timings: Record<string, number> = {
       "core-runtime-config": 240,
-      "core-runtime-infra-heartbeat-runner": 170,
+      "core-runtime-infra-heartbeat-core": 170,
       "core-runtime-infra-system-runtime": 160,
       "core-runtime-infra-misc-os": 170,
       "core-runtime-infra-provider-push": 160,
@@ -3965,10 +3969,17 @@ describe("CI changed Node test plan", () => {
   it("keeps the complete budgeted corpus plan beside a documentation page", () => {
     const targets = startupCorpusTestFiles;
     const before = changedOwnerTests(targets);
-    expect(before).toHaveLength(3);
-    expect(before?.every((shard) => (shard.predictedSeconds ?? 0) <= 150)).toBe(true);
-    expect(before?.flatMap((shard) => shard.targets ?? []).toSorted()).toEqual(targets.toSorted());
-    expect(before?.some((shard) => shard.pretestBuildMode === "runtime")).toBe(true);
+    expect(before).toHaveLength(4);
+    expect(selectedFiles(before)).toContain(lintSuppressionInventoryTest);
+    const corpusShards =
+      before?.filter((shard) => !selectedFiles([shard]).includes(lintSuppressionInventoryTest)) ??
+      [];
+    expect(corpusShards).toHaveLength(3);
+    expect(corpusShards.every((shard) => (shard.predictedSeconds ?? 0) <= 150)).toBe(true);
+    expect(corpusShards.flatMap((shard) => shard.targets ?? []).toSorted()).toEqual(
+      targets.toSorted(),
+    );
+    expect(corpusShards.some((shard) => shard.pretestBuildMode === "runtime")).toBe(true);
     expect(changedOwnerTests([...targets, "docs/ci/pipeline.md"])).toEqual(before);
   });
 

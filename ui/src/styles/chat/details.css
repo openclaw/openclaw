@@ -294,32 +294,6 @@ openclaw-chat-details[mobile] {
   gap: 8px;
   margin-top: 4px;
 }
-.chat-details__change-summary {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: end;
-  align-items: center;
-  gap: 3px 7px;
-  color: var(--muted);
-}
-.chat-details__change-summary > span {
-  white-space: nowrap;
-}
-.chat-details__change-files,
-.chat-details__change-status {
-  color: var(--muted);
-}
-.chat-details__change-lines {
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-}
-.chat-details__change-lines--add {
-  color: var(--ok);
-}
-.chat-details__change-lines--del {
-  color: var(--danger);
-}
 .chat-details__meta-actions > button,
 .chat-details__participants > summary {
   width: auto;
@@ -663,31 +637,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
 .chat-details__changes {
   position: relative;
 }
-.chat-details__changes .chat-details__caption {
-  padding-inline-end: 92px;
-}
-.chat-details__changes--summary .chat-details__caption {
-  min-height: 56px;
-  padding-inline-end: 185px;
-}
-.chat-details__all-changes {
-  position: absolute;
-  display: flex;
-  flex-direction: column;
-  align-items: end;
-  gap: 4px;
-  max-width: calc(100% - 100px);
-  inset-block-start: 10px;
-  inset-inline-end: 4px;
-  min-height: 28px;
-  padding: 3px 8px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 11px;
-}
 .chat-details .chat-pr--compact {
   grid-template-columns: minmax(0, 1fr);
   gap: 7px;
@@ -724,7 +673,26 @@ button.chat-details__process:is(:hover, :focus-visible) {
   flex: none;
   margin-inline-start: auto;
 }
+.chat-details .chat-pr__actions-trigger {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+}
+.chat-details .chat-pr__actions-trigger > .oc-menu-item__label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
 .chat-details .chat-pr__actions-trigger svg {
+  display: block;
   width: 15px;
   height: 15px;
 }

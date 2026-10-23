@@ -23,6 +23,7 @@ import {
   createWorkerEnvironmentErrorRecorder,
   workerEnvironmentServiceError as serviceError,
 } from "./environment-errors.js";
+import { createWorkerProviderCaller, createWorkerReconcileTrace } from "./environment-operation.js";
 import {
   joinInferenceOperations,
   registerWorkerInferenceSessionControl,
@@ -57,7 +58,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const scope = scheduler.scope();
   const warn = (message: string) => options.logger?.warn(message);
   const operations = new KeyedAsyncQueue();
-  const providerOperations = new KeyedAsyncQueue();
   const activeOperations = new Set<Promise<unknown>>();
   const inferenceCancellations = new Set<Promise<unknown>>();
   const retainInferenceCancellation = (operation: Promise<unknown>) => {
@@ -107,29 +107,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     return racePromiseWithAbortSignal(trackOperation(preparation), signal);
   };
 
-  const callProvider = async <T>(
-    environmentId: string,
-    run: () => Promise<T>,
-    timeoutMs?: number,
-    observationSignal?: AbortSignal,
-  ): Promise<T> => {
-    const { promise: started, resolve: signalStarted } = createDeferredCore();
-    const operation = trackOperation(
-      providerOperations.enqueue(environmentId, async () => {
-        signalStarted();
-        observationSignal?.throwIfAborted();
-        // Only read-only inspection may release its queue slot before a late reply.
-        return await racePromiseWithAbortSignal(run(), observationSignal);
-      }),
-    );
-    await racePromiseWithAbortSignal(started, observationSignal);
-    // Timeout completion must not release provider ownership or permit replay/destroy overlap.
-    return await withTimeout(
-      operation,
-      options.providerCallTimeoutMs ?? timeoutMs ?? 300_000,
-      "Worker provider operation",
-    );
-  };
+  const callProvider = createWorkerProviderCaller({
+    store,
+    trackOperation,
+    providerCallTimeoutMs: options.providerCallTimeoutMs,
+  });
 
   const callBootstrap = async <T>(
     installation: WorkerInstallationArtifact,
@@ -270,24 +252,37 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (isReconciliationPaused()) {
       return;
     }
-    await withLock(environmentId, async () => {
-      if (isReconciliationPaused()) {
-        return;
-      }
-      await store.ready();
-      const current = store.get(environmentId);
-      if (!current || ["destroyed", "failed", "orphaned"].includes(current.state)) {
-        return;
-      }
-      // Conversation cleanup has one retry owner, including its backoff and parked budget.
-      if (
-        current.destroyRequestedAtMs !== null &&
-        (await store.hasSessionAttachment(environmentId))
-      ) {
-        return;
-      }
-      await providerLifecycle.reconcileRecord(current, signal, retainProviderSettlement);
-    });
+    const entered = createDeferredCore();
+    const traceContext: { environmentId: string; providerId?: string } = { environmentId };
+    const step = createWorkerReconcileTrace(traceContext);
+    const operation = step("owner", () =>
+      withLock(environmentId, async () => {
+        entered.resolve();
+        if (isReconciliationPaused()) {
+          return;
+        }
+        await step("inventory", () => racePromiseWithAbortSignal(store.ready(), signal));
+        signal?.throwIfAborted();
+        const current = store.get(environmentId);
+        // Inventory readiness may recover a retired database admission before this read.
+        traceContext.providerId = current?.providerId;
+        if (!current || ["destroyed", "failed", "orphaned"].includes(current.state)) {
+          return;
+        }
+        // Conversation cleanup has one retry owner, including its backoff and parked budget.
+        if (
+          current.destroyRequestedAtMs !== null &&
+          (await racePromiseWithAbortSignal(store.hasSessionAttachment(environmentId), signal))
+        ) {
+          return;
+        }
+        await providerLifecycle.reconcileRecord(current, signal, retainProviderSettlement);
+      }),
+    );
+    // A queued observer must not keep the guard alive behind an admitted mutation.
+    // The mutation and queued callback remain tracked until their actual settlement.
+    await racePromiseWithAbortSignal(Promise.race([entered.promise, operation]), signal);
+    await operation;
   };
 
   const reconcileEnvironment = async (environmentId: string) => {
@@ -354,9 +349,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     const tasks = candidates.map(
       ({ environmentId: id, providerId }) =>
         () =>
-          reconcileStep("environment", () => reconcileEnvironment(id)).catch(() =>
-            warn(`Worker environment reconcile failed (${id}, ${providerId})`),
-          ),
+          measureGatewayRestartTrace(
+            "worker-environments.reconcile.environment",
+            () => reconcileEnvironment(id),
+            () => ({ environment: id, provider: providerId }),
+            true,
+          ).catch(() => warn(`Worker environment reconcile failed (${id}, ${providerId})`)),
     );
     await runTasksWithConcurrency({ tasks, limit: 8 });
     if (isReconciliationPaused() || environmentId !== undefined) {
@@ -400,9 +398,16 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           }),
       );
     }
-    return (reconcileInFlight ??= reconcilePass().finally(() => {
+    const pass = (reconcileInFlight ??= reconcilePass().finally(() => {
       reconcileInFlight = undefined;
     }));
+    // Placement shutdown can proceed to transport cleanup while this service still
+    // retains every admitted mutation in its guard and active-operation joins.
+    return racePromiseWithAbortSignal(pass, scope.signal).catch((error: unknown) => {
+      if (!scope.signal.aborted) {
+        throw error;
+      }
+    });
   };
 
   const start = () => {

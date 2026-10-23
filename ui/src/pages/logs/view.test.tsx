@@ -9,7 +9,7 @@ import { LogsView, type LogsProps } from "./view.tsx";
 
 function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
   return {
-    loading: false,
+    completion: null,
     refreshDisabled: false,
     status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
     file: null,

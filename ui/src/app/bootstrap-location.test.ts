@@ -1,7 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { createRouter } from "@openclaw/uirouter";
+import { describe, expect, it, vi } from "vitest";
+import type { RouteId } from "../app-route-paths.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
-import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
-import { makeLocation, makeRoutingGateway } from "./bootstrap.test-support.ts";
+import { createAgentCapability } from "../lib/agents/index.ts";
+import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
+import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { createAgentSelectionCapability } from "./agent-selection.ts";
+import {
+  resolveInitialApplicationLocation,
+  subscribeForegroundChatBootstrap,
+} from "./bootstrap-location.ts";
+import { makeBootRoster, makeLocation, makeRoutingGateway } from "./bootstrap.test-support.ts";
+import { createChatSubmissions } from "./chat-submissions.ts";
+import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 
 function gateway(snapshot: object) {
   return makeRoutingGateway(snapshot).gateway;
@@ -27,6 +39,64 @@ async function expectPending(pending: Promise<unknown>) {
   await Promise.resolve();
   expect(settled).toBe(false);
 }
+
+it("hydrates the roster when a literal route commits before its Gateway connects", async () => {
+  const sessionKey = "agent:main:dashboard:12345678-aaaa-4000-8000-000000000001";
+  const { gateway: connection, publish } = createApplicationGateway();
+  publish({ ...connection.snapshot, phase: "connecting", assistantAgentId: "main" });
+  const agents = createAgentCapability(connection);
+  const agentSelection = createAgentSelectionCapability(connection, agents);
+  const connectionBootstrap = createConnectionBootstrapCoordinator();
+  const router = createRouter<RouteId, unknown, { renderSolid: () => null }>({
+    routes: [
+      {
+        id: "chat",
+        path: "/chat/main/dashboard/12345678-aaaa-4000-8000-000000000001",
+        component: () => ({ renderSolid: () => null }),
+        loader: () => ({ kind: "session", sessionKey }),
+      },
+    ],
+  });
+  const stop = subscribeForegroundChatBootstrap({
+    router,
+    gateway: connection,
+    agents,
+    agentSelection,
+    connectionBootstrap,
+    chatSubmissions: createChatSubmissions(),
+    initialChatRoute: true,
+  });
+  try {
+    await router.navigate("chat", {});
+    const hydrate = vi.fn(async () => {});
+    const pending = connectionBootstrap.run("roster", hydrate, { background: true });
+    expect(hydrate).not.toHaveBeenCalled();
+
+    const client = createTestGatewayClient(async () => makeBootRoster());
+    publish({ ...connection.snapshot, phase: "connected", client });
+    expect(hydrate).not.toHaveBeenCalled();
+    connectionBootstrap.setForegroundPane(
+      {},
+      {
+        sessionKey: resolveChatSnapshotKey(
+          { settings: connection.connection, client },
+          { sessionKey },
+        ),
+        client,
+        ready: true,
+      },
+    );
+
+    expect(hydrate).toHaveBeenCalledOnce();
+    await pending;
+  } finally {
+    stop();
+    router.stop();
+    connectionBootstrap.reset();
+    agentSelection.dispose();
+    agents.dispose();
+  }
+});
 
 describe("resolveInitialApplicationLocation", () => {
   it("resolves a malformed persisted session without aborting bootstrap", async () => {
@@ -65,16 +135,20 @@ describe("resolveInitialApplicationLocation", () => {
   );
 
   it.each([
-    ["/settings/appearance", "", "main"],
-    ["/sessions", "?session=agent%3Amain%3Amain", "agent:main:main"],
+    ["/settings/appearance", "", "main", ""],
+    ["/sessions", "?session=agent%3Amain%3Amain", "agent:main:main", ""],
+    ["/chat/main", "", "agent:research:workspace", ""],
+    ["/chat/main/", "", "agent:research:workspace", ""],
+    ["/openclaw/chat/main", "", "agent:research:workspace", "/openclaw"],
+    ["/openclaw/chat/main/", "", "agent:research:workspace", "/openclaw"],
   ])(
     "preserves explicit %s state without waiting for defaults",
-    async (pathname, search, sessionKey) => {
+    async (pathname, search, sessionKey, basePath) => {
       const cold = gateway({ phase: "connecting", client: null });
       const location = { pathname, search, hash: "" };
-      await expect(resolveLocation({ location, sessionKey, gateway: cold })).resolves.toBe(
-        location,
-      );
+      await expect(
+        resolveLocation({ location, basePath, sessionKey, gateway: cold }),
+      ).resolves.toBe(location);
       expect(cold.subscribe).not.toHaveBeenCalled();
     },
   );

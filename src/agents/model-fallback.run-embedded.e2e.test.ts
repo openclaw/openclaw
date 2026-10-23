@@ -1,7 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import type { ModelFallbackAvailability } from "./agent-scope.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
@@ -365,46 +364,6 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     },
   );
 
-  it.each([
-    {
-      name: "MCP runtime cleanup failure",
-      createError: () => new Error("MCP runtime cleanup could not confirm closure"),
-    },
-    {
-      name: "CLI history ownership change",
-      createError: () => new Error("CLI history owner changed before preparation"),
-    },
-    {
-      name: "canonical user-turn projection loss",
-      createError: () => new Error("Model prompt projection lost its canonical user turn"),
-    },
-    {
-      name: "current-turn transcript admission change",
-      createError: () =>
-        new SessionTranscriptReadFenceError(
-          "Current-turn transcript admission identity changed: test-entry",
-        ),
-    },
-  ])("does not advance to another model after $name", async ({ createError }) => {
-    await withDefaultAuth(async ({ agentDir, workspaceDir }) => {
-      const runtimeFault = createError();
-      runEmbeddedAttemptMock.mockRejectedValue(runtimeFault);
-      const result = await runEmbeddedEntryFallback(
-        { agentDir, workspaceDir },
-        "local-runtime-fault",
-        {
-          runId: "announce:requester-settle:test:local-runtime-fault",
-          fallbacksOverride: ["groq/mock-2", "groq/mock-3"],
-        },
-      ).catch((error: unknown) => error);
-
-      expectProviderAttemptCounts({ openai: 1, groq: 0 });
-      expect(result).toBeInstanceOf(Error);
-      expect(result).toMatchObject({ message: runtimeFault.message });
-      expect(suspendSessionMock).not.toHaveBeenCalled();
-    });
-  });
-
   it("keeps a pinned model on its rate-limit surface instead of escalating to fallback", async () => {
     await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeFallbackMultiProfileAuthStore(agentDir);
@@ -574,7 +533,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         // The writer owns its clock; observe its first window before later failure marks.
         sleepWithAbortMock.mockImplementationOnce(async () => {
           const initial = (await readFallbackUsageStats(agentDir))["openai:p1"];
-          expect((initial?.cooldownUntil ?? 0) - (initial?.lastFailureAt ?? 0)).toBe(90_000);
+          expect((initial?.cooldownUntil ?? 0) - (initial?.lastRateLimitAt ?? 0)).toBe(90_000);
           initialCooldownUntil = initial?.cooldownUntil;
         });
         const message =
@@ -611,11 +570,11 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           Array<number>(9).fill(90_000),
         );
         const stats = (await readFallbackUsageStats(agentDir))["openai:p1"];
-        expect(stats).toMatchObject({
-          cooldownReason: "rate_limit",
-          cooldownModel: "mock-1",
-          cooldownUntil: initialCooldownUntil,
-        });
+        expect(stats).toMatchObject({ cooldownReason: "rate_limit", cooldownModel: "mock-1" });
+        // Each 429 restates the provider's 90s: the window follows the latest one and never grows.
+        expect(stats?.cooldownUntil).toBe((stats?.lastRateLimitAt ?? 0) + 90_000);
+        expect(stats?.cooldownUntil).toBeGreaterThanOrEqual(initialCooldownUntil ?? Infinity);
+        expect(stats?.failureCounts).toBeUndefined();
 
         runEmbeddedAttemptMock.mockClear();
         sleepWithAbortMock.mockClear();

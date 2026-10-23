@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { agentsWorkspaceHandlers } from "./agents-workspace.js";
 
 const hoisted = vi.hoisted(() => ({ listAgentIds: vi.fn(), resolveAgentWorkspaceDir: vi.fn() }));
@@ -14,18 +15,10 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
 type WorkspaceMethod = "agents.workspace.list" | "agents.workspace.get";
 
 async function invokeWorkspaceHandler(method: WorkspaceMethod, params: Record<string, unknown>) {
-  const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-  await agentsWorkspaceHandlers[method]?.({
-    req: { type: "req", id: method, method, params: {} },
-    params,
-    client: null,
-    isWebchatConnect: () => false,
-    respond: (ok, payload, error) => {
-      calls.push({ ok, payload, error });
-    },
+  const respond = await callAgentHandler(agentsWorkspaceHandlers[method]!, method, params, {
     context: { getRuntimeConfig: () => ({}) } as never,
   });
-  return calls;
+  return respond.mock.calls.map(([ok, payload, error]) => ({ ok, payload, error }));
 }
 
 function getWorkspaceFile(filePath: string) {

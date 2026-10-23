@@ -7,14 +7,7 @@ import {
   isStandaloneToolMessageForDisplay,
   normalizeRoleForGrouping,
 } from "../../../lib/chat/message-normalizer.ts";
-import {
-  extractToolCardsCached,
-  formatDistinctCollapsedToolSummaryText,
-  formatCollapsedToolPreviewText,
-  formatCollapsedToolSummaryText,
-  isToolCardError,
-} from "../../../lib/chat/tool-cards.ts";
-import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { extractToolCardsCached, isToolCardError } from "../../../lib/chat/tool-cards.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { isProviderVoiceTranscript } from "../chat-assistant-reply.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
@@ -30,7 +23,6 @@ import { type AttachmentItem, projectMessageMedia } from "./chat-message-media.t
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import { resolveCollapsedToolDetail } from "./chat-tool-cards.solid.tsx";
 
 function messageVideoSlots(
   projection: Pick<
@@ -202,11 +194,7 @@ export function prepareGroupedMessage(
     codeBlockChrome: role === "user" ? "none" : "copy",
     codeBlockInteraction: role === "assistant" ? "interactive" : "static",
     fileLinks: true,
-    githubRepo: role === "assistant" ? (opts.githubRepo ?? null) : null,
     humanMentions: markdown === displayMarkdown ? humanMentions : undefined,
-    ...(role === "assistant" && opts.githubRepositories
-      ? { githubRepositories: opts.githubRepositories }
-      : {}),
     interactiveImages: opts.onOpenImage !== undefined,
     sessionLinks: true,
     tableInteractions: "enabled",
@@ -270,7 +258,6 @@ export function prepareGroupedMessage(
 
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
-  const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
   const standaloneToolPayload =
     isStandaloneToolMessage &&
@@ -290,38 +277,6 @@ export function prepareGroupedMessage(
   const expandsSingleToolCard =
     Boolean(singleToolCard) && (!markdown || standaloneToolPayload) && !hasImages;
   const failedToolCard = expandsSingleToolCard ? undefined : toolCards.find(isToolCardError);
-  const singleToolDisplay = singleToolCard
-    ? resolveToolDisplay({
-        name: singleToolCard.name,
-        args: singleToolCard.args,
-        detailMode: "explain",
-      })
-    : null;
-  const singleToolDisplayDetail =
-    singleToolCard && singleToolDisplay
-      ? resolveCollapsedToolDetail(singleToolCard, singleToolDisplay.detail)
-      : undefined;
-  const toolSummaryLabelRaw = singleToolDisplayDetail
-    ? !markdown && !hasImages
-      ? singleToolDisplayDetail
-      : singleToolCard?.outputText?.trim()
-        ? "output"
-        : undefined
-    : toolNames.length <= 3
-      ? toolNames.join(", ")
-      : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
-  const toolPreview =
-    isStandaloneToolMessage && markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
-  const toolMessageLabelRaw =
-    singleToolDisplay && !markdown && !hasImages
-      ? singleToolDisplay.label
-      : t("chat.toolCards.toolOutput");
-  const toolMessageLabel =
-    formatCollapsedToolSummaryText(toolMessageLabelRaw) ?? toolMessageLabelRaw;
-  const toolSummaryLabel = formatDistinctCollapsedToolSummaryText(
-    toolSummaryLabelRaw,
-    toolMessageLabel,
-  );
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
   const duplicateSuffix =
     duplicateCount > 1
@@ -377,10 +332,6 @@ export function prepareGroupedMessage(
     renderInOrder,
     expandsSingleToolCard,
     failedToolCard,
-    singleToolDisplay,
-    toolSummaryLabel,
-    toolMessageLabel,
-    toolPreview,
     duplicateCount,
     duplicateSuffix,
     onlyToolCards,

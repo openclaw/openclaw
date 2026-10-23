@@ -11,17 +11,13 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import type { BuildChannelInboundEventContextParams } from "../inbound-event/context.js";
 import {
   createHostIngressFixture,
   ingressInput,
   ingressMessage,
   withTestChannelRegistry,
 } from "./host-ingress.test-support.js";
-
-export function createCommandOwnerTestGateway(cfg: OpenClawConfig) {
-  // SAFETY: Ingress authority only consumes runtime config from this synthetic Gateway.
-  return { getRuntimeConfig: () => cfg } as GatewayRequestContext;
-}
 
 export const createCommandOwnerTestRoles = (): NonNullable<OpenClawConfig["gateway"]>["roles"] => ({
   default: "member",
@@ -99,10 +95,16 @@ export async function createAdminIngressFixture(
   setRuntimeConfigSnapshot(cfg);
   const host = createHostIngressFixture(channelId, cfg);
   const key = `agent:main:${channelId}:channel:maintainers`;
-  const context = async (senderId: string, verified = true, accountId = "team") => {
+  const context = async (
+    senderId: string,
+    verified = true,
+    accountId = "team",
+    overrides: Partial<BuildChannelInboundEventContextParams> = {},
+  ) => {
     const message = ingressMessage(channelId, key, senderId, {
       accountId,
       message: { rawBody: "Assign this session to the requester" },
+      ...overrides,
     });
     const ingress = await host.ingress.resolveStable(
       ingressInput(message, {
@@ -123,7 +125,9 @@ export async function createAdminIngressFixture(
     gateway: host.gateway,
     context,
     replaceGatewayContext: (replacement?: GatewayRequestContext) => {
-      host.replaceGatewayContext(replacement ?? createCommandOwnerTestGateway(cfg));
+      host.replaceGatewayContext(
+        replacement ?? ({ getRuntimeConfig: () => cfg } as GatewayRequestContext),
+      );
     },
     unregister: host.retire,
     retire: host.retire,

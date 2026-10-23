@@ -61,7 +61,7 @@ import type {
 } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.types.ts";
-import type { ChatSessionSharingState } from "./components/chat-session-sharing.solid.tsx";
+import type { ChatSessionSharingState } from "./components/chat-session-sharing-shared.tsx";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { createChatTranscript } from "./components/chat-transcript-controller.ts";
 import type { ComposerActivityLayout } from "./components/chat-transcript-layout-owner.ts";
@@ -77,6 +77,7 @@ export type ChatPaneInputChanges = {
   inputRegion?: boolean;
   draft?: boolean;
   focusComposer?: boolean;
+  routeResolutionPending?: boolean;
 };
 
 /** Synchronous pane facts and domain resources; Solid owns publication and commits. */
@@ -221,6 +222,7 @@ export abstract class ChatPaneStateOwner {
   sessionKey = "";
   // This session-keyed pane retains its initial skeleton through URL canonicalization.
   routeLoadingSkeleton = false;
+  routeResolutionPending = false;
   agentId?: string = undefined;
   inputRegion: ChatInputRegion = "page";
   compact = false;
@@ -707,7 +709,6 @@ export abstract class ChatPaneStateOwner {
     snapshot: ApplicationContext["gateway"]["snapshot"],
   ): void;
   protected abstract applyApplicationConfig(config: ApplicationContext["config"]["current"]): void;
-  protected abstract applySessionsState(state: ApplicationContext["sessions"]["state"]): void;
   protected abstract cancelHeaderRename(): void;
   protected abstract handleArchiveSessionShortcut(event: KeyboardEvent): boolean;
   protected abstract resetOlderMessagesViewport(): void;

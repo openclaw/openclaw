@@ -2,19 +2,23 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { extractAgentRunTerminalError, extractAgentRunText } from "../agents/agent-run-result.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { CommandLane } from "../process/lanes.js";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
+  SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS,
+  SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS,
   SYSTEM_AGENT_GREETING_SYSTEM_PROMPT,
   buildSystemAgentAssistantUserPrompt,
   buildSystemAgentGreetingUserPrompt,
   parseSystemAgentAssistantPlanText,
   type SystemAgentAssistantPlan,
 } from "./assistant-prompts.js";
-import { resolveSystemAgentAssistantTimeoutMs } from "./assistant-timeout.js";
 import type { SystemAgentGreetingFacts, SystemAgentGreetingPlan } from "./greeting.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
@@ -114,7 +118,35 @@ async function runConfiguredSystemAgentText(params: {
   let preparedRunAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
   try {
     const runId = `${params.runIdPrefix}-${randomUUID()}`;
-    const timeoutMs = params.timeoutMs ?? resolveSystemAgentAssistantTimeoutMs(route);
+    const timeoutMs =
+      params.timeoutMs ??
+      (() => {
+        try {
+          const workspaceDir = resolveAgentWorkspaceDir(route.runConfig, route.agentId);
+          const snapshot = resolvePluginMetadataSnapshot({
+            config: route.runConfig,
+            workspaceDir,
+            env: process.env,
+            allowWorkspaceScopedCurrent: true,
+          });
+          const plugins = snapshot.plugins;
+          const providers = new Set([
+            normalizeProviderId(route.provider),
+            normalizeProviderId(route.modelLabel.split("/", 1)[0] ?? ""),
+          ]);
+          const isLocal = plugins.some((plugin) =>
+            Object.entries(plugin.modelPricing?.providers ?? {}).some(
+              ([provider, pricing]) =>
+                providers.has(normalizeProviderId(provider)) && pricing.external === false,
+            ),
+          );
+          return isLocal
+            ? SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS
+            : SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS;
+        } catch {
+          return SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS;
+        }
+      })();
     preparedRunAdmission = prepareSystemAgentRunAdmission(
       route.runConfig,
       runId,

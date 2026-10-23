@@ -353,7 +353,6 @@ describe("cron batch outcome finalization", () => {
         ).toMatchObject({ enabled: 0 });
         order.push("notify");
       });
-      const requestHeartbeat = vi.fn();
       const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
         async () => {},
       );
@@ -361,7 +360,6 @@ describe("cron batch outcome finalization", () => {
         nowMs: () => DUE_AT + 10,
         defaultAgentId: "main",
         enqueueSessionEvent,
-        requestHeartbeat,
         ...(routed ? { sendCronFailureAlert } : { resolveOriginDeliveryContext }),
       });
       const cause = routed ? "server_error" : "timeout";
@@ -390,7 +388,6 @@ describe("cron batch outcome finalization", () => {
         expect(text).toContain('Automation "Recurring report" was auto-disabled');
         expect(text).toContain(`Last error: ${error}`);
         expect(enqueueSessionEvent).not.toHaveBeenCalled();
-        expect(requestHeartbeat).not.toHaveBeenCalled();
       } else {
         expect(order).toEqual(["notify"]);
         expect(text).not.toContain("/private/agent/work");
@@ -408,7 +405,6 @@ describe("cron batch outcome finalization", () => {
           agentId: "main",
           sessionKey: undefined,
         });
-        expect(requestHeartbeat).not.toHaveBeenCalled();
       }
       expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
         enabled: false,

@@ -4,8 +4,8 @@ import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { PinnedDispatcherPool } from "./pinned-dispatcher-pool.js";
 
-function poolFixture(maxEntries = 2) {
-  const pool = new PinnedDispatcherPool({ maxEntries, idleTtlMs: 60_000 });
+function poolFixture() {
+  const pool = new PinnedDispatcherPool();
   const create = vi.fn(() => ({ close: vi.fn(async () => undefined) }));
   const acquire = (key: string) =>
     pool.acquire({ key, createDispatcher: () => create() as unknown as Dispatcher });
@@ -47,13 +47,13 @@ it("keeps separate active pins open through shutdown", async () => {
 });
 
 it("falls back to caller-owned dispatchers when capacity is fully leased", async () => {
-  const { pool, create, acquire } = poolFixture(1);
-  const first = acquire("origin-a/pin-a");
+  const { pool, create, acquire } = poolFixture();
+  const leases = Array.from({ length: 16 }, (_, i) => acquire(`origin-${i}/pin-${i}`));
   const close = create.mock.results[0]?.value.close;
   expect(acquire("origin-b/pin-b")).toBeUndefined();
-  expect(create).toHaveBeenCalledOnce();
+  expect(create).toHaveBeenCalledTimes(16);
   expect(close).not.toHaveBeenCalled();
-  await first?.release();
+  await Promise.all(leases.map((lease) => lease!.release()));
   await pool.closeAll();
 });
 
@@ -67,9 +67,10 @@ it.each(["expiry", "shutdown"] as const)(
     const close = vi.fn(async () => closed.resolve([requests.getStore(), sessions.getStore()]));
     let pool: PinnedDispatcherPool | undefined;
     try {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       await requests.run(request, () =>
         sessions.run(session, async () => {
-          pool = new PinnedDispatcherPool({ maxEntries: 1, idleTtlMs: 5 });
+          pool = new PinnedDispatcherPool();
           const lease = pool.acquire({
             key: "origin-a/pin-a",
             createDispatcher: () => {
@@ -83,6 +84,7 @@ it.each(["expiry", "shutdown"] as const)(
             await pool.closeAll();
           } else {
             await lease!.release();
+            await vi.advanceTimersByTimeAsync(60_000);
           }
           expect(requests.getStore()).toBe(request);
           expect(sessions.getStore()).toBe(session);
@@ -92,6 +94,7 @@ it.each(["expiry", "shutdown"] as const)(
       expect(close).toHaveBeenCalledOnce();
     } finally {
       await pool?.closeAll();
+      vi.useRealTimers();
     }
   },
 );

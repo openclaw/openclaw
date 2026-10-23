@@ -550,7 +550,9 @@ function createPublicationBackend(
           write(() => {
             stageMemoryIndexSchemaExtension(db);
             stageOpenClawAgentDatabaseSchemaExtension(db);
-            vectorIndex.capability.drop(vectorIndex.index);
+            if (hasVectorTable) {
+              vectorIndex.capability.drop(vectorIndex.index);
+            }
             vectorIndex.capability.create(vectorIndex.index, dimensions);
             admitStoreSearch(db, memoryVectorSearchSchema(dimensions), {
               extension: "memory.vector",

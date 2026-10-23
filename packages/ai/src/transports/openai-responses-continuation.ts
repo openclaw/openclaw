@@ -186,7 +186,9 @@ export function recordResponsesContinuationState(
   return {
     lastRequest,
     lastResponseId: response.id,
-    lastResponseItems: response.output,
+    // Hosted search runs on the server and has no transcript block, so replay never
+    // sends it back. The server keeps it under previous_response_id.
+    lastResponseItems: response.output.filter((item) => item.type !== "web_search_call"),
     pendingToolCalls,
   };
 }

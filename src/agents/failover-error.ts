@@ -63,13 +63,9 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "WorkerRunnerCapacityError",
   "WorkerWorkspaceReconciliationError",
   "ActiveTurnClaimError",
-  "SqliteWorkerError",
+  "CliHistoryOwnerChangedError",
   "SessionTranscriptReadFenceError",
-]);
-const RUNTIME_COORDINATION_ERROR_MESSAGES = new Set([
-  "MCP runtime cleanup could not confirm closure",
-  "CLI history owner changed before preparation",
-  "Model prompt projection lost its canonical user turn",
+  "SqliteWorkerError",
 ]);
 
 export { recordModelFallbackStop } from "./model-fallback-stop.js";
@@ -314,7 +310,6 @@ function hasRuntimeCoordinationFailure(err: unknown): boolean {
     (candidate) =>
       isSessionWorkStartInvalidatedError(candidate) ||
       RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)) ||
-      RUNTIME_COORDINATION_ERROR_MESSAGES.has(readDirectErrorMessage(candidate) ?? "") ||
       resolveExecutionApprovalFailureMessage(readDirectErrorMessage(candidate)) !== undefined,
   );
 }
@@ -492,7 +487,7 @@ export function resolveFailoverClassificationFromError(
     return null;
   }
   // Local coordination codes such as SQLite "overloaded" are not provider signals.
-  if (hasRuntimeCoordinationFailure(err)) {
+  if (!isFailoverError(err) && hasRuntimeCoordinationFailure(err)) {
     return null;
   }
   return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0, providerHint);
@@ -614,9 +609,6 @@ export function coerceToFailoverError(
   err: unknown,
   context?: FailoverErrorContext,
 ): FailoverError | null {
-  if (hasRuntimeCoordinationFailure(err)) {
-    return null;
-  }
   if (isFailoverError(err)) {
     if (findLocalWorkerTaskTimeout(err)) {
       return null;

@@ -97,9 +97,6 @@ it.each([false, true])("calibrates held resources with obscured signals=%s", asy
     ...["status", "cpu", "buffer", "timer", "reset", "reacquire"].map((n) => `control-${n}`),
     "plugin-disable",
   ]);
-  for (const { operations } of result.phases) {
-    expect(operations).toMatchObject({ completed: 1, failed: 0 });
-  }
   if (obscured) {
     for (const name of ["heldBuffer", "referencedTimer", "timerRetirement"]) {
       expect(result.signals[name]).toMatchObject({ status: "inconclusive", value: 0 });

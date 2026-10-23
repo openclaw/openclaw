@@ -328,12 +328,6 @@ describe("trigger handling", () => {
           historyBody,
         ],
         ["current-message", { ...message, Body: `/thinking high ${currentBody}` }, {}, currentBody],
-        [
-          "heartbeat",
-          { Body: "HEARTBEAT /think:high", From: "+1003", To: "+1003" },
-          { isHeartbeat: true },
-          undefined,
-        ],
       ] as const;
       for (const [label, request, options, expectedPrompt] of thinkCases) {
         const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
@@ -349,35 +343,6 @@ describe("trigger handling", () => {
             firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent").prompt ?? "";
           expect(prompt, label).toBe(expectedPrompt);
         }
-      }
-    });
-  });
-
-  it("resolves heartbeat model selection from overrides", async () => {
-    await withTempHome(async (home) => {
-      for (const [label, provider, model] of [
-        ["heartbeat-override", "anthropic", "claude-haiku-4-5-20251001"],
-        ["stored-override", "openai", "gpt-5.4"],
-      ] as const) {
-        const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-        runEmbeddedAgentMock.mockReset();
-        mockRunEmbeddedAgentOk("ok");
-        const cfg = makeCfg(home);
-        cfg.session = { ...cfg.session, store: join(home, `${label}.sessions.json`) };
-        await seedTargetSession(requireSessionStorePath(cfg), MAIN_SESSION_KEY, {
-          sessionId: "main",
-          providerOverride: "openai",
-          modelOverride: "gpt-5.4",
-        });
-        if (label === "heartbeat-override") {
-          cfg.agents ??= {};
-          cfg.agents.defaults ??= {};
-          cfg.agents.defaults.heartbeat = { model: `${provider}/${model}` };
-        }
-        await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
-
-        const call = firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent");
-        expect(call).toMatchObject({ provider, model });
       }
     });
   });

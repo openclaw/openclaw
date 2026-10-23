@@ -183,9 +183,7 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
   nowMs?: CronServiceDeps["nowMs"];
   storePath: string;
   logger: ReturnType<typeof createNoopLogger>;
-  requestHeartbeatAndWait?: CronServiceDeps["requestHeartbeatAndWait"];
   runSessionEvent?: CronServiceDeps["runSessionEvent"];
-  resolveHeartbeatTimeoutMs?: CronServiceDeps["resolveHeartbeatTimeoutMs"];
   onEvent?: CronServiceDeps["onEvent"];
 }): {
   cron: CronService;
@@ -194,17 +192,11 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
   enqueueSessionEvent: ReturnType<
     typeof vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>
   >;
-  requestHeartbeat: MockFn;
-  requestHeartbeatAndWait: MockFn;
   runSessionEvent: ReturnType<typeof vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>>;
   finished: ReturnType<typeof createFinishedBarrier>;
 } {
   const enqueueSystemEvent = vi.fn();
   const enqueueSessionEvent = vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>();
-  const requestHeartbeat = vi.fn();
-  const requestHeartbeatAndWait = vi.fn(
-    params.requestHeartbeatAndWait ?? (async () => ({ status: "ran" as const, durationMs: 1 })),
-  );
   const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(
     params.runSessionEvent ?? (async () => ({ status: "ok" })),
   );
@@ -217,10 +209,7 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
     log: params.logger,
     enqueueSystemEvent,
     enqueueSessionEvent,
-    requestHeartbeat,
-    requestHeartbeatAndWait,
     runSessionEvent,
-    resolveHeartbeatTimeoutMs: params.resolveHeartbeatTimeoutMs,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     onEvent: (event) => {
       finished.onEvent(event);
@@ -232,8 +221,6 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
     state,
     enqueueSystemEvent,
     enqueueSessionEvent,
-    requestHeartbeat,
-    requestHeartbeatAndWait,
     runSessionEvent,
     finished,
   };
@@ -256,14 +243,12 @@ export async function withCronServiceForTest(
     enqueueSessionEvent: ReturnType<
       typeof vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>
     >;
-    requestHeartbeat: ReturnType<typeof vi.fn>;
     runSessionEvent: ReturnType<typeof vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>>;
   }) => Promise<void>,
 ): Promise<void> {
   const store = await params.makeStorePath();
   const enqueueSystemEvent = vi.fn();
   const enqueueSessionEvent = vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>();
-  const requestHeartbeat = vi.fn();
   const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(
     params.runSessionEvent ?? (async () => ({ status: "ok" })),
   );
@@ -275,7 +260,6 @@ export async function withCronServiceForTest(
     log: params.logger,
     enqueueSystemEvent,
     enqueueSessionEvent,
-    requestHeartbeat,
     runSessionEvent,
     runIsolatedAgentJob:
       params.runIsolatedAgentJob ??
@@ -289,7 +273,6 @@ export async function withCronServiceForTest(
       state,
       enqueueSystemEvent,
       enqueueSessionEvent,
-      requestHeartbeat,
       runSessionEvent,
     });
   } finally {
@@ -322,7 +305,6 @@ export function createMockCronStateForJobs(params: {
     defaultAgentId: "main",
     nowMs: () => nowMs,
     enqueueSystemEvent: () => {},
-    requestHeartbeat: () => {},
     runIsolatedAgentJob: async () => ({ status: "ok" }),
     log: createNoopLogger(),
   });

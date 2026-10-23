@@ -78,6 +78,7 @@ const imageFailure = new Error("Mermaid image could not be displayed");
 
 function MermaidContent(props: MermaidProps, host: MermaidElement) {
   const menuId = createUniqueId();
+  const descriptionId = createUniqueId();
   const [showSource, setShowSource] = createSignal(false);
   const [expanded, setExpanded] = createSignal(false);
   const source = createMemo(() => props.source);
@@ -90,7 +91,7 @@ function MermaidContent(props: MermaidProps, host: MermaidElement) {
   let disposed = false;
   const image = createMemo(() => {
     source();
-    const [url, setUrl] = createSignal("");
+    const [value, setValue] = createSignal<{ url: string; title: string; description: string }>();
     let allocatedUrl = "";
     let key = "";
     function revoke() {
@@ -101,18 +102,23 @@ function MermaidContent(props: MermaidProps, host: MermaidElement) {
     }
     function release() {
       revoke();
-      setUrl("");
+      setValue(undefined);
     }
     // Source replacement retires its URL even while the next layout is pending.
     onCleanup(revoke);
     return {
-      url,
+      value,
       release,
       accept(result: { svg: string; key: string }) {
         revoke();
         key = result.key;
         allocatedUrl = URL.createObjectURL(new Blob([result.svg], { type: "image/svg+xml" }));
-        setUrl(allocatedUrl);
+        // Mermaid owns accTitle/accDescr parsing. Read only its sanitized SVG's
+        // root metadata as text; never mount the SVG or interpret source as HTML.
+        const root = new DOMParser().parseFromString(result.svg, "image/svg+xml").documentElement;
+        const metadata = (name: string) =>
+          [...root.children].find((child) => child.localName === name)?.textContent?.trim() ?? "";
+        setValue({ url: allocatedUrl, title: metadata("title"), description: metadata("desc") });
       },
       fail() {
         setFailedImageKey(key);
@@ -120,7 +126,9 @@ function MermaidContent(props: MermaidProps, host: MermaidElement) {
       },
     };
   });
-  const imageUrl = () => image().url();
+  const imageUrl = () => image().value()?.url ?? "";
+  const imageTitle = () => image().value()?.title || t("chat.mermaid.title");
+  const imageDescription = () => image().value()?.description ?? "";
 
   const request = createMemo(
     () => {
@@ -199,13 +207,31 @@ function MermaidContent(props: MermaidProps, host: MermaidElement) {
           when={sourceVisible()}
           fallback={
             <Show when={imageUrl()}>
-              <div class="preview">
+              <button
+                class="preview"
+                type="button"
+                aria-label={
+                  image().value()?.title
+                    ? t("chat.mermaid.expandNamed", { title: imageTitle() })
+                    : t("chat.mermaid.expand")
+                }
+                aria-describedby={imageDescription() ? descriptionId : undefined}
+                aria-haspopup="dialog"
+                title={t("chat.mermaid.expand")}
+                onClick={() => setExpanded(true)}
+              >
                 <img
                   src={imageUrl()}
-                  alt={t("chat.mermaid.title")}
+                  alt={imageTitle()}
+                  aria-describedby={imageDescription() ? descriptionId : undefined}
                   onError={() => image().fail()}
                 />
-              </div>
+                <Show when={imageDescription()}>
+                  <span class="description" id={descriptionId} hidden>
+                    {imageDescription()}
+                  </span>
+                </Show>
+              </button>
             </Show>
           }
         >
@@ -216,7 +242,8 @@ function MermaidContent(props: MermaidProps, host: MermaidElement) {
         <Show when={expanded() && imageUrl()}>
           <openclaw-image-lightbox
             prop:src={imageUrl()}
-            prop:imageTitle={t("chat.mermaid.title")}
+            prop:imageTitle={imageTitle()}
+            prop:imageDescription={imageDescription()}
             onImage-lightbox-close={() => setExpanded(false)}
           />
         </Show>

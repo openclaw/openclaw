@@ -7,7 +7,7 @@ import {
   isSettingsNavigationRoute,
   type NavigationRouteId,
 } from "../app-navigation.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { IconName } from "./icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
@@ -58,7 +58,6 @@ export type SidebarDropdownProps = {
   anchor?: HTMLElement;
   items: readonly MenuEntry[];
   onSelect: (id: string) => void;
-  tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   onClose: (restoreFocus: boolean) => void;
   onAfterShow?: (event: Event) => void;
   onOpenChange?: (open: boolean) => void;
@@ -123,7 +122,6 @@ export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
         ];
         overlay.request(true, params.focusOnOpen === false ? "none" : "first");
       }}
-      tabFocusTarget={params.tabFocusTarget}
       onSelect={(item) => params.onSelect(item.id)}
       onAfterShow={params.onAfterShow}
       onOpenChange={(open) => {
@@ -187,13 +185,7 @@ export function renderSidebarNavLink(params: {
       onPointerEnter={(event) => params.onPreload?.(event)}
       onPointerLeave={(event) => params.onCancelPreload?.(event)}
       onTouchStart={(event) => params.onPreload?.(event, true)}
-      onClick={(event: MouseEvent) => {
-        if (!shouldHandleNavigationClick(event)) {
-          return;
-        }
-        event.preventDefault();
-        params.onNavigate();
-      }}
+      onClick={(event: MouseEvent) => handleNavigationClick(event, () => params.onNavigate())}
     >
       <span class="nav-item__icon" aria-hidden="true">
         {params.icon}
