@@ -114,7 +114,11 @@ in the existing receipt. Doctor disables a pending job when that receipt or the
 remaining source configuration proves it was disabled. Older pending receipts
 without those facts retain their job and report its exact disable command; after
 disabling it, rerun `openclaw doctor --fix`, then re-enable it if intended.
-Completed cutovers preserve later operator edits.
+Completed cutovers preserve later operator edits. Doctor also repairs the quiet
+reply token in receipt-owned tasks created from scratch by an earlier migration
+when their creation and definition-update timestamps still match. Ordinary runs
+preserve that provenance. Edited tasks and older converted tasks without that
+provenance remain unchanged.
 
 Migrated jobs use standard Automations delivery semantics. Heartbeat-specific
 duplicate suppression and no-route skipping are removed: repeated updates can be
