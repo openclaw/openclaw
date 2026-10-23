@@ -10,6 +10,7 @@ import type { OverlayNativeAdapter } from "./overlay-types.ts";
 import type { PickerOption, PickerParams, PickerGroup } from "./select-picker-types.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useMenuMachine } from "./solid/menu-machine.ts";
+import { MenuNavigationError } from "./solid/menu-navigation-error.tsx";
 import { useOverlayControl } from "./solid/overlay-control.ts";
 import "./solid/overlay.css";
 
@@ -146,10 +147,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         intent === "last" &&
         !rows().some((option) => option.value === props.params.value && !option.disabled)
       ) {
-        menu.service.send({
-          type: "HIGHLIGHTED.SET",
-          value: rows().findLast((option) => !option.disabled)?.value ?? null,
-        });
+        menu.setHighlightedValue(rows().findLast((option) => !option.disabled)?.value ?? null);
       }
       target?.focus({ preventScroll: true });
     },
@@ -186,7 +184,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     items: rows,
     value: () => props.params.value,
   });
-  const active = () => menu.read().highlightedValue;
+  const active = () => menu.highlightedValue();
   const controls = () =>
     props.params.groupBy
       ? sections()
@@ -228,7 +226,7 @@ export function PickerContent<Option extends PickerOption>(props: {
           if (searching()) {
             setQuery(initialKey);
           } else {
-            menu.service.send({ type: "TYPEAHEAD", key: initialKey });
+            menu.typeahead(initialKey);
           }
         });
       }
@@ -328,7 +326,7 @@ export function PickerContent<Option extends PickerOption>(props: {
             identity: [opened(), active(), query(), rows()],
             target: () =>
               overlay.open && !pointerHighlight
-                ? optionElements.get(menu.service.context.get("highlightedValue") ?? "")
+                ? optionElements.get(menu.highlightedValueNow() ?? "")
                 : undefined,
           }
         : undefined,
@@ -411,7 +409,7 @@ export function PickerContent<Option extends PickerOption>(props: {
           setKeyboard(false);
           pointerHighlight = true;
           if (!row.option().disabled) {
-            menu.read().setHighlightedValue(row.option().value);
+            menu.setHighlightedValue(row.option().value);
           }
         }}
         onClick={() => commit(row.option().value)}
@@ -504,6 +502,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         popover={props.params.sheet ? undefined : "manual"}
         hidden={props.params.sheet ? true : undefined}
       >
+        <MenuNavigationError binding={menu} />
         <Show when={props.params.sheet}>
           <div class="picker-select__page-header">
             <button

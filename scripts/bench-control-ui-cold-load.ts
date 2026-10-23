@@ -9,6 +9,7 @@
 // OPENCLAW_CONTROL_UI_BUILD_ID supplies the matching identity outside a Git checkout.
 // --gateway-url uses real Gateway HTTP serving with synthetic bootstrap/RPC fixtures.
 // --first-load --runs 1 skips warm-up; restart the Gateway separately for a cold server cache.
+// --sidebar-persistent-children keeps expanded rows outside root windows for staggered handoff proof.
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
@@ -237,6 +238,7 @@ const { values } = parseArgs({
     "sidebar-live-churn": { type: "boolean", default: false },
     "sidebar-avatars": { type: "boolean", default: false },
     "sidebar-expanded": { type: "boolean", default: false },
+    "sidebar-persistent-children": { type: "boolean", default: false },
     "omit-hello-self-presence": { type: "boolean", default: false },
     "session-event-churn": { type: "boolean", default: false },
     "session-event-duration-ms": { type: "string", default: "30000" },
@@ -579,6 +581,7 @@ const fixture = createControlUiTeamScaleFixture({
   sidebarListChurn: values["sidebar-list-churn"],
   sidebarLiveChurn: values["sidebar-live-churn"],
   sidebarAvatars: values["sidebar-avatars"],
+  sidebarPersistentChildren: values["sidebar-persistent-children"],
   sessionEventChurn: values["session-event-churn"],
   sessionEventDurationMs,
   sessionEventAncestorRefs: values["session-event-ancestor-refs"],
@@ -984,10 +987,21 @@ try {
     }
   }
   async function expandSidebar() {
-    if (!values["sidebar-expanded"]) {
+    if (!values["sidebar-expanded"] && !fixture.sidebarPersistentChildren) {
       return;
     }
-    const expansionSaved = async () => {
+    if (fixture.sidebarPersistentChildren) {
+      const { parentKey, childKeys } = fixture.sidebarPersistentChildren;
+      const toggle = page.locator(`[data-child-session-toggle="${parentKey}"]`);
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+        await toggle.click();
+      }
+      for (const key of childKeys) {
+        await page.locator(`.sidebar-session-content [data-session-key="${key}"]`).waitFor();
+      }
+    }
+    const expansionSaved = async (expanded: boolean) => {
+      type SavedRow = { key: string; children?: SavedRow[] };
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
         const request = indexedDB.open("openclaw-chat-snapshots");
         request.addEventListener("success", () => resolve(request.result), { once: true });
@@ -1000,7 +1014,7 @@ try {
       try {
         const records = await new Promise<
           Array<{
-            model: { sections: Array<{ visibleLimit: number; rows: Array<{ key: string }> }> };
+            model: { sections: Array<{ visibleLimit: number; rows: SavedRow[] }> };
           }>
         >((resolve, reject) => {
           const request = database
@@ -1018,11 +1032,16 @@ try {
           ...document.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
         ].map((row) => row.getAttribute("data-session-key"));
         return records.some(({ model }) => {
-          const savedKeys = new Set(
-            model.sections.flatMap((section) => section.rows.map((row) => row.key)),
-          );
+          const savedKeys = new Set<string>();
+          const collect = (rows: SavedRow[]) => {
+            for (const row of rows) {
+              savedKeys.add(row.key);
+              collect(row.children ?? []);
+            }
+          };
+          collect(model.sections.flatMap((section) => section.rows));
           return (
-            model.sections.some(({ visibleLimit }) => visibleLimit > 10) &&
+            (!expanded || model.sections.some(({ visibleLimit }) => visibleLimit > 10)) &&
             visibleKeys.every((key) => key !== null && savedKeys.has(key))
           );
         });
@@ -1031,7 +1050,7 @@ try {
       }
     };
     // Sticky live rows can exceed ten without an explicit Show more selection.
-    if (!(await page.evaluate(expansionSaved))) {
+    if (values["sidebar-expanded"] && !(await page.evaluate(expansionSaved, true))) {
       await page
         .locator(".sidebar-session-content .sidebar-session-pagination__button")
         .filter({ hasText: "Show more" })
@@ -1040,7 +1059,7 @@ try {
     }
     // waitForFunction treats an async predicate's Promise as truthy.
     const deadline = Date.now() + 30_000;
-    while (!(await page.evaluate(expansionSaved))) {
+    while (!(await page.evaluate(expansionSaved, values["sidebar-expanded"]))) {
       if (Date.now() >= deadline) {
         throw new Error("Expanded sidebar membership was not persisted");
       }
@@ -2066,6 +2085,7 @@ try {
         sidebarView,
         sidebarAvatars: values["sidebar-avatars"],
         sidebarExpanded: values["sidebar-expanded"],
+        sidebarPersistentChildren: fixture.sidebarPersistentChildren,
         omitHelloSelfPresence: values["omit-hello-self-presence"],
         streamingReply: values["streaming-reply"],
         streamingAllocations: values["streaming-allocations"],

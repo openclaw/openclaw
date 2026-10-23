@@ -18,6 +18,7 @@ type CronJobMutationOptions = Pick<
   | "inferenceBinding"
   | "sourceConversation"
   | "operatorSource"
+  | "operatorSourceExecutionRevision"
   | "skillLibrarySelections"
   | "toolsAllowProvenance"
   | "toolsAllowExecTarget"

@@ -18,11 +18,14 @@ describe("Control UI build chunking", () => {
       import.meta.url,
     ).pathname;
     const signer = new URL("../../node_modules/@noble/ed25519/index.js", import.meta.url).pathname;
+    const markdown = new URL("../../node_modules/markdown-it/dist/markdown-it.mjs", import.meta.url)
+      .pathname;
+    const entities = new URL("../../node_modules/entities/dist/index.js", import.meta.url).pathname;
     const entry = "\0config-parser-fixture";
     const sources = new Map([
       [
         entry,
-        `export { validate } from ${JSON.stringify(zod)}; export { canCall } from ${JSON.stringify(gatewayMethods)}; export { signal } from ${JSON.stringify(solid)}; export { pending } from ${JSON.stringify(verdict)}; export const warm = () => import(${JSON.stringify(json5)}); export const sign = () => import(${JSON.stringify(signer)});`,
+        `export { validate } from ${JSON.stringify(zod)}; export { canCall } from ${JSON.stringify(gatewayMethods)}; export { signal } from ${JSON.stringify(solid)}; export { pending } from ${JSON.stringify(verdict)}; export const warm = () => import(${JSON.stringify(json5)}); export const sign = () => import(${JSON.stringify(signer)}); export const render = () => import(${JSON.stringify(markdown)});`,
       ],
       [zod, "export const validate = () => true;"],
       [json5, "export const parse = () => ({});"],
@@ -30,6 +33,8 @@ describe("Control UI build chunking", () => {
       [solid, "export const signal = () => 1;"],
       [verdict, "export const pending = () => false;"],
       [signer, "export const sign = () => 'signature';"],
+      [markdown, `export { decode as render } from ${JSON.stringify(entities)};`],
+      [entities, "export const decode = () => 'decoded';"],
     ]);
     const result = await build({
       configFile: false,
@@ -73,6 +78,12 @@ describe("Control UI build chunking", () => {
     const signerChunk = chunks.find((chunk) => signer in chunk.modules)!;
     expect(dependencies.has(signerChunk.fileName)).toBe(false);
     expect(entryChunk.dynamicImports).toContain(signerChunk.fileName);
+    const markdownChunk = chunks.find((chunk) => markdown in chunk.modules)!;
+    expect(dependencies.has(markdownChunk.fileName)).toBe(false);
+    expect(entryChunk.dynamicImports).toContain(markdownChunk.fileName);
+    expect(chunks.find((chunk) => entities in chunk.modules)?.fileName).toBe(
+      markdownChunk.fileName,
+    );
     expect(chunks.find((chunk) => solid in chunk.modules)?.fileName).toBe(
       chunks.find((chunk) => verdict in chunk.modules)?.fileName,
     );
@@ -205,8 +216,12 @@ describe("Control UI build chunking", () => {
     });
     for (const [id, expected] of [
       ["/repo/ui/node_modules/highlight.js/lib/core.js", "markdown-highlight-runtime"],
-      ["/repo/ui/node_modules/markdown-it/dist/markdown-it.mjs", undefined],
-      ["/repo/ui/node_modules/entities/dist/esm/index.js", undefined],
+      ["/repo/ui/node_modules/markdown-it/dist/markdown-it.mjs", "markdown-runtime"],
+      ["/repo/ui/node_modules/entities/dist/esm/index.js", "markdown-runtime"],
+      ["/repo/ui/node_modules/linkify-it/build/index.cjs.js", "markdown-runtime"],
+      ["/repo/ui/node_modules/mdurl/index.mjs", "markdown-runtime"],
+      ["/repo/ui/node_modules/punycode.js/punycode.es6.js", "markdown-runtime"],
+      ["/repo/ui/node_modules/uc.micro/index.mjs", "markdown-runtime"],
       [String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`, "markdown-highlight-runtime"],
       ["/tmp/openclaw-pnpm-node-modules/dompurify/dist/purify.es.mjs", "markdown-runtime"],
       ["/tmp/openclaw-pnpm-node-modules/zod/v4/core/schemas.js", "config-runtime"],

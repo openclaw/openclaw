@@ -108,11 +108,11 @@ export function observeTerminalRestoreInput(document: Document, signal: AbortSig
   function stop() {
     stopPointer();
     stopKeyboard();
-    signal.removeEventListener("abort", stop);
+    stopAbort();
   }
   const stopPointer = listen(document, "pointerdown", onInteraction, true);
   const stopKeyboard = listen(document, "keydown", onInteraction, true);
-  signal.addEventListener("abort", stop, { once: true });
+  const stopAbort = listen(signal, "abort", stop, { once: true });
   return input;
 }
 

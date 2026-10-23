@@ -7,28 +7,10 @@ import type {
   ConfirmDialogChoiceOptions,
   ConfirmDialogOptions,
 } from "./confirm-dialog-types.ts";
-import { withPromiseModalHost } from "./promise-modal-host.ts";
 
-type ConfirmDialogViewOptions = ConfirmDialogOptions & Partial<ConfirmDialogChoiceOptions>;
+export type ConfirmDialogViewOptions = ConfirmDialogOptions & Partial<ConfirmDialogChoiceOptions>;
 
-let confirmationActive = false;
-
-export function presentConfirmDialog(
-  options: ConfirmDialogViewOptions,
-): Promise<ConfirmDialogChoice> {
-  if (confirmationActive) {
-    return Promise.resolve(null);
-  }
-  confirmationActive = true;
-  return withPromiseModalHost<ConfirmDialogChoice>(
-    { signal: options.signal, value: null },
-    ({ render, finish }) => render(() => <ConfirmDialogView options={options} finish={finish} />),
-  ).finally(() => {
-    confirmationActive = false;
-  });
-}
-
-function ConfirmDialogView(props: {
+export function ConfirmDialogView(props: {
   options: ConfirmDialogViewOptions;
   finish(value: ConfirmDialogChoice): void;
 }) {
