@@ -168,6 +168,7 @@ if (
     "sessions.list",
     "sessions.describe",
     "sessions.patch",
+    "sessions.cleanup",
     "connect",
     "reconnect",
     "subscribe",
@@ -180,7 +181,7 @@ if (
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, sessions.describe, sessions.patch, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, or plugins.reload",
+    "--scenario must be sessions.list, sessions.describe, sessions.patch, sessions.cleanup, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, or plugins.reload",
   );
 }
 const retentionScenario = scenario === "attempt-retention";
@@ -570,6 +571,13 @@ const viewerIdentity = (index: number) =>
   `broadcast-viewer-${values["distinct-viewers"] ? index : 0}@example.invalid`;
 const viewerProfiles = new Set<string>();
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
+if (scenario === "sessions.cleanup") {
+  // Exercise live preservation admission repeatedly without consuming the fixture inventory.
+  cfg.session = {
+    ...cfg.session,
+    maintenance: { ...cfg.session?.maintenance, mode: "warn" },
+  };
+}
 applyMockOpenAiModelConfig(cfg, {
   mockPort,
   modelRef: "openai/gpt-4.1",
@@ -3726,6 +3734,21 @@ try {
             } else if (scenario === "sessions.patch") {
               const params = sessionPatchParams(index, patchSequences[index]!++);
               assertSessionPatch(params, await rpc(workerClient, "sessions.patch", params));
+            } else if (scenario === "sessions.cleanup") {
+              const result = await rpc(workerClient, "sessions.cleanup", { agent: "main" });
+              if (
+                !isRecord(result) ||
+                result.agentId !== "main" ||
+                result.mode !== "warn" ||
+                result.dryRun !== false ||
+                result.applied !== true ||
+                result.wouldMutate !== false ||
+                typeof result.beforeCount !== "number" ||
+                result.beforeCount <= 0 ||
+                result.afterCount !== result.beforeCount
+              ) {
+                throw new Error("sessions.cleanup did not preserve the warning-mode fixture");
+              }
             } else {
               const result = await rpc(workerClient, "plugins.reload", {
                 plugins: [{ pluginId: reloadPluginId }],
@@ -4877,6 +4900,7 @@ try {
     recapBurstRepeats,
     recapBurstIntervalMs,
     runCount,
+    ...(scenario === "sessions.cleanup" ? { sessionMaintenanceMode: "warn" } : {}),
     chunks: chunkCount,
     chunkIntervalMs,
     peakStreams,
