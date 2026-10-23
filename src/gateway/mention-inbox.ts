@@ -31,13 +31,11 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-profile-events.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import { createHumanMentionPolicy, humanMentionDisplayLabel } from "./human-mention-policy.js";
-import {
-  formatMentionSessionTitle,
-  mentionInboxUnavailable,
-} from "./mention-inbox-presentation.js";
+import { mentionInboxUnavailable } from "./mention-inbox-presentation.js";
 import {
   createMentionProjection,
   createMentionMutationProjection,
+  mentionTargetKey,
   reconcileMentionProfiles,
   removeMentionItem,
   expireMentionItems,
@@ -75,7 +73,11 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       readItems: () => state.items.values(),
     },
   );
-  const policy = createHumanMentionPolicy({ ...params, readSessionTarget: readTarget });
+  const policy = createHumanMentionPolicy({
+    ...params,
+    readSessionTarget: (sessionKey, agentId) =>
+      readTarget(mentionTargetKey(sessionKey, agentId))?.target ?? null,
+  });
   let tail: Promise<void> = Promise.resolve();
   let closing = false;
   let needsSynchronization = true;
@@ -233,23 +235,23 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
 
   function currentTarget(item: StoredMention, cfg: OpenClawConfig, projection = state) {
     const { source, message } = item;
-    const { agentId, sessionKey, senderProfileId } = message.content;
+    const { senderProfileId } = message.content;
     if (projection.items.get(item.id) !== item || source.expiresAt <= scheduler.now()) {
       return undefined;
     }
-    const resolved = readTarget(sessionKey, agentId);
-    if (!resolved || resolved.entry.sessionId !== message.sessionId) {
+    const resolved = readTarget(item.targetKey);
+    if (!resolved || resolved.target.entry.sessionId !== message.sessionId) {
       return undefined;
     }
     const target = {
-      agentId: resolved.agentId,
-      sessionKey: resolved.canonicalKey,
-      entry: resolved.entry,
+      agentId: resolved.target.agentId,
+      sessionKey: resolved.target.canonicalKey,
+      entry: resolved.target.entry,
     };
     const recipient = policy.recipientProfile(item.recipientProfileId, target, cfg);
     const sender = policy.readProfile(senderProfileId);
     return recipient && recipient.profileId !== sender?.profileId
-      ? { target, recipient, sender }
+      ? { target, recipient, sender, sessionTitle: resolved.sessionTitle }
       : undefined;
   }
 
@@ -265,7 +267,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       senderProfileId: current.sender?.profileId ?? content.senderProfileId,
       senderLabel: humanMentionDisplayLabel(current.sender?.label, content.senderProfileId),
       ...(current.sender ? { senderAvatarUrl: current.sender.avatarUrl } : {}),
-      sessionTitle: formatMentionSessionTitle(current.target.entry),
+      sessionTitle: current.sessionTitle,
     };
   }
 

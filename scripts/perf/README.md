@@ -3377,3 +3377,66 @@ transport and diagnostics, rather than a complete agent run; use
 --allocations --diagnostics --active-work-diagnostics --trace-gc` and the memory-soak
 scenario when whole-Gateway behavior is the question. Allocation reduction alone
 is insufficient.
+
+## Mention Inbox target reads
+
+`mention-inbox-measure.ts` starts a real isolated Gateway on synthetic team-shaped
+state (5,000 sessions and 6,000 settled runs, without transcript bulk or projects).
+It connects one sender and 24 authenticated recipient viewers through loopback
+WebSockets, then seeds mentions with real `chat.send` turns against a synthetic
+loopback model. The measured paths are `mentions.list` and mentioned-session
+label changes that produce `mentions.changed` for every viewer. Inbox item counts,
+model completion, and broadcast delivery are checked before and after measurement.
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/mention-inbox-measure.ts \
+  --state-dir /path/to/new-synthetic-state --output /path/to/result.json \
+  --port 41605 --mock-port 41606 --mentions 100 --clients 24 \
+  --operations 2000 --broadcasts 100
+```
+
+Use one task-owned source checkout and `--owner-dir /path/to/baseline-owners` to
+select baseline copies of `mention-inbox-targets.ts`, `mention-inbox.ts`,
+`mention-inbox-projection.ts`, and `mention-inbox-recording.ts`. The module URLs
+and relative imports remain unchanged. Source hooks count `readTarget`,
+`currentTarget`, and `readView`; no production instrumentation is required.
+`--count-only` runs setup plus one list and one broadcast without profiling.
+`--start-at` schedules the warmed allocation pass, `--cpu-start-at` the unprofiled
+list pass, and `--broadcast-start-at` the unprofiled broadcast pass. Each rejects
+a missed preparation deadline. For sequential preparation followed by concurrent
+measurement, `--barrier-dir <shared-pair-directory> --side baseline|candidate`
+writes `<phase>.<side>.ready` and waits for `<phase>.start` containing a future
+epoch in milliseconds. The runner prepares each side on the preparation CPUs,
+sets each owned process scope to its measurement CPU set, then releases both
+sides of each phase together. Sampling starts after the allocation barrier. HOME,
+OPENCLAW_HOME, and TMPDIR must remain within the isolated sandbox.
+
+Acceptance rule: run concurrent baseline/candidate pairs with identical fixtures
+under one exclusive host measurement lock, using interleaved 16-CPU sides and
+swapping placement for the second pair. Decide on the paired mean. Stop for a
+20% adverse mean, or 10% adverse in both pairs, for CPU, allocation, total GC time
+per operation, promotion per operation, and qualified event-loop/latency tails.
+A p99 requires 1,000 samples per side and a p95 requires 200. Major-GC tails are
+context below 50 collections per side. Opposite-signed deltas or baselines more
+than 5x apart are inconclusive: show absolute deltas beside percentages and run
+a third pair if that metric gates, deciding on the absolute mean. GC pause
+percentiles with paired absolute mean shifts below 1 ms are context. They are
+also context when collection count drops at least 20% without increased total GC
+time. Always report both sides' maximum pause; the candidate maximum exceeding
+max(50 ms, twice baseline maximum) retains its gate. Guard-interrupted pairs are
+discarded and rerun; use the shared production guard without a stricter threshold.
+
+Sampled allocation includes collected objects and reports whole-process and
+target-read attribution per Inbox read, plus a rate normalized to the measured
+minute. CPU/GC/loop observations are separate from sampling; process CPU includes
+workers and in-process WebSocket clients, with main-thread CPU reported separately.
+Pass `--trace-log /path/to/captured-stdout.log` with `--trace-gc-nvp` to include
+promotion from the existing Gateway trace parser. Synchronous identification
+markers before worker startup select only the main isolate; separate capture
+markers delimit list and broadcast phases. Worker collections are excluded. Every tail carries
+its sample count. The Gateway and WebSocket driver share the measured main isolate, so these
+allocation and CPU totals include both. Observed throughput and bytes per minute
+are context; decisions use per-operation work. `bytesPer450Reads` provides a fixed
+synthetic rate comparison without claiming production Inbox traffic. These
+measurements do not cover browser rendering.
