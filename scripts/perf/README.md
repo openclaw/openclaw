@@ -204,7 +204,8 @@ its original imports. Add `--allocations` for separate paired allocation passes
 that retain samples of objects collected by minor and major GC.
 
 Every result must exactly match the independently constructed ordered adoption
-map. Compare the result and fixture digests across both sides. The report includes
+map. Compare result digests across both sides; fixture digests also include the
+isolated state-directory paths, which differ between runs. The report includes
 bytes per list for the full capture, owner stacks, and key-parser stacks, along
 with CPU, latency, GC time per list, promotion, and event-loop delay. All tails
 include sample counts and GC includes maximum pauses. Result verification and

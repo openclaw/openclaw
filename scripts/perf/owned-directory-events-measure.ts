@@ -4,7 +4,12 @@ import fs from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import path from "node:path";
-import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
+import {
+  constants,
+  monitorEventLoopDelay,
+  PerformanceObserver,
+  type PerformanceEntry,
+} from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -145,8 +150,8 @@ const loop = monitorEventLoopDelay({ resolution: 1 });
 const collections: Array<{ kind: number; ms: number }> = [];
 let measuredStart = Infinity;
 let measuredEnd = Infinity;
-const observer = new PerformanceObserver((list) => {
-  for (const entry of list.getEntries()) {
+function recordGc(records: PerformanceEntry[]) {
+  for (const entry of records) {
     if (entry.startTime >= measuredStart && entry.startTime < measuredEnd) {
       collections.push({
         kind: (entry as typeof entry & { detail: { kind: number } }).detail.kind,
@@ -154,7 +159,8 @@ const observer = new PerformanceObserver((list) => {
       });
     }
   }
-});
+}
+const observer = new PerformanceObserver((list) => recordGc(list.getEntries()));
 try {
   global.gc();
   await nextTurn();
@@ -189,6 +195,8 @@ try {
   marker("heap-stop");
   loop.disable();
   await nextTurn();
+  recordGc(observer.takeRecords());
+  observer.disconnect();
   let sampledAllocation;
   if (values.allocations) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
