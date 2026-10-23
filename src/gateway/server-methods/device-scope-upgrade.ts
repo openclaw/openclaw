@@ -10,6 +10,7 @@ import { normalizeDeviceAuthScopes } from "../../shared/device-auth.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { isOperatorScope } from "../operator-scopes.js";
+import { broadcastRejectedDevicePairing } from "../pairing-events.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -142,16 +143,7 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       const resolvedAt = Date.now();
       for (const superseded of pairing.superseded ?? []) {
         coordinator.notify(superseded.requestId, "rejected");
-        context.broadcast(
-          "device.pair.resolved",
-          {
-            requestId: superseded.requestId,
-            deviceId: superseded.deviceId,
-            decision: "rejected",
-            ts: resolvedAt,
-          },
-          { dropIfSlow: true },
-        );
+        broadcastRejectedDevicePairing(context.broadcast, superseded, resolvedAt);
       }
       if (pairing.created) {
         context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });

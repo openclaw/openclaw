@@ -43,6 +43,7 @@ import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import { operatorSessionCap } from "../../operator-role-policy.js";
+import { broadcastRejectedNodePairing } from "../../pairing-events.js";
 import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
 import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
 import {
@@ -486,16 +487,7 @@ export async function sendGatewayHello(
         : await finalizeNodePairingCleanupClaim(cleanupClaim);
       const resolvedAt = Date.now();
       for (const resolved of resolvedPairings) {
-        requestContext.broadcast(
-          "node.pair.resolved",
-          {
-            requestId: resolved.requestId,
-            nodeId: resolved.nodeId,
-            decision: "rejected",
-            ts: resolvedAt,
-          },
-          { dropIfSlow: true },
-        );
+        broadcastRejectedNodePairing(requestContext.broadcast, resolved, resolvedAt);
       }
     } catch (error) {
       logGateway.warn(
