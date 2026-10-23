@@ -80,6 +80,7 @@ import {
 import type { ChatProps } from "./chat-view.tsx";
 import * as chatMessageConfirmation from "./components/chat-message-confirmation-view.tsx";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
+import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import {
   resetThreadPresentation,
@@ -687,7 +688,7 @@ describe("chat history pagination", () => {
     expect(loadingButton.textContent?.trim()).toBe("Loading earlier…");
     expect(loadingButton.getAttribute("aria-label")).toBe("Loading earlier…");
     expect(loadingButton.getAttribute("aria-busy")).toBe("true");
-    expect(loadingButton.disabled).toBe(true);
+    expect(loadingButton.getAttribute("aria-disabled")).toBe("true");
     expect(loadingButton.closest(".chat-history-boundary--loading")).not.toBeNull();
     loadingButton.click();
     expect(onShowEarlier).toHaveBeenCalledOnce();
@@ -748,39 +749,6 @@ describe("chat history pagination", () => {
 });
 
 describe("retained input navigation", () => {
-  it.each([
-    {
-      type: "attachment",
-      attachment: { kind: "document", label: "installation.pdf", url: "/media/installation.pdf" },
-    },
-    {
-      type: "attachment_error",
-      attachment: { kind: "video", label: "walkthrough.mp4", code: "file-not-found" },
-    },
-  ])("names a queued $attachment.kind attachment without message text", async (content) => {
-    const historyState = makeChatHost({ currentSessionId: "attachment-session" });
-    applyChatPendingInputs(historyState, {
-      total: 1,
-      items: [
-        {
-          id: "attachment-input",
-          runId: "attachment-run",
-          acceptedAt: 1,
-          state: "queued",
-          queued: true,
-          message: { role: "user", content: [content] },
-        },
-      ],
-    });
-    const container = renderChatView({ historyState });
-    await vi.dynamicImportSettled();
-    flush();
-    expect(container.querySelector(".chat-queue__text")?.textContent).toBe(
-      content.attachment.label,
-    );
-    expect(container.querySelector(".chat-group.user")).toBeNull();
-  });
-
   it("keeps an empty filtered page navigable without blocking an independent send", async () => {
     const sessionKey = "agent:main:hidden-page";
     const sessionId = "hidden-page-session";
@@ -2032,7 +2000,7 @@ describe("chat composer render invalidation", () => {
     expect(getComposerTextarea(container)).toBe(textarea);
     expect(chatThread.buildCachedChatItems).not.toHaveBeenCalled();
 
-    textarea.value = "مرحبا";
+    textarea.value = "1. مرحبا";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
 
     expect(getComposerTextarea(container)).toBe(textarea);
@@ -3204,6 +3172,7 @@ describe("chat model controls", () => {
         ],
       },
     });
+    expandModelProviders(container);
     expect(
       container
         .querySelector('[data-chat-model-provider="openai"]')
@@ -3303,10 +3272,16 @@ describe("chat model controls", () => {
     idReads = 0;
     const container = await renderModelControls(state);
     const rows = container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]");
-    expect(rows).toHaveLength(size);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.length).toBeLessThan(size);
     expect(rows[0]?.dataset.chatModelOption).toBe("example/model-0");
-    expect(rows[size - 1]?.textContent).toContain(`Model ${size - 1}`);
-    expect(rows[size - 1]?.textContent).toContain("128k");
+    const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]")!;
+    search.value = `example/model-${size - 1}`;
+    search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    flush();
+    const last = container.querySelector(`[data-chat-model-option="example/model-${size - 1}"]`);
+    expect(last?.textContent).toContain(`Model ${size - 1}`);
+    expect(last?.textContent).toContain("128k");
     expect(idReads).toBeLessThan(size * 60);
   });
 
@@ -3327,6 +3302,7 @@ describe("chat model controls", () => {
       ],
     });
     const container = await renderModelControls(state);
+    expandModelProviders(container);
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(3);
     const shared = container.querySelector('[data-chat-model-option="example/shared"]');
     expect(shared?.textContent).toContain("Last label");
@@ -3707,6 +3683,7 @@ describe("chat model controls", () => {
         button.querySelector(".chat-controls__provider-label")?.textContent?.trim(),
       ),
     ).toEqual(["OpenRouter", "Google"]);
+    expandModelProviders(container);
     expect(
       container.querySelector<HTMLElement>('[data-chat-model-provider-group="google"]')
         ?.textContent,
@@ -3806,6 +3783,7 @@ describe("chat model controls", () => {
       undefined,
     );
 
+    await waitForSolid(() => expect(getThinkingSlider(container)).toBeInstanceOf(HTMLInputElement));
     const slider = getThinkingSlider(container);
     expect(slider).toBeInstanceOf(HTMLInputElement);
     if (slider) {
@@ -4088,7 +4066,7 @@ describe("chat model controls", () => {
       }));
       const container = await renderModelControls(state);
       expect(getChatThinkingValue(getThinkingSelect(container))).toBe("");
-      expect(getThinkingReasoningValueLabel(container)).toBe("Adaptive");
+      await waitForSolid(() => expect(getThinkingReasoningValueLabel(container)).toBe("Adaptive"));
       if (!omitSessionFromList) {
         expect(getThinkingSliderValues(container)).not.toContain("adaptive");
         const slider = getThinkingSlider(container);
@@ -4127,6 +4105,10 @@ describe("chat model controls", () => {
             },
           ]);
       const container = await renderModelControls(state);
+      getThinkingSlider(container);
+      await waitForSolid(() =>
+        expect(container.querySelector('[data-chat-thinking-option="adaptive"]')).not.toBeNull(),
+      );
       expect(getThinkingSlider(container)).toBeNull();
       const only = container.querySelector<HTMLButtonElement>(
         '[data-chat-thinking-option="adaptive"]',

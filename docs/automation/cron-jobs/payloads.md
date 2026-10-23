@@ -122,10 +122,20 @@ The stored tool cap, sandbox, and current tool denials still apply. Scheduled
 automation management remains self-scoped.
 
 This source is not inferred for existing jobs, guests, isolated/current targets,
-scripts, or another conversation. Executable edits discard it unless an
-authenticated creator schedules a fresh continuation; display-only edits retain
-it. Disabling, removing, or replacing the job or session retires the active
-occurrence. Re-enabling the job does not revive a revoked occurrence.
+scripts, or another conversation. An authenticated owner update can bind it again
+to the updated task. Executable edits without that authentication discard it.
+Display-only edits and disabling or re-enabling the job preserve its stored
+source; names, schedules, and other executable inputs remain bound. A fresh
+owner capture applies only to the definition captured, even if another manager
+edits the job before the update commits. Disabling or removing a job still
+cancels its active occurrence; re-enabling it does not revive that cancelled
+occurrence.
+
+A continuation waits for its current conversation turn to finish before reading
+the current job and checking its source at launch. Trigger-supplied context does
+not change that stored definition. Existing stored sources remain valid after an
+upgrade, including jobs the scheduler disabled. A rejected source is recorded as
+a terminal failure instead of repeatedly retrying the same authority error.
 
 While an `at` agent-turn continuation in an explicitly named conversation waits
 for a result, it can call `automations` with `action: "next_check"` and `in: "3m"`
@@ -206,6 +216,10 @@ from an explicit user profile pin. Token refresh within the same authorization i
 allowed; deleting, replacing, or revoking that authorization stops the job rather
 than falling back to another account. Model and route compatibility still apply.
 
+At creation, account capture follows scheduled-model selection, including an
+allowed `model@profile` value in per-agent or global `subagents.model`. A disallowed
+scheduled model falls back without retaining that model's account.
+
 To change an account deliberately, update the job with a model/profile selection,
 for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
 For legacy jobs without a recorded inference owner, `openclaw doctor --fix` records
@@ -253,13 +267,15 @@ Model-selection precedence for isolated jobs, highest first:
 3. User-selected stored automation-session model override
 4. Agent/default model selection
 
+A user-selected stored session model is an exact selection, as described in [selection source policy](/concepts/model-failover#selection-source-policy): if it fails, the run reports the failure instead of answering from configured fallbacks. The same applies when an agent turn runs in a main or custom (`session:<key>`) session whose model was selected by the user. Per-job `--fallbacks` still apply.
+
 Fast mode follows the resolved live selection. Isolated automation resolves it in this order: stored session `fastMode`, per-agent `agents.entries.*.fastModeDefault`, global `agents.defaults.fastModeDefault`, then selected-model `params.fastMode`. Auto mode uses the model's `params.fastAutoOnSeconds` cutoff, defaulting to 60 seconds.
 
 When a runtime reports token usage without a cost, automation estimates use the selected agent's local `models.json` prices and the model metadata retained for that run.
 
 If a run hits a live model-switch handoff, the scheduler retries with the switched provider/model and persists that model selection for the active run. A job with a recorded inference account retains that account and its compatible authentication route; a switch cannot adopt a different account. Retries are bounded: after the initial attempt plus 2 switch retries, the scheduler aborts instead of looping.
 
-Before an isolated run starts, OpenClaw checks reachable local endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. This preflight walks the job's configured fallback chain and only marks the run `skipped` once every candidate is unreachable; `--fallbacks ""` keeps that walk strict to just the primary model. A down endpoint records the run as `skipped` with a clear error instead of starting a model call. The result is cached for 5 minutes per endpoint (not per job or model), so many due jobs sharing a dead local Ollama/vLLM/SGLang/LM Studio server cost one check instead of a request storm. Skipped preflight runs do not increment execution-error backoff. They use the existing [failure-alert policy](/automation/cron-jobs/delivery#failure-notifications) without requiring `failureAlert.includeSkipped`; recurring jobs remain enabled and recover automatically when a later preflight finds the provider reachable.
+Before an isolated run starts, OpenClaw checks reachable local endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. This preflight walks the job's configured fallback chain and only marks the run `skipped` once every candidate is unreachable; `--fallbacks ""` keeps that walk strict to just the primary model, and a user-selected stored session model keeps it strict to that model. A down endpoint records the run as `skipped` with a clear error instead of starting a model call. The result is cached for 5 minutes per endpoint (not per job or model), so many due jobs sharing a dead local Ollama/vLLM/SGLang/LM Studio server cost one check instead of a request storm. Skipped preflight runs do not increment execution-error backoff. They use the existing [failure-alert policy](/automation/cron-jobs/delivery#failure-notifications) without requiring `failureAlert.includeSkipped`; recurring jobs remain enabled and recover automatically when a later preflight finds the provider reachable.
 
 Client-side preflight timeouts are not cached. The next scheduled run checks the endpoint again instead of inheriting a timeout from another run.
 

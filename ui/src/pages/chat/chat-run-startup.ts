@@ -3,11 +3,11 @@ import type { WorkerEnvironmentStartStatus } from "../../../../packages/gateway-
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 
 registerChatComposerEnglish();
 
-registerNewSessionSetupEnglish();
+registerNewSessionRuntimeEnglish();
 
 export type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/src/index.js";
 
@@ -102,6 +102,7 @@ const STARTUP_LABEL_KEYS = {
   waiting_for_state: "chat.startupStatus.waitingForState",
   preparing_workspace: "chat.startupStatus.preparingWorkspace",
   naming_worktree: "chat.startupStatus.namingWorktree",
+  preparing_worktree_base: "chat.startupStatus.updatingRepository",
   creating_worktree: "chat.startupStatus.creatingWorktree",
   running_setup: "chat.startupStatus.runningSetup",
   provisioning_environment: "chat.startupStatus.provisioningEnvironment",

@@ -66,11 +66,16 @@ describe("printClawBanner", () => {
 
   it("wipes, shimmers once, and snips once within the startup pause budget", async () => {
     const staticRows = await runStatic();
+    const before = listenerCounts();
+    let during = [...before];
     const pauses: number[] = [];
     vi.mocked(sleep).mockImplementation(async (ms) => {
       pauses.push(ms);
+      during = listenerCounts().map((count, index) => Math.max(during[index]!, count));
     });
     expect(await printClawBanner(runtime)).toBe("completed");
+    expect(during).toEqual(before.map((count) => count + 1));
+    expect(listenerCounts()).toEqual(before);
     expect(pauses).toEqual([...Array<number>(13).fill(20), 35, 35]);
     expect(chunks[0]).toBe("\x1b[?25l");
     expect(chunks).toContain("\x1b[?25h");
@@ -88,18 +93,6 @@ describe("printClawBanner", () => {
       ),
     ).toEqual([13]);
     expect(rows(animation.at(-1) ?? "")).toEqual(staticRows);
-  });
-
-  it("installs scoped signal handlers only while animating", async () => {
-    const before = listenerCounts();
-    let during: [number, number] = [-1, -1];
-    vi.mocked(sleep).mockImplementation(async () => {
-      const counts = listenerCounts();
-      during = [Math.max(during[0], counts[0]), Math.max(during[1], counts[1])];
-    });
-    await printClawBanner(runtime);
-    expect(during).toEqual(before.map((count) => count + 1));
-    expect(listenerCounts()).toEqual(before);
   });
 
   it.each([

@@ -54,6 +54,12 @@ function captureSourceInvocationGuard(tool: AnyAgentTool, signal?: AbortSignal):
 }
 
 type ToolExecuteArgs = Parameters<ToolDefinition["execute"]>;
+const toolDefinitionSources = new WeakMap<ToolDefinition, AnyAgentTool>();
+
+/** Policy follows the concrete registered definition back to its runtime-owned source. */
+export function getToolDefinitionSource(definition: ToolDefinition): AnyAgentTool | undefined {
+  return toolDefinitionSources.get(definition);
+}
 
 type ClientToolCallRecorder =
   | ((toolName: string, params: Record<string, unknown>) => void)
@@ -275,6 +281,7 @@ export function toToolDefinitions(
         });
       },
     } satisfies ToolDefinition;
+    toolDefinitionSources.set(definition, tool);
     copyCodeModeControlToolIdentity(tool, definition);
     copyAgentToolReplaySafety(tool, definition);
     if (!sourcePreparer) {

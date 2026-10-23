@@ -1,17 +1,21 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { Errored, For, Loading, Show, createMemo, createSignal } from "solid-js";
 import { showConfirmDialog } from "../../../components/confirm-dialog.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "./chat-subagents-mobile.css";
 import { SubagentDesktopAvatar } from "./chat-subagents-panel-desktop.tsx";
+import type { SubagentStopControl } from "./chat-subagents-presentation.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
 export type ChatSubagentMobileStop = {
+  /** Stable session/run identity; preparation feedback must not follow a successor. */
+  target: string;
   label: string;
   accessibleLabel: string;
   disabled: boolean;
@@ -33,12 +37,8 @@ export type ChatSubagentMobileItem = {
   title: string;
   status: "running" | "waiting" | "queued" | "finished" | "failed" | "stopped";
   statusLabel: string;
-  activity?: string;
-  /** Localized native count, including the lower-bound marker when not exact. */
-  calls?: string;
   /** The native elapsed-time element or formatted duration; no presenter timer. */
   elapsed?: JSX.Element;
-  elapsedLabel?: string;
   /** Omitted when the native owner does not offer Stop for this run. */
   stop?: ChatSubagentMobileStop;
 };
@@ -57,6 +57,7 @@ export type ChatSubagentsMobileListProps = {
   notice?: JSX.Element;
   empty?: JSX.Element;
   loading: boolean;
+  createStop: (key: () => string) => SubagentStopControl;
   /** The navigation owner retains/restores list scroll across child navigation. */
   listRef?: (element: HTMLDivElement, firstButton: () => HTMLButtonElement | undefined) => void;
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
@@ -80,38 +81,65 @@ const statusIcons: Record<Exclude<ChatSubagentMobileItem["status"], "running">, 
   stopped: "stop",
 };
 
-function MobileStop(props: { action: ChatSubagentMobileStop }) {
+function MobileStop(props: { action: ChatSubagentMobileStop; control?: SubagentStopControl }) {
+  const [completion, setCompletion] = createSignal<{ target: string; result: Promise<void> }>();
+  const currentCompletion = () => {
+    const receipt = completion();
+    return receipt?.target === props.action.target ? receipt.result : undefined;
+  };
+  const completed = createMemo(() => currentCompletion()?.then(() => null) ?? null);
+  const pending = () => Boolean(props.control?.stopping()) || props.action.pending;
   const confirmStop = async () => {
     const action = props.action;
-    if (action.disabled || action.pending) {
+    if (action.disabled || pending()) {
       return;
     }
     // Capture the native target-bound callback before the modal can outlive a row update.
-    const onConfirm = action.onConfirm;
+    const onConfirm = props.control?.capture() ?? action.onConfirm;
     if (await showConfirmDialog({ ...action.confirmation, danger: true })) {
       await onConfirm();
     }
   };
   return (
-    <button
-      class="chat-subagents-mobile__stop"
-      type="button"
-      disabled={props.action.disabled || props.action.pending}
-      aria-busy={props.action.pending ? "true" : "false"}
-      aria-label={props.action.accessibleLabel}
-      onClick={() => void confirmStop()}
-    >
-      <Icon name="stop" />
-      <span>{props.action.label}</span>
-    </button>
+    <>
+      <button
+        class="chat-subagents-mobile__stop"
+        type="button"
+        disabled={props.action.disabled || pending()}
+        aria-busy={pending() ? "true" : "false"}
+        aria-label={pending() ? t("chat.subagentsPanel.stopping") : props.action.accessibleLabel}
+        onClick={() => {
+          const target = props.action.target;
+          const result = confirmStop();
+          setCompletion({ target, result });
+          void result.catch(() => {});
+        }}
+      >
+        <Icon name="stop" />
+        <span>{pending() ? t("chat.subagentsPanel.stopping") : props.action.label}</span>
+      </button>
+      <Loading on={currentCompletion()}>
+        <Errored
+          fallback={(error) => (
+            <span class="chat-subagents-mobile__error" role="alert">
+              {formatUiError(error())}
+            </span>
+          )}
+        >
+          {completed()}
+        </Errored>
+      </Loading>
+    </>
   );
 }
 
 function MobileRow(props: {
   item: ChatSubagentMobileItem;
+  createStop: ChatSubagentsMobileListProps["createStop"];
   onOpen: (key: string) => void;
   registerOpen: (key: string, button: HTMLButtonElement) => () => void;
 }) {
+  const control = props.createStop(() => props.item.key);
   const nameScrollState = useScrollState(true, false);
   const finished = () => ["finished", "failed", "stopped"].includes(props.item.status);
   return (
@@ -154,7 +182,7 @@ function MobileRow(props: {
       </button>
       {finished() && <span class="chat-subagents-mobile__elapsed">{props.item.elapsed}</span>}
       <Show when={props.item.stop && !props.item.stop.disabled ? props.item.stop : undefined}>
-        {(stop) => <MobileStop action={stop()} />}
+        {(stop) => <MobileStop action={stop()} control={control} />}
       </Show>
       <Icon class="chat-subagents-mobile__chevron" name="chevronRight" />
     </div>
@@ -199,6 +227,7 @@ export function ChatSubagentsMobileList(props: ChatSubagentsMobileListProps) {
                 {(item) => (
                   <MobileRow
                     item={item()}
+                    createStop={props.createStop}
                     onOpen={(key) => props.onOpen(key)}
                     registerOpen={registerOpen}
                   />
@@ -236,6 +265,7 @@ export function ChatSubagentsMobileList(props: ChatSubagentsMobileListProps) {
                 {(item) => (
                   <MobileRow
                     item={item()}
+                    createStop={props.createStop}
                     onOpen={(key) => props.onOpen(key)}
                     registerOpen={registerOpen}
                   />

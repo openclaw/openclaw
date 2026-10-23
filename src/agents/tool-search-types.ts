@@ -106,6 +106,8 @@ export type ToolSearchCatalogEntry = {
   description: string;
   /** Recorded when the catalog owner also exposes this tool in the native surface. */
   directVisible?: boolean;
+  /** Its bare name also belongs to an eligible tool kept direct outside the catalog. */
+  requiresExactId?: boolean;
   parameters?: unknown;
   outputSchema?: TSchema;
   tool: CatalogTool;
@@ -150,4 +152,5 @@ export type ToolSearchCatalogCompactionParams = {
   isVisibleControlTool: (tool: AnyAgentTool) => boolean;
   isVisibleCatalogTool?: (tool: AnyAgentTool) => boolean;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
+  selection?: Pick<ToolSearchConfig, "include" | "exclude">;
 };

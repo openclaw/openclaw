@@ -100,6 +100,7 @@ import {
   readCompleteSplitGenerationSeconds,
   readRuntimePlacementTimings,
   readToolingFileTimings,
+  readUiE2eFileTimings,
   resolveRuntimePlacementSeconds,
 } from "./ci-test-timings.mts";
 import { UI_E2E_OWNER_WATCHES, UI_E2E_SMOKE_TEST_FILES } from "./ci-ui-e2e-owner-inventory.mts";
@@ -384,7 +385,6 @@ const COMPACT_NODE_TEST_OWNER_RUNNERS = new Map([
       ["agentic-control-plane-http-plugin-ws", DEFAULT_NODE_TEST_RUNNER],
       ["agentic-control-plane-runtime-ui-tools", DEFAULT_NODE_TEST_RUNNER],
       ["auto-reply-reply-agent-runner", DEFAULT_NODE_TEST_RUNNER],
-      ["core-runtime-infra-heartbeat-runner", DEFAULT_NODE_TEST_RUNNER],
       ["core-runtime-infra-storage-state", DEFAULT_NODE_TEST_RUNNER],
       ["core-runtime-infra-system-runtime", DEFAULT_NODE_TEST_RUNNER],
     ]),
@@ -554,7 +554,6 @@ const COMPACT_SECONDS_HINTS: readonly [
   ["core-runtime-infra-gateway-processes", 1, undefined, 1],
   ["core-runtime-infra-gateway-watch", 1, undefined, 1],
   ["core-runtime-infra-heartbeat-core", 7, undefined, 10],
-  ["core-runtime-infra-heartbeat-runner", 59, undefined, 106],
   ["core-runtime-infra-misc", 14, undefined, 33],
   ["core-runtime-infra-misc-dedupe-disk", 1, undefined, 1],
   ["core-runtime-infra-misc-os", 1, undefined, 1],
@@ -1593,7 +1592,33 @@ export function createUiRealGatewayTestShards(
   const parallelFiles = new Set(uiE2ePrebuiltParallelTestFiles);
   const desktop = resolveUiTypeScriptPath("ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts");
   const files = uiE2eRealGatewayTestFiles.filter((file) => selected.has(file) && file !== desktop);
-  // Desktop transport proof owns its file separately, alongside the serial phase.
+  const timings = readUiE2eFileTimings();
+  // Cold Gateway files use the observed roughly 30s file cost until two CI samples exist.
+  const seconds = (file: string) =>
+    (timings.fileSeconds[file] ?? 30) + timings.perFileOverheadSeconds;
+  const serial = files.filter((file) => !parallelFiles.has(file));
+  const serialSeconds =
+    serial.reduce((sum, file) => sum + seconds(file), 0) +
+    // The desktop driver runs outside Vitest: scheduled run 39872214487 took 120s.
+    (selected.has(desktop) ? (timings.fileSeconds[desktop] ?? 120) : 0);
+  // Keep unqualified fixtures together. Qualified fixtures can use either job's
+  // existing two workers after its serial work, including the separate desktop proof.
+  const buckets: { workerSeconds: [number, number]; files: string[] }[] = [
+    { workerSeconds: [serialSeconds, serialSeconds], files: serial },
+    { workerSeconds: [0, 0], files: [] },
+  ];
+  for (const file of files
+    .filter((candidate) => parallelFiles.has(candidate))
+    .toSorted((left, right) => seconds(right) - seconds(left) || left.localeCompare(right))) {
+    const bucket = buckets.reduce((earliest, candidate) =>
+      Math.min(...candidate.workerSeconds) < Math.min(...earliest.workerSeconds)
+        ? candidate
+        : earliest,
+    );
+    const worker = bucket.workerSeconds[0] <= bucket.workerSeconds[1] ? 0 : 1;
+    bucket.files.push(file);
+    bucket.workerSeconds[worker] += seconds(file);
+  }
   return ([1, 2] as const).map((shard) => ({
     shard,
     shard_count: 2 as const,
@@ -1602,7 +1627,7 @@ export function createUiRealGatewayTestShards(
       {
         configs: ["test/vitest/vitest.ui-e2e-prebuilt.config.ts"],
         shard_name: `ui-e2e-real-gateway-${shard === 1 ? "desktop" : "parallel"}`,
-        includePatterns: files.filter((file) => parallelFiles.has(file) === (shard === 2)),
+        includePatterns: buckets[shard - 1]!.files.toSorted(),
       },
     ],
   }));
@@ -1889,10 +1914,9 @@ function createCronSplitShards(): NodeTestSplitShard[] {
     .filter((shard) => shard.includePatterns.length > 0);
 }
 
-// Keep precedence: specific owners such as heartbeat-runner precede their broad prefixes.
+// Keep precedence: specific owners precede their broad prefixes.
 const INFRA_SHARD_PREFIXES = [
   ["approval-exec", ["approval", "exec"]],
-  ["heartbeat-runner", ["heartbeat-runner"]],
   ["heartbeat-core", ["heartbeat"]],
   ["outbound-actions", ["outbound/message-action"]],
   ["outbound-core", ["outbound/"]],
@@ -2026,7 +2050,6 @@ function createInfraSplitShards(): NodeTestSplitShard[] {
     "core-runtime-infra-gateway-processes",
     "core-runtime-infra-gateway-watch",
     "core-runtime-infra-heartbeat-core",
-    "core-runtime-infra-heartbeat-runner",
     "core-runtime-infra-misc",
     "core-runtime-infra-misc-dedupe-disk",
     "core-runtime-infra-misc-os",

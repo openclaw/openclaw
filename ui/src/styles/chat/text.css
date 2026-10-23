@@ -1137,7 +1137,9 @@
   overscroll-behavior-inline: contain;
 }
 
-.code-block-viewport :where(pre) {
+/* Outrank passive code and sidebar pre rules: the focused viewport must own
+   horizontal scrolling, not a nested pre that keyboard input cannot reach. */
+.code-block-wrapper .code-block-viewport pre {
   overflow: visible;
 }
 
@@ -1236,12 +1238,14 @@
 }
 
 .code-block-expand:focus-visible,
+.code-block-viewport:focus-visible,
 .code-block-wrap:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
-.code-block-expand:focus-visible {
+.code-block-expand:focus-visible,
+.code-block-viewport:focus-visible {
   /* Keep the bottom edge inside the clipped code wrapper. */
   outline-offset: -2px;
 }
@@ -1400,12 +1404,12 @@
   margin-block-start: inherit;
 }
 
-.chat-text > * + *,
-.chat-text > * + .markdown-external-image {
+.chat-text > :where(:not(:first-child)),
+.chat-text > .markdown-external-image:where(:not(:first-child)) {
   margin-block-start: var(--chat-block-gap);
 }
 
-.chat-text > * + :where(h1, h2, h3, h4) {
+.chat-text > :where(h1, h2, h3, h4):where(:not(:first-child)) {
   margin-block-start: calc(var(--chat-block-gap) * 1.5);
 }
 

@@ -208,12 +208,19 @@ function ChatVideoPlayerContent(
     );
   };
   return (
-    <Show
-      when={sourceState.read().readiness !== "unavailable"}
-      fallback={<CompactAttachmentCard {...card()} onExpand={props.onFallbackExpand} />}
-    >
-      <Player />
-    </Show>
+    <>
+      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {sourceState.read().readiness === "unavailable"
+          ? `${props.label.trim() || t("chat.attachments.video")}: ${t("chat.attachments.previewUnavailable")}`
+          : ""}
+      </span>
+      <Show
+        when={sourceState.read().readiness !== "unavailable"}
+        fallback={<CompactAttachmentCard {...card()} onExpand={props.onFallbackExpand} />}
+      >
+        <Player />
+      </Show>
+    </>
   );
 }
 

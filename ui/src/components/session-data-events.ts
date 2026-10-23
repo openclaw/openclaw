@@ -166,6 +166,7 @@ export function subscribeFilteredSidebarSessions(
   scope: SessionListOptions,
   isCurrent: () => boolean,
 ): () => void {
+  const bootstrap = owner.context?.connectionBootstrap;
   const apply = (snapshot: SessionListSnapshot) => {
     if (!isCurrent()) {
       return;
@@ -180,11 +181,13 @@ export function subscribeFilteredSidebarSessions(
   };
   const unsubscribe = sessions.subscribeList(scope, apply);
   apply(sessions.listSnapshot(scope));
-  return () => {
+  const stop = () => {
+    bootstrap?.cancelQueued(stop);
     unsubscribe();
     owner.sessionsStartupPending = false;
     publishSidebarSessionError(owner, null, "list");
   };
+  return stop;
 }
 
 export function scheduleFilteredSidebarSessions(

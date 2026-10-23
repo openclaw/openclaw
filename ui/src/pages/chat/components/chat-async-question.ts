@@ -23,7 +23,7 @@ import {
   restoreAsyncQuestionDrafts,
   type AsyncQuestionDraftSession,
 } from "./chat-async-question-draft.ts";
-import { parseGeneratedAsyncAnswer, quoteQuestion } from "./chat-async-question-summary.ts";
+import { parseGeneratedAsyncAnswer, quoteQuestion } from "./chat-async-question-summary.tsx";
 import type {
   AsyncQuestionDraft,
   AsyncQuestionPresentation,

@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { Errored, For, latest, Show } from "solid-js";
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
@@ -14,8 +14,8 @@ import { createPullRequestCopy } from "./chat-pull-request-copy.ts";
 import { ChecksRows } from "./chat-pull-request-shared.tsx";
 import { chatPullRequestId } from "./chat-pull-requests.ts";
 import "./chat-pull-request-presenters.css";
-import "./chat-ci-details.ts";
-import "./chat-ci-automation-control.ts";
+import "./chat-ci-details.tsx";
+import "./chat-ci-automation-control.tsx";
 
 registerGitHubEnglish();
 
@@ -23,7 +23,6 @@ registerGitHubEnglish();
 export type ChatPullRequestMobileRecoveryProps = {
   status: ControlUiSessionPullRequestSnapshot["status"];
   hasSnapshot: boolean;
-  lastUpdatedAt?: number;
   retrying: boolean;
   onRetry: () => void;
 };
@@ -58,17 +57,8 @@ export function ChatPullRequestMobileRecovery(
                   : "chat.pullRequests.couldNotLoad",
             )}
           </strong>
-          <Show when={props.hasSnapshot} fallback={<p>{t("chat.pullRequests.tryAgain")}</p>}>
-            <Show when={props.lastUpdatedAt !== undefined}>
-              <p>
-                {t("chat.pullRequests.lastUpdated", {
-                  time: new Date(props.lastUpdatedAt!).toLocaleTimeString(undefined, {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  }),
-                })}
-              </p>
-            </Show>
+          <Show when={!props.hasSnapshot}>
+            <p>{t("chat.pullRequests.tryAgain")}</p>
           </Show>
         </div>
         <button
@@ -283,10 +273,16 @@ export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailPr
                 <Icon name="link" />
                 <span>{t("chat.pullRequests.copyLink")}</span>
               </button>
-              <Show when={clipboard.failed()}>
-                <p class="chat-pr-menu__error" role="alert">
-                  {t("chat.pullRequests.copyFailed")}
-                </p>
+              <Show when={!clipboard.copying()}>
+                <Errored
+                  fallback={
+                    <p class="chat-pr-menu__error" role="alert">
+                      {t("chat.pullRequests.copyFailed")}
+                    </p>
+                  }
+                >
+                  {latest(clipboard.outcome)}
+                </Errored>
               </Show>
               <button
                 type="button"

@@ -117,8 +117,7 @@ describe("config-eval helpers", () => {
     const binDir = tempDirs.make("openclaw-binary-cache-");
     const missingDir = path.join(binDir, "missing");
     const executable = path.join(binDir, "tool");
-    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
-    fs.chmodSync(executable, 0o755);
+    install(executable);
     vi.stubEnv("PATH", [missingDir, binDir].join(path.delimiter));
 
     expect(hasBinary("tool")).toBe(true);
@@ -135,8 +134,7 @@ describe("config-eval helpers", () => {
     vi.stubEnv("PATH", toolsDir);
     vi.stubEnv("PATHEXT", ".EXE;.CMD");
     const cmdCandidate = path.join(toolsDir, "tool.CMD");
-    fs.writeFileSync(cmdCandidate, "#!/bin/sh\nexit 0\n");
-    fs.chmodSync(cmdCandidate, 0o755);
+    install(cmdCandidate);
 
     expect(hasBinary("tool")).toBe(true);
 
@@ -159,8 +157,7 @@ describe("config-eval helpers", () => {
       expect(hasBinary("fixture-tool")).toBe(false);
 
       const executable = path.join(binDir, `fixture-tool${suffix}`);
-      fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
-      fs.chmodSync(executable, 0o755);
+      install(executable);
 
       expect(hasBinary("fixture-tool")).toBe(true);
     },

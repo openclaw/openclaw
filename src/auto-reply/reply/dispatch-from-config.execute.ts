@@ -27,7 +27,6 @@ import {
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
-import { handleAcpDispatchTailAfterReset } from "./dispatch-from-config.acp-tail.js";
 import { createDispatchBlockReplyHandler } from "./dispatch-from-config.block-reply.js";
 import {
   hasAskUserPayload,
@@ -35,6 +34,7 @@ import {
   requiresDurableToolResultDelivery,
 } from "./dispatch-from-config.payloads.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
+import { runReplyDispatchHook } from "./dispatch-from-config.reply-dispatch-hook.js";
 import { requireQueuedReplyDelivery } from "./dispatch-from-config.turn-ledger.js";
 import { runWithCommandNativeSubagents } from "./dispatch-native-subagent.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
@@ -106,7 +106,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   } = createDispatchBlockReplyHandler(state);
   const flushDeferredFinalText = async () => {
     try {
-      if (!state.deferFinalTtsText || params.replyOptions?.isHeartbeat === true) {
+      if (!state.deferFinalTtsText) {
         return;
       }
       const deferredVisibleText = state.cleanBlockTtsDirectiveText
@@ -305,9 +305,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 toolLifecycleOptions,
               ),
               onToolResult: (payload) => {
-                if (state.replyOperationRunState.heartbeat) {
-                  return Promise.resolve();
-                }
                 state.getDispatchReplyOperation()?.recordActivity();
                 markProgress();
                 const run = async () => {
@@ -540,7 +537,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     const failedAgentRun = getAgentRunTerminalOutcome() === "failed";
     const adopted = state.turnAdoptionState?.adopted === true;
     if (
-      params.replyOptions?.isHeartbeat === true ||
       (!failedAgentRun && !didDeliverVisiblePartialReply && !adopted) ||
       isDispatchOperationAborted()
     ) {
@@ -595,9 +591,30 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       };
     }
 
-    const acpTailResult = await handleAcpDispatchTailAfterReset(state);
-    if (acpTailResult) {
-      return acpTailResult;
+    if (state.ctx.AcpDispatchTailAfterReset === true) {
+      // Command handling prepared a trailing prompt after ACP in-place reset.
+      // Route that tail through ACP now (same turn) instead of embedded dispatch.
+      state.ctx.AcpDispatchTailAfterReset = false;
+      const tailDispatchResult = await runReplyDispatchHook(state, {
+        shouldSendToolSummaries: state.shouldSendToolSummaries,
+        shouldSendToolSummariesAsync: state.shouldSendToolSummariesAsync,
+        isTailDispatch: true,
+      });
+      if (tailDispatchResult?.handled) {
+        state.commitInboundDedupeIfClaimed();
+        state.recordAgentDispatchCompleted("completed");
+        state.completeDispatchReplyOperation();
+        return {
+          status: "complete" as const,
+          result: state.attachSourceReplyDeliveryMode({
+            queuedFinal: tailDispatchResult.queuedFinal,
+            counts: tailDispatchResult.counts,
+            ...(state.routeState.sessionMetadataChangesForResult
+              ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
+              : {}),
+          }),
+        };
+      }
     }
     const nextState = Object.assign(state, {
       pendingContinuation,

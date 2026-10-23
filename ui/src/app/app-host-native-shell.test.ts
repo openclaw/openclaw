@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import "../components/modal-dialog.ts";
+import "../components/modal-dialog.tsx";
 import "../components/sidebar-update-card.tsx";
 import { createTooltip, settleTooltip } from "../components/tooltip.test-support.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
@@ -12,7 +12,6 @@ import {
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
-import { COMMAND_PALETTE_ELEMENT, ensureCustomElementDefined } from "./lazy-custom-element.ts";
 import { handleNavDrawerKeydown } from "./navigation-surface.ts";
 
 let navigate: ReturnType<typeof vi.fn>;
@@ -287,10 +286,7 @@ it.each(["operator.write", "operator.sessions.write"])(
     const shortcut = keydown({ key: "k", metaKey: true });
     document.dispatchEvent(shortcut);
     // Join the cold import before the shared runner retires this module graph.
-    await ensureCustomElementDefined(
-      COMMAND_PALETTE_ELEMENT.tagName,
-      COMMAND_PALETTE_ELEMENT.loadModule,
-    );
+    await vi.dynamicImportSettled();
     expect(shortcut.defaultPrevented).toBe(true);
     expect(togglePalette).toHaveBeenCalledOnce();
   },

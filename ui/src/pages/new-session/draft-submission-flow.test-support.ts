@@ -15,6 +15,7 @@ import type { NewSessionRouteData } from "./location.ts";
 
 type FixtureOptions = {
   onChange?: () => void;
+  updateComplete?: () => Promise<unknown>;
   gateway?: ApplicationContext["gateway"];
   takePreparedTitle?: () => string | undefined;
   retainForHandoff?: DraftSubmissionCallbacks["retainForHandoff"];
@@ -176,7 +177,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     {
       readAgents: () => context.agents,
       changed: vi.fn(options.onChange),
-      updateComplete: () => Promise.resolve(),
+      updateComplete: options.updateComplete ?? (() => Promise.resolve()),
       onInvalidate: vi.fn(),
       onVisibilityRetired: () => flow?.setVisibility("normal"),
       onCloudProfileCleared: () => place?.clearCloudProfile(),
@@ -245,6 +246,12 @@ export function stubObjectUrls(...urls: string[]) {
   const createObjectURL = vi.fn();
   urls.forEach((url) => createObjectURL.mockReturnValueOnce(url));
   const revokeObjectURL = vi.fn();
-  vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = createObjectURL;
+      static override revokeObjectURL = revokeObjectURL;
+    },
+  );
   return revokeObjectURL;
 }

@@ -3,6 +3,8 @@ type NativeSubagentSpawnParams = {
   /** Stable within this parent turn and plugin; replay returns the native accepted child. */
   requestId: string;
   task: string;
+  /** Local id registered by this plugin; cannot select another plugin’s profile. */
+  profile?: string;
   taskName?: string;
   label?: string;
   model?: string;
@@ -59,4 +61,26 @@ type NativeSubagentCollection = {
 export type NativeSubagentRuntime = {
   spawn(params: NativeSubagentSpawnParams): Promise<NativeSubagentAccepted>;
   collect(params: NativeSubagentCollectParams): Promise<NativeSubagentCollection>;
+  /** Most recent 200 children owned by this plugin, requester and exact parent incarnation. */
+  list?(
+    this: void,
+    params?: { status?: NativeSubagentChild["status"] },
+  ): Promise<NativeSubagentChild[]>;
+};
+
+type NativeSubagentChild = {
+  runId: string;
+  childSessionKey: string;
+  requestId: string;
+  label?: string;
+  /** Native completion when known; otherwise the recorded execution state. */
+  status:
+    | "queued"
+    | "running"
+    | "interrupted"
+    | "terminal"
+    | "done"
+    | "failed"
+    | "killed"
+    | "timeout";
 };

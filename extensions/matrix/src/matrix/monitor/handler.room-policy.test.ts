@@ -19,6 +19,60 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Matrix inbound room identity", () => {
+  it("does not tag an ordinary authorized room message as a text command", async () => {
+    const { handler, runPrepared } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      groupAllowFrom: ["@user:example.org"],
+      cfg: { channels: { matrix: { groupAllowFrom: ["@user:example.org"] } } },
+      roomsConfig: { "!room:example.org": { requireMention: false } },
+      shouldHandleTextCommands: () => true,
+      hasControlCommand: (text) => text === "/status",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$ordinary-message",
+        sender: "@user:example.org",
+        body: "FYI: no reply needed",
+        originServerTs: 123_456,
+      }),
+    );
+
+    const ctxPayload = runPrepared.mock.calls[0]?.[0].ctxPayload;
+    expect(ctxPayload).toMatchObject({
+      CommandAuthorized: true,
+      CommandTurn: { kind: "normal", source: "message" },
+    });
+    expect(ctxPayload?.CommandSource).toBeUndefined();
+  });
+
+  it("keeps text-command metadata for an authorized control command", async () => {
+    const { handler, runPrepared } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      groupAllowFrom: ["@user:example.org"],
+      cfg: { channels: { matrix: { groupAllowFrom: ["@user:example.org"] } } },
+      roomsConfig: { "!room:example.org": { requireMention: false } },
+      shouldHandleTextCommands: () => true,
+      hasControlCommand: (text) => text === "/status",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$control-command",
+        sender: "@user:example.org",
+        body: "/status",
+        originServerTs: 123_456,
+      }),
+    );
+
+    expect(runPrepared.mock.calls[0]?.[0].ctxPayload).toMatchObject({
+      CommandSource: "text",
+      CommandTurn: { kind: "text-slash", source: "text", authorized: true },
+    });
+  });
+
   it("keeps the display name for presentation and the room id for policy", async () => {
     const { handler, runPrepared } = createMatrixHandlerTestHarness({
       isDirectMessage: false,

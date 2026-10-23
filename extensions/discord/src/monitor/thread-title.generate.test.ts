@@ -36,38 +36,24 @@ describe("generateThreadTitle", () => {
     await expect(generate()).resolves.toBe(expected);
   });
 
-  it("routes through the shared isolated label generator", async () => {
+  it("routes UTF-16-safe prompt fields through the shared isolated label generator", async () => {
     await generate({
       modelRef: "openai/gpt-4.1-mini@local",
-      messageText: "Summarize deployment blockers and owner follow-ups.",
-      channelName: "release-status",
-      channelDescription: "Deploy updates and incident notes",
+      messageText: `${"m".repeat(599)}😀tail`,
+      channelName: `${"n".repeat(119)}😀tail`,
+      channelDescription: `${"d".repeat(319)}😀tail`,
     });
 
     expect(generateConversationLabelMock).toHaveBeenCalledWith({
       cfg: EMPTY_DISCORD_TEST_CONFIG,
       agentId: "main",
-      userMessage:
-        "Channel: release-status\n\nChannel description: Deploy updates and incident notes\n\nMessage:\nSummarize deployment blockers and owner follow-ups.",
+      userMessage: `Channel: ${"n".repeat(119)}...\n\nChannel description: ${"d".repeat(319)}...\n\nMessage:\n${"m".repeat(599)}...`,
       prompt:
         "Generate a concise Discord thread title (3-6 words) in sentence case: capitalize only the first word and words that are always capitalized. Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.",
       modelRef: "openai/gpt-4.1-mini@local",
       timeoutMs: 60_000,
       maxLength: 600,
     });
-  });
-
-  it("keeps truncated prompt fields on UTF-16 boundaries", async () => {
-    await generate({
-      messageText: `${"m".repeat(599)}😀tail`,
-      channelName: `${"n".repeat(119)}😀tail`,
-      channelDescription: `${"d".repeat(319)}😀tail`,
-    });
-
-    const content = generateConversationLabelMock.mock.calls[0]?.[0]?.userMessage ?? "";
-    expect(content).toBe(
-      `Channel: ${"n".repeat(119)}...\n\nChannel description: ${"d".repeat(319)}...\n\nMessage:\n${"m".repeat(599)}...`,
-    );
   });
 
   it("returns null for empty input, empty output, or generation failure", async () => {

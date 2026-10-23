@@ -178,6 +178,36 @@ describe("devices pending rendering", () => {
 
     expect(details[1]).toBe("requested: roles: node, operator · scopes: operator.read");
   });
+
+  it("names each pending decision for its device and disables only the deciding row", () => {
+    const pendingDevice = (requestId: string, displayName: string) => ({
+      requestId,
+      deviceId: `${requestId}-device`,
+      displayName,
+      role: "operator",
+      scopes: ["operator.read"],
+      ts: Date.now(),
+    });
+    const container = renderDevicesContainer({
+      devicesList: {
+        pending: [pendingDevice("req-1", "Device One"), pendingDevice("req-2", "Device Two")],
+        paired: [],
+      },
+      devicesDeciding: [{ requestId: "req-1" }],
+    });
+    const decisions = Array.from(
+      getSection(container, "Pending approval").querySelectorAll("button"),
+    )
+      .filter((button) => ["Approve", "Reject"].includes(button.textContent?.trim() ?? ""))
+      .map((button) => [button.getAttribute("aria-label"), button.disabled]);
+
+    expect(decisions).toEqual([
+      ["Approve Device One", true],
+      ["Reject Device One", true],
+      ["Approve Device Two", false],
+      ["Reject Device Two", false],
+    ]);
+  });
 });
 
 describe("devices inventory rendering", () => {
@@ -512,6 +542,28 @@ describe("devices inventory rendering", () => {
     await selectMenuItem(section, "reject");
     expect(rejections).toEqual(["node-req-1"]);
     expect(approvals).toEqual(["node-req-1"]);
+  });
+
+  it("disables a pending node's approve and reject while its decision is in flight", () => {
+    const container = renderDevicesContainer({
+      nodes: [
+        {
+          nodeId: "node-pending",
+          displayName: "clawmac",
+          paired: true,
+          connected: true,
+          approvalState: "pending-reapproval",
+          pendingRequestId: "node-req-1",
+        },
+      ],
+      devicesDeciding: [{ requestId: "node-req-1" }],
+    });
+    const row = getSettingsRow(container, "clawmac");
+    for (const action of ["approve", "reject"]) {
+      expect(
+        row.querySelector<HTMLButtonElement>(`[role="menuitem"][data-value="${action}"]`)?.disabled,
+      ).toBe(true);
+    }
   });
 
   it("keeps installed workers quiet and warns when the retained bundle is missing", () => {

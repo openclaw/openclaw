@@ -31,6 +31,8 @@ type ChatOutputsData = {
   /** undefined: not resolved; null: confirmed absent. Not one entry per widget. */
   dashboard: ChatOutputsDashboard | null | undefined;
   dashboardError: string | null;
+  /** Readiness of the acquired provider; observes its existing snapshot request. */
+  dashboardRead?: Promise<void>;
 };
 
 type ChatOutputsProps = ChatOutputsData & {
@@ -210,13 +212,52 @@ function ArtifactReadSlot(props: {
 }
 
 function DashboardStatus(props: ChatOutputsProps) {
+  const result = createMemo(() => ({ pending: props.dashboardRead }), {
+    equals: (previous, next) => previous.pending === next.pending,
+  });
+  const dashboard = createMemo(() => props.dashboard);
+  const error = createMemo(() => props.dashboardError);
+  const read = createMemo(async () => {
+    const pending = result().pending;
+    const value = dashboard();
+    const failure = error();
+    if (value === undefined && !failure) {
+      await pending;
+    }
+    if (failure) {
+      throw new Error(failure);
+    }
+    return value;
+  });
   return (
-    <OutputReadStatus
-      pending={props.dashboard === undefined && !props.dashboardError}
-      error={props.dashboardError}
-      label={t("outputs.loadingDashboard")}
-      onRetry={props.onRetryDashboard}
-    />
+    <Errored
+      fallback={(failure, reset) => (
+        <OutputReadStatus
+          pending={false}
+          error={formatUiError(failure())}
+          label=""
+          onRetry={
+            props.onRetryDashboard
+              ? () => {
+                  props.onRetryDashboard?.();
+                  reset();
+                }
+              : undefined
+          }
+        />
+      )}
+    >
+      <Loading
+        on={result()}
+        fallback={<OutputReadStatus pending error={null} label={t("outputs.loadingDashboard")} />}
+      >
+        <OutputReadStatus
+          pending={isPending(read) || latest(read) === undefined}
+          error={null}
+          label={t("outputs.loadingDashboard")}
+        />
+      </Loading>
+    </Errored>
   );
 }
 

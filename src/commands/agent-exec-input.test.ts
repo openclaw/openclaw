@@ -11,12 +11,21 @@ describe("agent exec prompt sources", () => {
   it.each([
     { source: "positional", text: "fix it", expected: "fix it" },
     { source: "file", text: "\uFEFFline one\nline two", expected: "line one\nline two" },
+    ...(process.platform === "win32"
+      ? []
+      : [{ source: "literal file", text: "literal prompt", expected: "literal prompt" }]),
     { source: "stdin", text: "from stdin", expected: "from stdin" },
   ])("reads a $source prompt", async ({ source, text, expected }) => {
     let messageFile = source === "stdin" ? "-" : undefined;
-    if (source === "file") {
-      messageFile = path.join(tempDirs.make("openclaw-agent-exec-prompt-"), "prompt.md");
+    if (source === "file" || source === "literal file") {
+      messageFile = path.join(
+        tempDirs.make("openclaw-agent-exec-prompt-"),
+        source === "literal file" ? " prompt.md " : "prompt.md",
+      );
       await fs.writeFile(messageFile, text, "utf8");
+      if (source === "literal file") {
+        await fs.writeFile(messageFile.trim(), "wrong neighboring prompt", "utf8");
+      }
     }
     if (source === "stdin") {
       const stdin = vi

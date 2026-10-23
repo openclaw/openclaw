@@ -22,6 +22,25 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+## Command palette file attachments
+
+Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
+images or files onto the palette, or paste images into its input, to prepare a
+new background session without changing your current conversation or composer.
+
+The first attachment switches the palette from navigation to **New session**.
+Add optional instructions, adjust the session settings, then choose **New session**
+or press **Cmd/Ctrl+Enter**. Dropping a file does not start the session by itself.
+Files remain visible while preparing. If a file is rejected, an error toast
+explains the failure and only that file is removed. You can manually start a
+session with the remaining text and files; a rejected file cancels a pending
+automatic start. File admission and size limits match the chat composer.
+
+Closing the palette keeps its attachment draft in memory for the same Gateway
+and account. Removing the final attachment keeps new-session mode while
+instructions remain; clearing both files and instructions restores navigation.
+Reloading or leaving the app does not preserve this in-memory draft.
+
 ## Temporary disconnections
 
 When the connection drops, the Control UI keeps loaded catalogs, automation
@@ -68,9 +87,11 @@ If the New Session page fails during its initial render, the UI attempts one aut
 
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
-A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen.
+A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. While older messages load, **Show earlier** keeps keyboard focus and ignores repeated activation.
 
-The cached transcript also preserves its conversation title when the conversation is outside the saved sidebar page. Live session metadata replaces that display projection when it arrives.
+GitHub item URLs and repository-qualified references such as `owner/repo#126` render as compact links. Use `PR owner/repo#126` for a pull request or `issue owner/repo#126` for an issue. References identified by keywords, such as `PR #126`, remain plain text without a repository qualifier. Project display names, the checkout, the project catalog, and other messages do not supply a destination. A standalone hash token that is also a valid hexadecimal color, such as `#126`, retains its color preview without a GitHub link.
+
+The cached transcript also preserves its conversation title when the conversation is outside the saved sidebar page. Live session metadata replaces that display projection when it arrives. Reloading a full-UUID chat link can show that scoped cache while the Gateway confirms the route. Sending and restored queued messages wait for confirmation; a deleted or moved conversation replaces the cached view with the Gateway's result.
 
 An authenticated same-origin reload includes shared display settings and your profile’s appearance and sidebar preferences in the document. Chat uses this display projection while connecting, without loading the full editable configuration. Preference changes from other tabs refresh through the Gateway’s existing notifications; settings pages and configuration writes still load the full snapshot.
 
@@ -163,6 +184,11 @@ Provider speed observations are tracked separately for each requested tier. Repe
 
 Metadata refreshes wait for an in-progress model-runtime replacement to publish. An agent whose model runtime is unavailable does not interrupt commands or model choices for healthy agents; its metadata becomes available when its owner publishes.
 
+The model picker searches across the full catalog, including models under collapsed
+providers and **All models**. Use the Up and Down arrow keys in the search field to
+move through results and Enter to select one. Large catalogs keep the same search
+and keyboard behavior while rendering only the visible portion of the list.
+
 New Session keeps previously fetched model choices selectable while their catalog
 refreshes in the background. Before the first catalog arrives, it does not turn a
 configured default into a model option. Command palette model results use the same
@@ -181,7 +207,9 @@ Thinking, speed, and context-window changes stay synchronized across panes showi
 While an agent works, completed commentary or preambles appear inline in the
 conversation when the model and runtime provide them. Narration keeps its
 formatting and position alongside tool activity; the working indicator remains
-a separate status for execution, startup, or approval. **Keep commentary** in
+a separate status for execution, startup, or approval. After a session is idle,
+a new run starts its own Working timer, including when it starts outside the
+Dashboard; earlier tool activity remains in the conversation. **Keep commentary** in
 the chat view menu controls whether commentary stays visible after the run,
 not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
@@ -310,6 +338,11 @@ existing settings without switching the selected agent. Reopening the menu
 brings the selected agent into view.
 
 ## Download files
+
+Chat filename links first try the named path. If a bare filename is missing there,
+the preview opens a nested file only when a complete workspace search finds exactly
+one matching filename. Ambiguous or incomplete searches keep the missing-file error;
+use an explicit path to select the intended file.
 
 If the **Files** panel shows a listing error, select **Retry** to load the current
 folder or search again. This keeps the session and query in place; access checks

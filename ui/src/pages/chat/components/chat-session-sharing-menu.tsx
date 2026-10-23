@@ -1,4 +1,13 @@
-import { createMemo, createSignal, For, mapArray, Show } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  For,
+  isPending,
+  latest,
+  Loading,
+  mapArray,
+  Show,
+} from "solid-js";
 import { PersonAvatarLink, PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -8,8 +17,11 @@ import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-sessio
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   type ChatSessionSharingProps,
+  type ChatSessionSharingOutcome,
   VISIBILITY_LABEL_KEYS,
   ChatSessionSharingModeIcon,
+  ChatSessionSharingError,
+  createChatSessionSharingPresentation,
 } from "./chat-session-sharing-shared.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -19,7 +31,10 @@ export function useChatSessionSharingMenu(
   controls?: MenuControls,
 ): {
   items: () => readonly MenuEntry[];
+  select: (value: string) => Promise<void | ChatSessionSharingOutcome>;
 } {
+  const presentation = createChatSessionSharingPresentation(() => props);
+  const busy = () => presentation.busy() || props.state?.loading === true;
   const result = () => props.state?.result;
   const visibility = () => props.session?.visibility ?? "shared";
   const owner = () => result()?.owner ?? props.session?.owner?.actor;
@@ -37,7 +52,7 @@ export function useChatSessionSharingMenu(
   const allowed = () =>
     result()?.allowedVisibilities ?? props.allowedVisibilities ?? [visibility()];
   const canPublish = () => visibility() === "draft" && allowed().includes("shared");
-  const scope = createMemo(result);
+  const scope = presentation.scope;
   const [query, setQuery] = createSignal(() => {
     scope();
     return "";
@@ -81,7 +96,7 @@ export function useChatSessionSharingMenu(
             id: "visibility:shared",
             label: t("chat.sessionSharing.publishDraft"),
             class: "session-menu__item chat-pane__publish-draft",
-            disabled: Boolean(props.visibilityDisabledReason),
+            disabled: Boolean(busy() || props.visibilityDisabledReason),
             attributes: { title: props.visibilityDisabledReason },
             content: (
               <span class="session-menu__text">{t("chat.sessionSharing.publishDraft")}</span>
@@ -118,7 +133,7 @@ export function useChatSessionSharingMenu(
           class: "session-menu__item chat-pane__sharing-visibility-item",
           type: "radio",
           checked,
-          disabled: Boolean(props.visibilityDisabledReason),
+          disabled: Boolean(busy() || props.visibilityDisabledReason),
           attributes: { title: props.visibilityDisabledReason },
           icon: (
             <span class="session-menu__icon" aria-hidden="true">
@@ -143,7 +158,7 @@ export function useChatSessionSharingMenu(
               <div class="chat-pane__sharing-title">{t("chat.sessionSharing.publicAccess")}</div>
               <div class="chat-pane__sharing-status">
                 {t(
-                  props.state?.loading || !result()
+                  busy() || !result()
                     ? "common.loading"
                     : result()?.publicShare
                       ? "chat.sessionSharing.worldReadable"
@@ -159,7 +174,7 @@ export function useChatSessionSharingMenu(
             label: t("chat.sessionSharing.copyPublicLink"),
             class: "session-menu__item",
             closeOnSelect: false,
-            disabled: Boolean(props.state?.loading),
+            disabled: busy(),
           });
         }
         entries.push({
@@ -170,7 +185,7 @@ export function useChatSessionSharingMenu(
               : "chat.sessionSharing.enablePublicAccess",
           ),
           class: "session-menu__item",
-          disabled: Boolean(props.publicShareDisabledReason || props.state?.loading || !result()),
+          disabled: Boolean(props.publicShareDisabledReason || busy() || !result()),
           attributes: { title: props.publicShareDisabledReason },
         });
       }
@@ -221,37 +236,7 @@ export function useChatSessionSharingMenu(
             </div>
           ),
         });
-        if (props.state?.loading) {
-          entries.push({
-            kind: "content",
-            id: "members-loading",
-            content: (
-              <div
-                class="chat-pane__sharing-members-loading"
-                role="status"
-                aria-busy="true"
-                aria-label={t("common.loading")}
-              >
-                <For each={[0, 1, 2]}>
-                  {() => (
-                    <div class="chat-pane__sharing-member-skeleton" aria-hidden="true">
-                      <span class="skeleton chat-pane__sharing-member-skeleton-icon" />
-                      <span class="skeleton chat-pane__sharing-member-skeleton-label" />
-                    </div>
-                  )}
-                </For>
-              </div>
-            ),
-          });
-        } else if (identities().length === 0) {
-          entries.push({
-            kind: "content",
-            id: "members-empty",
-            content: (
-              <div class="chat-pane__sharing-status">{t("chat.sessionSharing.noPeople")}</div>
-            ),
-          });
-        } else {
+        if (identities().length > 0) {
           entries.push(searchEntry());
         }
       }
@@ -262,7 +247,7 @@ export function useChatSessionSharingMenu(
   const memberItems = createMemo(
     () =>
       mapArray(
-        () => (props.membersAvailable === false || props.state?.loading ? [] : matches()),
+        () => (props.membersAvailable === false ? [] : matches()),
         (identity): MenuEntry => {
           const member = () => members().has(identity().id);
           const disabledReason = () =>
@@ -276,7 +261,7 @@ export function useChatSessionSharingMenu(
             },
             class: "session-menu__item chat-pane__sharing-member",
             get disabled() {
-              return Boolean(disabledReason());
+              return Boolean(busy() || disabledReason());
             },
             get attributes() {
               return { title: disabledReason() };
@@ -314,36 +299,66 @@ export function useChatSessionSharingMenu(
       kind: "content",
       id: "error",
       content: (
-        <div class="chat-pane__sharing-status chat-pane__sharing-status--error" role="alert">
-          {props.state?.error}
-        </div>
+        <ChatSessionSharingError
+          error={props.state?.error}
+          completion={presentation.completion()}
+          pending={presentation.busy()}
+        >
+          {(error) => (
+            <div class="chat-pane__sharing-status chat-pane__sharing-status--error" role="alert">
+              {error}
+            </div>
+          )}
+        </ChatSessionSharingError>
       ),
     }),
     { lazy: true },
   );
-  const items = createMemo(
-    () => [
-      ...baseItems(),
-      ...memberItems()(),
-      ...(props.membersAvailable !== false &&
-      !props.state?.loading &&
-      identities().length > 0 &&
-      memberItems()().length === 0
-        ? [
-            {
-              kind: "content" as const,
-              id: "members-no-match",
-              content: (
-                <div class="people-menu__status" role="status">
-                  {t("sessionsView.noPeopleMatch")}
-                </div>
-              ),
-            },
-          ]
-        : []),
-      ...(props.state?.error ? [errorEntry()] : []),
-    ],
-    { lazy: true },
-  );
-  return { items };
+  const membersSection: MenuEntry = {
+    kind: "group",
+    id: "members",
+    get items() {
+      return memberItems()();
+    },
+    render: (renderItems) => (
+      <Show when={props.membersAvailable !== false}>
+        <Loading
+          on={scope()}
+          fallback={
+            <div
+              class="chat-pane__sharing-members-loading"
+              role="status"
+              aria-busy="true"
+              aria-label={t("common.loading")}
+            >
+              <For each={[0, 1, 2]}>
+                {() => (
+                  <div class="chat-pane__sharing-member-skeleton" aria-hidden="true">
+                    <span class="skeleton chat-pane__sharing-member-skeleton-icon" />
+                    <span class="skeleton chat-pane__sharing-member-skeleton-label" />
+                  </div>
+                )}
+              </For>
+            </div>
+          }
+        >
+          {(latest(presentation.read), null)}
+          <div aria-busy={isPending(presentation.read) || busy() ? "true" : "false"}>
+            {renderItems(() => memberItems()())}
+            <Show when={memberItems()().length === 0}>
+              <div class="people-menu__status" role="status">
+                {t(
+                  identities().length
+                    ? "sessionsView.noPeopleMatch"
+                    : "chat.sessionSharing.noPeople",
+                )}
+              </div>
+            </Show>
+          </div>
+        </Loading>
+      </Show>
+    ),
+  };
+  const items = createMemo(() => [...baseItems(), membersSection, errorEntry()], { lazy: true });
+  return { items, select: presentation.select };
 }

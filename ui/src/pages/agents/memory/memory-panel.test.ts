@@ -5,7 +5,6 @@ import { getByRole } from "@solidjs/testing-library";
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
-import { hasOperatorReadAccess } from "../../../app/operator-access.ts";
 import { ShellLayoutOwner } from "../../../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../../../app/shell-layout-traits-solid.tsx";
 import { showConfirmDialog } from "../../../components/confirm-dialog.ts";
@@ -14,12 +13,12 @@ import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createAgentMemory, type AgentMemoryState } from "./memory-panel-state.ts";
-import { AgentMemoryView } from "./memory-panel-view.tsx";
 import {
   click,
   contextWithRequest,
   createAgentTarget,
+  createPage,
+  requestFor,
   DIARY,
   diary,
   emptyReply,
@@ -43,64 +42,11 @@ const PREVIEW = ".dreams-diary__preview-panel";
 const CONFIRM_BUTTON = ".exec-approval-actions button:last-child";
 const PREVIEW_TEXT = ".dreams-diary__preview-pre";
 
-function requestFor(
-  replies: Record<string, () => unknown>,
-  fallback: (method: string) => unknown = emptyReply,
-) {
-  return vi.fn((method: string) => replies[method]?.() ?? fallback(method));
-}
-
 function memoryStatus(promotedToday: number, extra: Record<string, unknown> = {}) {
   return { dreaming: { enabled: true, promotedToday, ...extra } };
 }
 
 const emptyClient = () => createTestGatewayClient(vi.fn(emptyReply));
-
-async function createPage(
-  replies:
-    | Parameters<typeof createTestGatewayClient>[0]
-    | Record<string, () => unknown> = emptyReply,
-  agentId = "main",
-  hello = gatewayHelloForMethods(["config.patch"]),
-) {
-  const request = typeof replies === "function" ? vi.fn(replies) : requestFor(replies);
-  const context = contextWithRequest(request);
-  context.emit({ hello });
-  const agentTarget = createAgentTarget(agentId);
-  let state: AgentMemoryState;
-  const { container, unmount } = mountSolid(() => {
-    state = createAgentMemory(context, () => agentTarget);
-    return AgentMemoryView({ state });
-  });
-  await waitForSolid(() => {
-    // Initial config loading can yield before the first resource is admitted.
-    if (agentId && hasOperatorReadAccess(hello.auth)) {
-      expect(request).toHaveBeenCalledWith(STATUS, { agentId });
-      expect(request).toHaveBeenCalledWith(DIARY, { agentId });
-    }
-    expect(state.view().header.refreshLoading).toBe(false);
-  });
-  return {
-    get state() {
-      return state;
-    },
-    context,
-    request,
-    get dreaming() {
-      return state.view().dreaming;
-    },
-    get toggle() {
-      return state.view().toggle;
-    },
-    query: container.querySelector.bind(container),
-    text: (selector: string) => container.querySelector(selector)?.textContent,
-    waitText: (selector: string, text: string) =>
-      waitForSolid(() => expect(container.querySelector(selector)?.textContent).toBe(text)),
-    container,
-    setAgentId: agentTarget.set,
-    unmount,
-  };
-}
 
 it.each([true, false])(
   "exposes Dreaming switch state through cancellation (%s)",

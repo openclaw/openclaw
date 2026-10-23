@@ -45,10 +45,10 @@ import type {
 import { restoreArchivedDispatchSession } from "./dispatch-session-archive.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { isExplicitSteerCommandTurn } from "./explicit-steer-routing.js";
+import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
-import { yieldHeartbeatToReplyTurn } from "./reply-turn-admission-lifecycle.js";
 import { createReplyTurnAdmissionWaiter } from "./reply-turn-admission-wait.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 import { resolveReplyTurnKind } from "./reply-turn-kind.js";
@@ -324,11 +324,7 @@ export function createDispatchReplyOperationCoordinator(
     const allowActiveResolution =
       queueEligible && (phase === "pre_dispatch" || phase === "command_resolution");
     const allowGatewayQueueResolution =
-      phase !== "pre_dispatch" &&
-      allowQueuePreparation &&
-      activeReplyOperation !== undefined &&
-      (activeReplyOperation.turnKind !== "heartbeat" ||
-        params.replyOptions?.internalEventExecution !== undefined);
+      phase !== "pre_dispatch" && allowQueuePreparation && activeReplyOperation !== undefined;
     if (allowGatewayQueueResolution) {
       // Gateway and low-level plugin turns must reach getReplyFromConfig while the owner is active;
       // that layer applies the session's steer/followup/collect/drop policy without concurrent runs.
@@ -370,13 +366,7 @@ export function createDispatchReplyOperationCoordinator(
         }
         const active = input.mailbox.owner.active;
         if (active) {
-          if (
-            active.turnKind !== "heartbeat" ||
-            params.replyOptions?.internalEventExecution !== undefined
-          ) {
-            return { status: "ready" };
-          }
-          break;
+          return { status: "ready" };
         }
         const predecessors = input.mailbox.entries.filter(
           (entry) =>
@@ -405,13 +395,6 @@ export function createDispatchReplyOperationCoordinator(
         return { status: "aborted" };
       }
       const predecessor = input.mailbox.owner.active;
-      if (phase === "dispatch") {
-        yieldHeartbeatToReplyTurn(predecessor, {
-          kind: replyTurnKind,
-          upstreamAbortSignal: input.abortSignal,
-          assertRequestCurrent,
-        });
-      }
       if (
         predecessor &&
         isRecoverableTerminalSessionStatus(params.operationSessionStoreEntry.entry?.status)
@@ -425,9 +408,6 @@ export function createDispatchReplyOperationCoordinator(
         return { status: "ready" };
       }
       if (!mailboxClaim) {
-        if (replyTurnKind === "heartbeat") {
-          return { status: "busy" };
-        }
         const selected = claimSessionControllerTask(input, () => {}, replyTurnKind);
         try {
           mailboxClaim = await selected;
@@ -606,6 +586,21 @@ export function createDispatchReplyOperationCoordinator(
     params.replyOptions?.abortSignal;
   let observedReplyDelivery = false;
   let agentRunTerminalOutcome: "completed" | "failed" | undefined;
+  const observeDeliveryProgress = (
+    deliveryOutcome: Promise<ReplyDispatchDeliveryOutcome> | undefined,
+    event: string,
+  ) => {
+    const operation = dispatchReplyOperation;
+    void deliveryOutcome?.then(
+      (outcome) => {
+        if (outcome === "delivered") {
+          operation?.watchdog.progress("finalization", event);
+        }
+      },
+      () => {},
+    );
+  };
+
   const markObservedReplyDelivery = async () => {
     if (observedReplyDelivery) {
       return;
@@ -736,6 +731,7 @@ export function createDispatchReplyOperationCoordinator(
     isDispatchOperationAborted,
     isPreDispatchOperationAborted,
     markObservedReplyDelivery,
+    observeDeliveryProgress,
     releasePreDispatchLifecycleAdmission,
     runWithDispatchLifecycleAdmission,
     throwIfDispatchOperationAborted,

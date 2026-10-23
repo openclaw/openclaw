@@ -30,14 +30,15 @@ function skillsParams(skills: SkillStatusEntry[], overrides: Partial<Params> = {
     configLoading: false,
     configSaving: false,
     configDirty: false,
+    presentationRetired: Promise.withResolvers<void>().promise,
     filter: "",
     onFilterChange: () => undefined,
     onRefresh: () => undefined,
     onToggle: () => false,
     onClear: () => undefined,
     onDisableAll: () => false,
-    onConfigReload: () => undefined,
-    onConfigSave: () => undefined,
+    onConfigReload: async () => undefined,
+    onConfigSave: async () => undefined,
     ...overrides,
   };
 }
@@ -295,7 +296,7 @@ describe("agents skills panel (browser)", () => {
     );
     const toggle = learnedRow?.querySelector<HTMLInputElement>("input.settings-toggle__input");
     expect(toggle?.checked).toBe(true);
-    expect(toggle?.disabled).toBe(true);
+    expect(toggle?.hasAttribute("aria-disabled")).toBe(true);
     expect(learnedRow?.textContent).toContain("archive in Workshop to hide");
     expect(container.textContent).toContain("2/2");
   });

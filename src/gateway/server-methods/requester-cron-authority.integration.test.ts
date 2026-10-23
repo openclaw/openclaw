@@ -175,7 +175,7 @@ async function withTransport(
 ) {
   // Construct the listener outside the requester's Cron scope.
   if (transport === "cli") {
-    await ensureMcpLoopbackServer(0);
+    await ensureMcpLoopbackServer();
   }
   try {
     await withSuccessor(true, async (_identity, admitted, capability) => {

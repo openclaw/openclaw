@@ -218,7 +218,6 @@ export async function retainNativeSessionGenerationAuthority(
   let captured:
     | Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>>
     | undefined;
-  let failed = false;
   try {
     if (read.sessionKey) {
       captured = await captureSessionEntryCurrentCheckAsyncInternal({
@@ -228,13 +227,13 @@ export async function retainNativeSessionGenerationAuthority(
       });
     }
     params.assertCurrent?.();
-  } catch {
+  } catch (error) {
     captured?.release();
-    captured = undefined;
     params.assertCurrent?.();
-    failed = true;
+    // A failed read cannot establish supersession or authorize a native binding.
+    throw error;
   }
-  const entry = failed ? null : captured?.entry;
+  const entry = captured?.entry;
   const current = entry?.sessionId === params.target.sessionId;
   const state = entry === undefined ? "ephemeral" : current ? "current" : "superseded";
   const previousSessionId = current ? entry?.previousSessionId : undefined;

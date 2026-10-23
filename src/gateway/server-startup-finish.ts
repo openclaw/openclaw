@@ -175,21 +175,6 @@ export async function finishGatewayStartup(params: {
   await startupTrace.measure("http.listen", () => runtime.startListening());
   startupTrace.mark("http.bound");
   const mainSessionRecoveryStartupCheckedStorePaths = new Set<string>();
-  const mainSessionOrphansReady =
-    minimalTestGateway || opts.updateCanary
-      ? Promise.resolve()
-      : import("./server-startup-observers.js").then(({ markGatewayStartupMainSessionOrphans }) =>
-          markGatewayStartupMainSessionOrphans(
-            {
-              gatewayPluginConfigAtStart,
-              isRestartRecoverySuppressed: () => channelManager.getAutostartSuppression() !== null,
-              scheduler: runtime.scheduler,
-              startupTrace,
-              log,
-            },
-            mainSessionRecoveryStartupCheckedStorePaths,
-          ),
-        );
   // Join independent preparation before channels start or failure cleanup retires its owners.
   const requestRuntimeReady = runtime.ensureRequestRuntimeReady().then(() => {
     kernel.setDispatchReady(true);
@@ -207,10 +192,9 @@ export async function finishGatewayStartup(params: {
     }
   });
   const earlyRuntimeReady = runtime.startEarlyRuntime();
-  await Promise.allSettled([requestRuntimeReady, earlyRuntimeReady, mainSessionOrphansReady]);
+  await Promise.allSettled([requestRuntimeReady, earlyRuntimeReady]);
   await requestRuntimeReady;
   const earlyRuntime = await earlyRuntimeReady;
-  await mainSessionOrphansReady;
   const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
   let postAttachRuntimeReturned = false;
   let scheduledServicesActivated = false;
@@ -285,6 +269,7 @@ export async function finishGatewayStartup(params: {
           startChannels,
           recoveryRuntime: gatewayInstanceRuntime.recovery,
           mainSessionRecoveryStartupCheckedStorePaths,
+          isRestartRecoverySuppressed: () => channelManager.getAutostartSuppression() !== null,
           resolveGatewayContext: gatewayRequestContext.resolveGatewayContext!,
           logHooks,
           logChannels,
@@ -343,26 +328,23 @@ export async function finishGatewayStartup(params: {
           onGatewayLifetimeSidecars: registerGatewayLifetimeSidecars,
           trackStartupWork,
           unregisterConnectionDependentSidecar,
-          ...(workerPlacementRuntime
-            ? {
-                startWorkerEnvironmentRuntime: async () => {
-                  if (lifecycle.closePreludeStarted) {
-                    return null;
-                  }
-                  databasePreparationReady.resolve(); // Plugins are attached; worker recovery awaits admission.
-                  return await workerPlacementRuntime.startRuntime({
-                    startupTrace,
-                    isClosePreludeStarted: () => lifecycle.closePreludeStarted,
-                    // Close must see the drain handle before reconciliation can yield.
-                    registerSidecar: registerConnectionDependentSidecars,
-                    unregisterSidecar: unregisterConnectionDependentSidecar,
-                  });
-                },
-              }
-            : {}),
+          startWorkerEnvironmentRuntime: async () => {
+            if (lifecycle.closePreludeStarted) {
+              return null;
+            }
+            databasePreparationReady.resolve(); // Plugins are attached; worker recovery awaits admission.
+            return workerPlacementRuntime
+              ? await workerPlacementRuntime.startRuntime({
+                  startupTrace,
+                  isClosePreludeStarted: () => lifecycle.closePreludeStarted,
+                  // Close must see the drain handle before reconciliation can yield.
+                  registerSidecar: registerConnectionDependentSidecars,
+                  unregisterSidecar: unregisterConnectionDependentSidecar,
+                })
+              : null;
+          },
           onSidecarsReady: () => {
             kernel.markSidecarsReady();
-            databasePreparationReady.resolve();
             activateScheduledServicesWhenReady();
           },
           getReadiness,

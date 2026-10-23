@@ -97,6 +97,7 @@ export type CodexSteeringQueueOptions = Pick<
   | "imageOrder"
   | "media"
   | "isInboundUserMessage"
+  | "isInboundUserReply"
   | "allowPendingUserInputAnswer"
   | "onQueueAccepted"
   | "onQueueSettled"
@@ -106,7 +107,7 @@ export type CodexSteeringQueueOptions = Pick<
 
 type CodexSteeringCommitItem = Pick<
   CodexSteeringQueueOptions,
-  "isInboundUserMessage" | "userTurnTranscriptRecorder"
+  "isInboundUserMessage" | "isInboundUserReply" | "userTurnTranscriptRecorder"
 >;
 
 /**
@@ -164,10 +165,8 @@ export function createCodexSteeringQueue(params: {
   };
 
   const clearBatchTimer = () => {
-    if (batchTimer) {
-      clearTimeout(batchTimer);
-      batchTimer = undefined;
-    }
+    clearTimeout(batchTimer);
+    batchTimer = undefined;
   };
 
   const reportItemAcceptance = (item: PendingSteerMessage, accepted: boolean) => {

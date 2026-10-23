@@ -224,6 +224,17 @@ const enChatSession = {
       installingBody: "Installing the new worker runtime on this device.",
     },
     subagentsPanel: {
+      nativeTitle: "Live native agents",
+      nativeCoverage: "Current native agent activity. Saved agent history is not included.",
+      nativeEmpty: "No native agents are currently observed.",
+      nativeTruncated: "Only part of the live native roster is shown.",
+      nativeRetry: "Updates retry automatically while this panel is visible.",
+      nativeStatus: {
+        running: "Running",
+        completed: "Completed",
+        failed: "Failed",
+        interrupted: "Interrupted",
+      },
       title: "Subagents",
       desktopFilter: { all: "All", active: "Active", waiting: "Waiting", done: "Done" },
       desktopFilterLabel: "Filter subagents",

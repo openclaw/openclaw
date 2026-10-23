@@ -35,29 +35,31 @@ export function createSettingsStatus<T>(
   // Immutable issued-read identities; payloads stay on their admitted promise.
   const [issued, setIssued] = createSignal<Read>({ scope });
   const scopeKey = createMemo(() => issued().scope);
-  const reads = createMemo(() => {
-    const currentScope = scopeKey();
-    const value = createMemo<Outcome | undefined>((previous) => {
-      const current = issued();
-      // Retiring a request keeps the accepted answer until this scope receives another.
-      return current.scope === currentScope
-        ? (current.promise?.then((outcome) => outcome ?? previous) ?? previous)
-        : undefined;
-    });
-    return value;
+  type Snapshot = { scope: object; outcome?: Outcome };
+  const reads = createMemo<Snapshot>((previous) => {
+    const current = issued();
+    const retained = previous?.scope === current.scope ? previous.outcome : undefined;
+    // A retired read keeps only an accepted answer from the same connection scope.
+    return current.promise
+      ? current.promise.then((outcome) => ({ scope: current.scope, outcome: outcome ?? retained }))
+      : { scope: current.scope, outcome: retained };
   });
+  const lastOutcome = () => {
+    const current = latest(reads);
+    return current.scope === scopeKey() ? current.outcome : undefined;
+  };
   const pending = createMemo(
-    () => Boolean(client()) && (isPending(() => reads()()) || latest(reads()) === undefined),
+    () => Boolean(client()) && (isPending(reads) || lastOutcome() === undefined),
   );
   const result = createMemo(() => {
-    const outcome = latest(reads());
+    const outcome = lastOutcome();
     return outcome && "result" in outcome ? outcome.result : undefined;
   });
   const read = () => {
     if (!client()) {
       return result();
     }
-    const outcome = reads()();
+    const outcome = reads().outcome;
     if (outcome && "error" in outcome) {
       throw outcome.error;
     }

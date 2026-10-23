@@ -14,6 +14,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { projectMutableSource, projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import { createChannelMutations } from "./mutation-presentation.ts";
 import { createChannelPluginPresentation } from "./plugin-presentation-loader.ts";
 import { ChannelsView, resolveChannelOrder } from "./view.tsx";
 import type { ChannelPairingPrompt, ChannelsProps } from "./view.types.ts";
@@ -53,7 +54,7 @@ function createChannelsPage(context: ApplicationContext) {
 
   const pluginPresentation = createChannelPluginPresentation({
     getContext: () => context,
-    getProps: viewProps,
+    getProps: () => ({ ...viewProps(), mutationBusy: mutations.busy() }),
     getConnection: () => connection,
     getChannelIds: () => resolveChannelOrder(channelsProjection.read().channelsSnapshot),
     isConnected: () => active && context.gateway.snapshot.phase === "connected",
@@ -62,6 +63,12 @@ function createChannelsPage(context: ApplicationContext) {
   const wizardHost = createChannelSetup({
     getContext: () => context,
     clearSelection: () => setSelectedChannel(null),
+    presentWizard: (pending) => mutations.run("wizard", pending),
+    retire: () => {
+      mutations.retire("wizard");
+      mutations.retire("whatsapp");
+    },
+    startWhatsApp,
   });
 
   let schemaLoadStarted = false;
@@ -72,15 +79,31 @@ function createChannelsPage(context: ApplicationContext) {
     getGateway: () => context.gateway,
     onSnapshot: handleGatewaySnapshot,
   });
+  const mutations = createChannelMutations({
+    readEpoch: () => {
+      gatewayProjection.read();
+      return connection.epoch;
+    },
+    currentEpoch: () => connection.epoch,
+    isActive: () => active,
+  });
 
   function handleGatewaySnapshot(change: GatewayPageChange) {
     const { snapshot, initial, identityChanged } = change;
     const transportChanged = change.clientChanged || change.connectionChanged;
+    if (identityChanged || transportChanged) {
+      mutations.retire();
+    }
     const connected = snapshot.phase === "connected";
     const pairingAccess = connected
       ? hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
       : canManagePairing;
     const adminAccess = connected ? hasOperatorAdminAccess(snapshot.hello?.auth ?? null) : canAdmin;
+    if (!adminAccess) {
+      mutations.retire("config");
+      mutations.retire("whatsapp");
+      mutations.retire("wizard");
+    }
     const pairingAuthSignature = connected
       ? resolveChannelPairingAuthSignature(snapshot)
       : gatewayPairingAuthSignature;
@@ -91,6 +114,7 @@ function createChannelsPage(context: ApplicationContext) {
       pluginPresentation.invalidateRequests();
     }
     if (identityChanged || pairingAuthChanged || (connected && !pairingAccess)) {
+      mutations.retire("pairing");
       updateOperations({ prompt: null });
       setPairingFilter(null, null);
       setPairingNotice(null);
@@ -284,6 +308,18 @@ function createChannelsPage(context: ApplicationContext) {
     );
   }
 
+  function presentWhatsApp(pending: Promise<void>) {
+    void mutations.run("whatsapp", pending).then(() => {
+      // Plugin views receive imperative snapshots, including the settled saving flag.
+      onSettled(() => pluginPresentation.details.sync());
+    });
+    return pending;
+  }
+
+  function startWhatsApp(force: boolean, accountId = wizardHost.whatsappAccountId()) {
+    return presentWhatsApp(context.channels.startWhatsApp(force, accountId));
+  }
+
   function viewProps(): ChannelsProps {
     operationState.read();
     gatewayProjection.read();
@@ -305,8 +341,16 @@ function createChannelsPage(context: ApplicationContext) {
         pairingRoot = element;
       },
       selectedChannel: selectedChannel(),
-      onShowDetail: setSelectedChannel,
-      onCloseDetail: () => setSelectedChannel(null),
+      onShowDetail: (channel) => {
+        mutations.retire("config");
+        mutations.retire("whatsapp");
+        setSelectedChannel(channel);
+      },
+      onCloseDetail: () => {
+        mutations.retire("config");
+        mutations.retire("whatsapp");
+        setSelectedChannel(null);
+      },
       onStartSetup: (channelId) => {
         if (canAdmin && context.gateway.snapshot.phase === "connected") {
           wizardHost.startSetup(channelId);
@@ -319,14 +363,18 @@ function createChannelsPage(context: ApplicationContext) {
       onPairingApprove: (request) => openPairingPrompt("approve", request),
       onPairingDismiss: (request) => openPairingPrompt("dismiss", request),
       onPairingPromptChange: patchPairingPrompt,
-      onPairingPromptCancel: () => updateOperations({ prompt: null }),
-      onPairingPromptConfirm: () => void confirmPairingPrompt(),
-      onWhatsAppStart: (force) =>
-        void context.channels.startWhatsApp(force, wizardHost.whatsappAccountId()),
-      onWhatsAppWait: () => void context.channels.waitWhatsApp(wizardHost.whatsappAccountId()),
+      onPairingPromptCancel: () => {
+        mutations.retire("pairing");
+        updateOperations({ prompt: null });
+      },
+      onPairingPromptConfirm: () => void mutations.run("pairing", confirmPairingPrompt()),
+      onWhatsAppStart: startWhatsApp,
+      onWhatsAppWait: () =>
+        presentWhatsApp(context.channels.waitWhatsApp(wizardHost.whatsappAccountId())),
+      onWhatsAppLogout: (accountId) => presentWhatsApp(context.channels.logoutWhatsApp(accountId)),
       onShowAdvancedSettings: setShowAdvancedSettings,
       onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
-      onConfigSave: () => void saveChannelConfig(),
+      onConfigSave: () => void mutations.run("config", saveChannelConfig()),
       onConfigReload: () => void reloadChannelConfig(),
     };
   }
@@ -349,18 +397,29 @@ function createChannelsPage(context: ApplicationContext) {
     // Configuration completion receipts drive the initial channel and schema loading state machine.
     const stopConfig = configProjection.subscribe(applyConfig);
     applyConfig();
+    let location = context.router.getState().location;
+    // Navigation intent releases presentation before Solid parks the departing page.
+    const stopNavigation = context.router.subscribe((state) => {
+      if (state.location !== location) {
+        location = state.location;
+        mutations.retire();
+      }
+    });
     return () => {
       active = false;
+      mutations.retire();
+      stopNavigation();
       stopChannels();
       stopConfig();
       connection.dispose();
     };
   });
-  return viewProps;
+  return { viewProps, mutations };
 }
 
 export function ChannelsPage() {
-  const viewProps = createMemo(createChannelsPage(useApplication()));
+  const page = createChannelsPage(useApplication());
+  const viewProps = createMemo(page.viewProps);
   return (
     <openclaw-channels-page>
       <SettingsPageHeader
@@ -372,7 +431,7 @@ export function ChannelsPage() {
         }
       />
       <SettingsWorkspace>
-        <ChannelsView {...viewProps()} />
+        <ChannelsView {...viewProps()} mutationBusy={page.mutations.busy()} />
       </SettingsWorkspace>
     </openclaw-channels-page>
   );

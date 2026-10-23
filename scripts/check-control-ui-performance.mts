@@ -52,14 +52,17 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
-  // Schema runtime deferrals use 7/25/20 requests; retain two per path.
+  // Deferred menu and emoji/Markdown loads use 7/23/17 requests; retain two per path.
   startupJsRequests: 9,
-  chatBootJsRequests: 27,
-  newBootJsRequests: 22,
-  // Page-owned English copy measures 1,435,673 B for Chat and 1,000,561 B
-  // for New Session. Retain at least 32 KiB of headroom for each route.
-  chatBootJsGzipBytes: 1_500_000,
-  newBootJsGzipBytes: 1_035_000,
+  chatBootJsRequests: 25,
+  newBootJsRequests: 19,
+  // Initial shell plus shared route styles and the route's own stylesheet.
+  chatBootCssRequests: 3,
+  newBootCssRequests: 3,
+  // Optional motion: 1,345,727 B Chat and 821,070 B New Session.
+  // Preserve main's relative headroom against the matched 0f6a build.
+  chatBootJsGzipBytes: 1_396_218,
+  newBootJsGzipBytes: 831_382,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   startupJsGzipBytes: 325_081,
@@ -67,9 +70,9 @@ const controlUiPerformanceBudgets = {
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
   largestJsGzipBytes: 215 * KIB,
-  // Composer multiline surface (stack #124301) legitimately grew boot CSS;
-  // operator decision 2026-08-25 rejected boot splitting due to precedence risk.
-  largestCssGzipBytes: 53_400,
+  // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
+  // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
+  largestCssGzipBytes: 58_315,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
@@ -304,6 +307,12 @@ function collectControlUiPerformanceBudgetChecks(
           "count",
         ],
         [
+          `${route} boot CSS requests`,
+          metrics.routeBoot[route].css.requests,
+          budgets[`${route}BootCssRequests`],
+          "count",
+        ],
+        [
           `${route} boot JS gzip`,
           metrics.routeBoot[route].js.gzipBytes,
           budgets[`${route}BootJsGzipBytes`],
@@ -363,16 +372,29 @@ export function evaluateControlUiPerformanceBudgets(
     }
   }
   if (baseMetrics) {
-    for (const area of ["startup", "largest"] as const) {
+    for (const area of ["startup", "total"] as const) {
+      const limit =
+        area === "startup"
+          ? CONTROL_UI_CSS_GZIP_GROWTH_BYTES - 1
+          : CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES;
       const growth = metrics[area].css.gzipBytes - baseMetrics[area].css.gzipBytes;
-      if (growth >= CONTROL_UI_CSS_GZIP_GROWTH_BYTES) {
+      if (growth > limit) {
         violations.push({
           metric: `${area} CSS gzip growth`,
           actual: growth,
-          limit: CONTROL_UI_CSS_GZIP_GROWTH_BYTES - 1,
+          limit,
           unit: "bytes",
         });
       }
+    }
+    const rawGrowth = metrics.total.css.rawBytes - baseMetrics.total.css.rawBytes;
+    if (rawGrowth > CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES) {
+      violations.push({
+        metric: "total CSS raw growth",
+        actual: rawGrowth,
+        limit: CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES,
+        unit: "bytes",
+      });
     }
   }
   if (baselineBytes !== undefined && baselineBytes > budgets.startupJsGzipBytes) {
@@ -498,7 +520,7 @@ export function formatControlUiPerformanceReport(
       const boot = metrics.routeBoot[route];
       lines.push(
         `  ${route} boot JS: ${formatAssetSummary(boot.js)} (${boot.js.gzipBytes - metrics.startup.js.gzipBytes} B beyond initial-entry JS; limits: ${formatRequestCount(budgets[`${route}BootJsRequests`])}, ${budgets[`${route}BootJsGzipBytes`]} B gzip)`,
-        `  ${route} boot CSS: ${formatAssetSummary(boot.css)}`,
+        `  ${route} boot CSS: ${formatAssetSummary(boot.css)} (${boot.css.requests - metrics.startup.css.requests} beyond initial-entry CSS; limit: ${formatRequestCount(budgets[`${route}BootCssRequests`])})`,
       );
       if (baseMetrics) {
         const baseBoot = baseMetrics.routeBoot?.[route];
@@ -518,12 +540,24 @@ export function formatControlUiPerformanceReport(
     lines.push("  route boot accounting: unavailable (build has no route preload templates)");
   }
   if (baseMetrics) {
-    for (const area of ["startup", "largest"] as const) {
+    const startupGrowth = metrics.startup.js.gzipBytes - baseMetrics.startup.js.gzipBytes;
+    lines.push(
+      `  startup JS gzip vs base: ${baseMetrics.startup.js.gzipBytes} B -> ${metrics.startup.js.gzipBytes} B (${startupGrowth >= 0 ? "+" : ""}${startupGrowth} B); requests ${baseMetrics.startup.js.requests} -> ${metrics.startup.js.requests}`,
+    );
+    for (const area of ["startup", "total"] as const) {
+      const limit =
+        area === "startup"
+          ? CONTROL_UI_CSS_GZIP_GROWTH_BYTES - 1
+          : CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES;
       const growth = metrics[area].css.gzipBytes - baseMetrics[area].css.gzipBytes;
       lines.push(
-        `  ${area} CSS gzip vs base: ${baseMetrics[area].css.gzipBytes} B -> ${metrics[area].css.gzipBytes} B (${growth >= 0 ? "+" : ""}${growth} B; growth below ${CONTROL_UI_CSS_GZIP_GROWTH_BYTES} B allowed)`,
+        `  ${area} CSS gzip vs base: ${baseMetrics[area].css.gzipBytes} B -> ${metrics[area].css.gzipBytes} B (${growth >= 0 ? "+" : ""}${growth} B; growth up to ${limit} B allowed)`,
       );
     }
+    const rawGrowth = metrics.total.css.rawBytes - baseMetrics.total.css.rawBytes;
+    lines.push(
+      `  total CSS raw vs base: ${baseMetrics.total.css.rawBytes} B -> ${metrics.total.css.rawBytes} B (${rawGrowth >= 0 ? "+" : ""}${rawGrowth} B; growth up to ${CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES} B allowed)`,
+    );
   }
   for (const warning of controlUiPerformanceWarnings(metrics, budgets)) {
     lines.push(`  warning: ${warning}`);
@@ -644,7 +678,7 @@ function validateExplicitStartupJsBytes(
   }
 }
 
-export function runControlUiPerformanceCheck(
+function runControlUiPerformanceCheck(
   distDir: string,
   budgets: Readonly<typeof CONTROL_UI_PERFORMANCE_BUDGETS> = CONTROL_UI_PERFORMANCE_BUDGETS,
   baselinePath = DEFAULT_STARTUP_BUDGET_BASELINE_PATH,
@@ -680,9 +714,10 @@ export function runControlUiPerformanceCheck(
   };
 }
 
-function main(argv: string[] = process.argv.slice(2)): void {
+async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   let json = false;
   let reportOnly = false;
+  let moduleAttribution = false;
   let distDir: string | undefined;
   let baseDistDir: string | undefined;
   let updateBaseline = false;
@@ -694,6 +729,8 @@ function main(argv: string[] = process.argv.slice(2)): void {
       json = true;
     } else if (arg === "--report-only") {
       reportOnly = true;
+    } else if (arg === "--module-attribution") {
+      moduleAttribution = true;
     } else if (arg === "--base-dist" || arg === "--dist") {
       const value = argv[++index];
       if (!value || value.startsWith("--")) {
@@ -735,6 +772,9 @@ function main(argv: string[] = process.argv.slice(2)): void {
   if (json && updateBaseline) {
     throw new Error("--json cannot be combined with --update-baseline");
   }
+  if (moduleAttribution && updateBaseline) {
+    throw new Error("--module-attribution cannot be combined with --update-baseline");
+  }
   if (updateBaseline && (reportOnly || baseDistDir || distDir)) {
     throw new Error(
       "--report-only, --base-dist and --dist cannot be combined with --update-baseline",
@@ -761,8 +801,20 @@ function main(argv: string[] = process.argv.slice(2)): void {
     return;
   }
   const result = runControlUiPerformanceCheck(distDir, undefined, undefined, baseDistDir);
+  let attribution;
+  if (moduleAttribution) {
+    const { collectControlUiModuleAttribution, formatControlUiModuleAttribution } =
+      await import("./lib/control-ui-module-attribution.mts");
+    if (!result.metrics.routeBoot) {
+      throw new Error("Module attribution requires a build with route preload templates");
+    }
+    attribution = collectControlUiModuleAttribution(distDir, result.metrics.routeBoot);
+    result.report += `\n${formatControlUiModuleAttribution(attribution)}`;
+  }
   if (json) {
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ ...result, ...(attribution ? { moduleAttribution: attribution } : {}) }, null, 2)}\n`,
+    );
   } else {
     process.stdout.write(`${result.report}\n`);
   }
@@ -784,10 +836,8 @@ function main(argv: string[] = process.argv.slice(2)): void {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try {
-    main();
-  } catch (error) {
+  main().catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
-  }
+  });
 }

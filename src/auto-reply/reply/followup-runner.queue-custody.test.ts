@@ -55,7 +55,6 @@ vi.mock("./followup-delivery.js", async (importOriginal) => ({
 vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-runner-utils.js")>()),
   resolveQueuedReplyExecutionConfig: state.config,
-  resolveQueuedReplyRuntimeConfig: (config: unknown) => config,
 }));
 installQueueRuntimeErrorSilencer();
 afterEach(() => vi.clearAllMocks());

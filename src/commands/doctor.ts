@@ -160,7 +160,7 @@ export async function doctorCommand(
     const { runPostUpgradeProbes } = await import("./doctor-post-upgrade.js");
     const { readSourceConfigBestEffort } = await import("../config/io.runtime.js");
     const config = await readSourceConfigBestEffort();
-    const report = await runPostUpgradeProbes({ updateChannel: config.update?.channel });
+    const report = await runPostUpgradeProbes(config.update?.channel);
     if (options.json) {
       writeRuntimeJson(outputRuntime, report);
     } else {

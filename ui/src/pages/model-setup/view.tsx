@@ -536,6 +536,7 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
           onDialogRef={props.onWizardDialog}
           mode={props.wizardMode}
           state={props.wizard}
+          busy={props.wizardBusy}
           refreshWarning={props.refreshWarning}
           cancellationNotice={props.cancellationNotice}
           value={props.wizardValue}
@@ -545,8 +546,8 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
           onClose={props.onWizardClose}
         />
       </div>
-      <Show when={props.activation.phase === "success" ? props.activation : undefined}>
-        {(activation) => <ModelSetupSuccessDialog {...props} activation={activation()} />}
+      <Show when={props.activation.phase === "success" ? props.activation : undefined} keyed>
+        {(activation) => <ModelSetupSuccessDialog {...props} activation={activation} />}
       </Show>
     </>
   );

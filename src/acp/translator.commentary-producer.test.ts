@@ -1,16 +1,9 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { createSubscribedSessionHarness } from "../agents/embedded-agent-subscribe.e2e-harness.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { createAgentEventTestHarness } from "../gateway/server-chat.agent-events.test-harness.js";
 import { subscribeAgentEvents } from "../gateway/server-chat.agent-events.test-helpers.js";
-import {
-  createSessionAgentHarness,
-  promptAgent,
-} from "./translator.prompt-harness.test-support.js";
-
-// mock-isolation: Command discovery loads unrelated plugins outside this event delivery contract.
-vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
+import { createPromptScenario } from "./translator.scenario.test-support.js";
 
 it.each([
   [false, "", "Checking files.\nReading config.\nChecking files.Done."],
@@ -19,16 +12,9 @@ it.each([
 ] as const)(
   "delivers explicit commentary once through Gateway and ACP (preview: %s, separator: %j)",
   async (batchedPreview, separator, expected) => {
-    const sent = createDeferred<string>();
-    const request = vi.fn().mockImplementation(async (method, params) => {
-      if (method === "chat.send") {
-        sent.resolve(params.idempotencyKey);
-      }
-      return {};
-    });
-    const acp = createSessionAgentHarness(request);
-    const prompt = promptAgent(acp.agent);
-    const runId = await sent.promise;
+    const acp = createPromptScenario({ send: () => ({}) });
+    const { result: prompt, sent } = acp.start();
+    const runId = await sent;
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const gateway = createAgentEventTestHarness();
     gateway.register(runId, acp.sessionKey, runId);
@@ -111,9 +97,13 @@ it.each([
       await prompt;
       expect(
         acp.sessionUpdate.mock.calls
-          .flatMap(([{ update }]) =>
-            update.sessionUpdate === "agent_message_chunk" ? [update.content.text] : [],
-          )
+          .flatMap(([{ update }]) => {
+            if (update.sessionUpdate !== "agent_message_chunk") {
+              return [];
+            }
+            expect(update.content.type).toBe("text");
+            return update.content.type === "text" ? [update.content.text] : [];
+          })
           .join(""),
       ).toBe(expected);
     } finally {

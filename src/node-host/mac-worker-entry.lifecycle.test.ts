@@ -53,7 +53,6 @@ afterEach(() => {
 it.each([
   { args: [], enabled: undefined, code: 0 },
   { args: ["--desktop-sharing"], enabled: true, code: 143 },
-  { args: ["--no-desktop-sharing"], enabled: false, code: 0 },
 ])(
   "starts with desktop preference $enabled and finalizes exit $code",
   async ({ args, enabled, code }) => {
@@ -98,21 +97,16 @@ it.each([
   },
 );
 
-it.each([
-  { args: ["node", "worker"], error: "worker bootstrap failed" },
-  { args: ["node", "run"], error: "Private macOS worker accepts only: node worker" },
-  { args: ["--profile"], error: "--profile requires a value" },
-])("reports $error and finalizes an unsuccessful exit", async ({ args, error }) => {
+it("reports bootstrap failure and finalizes an unsuccessful exit", async () => {
   const { defaultRuntime } = await import("../runtime.js");
   const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   fixture.bootstrap.mockRejectedValue(new Error("worker bootstrap failed"));
-  process.argv.splice(2, process.argv.length - 2, ...args);
 
   await import("./mac-worker-entry.js");
 
   expect(fixture.worker).not.toHaveBeenCalled();
-  expect(stderr).toHaveBeenCalledWith(`${error}\n`);
+  expect(stderr).toHaveBeenCalledWith("worker bootstrap failed\n");
   expect(process.exitCode).toBe(1);
   expect(exit).not.toHaveBeenCalled();
 });

@@ -905,7 +905,7 @@ describe("curated meeting capture", () => {
         ),
       ].every((button) => button.disabled),
     ).toBe(true);
-    expect(page.querySelector<HTMLInputElement>('input[role="switch"]')?.disabled).toBe(true);
+    expect(page.querySelector('input[role="switch"]')?.hasAttribute("aria-disabled")).toBe(true);
     expect(runtimeConfig.state.configFormDirty).toBe(false);
   });
 

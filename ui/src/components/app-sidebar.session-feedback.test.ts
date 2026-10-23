@@ -293,11 +293,20 @@ describe("sidebar session feedback", () => {
       harness.sessions,
     );
     await selectFilter(sidebar, "status:all");
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = keys[0]!;
+    await settleLitElement(sidebar);
     await vi.waitFor(() => expect(sidebar.querySelector(pagination)).not.toBeNull());
+    const button = () => sidebar.querySelector<HTMLButtonElement>(pagination)!;
+    const focusedButton = button();
+    focusedButton.focus();
+    sidebar.sessionKey = keys[1]!;
+    await settleLitElement(sidebar);
+    expect(button()).toBe(focusedButton);
+    expect(document.activeElement).toBe(focusedButton);
     let pending = createDeferred<typeof first>();
     harness.list.mockClear();
     harness.list.mockImplementation(async () => await pending.promise);
-    const button = () => sidebar.querySelector<HTMLButtonElement>(pagination)!;
     expect(button().disabled).toBe(false);
     button().click();
     button().click(); // The owner is already pending before the renderer applies disabled.

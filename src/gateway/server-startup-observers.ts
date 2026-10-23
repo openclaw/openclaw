@@ -15,15 +15,15 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
-// Startup only needs orphan marking; keep resume and delivery runtime out of the pre-channel path.
+// Keep orphan marking independent of the resume and delivery runtime.
 const loadMainSessionRestartRecoveryMarkingModule = createLazyRuntimeModule(
   () => import("../agents/main-session-recovery/main-session-restart-recovery-marking.js"),
 );
 
-/** Mark predecessors before channels admit work, independently of plugin registration. */
+/** Mark predecessors before channels and saved inputs admit work. */
 export async function markGatewayStartupMainSessionOrphans(
   params: {
-    gatewayPluginConfigAtStart: OpenClawConfig;
+    getConfig: () => OpenClawConfig;
     isRestartRecoverySuppressed: () => boolean;
     scheduler: { signal: AbortSignal };
     startupTrace?: GatewayStartupTrace;
@@ -41,19 +41,34 @@ export async function markGatewayStartupMainSessionOrphans(
         "sidecars.main-session-recovery-load",
         loadMainSessionRestartRecoveryMarkingModule,
       );
-      if (params.scheduler.signal.aborted || params.isRestartRecoverySuppressed()) {
-        return;
+      while (!params.scheduler.signal.aborted && !params.isRestartRecoverySuppressed()) {
+        const cfg = params.getConfig();
+        try {
+          await measureStartup(params.startupTrace, "sidecars.main-session-recovery-scan", () =>
+            markStartupOrphanedMainSessionsForRecovery({
+              cfg,
+              startupCheckedStorePaths,
+              assertCommitAllowed: () => {
+                params.scheduler.signal.throwIfAborted();
+                if (params.isRestartRecoverySuppressed() || params.getConfig() !== cfg) {
+                  throw new Error("Gateway restart recovery state changed before orphan marking");
+                }
+              },
+            }),
+          );
+        } catch (err) {
+          if (params.getConfig() === cfg) {
+            throw err;
+          }
+        }
+        // A store can return a failed target instead of throwing after invalidation.
+        // Keep admission held; the checked set skips stores that already committed.
+        if (params.getConfig() === cfg) {
+          return;
+        }
       }
-      await measureStartup(params.startupTrace, "sidecars.main-session-recovery-scan", () =>
-        markStartupOrphanedMainSessionsForRecovery({
-          cfg: params.gatewayPluginConfigAtStart,
-          startupCheckedStorePaths,
-        }),
-      );
     } catch (err) {
-      params.log.warn(
-        `main-session startup orphan marking failed before channel startup: ${String(err)}`,
-      );
+      params.log.warn(`main-session startup orphan marking failed: ${String(err)}`);
     }
   });
 }
@@ -76,7 +91,6 @@ export async function runGatewayStartupObservers(params: {
   workspaceDir: string;
   getCron: () => PluginHookGatewayCronService | undefined;
   isClosing?: () => boolean;
-  waitForPostReadyWork?: () => Promise<void>;
   onSubagentRecoverySettled?: () => void;
   unlockStartupMethods?: () => void;
   startupTrace?: GatewayStartupTrace;
@@ -91,7 +105,6 @@ export async function runGatewayStartupObservers(params: {
   ) => ReturnType<typeof createHookRunner> | Promise<ReturnType<typeof createHookRunner>>;
   refreshLatestUpdateRestartSentinel: () => Promise<unknown>;
 }): Promise<void> {
-  await params.waitForPostReadyWork?.();
   if (params.signal.aborted || params.isClosing?.()) {
     return;
   }

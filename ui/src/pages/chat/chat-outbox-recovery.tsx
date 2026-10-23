@@ -36,7 +36,10 @@ type RecoveryHost = Parameters<typeof captureChatOutboxRecoveryDestination>[0] &
     sessionsResult?: SessionsListResult | null;
   };
 
-const draftStore = import("../../lib/chat/composer-draft-store.runtime.ts");
+// Start at the first admitted refresh, preserving promise ordering for recovery actions.
+let draftStore: Promise<typeof import("../../lib/chat/composer-draft-store.runtime.ts")>;
+const loadDraftStore = () =>
+  (draftStore ??= import("../../lib/chat/composer-draft-store.runtime.ts"));
 
 type RecoveryProps = {
   host: RecoveryHost | undefined;
@@ -131,7 +134,7 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
       }
       setEntries(recovery?.entries ?? []);
       setError(retirementError || (recovery?.blocked ? t("chat.outboxRecoveryFull") : ""));
-      const result = await (await draftStore).prepareDurableComposerRecovery(owner);
+      const result = await (await loadDraftStore()).prepareDurableComposerRecovery(owner);
       if (request !== generation || !isConnected()) {
         return;
       }
@@ -195,7 +198,7 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
         if ("id" in entry) {
           result = discardChatOutboxRecovery(host, entry, isCurrent);
         } else {
-          const store: Awaited<typeof draftStore> = yield draftStore;
+          const store: Awaited<typeof draftStore> = yield loadDraftStore();
           const discarded: Awaited<ReturnType<typeof store.discardDurableComposerRecovery>> =
             yield store.discardDurableComposerRecovery(owner, entry, isCurrent);
           result = discarded.status;
@@ -222,7 +225,7 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
       const scope = resolveUiConversationIdentity(host, host.sessionKey);
       const destination = captureChatOutboxRecoveryDestination(host, scope);
       const durableScope = { ...owner, scopeKey: `chat:v3:${storedChatOutboxScopeKey(scope)}` };
-      const store: Awaited<typeof draftStore> = yield draftStore;
+      const store: Awaited<typeof draftStore> = yield loadDraftStore();
       const before: Awaited<ReturnType<typeof store.readDurableComposerDraft>> =
         yield store.readDurableComposerDraft(durableScope);
       if (before.status === "storage-failed") {

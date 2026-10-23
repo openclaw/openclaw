@@ -129,7 +129,8 @@ async function inspectRestorableDatabaseFiles(
 ) {
   const identities = new Map<string, BigIntStats>();
   for (const database of databases) {
-    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+    // Readers mutate/recreate the transient WAL index; only durable files fence capture.
+    for (const suffix of ["", "-wal", "-journal"]) {
       const file = `${database}${suffix}`;
       let info;
       try {
@@ -152,16 +153,19 @@ async function inspectRestorableDatabaseFiles(
       ) {
         throw new Error(`Update database file changed during backup: ${file}.`);
       }
-      identities.set(file, info);
+      // Readers can create an empty WAL beside a checkpointed database.
+      if (suffix !== "-wal" || info.size !== 0n) {
+        identities.set(file, info);
+      }
     }
   }
-  if (
-    stopped &&
-    previous &&
-    (identities.size !== previous.size ||
-      [...identities.keys()].some((file) => !previous.has(file)))
-  ) {
-    throw new Error("Update database journal state changed during stopped backup.");
+  if (stopped && previous) {
+    const changed = [...previous.keys(), ...identities.keys()].find(
+      (file) => previous.has(file) !== identities.has(file),
+    );
+    if (changed) {
+      throw new Error(`Update database journal state changed during stopped backup: ${changed}.`);
+    }
   }
   return identities;
 }

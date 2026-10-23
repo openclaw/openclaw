@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import type { Server as HttpServer } from "node:http";
+import { createServer, type Server as HttpServer } from "node:http";
 import type { Server as HttpsServer } from "node:https";
 import type { AddressInfo, Server, Socket } from "node:net";
 import { promisify } from "node:util";
@@ -48,20 +48,6 @@ export function transportFixture(beforeSocketCleanup = () => {}) {
     websockets.push(value);
     return value;
   }
-  async function startWebSocketServer() {
-    const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-    websockets.push(server);
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("websocket address unavailable");
-    }
-    return {
-      server,
-      url: `ws://127.0.0.1:${address.port}`,
-      origin: `http://127.0.0.1:${address.port}`,
-    };
-  }
   async function listen(server: Server) {
     servers.push(server);
     server.on("connection", trackSocket);
@@ -69,6 +55,11 @@ export function transportFixture(beforeSocketCleanup = () => {}) {
     server.listen(0, "127.0.0.1");
     await listening;
     return (server.address() as AddressInfo).port;
+  }
+  async function startWebSocketServer(server: HttpServer | HttpsServer = createServer()) {
+    const websocket = websocketServer(server);
+    const port = await listen(server);
+    return { server: websocket, url: `ws://127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` };
   }
   afterEach(async () => {
     for (const value of clients.splice(0)) {
@@ -78,9 +69,7 @@ export function transportFixture(beforeSocketCleanup = () => {}) {
       for (const socket of server.clients) {
         socket.terminate();
       }
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await promisify(server.close.bind(server))();
     }
     beforeSocketCleanup();
     for (const socket of sockets) {

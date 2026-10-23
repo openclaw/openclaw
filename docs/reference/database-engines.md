@@ -605,10 +605,14 @@ Writers use `READ COMMITTED` and a transaction-scoped advisory lock derived from
 the store identity. Every PostgreSQL write, including a single statement, uses
 the adapter's `runTransaction` so it retains that lock and publishes its write
 token. A single-statement read may use autocommit; multi-statement snapshot reads
-use `REPEATABLE READ READ ONLY`. Connections
-set `synchronous_commit=off` to match SQLite WAL with `synchronous=NORMAL`: a
-server or operating-system crash can lose recently acknowledged commits. Backups
-and recovery must account for that durability policy. The adapter sets generous
+use `REPEATABLE READ READ ONLY`. OpenClaw uses the server's `synchronous_commit`
+setting. PostgreSQL's default `on` makes acknowledged commits durable across
+PostgreSQL or operating-system crashes. For SQLite WAL `synchronous=NORMAL`-like
+throughput, operators can opt in with
+`ALTER ROLE <openclaw_role> SET synchronous_commit = off` or the equivalent
+`ALTER DATABASE` setting. This can lose recently acknowledged commits on a server
+or operating-system crash, without corruption. Ports and backups always commit
+durably. The adapter sets generous
 lock and statement timeouts once during connection setup; operations do not
 change timeout settings individually.
 

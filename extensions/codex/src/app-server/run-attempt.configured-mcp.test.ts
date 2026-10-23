@@ -60,6 +60,39 @@ function expectMcpDisposed() {
 
 describe("runCodexAppServerAttempt configured MCP ownership", () => {
   it.each([
+    { name: "MCP-only", appTools: [], needsAppRecovery: false },
+    { name: "Codex app", appTools: ["codex_apps.notion.fetch"], needsAppRecovery: true },
+    { name: "Codex glob", appTools: ["codex_*"], needsAppRecovery: true },
+    { name: "Codex suffix glob", appTools: ["codex_*fetch"], needsAppRecovery: true },
+  ])(
+    "scopes scheduled app recovery instructions to the $name tool cap",
+    async ({ appTools, needsAppRecovery }) => {
+      const params = createMcpParams(["fake__show", "message", ...appTools]);
+      params.trigger = "cron";
+      params.scheduledToolPolicy = { version: 1, mode: "trusted" };
+      params.scheduledRuntimeAuthorityRecoveryRequired = true;
+
+      const { harness, finish } = await startMcpAttempt(params);
+      try {
+        const threadStart = harness.requests.find((request) => request.method === "thread/start")
+          ?.params as
+          | { developerInstructions?: string; dynamicTools?: CodexDynamicToolSpec[] }
+          | undefined;
+        expect(threadStart).toMatchObject({
+          developerInstructions: needsAppRecovery
+            ? expect.stringContaining("Scheduled Codex app access is unavailable")
+            : expect.not.stringContaining("Scheduled Codex app access is unavailable"),
+        });
+        expect(flattenCodexDynamicToolFunctions(threadStart?.dynamicTools)).toEqual(
+          expect.arrayContaining([expect.objectContaining({ name: "fake__show" })]),
+        );
+      } finally {
+        await finish();
+      }
+    },
+  );
+
+  it.each([
     { reason: "cancellation", rejectCleanup: true },
     { reason: "authority closure", rejectCleanup: false },
   ])(

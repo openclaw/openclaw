@@ -6,7 +6,7 @@ import { messageClientSourcesLabel } from "../../../lib/chat/message-client-sour
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
-import { persistedMessageEntryId } from "../chat-thread.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
@@ -42,7 +42,7 @@ import {
   resolveMessageReplyLine,
 } from "./chat-reply-attribution.ts";
 import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
-import type { ReplyConnectorElements } from "./chat-reply-connector.ts";
+import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
 import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";

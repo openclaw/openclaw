@@ -95,11 +95,16 @@ function SourceCard(props: {
 }
 
 export function ChatSourcePreviews(props: SourcePreviewsProps) {
+  const [ready, setReady] = createSignal(false);
   const [revision, setRevision] = createSignal(0);
   const [failedFavicons, setFailedFavicons] = createStore<Record<string, boolean>>({});
-  let active = true;
-  onSettled(() => () => {
-    active = false;
+  let active = false;
+  onSettled(() => {
+    active = true;
+    setReady(true);
+    return () => {
+      active = false;
+    };
   });
   const refreshFavicons = () => {
     if (active) {
@@ -107,6 +112,9 @@ export function ChatSourcePreviews(props: SourcePreviewsProps) {
     }
   };
   const favicon = (source: ChatSourcePreview) => {
+    if (!ready()) {
+      return null;
+    }
     revision();
     const url = props.fetchFavicon
       ? readLinkFavicon(new URL(source.url).hostname, props.fetchFavicon, refreshFavicons)

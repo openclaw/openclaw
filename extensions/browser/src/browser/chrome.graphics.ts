@@ -92,61 +92,6 @@ function classifyGraphicsAcceleration(params: {
   return coreFeatureStatuses.some((status) => status.includes("software")) ? "software" : "unknown";
 }
 
-function normalizeChromeGraphicsInfo(
-  value: unknown,
-  observedAt: number,
-): BrowserGraphicsDiagnostics {
-  const result = asNullableRecord(value);
-  const gpu = asNullableRecord(result?.gpu);
-  if (!gpu) {
-    return {
-      status: "unavailable",
-      observedAt,
-      reason: "SystemInfo.getInfo returned no GPU information",
-    };
-  }
-
-  const attributes = readStringRecord(gpu.auxAttributes);
-  const featureStatus = readStringRecord(gpu.featureStatus);
-  const devices = readRecordArray(gpu.devices).map((device) => ({
-    vendorId: readChromeNumber(device.vendorId),
-    deviceId: readChromeNumber(device.deviceId),
-    vendor: readChromeString(device.vendorString),
-    device: readChromeString(device.deviceString),
-    driverVendor: readChromeString(device.driverVendor),
-    driverVersion: readChromeString(device.driverVersion),
-  }));
-  const renderer = firstAttribute(attributes, ["glRenderer", "angleRenderer", "webglRenderer"]);
-  const disabledFeatures = Object.entries(featureStatus)
-    .filter(([, status]) => !status.toLowerCase().startsWith("enabled"))
-    .map(([feature, status]) => ({ feature, status }));
-
-  return {
-    status: "available",
-    observedAt,
-    acceleration: classifyGraphicsAcceleration({ renderer, devices, featureStatus }),
-    renderer,
-    vendor: firstAttribute(attributes, ["glVendor", "angleVendor", "webglVendor"]),
-    version: firstAttribute(attributes, ["glVersion", "angleVersion"]),
-    backend: firstAttribute(attributes, ["glImplementationParts", "displayType"]),
-    devices,
-    featureStatus,
-    disabledFeatures,
-    driverBugWorkarounds: filterStringEntries(gpu.driverBugWorkarounds),
-    videoDecoding: readRecordArray(gpu.videoDecoding).map((capability) => ({
-      profile: readChromeString(capability.profile),
-      minResolution: readSize(capability.minResolution),
-      maxResolution: readSize(capability.maxResolution),
-    })),
-    videoEncoding: readRecordArray(gpu.videoEncoding).map((capability) => ({
-      profile: readChromeString(capability.profile),
-      maxResolution: readSize(capability.maxResolution),
-      maxFramerateNumerator: readChromeNumber(capability.maxFramerateNumerator),
-      maxFramerateDenominator: readChromeNumber(capability.maxFramerateDenominator),
-    })),
-  };
-}
-
 async function inspectChromeGraphicsDiagnostics(
   cdpUrl: string,
   ssrfPolicy?: SsrFPolicy,
@@ -171,7 +116,55 @@ async function inspectChromeGraphicsDiagnostics(
         lookup: endpoint.lookup,
       },
     );
-    return normalizeChromeGraphicsInfo(result, observedAt);
+    const info = asNullableRecord(result);
+    const gpu = asNullableRecord(info?.gpu);
+    if (!gpu) {
+      return {
+        status: "unavailable",
+        observedAt,
+        reason: "SystemInfo.getInfo returned no GPU information",
+      };
+    }
+
+    const attributes = readStringRecord(gpu.auxAttributes);
+    const featureStatus = readStringRecord(gpu.featureStatus);
+    const devices = readRecordArray(gpu.devices).map((device) => ({
+      vendorId: readChromeNumber(device.vendorId),
+      deviceId: readChromeNumber(device.deviceId),
+      vendor: readChromeString(device.vendorString),
+      device: readChromeString(device.deviceString),
+      driverVendor: readChromeString(device.driverVendor),
+      driverVersion: readChromeString(device.driverVersion),
+    }));
+    const renderer = firstAttribute(attributes, ["glRenderer", "angleRenderer", "webglRenderer"]);
+    const disabledFeatures = Object.entries(featureStatus)
+      .filter(([, status]) => !status.toLowerCase().startsWith("enabled"))
+      .map(([feature, status]) => ({ feature, status }));
+
+    return {
+      status: "available",
+      observedAt,
+      acceleration: classifyGraphicsAcceleration({ renderer, devices, featureStatus }),
+      renderer,
+      vendor: firstAttribute(attributes, ["glVendor", "angleVendor", "webglVendor"]),
+      version: firstAttribute(attributes, ["glVersion", "angleVersion"]),
+      backend: firstAttribute(attributes, ["glImplementationParts", "displayType"]),
+      devices,
+      featureStatus,
+      disabledFeatures,
+      driverBugWorkarounds: filterStringEntries(gpu.driverBugWorkarounds),
+      videoDecoding: readRecordArray(gpu.videoDecoding).map((capability) => ({
+        profile: readChromeString(capability.profile),
+        minResolution: readSize(capability.minResolution),
+        maxResolution: readSize(capability.maxResolution),
+      })),
+      videoEncoding: readRecordArray(gpu.videoEncoding).map((capability) => ({
+        profile: readChromeString(capability.profile),
+        maxResolution: readSize(capability.maxResolution),
+        maxFramerateNumerator: readChromeNumber(capability.maxFramerateNumerator),
+        maxFramerateDenominator: readChromeNumber(capability.maxFramerateDenominator),
+      })),
+    };
   } catch (error) {
     return {
       status: "unavailable",

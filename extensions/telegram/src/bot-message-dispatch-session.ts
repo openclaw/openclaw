@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -7,7 +8,6 @@ import {
   appendAssistantMirrorMessageByIdentity,
   readLatestAssistantTextByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
 import type {
   CurrentTurnTranscriptFinal,
   FreshTelegramSessionEntryLoader,
@@ -43,7 +43,10 @@ export async function resolveTelegramReasoningLevel(params: {
   agentId: string;
   loadFreshSessionEntry: FreshTelegramSessionEntryLoader;
 }): Promise<TelegramReasoningLevel> {
-  const configDefault = resolveTelegramConfigReasoningDefault(params.cfg, params.agentId);
+  const configDefault =
+    resolveAgentConfig(params.cfg, params.agentId)?.reasoningDefault ??
+    params.cfg.agents?.defaults?.reasoningDefault ??
+    "off";
   if (!params.sessionKey) {
     return configDefault;
   }

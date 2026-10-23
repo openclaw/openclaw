@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -17,6 +18,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { restoreDoctorMigrationBackup } from "../../src/commands/doctor-migration-backup-restore.js";
 import { CLIENT_CREDENTIAL_LEGACY_TABLES_SQL } from "../../src/infra/client-credential-schema.js";
 import { generateStoredDeviceIdentity } from "../../src/infra/device-identity-material.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../src/state/openclaw-state-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -24,13 +26,33 @@ import {
   createProvisionOwnerFixture,
   expectProvisionComplete,
 } from "./pr-worktree-owner.test-support.js";
+import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
+const schemaCases = [
+  [28, "checkout"],
+  [29, "checkout"],
+  [28, "unclassified extract"],
+] as const;
+
+function extractUnclassifiedWrapper() {
+  const source = tempDirs.make("openclaw-pr-anchor-");
+  copyPrWrapperSources(source);
+  linkPrWrapperDependencies(source);
+  // A forked preflight child missing from the extracted closure leaves the store unclassified.
+  rmSync(join(source, "src/state/openclaw-agent-schema-inspection.worker.ts"));
+  return source;
+}
 
 describePosix("repository-owned PR provisioning state", () => {
-  it.each([28, 29])("preserves private schema v%i state while provisioning", async (version) => {
-    const f = createProvisionOwnerFixture(tempDirs.make("openclaw-pr-schema-"));
+  it.each(schemaCases)("preserves private schema v%i state from %s", async (version, source) => {
+    const f = createProvisionOwnerFixture(
+      tempDirs.make("openclaw-pr-schema-"),
+      "native",
+      128,
+      source === "checkout" ? undefined : extractUnclassifiedWrapper(),
+    );
     const stateDir = join(f.canonical, ".local", "pr-state");
     const databasePath = join(stateDir, "state", "openclaw.sqlite");
     mkdirSync(join(stateDir, "state"), { recursive: true });
@@ -69,7 +91,9 @@ describePosix("repository-owned PR provisioning state", () => {
     expect(backups).toHaveLength(version === 28 ? 1 : 0);
     {
       using database = new DatabaseSync(databasePath, { readOnly: true });
-      expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 30 });
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
       expect(
         database
           .prepare(

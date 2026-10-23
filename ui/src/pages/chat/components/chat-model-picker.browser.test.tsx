@@ -110,7 +110,7 @@ it("opens during activation and preserves filter focus and query across catalog 
   await userEvent.keyboard("beta");
   expect(search.value).toBe("beta");
   expect(composer.value).toBe("Keep this draft");
-  expect(option("example/alpha")).toMatchObject({ hidden: true });
+  expect(option("example/alpha")).toBeNull();
   const beta = option("example/beta");
   expect(beta).toMatchObject({ hidden: false });
   expect(beta.checkVisibility()).toBe(true);
@@ -241,7 +241,6 @@ it.each(["trigger", "Escape", "selection"])(
     const { picker, trigger, toggle, open, update, params } = mountPicker();
     await open();
     const search = getSearch();
-    const beta = option("example/beta");
     const providerToggle = (provider: string) =>
       picker.querySelector<HTMLButtonElement>(
         `[data-chat-model-provider-group="${provider}"] [data-chat-model-provider-toggle]`,
@@ -272,16 +271,66 @@ it.each(["trigger", "Escape", "selection"])(
     expect(search.value).toBe("");
     update();
     await toggle(() => userEvent.click(trigger));
-    expect(option("example/beta")).toBe(beta);
+    expect(option("example/beta")).toBeNull();
     expectExpanded();
-    const hidden = option("example/beta"),
-      visible = option("other/gamma");
-    expect(hidden).toMatchObject({ hidden: true });
-    expect(hidden.checkVisibility()).toBe(false);
-    expect(visible).toMatchObject({ hidden: false });
-    expect(visible.checkVisibility()).toBe(true);
+    await vi.waitFor(() => {
+      const visible = option("other/gamma");
+      expect(visible).toMatchObject({ hidden: false });
+      expect(visible.checkVisibility()).toBe(true);
+    });
     trigger.focus();
     await toggle(() => userEvent.keyboard("1"));
     expect(params.onModelSelect).toHaveBeenLastCalledWith("other/gamma", "main", undefined);
   },
 );
+
+it("windows a large catalog while keeping keyboard choices and accessible positions live", async () => {
+  const { params, update, open } = mountPicker();
+  params.modelOptions = Array.from({ length: 1000 }, (_, index) =>
+    modelOption("example", `model-${index}`, { label: `Model ${String(index).padStart(4, "0")}` }),
+  );
+  params.selectedModelValue = "example/model-0";
+  update();
+  await open();
+  const rows = () => [...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
+  expect(rows()).toHaveLength(9);
+  const more = container.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]")!;
+  more.click();
+  flush();
+  const search = getSearch();
+  search.focus();
+  search.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+  flush();
+  await vi.waitFor(() => {
+    const active = document.getElementById(search.getAttribute("aria-activedescendant")!);
+    expect(active?.getAttribute("data-chat-model-option")).toBe("example/model-999");
+    expect(active?.getAttribute("aria-posinset")).toBe("991");
+    expect(active?.getAttribute("aria-setsize")).toBe("991");
+    const viewport = container.querySelector<HTMLElement>("[data-chat-model-window]")!;
+    expect(viewport.scrollTop).toBeGreaterThan(0);
+    const bounds = active!.getBoundingClientRect();
+    const clip = viewport.getBoundingClientRect();
+    expect(bounds.top).toBeGreaterThanOrEqual(clip.top);
+    expect(bounds.bottom).toBeLessThanOrEqual(clip.bottom);
+    expect(rows().length).toBeLessThan(40);
+  });
+  search.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  flush();
+  await vi.waitFor(() =>
+    expect(
+      document
+        .getElementById(search.getAttribute("aria-activedescendant")!)
+        ?.getAttribute("data-chat-model-option"),
+    ).toBe("example/model-0"),
+  );
+  search.value = "Model 0999";
+  search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  flush();
+  await vi.waitFor(() =>
+    expect(rows().map((row) => row.dataset.chatModelOption)).toEqual(["example/model-999"]),
+  );
+  expect(rows()[0]?.getAttribute("aria-setsize")).toBe("1");
+  expect(search.getAttribute("aria-activedescendant")).toBe(rows()[0]?.id);
+  search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  expect(params.onModelSelect).toHaveBeenCalledWith("example/model-999", "main", undefined);
+});

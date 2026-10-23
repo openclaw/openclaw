@@ -4,8 +4,13 @@ import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contra
 import { createModel } from "./model.test-support.js";
 
 const cloudModel = createModel("kimi-k2.5:cloud", "Kimi K2.5 Cloud", { contextWindow: 131072 });
+const localProfile = { provider: "ollama", mode: "api_key" as const };
+const otherProfile = { provider: "openai", mode: "api_key" as const };
 
-function legacyLocalConfig(baseUrl = "http://127.0.0.1:11434"): OpenClawConfig {
+function legacyLocalConfig(
+  baseUrl = "http://127.0.0.1:11434",
+  profile: (typeof localProfile & { displayName?: string }) | null = localProfile,
+): OpenClawConfig {
   return {
     models: {
       providers: {
@@ -14,8 +19,8 @@ function legacyLocalConfig(baseUrl = "http://127.0.0.1:11434"): OpenClawConfig {
     },
     auth: {
       profiles: {
-        "ollama:default": { provider: "ollama", mode: "api_key" },
-        "openai:default": { provider: "openai", mode: "api_key" },
+        ...(profile ? { "ollama:default": profile } : {}),
+        "openai:default": otherProfile,
       },
     },
     agents: { defaults: { model: { primary: "ollama/kimi-k2.5:cloud" } } },
@@ -36,15 +41,19 @@ function expectUnchanged(config: OpenClawConfig) {
 }
 
 describe("ollama doctor contract", () => {
-  it.each(["https://OLLAMA.COM:443/api", "${OLLAMA_BASE_URL}"])(
-    "preserves hosted auth and model refs at %s",
-    (baseUrl) => {
-      const config = legacyLocalConfig(baseUrl);
+  it.each([
+    ["https://OLLAMA.COM:443/api", localProfile],
+    ["${OLLAMA_BASE_URL}", localProfile],
+    [undefined, null],
+    [undefined, { ...localProfile, displayName: "Remote Ollama" }],
+  ] as const)("preserves non-legacy config at %s with profile %j", (baseUrl, profile) => {
+    const config = legacyLocalConfig(baseUrl, profile);
+    if (baseUrl) {
       config.agents = { defaults: { model: "ollama/kimi-k2.5:cloud@ollama:default" } };
-      expect(matchesLegacy(config)).toBe(false);
-      expectUnchanged(config);
-    },
-  );
+    }
+    expect(matchesLegacy(config)).toBe(false);
+    expectUnchanged(config);
+  });
 
   it("migrates the pre-#123190 local marker without replacing its catalog or default", () => {
     const config = legacyLocalConfig();
@@ -60,22 +69,9 @@ describe("ollama doctor contract", () => {
       models: {
         providers: { ollama: { ...original.models?.providers?.ollama, apiKey: "ollama-local" } },
       },
-      auth: { profiles: { "openai:default": { provider: "openai", mode: "api_key" } } },
+      auth: { profiles: { "openai:default": otherProfile } },
     });
     expect(config).toEqual(original);
     expectUnchanged(result.config);
-  });
-
-  it("preserves current env-backed marker configs without the exact legacy profile", () => {
-    const withoutProfile = legacyLocalConfig();
-    delete withoutProfile.auth?.profiles?.["ollama:default"];
-    const customizedProfile = legacyLocalConfig();
-    customizedProfile.auth!.profiles!["ollama:default"] = {
-      provider: "ollama",
-      mode: "api_key",
-      displayName: "Remote Ollama",
-    };
-    expectUnchanged(withoutProfile);
-    expectUnchanged(customizedProfile);
   });
 });

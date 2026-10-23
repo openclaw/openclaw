@@ -105,6 +105,28 @@ describe("restart health", () => {
   });
 
   it.each([
+    "{broken",
+    "null",
+    JSON.stringify({ ready: false, coreReady: true, failing: "telegram" }),
+    JSON.stringify({ ready: false, coreReady: true, failing: [" "] }),
+  ])("does not accept malformed channel readiness: %s", async (body) => {
+    requestReadinessProbe.mockImplementation(async ({ pathname }) => ({
+      statusCode: pathname === "/healthz" ? 200 : 503,
+      body: pathname === "/healthz" ? "" : body,
+    }));
+    const { waitForGatewayHttpReadiness } = await import("./restart-health-probe.js");
+    await expect(
+      waitForGatewayHttpReadiness({
+        attempts: 1,
+        deadlineAt: performance.now() + 1_000,
+        delayMs: 0,
+        port: 18789,
+        requireChannelHealth: false,
+      }),
+    ).resolves.toEqual({ healthz: 200, readyz: 503, coreReady: false });
+  });
+
+  it.each([
     { transport: "response", ready: true, build: "candidate-build", outcome: "healthy" },
     { transport: "close", ready: true, build: "candidate-build", outcome: "healthy" },
     { transport: "response", ready: false, build: "candidate-build", outcome: "auth-rejected" },

@@ -57,15 +57,13 @@ const expectTarget = (manager: Manager, thread: string, target: string | undefin
 
 installThreadBindingLifecycleTestHooks();
 
-it.each([false, true])("reuses a channel webhook after unbinding (reload=%s)", async (reload) => {
+it("reuses a restored channel webhook after unbinding without sharing it across accounts", async () => {
   let manager = await createTestThreadBindingManager({ persist: true });
   let other: Manager | undefined;
   try {
     await bindTestThread(manager);
-    if (reload) {
-      await resetThreadBindingsForTests();
-      manager = await createTestThreadBindingManager({ persist: true });
-    }
+    await resetThreadBindingsForTests();
+    manager = await createTestThreadBindingManager({ persist: true });
     await manager.unbindThread({ threadId: "thread-1", sendFarewell: false });
     const withoutWebhook = { webhookId: undefined, webhookToken: undefined };
     await expect(

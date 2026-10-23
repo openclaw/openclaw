@@ -125,6 +125,58 @@ function runVerifier(
 }
 
 describe("release-note verification", () => {
+  it("rejects an off-branch generation target before release-note discovery", () => {
+    const cwd = tempDirs.make("openclaw-off-branch-notes-");
+    git(cwd, ["init", "-q", "-b", "main"]);
+    git(cwd, ["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(cwd, "CHANGELOG.md"), createReleaseNotesFixtureLines().join("\n"));
+    splitChangelog({ rootDir: cwd });
+    git(cwd, ["add", "."]);
+    git(cwd, ["commit", "-qm", "docs: seed changelog"]);
+    const base = git(cwd, ["rev-parse", "HEAD"]);
+    git(cwd, ["branch", "release/2026.7.1", base]);
+    writeFileSync(join(cwd, "off-branch.txt"), "wrong worktree\n");
+    git(cwd, ["add", "off-branch.txt"]);
+    git(cwd, ["commit", "-qm", "docs: prepare notes elsewhere"]);
+
+    const result = runVerifier(cwd, {
+      base,
+      target: "HEAD",
+      extraArgs: ["--release-branch", "release/2026.7.1"],
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "is not reachable from canonical release branch release/2026.7.1",
+    );
+    expect(readdirSync(join(cwd, ".git"))).not.toContain("openclaw-release-cache");
+  });
+
+  it("initializes a missing target section before writing its contribution record", () => {
+    const cwd = tempDirs.make("openclaw-initial-release-notes-");
+    git(cwd, ["init", "-q"]);
+    git(cwd, ["config", "commit.gpgsign", "false"]);
+    writeFileSync(
+      join(cwd, "CHANGELOG.md"),
+      createReleaseNotesFixtureLines().join("\n").replace("2026.7.1", "2026.6.11"),
+    );
+    splitChangelog({ rootDir: cwd });
+    git(cwd, ["add", "."]);
+    git(cwd, ["commit", "-qm", "docs: seed changelog"]);
+    const target = git(cwd, ["rev-parse", "HEAD"]);
+    const version = "2026.7.1-beta.1";
+
+    const result = runVerifier(cwd, { base: target, target, version });
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(readFileSync(join(cwd, `CHANGELOG/${version}.md`), "utf8")).toContain(
+      [`## ${version}`, "", "### Highlights", "", "### Changes", "", "### Fixes"].join("\n"),
+    );
+    expect(readFileSync(join(cwd, `CHANGELOG/records/${version}.md`), "utf8")).toContain(
+      "0 in-range PRs + 0 retained seed-only PRs = 0 unique PRs",
+    );
+  });
+
   it("verifies extended-stable GitHub notes with their regular-stable context", () => {
     const cwd = tempDirs.make("openclaw-extended-stable-notes-");
     const bin = join(cwd, "bin");

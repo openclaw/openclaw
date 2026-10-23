@@ -15,6 +15,7 @@ import {
 } from "../../agent-run-terminal-outcome.js";
 import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
+import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
 import {
   createMissingReplyNotice,
@@ -38,6 +39,7 @@ import {
   reportEmbeddedRunSuccessfulAuthBinding,
 } from "./auth-profile-success.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import {
   classifyAssistantTurn,
@@ -190,11 +192,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   readTerminalToolPresentation: () => string | undefined;
   resolveReplayInvalid: (incompleteTurnText?: string | null) => boolean;
   setTerminalLifecycleMeta: NonNullable<EmbeddedRunAttemptResult["setTerminalLifecycleMeta"]>;
-  maybeMarkAuthProfileFailure: (failure: {
-    profileId?: string;
-    reason?: AuthProfileFailureReason | null;
-    modelId?: string;
-  }) => Promise<void>;
+  maybeMarkAuthProfileFailure: EmbeddedRunFailoverRetryController["maybeMarkAuthProfileFailure"];
   assistantProfileFailureReason?: AuthProfileFailureReason | null;
   startedAtMs: number;
   provider: string;
@@ -520,11 +518,13 @@ async function completeEmbeddedRun(
   });
   if (error) {
     if (input.authProfileId) {
+      const assistant = input.attemptAssistant;
       try {
         await input.maybeMarkAuthProfileFailure({
           profileId: input.authProfileId,
           reason: input.assistantProfileFailureReason,
           modelId: input.modelId,
+          retryAfterMs: assistant && buildAssistantFailoverSignal(assistant).retryAfterMs,
         });
       } catch (bookkeepingError) {
         log.warn(

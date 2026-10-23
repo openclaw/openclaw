@@ -1325,12 +1325,6 @@ button.sidebar-image-view__image {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .sidebar-markdown-reader {
-    transition: none;
-  }
-}
-
 .review-unavailable {
   display: grid;
   flex: 1;
@@ -2283,14 +2277,6 @@ openclaw-session-diff:has(> .session-diff--desktop) {
   font-size: inherit;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
-}
-
-.session-diff--desktop .chat-diffstat__add {
-  color: var(--ok);
-}
-
-.session-diff--desktop .chat-diffstat__del {
-  color: var(--destructive);
 }
 
 .session-diff--desktop .session-diff__file-toggle > .chat-diffstat {

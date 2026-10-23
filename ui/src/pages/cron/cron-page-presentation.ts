@@ -17,6 +17,7 @@ import type { createGatewayConnectionLifecycle } from "../../lib/gateway-connect
 import {
   loadModelCatalog,
   modelCatalogRefreshError,
+  readAgentModelCatalog,
   subscribeModelCatalogCache,
 } from "../../lib/model-catalog-store.ts";
 
@@ -31,8 +32,20 @@ type CronPresentationDeps = {
 
 /** Presents admitted cron work; the plain owners retain every request decision. */
 export function createCronPresentation(deps: CronPresentationDeps) {
-  const [cronModelSuggestions, setCronModelSuggestions] = createSignal<string[]>([]);
-  const [modelSuggestionsError, setModelSuggestionsError] = createSignal<string | null>(null);
+  type ModelReceipt = { state: CronState; agentId: string; result: Promise<void> };
+  const [modelReceipt, setModelReceipt] = createSignal<ModelReceipt | null>(null);
+  const modelRead = createMemo(() => modelReceipt()?.result.then(() => null) ?? null);
+  const cronModelSuggestions = createMemo(() => {
+    const state = deps.readState();
+    const agentId = deps.context().agentSelection.state.selectedId;
+    const receipt = modelReceipt();
+    if (receipt?.state !== state || receipt.agentId !== agentId) {
+      return [];
+    }
+    return readAgentModelCatalog(state.client, agentId)
+      .models.filter((entry) => entry.manualSelectionAllowed !== false)
+      .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider));
+  });
   let modelSuggestionsRequest: { state: CronState; agentId: string } | null = null;
   let stopModelSuggestions: (() => void) | undefined;
   // Receipts describe work already admitted by the plain owner. Reading them
@@ -181,8 +194,7 @@ export function createCronPresentation(deps: CronPresentationDeps) {
     // Last-good suggestions belong to one agent, including when its successor has no catalog.
     if (modelSuggestionsRequest?.agentId !== agentId) {
       modelSuggestionsRequest = null;
-      setCronModelSuggestions([]);
-      setModelSuggestionsError(null);
+      setModelReceipt(null);
       deps.publish(cronState);
     }
     if (!client || !agentId || !isGatewayAvailable(deps.context().gateway.snapshot)) {
@@ -195,12 +207,12 @@ export function createCronPresentation(deps: CronPresentationDeps) {
     stopModelSuggestions ??= subscribeModelCatalogCache(
       client,
       (update) => {
-        if (
-          deps.active() &&
-          deps.currentState().client === client &&
-          update.type === "invalidated"
-        ) {
-          void loadModelSuggestions(deps.currentState());
+        if (deps.active() && deps.currentState().client === client) {
+          if (update.type === "invalidated") {
+            void loadModelSuggestions(deps.currentState());
+          } else {
+            deps.publish(deps.currentState());
+          }
         }
       },
       () => ({ agentId: deps.context().agentSelection.state.selectedId ?? undefined }),
@@ -214,30 +226,30 @@ export function createCronPresentation(deps: CronPresentationDeps) {
       deps.connection.isCurrent(connectionScope) &&
       modelSuggestionsRequest === request &&
       deps.context().agentSelection.state.selectedId === agentId;
-    try {
-      const result = await loadModelCatalog(client, { agentId });
-      if (isCurrent()) {
-        setCronModelSuggestions(
-          result.models
-            .filter((entry) => entry.manualSelectionAllowed !== false)
-            .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider)),
-        );
-        setModelSuggestionsError(modelCatalogRefreshError(result));
-        deps.publish(cronState);
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        setModelSuggestionsError(formatUiError(error));
-        deps.publish(cronState);
-      }
-    }
+    const result = loadModelCatalog(client, { agentId })
+      .then((catalog) => {
+        if (isCurrent()) {
+          const error = modelCatalogRefreshError(catalog);
+          if (error) {
+            throw new Error(error);
+          }
+        }
+      })
+      .catch((error: unknown) => {
+        if (isCurrent()) {
+          throw error;
+        }
+      });
+    setModelReceipt({ ...request, result });
+    // The boundary observes failures; fire-and-forget callers still consume
+    // completion if their view retires before reading it.
+    await result.catch(() => {});
   }
 
   function resetModels() {
     stopModelSuggestions?.();
     stopModelSuggestions = undefined;
-    setCronModelSuggestions([]);
-    setModelSuggestionsError(null);
+    setModelReceipt(null);
     modelSuggestionsRequest = null;
   }
 
@@ -245,13 +257,15 @@ export function createCronPresentation(deps: CronPresentationDeps) {
     capture: presentation,
     isCurrent: isCurrentPresentation,
     retire: retirePresentation,
+    get retired() {
+      return presentationLifetime.promise;
+    },
     dispose() {
       presentationLifetime.resolve();
       stopModelSuggestions?.();
       modelSuggestionsRequest = null;
     },
     modelSuggestions: cronModelSuggestions,
-    modelError: modelSuggestionsError,
     get modelRequest() {
       return modelSuggestionsRequest;
     },
@@ -272,6 +286,8 @@ export function createCronPresentation(deps: CronPresentationDeps) {
     reportError: reportActionError,
     saving: () => presentation().saving(),
     reads: {
+      models: modelRead,
+      modelRequest: modelReceipt,
       jobs: () => presentation().jobsRead(),
       rows: () => presentation().jobs,
       status: () => presentation().statusRead(),

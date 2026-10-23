@@ -182,6 +182,14 @@ it.each([
   },
 );
 
+it("waits exactly the provider's rate-limit timing instead of a longer local backoff", async () => {
+  vi.spyOn(Math, "random").mockReturnValue(0.999);
+  await checkRetry({ reason: "rate_limit", retryAfterMs: 200, onRetry });
+  await checkRetry({ reason: "rate_limit", retryAfterMs: 1_200, onRetry });
+  await checkRetry({ reason: "rate_limit", onRetry });
+  expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([200, 1_200, 5_996]);
+});
+
 it("retains the non-rate retry window after a long rate-limit wait", async () => {
   const advanceTime = clock();
   await checkRetry({ reason: "rate_limit", retryAfterMs: 120000 });

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createCpuTrackedWorker,
@@ -108,9 +109,13 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
       reject(new Error(`Telegram ingress worker exited with code ${code}`));
     });
   });
-  worker.on("message", (message: TelegramIngressWorkerMessage) => {
-    handle.onMessage?.(message);
-  });
+  // Keep the constructing plugin's runtime even if another scope assigns onMessage.
+  worker.on(
+    "message",
+    AsyncLocalStorage.bind((message: TelegramIngressWorkerMessage) => {
+      handle.onMessage?.(message);
+    }),
+  );
 
   const handle: TelegramIngressWorkerHandle = {
     ackSpooledUpdate(requestId, result) {

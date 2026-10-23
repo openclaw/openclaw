@@ -17,6 +17,8 @@ import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.t
 import { autoPromptNotificationsOnSend } from "./notifications-auto-prompt.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
+const webProps = { connected: true, presentationRetired: () => new Promise<void>(() => {}) };
+
 const originalServiceWorkerDescriptor = Object.getOwnPropertyDescriptor(
   Navigator.prototype,
   "serviceWorker",
@@ -225,7 +227,7 @@ describe("web push Gateway reconciliation", () => {
       expect(requestPermission).not.toHaveBeenCalled();
       expect(request).not.toHaveBeenCalled();
       const { container } = mountSolid(() => (
-        <NotificationsSection connected={true} webPush={capability.snapshot} />
+        <NotificationsSection {...webProps} webPush={capability.snapshot} />
       ));
       expect(container.textContent).toContain("Unavailable");
       expect(container.textContent).toContain("Not requested");
@@ -294,7 +296,7 @@ describe("web push Gateway reconciliation", () => {
       const changePreferences = vi.fn();
       const { container } = mountSolid(() => (
         <NotificationsSection
-          connected={true}
+          {...webProps}
           webPush={capability.snapshot}
           onWebPushSetUserPreferences={changePreferences}
           onWebPushSetDevicePreferences={changePreferences}
@@ -304,11 +306,11 @@ describe("web push Gateway reconciliation", () => {
       await vi.waitFor(() =>
         expect(container.querySelector(".settings-stack")?.hasAttribute("inert")).toBe(false),
       );
-      const controls = Array.from(
-        container.querySelectorAll(".settings-stack input, .settings-stack select"),
-      );
+      const controls = container.querySelectorAll(".settings-stack input, .settings-stack select");
       expect(controls.length).toBeGreaterThan(0);
-      expect(controls.every((control) => control.matches(":disabled"))).toBe(true);
+      expect(
+        [...controls].every((control) => control.matches(':disabled, [aria-disabled="true"]')),
+      ).toBe(true);
       container.querySelector<HTMLInputElement>(".settings-stack input")?.click();
       expect(changePreferences).not.toHaveBeenCalled();
       expect(container.textContent).not.toContain("Send test");
@@ -1009,7 +1011,7 @@ describe("web push Gateway reconciliation", () => {
       const { unmount: dispose } = mountSolid(
         () => (
           <NotificationsSection
-            connected={true}
+            {...webProps}
             webPush={snapshot()}
             onWebPushSubscribe={() => capability.run({ kind: "enable" })}
             onWebPushUnsubscribe={() => capability.run({ kind: "disable" })}

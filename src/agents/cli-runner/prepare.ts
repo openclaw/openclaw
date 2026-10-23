@@ -27,7 +27,6 @@ import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
-import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-store.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
@@ -69,7 +68,6 @@ import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
 } from "../bootstrap-files.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "../bootstrap-routing.js";
 import {
   CLI_AUTH_EPOCH_VERSION,
@@ -146,7 +144,6 @@ import { runWithCliPreparationSource } from "./prepare-source.js";
 import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
 import {
   buildCliVisibleReplyGuidance,
-  composeCliPromptContext,
   createCliCurrentPromptRenderer,
   prepareCliSystemPrompt,
   prepareCliTurnPromptContext,
@@ -664,10 +661,14 @@ async function prepareCliRunContextWithinReadFence(
     : undefined;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
+  const canonicalWorkspace = resolveUserPath(
+    resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
+  );
   const { bootstrapFiles, contextFiles: resolvedContextFiles } = skipsTurnPreparation
     ? { bootstrapFiles: [], contextFiles: [] }
     : await resolveBootstrapContextForRunImpl({
-        workspaceDir: params.bootstrapWorkspaceDir ?? workspaceDir,
+        workspaceDir: params.bootstrapWorkspaceDir ?? canonicalWorkspace,
+        executionWorkspaceDir: workspaceDir,
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
@@ -678,7 +679,7 @@ async function prepareCliRunContextWithinReadFence(
         runKind: params.bootstrapContextRunKind,
         warn: makeBootstrapWarnImpl({
           sessionLabel,
-          workspaceDir,
+          workspaceDir: params.bootstrapWorkspaceDir ?? canonicalWorkspace,
           warn: (message) => cliBackendLog.warn(message),
         }),
       });
@@ -843,9 +844,6 @@ async function prepareCliRunContextWithinReadFence(
   );
   // Mirror the embedded runner's bootstrap routing for backends that transport
   // OpenClaw's system prompt, using the final native or mediated file access.
-  const canonicalWorkspace = resolveUserPath(
-    resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
-  );
   const selectedNativeToolsProvideFileAccess =
     params.cliToolAvailability === undefined || params.cliToolAvailability.native.length > 0;
   const mediatedBootstrapFileAccess =
@@ -1592,7 +1590,7 @@ async function prepareCliRunContextWithinReadFence(
     // CLI sessions still receive prior conversation context via stdin.
     const shouldPrepareOpenClawHistoryPrompt =
       !skipsTurnPreparation && (!reusableCliSessionId || allowRawTranscriptReseed);
-    let openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
+    const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
       ? buildCliSessionHistoryPrompt({
           messages: sessionPromptContext?.reseedMessages ?? [],
           prompt: historyPromptCurrentTurn,
@@ -1738,7 +1736,6 @@ async function prepareCliRunContextWithinReadFence(
         lease: params.contextEngineLogicalTurnLease,
         host: contextEngineHostSupport,
         recorder: params.userTurnTranscriptRecorder,
-        isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
         sessionTarget: params.sessionTarget,
       });
       resolvedContextEngine = effective.engine;
@@ -1782,34 +1779,7 @@ async function prepareCliRunContextWithinReadFence(
       });
     }
     const hadSessionFile = await hasCliSessionTranscript(params);
-    let preparedParams = await admitFinalParams();
-
-    const note = await claimHeartbeatContextForUserRun({
-      ...preparedParams,
-      agentId: sessionAgentId,
-      storePath: params.sessionTarget?.storePath ?? params.storePath,
-      detached: Boolean(params.sessionManager || params.isolatedCompletion),
-      assertCurrent: createCliRunCurrentAssertion(preparedParams),
-    });
-    if (note) {
-      preparedParams = {
-        ...preparedParams,
-        transcriptPrompt: finalizedTranscriptPrompt ?? params.prompt,
-      };
-      const append = (text: string) => composeCliPromptContext(text, { appendContext: note });
-      if (executionTarget.kind === "plugin") {
-        promptContext = {
-          ...promptContext,
-          appendContext: append(promptContext?.appendContext ?? ""),
-        };
-        promptForHooks = append(promptForHooks ?? preparedParams.prompt);
-      } else {
-        preparedParams.prompt = append(preparedParams.prompt);
-        if (openClawHistoryPrompt) {
-          openClawHistoryPrompt = append(openClawHistoryPrompt);
-        }
-      }
-    }
+    const preparedParams = await admitFinalParams();
     return finishPreparation({
       ...buildPreparedContext(preparedParams),
       ...(managedClaudeLiveSessionGeneration

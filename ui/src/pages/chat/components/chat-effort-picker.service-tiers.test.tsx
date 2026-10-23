@@ -3,7 +3,7 @@ import type { ModelCatalogEntry } from "../../../api/types.ts";
 import { resolveChatFastModeSelectState } from "../../../lib/chat/model-select-state.ts";
 import { resolveChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatEffortPicker } from "./chat-effort-picker.tsx";
 
 const host = document.createElement("div");
@@ -12,12 +12,14 @@ beforeEach(() => {
   document.body.append(host);
   onTestFinished(() => host.remove());
 });
-function openPicker() {
+async function openPicker() {
   summary().click();
-  flush();
+  await waitForSolid(() =>
+    expect(host.querySelector(".chat-controls__effort-menu")).not.toBeNull(),
+  );
 }
 
-it("keeps Ultrafast selectable while showing and clearing a provider downgrade", () => {
+it("keeps Ultrafast selectable while showing and clearing a provider downgrade", async () => {
   const onFastModeSelect = vi.fn(async () => undefined);
   const model: ModelCatalogEntry = {
     id: "model",
@@ -61,7 +63,7 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
     return host.querySelector<HTMLButtonElement>('[data-chat-speed-option="ultrafast"]')!;
   };
   const observation = { requestedTier: "ultrafast", responseTier: "priority" };
-  openPicker();
+  await openPicker();
   const ultrafast = show("ultrafast", [observation]);
   expect([ultrafast.disabled, ultrafast.getAttribute("aria-checked")]).toEqual([false, "true"]);
   expect(summary().title).toContain("Ultrafast requested, currently served as priority");
@@ -86,7 +88,7 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
   expect(summary().title).toBe("Speed: Ultrafast");
 });
 
-it("keeps an uncommitted reasoning preview when other picker props refresh", () => {
+it("keeps an uncommitted reasoning preview when other picker props refresh", async () => {
   const onThinkingSelect = vi.fn(async () => undefined);
   const options = (active: boolean): Parameters<typeof ChatEffortPicker>[0] => ({
     disabled: false,
@@ -114,7 +116,7 @@ it("keeps an uncommitted reasoning preview when other picker props refresh", () 
     onThinkingSelect,
   });
   const view = mountSolid(ChatEffortPicker, options(false), host);
-  openPicker();
+  await openPicker();
   const slider = host.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
   slider.value = "2";
   slider.dispatchEvent(new Event("input", { bubbles: true }));

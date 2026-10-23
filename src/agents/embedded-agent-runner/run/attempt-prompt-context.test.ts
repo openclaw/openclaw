@@ -6,7 +6,7 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import { redactToolPayloadTextWithConfig } from "../../../logging/redact.js";
-import { addSession, deleteSession } from "../../bash-process-registry.js";
+import { addSession, appendOutput, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -150,7 +150,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     for (const id of ["exec-z", "exec-a"]) {
       const session = createProcessSessionFixture({ id, backgrounded: true });
       session.scopeKey = fixture.input.attempt.sessionKey;
-      session.tail = "private output tail";
+      appendOutput(session, "stdout", "private output tail");
       addSession(session);
     }
     const active = await prepareContext(fixture.input);

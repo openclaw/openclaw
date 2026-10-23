@@ -21,6 +21,7 @@ describe.each(["roster", "file inventory"] as const)("Agents %s native read", (k
         <AgentFiles
           {...fixture.agentFiles}
           readData={fixture.readData}
+          presentationRetired={fixture.presentationRetired}
           agentId="beta"
           canWrite
           listRead={pending.promise}
@@ -51,6 +52,7 @@ describe.each(["roster", "file inventory"] as const)("Agents %s native read", (k
         <AgentFiles
           {...fixture.agentFiles}
           readData={fixture.readData}
+          presentationRetired={fixture.presentationRetired}
           agentId="beta"
           canWrite
           listRead={request()}

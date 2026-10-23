@@ -8,7 +8,11 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
-import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
+import {
+  buildChannelGroupsScopeTree,
+  createRestrictSendersChannelSecurity,
+  resolveScopeRequireMention,
+} from "openclaw/plugin-sdk/channel-policy";
 import {
   createChannelDirectoryAdapter,
   createResolvedDirectoryEntriesLister,
@@ -20,8 +24,7 @@ import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { lineDoctor } from "./doctor.js";
 import { lineGatewayAdapter } from "./gateway.js";
-import { resolveLineGroupLookupIds } from "./group-keys.js";
-import { resolveLineGroupRequireMention } from "./group-policy.js";
+import { resolveExactLineGroupConfigKey, resolveLineGroupLookupIds } from "./group-keys.js";
 import { inferLineTargetChatType, normalizeLineMessagingTarget } from "./messaging-target.js";
 import { lineMessageAdapter, lineOutboundAdapter } from "./outbound.js";
 import { lineMessageActions } from "./rich-messages.js";
@@ -62,7 +65,17 @@ export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
     ...lineChannelPluginCommon,
     setupWizard: lineSetupWizard,
     groups: {
-      resolveRequireMention: resolveLineGroupRequireMention,
+      resolveRequireMention: (params) => {
+        const tree = buildChannelGroupsScopeTree(params.cfg, "line", params.accountId);
+        const matchedKey = resolveExactLineGroupConfigKey({
+          groups: tree.scopes,
+          groupId: params.groupId,
+        });
+        return resolveScopeRequireMention({
+          tree,
+          path: matchedKey ? [matchedKey] : [],
+        });
+      },
     },
     allowlist: buildDmGroupAccountAllowlistAdapter({
       channelId: "line",

@@ -133,6 +133,9 @@ export function SidebarAgentRoster(props: RosterProps) {
       details: t("agentsHome.deleteAgentDetails"),
       confirmLabel: t("common.delete"),
       danger: true,
+    }).catch((error: unknown) => {
+      showToast({ message: formatUiError(error) });
+      return false;
     });
     if (
       !confirmed ||

@@ -107,13 +107,6 @@
   font-size: 11px;
 }
 
-.model-setup__provider-copy {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
 .model-setup__current-copy {
   min-width: 0;
 }
@@ -479,6 +472,40 @@
 
 .model-setup-wizard--done {
   grid-template-rows: minmax(0, 1fr) auto;
+}
+
+/* Sign-in steps size to their content; the provider badge replaces the header. */
+.model-setup-wizard--sign-in {
+  position: relative;
+  grid-template-rows: minmax(0, 1fr);
+  height: auto;
+}
+
+.model-setup-wizard__close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.model-setup-wizard__close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.model-setup-wizard__close:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
 }
 
 .model-setup-wizard--auth .model-setup-wizard__body {

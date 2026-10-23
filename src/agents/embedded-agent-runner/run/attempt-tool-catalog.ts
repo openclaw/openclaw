@@ -23,6 +23,7 @@ import {
   withRuntimeToolSchemaQuarantine,
   type RuntimeToolSchemaQuarantineRecorder,
 } from "../../tool-schema-quarantine.js";
+import { createToolSearchSelectionMatcher } from "../../tool-search-selection.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import {
   collectUniqueCatalogToolNames,
@@ -161,9 +162,18 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       const entries = normalizeStringEntries(allow);
       return entries.length === 0 ? [] : [{ label, entries, enforceWhenToolsDisabled }];
     });
-    const clientToolsCataloged =
+    const selectedClientTool = createToolSearchSelectionMatcher(
+      codeModeControlsEnabledForRun ? undefined : toolSearchConfig,
+    );
+    const catalogedClientToolNames = new Set(
       toolSearch.catalogRegistered &&
-      (codeModeControlsEnabledForRun || toolSearchConfig.mode !== "directory");
+        (codeModeControlsEnabledForRun ||
+          (toolSearchConfig.enabled && toolSearchConfig.mode !== "directory"))
+        ? (clientTools ?? [])
+            .map((tool) => tool.function.name)
+            .filter((name) => selectedClientTool({ source: "client", name }))
+        : [],
+    );
     const controlsEnabled = toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun;
     const controlNames = codeModeControlsEnabledForRun
       ? [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME]
@@ -173,7 +183,7 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     // Visible tools use compacted prompt state; replay keeps uncompacted identities.
     const visibleAllowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
-      clientTools: clientToolsCataloged ? undefined : clientTools,
+      clientTools: clientTools?.filter((tool) => !catalogedClientToolNames.has(tool.function.name)),
     });
     const replayAllowedToolNames = collectAllowedToolNames({
       tools: uncompactedEffectiveTools,
@@ -182,9 +192,17 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     const capabilityToolNames = collectAllowedToolNames({
       tools: [
         ...(deferredDirectoryToolsCallable ? uncompactedEffectiveTools : effectiveTools),
-        ...(toolSearch.catalogRegistered ? uncompactedEffectiveTools : []),
-      ].filter((tool) => getPluginToolMeta(tool)?.pluginId !== "bundle-mcp"),
+      ].filter((tool) => {
+        const meta = getPluginToolMeta(tool);
+        return !meta?.mcp && meta?.pluginId !== "bundle-mcp";
+      }),
     });
+    for (const entry of preparedToolBase.toolSurfaceRuntime.toolSearchCatalogRef?.current
+      ?.entries ?? []) {
+      if (entry.source === "openclaw") {
+        capabilityToolNames.add(normalizeToolPolicyName(entry.name));
+      }
+    }
     if (controlsEnabled) {
       // Visible compacted controls must remain allowed during uncompacted replay.
       for (const controlName of controlNames) {
@@ -228,7 +246,8 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     // Auto-added controls cannot conceal an explicit allowlist that matched nothing.
     const hasCallableTools =
       toolSearch.catalogToolCount > 0 ||
-      ((clientToolsCataloged || deferredDirectoryToolsCallable) && explicitlyAllowedClientTool) ||
+      ((catalogedClientToolNames.size > 0 || deferredDirectoryToolsCallable) &&
+        explicitlyAllowedClientTool) ||
       [...emptyAllowlistVisibleToolNames].some((toolName) => !autoAddedControlNames.has(toolName));
     const toolSearchRunPlan = {
       visibleAllowedToolNames,
@@ -242,7 +261,9 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
         return null;
       }
       const toolsIntentionallyDisabled =
-        attempt.disableTools === true || preparedToolBase.effectiveToolsAllow?.length === 0;
+        attempt.disableTools === true ||
+        preparedToolBase.effectiveToolsAllow?.length === 0 ||
+        runtimeCapabilityProfile.policy.explicitToolDenylist.includes("*");
       const sources = toolsIntentionallyDisabled
         ? explicitToolAllowlistSources.filter((source) => source.enforceWhenToolsDisabled === true)
         : explicitToolAllowlistSources;

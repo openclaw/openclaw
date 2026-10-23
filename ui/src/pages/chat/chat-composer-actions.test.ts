@@ -265,6 +265,7 @@ describe("renderChatComposer controls", () => {
         queued("waiting-idle-1", { createdAt: 4, sendState: "waiting-idle" }),
       ],
     });
+    await vi.dynamicImportSettled();
     const steer = await waitForSolid(() => {
       const buttons = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__action")];
       expect(buttons).toHaveLength(2);
@@ -275,7 +276,8 @@ describe("renderChatComposer controls", () => {
     expect(onQueueSteer.mock.calls).toEqual([["queued-1"], ["waiting-idle-1"]]);
   });
 
-  it("steers empty Enter on a new press", () => {
+  it.each([false, true])("steers empty Enter only on desktop (mobile=%s)", (mobile) => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(mobile ? "Android" : "Windows");
     const onQueueSteer = vi.fn();
     const { container, onSend } = renderComposer({
       ...activeRun(),
@@ -288,10 +290,10 @@ describe("renderChatComposer controls", () => {
         queued("failed", { createdAt: 2, sessionKey: "main", sendState: "failed" }),
       ],
     });
-    const event = pressComposerEnter(container, { repeat: false });
+    const event = pressComposerEnter(container);
 
-    expect(event.defaultPrevented).toBe(true);
-    expect(onQueueSteer.mock.calls).toEqual([["pending-unscoped"]]);
+    expect(event.defaultPrevented).toBe(!mobile);
+    expect(onQueueSteer.mock.calls).toEqual(mobile ? [] : [["pending-unscoped"]]);
     expect(onSend).not.toHaveBeenCalled();
   });
 
@@ -307,6 +309,7 @@ describe("renderChatComposer controls", () => {
 
     pressComposerEnter(container);
     expect(onQueueSteer).not.toHaveBeenCalled();
+    await vi.dynamicImportSettled();
     await waitForSolid(() => expect(container.querySelector(".chat-queue__item")).not.toBeNull());
     expect(container.querySelector(".chat-queue__action")).toBeNull();
   });

@@ -575,21 +575,36 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenLastCalledWith(["cron", "enabled"], undefined);
   });
 
-  it.each([
-    { key: "slack", additionalProperties: { type: "string" }, value: { channelA: "ok" } },
-    { key: "accounts", additionalProperties: true, value: { default: { enabled: true } } },
-  ])("removes entries from the $key map", ({ key, additionalProperties, value }) => {
-    const analysis = analyzeConfigSchema(
-      object({ [key]: { type: "object", additionalProperties } }),
-    );
-    expect(analysis.unsupportedPaths).toEqual([]);
-    renderAnalyzedFormFixture(container, analysis, { value: { [key]: value }, onPatch });
-    expectElement(
-      container.querySelector(".cfg-map button[aria-label='Remove entry']"),
-      "map remove button",
-    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith([key], {});
-  });
+  it.each(
+    [
+      { key: "slack", additionalProperties: { type: "string" }, value: { channelA: "ok" } },
+      { key: "accounts", additionalProperties: true, value: { default: { enabled: true } } },
+    ].flatMap((entry) => [false, true].map((disabled) => ({ entry, disabled }))),
+  )(
+    "removes entries from the $entry.key map only when enabled (disabled=$disabled)",
+    ({ entry: { key, additionalProperties, value }, disabled }) => {
+      const analysis = analyzeConfigSchema(
+        object({ [key]: { type: "object", additionalProperties } }),
+      );
+      expect(analysis.unsupportedPaths).toEqual([]);
+      renderAnalyzedFormFixture(container, analysis, {
+        value: { [key]: value },
+        onPatch,
+        disabled,
+      });
+      const remove = expectElement(
+        container.querySelector<HTMLButtonElement>(".cfg-map button[aria-label^='Remove entry: ']"),
+        "map remove button",
+      );
+      expect(remove.disabled).toBe(disabled);
+      remove.click();
+      if (disabled) {
+        expect(onPatch).not.toHaveBeenCalled();
+      } else {
+        expect(onPatch).toHaveBeenCalledWith([key], {});
+      }
+    },
+  );
 
   it("filters by authored metadata tags without rendering field chips", () => {
     const analysis = rootAnalysis;

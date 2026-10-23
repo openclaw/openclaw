@@ -1,7 +1,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
@@ -17,17 +19,24 @@ const SESSION_SORT_OPTIONS = [
   { value: "tokens", labelKey: "usage.metrics.tokens" },
 ] as const;
 
-const buildSessionMeta = (session: UsageSessionEntry): string[] =>
-  [
-    session.channel && `channel:${session.channel}`,
-    (session.modelProvider || session.providerOverride) &&
-      `provider:${session.modelProvider ?? session.providerOverride}`,
-    session.model && `model:${session.model}`,
-    session.usage?.messageCounts && `msgs:${session.usage.messageCounts.total}`,
-    session.usage?.toolUsage && `tools:${session.usage.toolUsage.totalCalls}`,
-    session.usage?.messageCounts && `errors:${session.usage.messageCounts.errors}`,
-    session.usage?.durationMs && `dur:${formatDurationCompact(session.usage.durationMs) ?? "—"}`,
+/** Plain facts for a session row: where it ran, on what, and how much happened. */
+const buildSessionMeta = (session: UsageSessionEntry): string[] => {
+  const provider = session.modelProvider ?? session.providerOverride;
+  const counts = session.usage?.messageCounts;
+  const tools = session.usage?.toolUsage?.totalCalls;
+  return [
+    session.channel,
+    provider && providerDisplayLabel(provider),
+    session.model,
+    counts && `${counts.total.toLocaleString()} ${t("usage.overview.messagesAbbrev")}`,
+    tools && `${tools.toLocaleString()} ${t("usage.overview.calls")}`,
+    counts?.errors &&
+      `${counts.errors.toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}`,
+    session.usage?.durationMs && formatDurationCompact(session.usage.durationMs),
   ].filter((part): part is string => typeof part === "string" && part.length > 0);
+};
+
+const SESSION_PREVIEW = 10;
 
 export function SessionsCard(props: {
   sessions: UsageSessionEntry[];
@@ -37,6 +46,8 @@ export function SessionsCard(props: {
   totalSessions: number;
 }) {
   const isTokenMode = createMemo(() => props.usage.display.chartMode === "tokens");
+  // The page leads with the costliest sessions; the rest of the page stays one click away.
+  const [showAll, setShowAll] = createSignal(false);
   const selectedRows = () => props.usage.data.overview?.selectedRows ?? [];
   const averageLabel = createMemo(() => {
     i18nRevision();
@@ -61,7 +72,7 @@ export function SessionsCard(props: {
           <div class="sessions-card-count">
             {t("usage.sessions.shown", { count: String(props.sessions.length) })}
             {props.totalSessions !== props.sessions.length
-              ? ` · ${t("usage.sessions.total", { count: String(props.totalSessions) })}`
+              ? ` · ${t("usage.sessions.total", { count: props.totalSessions.toLocaleString() })}`
               : ""}
           </div>
         </div>
@@ -71,7 +82,7 @@ export function SessionsCard(props: {
               {averageLabel()} {t("usage.sessions.avg")}
             </span>
             <span>
-              {props.overview?.tableTotals.errors ?? 0}{" "}
+              {(props.overview?.tableTotals.errors ?? 0).toLocaleString()}{" "}
               {normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}
             </span>
           </div>
@@ -147,11 +158,23 @@ export function SessionsCard(props: {
             ]}
           >
             <SessionRows
-              sessions={props.sessions}
+              sessions={showAll() ? props.sessions : props.sessions.slice(0, SESSION_PREVIEW)}
               selectedSessions={props.usage.filters.selectedSessions}
               isTokenMode={isTokenMode()}
               onSelect={props.usage.callbacks.details.onSelectSession}
             />
+            <Show when={props.sessions.length > SESSION_PREVIEW}>
+              <button
+                type="button"
+                class="btn btn--sm btn--ghost sessions-show-all"
+                aria-expanded={showAll() ? "true" : "false"}
+                onClick={() => setShowAll((current) => !current)}
+              >
+                {showAll()
+                  ? t("usage.sessions.showTop", { count: String(SESSION_PREVIEW) })
+                  : t("usage.sessions.showAll", { count: props.sessions.length.toLocaleString() })}
+              </button>
+            </Show>
           </div>
         )}
         {props.usage.display.sessionsTab === "all" && props.overview ? (
@@ -273,24 +296,36 @@ function SessionRows(props: {
             <div class="session-bar-actions">
               <Show when={copyIdentity()} keyed>
                 {(_identity) => {
-                  let labelElement!: HTMLSpanElement;
+                  let feedback!: HTMLSpanElement;
+                  let announcement!: HTMLSpanElement;
                   return (
                     <>
                       {" "}
                       <button
                         type="button"
-                        class="btn btn--sm btn--ghost"
+                        class="btn btn--sm btn--icon session-bar-copy"
+                        aria-label={t("usage.sessions.copy")}
+                        title={t("usage.sessions.copy")}
                         onClick={(event: MouseEvent) => {
                           event.stopPropagation();
                           void handleCopyButton(event, label(), t("usage.sessions.copy"), {
-                            label: labelElement,
+                            feedback,
+                            announcement,
                           });
                         }}
                       >
-                        <span ref={(element) => (labelElement = element)} data-copy-label>
-                          {t("usage.sessions.copy")}
-                        </span>
-                      </button>{" "}
+                        <Icon name="copy" />
+                      </button>
+                      <span
+                        ref={(element) => (feedback = element)}
+                        class="session-bar-copy-feedback"
+                        hidden
+                      />
+                      <span
+                        ref={(element) => (announcement = element)}
+                        class="sr-only"
+                        role="status"
+                      />{" "}
                     </>
                   );
                 }}

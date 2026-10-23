@@ -46,11 +46,12 @@ suite.define(() => {
       expect(await pinReads()).toHaveLength(0);
       await gateway.resolveDeferred("chat.startup");
       await page.getByText("Selected conversation ready.", { exact: true }).waitFor();
-      await page.getByRole("link", { name: "Pinned chat 29", exact: true }).waitFor();
+      const pinned = page.locator('[data-session-section="pinned"] .sidebar-recent-session');
+      await pinned.getByText("Pinned chat 29", { exact: true }).waitFor();
       expect(
-        await page
-          .locator(".sidebar-rail__pin")
-          .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-sidebar-entry"))),
+        await pinned.evaluateAll((rows) =>
+          rows.map((row) => `session:${row.getAttribute("data-session-key")}`),
+        ),
       ).toEqual(entries);
       expect(await pinReads()).toHaveLength(30);
     });

@@ -153,9 +153,7 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:process.env.C
         TEST_TITLE: title,
         PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: "[]",
         EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
-        ...emptyInputs(
-          "CANDIDATE_ARTIFACT_JSON TELEGRAM_WAIVER CROSS_OS_SUITE_FILTER CODEX_PLUGIN_SPEC",
-        ),
+        ...emptyInputs("CANDIDATE_ARTIFACT_JSON CROSS_OS_SUITE_FILTER CODEX_PLUGIN_SPEC"),
         PROVIDER: "openai",
         MODE: "both",
         RELEASE_PROFILE: "stable",

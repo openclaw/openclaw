@@ -7,6 +7,7 @@ import type { HookEntry } from "../hooks/types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { MemoryAudience } from "./memory-provider-types.js";
+import type { PluginRequesterModels } from "./model-catalog.types.js";
 
 export type OpenClawPluginActiveModelContext = {
   provider?: string;
@@ -142,7 +143,11 @@ type OpenClawPluginToolContextBase = {
 
 /** Version 1 is the source-compatible direct-turn context; version 2 requires final-effect authority. */
 export type OpenClawPluginToolContext<Version extends 1 | 2 = 1> = Version extends 2
-  ? OpenClawPluginToolContextBase & { assertInvocationCurrent: () => void }
+  ? OpenClawPluginToolContextBase & {
+      assertInvocationCurrent: () => void;
+      /** Optional on older hosts and on turns without admitted requester/session authority. */
+      runtimeContext?: { models?: PluginRequesterModels };
+    }
   : OpenClawPluginToolContextBase;
 
 /** A version 2 descriptor explicitly opts into owner-authorized continuations. */
