@@ -106,7 +106,13 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
   }
   const draw = (id = "main") => renderControl(control, context, id, { ...agent, id });
   const find = (attribute: string, value?: string) => controlElement(draw(), attribute, value);
-  const select = (value: string) => find("account-option", value)!.click();
+  const select = (value: string) => {
+    if (!find("account-option", value)) {
+      find("account-group-toggle")!.click();
+      flush();
+    }
+    find("account-option", value)!.click();
+  };
   const chooseAccount = async () => {
     await vi.waitFor(() =>
       expect(control.modelSelectionBlockedReason(agent)).toContain("No provider credential"),

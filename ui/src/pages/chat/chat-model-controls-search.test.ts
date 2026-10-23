@@ -123,8 +123,11 @@ describe("chat model controls", () => {
     expect(details?.open).toBe(false);
 
     onModelSelect.mockClear();
-    details!.dispatchEvent(new Event("toggle"));
     details!.open = true;
+    details!.dispatchEvent(new Event("toggle"));
+    search!.value = "";
+    search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    flush();
     container
       .querySelector<HTMLButtonElement>(
         '[data-chat-model-provider-group="anthropic"] [data-chat-model-provider-toggle]',

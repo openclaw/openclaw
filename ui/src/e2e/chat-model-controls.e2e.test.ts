@@ -576,6 +576,7 @@ suite.define(() => {
           key: sessionKey,
           model: `openai/gpt-5.5@${work.authProfileId}`,
         });
+        await search.clear();
         await expect.poll(() => trigger.textContent()).toContain(personal.label);
         await gateway.resolveDeferred("sessions.patch", { ok: true });
         await gateway.setMethodResponse("sessions.list", sessionList);
