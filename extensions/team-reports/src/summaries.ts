@@ -12,7 +12,6 @@ import type {
 } from "./types.js";
 
 export type SummaryLlm = Pick<OpenClawPluginApi["runtime"]["llm"], "complete">;
-type CompletionParams = Parameters<SummaryLlm["complete"]>[0];
 type SummaryLogger = Pick<SourceRuntime["logger"], "warn">;
 
 type SummaryResult = {
@@ -346,7 +345,7 @@ export async function generateSummaries(params: {
   if (!options.enabled || Buffer.byteLength(digest, "utf8") > MAX_DIGEST_BYTES) {
     return fallbackResult(report, fingerprint, generatedAtMs);
   }
-  const messages: CompletionParams["messages"] = [
+  const messages: Parameters<SummaryLlm["complete"]>[0]["messages"] = [
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: digest },
   ];

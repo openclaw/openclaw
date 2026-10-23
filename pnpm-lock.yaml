@@ -3171,6 +3171,9 @@ importers:
       jsdom:
         specifier: 30.1.2
         version: 30.1.2(@noble/hashes@2.4.0)
+      libdeflate:
+        specifier: 0.1.0
+        version: 0.1.0
       openclaw:
         specifier: workspace:*
         version: link:..
@@ -8861,6 +8864,10 @@ packages:
 
   libbase64@1.3.2:
     resolution: {integrity: sha512-fFCoI0ceXhTu/0QiJ6Uf6BV9k7X/8QW2/D4BR1vw3BPrHcIjLbGLH+U7inQ4SeWrfNCOmpGE09Qt4XjSFfus0g==}
+
+  libdeflate@0.1.0:
+    resolution: {integrity: sha512-HubE+lY04UnnaAjH32SiToef3s/JJ6yApb+QTjY/3BfSlY8AqAjcUga9NTIJZ4NzKU2sKttCefBu3T3toLXCfQ==}
+    engines: {node: '>=24'}
 
   libmime@5.4.7:
     resolution: {integrity: sha512-r1ENu4wMVSB52AAORwaW4L/MeQJr9rryzHLRpcjud3zcUPWXh1Xkgn+tAqL8oTnRO/LW7y5xxPBE20ta5amtMA==}
@@ -17294,6 +17301,8 @@ snapshots:
       type-check: 0.4.0
 
   libbase64@1.3.2: {}
+
+  libdeflate@0.1.0: {}
 
   libmime@5.4.7:
     dependencies:

@@ -359,12 +359,11 @@ export function resolveOfficialExternalProviderContractPluginIds(params: {
 
 /** Resolves official web provider owners from matching documented environment credentials. */
 export function resolveOfficialExternalWebProviderContractPluginIdsForEnv(params: {
-  contract: OfficialExternalProviderContract;
   env: NodeJS.ProcessEnv;
 }): string[] {
   return resolveOfficialExternalPluginOwners((manifest) => {
     const contractProviderIds = normalizedProviderIdSet(
-      manifest.contracts?.[params.contract] ?? [],
+      manifest.contracts?.webFetchProviders ?? [],
     );
     return (
       contractProviderIds.size > 0 &&

@@ -5,16 +5,14 @@ import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 
-type AgentsTeamCreateOptions = {
+export async function agentsTeamCreateCommand(opts: {
   preset?: string;
   coordinator?: string;
   prefix?: string;
   workspaceRoot?: string;
   nonInteractive?: boolean;
   json?: boolean;
-};
-
-export async function agentsTeamCreateCommand(opts: AgentsTeamCreateOptions): Promise<void> {
+}): Promise<void> {
   const result = await runWithLocalStateOwner({
     method: "agents.team.create",
     params: {},

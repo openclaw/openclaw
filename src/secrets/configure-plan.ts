@@ -196,12 +196,11 @@ export function hasConfigurePlanChanges(params: {
 export function buildSecretsConfigurePlan(params: {
   selectedTargets: ReadonlyMap<string, ConfigureSelectedTarget>;
   providerChanges: ConfigureProviderChanges;
-  generatedAt?: string;
 }): SecretsApplyPlan {
   return {
     version: 1,
     protocolVersion: 1,
-    generatedAt: params.generatedAt ?? new Date().toISOString(),
+    generatedAt: new Date().toISOString(),
     generatedBy: "openclaw secrets configure",
     targets: [...params.selectedTargets.values()].map((entry) =>
       Object.assign(

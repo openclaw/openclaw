@@ -5,6 +5,7 @@ import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
@@ -31,6 +32,7 @@ import { ChatSubagentsPanelDesktop } from "./chat-subagents-panel-desktop.tsx";
 import { createSubagentsPresentation } from "./chat-subagents-presentation.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 type Props = SessionPanelProps & {
   paneId: string;

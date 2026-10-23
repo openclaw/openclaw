@@ -3,7 +3,6 @@ import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-tes
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { getSlackClient, getSlackTestState, resetSlackTestState } from "../monitor.test-helpers.js";
-import { SLACK_ISOLATED_INVALID_AUTH_TERMINAL_LIMIT } from "./reconnect-policy.js";
 
 const { monitorSlackProvider } = await import("./provider.js");
 const slackTestState = getSlackTestState();
@@ -156,9 +155,7 @@ describe("slack socket reconnect loop", () => {
     const run = start();
     await vi.runAllTimersAsync();
     await expect(run).rejects.toThrow("invalid_auth");
-    expect(slackTestState.appStartMock).toHaveBeenCalledTimes(
-      SLACK_ISOLATED_INVALID_AUTH_TERMINAL_LIMIT,
-    );
+    expect(slackTestState.appStartMock).toHaveBeenCalledTimes(3);
     expect(setStatus.mock.calls.some(([next]) => next.lifecycle === "blocked")).toBe(true);
   });
 
@@ -180,10 +177,8 @@ describe("slack socket reconnect loop", () => {
     await vi.runAllTimersAsync();
     await expect(run).rejects.toThrow("invalid_auth");
     // The pre-connect failure must not carry over: terminal only after a fresh
-    // run of SLACK_ISOLATED_INVALID_AUTH_TERMINAL_LIMIT consecutive failures.
-    expect(slackTestState.appStartMock).toHaveBeenCalledTimes(
-      SLACK_ISOLATED_INVALID_AUTH_TERMINAL_LIMIT + 1,
-    );
+    // run of three consecutive failures.
+    expect(slackTestState.appStartMock).toHaveBeenCalledTimes(4);
     expect(setStatus.mock.calls.some(([next]) => next.lifecycle === "blocked")).toBe(true);
   });
 });

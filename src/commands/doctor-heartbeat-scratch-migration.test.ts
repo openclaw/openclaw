@@ -20,7 +20,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
-import { retireHeartbeatWithDoctor } from "./doctor-heartbeat-retirement.js";
+import {
+  maybeMigrateHeartbeatCadenceToCron,
+  retireHeartbeatWithDoctor,
+} from "./doctor-heartbeat-retirement.js";
 import {
   collectHeartbeatScratchMigrationFindings,
   maybeMigrateHeartbeatFilesToScratch,
@@ -86,6 +89,42 @@ function sharedHeartbeatConfig(workspace: string, ollamaEvery = "0m") {
 }
 
 describe("HEARTBEAT.md cron scratch migration", () => {
+  it.each(["0m", "15m"])(
+    "finishes the Doctor pass with disabled defaults and an explicit %s sibling",
+    async (every) => {
+      const fixture = await createFixture();
+      fixture.cfg.agents!.defaults!.systemAgent = { agentId: "main" };
+      fixture.cfg.agents!.defaults!.heartbeat = {
+        every: "0m",
+        target: "discord",
+        to: "channel:synthetic",
+        directPolicy: "block",
+      };
+      fixture.cfg.agents!.entries!.other = {
+        workspace: path.join(fixture.root, "other"),
+        heartbeat: { every },
+      };
+      await fs.writeFile(fixture.heartbeatPath, "# HEARTBEAT.md\n# Proactive checks\n");
+      const retired = await retireHeartbeatWithDoctor(fixture.cfg);
+      await maybeMigrateHeartbeatCadenceToCron({ cfg: retired, shouldRepair: true });
+      await maybeMigrateHeartbeatFilesToScratch({ cfg: retired, shouldRepair: true });
+      const storePath = resolveCronJobsStorePathFromConfig(retired);
+      const store = await loadCronJobsStore(storePath);
+      expect(store.jobs.find((job) => job.agentId === "main")?.enabled).toBe(false);
+      expect(store.jobs).toHaveLength(2);
+      expect(store.jobs.find((job) => job.agentId === "other")?.enabled).toBe(every !== "0m");
+      for (const agentId of ["main", "other"]) {
+        expect(
+          withExistingOpenClawStateDatabaseReadOnly(({ db }) =>
+            readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId),
+          ),
+        ).toMatchObject({ phase: "complete" });
+      }
+      await retireHeartbeatWithDoctor(retired);
+      expect((await loadCronJobsStore(storePath)).jobs).toEqual(store.jobs);
+    },
+  );
+
   it.each(["admission", "repair"])(
     "preserves differing legacy scratch and its source during %s",
     async (phase) => {

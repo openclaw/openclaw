@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { Errored, For, Loading, Show, createMemo, createSignal, latest } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
@@ -20,6 +21,7 @@ import { createProcessesPresentation } from "./chat-processes-presentation.ts";
 import { ChatSubagentActivity } from "./chat-subagent-activity-lazy.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 type Props = {
   details: ChatDetailsProps;

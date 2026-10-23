@@ -64,7 +64,6 @@ packages/llm-core/src/usage-cost.ts
 packages/llm-core/src/utils/assistant-message-events.ts
 packages/llm-core/src/utils/diagnostics.ts
 packages/llm-core/src/utils/event-stream.ts
-packages/llm-core/src/utils/provider-refusal.ts
 packages/llm-core/src/validation.ts
 packages/media-core/src/constants.ts
 packages/media-core/src/file-name.ts
