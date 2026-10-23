@@ -10,6 +10,7 @@ import type {
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
+import * as profiles from "../../state/user-profile-list.js";
 import { resolveBundledPluginPublicModulePath } from "../../test-utils/bundled-plugin-public-surface.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
@@ -56,7 +57,13 @@ async function call(
 
 const searchParams = { version: 2, query: "x" };
 
+let sharedGateway = false;
+
 beforeEach(() => {
+  sharedGateway = false;
+  vi.spyOn(profiles, "hasMultipleResidentSessionSharingIdentities").mockImplementation(
+    () => sharedGateway,
+  );
   config = providerConfig;
   provider = createMemoryProvider(reference, searchPage, true);
   open = vi.fn<MemoryProviderRuntime["open"]>(async () => ({ provider }));
@@ -98,6 +105,32 @@ describe("memory provider reads through Gateway dispatch", () => {
       scopes: ["operator.read"],
       connId: "cli-connection",
     });
+  });
+
+  it("requires an administrator for content reads on a shared Gateway", async () => {
+    sharedGateway = true;
+    expectRpcError(await call("memory.search", searchParams), {
+      message: expect.stringContaining("requires an administrator"),
+    });
+    expectRpcError(await call("memory.get", { reference }), {
+      message: expect.stringContaining("requires an administrator"),
+    });
+    expect(open).not.toHaveBeenCalled();
+    expectRpcResult(await call("memory.status", {}), expect.objectContaining({ status: "ready" }));
+    const admin = await call("memory.search", searchParams, cliClient(["operator.admin"]));
+    expectRpcResult(admin, expect.objectContaining({ agentId: "main" }));
+  });
+
+  it("refuses a content read before provider I/O when the Gateway becomes shared during open", async () => {
+    open.mockImplementation(async (input) => {
+      sharedGateway = true;
+      input.context.assertCurrent();
+      return { provider };
+    });
+    expectRpcError(await call("memory.search", searchParams), {
+      message: expect.stringContaining("requires an administrator"),
+    });
+    expect(provider.search).not.toHaveBeenCalled();
   });
 
   it.each([

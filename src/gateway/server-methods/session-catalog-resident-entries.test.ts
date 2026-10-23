@@ -27,6 +27,8 @@ import {
   createSessionRowProjection,
   type SessionRowProjection,
 } from "../session-row-projection.js";
+import * as rowSelection from "../session-row-selection.js";
+import { prepareSessionRowSelection } from "../session-utils-list.js";
 import { catalogHost, catalogSession } from "./session-catalog.fixtures.test-support.js";
 import { sessionCatalogHandlers } from "./session-catalog.js";
 
@@ -184,6 +186,44 @@ it("reads clean local catalog entries from the resident owner without SQLite", (
     expect(renamed.sessions[0]?.name).toBe("Updated provider title");
     expect(originalHost.sessions[0]?.name).toBeUndefined();
   }));
+
+it("shares list selection facts while preserving catalog order after row replacement", () =>
+  withCatalog(
+    async ({ list, setList, projection }) => {
+      const snapshots: Array<readonly string[]> = [];
+      setList(async ({ sessionEntries }) => {
+        snapshots.push(sessionEntries!.entriesForAgent("main").map(({ sessionKey }) => sessionKey));
+        return hosts([session()]);
+      });
+      await list();
+      const builds = vi.spyOn(rowSelection, "createSessionRowSelection");
+      const ordered = () =>
+        prepareSessionRowSelection(projection, { agentId: "main" }, { ordered: true }).entries(
+          "all",
+        );
+      expect(ordered()).toHaveLength(3);
+      // The catalog and sessions.list consume one maintained federation, not two indexes.
+      expect(builds).not.toHaveBeenCalled();
+      replace({ updatedAt: 2 });
+      await list();
+      expect(ordered().map(([sessionKey]) => sessionKey)[0]).toBe(key);
+      const unrelated = ["agent:main:unrelated-0", "agent:main:unrelated-1"];
+      expect(snapshots).toEqual([
+        [key, ...unrelated],
+        [...unrelated, key],
+      ]);
+      // Delivery still constructs its bounded one-key selector; planning reuses the owner.
+      expect(builds).toHaveBeenCalledTimes(1);
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: unrelated[0]! },
+        { sessionId: "unrelated-0", updatedAt: 3, archivedAt: 3 },
+      );
+      await list();
+      expect(snapshots[2]).toEqual([unrelated[1], key, unrelated[0]]);
+      expect(snapshots[0]).toEqual([key, ...unrelated]);
+    },
+    { otherEntryCount: 2 },
+  ));
 
 it.each(["planning", "delivery"])(
   "serves catalog %s without draining unrelated display invalidations",

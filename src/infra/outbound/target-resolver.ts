@@ -73,32 +73,26 @@ export function formatTargetDisplay(params: {
   channel: ChannelId;
   target: string;
   display?: string;
-  kind?: ChannelDirectoryEntryKind;
 }): string {
   const plugin = getRuntimeVisibleChannelPlugin(params.channel);
   if (plugin?.messaging?.formatTargetDisplay) {
     return plugin.messaging.formatTargetDisplay({
       target: params.target,
       display: params.display,
-      kind: params.kind,
     });
   }
 
   const trimmedTarget = params.target.trim();
   const lowered = trimmedTarget.toLowerCase();
   const display = params.display?.trim();
-  const kind =
-    params.kind ??
-    (lowered.startsWith("user:") ? "user" : lowered.startsWith("channel:") ? "group" : undefined);
-
   if (display) {
     if (display.startsWith("#") || display.startsWith("@")) {
       return display;
     }
-    if (kind === "user") {
+    if (lowered.startsWith("user:")) {
       return `@${display}`;
     }
-    if (kind === "group" || kind === "channel") {
+    if (lowered.startsWith("channel:")) {
       return `#${display}`;
     }
     return display;

@@ -262,6 +262,7 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
       const connection = requireNativeSqliteDatabase(retained.value);
       const read = () => scope.run(target.database, () => readRecent());
       const external = new DatabaseSync(target.database.path);
+      const selectedConnections: DatabaseSync[] = [];
       try {
         if (admission === "cold") {
           // The host fixture writer can already have published canonical admission.
@@ -285,16 +286,24 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
           invalidateOpenClawAgentDatabaseValidation(database.path);
         }
         clearNodeSqliteKyselyCacheForDatabase(connection);
-        const prepare = connection.prepare.bind(connection);
+        // oxlint-disable-next-line typescript/unbound-method -- Forward with the actual native reader.
+        const prepare = DatabaseSync.prototype.prepare;
         let selectedInTransaction: boolean | undefined;
-        const prepareSpy = vi.spyOn(connection, "prepare").mockImplementation((sql) => {
-          const statement = prepare(sql);
+        const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+          this: DatabaseSync,
+          sql,
+        ) {
+          const statement = prepare.call(this, sql);
           if (
             selectedInTransaction === undefined &&
+            this !== external &&
+            this !== database.db &&
+            this.location() === target.database.path &&
             isSessionNodePayloadSelect(sql) &&
             / from "session_nodes" where "session_key" = /i.test(sql)
           ) {
-            selectedInTransaction = connection.isTransaction;
+            selectedConnections.push(this);
+            selectedInTransaction = this.isTransaction;
             // Commit after admission but before the exact row read. The same snapshot
             // must protect both row validation and the history payload returned to callers.
             runSqliteImmediateTransactionSync(external, () => {
@@ -329,9 +338,10 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
             expect(page.messages[0]).toMatchObject({ content: "Requested history" });
           }
           expect(selectedInTransaction).toBe(admission !== "warm");
-          expect(connection.isTransaction).toBe(false);
+          const selectedConnection = selectedConnections[0]!;
+          expect(selectedConnection.isTransaction).toBe(false);
           await expect(read()).rejects.toThrow("openclaw doctor --fix");
-          expect(connection.isOpen).toBe(true);
+          expect(selectedConnection.isOpen).toBe(true);
         } finally {
           prepareSpy.mockRestore();
         }
@@ -339,6 +349,7 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
         external.close();
         scope.close();
       }
+      expect(selectedConnections[0]?.isOpen).toBe(false);
       expect(connection.isOpen).toBe(false);
     });
   },

@@ -23,6 +23,8 @@ import type {
 } from "./session-accessor.sqlite-history-navigation.types.js";
 import {
   getActiveTranscriptKysely,
+  selectActiveTranscriptEventRows,
+  selectActiveTranscriptIdentityRows,
   getMessageRangeReaders,
   selectMessageRows,
   selectMessagePayload,
@@ -327,7 +329,6 @@ function findLatestResetMessageWindow(
   scope: BoundaryWindowScope,
   beforeRawSeq?: number,
 ): ResetMessageWindow | null {
-  const db = getActiveTranscriptKysely(projection.database);
   const latestBoundary = readLatestActiveBoundaryMetadata(projection, scope, beforeRawSeq);
   if (!latestBoundary) {
     return null;
@@ -341,13 +342,7 @@ function findLatestResetMessageWindow(
   if (typeof boundary.firstKeptEntryId === "string") {
     const indexedFirstKept = executeSqliteQueryTakeFirstSync(
       projection.database.db,
-      db
-        .selectFrom("transcript_event_identities as identity")
-        .innerJoin("session_transcript_active_events as active", (join) =>
-          join
-            .onRef("active.session_id", "=", "identity.session_id")
-            .onRef("active.event_seq", "=", "identity.seq"),
-        )
+      selectActiveTranscriptIdentityRows(projection.database)
         .select("active.active_position")
         .where("identity.session_id", "=", projection.resolved.sessionId)
         .where("identity.event_id", "=", boundary.firstKeptEntryId)
@@ -369,13 +364,7 @@ function findLatestResetMessageWindow(
       firstKeptActivePosition = firstKept.active_position;
       const candidateRows = iterateSqliteQuerySync(
         projection.database.db,
-        db
-          .selectFrom("session_transcript_active_events as active")
-          .innerJoin("transcript_events as event", (join) =>
-            join
-              .onRef("event.session_id", "=", "active.session_id")
-              .onRef("event.seq", "=", "active.event_seq"),
-          )
+        selectActiveTranscriptEventRows(projection.database)
           .select([
             "active.message_position",
             // Compaction keeps the entire tail and needs no tool-pairing metadata.
@@ -666,14 +655,7 @@ export function readVisibleTranscriptStats(
   const window = freshBoundary
     ? findLatestResetMessageWindow(projection, "context")
     : resolveTranscriptBoundaryWindow(projection, "context");
-  const db = getActiveTranscriptKysely(projection.database);
-  const base = db
-    .selectFrom("session_transcript_active_events as active")
-    .innerJoin("transcript_events as event", (join) =>
-      join
-        .onRef("event.session_id", "=", "active.session_id")
-        .onRef("event.seq", "=", "active.event_seq"),
-    )
+  const base = selectActiveTranscriptEventRows(projection.database)
     .select((eb) => [
       eb.fn.countAll<number>().as("event_count"),
       /* kysely-allow-raw: JSONL size includes one terminating newline per event. */

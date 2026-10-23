@@ -58,6 +58,12 @@ export function inheritSessionCreateParentFields(params: {
   if (params.newDashboardRoot && !params.selectedModel) {
     inherited.modelOverrideSource = "default";
   }
+  // A dashboard root is a direct chat with its operator, whichever turn path
+  // (chat.send, sessions_send, cron) first runs it. Memory audience resolution
+  // reads this durable root fact; each turn still decides owner status.
+  if (params.newDashboardRoot) {
+    inherited.chatType = "direct";
+  }
   return inherited;
 }
 

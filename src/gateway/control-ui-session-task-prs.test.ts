@@ -20,6 +20,7 @@ import { insertRepositoryGitHubPublicationFixture } from "./github-publication-s
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication.kernel.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import * as records from "./session-row-projection-record.js";
 
 let state: OpenClawTestState;
 let fixture: Awaited<ReturnType<typeof createFixture>>;
@@ -126,6 +127,7 @@ it("shares lineage work across audiences without sharing visibility or stale des
   await projection.ensureMaterialized();
   const root = projection.describe({ agentId: "main", key: sessionKey })!;
   const reads = vi.spyOn(projection, "selectEntries");
+  const resolveParent = vi.spyOn(records, "parentReference");
   const expected = (keys: string[]) =>
     keys.map((key) => ({
       agentId: "main",
@@ -148,10 +150,12 @@ it("shares lineage work across audiences without sharing visibility or stale des
     expected([child, hidden, leaf, sessionKey]),
   );
   expect(reads).toHaveBeenCalledTimes(firstReads);
+  expect(resolveParent).not.toHaveBeenCalled();
 
   await fixture.seed(leaf, fixture.profile.id, { parentSessionKey: hidden, updatedAt: 2 });
   await projection.ensureMaterialized();
   const current = projection.describe({ agentId: "main", key: sessionKey })!;
+  resolveParent.mockClear();
   expect(selectTaskPublicationSessions(projection, current, allowsShared)).toEqual(
     expected([child, sessionKey]),
   );
@@ -159,6 +163,7 @@ it("shares lineage work across audiences without sharing visibility or stale des
     expected([child, hidden, leaf, sessionKey]),
   );
   expect(reads.mock.calls.length).toBeGreaterThan(firstReads);
+  expect(resolveParent).not.toHaveBeenCalled();
 
   const runId = "task-pr-registry-lineage";
   subagentRuns.set(

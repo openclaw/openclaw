@@ -191,7 +191,9 @@ export function renderSidebarAgentMenuSwitcher(
   if (agents().length > 1) {
     entries.push({
       id: "scope:all",
-      label: t("agentChip.showAll"),
+      get label() {
+        return t("agentChip.showAll");
+      },
       class: [
         "sidebar-customize-menu__item sidebar-agent-menu__agent-switch",
         { "sidebar-agent-menu__agent-switch--active": params.allAgentsScope },

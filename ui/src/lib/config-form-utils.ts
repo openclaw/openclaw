@@ -190,8 +190,6 @@ export function pruneEmptyConfigForm(
   return isRecord(pruned) ? pruned : form;
 }
 
-type PathPatchMode = "copy" | "set" | "remove";
-
 type PathPatchResult = { ok: true; value: unknown } | { ok: false };
 
 function patchPathValue(
@@ -199,7 +197,7 @@ function patchPathValue(
   path: Array<string | number>,
   index: number,
   replacement: unknown,
-  mode: PathPatchMode,
+  mode: "copy" | "set" | "remove",
 ): PathPatchResult {
   const segment = path[index];
   if (segment === undefined) {

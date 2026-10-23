@@ -255,9 +255,10 @@ suite.define(() => {
 
         await logout.click();
         await expectRequests(gateway, "channels.logout", 0);
-        const firstConfirm = (await waitForConfirmModal(page)).filter({
+        const logoutConfirmation = page.locator("openclaw-modal-dialog").filter({
           has: page.getByText("Log out of WhatsApp account default?", { exact: true }),
         });
+        const firstConfirm = await waitForConfirmModal(page, logoutConfirmation);
         const confirmation = await firstConfirm.textContent();
         expect(confirmation).toContain("Log out of WhatsApp account default?");
         expect(confirmation).toContain(
@@ -272,9 +273,7 @@ suite.define(() => {
         await expect.poll(() => field(detail, "Linked").textContent()).toContain("Yes");
 
         await logout.click();
-        const secondConfirm = (await waitForConfirmModal(page)).filter({
-          has: page.getByText("Log out of WhatsApp account default?", { exact: true }),
-        });
+        const secondConfirm = await waitForConfirmModal(page, logoutConfirmation);
         await button(secondConfirm, "Logout").click();
         await expect
           .poll(async () => detail.locator(".settings-row__desc").allTextContents())
@@ -346,9 +345,12 @@ suite.define(() => {
       async (page, gateway) => {
         const detail = await openChannel(page);
         await detail.getByRole("button", { name: "Logout" }).click();
-        const confirm = (await waitForConfirmModal(page)).filter({
-          has: page.getByText("Log out of WhatsApp account work?", { exact: true }),
-        });
+        const confirm = await waitForConfirmModal(
+          page,
+          page.locator("openclaw-modal-dialog").filter({
+            has: page.getByText("Log out of WhatsApp account work?", { exact: true }),
+          }),
+        );
         await expect.poll(() => confirm.count()).toBe(1);
         const socketCount = await gateway.getSocketCount();
         await gateway.closeLatest(1012, "Reconnect during logout confirmation");

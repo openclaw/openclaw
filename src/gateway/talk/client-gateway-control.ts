@@ -10,6 +10,7 @@ import {
   reserveSessionControllerSource,
   type SessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
+import { waitForAgentInputRecovery } from "../../state/agent-input-recovery-context.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   resolveRealtimeVoiceAgentConsultToolsAllow,
@@ -24,6 +25,7 @@ import { createClientVoiceTranscriptReadiness } from "../../talk/client-voice-tr
 import type {
   RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceCloseDisposition,
+  RealtimeVoiceGatewayControl,
   RealtimeVoiceToolCallEvent,
 } from "../../talk/provider-types.js";
 import {
@@ -37,12 +39,9 @@ import type { GatewayRequestContext } from "../server-methods/shared-types.js";
 import type {
   LifecycleBoundTalkAgentConsult,
   ReusableTalkAgentConsult,
+  TalkAgentConsultLifecycleMethods,
   TalkAgentConsultRequest,
 } from "./client-agent-consult.types.js";
-import type {
-  GatewayControlCommands,
-  GatewayControlOwner,
-} from "./client-gateway-control.types.js";
 import {
   createTalkRealtimeRunControlOwner,
   createTalkRunCancel,
@@ -52,6 +51,31 @@ import { resolveOwnedActiveTalkRunTarget } from "./run-ownership.js";
 import { registerTalkConnectionCleanup } from "./session-registry.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 import { isTalkVoiceSessionReplacing } from "./voice-selection.js";
+
+type GatewayTalkAgentConsultRunner = (
+  request: TalkAgentConsultRequest,
+) => ReturnType<RealtimeVoiceAgentConsultRunner>;
+
+type GatewayControlOwner = {
+  readonly signal: AbortSignal;
+  adoptProvider: (closeProvider: () => Promise<void>) => Promise<void>;
+  activate: () => void;
+  assertOpen: () => void;
+  close: (options?: {
+    preserveLogicalSession?: boolean;
+    preserveRuns?: boolean;
+    skipProvider?: boolean;
+  }) => Promise<void>;
+  connId: string;
+  control: RealtimeVoiceGatewayControl & Required<Pick<RealtimeVoiceGatewayControl, "bindControl">>;
+  runAgentConsult: GatewayTalkAgentConsultRunner & TalkAgentConsultLifecycleMethods;
+  sessionTarget: PreparedTalkSessionTarget;
+  voiceSessionId: string;
+};
+
+type GatewayControlCommands = Parameters<
+  NonNullable<RealtimeVoiceGatewayControl["bindControl"]>
+>[0];
 
 const owners = new Map<string, GatewayControlOwner>();
 const pendingOwners = new Set<GatewayControlOwner>();
@@ -94,7 +118,8 @@ export function createTalkClientGatewayControlOwner(params: {
   controlSource?: "delegation" | "transcript";
   sessionTarget: PreparedTalkSessionTarget;
   connId: string;
-  context: Pick<GatewayRequestContext, "broadcastToConnIds" | "logGateway"> & TalkRunCancelContext;
+  context: Pick<GatewayRequestContext, "broadcastToConnIds" | "logGateway" | "inputRecovery"> &
+    TalkRunCancelContext;
   assertConnectionOpen?: () => void;
   runToolAgentConsult: ReusableTalkAgentConsult;
   runAgentConsult: LifecycleBoundTalkAgentConsult;
@@ -122,6 +147,7 @@ export function createTalkClientGatewayControlOwner(params: {
   });
   const entryPrefix = `gateway-${randomUUID()}`;
   const consults = new Set<Promise<void>>();
+  let consultAdmission: Promise<void> | undefined;
   let consultAdmissionSealed = false;
   const consultControllers = new Map<
     string | symbol,
@@ -180,6 +206,15 @@ export function createTalkClientGatewayControlOwner(params: {
   const awaitProviderConsultReadiness = async (consultSignal: AbortSignal): Promise<void> => {
     assertActive();
     consultSignal.throwIfAborted();
+    const recovery = waitForAgentInputRecovery(params.sessionTarget.agentId, {
+      signal: AbortSignal.any([signal, consultSignal]),
+      owner: params.context.inputRecovery,
+    });
+    if (recovery) {
+      await recovery;
+      assertActive();
+      consultSignal.throwIfAborted();
+    }
     await transcriptReadiness.wait(consultSignal);
     // Keep accepted work detached, but reject pending admission if either owner
     // changed while transcript writes were draining.
@@ -251,9 +286,11 @@ export function createTalkClientGatewayControlOwner(params: {
   const runConsult = async (
     event: RealtimeVoiceToolCallEvent,
     controller: AbortController,
-    input: SessionControllerInput,
+    reservedInput: SessionControllerInput | Promise<SessionControllerInput>,
   ): Promise<void> => {
+    let input: SessionControllerInput | undefined;
     try {
+      input = await reservedInput;
       const result = await admitConsult(params.runToolAgentConsult, event.args, input);
       if (signal.aborted) {
         return;
@@ -264,7 +301,7 @@ export function createTalkClientGatewayControlOwner(params: {
         return;
       }
       const result =
-        input.abortSignal.aborted || readErrorName(error) === "AbortError"
+        (input?.abortSignal ?? controller.signal).aborted || readErrorName(error) === "AbortError"
           ? buildRealtimeVoiceAgentCancelProviderResult()
           : { error: formatError(error) };
       await submit(event.callId, result);
@@ -379,16 +416,49 @@ export function createTalkClientGatewayControlOwner(params: {
         return;
       }
       const controller = new AbortController();
-      // Reserve mailbox order on arrival; consult preparation is asynchronous.
-      const input = reserveSessionControllerSource(params.sessionTarget.canonicalKey, {
-        policy: { mode: "followup" },
-        target: captureSessionTarget({
-          storeScope: params.sessionTarget.storePath,
-          sessionKey: params.sessionTarget.canonicalKey,
-          agentId: params.sessionTarget.agentId,
-        }),
-        adapter: { signal: controller.signal },
-      });
+      const admissionSignal = AbortSignal.any([signal, controller.signal]);
+      const reserve = () => {
+        assertActive();
+        admissionSignal.throwIfAborted();
+        return reserveSessionControllerSource(params.sessionTarget.canonicalKey, {
+          policy: { mode: "followup" },
+          target: captureSessionTarget({
+            storeScope: params.sessionTarget.storePath,
+            sessionKey: params.sessionTarget.canonicalKey,
+            agentId: params.sessionTarget.agentId,
+          }),
+          adapter: { signal: controller.signal },
+        });
+      };
+      const waitForRecovery = () =>
+        waitForAgentInputRecovery(params.sessionTarget.agentId, {
+          signal: admissionSignal,
+          owner: params.context.inputRecovery,
+        });
+      const pendingAdmission = consultAdmission
+        ? consultAdmission.then(async () => {
+            const recovery = waitForRecovery();
+            if (recovery) {
+              await recovery;
+            }
+            return reserve();
+          })
+        : waitForRecovery()?.then(reserve);
+      // Keep arrival order through recovery without holding the next reservation
+      // behind the preceding model run. Ready agents still reserve synchronously.
+      const input = pendingAdmission ?? reserve();
+      if (pendingAdmission) {
+        const tail = pendingAdmission.then(
+          () => undefined,
+          () => undefined,
+        );
+        consultAdmission = tail;
+        void tail.then(() => {
+          if (consultAdmission === tail) {
+            consultAdmission = undefined;
+          }
+        });
+      }
       consultControllers.set(event.callId, { controller, closeDisposition: "abort" });
       const consult = runConsult(event, controller, input)
         .catch((error: unknown) => {

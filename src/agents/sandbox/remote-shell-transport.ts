@@ -110,84 +110,75 @@ export function createRemoteShellSandboxSession(
   return {
     runCommand,
     uploadDirectory: (params) => uploadDirectoryToRemoteCommand(params, options),
-    prepareExec: (params) => prepareRemoteShellExec(params, options, runCommand),
+    prepareExec: async (params) => {
+      const env =
+        params.tty && params.env.TERM === undefined
+          ? { TERM: "xterm-256color", ...params.env }
+          : params.env;
+      for (const [key, value] of Object.entries(env)) {
+        if (normalizeEnvVarKey(key, { portable: true }) !== key) {
+          throw new Error(
+            `Invalid sandbox environment variable name ${JSON.stringify(key)}; use a POSIX variable name.`,
+          );
+        }
+        if (value.includes("\0")) {
+          throw new Error(
+            `Invalid sandbox environment variable ${JSON.stringify(key)}; values must not contain NUL bytes.`,
+          );
+        }
+      }
+      const remoteDir = `/tmp/openclaw-sandbox-exec-${randomUUID()}`;
+      const remoteScript = `${remoteDir}/exec.sh`;
+      const script = [
+        "#!/bin/sh",
+        "set -e",
+        `rm -rf -- ${shellEscape(remoteDir)}`,
+        ...Object.entries(env).map(([key, value]) => `export ${key}=${shellEscape(value)}`),
+        `exec ${params.remoteCommand}`,
+        "",
+      ].join("\n");
+      const cleanup = async () => {
+        // Cleanup owns this exact staged artifact even after core runtime revocation.
+        // The provider command still enforces its own current claim authority.
+        await runCommand(
+          {
+            remoteCommand: buildRemoteCommand([
+              "/bin/sh",
+              "-c",
+              'rm -rf -- "$1"',
+              "openclaw-sandbox-exec-cleanup",
+              remoteDir,
+            ]),
+            allowFailure: true,
+          },
+          false,
+        );
+      };
+      try {
+        await runCommand({
+          remoteCommand: buildRemoteCommand([
+            "/bin/sh",
+            "-c",
+            'umask 077 && mkdir -- "$1" && cat > "$1/exec.sh" && chmod 700 "$1/exec.sh"',
+            "openclaw-sandbox-exec-stage",
+            remoteDir,
+          ]),
+          stdin: script,
+        });
+        return {
+          ...options.buildCommand({
+            remoteCommand: buildRemoteCommand(["/bin/sh", remoteScript]),
+            tty: params.tty,
+          }),
+          cleanup,
+        };
+      } catch (error) {
+        await cleanup().catch(() => undefined);
+        throw error;
+      }
+    },
     dispose: options.dispose ?? (async () => {}),
   };
-}
-
-async function prepareRemoteShellExec(
-  params: RemoteShellExecParams,
-  options: RemoteShellSessionOptions,
-  runCommand: (
-    params: RemoteShellRunParams,
-    checkCurrent?: boolean,
-  ) => Promise<SandboxBackendCommandResult>,
-): Promise<RemoteShellCommandSpec & { cleanup: () => Promise<void> }> {
-  const env =
-    params.tty && params.env.TERM === undefined
-      ? { TERM: "xterm-256color", ...params.env }
-      : params.env;
-  for (const [key, value] of Object.entries(env)) {
-    if (normalizeEnvVarKey(key, { portable: true }) !== key) {
-      throw new Error(
-        `Invalid sandbox environment variable name ${JSON.stringify(key)}; use a POSIX variable name.`,
-      );
-    }
-    if (value.includes("\0")) {
-      throw new Error(
-        `Invalid sandbox environment variable ${JSON.stringify(key)}; values must not contain NUL bytes.`,
-      );
-    }
-  }
-  const remoteDir = `/tmp/openclaw-sandbox-exec-${randomUUID()}`;
-  const remoteScript = `${remoteDir}/exec.sh`;
-  const script = [
-    "#!/bin/sh",
-    "set -e",
-    `rm -rf -- ${shellEscape(remoteDir)}`,
-    ...Object.entries(env).map(([key, value]) => `export ${key}=${shellEscape(value)}`),
-    `exec ${params.remoteCommand}`,
-    "",
-  ].join("\n");
-  const cleanup = async () => {
-    // Cleanup owns this exact staged artifact even after core runtime revocation.
-    // The provider command still enforces its own current claim authority.
-    await runCommand(
-      {
-        remoteCommand: buildRemoteCommand([
-          "/bin/sh",
-          "-c",
-          'rm -rf -- "$1"',
-          "openclaw-sandbox-exec-cleanup",
-          remoteDir,
-        ]),
-        allowFailure: true,
-      },
-      false,
-    );
-  };
-  try {
-    await runCommand({
-      remoteCommand: buildRemoteCommand([
-        "/bin/sh",
-        "-c",
-        'umask 077 && mkdir -- "$1" && cat > "$1/exec.sh" && chmod 700 "$1/exec.sh"',
-        "openclaw-sandbox-exec-stage",
-        remoteDir,
-      ]),
-      stdin: script,
-    });
-    return {
-      ...options.buildCommand({
-        remoteCommand: buildRemoteCommand(["/bin/sh", remoteScript]),
-        tty: params.tty,
-      }),
-      cleanup,
-    };
-  } catch (error) {
-    await cleanup().catch(() => undefined);
-    throw error;
-  }
 }
 
 async function uploadDirectoryToRemoteCommand(

@@ -81,7 +81,7 @@ describe("doctor retirement repair ordering", () => {
       configRepair.config,
       state,
     );
-    expect.soft(result.repairedSessions).toBe(0);
+    expect.soft(result.changes).toEqual([]);
     for (const selection of selections) {
       const entry = readSession(state, `agent:main:no-op-${selection.source}`);
       expect.soft(entry).toMatchObject({

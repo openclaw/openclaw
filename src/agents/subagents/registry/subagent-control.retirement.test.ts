@@ -512,7 +512,7 @@ async function restore() {
   await initSubagentRegistry();
   // These terminal-only fixtures need a live owner but never dispatch a model turn.
   const gatewayContext = { resolveGatewayContext: () => gatewayContext as never };
-  await activateSubagentRegistry(() => gatewayContext as never);
+  await activateSubagentRegistry(() => gatewayContext as never).settled;
 }
 
 function expectNoExecutionReplay() {

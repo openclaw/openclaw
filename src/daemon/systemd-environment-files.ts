@@ -1,14 +1,34 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { Minimatch } from "minimatch";
 import { isUnresolvedShellReference } from "../config/state-dir-dotenv.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { lstatIfExists } from "../infra/path-existence.js";
+import { normalizeWindowsPathSeparators } from "./output.js";
+import { resolveDaemonHomeDir } from "./paths.js";
+import type { GatewayServiceEnv } from "./service-types.js";
 
 export type SystemdEnvironmentFileSpec = [pathname: string, optional: boolean];
 export type SystemdEnvironmentFilesParams = {
   environmentFileSpecs: SystemdEnvironmentFileSpec[];
   failOnUnavailable?: boolean;
 };
+
+export function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
+  return input.replace(/%%|%h/gu, (specifier) =>
+    specifier === "%%" ? "%" : normalizeWindowsPathSeparators(resolveDaemonHomeDir(env)),
+  );
+}
+
+export function parseSystemdEnvironmentFileSpec(
+  value: string,
+  env: GatewayServiceEnv,
+): SystemdEnvironmentFileSpec | undefined {
+  const optional = value.startsWith("-");
+  const pathname = expandSystemdSpecifier(optional ? value.slice(1) : value, env);
+  // Native systemd ignores relative declarations rather than resolving them beside the unit.
+  return path.posix.isAbsolute(pathname) ? [pathname, optional] : undefined;
+}
 
 async function expandSystemdEnvironmentFilePattern(pattern: string): Promise<string[]> {
   const [parts] = new Minimatch(pattern, {

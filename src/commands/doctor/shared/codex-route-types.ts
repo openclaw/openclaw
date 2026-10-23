@@ -46,8 +46,6 @@ export type ConfigRouteRepairResult = {
 
 export type CodexSessionRouteRepairSummary = {
   scannedStores: number;
-  repairedStores: number;
-  repairedSessions: number;
   warnings: string[];
   changes: string[];
 };

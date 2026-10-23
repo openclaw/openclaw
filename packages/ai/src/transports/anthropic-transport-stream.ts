@@ -80,50 +80,12 @@ function withEffectiveAnthropicBaseUrl(model: AnthropicTransportModel): Anthropi
   return baseUrl === model.baseUrl ? model : { ...model, baseUrl };
 }
 
-function createAbortError(signal: AbortSignal): Error {
-  const reason = signal.reason;
-  if (reason instanceof Error) {
-    return reason;
-  }
-  return createNamedAbortError(
-    "Request was aborted",
-    reason === undefined ? undefined : { cause: reason },
-  );
-}
-
-function readAnthropicSseChunk(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  signal?: AbortSignal,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  if (!signal) {
-    return reader.read();
-  }
-
-  return racePromiseWithAbortSignal(
-    () =>
-      reader.read().catch((error: unknown) => {
-        throw toErrorObject(error, "Non-Error rejection");
-      }),
-    signal,
-    createAbortError,
-  );
-}
-
 function parseAnthropicSseEventData(data: string): Record<string, unknown> {
   try {
     return JSON.parse(data) as Record<string, unknown>;
   } catch (error) {
     throw streamFragmentError(error);
   }
-}
-
-function assertAnthropicSsePendingBufferWithinLimit(pendingChars: number): void {
-  if (pendingChars <= ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS) {
-    return;
-  }
-  throw new Error(
-    `Anthropic Messages SSE response exceeded max pending buffer size (${ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS} chars) without event boundary`,
-  );
 }
 
 async function* parseAnthropicSseBody(
@@ -135,11 +97,35 @@ async function* parseAnthropicSseBody(
   try {
     for await (const { frame, terminated } of iterateSseFrames(
       async () => {
-        const chunk = await readAnthropicSseChunk(reader, signal);
+        const chunk = await (signal
+          ? racePromiseWithAbortSignal(
+              () =>
+                reader.read().catch((error: unknown) => {
+                  throw toErrorObject(error, "Non-Error rejection");
+                }),
+              signal,
+              (abortedSignal) => {
+                const reason = abortedSignal.reason;
+                if (reason instanceof Error) {
+                  return reason;
+                }
+                return createNamedAbortError(
+                  "Request was aborted",
+                  reason === undefined ? undefined : { cause: reason },
+                );
+              },
+            )
+          : reader.read());
         completed = chunk.done;
         return chunk;
       },
-      (pending) => assertAnthropicSsePendingBufferWithinLimit(pending.length),
+      (pending) => {
+        if (pending.length > ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS) {
+          throw new Error(
+            `Anthropic Messages SSE response exceeded max pending buffer size (${ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS} chars) without event boundary`,
+          );
+        }
+      },
     )) {
       const data = (terminated ? frame : frame.trim())
         .split(/\r\n|\n|\r/)

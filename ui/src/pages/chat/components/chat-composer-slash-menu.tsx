@@ -619,32 +619,36 @@ export function SlashMenu(props: { menu: SlashMenu; host: SlashMenuHost; draft: 
               </For>
             </div>
           ) : (
-            <For each={grouped()}>
-              {(group) => (
-                <div
-                  class={[
-                    "slash-menu-group",
-                    { "slash-menu-group--skills": group[0] === "skills" },
-                  ]}
-                >
-                  <div class="slash-menu-group__label">
-                    {group[0] === "skills"
-                      ? t("chat.skills.label")
-                      : getSlashCommandCategoryLabel(group[0])}
+            <For each={grouped()} keyed={false}>
+              {(group) => {
+                const label = createMemo(() => {
+                  const category = group()[0];
+                  return category === "skills"
+                    ? t("chat.skills.label")
+                    : getSlashCommandCategoryLabel(category);
+                });
+                return (
+                  <div
+                    class={[
+                      "slash-menu-group",
+                      { "slash-menu-group--skills": group()[0] === "skills" },
+                    ]}
+                  >
+                    <div class="slash-menu-group__label">{label()}</div>
+                    <For each={group()[1]} keyed={(entry) => entry.command.name}>
+                      {(entry) => (
+                        <CommandOption
+                          menu={props.menu}
+                          host={props.host}
+                          command={entry().command}
+                          index={entry().index}
+                          query={props.draft.slice(1)}
+                        />
+                      )}
+                    </For>
                   </div>
-                  <For each={group[1]}>
-                    {(entry) => (
-                      <CommandOption
-                        menu={props.menu}
-                        host={props.host}
-                        command={entry.command}
-                        index={entry.index}
-                        query={props.draft.slice(1)}
-                      />
-                    )}
-                  </For>
-                </div>
-              )}
+                );
+              }}
             </For>
           )}
         </ComposerMenu>

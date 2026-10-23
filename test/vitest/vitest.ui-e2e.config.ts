@@ -78,6 +78,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/native-notifications-loading.e2e.test.ts",
   "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
   "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
+  "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
   "ui/src/e2e/presentation-primitives.e2e.test.ts",
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",

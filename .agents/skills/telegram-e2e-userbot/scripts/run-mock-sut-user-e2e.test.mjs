@@ -722,3 +722,17 @@ test("clears a leased bot webhook before polling updates", async () => {
     pendingAfter: 0,
   });
 });
+
+test("DM-topic CLI setup requires an explicit DM scenario before leasing", async () => {
+  const result = await runCommand(
+    process.execPath,
+    [path.join(import.meta.dirname, "run-mock-sut-user-e2e.mjs"), "--dm", "--create-dm-topic"],
+    {
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH, HOME: process.env.HOME },
+      timeoutMs: 10_000,
+    },
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /--create-dm-topic requires --dm and a --scenario/);
+});

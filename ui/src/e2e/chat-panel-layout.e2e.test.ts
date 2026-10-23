@@ -591,7 +591,7 @@ suite.define(() => {
           expect(await mountedCanvas?.evaluate((element) => element.isConnected)).toBe(true);
         }
         await page.setViewportSize({ width: 400, height: 900 });
-        await openChatPanels(page);
+        await openChatPanels(page, "mobile");
         const host = page.locator(".chat-mobile-host");
         await host.getByRole("button", { name: "Panels", exact: true }).click();
         await side.locator('.tabstrip-tab[data-tab-value^="hosted:terminal:"]').click();

@@ -177,6 +177,10 @@ export function sanitizeChatHistoryContentBlock(
     return { block, changed: false, truncated: false };
   }
   const entry = { ...(block as Record<string, unknown>) };
+  // Native inline blocks are host projections of admitted tool details, never transcript-authored UI.
+  if (entry.type === "plugin_view") {
+    return { block: { type: "text", text: "" }, changed: true, truncated: false };
+  }
   let changed = stripPrivateToolCallContextForDisplay(entry);
   // Display-cap truncation is a fact consumers need (to fetch the full row), so
   // it is tracked apart from `changed`, which also covers metadata stripping.
@@ -189,7 +193,7 @@ export function sanitizeChatHistoryContentBlock(
       ? opts?.toolResultMaxChars
       : undefined;
   if (isToolResultHistoryBlockType(entry.type) && "details" in entry) {
-    const projectedDetails = projectToolResultDetails(entry.details, maxChars);
+    const projectedDetails = projectToolResultDetails(entry.details, maxChars, entry);
     if (projectedDetails.details) {
       entry.details = projectedDetails.details;
     } else {
@@ -517,7 +521,7 @@ export function sanitizeChatHistoryMessage(
     const conflictDetails = projectWorkspaceConflictDetails(entry);
     const toolResultDetails =
       !conflictDetails && messageHasToolResultShape(entry)
-        ? projectToolResultDetails(entry.details, maxChars)
+        ? projectToolResultDetails(entry.details, maxChars, entry)
         : undefined;
     // Only the terminal owner's presentation category crosses this report boundary.
     // Correlation is projected separately; raw diagnostics and report fields stay private.
@@ -710,9 +714,6 @@ export function sanitizeChatHistoryMessages(
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   opts?: { includeCommentaryFallbacks?: boolean; toolResultMaxChars?: number },
 ): unknown[] {
-  if (messages.length === 0) {
-    return messages;
-  }
   let changed = false;
   const next: unknown[] = [];
   for (const original of messages) {

@@ -192,6 +192,12 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
     expect(document.activeElement).toBe(settings);
     expect(settings.hasAttribute("title")).toBe(false);
     expect(getComputedStyle(settings).opacity).toBe("1");
+    const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
+    // A newly opened lazy view can install its catalog while this menu is focused.
+    registerEnglishCatalog(() => {});
+    await sidebar.updateComplete;
+    expect(query(tiles[2]!, ".sidebar-agent-menu__settings")).toBe(settings);
+    expect(document.activeElement).toBe(settings);
     await userEvent.keyboard("{ArrowDown}");
     expect(document.activeElement).toBe(tiles[3]);
     expect(getComputedStyle(settings).opacity).toBe("0");

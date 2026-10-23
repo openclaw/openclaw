@@ -149,12 +149,6 @@ export interface AgentOptions {
   toolExecution?: ToolExecutionMode;
 }
 
-type ActiveRun = {
-  promise: Promise<void>;
-  resolve: () => void;
-  abortController: AbortController;
-};
-
 /**
  * Stateful wrapper around the low-level agent loop.
  *
@@ -183,7 +177,11 @@ export class Agent {
   public afterToolOutcome?: NonNullable<AgentOptions["afterToolOutcome"]>;
   public prepareNextTurn?: NonNullable<AgentOptions["prepareNextTurn"]>;
   public prepareNextTurnWithContext?: NonNullable<AgentOptions["prepareNextTurnWithContext"]>;
-  private activeRun?: ActiveRun;
+  private activeRun?: {
+    promise: Promise<void>;
+    resolve: () => void;
+    abortController: AbortController;
+  };
   /** Session identifier forwarded to providers for cache-aware backends. */
   public sessionId?: string;
   /** Optional per-level thinking token budgets forwarded to the stream function. */

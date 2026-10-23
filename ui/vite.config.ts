@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { brotliCompress, constants as zlibConstants } from "node:zlib";
-import { gzip } from "pako";
+import { gzip } from "libdeflate";
 import {
   runnerImport,
   type Plugin,
@@ -102,9 +102,9 @@ export async function createControlUiPrecompressedAssetVariants(
     },
     {
       fileName: `${fileName}.gz`,
-      // Host zlib is byte-unstable across supported runtimes; pako's classic hash is canonical.
-      // Smaller deflate blocks reduce startup JavaScript size and encoder memory.
-      source: Buffer.from(gzip(body, { level: 9, legacyHash: true, memLevel: 6 })),
+      // Pinned WASM keeps gzip bytes independent of the host zlib and CPU.
+      // Level 11 retains nearly all of level 12's savings at lower build-time cost.
+      source: Buffer.from(gzip(body, 11)),
     },
   ];
 }

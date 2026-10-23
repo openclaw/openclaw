@@ -575,6 +575,36 @@ describe("Control UI performance budgets", () => {
     }
   });
 
+  it.each([
+    { baselineBytes: 315_881, limit: 316_457 },
+    { baselineBytes: 311_544, limit: 312_120 },
+  ])(
+    "enforces unchanged startup allowances for a $baselineBytes B baseline",
+    ({ baselineBytes, limit }) => {
+      const fixture = createCliFixture();
+      // Synthetic assets and their baseline must not depend on the live build ratchet.
+      fs.writeFileSync(fixture.baselinePath, JSON.stringify(startupBaseline(baselineBytes)));
+      const assetsDir = path.join(fixture.distDir, "assets");
+      writeAssetAt(assetsDir, "index-a.js", 200_000, 200_000, 200_000);
+      writeAssetAt(assetsDir, "runtime-b.js", limit - 200_000);
+      fs.appendFileSync(path.join(fixture.distDir, "index.html"), preload("runtime-b.js"));
+
+      expect(jsonCli(fixture)).toMatchObject({
+        budgets: { startupJsGzipBytes: 325_131 },
+        startupBudgetBaseline: { startupJsGzipBytes: baselineBytes },
+        startupJsTolerance: 512,
+        startupJsBuildVariance: 64,
+        metrics: { startup: { js: { gzipBytes: limit, requests: 2 } } },
+        violations: [],
+      });
+
+      fs.appendFileSync(path.join(assetsDir, "index-a.js.gz"), "x");
+      expect(jsonCli(fixture, [], 1).violations).toEqual([
+        { metric: "startup JS gzip", actual: limit + 1, limit, unit: "bytes" },
+      ]);
+    },
+  );
+
   it("updates the baseline from generated or explicitly measured metrics", () => {
     const { run, baselinePath, distDir } = createCliFixture();
     const update = (args: string[] = []) => {

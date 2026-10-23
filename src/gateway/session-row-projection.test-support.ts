@@ -259,6 +259,10 @@ export function createSessionRowProjectionFixture(params: {
   }
   const selectEntries = (options?: Parameters<SessionRowProjection["selectEntries"]>[0]) => {
     const query = options ?? {};
+    const parentKey =
+      typeof query.parentSessionKey === "string"
+        ? query.parentSessionKey
+        : query.parentSessionKey?.key;
     const matchingKeys =
       query.sessionIdOrKey &&
       new Set(
@@ -271,8 +275,7 @@ export function createSessionRowProjectionFixture(params: {
       );
     const selected = matching(query).filter(
       (row) =>
-        (!matchingKeys || matchingKeys.has(row.key)) &&
-        (!query.parentSessionKey || row.parents.has(query.parentSessionKey)),
+        (!matchingKeys || matchingKeys.has(row.key)) && (!parentKey || row.parents.has(parentKey)),
     );
     return sortSessionRows(selected, query.sortBy);
   };

@@ -96,7 +96,6 @@ type PluginControlUiTabGroup = "control" | "agent";
 export type PluginControlUiDescriptor = {
   id: string;
   /** "tab" adds a sidebar tab; "widget" advertises a trusted dashboard renderer. */
-  surface: "session" | "tool" | "run" | "settings" | "tab" | "widget" | "link-reader";
   /** Required for link-reader surfaces; passive models rendered by the host, never plugin JS. */
   linkReader?: ControlUiLinkReaderMetadata;
   label: string;
@@ -118,7 +117,13 @@ export type PluginControlUiDescriptor = {
   group?: PluginControlUiTabGroup;
   /** Sort order among plugin tabs; lower renders first. */
   order?: number;
-};
+} & (
+  | { surface: "inline"; version: number }
+  | {
+      surface: "session" | "tool" | "run" | "settings" | "tab" | "widget" | "link-reader";
+      version?: never;
+    }
+);
 
 export type PluginSessionActionContext = {
   pluginId: string;
@@ -129,6 +134,16 @@ export type PluginSessionActionContext = {
   client?: {
     connId?: string;
     scopes: string[];
+    /**
+     * Live check: whether the caller's current operator role allows this agent.
+     * Re-evaluated on every call, so check it right before reading agent data.
+     */
+    allowsAgent?: (agentId: string) => boolean;
+    /**
+     * Live check: whether several people currently share this Gateway, so admin
+     * scope distinguishes the owner. Re-evaluated on every call.
+     */
+    isSharedGateway?: () => boolean;
   };
 };
 

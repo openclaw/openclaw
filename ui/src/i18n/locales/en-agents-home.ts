@@ -11,7 +11,6 @@ const enAgentsHome = {
       "Its workspace, agent state, and session transcripts move to Trash. Its channel accounts remain configured.",
     agentOptions: "Options for {agent}",
     working: "Working now",
-    loadFailed: "Could not load agents. Try again.",
   },
   clawsDraft: {
     title: "Create Claw",
@@ -51,7 +50,8 @@ const enAgentsHome = {
 
 export const registerAgentsHomeEnglish = Object.assign(
   () => {
-    Object.assign(en, enAgentsHome);
+    Object.assign(en.agentsHome, enAgentsHome.agentsHome);
+    Object.assign(en, { clawsDraft: enAgentsHome.clawsDraft });
   },
   { catalog: enAgentsHome },
 );

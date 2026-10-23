@@ -5,6 +5,7 @@ import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
   agentChip: TranslationMap;
+  agentsHome: TranslationMap;
   logbook: TranslationMap;
   gatewayLogs: TranslationMap;
   standingGrants: TranslationMap;
@@ -342,6 +343,9 @@ export const en: TranslationMap & {
     selectionScope: "Choose views for this browser window. Built-in views are always available.",
     builtin: "Built-in view",
     retryView: "Retry plugin view",
+    inlineLoading: "Loading plugin view…",
+    inlineUnavailable:
+      "This view is unavailable. Check that its plugin is installed, enabled, and allowed for your account. Reload the conversation after installing or updating the plugin.",
     reload: "Reload plugin UI",
     dashboardTitle: "Session dashboard",
     dashboardEmpty: "This session has no dashboard widgets yet.",
@@ -361,7 +365,9 @@ export const en: TranslationMap & {
     unavailable: "Slot utilization unavailable",
     execHost: "Codex exec",
   },
-  agentsHome: {},
+  agentsHome: {
+    loadFailed: "Could not load agents. Try again.",
+  },
   outputs: {
     viewAll: "View all",
     dashboard: "Dashboard",

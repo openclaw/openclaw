@@ -53,7 +53,7 @@ export async function activateSubagentRegistryWithRecoveryRuntime(
     resolveGatewayContext: () => gatewayContext as never,
   };
   bindGatewayContextResolver(recoveryRuntime, gatewayContext.resolveGatewayContext);
-  await mod.activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+  await mod.activateSubagentRegistry(gatewayContext.resolveGatewayContext).settled;
 }
 
 export function registerRestoredRollbackPublicationTest({
@@ -390,8 +390,8 @@ export function registerRestoredRequesterWakeSettlementTests({
       const settleRootWork = observeRootWork();
       try {
         await mod.initSubagentRegistry();
-        await mod.activateSubagentRegistry(resolveGatewayContext);
-        await mod.activateSubagentRegistry(resolveGatewayContext);
+        await mod.activateSubagentRegistry(resolveGatewayContext).settled;
+        await mod.activateSubagentRegistry(resolveGatewayContext).settled;
         expect(wakeRequester).not.toHaveBeenCalled();
         if (restoreTiming === "partial restore") {
           await mod.testing.runSweeperTickForTests();
@@ -399,7 +399,7 @@ export function registerRestoredRequesterWakeSettlementTests({
         }
         gatewayOpen = restoreTiming !== "after Gateway closure";
         await mod.initSubagentRegistry();
-        await mod.activateSubagentRegistry(resolveGatewayContext);
+        await mod.activateSubagentRegistry(resolveGatewayContext).settled;
         await vi.advanceTimersByTimeAsync(1_000);
         if (!gatewayOpen || restoreTiming === "without instance binding") {
           await vi.advanceTimersByTimeAsync(5_000);

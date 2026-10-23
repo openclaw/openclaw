@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import v8, { getHeapSpaceStatistics, queryObjects, writeHeapSnapshot } from "node:v8";
 import { isMainThread } from "node:worker_threads";
+import { getSessionRowSelectionMetrics } from "../../src/infra/gateway-work-metrics.ts";
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 import {
   GATEWAY_PROFILE_CHANNEL,
@@ -49,6 +50,7 @@ function sampleResources(): GatewayResourceSnapshot {
     ...sampleCpu(),
     memory: process.memoryUsage(),
     heapSpaces: getHeapSpaceStatistics(),
+    sessionRowSelections: getSessionRowSelectionMetrics(),
     // These resource types keep the event loop alive; they are not ownership IDs.
     activeResources: Object.fromEntries(
       [...counts].toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),

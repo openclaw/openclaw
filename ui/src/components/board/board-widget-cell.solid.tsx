@@ -274,6 +274,16 @@ function BoardWidgetCellContent(
     frame.disconnect();
   });
   const unavailable = () => props.busy || actionPending() || !canMutate();
+  const RemoveButton = () => (
+    <button
+      class="btn btn--small"
+      type="button"
+      disabled={unavailable()}
+      onClick={() => runAction(() => props.callbacks!.remove(props.widget!))}
+    >
+      {t("board.widget.remove")}
+    </button>
+  );
   const AccessNotice = () => (
     <Show
       when={props.widget?.grantState === "pending"}
@@ -285,14 +295,7 @@ function BoardWidgetCellContent(
           >
             <strong>{t("board.widget.rejected")}</strong>
             <span>{t("board.widget.rejectedDetail")}</span>
-            <button
-              class="btn btn--small"
-              type="button"
-              disabled={unavailable()}
-              onClick={() => runAction(() => props.callbacks!.remove(props.widget!))}
-            >
-              {t("board.widget.remove")}
-            </button>
+            <RemoveButton />
           </div>
         </Show>
       }
@@ -366,14 +369,7 @@ function BoardWidgetCellContent(
             >
               <CustomPluginUiDisabled context={context} pluginId={pluginId()} />
             </Show>
-            <button
-              class="btn btn--small"
-              type="button"
-              disabled={unavailable()}
-              onClick={() => runAction(() => props.callbacks!.remove(props.widget!))}
-            >
-              {t("board.widget.remove")}
-            </button>
+            <RemoveButton />
           </div>
         }
       >

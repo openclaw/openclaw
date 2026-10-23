@@ -6,10 +6,10 @@ They do not add an engine binary, container layer, or npm dependency to OpenClaw
 
 ## License boundary
 
-OpenClaw's adapter is MIT-licensed. Lightpanda 1.0.0 is
+OpenClaw's adapter is MIT-licensed. Lightpanda 1.0.2 is
 **AGPL-3.0-or-later**, as stated in its
-[source header](https://github.com/lightpanda-io/browser/blob/588f6223b9cae8a2406aeef035ed9363a3e404fd/src/main.zig#L1)
-and [license](https://github.com/lightpanda-io/browser/blob/588f6223b9cae8a2406aeef035ed9363a3e404fd/LICENSE).
+[source header](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/src/main.zig#L1)
+and [license](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/LICENSE).
 The engine is independently installed and communicates with OpenClaw over CDP;
 OpenClaw does not link, vendor, or relicense its implementation. This is not an
 MIT-only stack or a certification that every deployment is legally compliant.
@@ -24,30 +24,28 @@ work; see the [GNU aggregation guidance](https://www.gnu.org/licenses/gpl-faq.ht
 
 ## Artifact integrity
 
-Updated on **2026-10-13**:
+Updated on **2026-10-23**:
 
-- [Release 1.0.0](https://github.com/lightpanda-io/browser/releases/tag/1.0.0)
-  was published on **2026-10-02 at 10:12:01 UTC** and resolves to source commit
-  `588f6223b9cae8a2406aeef035ed9363a3e404fd`.
+- [Release 1.0.2](https://github.com/lightpanda-io/browser/releases/tag/1.0.2)
+  was published on **2026-10-23 at 09:01:02 UTC** and resolves to source commit
+  `c5f7bb29b127040c899d4e181b5709f76fc71a6f`.
 - [SHA256SUMS](SHA256SUMS) records all four official Linux/macOS x86-64/ARM64
-  binary digests. Each matched the corresponding release API digest.
+  binary digests from the release API. The downloaded Linux x86-64 binary also
+  matched its checksum before execution and reported version 1.0.2.
 - [compose.yaml](compose.yaml) pins the official multi-platform image index,
-  published on **2026-10-02 at 10:19:44 UTC**, rather than relying on the version
-  tag alone. The release, binary assets, and image predate the update cutoff of
-  **2026-10-07 at 02:36:46 UTC**.
+  rather than relying on the version tag alone. The index bytes matched the
+  registry's content digest; its platform configurations were created on
+  **2026-10-23 at 09:04:39 UTC** (amd64) and **09:04:40 UTC** (arm64).
 
 | OCI object           | SHA-256 digest                                                     |
 | -------------------- | ------------------------------------------------------------------ |
-| Image index          | `5b84708cb3d9bef841aba4a4cd299f4de0609ac1bd7d4c6fbfcbf168d56b685e` |
-| Linux amd64 manifest | `16b668ba75fdf3f9b215a0550f2840a0e76b905c645d99a23751dcd40a65688a` |
-| Linux arm64 manifest | `dddeeccaea193724896a8c7b18a6630c66de18821518179a33060b0aa189090c` |
+| Image index          | `5d1d724c476957d8c2f8393a51fd089477523b0e5aa9c783c48688785d934fb9` |
+| Linux amd64 manifest | `0fd590f7072f15ff8f681b546bdda231a9f1d65360da27376c02cb72b2a0413e` |
+| Linux arm64 manifest | `94b7a6c97648a68a0905ea6f225b7ee36ba75b51bc6c6d5427f523f803f8e572` |
 
-The Linux arm64 image's `usr/bin/lightpanda` and the downloaded macOS arm64
-binary matched their release checksums in `SHA256SUMS`. The other two native
-binary pins were verified against release API digests, without execution.
-Both architectures' attached SLSA provenance identifies
-[browser-docker commit `844bcb2e3df1aac108f7301edb97f8859edd7e35`](https://github.com/lightpanda-io/browser-docker/blob/844bcb2e3df1aac108f7301edb97f8859edd7e35/Dockerfile)
-and build argument `TAG=1.0.0`. This inspection is not signature verification,
+The amd64 image's attached SLSA provenance identifies
+[browser-docker commit `4b9d558e5598f825b4e5fe469370c4ff6a3adb46`](https://github.com/lightpanda-io/browser-docker/blob/4b9d558e5598f825b4e5fe469370c4ff6a3adb46/Dockerfile)
+and build argument `TAG=1.0.2`. This inspection is not signature verification,
 proof of a reproducible build, or a complete binary SBOM review.
 
 That Dockerfile's final stage copies the engine, CA bundle, and Tini; it does not
@@ -59,18 +57,26 @@ obligations.
 ## Adapter verification
 
 The unmodified `extensions/browser/scripts/bench-lightweight.ts` fixture passed
-with the verified 1.0.0 macOS arm64 binary: one initial task and two warm tasks
-covered navigation, efficient AI snapshots with references, typing, clicking,
-exactly-once form submission, waiting, and text extraction. Unsupported
-capabilities still returned 501, a second page was rejected, and disconnecting
-invalidated the old target. No adapter or browser security policy changes were
-needed. The engine's new default CORS enforcement remains enabled.
+with the checksum-verified 1.0.2 Linux x86-64 binary and the repository-pinned
+Playwright 1.64.0 client: one initial task and two warm tasks covered navigation,
+efficient AI snapshots with references, typing, clicking, exactly-once form
+submission, waiting, and text extraction. Unsupported capabilities still
+returned 501, a second page was rejected, and disconnecting invalidated the old
+target. No adapter or browser security policy changes were needed. The engine's
+default CORS enforcement remains enabled.
 
-A dedicated Linux arm64 Docker instance reported version 1.0.0 and accepted
-CDP connections. Its host-fixture runs encountered DNS and navigation timeouts;
-those runs do not establish Docker route conformance. No existing browser,
-Gateway, profile, or user state was used. Windows, Linux amd64, and macOS x86-64
-execution remain unverified by this update.
+A separate local fixture moved the Save button into an open shadow root. Its
+reference resolved, but the OpenClaw click failed in Playwright's hit-target
+check with `root.elementsFromPoint is not a function`. Lightpanda 1.0.2's
+upstream mouse-event improvements therefore do not establish shadow-DOM click
+support with this client. No forced click, page polyfill, or action replay was
+used to bypass the failure. Keep Chromium for affected sites.
+
+All runtime checks used isolated state and engine processes, not an existing
+browser, Gateway, profile, or user state. Docker route execution, Windows,
+Linux ARM64, and both macOS architectures remain unverified by this update.
+The other three native binary pins were checked against release API digests,
+without download or execution.
 
 ## Existing JavaScript clients
 
@@ -92,12 +98,13 @@ Permissive dependencies can accompany an MIT project without becoming MIT-only.
 
 ## Engine dependency scope
 
-The 1.0.0 [Zig dependency manifest](https://github.com/lightpanda-io/browser/blob/588f6223b9cae8a2406aeef035ed9363a3e404fd/build.zig.zon),
-[build-tool versions](https://github.com/lightpanda-io/browser/blob/588f6223b9cae8a2406aeef035ed9363a3e404fd/.github/actions/install/action.yml),
-and [Rust lockfile](https://github.com/lightpanda-io/browser/blob/588f6223b9cae8a2406aeef035ed9363a3e404fd/src/rust/Cargo.lock)
+The 1.0.2 [Zig dependency manifest](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/build.zig.zon),
+[build-tool versions](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/.github/actions/install/action.yml),
+and [Rust lockfile](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/src/rust/Cargo.lock)
 identify the current source dependencies. The Rust lockfile contains 105 registry
-packages. The release updates V8 to 15.5.35.13, nghttp2 to 1.70.0, PCRE2 to 10.49,
-and several source-pinned components. The older license inventory below is
+packages. The source pins V8 15.5.35.13, nghttp2 1.70.0, curl 8.23.0, zstd 1.5.7,
+PCRE2 commit `9ad4a2e956876747a5022bf04614c7e39e71d4ec`, and several other
+source-pinned components. The older license inventory below is
 historical evidence, not a renewed review of this release's dependency closure.
 
 ### Historical 0.4.1 dependency audit

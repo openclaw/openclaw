@@ -41,6 +41,7 @@ import {
   type DoctorConfigMutationState,
 } from "./shared/config-mutation-state.js";
 import { maybeRepairContextEngineHostCompatibility } from "./shared/context-engine-host-compat.js";
+import { maybeRepairContextEnginePluginIdSelector } from "./shared/context-engine-plugin-id-selector.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import {
@@ -211,6 +212,12 @@ export async function runDoctorRepairSequence(params: {
       cfg: state.candidate,
       env,
     });
+  // Host compatibility must inspect the engine the selector repair resolves, not a stale plugin ID.
+  applyMutation(
+    runWithCurrentPluginMetadata(() =>
+      maybeRepairContextEnginePluginIdSelector(state.candidate, env),
+    ),
+  );
   applyMutation(
     await runWithCurrentPluginMetadata(() =>
       maybeRepairContextEngineHostCompatibility({

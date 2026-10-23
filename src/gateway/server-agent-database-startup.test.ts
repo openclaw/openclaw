@@ -214,9 +214,13 @@ it.for([
         bootstrapSecrets = getActiveSecretsRuntimeSnapshot();
         return startEarly(params);
       });
-      vi.spyOn(subagents, "activateSubagentRegistry").mockImplementation(async () => {
+      vi.spyOn(subagents, "activateSubagentRegistry").mockImplementation(() => {
         restorationEntered.resolve();
-        await restorationRelease.promise;
+        return {
+          initial: restorationRelease.promise,
+          pending: new Map(),
+          settled: restorationRelease.promise,
+        };
       });
     }
     const nativeBroker = process.platform === "linux" && !process.versions.bun;

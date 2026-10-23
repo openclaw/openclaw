@@ -46,7 +46,7 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { resolveNodePushTransport } from "./node-push-transport.js";
-import { respondUnavailableOnThrow } from "./response.js";
+import { respondError, respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers, GatewayRequestHandlerOptions } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
@@ -215,7 +215,7 @@ export const pushHandlers = {
     async ({ params, respond, context }) => {
       const nodeId = normalizeOptionalString(params.nodeId) ?? "";
       if (!nodeId) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "nodeId required");
         return;
       }
 
@@ -225,13 +225,10 @@ export const pushHandlers = {
       await respondUnavailableOnThrow(respond, async () => {
         const registration = await loadApnsRegistration(nodeId);
         if (!registration) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `node ${nodeId} has no APNs registration (connect iOS node first)`,
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            `node ${nodeId} has no APNs registration (connect iOS node first)`,
           );
           return;
         }
@@ -244,7 +241,7 @@ export const pushHandlers = {
           registration.transport === "relay" ? context.getRuntimeConfig() : undefined,
         );
         if (!transport.ok) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, transport.error));
+          respondError(respond, ErrorCodes.INVALID_REQUEST, transport.error);
           return;
         }
         const result = await sendApnsAlert({ ...transport.transport, nodeId, title, body });
@@ -384,10 +381,10 @@ export const pushHandlers = {
       await withAuthorizedWebPushSubscription(params.endpoint, options, async (authorized) => {
         const currentProfileId = authorized.assertCurrent();
         if (!hasValidWebPushQuietHoursTimeZone(params.preferences)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "invalid notification quiet-hours time zone"),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "invalid notification quiet-hours time zone",
           );
           return undefined;
         }
@@ -414,10 +411,10 @@ export const pushHandlers = {
             );
             authorized.assertCurrent();
             if (!result?.ok) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.INVALID_REQUEST, "could not save notification preferences"),
+              respondError(
+                respond,
+                ErrorCodes.INVALID_REQUEST,
+                "could not save notification preferences",
               );
               return undefined;
             }
@@ -460,11 +457,7 @@ export const pushHandlers = {
       await respondUnavailableOnThrow(respond, async () => {
         const results = await broadcastWebPush({ title, body });
         if (results.length === 0) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "no web push subscriptions registered"),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, "no web push subscriptions registered");
           return;
         }
         if (!results.some((result) => result.ok)) {

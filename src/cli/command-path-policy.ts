@@ -32,29 +32,25 @@ export function resolveCliCommandPathPolicy(commandPath: string[]): CliCommandPa
   return resolvedPolicy;
 }
 
-function resolveCliCatalogCommandPath(argv: string[]): string[] {
+export function resolveCliNetworkProxyPolicy(argv: string[]): CliNetworkProxyPolicy {
   // Gateway `run openclaw ...` argv needs catalog routing against the embedded command path.
   const tokens =
     resolveGatewayCommandPath(argv) ??
     resolveCliParentCommandPath(argv) ??
     getCommandPathWithRootOptions(argv, argv.length);
-  if (tokens.length === 0) {
-    return [];
-  }
-  let bestMatch: readonly string[] | null = null;
-  for (const entry of cliCommandCatalog) {
-    if (!matchesCommandPath(tokens, entry.commandPath)) {
-      continue;
+  let commandPath: string[] = [];
+  if (tokens.length > 0) {
+    let bestMatch: readonly string[] | null = null;
+    for (const entry of cliCommandCatalog) {
+      if (!matchesCommandPath(tokens, entry.commandPath)) {
+        continue;
+      }
+      if (!bestMatch || entry.commandPath.length > bestMatch.length) {
+        bestMatch = entry.commandPath;
+      }
     }
-    if (!bestMatch || entry.commandPath.length > bestMatch.length) {
-      bestMatch = entry.commandPath;
-    }
+    commandPath = bestMatch ? [...bestMatch] : [expectDefined(tokens[0], "tokens entry at 0")];
   }
-  return bestMatch ? [...bestMatch] : [expectDefined(tokens[0], "tokens entry at 0")];
-}
-
-export function resolveCliNetworkProxyPolicy(argv: string[]): CliNetworkProxyPolicy {
-  const commandPath = resolveCliCatalogCommandPath(argv);
   const networkProxy = resolveCliCommandPathPolicy(commandPath).networkProxy;
   return typeof networkProxy === "function" ? networkProxy({ argv, commandPath }) : networkProxy;
 }

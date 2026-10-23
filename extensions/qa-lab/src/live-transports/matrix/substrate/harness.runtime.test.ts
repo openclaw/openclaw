@@ -226,7 +226,7 @@ describe("matrix harness runtime", () => {
         })),
       },
       async ({ outputDir, result }) => {
-        expect(result).toMatchObject({ homeserverPort: 49152, baseUrl: "http://127.0.0.1:49152/" });
+        expect(result).toMatchObject({ baseUrl: "http://127.0.0.1:49152/" });
         expect(calls).toContain(
           `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml port matrix-qa-homeserver 8008 @/repo/openclaw`,
         );

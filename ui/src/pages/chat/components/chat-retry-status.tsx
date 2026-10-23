@@ -3,10 +3,8 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
 import { createInterval } from "../../../lib/reactive/timers.ts";
 
-type ChatRetryStatusProps = { retryAt: number | null };
-
 /** Counts down an owner-reported deadline; never guesses timing from provider text. */
-export function ChatRetryStatus(props: ChatRetryStatusProps) {
+export function ChatRetryStatus(props: { retryAt: number | null }) {
   const [tick, setTick] = createSignal(0);
   const visible = createDocumentVisibility();
   const remaining = createMemo(() => {

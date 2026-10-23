@@ -98,7 +98,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   };
   const interruptTurn = async (
     turnId: string,
-    completionOptions?: { locallyCompleted?: boolean; timeoutMs?: number },
+    completionOptions?: { locallyCompleted?: boolean },
   ) => {
     if (completionOptions?.locallyCompleted) {
       state.localCompletionRequested = true;
@@ -106,7 +106,6 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     const completed = await interruptCodexTurnAndWaitBestEffort(resourceState.client, {
       threadId: resourceState.thread.threadId,
       turnId,
-      timeoutMs: completionOptions?.timeoutMs,
     });
     if (!completed) {
       await closeCodexStartupClientBestEffort(resourceState.client);

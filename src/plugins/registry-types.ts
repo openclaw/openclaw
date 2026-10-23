@@ -337,6 +337,7 @@ export type PluginRecord = {
   webSearchProviderIds: string[];
   migrationProviderIds: string[];
   contextEngineIds?: string[];
+  declaredContextEngineIds?: readonly string[];
   agentHarnessIds: string[];
   cliCommands: string[];
   services: string[];
@@ -431,7 +432,11 @@ export type PluginRegistry = {
   >;
   trustedToolPolicies: PluginTrustedToolPolicyRegistryRegistration[];
   toolMetadata: Array<PluginRegistrationOwner & { metadata: PluginToolMetadataRegistration }>;
-  controlUiDescriptors: Array<PluginRegistrationOwner & { descriptor: PluginControlUiDescriptor }>;
+  controlUiDescriptors: Array<
+    PluginRegistrationOwner & {
+      descriptor: PluginControlUiDescriptor;
+    }
+  >;
   runtimeLifecycles: Array<
     PluginRegistrationOwner & { lifecycle: PluginRuntimeLifecycleRegistration }
   >;

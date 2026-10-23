@@ -34,6 +34,14 @@ export type RequesterSettleWakeReplay = {
 };
 
 export type InternalAgentTurnDispatchOptions = {
+  /** Validated saved input; its owner rechecks live custody at admission. */
+  recoveryInput?: {
+    agentId: string;
+    sessionKey: string;
+    sessionId: string;
+    runId: string;
+    assertCurrent: () => void;
+  };
   /** Exact in-process mailbox source reserved by the input owner. */
   controllerInput?: SessionControllerInput;
   /** Internal completion delivery owns its hidden input and durable processing receipt. */

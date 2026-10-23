@@ -20,10 +20,9 @@ registerEnglishCatalog(registerMcpAppEnglish);
 
 const AppsConversation = lazy(() => import("./apps-conversation.tsx"));
 
-type AppsPageProps = { appSearch?: string };
 type AppLaunch = { key: string; detail?: McpAppOpenDetail };
 
-export function AppsPage(props: AppsPageProps) {
+export function AppsPage(props: { appSearch?: string }) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const selection = projectAgentSelection(context.agentSelection);

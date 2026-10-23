@@ -56,18 +56,6 @@ type ReferenceEntry = {
   value?: SessionTitleTarget | null;
 };
 
-function titleFromPreview(value: ControlUiSessionPreview): SessionTitle {
-  if (value.status !== "ok") {
-    throw new Error("Session title unavailable");
-  }
-  return {
-    sessionKey: value.sessionKey,
-    agentId: value.agentId,
-    namespace: "chat",
-    title: readNonBlankString(value.title) ?? readNonBlankString(value.derivedTitle),
-  };
-}
-
 export class SessionLinkTitler {
   private currentClient: GatewayBrowserClient | null = null;
   private currentContext: ApplicationContext | null = null;
@@ -414,12 +402,18 @@ export class SessionLinkTitler {
       if (!client) {
         throw new Error("Session title requires a connected Gateway");
       }
-      const title = titleFromPreview(
-        await client.request<ControlUiSessionPreview>("controlUi.sessionPreview", {
-          sessionKey: target.sessionKey,
-        }),
-      );
-      return { ...title, namespace: target.namespace };
+      const value = await client.request<ControlUiSessionPreview>("controlUi.sessionPreview", {
+        sessionKey: target.sessionKey,
+      });
+      if (value.status !== "ok") {
+        throw new Error("Session title unavailable");
+      }
+      return {
+        sessionKey: value.sessionKey,
+        agentId: value.agentId,
+        namespace: target.namespace,
+        title: readNonBlankString(value.title) ?? readNonBlankString(value.derivedTitle),
+      };
     };
     const entry: CacheEntry = {
       expiresAt: Date.now() + SUCCESS_CACHE_MS,

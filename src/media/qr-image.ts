@@ -9,19 +9,6 @@ type QrPngRenderOptions = {
   marginModules?: number;
 };
 
-/** Temp-file write options kept to filename segments so callers cannot choose parent paths. */
-type QrPngTempFileOptions = QrPngRenderOptions & {
-  tmpRoot: string;
-  dirPrefix: string;
-  fileName?: string;
-};
-
-type QrPngTempFile = {
-  filePath: string;
-  dirPath: string;
-  mediaLocalRoots: string[];
-};
-
 function resolveQrPngIntegerOption(name: string, input: number, min: number, max: number): number {
   if (!Number.isFinite(input)) {
     throw new RangeError(`${name} must be a finite number.`);
@@ -71,8 +58,17 @@ export async function renderQrPngDataUrl(
 /** Writes QR PNG output into a scoped temp directory and returns that directory as a media root. */
 export async function writeQrPngTempFile(
   input: string,
-  opts: QrPngTempFileOptions,
-): Promise<QrPngTempFile> {
+  /** Temp-file write options kept to filename segments so callers cannot choose parent paths. */
+  opts: QrPngRenderOptions & {
+    tmpRoot: string;
+    dirPrefix: string;
+    fileName?: string;
+  },
+): Promise<{
+  filePath: string;
+  dirPath: string;
+  mediaLocalRoots: string[];
+}> {
   const dirPrefix = resolveQrTempPathSegment("dirPrefix", opts.dirPrefix);
   const fileName = resolveQrTempPathSegment("fileName", opts.fileName ?? "qr.png");
   const png = await renderQrPngBuffer(input, opts);

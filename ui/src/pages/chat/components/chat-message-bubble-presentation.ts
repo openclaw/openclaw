@@ -179,9 +179,13 @@ export function prepareGroupedMessage(
   const actionText = opts.messageActions?.markdown ?? displayMarkdown;
   const omittedMedia = normalizedMessage.content.filter((item) => item.type === "omitted_media");
   const assistantViewBlocks = normalizedMessage.content.filter((item) => item.type === "canvas");
+  const inlineViewBlocks = normalizedMessage.content.filter((item) => item.type === "plugin_view");
   const hasImagesOrNotices = hasImages || expiredPairingQrCount !== 0 || omittedMedia.length !== 0;
   const hasMediaContent =
-    hasImagesOrNotices || visibleAttachments.length !== 0 || assistantViewBlocks.length !== 0;
+    hasImagesOrNotices ||
+    visibleAttachments.length !== 0 ||
+    assistantViewBlocks.length !== 0 ||
+    inlineViewBlocks.length !== 0;
   const clawHubCards = normalizedMessage.content.filter((item) => item.type === "clawhub");
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
@@ -318,6 +322,7 @@ export function prepareGroupedMessage(
     actionText,
     omittedMedia,
     assistantViewBlocks,
+    inlineViewBlocks,
     clawHubCards,
     reasoningMarkdown,
     markdown,

@@ -88,19 +88,12 @@ export function compactManualTranscript(
         result: selected.result,
       };
       if (selected.result.compacted) {
-        const identity = applyManualCompactInTransaction(
-          current,
-          input.scope,
-          {
-            rows,
-            entries,
-            events,
-            nowMs: input.nowMs,
-          },
-          {
-            scheduleProjectionReconcile: false,
-          },
-        );
+        const identity = applyManualCompactInTransaction(current, input.scope, {
+          rows,
+          entries,
+          events,
+          nowMs: input.nowMs,
+        });
         // Finish the retained projection before the next turn can use this generation.
         reconcileSessionTranscriptIndexInTransaction(current.db, input.scope.sessionId);
         candidate.publication = prepareSessionEntryReplacementPublication(

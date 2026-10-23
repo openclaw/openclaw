@@ -677,11 +677,6 @@
   font-size: 12px;
 }
 
-.chat-pane__sharing-member > .oc-menu-item__icon {
-  display: flex;
-  align-items: center;
-}
-
 .chat-pane__sharing-member-icon {
   display: inline-flex;
   width: 20px;
@@ -1129,13 +1124,8 @@
   cursor: default;
 }
 
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-person:hover:not(:disabled) {
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-person:hover {
   background: var(--bg-hover);
-}
-
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-person--creator:disabled {
-  opacity: 1;
-  cursor: default;
 }
 
 .chat-pane__sharing-menu--desktop
@@ -1144,26 +1134,28 @@
   filter: saturate(0.65);
 }
 
+.chat-pane__sharing-permission .oc-menu-item__submenu-icon {
+  color: var(--muted);
+  transform: rotate(90deg);
+}
+
+.chat-pane__sharing-permission[aria-expanded="true"] .oc-menu-item__submenu-icon {
+  transform: rotate(-90deg);
+}
+
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-permission {
   color: var(--muted);
   font-size: 11px;
 }
 
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-member-check {
-  display: grid;
-  place-items: center;
-  color: var(--accent);
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-permission-control {
+  grid-column: 3 / 5;
 }
 
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-member-check svg {
-  width: 14px;
-  height: 14px;
-}
-
-.chat-pane__sharing-menu--desktop
-  .chat-pane__sharing-person--creator
-  .chat-pane__sharing-member-check {
-  color: var(--muted);
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-permission-control .oc-menu-item--submenu {
+  min-height: 24px;
+  padding: 0;
+  gap: 8px;
 }
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-empty {

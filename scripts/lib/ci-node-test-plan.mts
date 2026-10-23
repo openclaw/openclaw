@@ -1615,14 +1615,14 @@ export function createUiRealGatewayTestShards(
     (optInEnabled.get(file) === false ? 0 : (timings.fileSeconds[file] ?? 30)) +
     timings.perFileOverheadSeconds;
   const serial = files.filter((file) => !parallelFiles.has(file));
-  const serialSeconds =
-    serial.reduce((sum, file) => sum + seconds(file), 0) +
-    // The desktop driver runs outside Vitest: scheduled run 39872214487 took 120s.
-    (selected.has(desktop) ? (timings.fileSeconds[desktop] ?? 120) : 0);
+  const serialSeconds = serial.reduce((sum, file) => sum + seconds(file), 0);
+  // The desktop driver runs outside Vitest: scheduled run 39872214487 took 120s.
+  const desktopSeconds = selected.has(desktop) ? (timings.fileSeconds[desktop] ?? 120) : 0;
+  const initialSeconds = Math.max(serialSeconds, desktopSeconds);
   // Keep unqualified fixtures together. Qualified fixtures can use either job's
-  // existing two workers after its serial work, including the separate desktop proof.
+  // existing two workers after its overlapping serial and desktop work joins.
   const buckets: { workerSeconds: [number, number]; files: string[] }[] = [
-    { workerSeconds: [serialSeconds, serialSeconds], files: serial },
+    { workerSeconds: [initialSeconds, initialSeconds], files: serial },
     { workerSeconds: [0, 0], files: [] },
   ];
   for (const file of files
