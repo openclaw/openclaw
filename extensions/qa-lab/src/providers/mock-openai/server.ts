@@ -143,8 +143,8 @@ import {
   buildReasoningAndAssistantEvents,
   buildFailedResponseEvents,
 } from "./mock-openai-events.js";
-import { normalizeResponsesInput } from "./mock-openai-input.js";
 import {
+  normalizeResponsesInput,
   extractLatestScenarioFamilyPrompt,
   extractLastUserText,
   extractLastMatchingUserTurn,
