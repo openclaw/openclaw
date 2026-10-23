@@ -39,6 +39,7 @@ import {
 import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
 import { A2A_CHANNEL_ID, a2aChannelSetupPlugin } from "./channel-base.js";
 import { dispatchA2aInbound } from "./inbound.js";
+import { a2aMessageActions } from "./message-actions.js";
 import { sendA2aChannelText } from "./outbound.js";
 import {
   A2aProtocolError,
@@ -244,6 +245,7 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
         },
       }),
     }),
+    actions: a2aMessageActions,
     gateway: {
       startAccount: async (ctx) => {
         const { account } = ctx;
@@ -587,6 +589,8 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
             unregister();
           }
           store.stop();
+          const { clearA2aTaskReadReceipts } = await import("./task-actions.js");
+          clearA2aTaskReadReceipts();
           ctx.setStatus(channelStoppedPatch({ accountId: account.accountId }));
         }
       },

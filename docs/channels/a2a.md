@@ -148,6 +148,50 @@ originating task `TASK_STATE_FAILED` with the reason `Agent run failed`, includi
 run was queued. If collect mode combines requests, a failed run marks every originating
 task failed. This does not change error reporting on human-facing channels.
 
+### Read an outbound answer with the message tool
+
+The shared message tool supports sending a task and reading its result:
+
+```json
+{
+  "action": "send",
+  "channel": "a2a",
+  "target": "hermes",
+  "message": "Summarize this synthetic example."
+}
+```
+
+Use the returned `messageId` (the remote task ID) to read the same task:
+
+```json
+{ "action": "read", "channel": "a2a", "target": "hermes", "messageId": "<remote-task-id>" }
+```
+
+`read` sends `GetTask`, or retries once as `tasks/get` only if the peer reports
+method-not-found. It returns `taskId`, `contextId`, normalized `state`, `terminal`,
+`inputRequired`, bounded artifact `text`, and optional `statusText`. It does not
+send another task, poll automatically, resume a task, or cancel work. A working
+task or read timeout means the caller can read the **same** task again later.
+Each call has a 30-second total transport budget. JSON reads are limited to 1 MiB;
+artifact and status text are each limited to 64 KiB. Task history, arbitrary
+metadata, and nontext attachments are not returned.
+
+A task ID is not read authority. An agent must have a receipt from a prior
+message-tool send in the exact same agent, session key, and session incarnation,
+to the same configured peer/account/endpoint/credential. The Gateway owns both
+actions and rechecks the existing host read authority before each HTTP attempt
+and before exposing the response. Model-authored identity fields cannot supply
+that authority. Direct operator reads use the host's explicit operator authority.
+
+Receipts are in memory, retained for up to 24 hours with a maximum of 500 entries,
+and cleared when the channel stops. After restart, expiry, reset, eviction, or
+peer credential/endpoint changes, agent reads fail closed: an operator must
+reconcile the old task. Do not resend work to recreate a receipt. Sends without a
+remote task ID, correlated JSON-RPC response, or trusted source session return
+`readAvailable: false`; raw
+transport, forced core-queue delivery, and one-shot CLI sends do not mint a
+message-tool read receipt. This is not durable execution or an exactly-once guarantee.
+
 ## Configuration reference
 
 | Key                          | Type     | Default  | Description                                                                    |

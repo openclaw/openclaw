@@ -5,6 +5,13 @@ import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { withEnv, withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { sendA2aChannelText } from "./outbound.js";
+import {
+  a2aPeerScope,
+  clearA2aTaskReadReceipts,
+  currentReceiptGeneration,
+  getTaskReceipt,
+  recordAcceptedSend,
+} from "./task-receipts.js";
 import type { A2aCoreConfig, A2aPeerConfig } from "./types.js";
 
 function createA2aOutboundConfig(
@@ -60,6 +67,7 @@ async function trackGuardedFetch(params: Parameters<typeof guardedFetch>[0]) {
 beforeEach(() => {
   releases.length = 0;
   completedReleases = 0;
+  clearA2aTaskReadReceipts();
   vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(trackGuardedFetch);
 });
 
@@ -140,6 +148,41 @@ describe("A2A outbound channel delivery", () => {
       params: { message: { messageId: string } };
     };
     expect(result.messageId).toBe(request.params.message.messageId);
+  });
+
+  it("revokes an earlier receipt when a receipt-less send reports the same task ID", async () => {
+    // A peer may reuse a task ID it already handed to another source. The direct
+    // channel-adapter send surface carries no session identity, so it can never install
+    // a replacement receipt — it must still revoke the older one.
+    const peerScope = a2aPeerScope({
+      accountId: "default",
+      peerName: "hermes",
+      url: "https://hermes.example/a2a/v1",
+      outboundToken: undefined,
+    });
+    recordAcceptedSend({
+      peerScope,
+      taskId: "shared-task-id",
+      source: JSON.stringify(["main", "agent:main:telegram:group:fixture", "incarnation-1"]),
+      contextId: "ctx-oc-hermes",
+      generation: currentReceiptGeneration(),
+    });
+    expect(getTaskReceipt(peerScope, "shared-task-id")).toBeDefined();
+
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(async (_url, init) => {
+      const rpc = parseA2aRequestBody(init?.body) as { id: string };
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: rpc.id,
+          result: { task: { id: "shared-task-id" } },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    });
+    await expect(send()).resolves.toMatchObject({ taskId: "shared-task-id" });
+
+    expect(getTaskReceipt(peerScope, "shared-task-id")).toBeUndefined();
   });
 
   it("rejects missing outbound peer URLs before making an HTTP request", async () => {
