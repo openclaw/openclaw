@@ -162,8 +162,7 @@ export class DesktopClient {
     const trackSocketClose = (event: CloseEvent) => {
       closeDetail = { code: event.code, reason: event.reason };
     };
-    socket.addEventListener("close", trackSocketClose, { once: true });
-    const stopSocketClose = () => socket.removeEventListener("close", trackSocketClose);
+    const stopSocketClose = listen(socket, "close", trackSocketClose, { once: true });
     const viewport = createDesktopViewport(options.target);
     let rfb: RfbClient;
     try {

@@ -432,7 +432,7 @@ function parsePositiveDimensionPair(
   return { width, height };
 }
 
-function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
+export function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
   const pair = parsePositiveDimensionPair(raw, /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
   if (!pair) {
     return null;

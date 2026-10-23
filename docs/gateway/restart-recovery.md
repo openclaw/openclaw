@@ -1146,6 +1146,11 @@ then use **Resume in new session** without losing the interrupted transcript.
 
 Definitive revocation of the original operator's authority remains terminal for
 that input: recovery records one visible interruption instead of retrying it.
+The same applies when a retained requester profile has no matching operator
+recovery source, or the requester source no longer belongs to the interrupted
+turn. A profile ID alone cannot restore execution authority. A current matching
+source still resumes under the original operator's permissions, regardless of
+who created the session.
 When no other recovery or delivery custody remains, send a new authenticated
 message to continue; `sessions.recover` does not revive that retired input.
 

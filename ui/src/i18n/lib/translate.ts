@@ -29,7 +29,6 @@ type LocaleLoadRecovery = {
   isUnrecoverableError: (error: unknown) => boolean;
   onUnrecoverableLocaleLoad?: (locale: Locale) => void;
 };
-type LocaleTranslationLoader = (locale: Locale) => Promise<TranslationMap | null>;
 
 export { SUPPORTED_LOCALES, isSupportedLocale };
 
@@ -58,9 +57,7 @@ class I18nManager {
   private localeLoadRecovery: LocaleLoadRecovery | undefined;
   private observedNamespaceLoads = new WeakSet<Promise<void>>();
 
-  constructor(
-    private readonly loadLocaleTranslation: LocaleTranslationLoader = loadLazyLocaleTranslation,
-  ) {
+  constructor() {
     this.loadLocale();
   }
 
@@ -163,7 +160,7 @@ class I18nManager {
           const translation = await getOrCreatePromise(
             this.inFlightLocaleLoads,
             locale,
-            () => this.loadLocaleTranslation(locale),
+            () => loadLazyLocaleTranslation(locale),
             { evictOnSettled: true },
           );
           if (!translation) {
@@ -280,8 +277,8 @@ export const translateActive = (key: string) => i18n.translateActive(key);
 
 if (typeof process !== "undefined" && (process.env?.VITEST || process.env?.NODE_ENV === "test")) {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.i18nManagerTestApi")] = {
-    createI18nManager(loadLocaleTranslation: LocaleTranslationLoader) {
-      return new I18nManager(loadLocaleTranslation);
+    createI18nManager() {
+      return new I18nManager();
     },
   };
 }

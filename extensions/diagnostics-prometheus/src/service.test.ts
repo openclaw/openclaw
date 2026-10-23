@@ -820,7 +820,7 @@ describe("metrics HTTP handler", () => {
       runId: "run-1",
       sessionKey: "session-1",
       provider: "openai",
-      model: "gpt-5.4",
+      model: "synthetic-雪-🦞",
       channel: "discord",
       trigger: "message",
       durationMs: 1500,
