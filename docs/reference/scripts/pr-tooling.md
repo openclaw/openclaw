@@ -43,6 +43,44 @@ intact until the command finishes. This setting applies at both dependency
 materialization handoffs; in-place wrappers keep their checkout's dependency
 context, and wrapper selection stays unchanged.
 
+## Qualify the workspace before review
+
+Before the first `review-init`, run:
+
+```bash
+scripts/pr workspace <PR>
+```
+
+This read-only preflight prints JSON with the physical `canonicalRoot`,
+`commonGitDir`, and `worktree`, plus the derived `artifactDirectory` and `reviewJson`
+paths. It needs no third-party Node dependencies or GitHub authentication,
+including when trusted wrapper code must be materialized. It does not call
+GitHub, acquire a PR lock, admit a workflow, install
+dependencies, create the checkout, or change existing PR state. Normal wrapper
+source qualification still applies. The result is a location report, not proof
+of sandbox permission or landing readiness.
+
+Confirm that the file tools used to read and edit review artifacts can access
+these physical paths. Shell access alone is not sufficient. A linked task
+worktree does not move PR artifacts into the task directory: the canonical
+repository still owns `.worktrees/pr-<PR>/.local`. `OPENCLAW_PR_TOOLING_ROOT`
+changes third-party dependency sourcing only, never this location or the shared
+lock, workflow-binding, and merge-outcome owners.
+
+Native PR tooling already supports an operator-provisioned symlink at the
+canonical `.worktrees` parent. The preflight resolves that target, and provisioning
+uses native Git there while keeping the same canonical repository and state
+owners. An existing allowed target can avoid a full clone. Do not repoint a
+shared parent or move existing PR worktrees to solve one task’s access problem;
+provisioning that shared layout belongs to its operator, not the caller.
+
+If no existing supported location is accessible, use a fresh full ordinary
+checkout inside the allowed workspace **before starting the PR workflow**, then
+repeat this preflight. Preserve full history and blobs; do not use a shallow,
+sparse, or linked checkout as a substitute. Never move an active or uncertain
+operation to another clone: first reconcile it through the native recovery owner
+in the original repository. A new clone has a different lock/outcome namespace.
+
 ## Keep the admitted workflow across commands
 
 The first locked operation for a PR retains its authenticated workflow source in
