@@ -11,17 +11,13 @@ export type PersonActivityRouting = {
   navigate: (personId: string, label?: string) => void;
 };
 
-type PersonActivityLink = { href: string; open: (event: MouseEvent) => void };
-
-/** Structural view of the application context, so identity chrome stays out of app/ imports. */
-type PersonActivityNavigator = {
-  readonly basePath: string;
-  navigate: (routeId: "activity", options: { pathname: string; search: string }) => void;
-};
-
 /** `beforeNavigate` lets transient hosts (hovercards, popovers) dismiss themselves first. */
 export function personActivityRouting(
-  context: PersonActivityNavigator,
+  /** Structural view of the application context, so identity chrome stays out of app/ imports. */
+  context: {
+    readonly basePath: string;
+    navigate: (routeId: "activity", options: { pathname: string; search: string }) => void;
+  },
   beforeNavigate?: () => void,
 ): PersonActivityRouting {
   return {
@@ -37,7 +33,7 @@ export function personActivityLink(
   personId: string | null | undefined,
   routing: PersonActivityRouting | undefined,
   label?: string,
-): PersonActivityLink | null {
+): { href: string; open: (event: MouseEvent) => void } | null {
   const id = personId?.trim();
   if (!id || !routing) {
     return null;
