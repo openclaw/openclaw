@@ -1,7 +1,4 @@
-import {
-  buildLiveModelProviderConfig,
-  type LiveModelCatalogFetchGuard,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -78,7 +75,6 @@ export async function buildGoogleLiveCatalogProvider(params: {
   discoveryMode?: "strict";
   apiKey?: string;
   discoveryApiKey?: string;
-  fetchGuard?: LiveModelCatalogFetchGuard;
 }): Promise<ModelProviderConfig> {
   const { models, ...providerConfig } = buildGoogleStaticCatalogProvider();
   return await buildLiveModelProviderConfig({

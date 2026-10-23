@@ -216,10 +216,8 @@ export type CodexAppServerBindingStore = {
 type CodexSessionGenerationReclaimParams = {
   identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
   config?: OpenClawConfig;
-  storePath?: string;
   assertCurrent?: () => void;
   bindingStore: CodexAppServerBindingStore;
-  reclaimStale?: boolean;
 };
 
 /** Builds the terminal coordination error used when a newer OpenClaw session owns the binding. */

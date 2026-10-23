@@ -86,12 +86,11 @@ export function recordCodexCyberTargetUnavailable(params: {
   model: string;
   workspace?: CodexCyberWorkspace;
   cooloffMs: number;
-  now?: number;
 }): void {
   if (params.cooloffMs <= 0) {
     return;
   }
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   for (const [key, expiresAt] of unavailableTargets) {
     if (expiresAt <= now) {
       unavailableTargets.delete(key);
@@ -125,7 +124,6 @@ export function planCodexCyberEscalation(params: {
   currentModel: string | undefined;
   replaySafe: boolean;
   workspace?: CodexCyberWorkspace;
-  now?: number;
 }): CodexCyberEscalationPlan {
   const { config } = params;
   if (config.mode !== "auto") {
@@ -142,7 +140,7 @@ export function planCodexCyberEscalation(params: {
   if (params.currentModel && targetKey(params.currentModel, params.workspace) === key) {
     return { kind: "skip", reason: "already_daybreak" };
   }
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   const expiresAt = unavailableTargets.get(key);
   if (expiresAt !== undefined && expiresAt <= now) {
     unavailableTargets.delete(key);
