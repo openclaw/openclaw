@@ -1,10 +1,7 @@
 /**
  * Resolves MCP transport command, environment, and timeout configuration.
  */
-import {
-  redactSensitiveUrl,
-  redactSensitiveUrlLikeString,
-} from "@openclaw/net-policy/redact-sensitive-url";
+import { redactSensitiveUrl } from "@openclaw/net-policy/redact-sensitive-url";
 import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
@@ -15,7 +12,7 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveConfiguredMcpTransport } from "../config/mcp-config-normalize.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { logWarn } from "../logger.js";
-import { toMcpStringRecord } from "./mcp-config-shared.js";
+import { resolveHttpMcpServerLaunchConfig, type HttpMcpTransportType } from "./mcp-http.js";
 import type { McpOAuthConfig } from "./mcp-oauth-provider.js";
 import {
   describeStdioMcpServerLaunchConfig,
@@ -43,7 +40,7 @@ type ResolvedMcpOAuthConfig = McpOAuthConfig & {
 
 export type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
   kind: "http";
-  transportType: "sse" | "streamable-http";
+  transportType: HttpMcpTransportType;
   url: string;
   headers?: Record<string, string>;
   auth?: "oauth";
@@ -138,62 +135,47 @@ export function resolveMcpTransportConfig(
     return null;
   }
 
-  const rejectHttp = (reason: string) => {
+  const transportType = effectiveTransport === "streamable-http" ? "streamable-http" : "sse";
+  const launch = resolveHttpMcpServerLaunchConfig(
+    rawServer,
+    logWarnings
+      ? {
+          transportType,
+          onDroppedHeader: (key: string) => {
+            logWarn(
+              `bundle-mcp: server "${serverName}": header "${key}" has an unsupported value type and was ignored.`,
+            );
+          },
+          onMalformedHeaders: () => {
+            logWarn(
+              `bundle-mcp: server "${serverName}": "headers" must be a JSON object; the value was ignored.`,
+            );
+          },
+        }
+      : { transportType },
+  );
+  if (!launch.ok) {
     if (logWarnings) {
       logWarn(
-        `bundle-mcp: skipped server "${sanitizeForLog(serverName)}" because ${stdioLaunch.reason} and ${reason}.`,
+        `bundle-mcp: skipped server "${sanitizeForLog(serverName)}" because ${stdioLaunch.reason} and ${launch.reason}.`,
       );
     }
     return null;
-  };
-  if (!isRecord(rawServer)) {
-    return rejectHttp("server config must be an object");
-  }
-  if (typeof rawServer.url !== "string" || rawServer.url.trim().length === 0) {
-    return rejectHttp("its url is missing");
-  }
-  const url = rawServer.url.trim();
-  const parsed = URL.parse(url);
-  if (!parsed) {
-    return rejectHttp(`its url is not a valid URL: ${redactSensitiveUrlLikeString(url)}`);
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return rejectHttp(`only http and https URLs are supported, got ${parsed.protocol}`);
-  }
-  let headers: Record<string, string> | undefined;
-  if (rawServer.headers !== undefined && rawServer.headers !== null) {
-    if (!isRecord(rawServer.headers)) {
-      if (logWarnings) {
-        logWarn(
-          `bundle-mcp: server "${serverName}": "headers" must be a JSON object; the value was ignored.`,
-        );
-      }
-    } else {
-      headers = toMcpStringRecord(rawServer.headers, {
-        onDroppedEntry: logWarnings
-          ? (key: string) => {
-              logWarn(
-                `bundle-mcp: server "${serverName}": header "${key}" has an unsupported value type and was ignored.`,
-              );
-            }
-          : undefined,
-      });
-    }
   }
   const oauth = record?.oauth;
   const clientCert = normalizeOptionalString(record?.clientCert);
   const clientKey = normalizeOptionalString(record?.clientKey);
   return {
     kind: "http",
-    transportType: effectiveTransport === "streamable-http" ? "streamable-http" : "sse",
-    url,
-    headers,
+    transportType: launch.config.transportType,
+    url: launch.config.url,
+    headers: launch.config.headers,
     ...(record?.auth === "oauth" ? { auth: "oauth" as const } : {}),
     ...(isRecord(oauth) ? { oauth: oauth as ResolvedMcpOAuthConfig } : {}),
     ...(typeof record?.sslVerify === "boolean" ? { sslVerify: record.sslVerify } : {}),
     ...(clientCert ? { clientCert } : {}),
     ...(clientKey ? { clientKey } : {}),
-    description: redactSensitiveUrl(url),
+    description: redactSensitiveUrl(launch.config.url),
     ...common(),
   };
 }

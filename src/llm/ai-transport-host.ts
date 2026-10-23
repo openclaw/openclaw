@@ -2,13 +2,9 @@
 // direct imports need the same wiring as the process-default stream facade.
 import { configureAiTransportHost } from "@openclaw/ai";
 import { configureProviderErrorRedactor } from "@openclaw/ai/diagnostics";
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
+import { resolveOpenAIStrictToolSetting } from "../agents/openai-strict-tool-setting.js";
 import { getModelProviderLocalService } from "../agents/provider-local-service.js";
-import {
-  getModelProviderRequestRouteFacts,
-  getModelProviderRequestTransport,
-} from "../agents/provider-request-config.js";
+import { getModelProviderRequestTransport } from "../agents/provider-request-config.js";
 import { unwrapModelHeaderSentinelsForProviderEgress } from "../agents/provider-secret-egress.js";
 import {
   buildGuardedModelFetch,
@@ -65,28 +61,7 @@ configureAiTransportHost({
   },
   redactToolPayloadText,
   normalizeAnthropicInlineContentBlocks,
-  resolveOpenAIStrictToolSetting(model, options) {
-    const capabilities =
-      getModelProviderRequestRouteFacts(model)?.capabilities ??
-      resolveProviderRequestCapabilities({
-        provider: readStringValue(model.provider),
-        api: readStringValue(model.api),
-        baseUrl: readStringValue(model.baseUrl),
-        capability: "llm",
-        transport: options?.transport ?? "stream",
-        modelId: readStringValue(model.id),
-        compat: model.compat,
-      });
-    if (
-      capabilities.usesKnownNativeOpenAIRoute &&
-      (capabilities.provider === "openai" ||
-        capabilities.provider === "azure-openai" ||
-        capabilities.provider === "azure-openai-responses")
-    ) {
-      return true;
-    }
-    return options?.supportsStrictMode ? false : undefined;
-  },
+  resolveOpenAIStrictToolSetting,
   resolveModelRequestTimeoutMs: (model) => resolveModelRequestTimeoutMs(model, undefined),
   logDebug: (subsystem, build) => {
     const log = transportLog(subsystem);
