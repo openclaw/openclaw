@@ -252,6 +252,20 @@ it.each(["needs-sign-in", "configured"] as const)("refreshes sign-in from %s", a
   text(page).not.toContain("Use a separate login");
 });
 
+it.each(["cancelled", ""])("explains a sign-in the Gateway cancelled (%j)", async (error) => {
+  const signIn = { authOptionId: "codex-sign-in", label: "ChatGPT" };
+  const request = setupRequest(
+    () => ({ ...unavailable(), status: "needs-sign-in", installedPlugins: ["codex"], signIn }),
+    {
+      "openclaw.setup.auth.start": () => ({ sessionId: "auth-session", done: false }),
+      "wizard.next": () => ({ done: true, status: "cancelled", error }),
+    },
+  );
+  const { page } = await mountSetup(request);
+  await click(page, "Sign in with ChatGPT");
+  alertText(page).toBe("Provider sign-in was cancelled.");
+});
+
 it("uses shell-neutral native capabilities for fallback, Gateway selection, and permissions", async () => {
   const openAiSetup = vi.fn();
   const openGateways = vi.fn();

@@ -321,7 +321,7 @@ describe("renderUpdates", () => {
     mountUpdates(props);
     expect(container.textContent).toContain("This Mac");
     expect(row("App version").textContent).toContain("2026.9.3 (build 42)");
-    expect(toggle("Check for updates automatically").disabled).toBe(false);
+    expect(toggle("Check for updates automatically").hasAttribute("aria-disabled")).toBe(false);
     setToggle("Check for updates automatically", false);
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
       "updates.automatic",
@@ -400,7 +400,7 @@ describe("renderUpdates", () => {
     });
     const automatic = automaticUpdatesControl().toggle;
     expect(automatic.checked).toBe(false);
-    expect(automatic.hasAttribute("disabled")).toBe(true);
+    expect(automatic.hasAttribute("aria-disabled")).toBe(true);
     expect(row("Automatic updates").textContent).toContain("never installs them automatically");
   });
 
@@ -421,7 +421,7 @@ describe("renderUpdates", () => {
     });
 
     const automatic = automaticUpdatesControl();
-    expect(automatic.toggle.hasAttribute("disabled")).toBe(disabled);
+    expect(automatic.toggle.hasAttribute("aria-disabled")).toBe(disabled);
     if (disabled) {
       expect(automatic.row.textContent).toContain(
         "Automatic dev updates require a source (git) install. This install is a package install — use stable or beta for automatic updates.",

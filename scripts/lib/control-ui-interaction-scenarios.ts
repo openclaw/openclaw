@@ -91,6 +91,7 @@ export function createInteractionFixture(buildId: string, version: string) {
       contextWindow: 128_000,
     })),
     methodResponses: {
+      "progressCard.get": { card: null },
       "cron.list": cronListResponseFixture([
         ...cronCases,
         ...Array.from({ length: 10 }, (_, index) => ({
@@ -282,7 +283,7 @@ async function prepareModelPicker(page: Page) {
   const trigger = page.locator(`${activePane} [data-chat-model-select]`);
   await trigger.waitFor({ state: "visible" });
   await trigger.click();
-  await page.locator('[data-chat-model-option="example/model-999"]').waitFor({ state: "attached" });
+  await page.locator("[data-chat-model-search]").waitFor();
   await trigger.click();
 }
 

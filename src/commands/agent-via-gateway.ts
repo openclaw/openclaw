@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import { TextDecoder } from "node:util";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { GatewayProtocolRequestError } from "../../packages/gateway-client/src/protocol-request.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -251,12 +254,6 @@ async function loadRemoteGatewayRosterWithShellEnvFallback(
 
 function formatActiveGatewayLocalRefusal(identity: GatewayLockIdentity): string {
   return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Run without --local to use it, or stop the Gateway first (${formatCliCommand("openclaw gateway stop")}).`;
-}
-
-function protectJsonStdout(opts: Pick<AgentCliOpts, "json">): void {
-  if (opts.json === true) {
-    routeLogsToStderr();
-  }
 }
 
 function missingAgentMessageError(): Error {
@@ -940,11 +937,12 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
       throw new Error(`${flag} must not be blank`);
     }
   }
-  protectJsonStdout(opts);
+  if (opts.json === true) {
+    routeLogsToStderr();
+  }
   const { messageFile: rawMessageFile, ...rest } = opts;
-  const messageFile = rawMessageFile?.trim();
-  const hasInlineMessage = opts.message !== undefined;
-  if (hasInlineMessage && messageFile) {
+  const messageFile = readNonBlankString(rawMessageFile);
+  if (opts.message !== undefined && messageFile) {
     throw new Error("Use either --message or --message-file, not both.");
   }
   if (rawMessageFile !== undefined && !messageFile) {
@@ -956,17 +954,16 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
       ? new Error(`Message file is empty: ${messageFile}`)
       : missingAgentMessageError();
   }
-  const messageOpts = { ...rest, message };
   // `/compact` cannot run as a plain CLI agent turn: the slash-command handler
   // rejects CLI-originated senders, so the message would fall through to a
   // normal turn and exit 0 without compacting anything (issue #90640 Gap B).
   // Fail loudly and point at the first-class command instead of no-opping.
-  if (isCompactControlCommand(messageOpts.message)) {
+  if (isCompactControlCommand(message)) {
     throw new Error(
       "Slash commands cannot be executed via --message from the CLI. Use: openclaw sessions compact <key>",
     );
   }
-  const dispatchOpts = await normalizeSessionKeyOptsForDispatch(messageOpts);
+  const dispatchOpts = await normalizeSessionKeyOptsForDispatch({ ...rest, message });
   validateExplicitSessionKeyForDispatch(dispatchOpts);
   const gatewayDispatchOpts = dispatchOpts.runId
     ? dispatchOpts

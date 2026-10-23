@@ -43,6 +43,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { unlinkUserChannelIdentity } from "../../state/user-channel-identities.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { handlePluginCommand } from "./commands-plugin.js";
@@ -93,6 +94,8 @@ export type Fixture = {
   ) => Promise<void>;
   /** The live loaded instance identity of the fixture plugin. */
   pluginIncarnation: () => string | undefined;
+  /** For a `bundled` fixture, the build record of the package that ships the plugin. */
+  bundledBuildInfoPath?: string;
   scheduledResults: Array<Awaited<ReturnType<CronServiceDeps["runIsolatedAgentJob"]>>>;
   resetParent: () => Promise<unknown>;
   reloadPlugin: () => Promise<void>;
@@ -101,16 +104,26 @@ export type Fixture = {
 
 // The fixture is a third-party plugin loaded from disk, not an injected registry record.
 // Only its application handler crosses this bridge; registration, selection, authority,
-// native tool policy, and command lifetime all use their production owners.
+// native tool policy, and command lifetime all use their production owners. With `bundled`, the
+// same plugin is discovered as a core-bundled plugin inside a built package's `dist/extensions`,
+// loading host-owned modules without captured source.
 export async function withCommandPlugin(
   run: (fixture: Fixture) => Promise<void>,
   options: {
     commands?: CommandMetadata[];
     manifestCapabilities?: unknown;
     scheduledContract?: boolean;
+    bundled?: boolean;
   } = {},
 ) {
   await withAdminIngress(async ({ cfg, state, admins, context, gateway }) => {
+    // The test state restores both bundled-plugin variables when it ends.
+    const bundledDist = options.bundled ? state.path("openclaw-package", "dist") : undefined;
+    if (bundledDist) {
+      await fs.mkdir(path.join(bundledDist, "extensions"), { recursive: true });
+      setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(bundledDist, "extensions"));
+      deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+    }
     const bridge = Symbol.for(`openclaw.command-native-test.${randomUUID()}`);
     const handler = vi.fn<Handler>((ctx) => ({
       text: JSON.stringify({
@@ -119,7 +132,9 @@ export async function withCommandPlugin(
       }),
     }));
     Reflect.set(globalThis, bridge, handler);
-    const pluginDir = state.path("controller-plugin");
+    const pluginDir = bundledDist
+      ? path.join(bundledDist, "extensions", pluginId)
+      : state.path("controller-plugin");
     await fs.mkdir(pluginDir);
     const pluginFile = path.join(pluginDir, "index.cjs");
     await fs.writeFile(
@@ -173,7 +188,7 @@ export async function withCommandPlugin(
     cfg.session = { ...cfg.session, store: storePath };
     cfg.plugins = {
       allow: [pluginId],
-      load: { paths: [pluginFile] },
+      ...(bundledDist ? {} : { load: { paths: [pluginFile] } }),
       entries: { [pluginId]: { enabled: true } },
     };
     const cronStorePath = state.path("cron/jobs.json");
@@ -324,6 +339,7 @@ export async function withCommandPlugin(
                 return cron;
               },
               scheduledResults,
+              bundledBuildInfoPath: bundledDist && path.join(bundledDist, "build-info.json"),
               restart: async (change) => {
                 cron.stop();
                 await cron.waitForIdle();

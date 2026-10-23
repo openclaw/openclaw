@@ -289,6 +289,7 @@ export async function finishSessionsSendReply(params: {
   start: SessionsSendStart;
   completion?: FollowupCompletionOwner;
   registryCompletion: boolean;
+  requesterTurnRunId?: string;
   watchField: { watched?: boolean };
   replyContext: SessionsSendReplyContext;
   targetSession: GatewaySessionStoreTargetWithStore;
@@ -384,7 +385,7 @@ export async function finishSessionsSendReply(params: {
       : completion
         ? await completion.take(timeoutMs)
         : await waitForAgentRunReply({ runId, timeoutMs, callGateway: replyContext.callGateway });
-  if (!result) {
+  if (!result || result.yielded === true || result.status === "pending") {
     await startReplyFlow(true);
     return accepted();
   }
@@ -407,6 +408,25 @@ export async function finishSessionsSendReply(params: {
       await startReplyFlow(true);
       return accepted();
     }
+  }
+  if (
+    registryCompletion &&
+    params.requesterTurnRunId &&
+    (result.status === "ok" ||
+      isTerminalAgentWaitTimeout(result) ||
+      (result.status === "error" && result.endedAt !== undefined))
+  ) {
+    if (!replyContext.requesterSessionKey) {
+      throw new Error("Inline child result is missing its requester session.");
+    }
+    const { acknowledgeSubagentResultForRequesterTurn } =
+      await import("../subagents/registry/subagent-registry-requester-claim.js");
+    await acknowledgeSubagentResultForRequesterTurn({
+      runId,
+      requesterSessionKey: replyContext.requesterSessionKey,
+      requesterAgentId,
+      requesterTurnRunId: params.requesterTurnRunId,
+    });
   }
   if (result.status === "timeout" || result.status === "error") {
     return jsonResult({

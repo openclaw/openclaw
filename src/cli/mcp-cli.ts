@@ -7,6 +7,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { Command } from "commander";
@@ -901,7 +902,7 @@ export function registerMcpCli(program: Command) {
           },
         ) => {
           const server: Record<string, unknown> = {};
-          const command = normalizeStringifiedOptionalString(opts.command);
+          const command = readNonBlankString(opts.command);
           const url = normalizeStringifiedOptionalString(opts.url);
           if (command && url) {
             fail("Specify either --command for stdio or --url for HTTP, not both.");
@@ -915,7 +916,7 @@ export function registerMcpCli(program: Command) {
               server.args = opts.arg;
             }
             setOptionalField(server, "env", parseKeyValueEntries(opts.env, "--env"));
-            setOptionalField(server, "cwd", normalizeStringifiedOptionalString(opts.cwd));
+            setOptionalField(server, "cwd", readNonBlankString(opts.cwd));
           }
           if (url) {
             server.url = url;
@@ -937,9 +938,7 @@ export function registerMcpCli(program: Command) {
           if (targetName && Object.hasOwn(loaded.mcpServers, targetName)) {
             fail(`MCP server ${JSON.stringify(targetName)} already exists.`);
           }
-          const shouldProbe =
-            opts.probe !== false && server.enabled !== false && server.auth !== "oauth";
-          if (shouldProbe) {
+          if (opts.probe !== false && server.enabled !== false && server.auth !== "oauth") {
             await probeMcpServersOrFail({
               config: loaded.config,
               path: loaded.path,

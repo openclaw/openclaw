@@ -1,10 +1,27 @@
-import { createMemo, Errored, lazy, Loading, onCleanup, onSettled, Show } from "solid-js";
+import {
+  children,
+  createMemo,
+  createSignal,
+  Errored,
+  isPending,
+  lazy,
+  Loading,
+  onCleanup,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-ui-reload.ts";
-import { reloadAfterRenderErrorOnce } from "../../app/stale-chunk-reload.ts";
+import {
+  cancelStaleChunkRecovery,
+  isStaleChunkImportError,
+  reloadAfterRenderErrorOnce,
+  retryStaleChunkReloadWhenReachable,
+} from "../../app/stale-chunk-reload.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
 import { SessionBackgroundLayoutScope } from "../../components/session-background-layout-context.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
@@ -49,6 +66,13 @@ registerNewSessionSetupEnglish();
 const CreationComposer = lazy(() => import("./creation-composer-render.tsx"), {
   export: "CreationComposer",
 });
+const AttachmentDetailPanel = lazy(
+  async () => {
+    await import("../../styles/chat/sidebar.css");
+    return import("../chat/components/chat-detail-panel.tsx");
+  },
+  { export: "ChatDetailPanel" },
+);
 const preloadSubmissionViews = () => {
   preloadNewSessionSubmission();
   void CreationComposer.preload().catch(() => undefined);
@@ -246,6 +270,22 @@ function DraftBlock(props: {
           voiceControl,
         })}
       />
+      <Show when={submission().blockedSubmitNotice()}>
+        <div
+          class="new-session-page__blocked-submit agent-chat__composer-status"
+          data-tone="info"
+          role="status"
+        >
+          <div class="agent-chat__composer-status-band">
+            <span class="agent-chat__composer-status-icon" aria-hidden="true">
+              <Icon name="info" />
+            </span>
+            <span class="agent-chat__composer-status-text">
+              {submission().blockedSubmitNotice()}
+            </span>
+          </div>
+        </div>
+      </Show>
       <Show when={!catalog.isTarget(props.page().data)}>
         <NewSessionIncognitoNotice
           active={submission().visibility === "incognito"}
@@ -405,10 +445,6 @@ function renderPageContent(host: PageHost) {
     };
   };
   const panel = () => page().attachmentPanel;
-  const panelError = () => {
-    const state = page().attachmentPanelLoader.visibleState;
-    return state?.status === "error" ? state : undefined;
-  };
   const lightbox = () => page().imageLightbox;
   const panelContent = () => {
     const attachment = panel();
@@ -501,29 +537,62 @@ function renderPageContent(host: PageHost) {
         </Show>
       </div>
       <Show when={panel()}>
-        <aside class="new-session-attachment-panel">
-          <Show
-            when={panelError()}
-            fallback={
-              <Show when={page().attachmentPanelLoader.visibleState}>
-                <div role="status">{t("common.loading")}</div>
-              </Show>
-            }
-          >
-            {(state) => (
-              <LazyViewError
-                error={state().error}
-                stale={state().stale}
-                onRetry={() => owner.attachmentPanelLoader.retry()}
-                onClose={owner.closeAttachmentPanel}
-              />
-            )}
-          </Show>
-          <openclaw-chat-detail-panel
-            prop:content={panelContent()}
-            onChat-detail-panel-close={owner.closeAttachmentPanel}
-          />
-        </aside>
+        {(_attachment) => {
+          const content = children(() => (
+            <AttachmentDetailPanel
+              content={panelContent()}
+              onChat-detail-panel-close={owner.closeAttachmentPanel}
+            />
+          ));
+          const loading = () => <div role="status">{t("common.loading")}</div>;
+          return (
+            <aside class="new-session-attachment-panel">
+              <Errored
+                fallback={(error, reset) => {
+                  let active = true;
+                  const [retrying, setRetrying] = createSignal(false);
+                  const stale = isStaleChunkImportError(error());
+                  const canRetry = () =>
+                    active && owner.isConnected && owner.attachmentPanel !== null;
+                  onSettled(() => () => {
+                    active = false;
+                    if (stale) {
+                      cancelStaleChunkRecovery();
+                    }
+                  });
+                  const retry = async () => {
+                    if (!canRetry()) {
+                      return;
+                    }
+                    setRetrying(true);
+                    if (
+                      stale &&
+                      (await retryStaleChunkReloadWhenReachable({ canReload: canRetry }))
+                    ) {
+                      return;
+                    }
+                    if (canRetry()) {
+                      setRetrying(false);
+                      reset();
+                    }
+                  };
+                  return (
+                    <Show when={!retrying() && !isPending(content)} fallback={loading()}>
+                      <LazyViewError
+                        error={error()}
+                        stale={stale}
+                        onRetry={() => void retry()}
+                        onClose={owner.closeAttachmentPanel}
+                      />
+                    </Show>
+                  );
+                }}
+              >
+                <Loading fallback={loading()}>{content()}</Loading>
+              </Errored>
+            </aside>
+          );
+        }}
       </Show>
     </>
   );
