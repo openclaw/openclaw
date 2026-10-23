@@ -41,6 +41,88 @@ Both calls recheck the invoking plugin's full-runtime lifetime and request autho
 
 A handler owns its calls only until it settles or times out. Accepted children transfer to native execution custody and do not automatically send a chat reply. A controller can await results while its handler remains active, or retain accepted IDs in its existing plugin store and collect during a later eligible invocation for the same parent incarnation. Persist controller decisions in the plugin's own store; this facade does not add a task engine, scheduler, or model-memory protocol. Existing `subagent.run`, `complete`, and `waitForRun` behavior is unchanged.
 
+## Plugin-local subagent profiles
+
+A profile adds package-owned instructions and can **only remove tools** from a
+native child's inherited policy. It cannot select a model, identity, credentials,
+authentication, or sandbox. Declare local profile IDs in the plugin manifest:
+
+```json
+{
+  "contracts": {
+    "subagentProfiles": ["reviewer"],
+    "commandRuntimeCapabilities": ["subagents"]
+  }
+}
+```
+
+Probe both the optional registration method and the string capability before
+registering. Undeclared plugins do not receive either surface; older hosts do not
+advertise support. Existing spawns without a profile are unchanged.
+
+```typescript
+if (
+  api.runtime.capabilities?.includes("native-subagent-profiles-v1") &&
+  api.agent.registerSubagentProfile
+) {
+  api.agent.registerSubagentProfile({
+    id: "reviewer",
+    description: "Review a change without editing files",
+    instructionsFile: "agents/reviewer.md",
+    tools: { deny: ["group:fs", "group:runtime"] },
+    outputSchema: {
+      type: "object",
+      properties: { findings: { type: "array", items: { type: "string" } } },
+      required: ["findings"],
+      additionalProperties: false,
+    },
+  });
+}
+
+// Inside an eligible command or reply_dispatch invocation:
+const child = await native.spawn({
+  requestId: "review-change",
+  task: "Review the requested change.",
+  profile: "reviewer",
+});
+```
+
+Use the deny list appropriate to the tools the reviewer needs; the example
+removes file reads as well as writes. Tool policy names, aliases, and groups have
+the same meaning as ordinary tool denies. An omitted or empty deny list grants
+nothing: the requester ceiling and current host policy still apply. A read-only
+reviewer should deny **every** write-capable tool it could inherit, including
+plugin tools. A profile is not a sandbox for trusted in-process plugin code.
+
+`id` is a local lowercase identifier (letter first, then letters, digits, `_` or
+`-`, at most 64 characters). `description` and `instructionsFile` are required.
+`instructionsFile` must be relative to the plugin package; missing files,
+traversal, symlink escapes, hard links, invalid UTF-8, and files larger than
+256 KiB are rejected. The host captures the whole file at registration. Edits on
+disk do not change already registered instructions; reload the plugin to adopt
+new bytes. Each child run records `subagentProfile` with `pluginId`, `id`,
+`instructionsFile`, and the hex SHA-256 `instructionsSha256` of those exact bytes.
+Existing queued-launch persistence retains the captured instructions.
+
+`tools` accepts only `{ deny: string[] }`; `allow` and other widening fields are
+rejected. Profiles are scoped to their registering plugin and invocation's
+registry generation. Another plugin cannot select a profile by its local ID or
+by prefixing the owner's ID. Every spawn retains the native requester's binding,
+parent incarnation, and per-call authority rechecks; profile capture adds no
+fallback authority.
+
+`outputSchema`, when present, uses the existing native collector's structured
+output enforcement. A caller cannot replace a profile schema with a spawn
+`outputSchema`, and a tool hook cannot remove it. Without a profile schema, the
+ordinary optional spawn `outputSchema` still works. Collection reports schema
+failures normally; text alone is not a successful structured result.
+
+Profiles are available only through the plugin's requester-bound native runtime,
+including command-scoped native children. The model-facing `sessions_spawn`
+schema does not expose `profile`: it has no registering-plugin identity. The
+host carries the selected profile privately through that same native spawn path,
+so model arguments or tool hooks cannot forge or replace its restrictions.
+
 ## Recover plugin-owned native children
 
 Hosts advertising the string capability `native-subagent-list-v1` support optional
