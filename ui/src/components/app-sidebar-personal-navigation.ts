@@ -396,13 +396,13 @@ export function sidebarVisibleRowsInOrder(
       sessions: Pick<ApplicationContext["sessions"], "archiveVisibility">;
     };
   },
+  personalGroupRows: readonly SidebarRecentSession[] = [],
 ): SidebarRecentSession[] {
-  return host.collapsedSessionSections.has("pinned")
-    ? visibleRows
-    : [
-        ...sidebarPinnedSessionRows(zone, (key) =>
-          host.sessionDataContext?.sessions.archiveVisibility(key),
-        ),
-        ...visibleRows,
-      ];
+  const pins = host.collapsedSessionSections.has("pinned")
+    ? []
+    : sidebarPinnedSessionRows(zone, (key) =>
+        host.sessionDataContext?.sessions.archiveVisibility(key),
+      );
+  // Keep appearances until the clicked range is resolved; batch targets deduplicate later.
+  return [...personalGroupRows, ...pins, ...visibleRows];
 }

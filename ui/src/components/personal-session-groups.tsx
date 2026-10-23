@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { prefValuesEqual } from "../app/server-prefs-state.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
@@ -12,6 +12,7 @@ import {
 import { showToast } from "../lib/toast.ts";
 import type { SidebarSessionListHost } from "./app-sidebar-session-render-types.ts";
 import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
+import { showPersonalSessionGroupDialog } from "./personal-session-group-dialog.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Menu } from "./solid/menu.tsx";
 import "../styles/personal-session-groups.css";
@@ -33,10 +34,9 @@ export function PersonalSessionGroups(props: { host: SidebarSessionListHost }) {
 function PersonalGroups(props: { host: SidebarSessionListHost }) {
   const context = useApplication();
   const lifetime = new AbortController();
-  onCleanup(() => lifetime.abort());
+  onSettled(() => () => lifetime.abort());
   const navigation = projectOwner(context.navigation, (owner) => owner.snapshot);
   const groups = createMemo(() => navigation.read().personalSessionGroups ?? []);
-  const [collapsed, setCollapsed] = createSignal<ReadonlySet<string>>(new Set());
   const [dropTarget, setDropTarget] = createSignal<string | null>(null);
   const write = (next: readonly PersonalSessionGroup[]): string | null => {
     // The profile preference has a byte limit. Never silently truncate an authored layout.
@@ -50,13 +50,7 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
     props.host.resolvePersonalGroupSession
       ? props.host.resolvePersonalGroupSession(key)
       : props.host.reconciledSidebarZone().sessionRows.get(key);
-  const visibleRows = (group: PersonalSessionGroup) =>
-    group.sessionKeys.flatMap((key) => {
-      const row = resolve(key);
-      return row && row.pinnable && !row.archived && !context.sessions.archiveVisibility(key)
-        ? [row]
-        : [];
-    });
+  const visibleRows = (group: PersonalSessionGroup) => props.host.personalGroupSessionRows(group);
   const edit = async (id?: string) => {
     const scope = context.sessions.captureConnectionScope();
     if (!scope) {
@@ -70,8 +64,6 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
       }
     });
     try {
-      const { showPersonalSessionGroupDialog } =
-        await import("./personal-session-group-dialog.tsx");
       if (!current()) {
         return;
       }
@@ -91,8 +83,12 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
         candidates,
         signal: AbortSignal.any([controller.signal, lifetime.signal]),
         submit: (value) => {
-          if (!current() || (id && !groups().some((item) => item.id === id))) {
+          const saved = id ? groups().find((item) => item.id === id) : undefined;
+          if (!current() || (id && !saved)) {
             return t("sessionsView.personalGroupUnavailable");
+          }
+          if (id && !prefValuesEqual(saved, group)) {
+            return t("sessionsView.personalGroupChanged");
           }
           // Retain unresolved saved references, but new membership must still resolve.
           const previousKeys = new Set(group?.sessionKeys);
@@ -220,18 +216,18 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
               <button
                 type="button"
                 class="sidebar-session-group-toggle"
-                aria-expanded={collapsed().has(group().id) ? "false" : "true"}
-                onClick={() =>
-                  setCollapsed((previous) => {
-                    const next = new Set(previous);
-                    if (!next.delete(group().id)) {
-                      next.add(group().id);
-                    }
-                    return next;
-                  })
+                aria-expanded={
+                  props.host.collapsedPersonalSessionGroups.has(group().id) ? "false" : "true"
                 }
+                onClick={() => props.host.togglePersonalSessionGroup(group().id)}
               >
-                <Icon name={collapsed().has(group().id) ? "chevronRight" : "chevronDown"} />
+                <Icon
+                  name={
+                    props.host.collapsedPersonalSessionGroups.has(group().id)
+                      ? "chevronRight"
+                      : "chevronDown"
+                  }
+                />
                 <span class="sidebar-recent-sessions__label-text">{group().label}</span>
               </button>
               <Menu
@@ -266,7 +262,7 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
                 }}
               />
             </div>
-            <Show when={!collapsed().has(group().id)}>
+            <Show when={!props.host.collapsedPersonalSessionGroups.has(group().id)}>
               <div role="list" aria-label={group().label} class="sidebar-recent-sessions__list">
                 <For each={visibleRows(group())} keyed={(row) => row.key}>
                   {(row) => <SessionTree host={props.host} session={row()} />}

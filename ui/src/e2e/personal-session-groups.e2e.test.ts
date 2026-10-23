@@ -130,6 +130,199 @@ suite.define(() => {
     },
   );
 
+  it("selects descriptor-only groups in visible order and batches each expanded member once", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const selected = createControlUiSessionRow(key, "Reliability Tracker", Date.now());
+      const members = ["first", "middle", "last"].map((id) =>
+        createControlUiSessionRow("agent:main:" + id, id + " project", Date.now()),
+      );
+      const gateway = await installMockGateway(page, {
+        sessionKey: key,
+        operatorScopes: ["operator.admin"],
+        sessions: [selected, ...members],
+        methodResponses: { "sessions.list": sessionsListResponse([selected]) },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+      await evaluateControlUiContext(page, ({ navigation }) =>
+        navigation.update({
+          sidebarEntries: ["session:agent:main:first"],
+          personalSessionGroups: [
+            { id: "first", label: "First", sessionKeys: ["agent:main:first"] },
+            { id: "middle", label: "Middle", sessionKeys: ["agent:main:middle"] },
+            { id: "last", label: "Last", sessionKeys: ["agent:main:last", "agent:main:first"] },
+          ],
+        }),
+      );
+      const group = (id: string) => page.locator('[data-personal-session-group="' + id + '"]');
+      const row = (id: string) =>
+        group(id).getByRole("link", { name: id + " project", exact: true });
+      for (const id of ["first", "middle", "last"]) {
+        await row(id).waitFor();
+      }
+      await row("first").click({ modifiers: ["Alt"] });
+      await row("last").click({ modifiers: ["Alt"] });
+      await row("last").click({ button: "right" });
+      const menu = page.locator("openclaw-session-menu");
+      await expect
+        .poll(() => menu.getByRole("menuitem", { name: "Archive 2", exact: true }).count())
+        .toBe(1);
+      await page.keyboard.press("Escape");
+
+      // Ordinary navigation clears selection; Shift includes the intervening group.
+      await page
+        .locator("openclaw-app-sidebar")
+        .getByRole("link", { name: /Reliability Tracker/ })
+        .click();
+      await row("first").click({ modifiers: ["Alt"] });
+      await row("last").click({ modifiers: ["Shift"] });
+      await row("last").click({ button: "right" });
+      await expect
+        .poll(() => menu.getByRole("menuitem", { name: "Archive 3", exact: true }).count())
+        .toBe(1);
+      await page.keyboard.press("Escape");
+
+      // A duplicate's clicked appearance, not its first occurrence, bounds the range.
+      await page
+        .locator("openclaw-app-sidebar")
+        .getByRole("link", { name: /Reliability Tracker/ })
+        .click();
+      await row("last").click({ modifiers: ["Alt"] });
+      await group("last")
+        .getByRole("link", { name: "first project", exact: true })
+        .click({ modifiers: ["Shift"] });
+      await row("last").click({ button: "right" });
+      await expect
+        .poll(() => menu.getByRole("menuitem", { name: "Archive 2", exact: true }).count())
+        .toBe(1);
+      await page.keyboard.press("Escape");
+      await page
+        .locator("openclaw-app-sidebar")
+        .getByRole("link", { name: /Reliability Tracker/ })
+        .click();
+      await row("first").click({ modifiers: ["Alt"] });
+
+      // Normal navigation must retain the clicked occurrence as the next Shift anchor.
+      await group("last").getByRole("link", { name: "first project", exact: true }).click();
+      await expect
+        .poll(() =>
+          group("last")
+            .getByRole("link", { name: "first project", exact: true })
+            .getAttribute("aria-current"),
+        )
+        .toBe("page");
+      await row("last").click({ modifiers: ["Shift"] });
+      await row("last").click({ button: "right" });
+      await expect
+        .poll(() =>
+          menu
+            .getByRole("menuitem", { name: /^Archive [0-9]+$/, exact: true })
+            .getAttribute("aria-label"),
+        )
+        .toBe("Archive 2");
+      await page.keyboard.press("Escape");
+      await page
+        .locator("openclaw-app-sidebar")
+        .getByRole("link", { name: /Reliability Tracker/ })
+        .click();
+      await row("first").click({ modifiers: ["Alt"] });
+
+      // A canonical pin must not inherit the first active personal-group appearance.
+      const canonicalPin = page
+        .locator('[data-session-section="pinned"]')
+        .getByRole("link", { name: "first project", exact: true });
+      const ordinary = page
+        .locator("openclaw-app-sidebar")
+        .getByRole("link", { name: /Reliability Tracker/ });
+      await canonicalPin.click();
+      await expect.poll(() => canonicalPin.getAttribute("aria-current")).toBe("page");
+      await ordinary.click({ modifiers: ["Shift"] });
+      await ordinary.click({ button: "right" });
+      await expect
+        .poll(() =>
+          menu
+            .getByRole("menuitem", { name: /^Archive [0-9]+$/, exact: true })
+            .getAttribute("aria-label"),
+        )
+        .toBe("Archive 2");
+      await page.keyboard.press("Escape");
+      await ordinary.click();
+      await row("first").click({ modifiers: ["Alt"] });
+
+      // A collapsed group is not a batch target, and duplicate placements never duplicate writes.
+      await group("middle").getByRole("button", { name: "Middle", exact: true }).click();
+      await row("middle").waitFor({ state: "hidden" });
+      await row("last").click({ modifiers: ["Shift"] });
+      await row("last").click({ button: "right" });
+      await menu.getByRole("menuitem", { name: "Archive 2", exact: true }).click();
+      const request = await gateway.waitForRequest("sessions.patchMany");
+      expect(request.params).toMatchObject({
+        patch: { archived: true },
+        targets: [members[0], members[2]].map((member) => ({
+          key: member!.key,
+          agentId: "main",
+          expectedSessionId: member!.sessionId,
+        })),
+      });
+    });
+  });
+
+  it("rejects an open editor that would overwrite newer group membership", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const rows = [
+        createControlUiSessionRow(key, "Reliability Tracker", Date.now()),
+        createControlUiSessionRow(releaseKey, "Release checklist", Date.now()),
+      ];
+      await installMockGateway(page, {
+        sessionKey: key,
+        operatorScopes: ["operator.sessions.read"],
+        sessions: rows,
+        methodResponses: { "sessions.list": sessionsListResponse(rows) },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+      await evaluateControlUiContext(page, ({ navigation }) =>
+        navigation.update({
+          personalSessionGroups: [
+            { id: "shared-tab", label: "Focus", sessionKeys: ["agent:main:reliability"] },
+          ],
+        }),
+      );
+      await page
+        .getByRole("button", { name: "Options for personal group Focus", exact: true })
+        .click();
+      await page.getByRole("menuitem", { name: "Edit group", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Edit personal group", exact: true });
+      await dialog.getByLabel("Group name", { exact: true }).fill("Renamed");
+      // The preference owner receives a newer saved layout while this editor is open.
+      await evaluateControlUiContext(page, ({ navigation }) =>
+        navigation.update({
+          personalSessionGroups: [
+            { id: "shared-tab", label: "Focus", sessionKeys: ["agent:main:release"] },
+          ],
+        }),
+      );
+      await dialog.getByRole("button", { name: "Save", exact: true }).click();
+      await dialog
+        .getByRole("alert")
+        .getByText("This group changed. Reopen it before saving your edits.", { exact: true })
+        .waitFor();
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      const group = page.locator('[data-personal-session-group="shared-tab"]');
+      await group.getByRole("link", { name: /Release checklist/ }).waitFor();
+      expect(await group.getByRole("link", { name: /Reliability Tracker/ }).count()).toBe(0);
+      await page
+        .getByRole("button", { name: "Options for personal group Focus", exact: true })
+        .click();
+      await page.getByRole("menuitem", { name: "Edit group", exact: true }).click();
+      expect(
+        await dialog.getByRole("checkbox", { name: "Release checklist", exact: true }).isChecked(),
+      ).toBe(true);
+      await dialog.getByLabel("Group name", { exact: true }).fill("Renamed");
+      await dialog.getByRole("button", { name: "Save", exact: true }).click();
+      await group.getByRole("list", { name: "Renamed", exact: true }).waitFor();
+      await group.getByRole("link", { name: /Release checklist/ }).waitFor();
+    });
+  });
+
   it("resolves off-page members without revealing unavailable saved references", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const selected = createControlUiSessionRow(key, "Reliability Tracker", Date.now());

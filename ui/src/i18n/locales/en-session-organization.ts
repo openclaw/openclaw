@@ -24,6 +24,7 @@ const enSessionOrganization = {
     personalGroupRemove: "Remove personal group",
     personalGroupRemoved: "Personal group removed. Sessions are unchanged.",
     personalGroupUnavailable: "Connection changed. Reopen the group to edit it.",
+    personalGroupChanged: "This group changed. Reopen it before saving your edits.",
     personalGroupCapacity:
       "Personal groups are full. Remove a group or some sessions before adding more.",
     personalGroupLimit: "You can create up to 100 personal groups.",

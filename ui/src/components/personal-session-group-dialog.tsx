@@ -1,134 +1,33 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
-import { t } from "../lib/reactive/i18n.ts";
-import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { lazy, Loading } from "solid-js";
+import type { PersonalSessionGroupDialogOptions } from "./personal-session-group-dialog-view.tsx";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 
+const PersonalSessionGroupDialogView = lazy(
+  () => import("./personal-session-group-dialog-view.tsx"),
+  {
+    export: "PersonalSessionGroupDialogView",
+  },
+);
 let active = false;
 
-export async function showPersonalSessionGroupDialog(options: {
-  group?: PersonalSessionGroup;
-  candidates: SidebarRecentSession[];
-  signal: AbortSignal;
-  submit: (value: Pick<PersonalSessionGroup, "label" | "sessionKeys">) => string | null;
-}): Promise<void> {
+export function showPersonalSessionGroupDialog(
+  options: PersonalSessionGroupDialogOptions,
+): Promise<void> {
   if (active) {
-    return;
+    return Promise.resolve();
   }
   active = true;
-  try {
-    await withPromiseModalHost<void>({ signal: options.signal, value: undefined }, (modal) => {
-      modal.render(() => {
-        const [label, setLabel] = createSignal(options.group?.label ?? "");
-        const [query, setQuery] = createSignal("");
-        const [selected, setSelected] = createSignal<ReadonlySet<string>>(
-          new Set(options.group?.sessionKeys),
-        );
-        const [error, setError] = createSignal<string | null>(null);
-        const rows = createMemo(() =>
-          options.candidates.filter((row) =>
-            row.label.toLocaleLowerCase().includes(query().trim().toLocaleLowerCase()),
-          ),
-        );
-        const title = () =>
-          t(options.group ? "sessionsView.personalGroupEdit" : "sessionsView.personalGroupNew");
-        let nameInput!: HTMLInputElement;
-        return (
-          <openclaw-modal-dialog
-            label={title()}
-            description={t("sessionsView.personalGroupHint")}
-            prop:initialFocus={() => nameInput}
-            onModal-cancel={() => modal.finish()}
-          >
-            <form
-              class="exec-approval-card personal-session-group-dialog"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (!label().trim()) {
-                  return;
-                }
-                const result = options.submit({
-                  label: label().trim(),
-                  sessionKeys: [...selected()],
-                });
-                if (result) {
-                  setError(result);
-                } else {
-                  modal.finish();
-                }
-              }}
-            >
-              <div class="exec-approval-header">
-                <div class="exec-approval-title">{title()}</div>
-              </div>
-              <p class="muted">{t("sessionsView.personalGroupHint")}</p>
-              <label class="field">
-                <span>{t("sessionsView.personalGroupName")}</span>
-                <input
-                  ref={(element) => (nameInput = element)}
-                  type="text"
-                  maxlength={80}
-                  value={label()}
-                  onInput={(event) => setLabel(event.currentTarget.value)}
-                  required
-                />
-              </label>
-              <label class="field">
-                <span>{t("sessionsView.personalGroupSearch")}</span>
-                <input
-                  type="search"
-                  value={query()}
-                  onInput={(event) => setQuery(event.currentTarget.value)}
-                />
-              </label>
-              <fieldset class="personal-session-group-dialog__sessions">
-                <legend>{t("sessionsView.personalGroupSessions")}</legend>
-                <For each={rows()} keyed={(row) => row.key}>
-                  {(row) => (
-                    <label class="personal-session-group-dialog__session">
-                      <input
-                        type="checkbox"
-                        checked={selected().has(row().key)}
-                        onChange={(event) => {
-                          const checked = event.currentTarget.checked;
-                          setSelected((previous) => {
-                            const next = new Set(previous);
-                            if (checked) {
-                              next.add(row().key);
-                            } else {
-                              next.delete(row().key);
-                            }
-                            return next;
-                          });
-                        }}
-                      />
-                      <span>{row().label}</span>
-                    </label>
-                  )}
-                </For>
-                <Show when={rows().length === 0}>
-                  <p class="muted">{t("sessionsView.personalGroupNoMatches")}</p>
-                </Show>
-              </fieldset>
-              <Show when={error()}>
-                <div role="alert" class="exec-approval-error">
-                  {error()}
-                </div>
-              </Show>
-              <openclaw-modal-actions class="exec-approval-actions">
-                <button type="button" class="btn" onClick={() => modal.finish()}>
-                  {t("common.cancel")}
-                </button>
-                <button type="submit" class="btn primary" disabled={!label().trim()}>
-                  {t("common.save")}
-                </button>
-              </openclaw-modal-actions>
-            </form>
-          </openclaw-modal-dialog>
-        );
-      });
-    });
-  } finally {
+  return withPromiseModalHost<void>(
+    { signal: options.signal, value: undefined },
+    ({ render, finish }) => {
+      render(() => (
+        <Loading>
+          <PersonalSessionGroupDialogView options={options} finish={finish} />
+        </Loading>
+      ));
+      return PersonalSessionGroupDialogView.preload().then(() => undefined);
+    },
+  ).finally(() => {
     active = false;
-  }
+  });
 }
