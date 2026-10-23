@@ -76,31 +76,6 @@ const ACTIVE_RUN_STATUSES = new Set(["requested", "queued", "pending", "waiting"
 const RELEASE_DECISION_FILE = "full-release-decision.json";
 const GH_NO_CACHE_HEADER = "Cache-Control: max-age=0";
 const ADMISSION_WORKFLOW = "openclaw-release-prepare.yml";
-const CANDIDATE_RELEASE_TOOLING_PATHS = [
-  ".github/workflows/full-release-artifacts.yml",
-  ".github/workflows/full-release-candidate.yml",
-  ".github/workflows/full-release-validation.yml",
-  ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
-  ".github/workflows/openclaw-release-checks.yml",
-  ".github/workflows/plugin-prerelease.yml",
-  ":(glob)scripts/full-release-*",
-  "scripts/frv.mjs",
-  "scripts/npm-prepared-bundle.mjs",
-  "scripts/plan-release-workflow-matrix.mjs",
-  "scripts/plan-targeted-docker-lane-groups.mjs",
-  "scripts/plugin-sdk-api-diff.mts",
-  "scripts/plugin-sdk-api-release-evidence.mjs",
-  "scripts/preflight-frozen-target-contracts.mjs",
-  "scripts/release-ci-summary.mjs",
-  ":(glob)scripts/release-qualification-*",
-  ":(glob)scripts/lib/frozen-target-*",
-  ":(glob)scripts/lib/full-release-*",
-  "scripts/lib/qualification-admission-baselines.mjs",
-  "scripts/lib/release-qualification-coverage.json",
-  "scripts/lib/release-upgrade-baseline.mjs",
-  ":(glob)scripts/lib/upgrade-survivor-*",
-  ":(glob)scripts/e2e/lib/upgrade-survivor/**",
-];
 const MAX_CANDIDATE_TOOLING_LAG_COMMITS = 20;
 const WITNESS_KIND = "openclaw.full-release-dispatch-inputs/v1";
 const WITNESS_FILE = "dispatch-inputs.json";
@@ -870,14 +845,17 @@ export function parseCandidateToolingLag(log: string) {
 export function formatCandidateToolingLagWarning(
   candidateSha: string,
   mainSha: string,
-  commits: Array<{ sha: string; subject: string }>,
+  commits: Array<{ sha: string; subject: string; paths?: string[] }>,
 ) {
   const shown = commits.slice(0, MAX_CANDIDATE_TOOLING_LAG_COMMITS);
   return [
     `WARNING: candidate-owned Q=C tooling ${candidateSha} lacks ${commits.length}${
       commits.length > MAX_CANDIDATE_TOOLING_LAG_COMMITS ? "+" : ""
-    } patch-inequivalent FRV tooling commit(s) from main ${mainSha}. Main cannot repair this candidate harness; review and port applicable commits before dispatch:`,
-    ...shown.map(({ sha, subject }) => `- ${sha.slice(0, 12)} ${subject}`),
+    } patch-inequivalent commit(s) from main ${mainSha}. Main cannot repair this candidate harness; review and port applicable release fixes before dispatch:`,
+    ...shown.map(
+      ({ sha, subject, paths }) =>
+        `- ${sha.slice(0, 12)} ${subject}${paths?.length ? ` — ${paths.join(", ")}` : ""}`,
+    ),
     ...(commits.length > shown.length
       ? [`- …and at least ${commits.length - shown.length} more`]
       : []),
@@ -909,10 +887,14 @@ function warnCandidateToolingLag(candidateSha: string) {
       `--max-count=${MAX_CANDIDATE_TOOLING_LAG_COMMITS + 1}`,
       "--format=%H%x09%s",
       `${candidateSha}...${mainSha}`,
-      "--",
-      ...CANDIDATE_RELEASE_TOOLING_PATHS,
     ]),
-  );
+  ).map((commit) => ({
+    sha: commit.sha,
+    subject: commit.subject,
+    paths: run("git", ["diff-tree", "--no-commit-id", "--name-only", "-r", commit.sha])
+      .split(/\r?\n/u)
+      .filter(Boolean),
+  }));
   if (commits.length > 0) {
     console.warn(formatCandidateToolingLagWarning(candidateSha, mainSha, commits));
   }

@@ -56,7 +56,7 @@ describe("full-release-validation-at-sha", () => {
 
     expect(formatCandidateToolingLagWarning(candidateSha, mainSha, commits)).toBe(
       [
-        `WARNING: candidate-owned Q=C tooling ${candidateSha} lacks 2 patch-inequivalent FRV tooling commit(s) from main ${mainSha}. Main cannot repair this candidate harness; review and port applicable commits before dispatch:`,
+        `WARNING: candidate-owned Q=C tooling ${candidateSha} lacks 2 patch-inequivalent commit(s) from main ${mainSha}. Main cannot repair this candidate harness; review and port applicable release fixes before dispatch:`,
         `- ${"c".repeat(12)} fix(release): retain large SDK evidence`,
         `- ${"d".repeat(12)} fix(ci): retry FRV job listings`,
       ].join("\n"),
@@ -79,19 +79,14 @@ describe("full-release-validation-at-sha", () => {
     );
   });
 
-  it("includes child workflows and coverage policy in the tooling-lag comparison", () => {
+  it("does not depend on a manually maintained release-path inventory", () => {
     const fixture = createDispatchFixture({ candidateOwned: true });
     const result = fixture.run();
 
     expect(result.status, result.stderr).toBe(0);
     const comparison = fixture.gitCalls().find((args) => args[0] === "log");
-    expect(comparison).toEqual(
-      expect.arrayContaining([
-        ".github/workflows/openclaw-release-checks.yml",
-        ".github/workflows/plugin-prerelease.yml",
-        "scripts/lib/release-qualification-coverage.json",
-      ]),
-    );
+    expect(comparison).not.toContain("--");
+    expect(comparison?.at(-1)).toMatch(/\.\.\./u);
   });
 
   it("rejects a missing purpose before remote creation on supporting tooling", () => {
