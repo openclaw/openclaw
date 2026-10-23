@@ -19,7 +19,13 @@ import type { ModelSetupWizardCompletion } from "../model-setup/wizard-runner.ts
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { buildModelProviderCards, type ModelProviderCard } from "./data.ts";
 import { createLoginSavingPresentation } from "./login-presentation.ts";
-import { buildLoginProviders, resolveLoginSelection } from "./login-providers.ts";
+import {
+  buildLoginProviders,
+  resolveLoginSelection,
+  resolveReconnectChoice,
+  resolveLoginCompletionModel,
+  type LoginChoice,
+} from "./login-providers.ts";
 import { createModelProviderStartChat } from "./login-start-chat.ts";
 import "../../styles/model-providers.css";
 registerEnglishCatalog(registerSettingsEnglish);
@@ -143,6 +149,15 @@ export function createModelProviderLogin(options: LoginOptions) {
       onConnect: (card: ModelProviderCard) => open([card.id, ...card.credentialProviderIds]),
       canConnect: (card: ModelProviderCard) =>
         loginProviders([card.id, ...card.credentialProviderIds]).length > 0,
+      canReconnect: (provider: string) =>
+        Boolean(resolveReconnectChoice(loginProviders([provider]))),
+      reconnectDisabled: !options.canStart() || busy(),
+      onReconnect: (provider: string) => {
+        const choice = resolveReconnectChoice(loginProviders([provider]));
+        if (choice && !busy()) {
+          start(choice);
+        }
+      },
     };
   }
 
@@ -222,6 +237,21 @@ export function createModelProviderLogin(options: LoginOptions) {
     return open(undefined, {
       allowSetup: !models.some((model) => model.available !== false),
     });
+  }
+
+  function start(selected: LoginChoice, allowSetup = false): void {
+    if (!options.canStart() || selected.kind === "setup-secret") {
+      return;
+    }
+    authProviderId = canonicalModelAuthProviderId(selected.authProvider);
+    currentPicker = null;
+    const selectingModel = allowSetup && selected.requiresSetup;
+    loginMode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
+    refreshWarning = null;
+    runner.prepareSignIn(selected.kind, selected.label);
+    void run(() =>
+      runner.start(selected.id, "models.authLogin", selectingModel ? { selectModel: true } : {}),
+    );
   }
 
   async function open(
@@ -465,19 +495,7 @@ export function createModelProviderLogin(options: LoginOptions) {
           options.onManualProvider?.(selected.id);
           return;
         }
-        authProviderId = canonicalModelAuthProviderId(selected.authProvider);
-        currentPicker = null;
-        const selectingModel = picker.allowSetup && selected.requiresSetup;
-        loginMode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
-        refreshWarning = null;
-        runner.prepareSignIn(selected.kind, selected.label);
-        void run(() =>
-          runner.start(
-            selected.id,
-            "models.authLogin",
-            selectingModel ? { selectModel: true } : {},
-          ),
-        );
+        start(selected, picker.allowSetup);
       },
       onApiKey: () => {
         if (!canSelect() || !provider?.apiKeyProvider) {
@@ -517,27 +535,13 @@ export function createModelProviderLogin(options: LoginOptions) {
       return;
     }
     const { context, agentId } = options.getScope();
-    const catalog = readAgentModelCatalog(context.gateway.snapshot.client, agentId);
-    const slash = modelRef.indexOf("/");
-    const provider = modelRef.slice(0, slash);
-    const id = modelRef.slice(slash + 1);
-    const known = catalog.models.find((model) => model.provider === provider && model.id === id);
     verifiedModelRef = modelRef;
-    const recommended =
-      !catalog.retired &&
-      catalog.models.find(
-        (model) =>
-          canonicalModelAuthProviderId(model.provider) === authProviderId &&
-          model.available === true &&
-          model.manualSelectionAllowed !== false &&
-          model.recommended === true,
-      );
-    const name = completion.modelActivation?.modelName ?? known?.name;
-    completionModel = recommended
-      ? { provider: recommended.provider, id: recommended.id, name: recommended.name }
-      : name
-        ? { provider, id, name }
-        : undefined;
+    completionModel = resolveLoginCompletionModel(
+      readAgentModelCatalog(context.gateway.snapshot.client, agentId),
+      modelRef,
+      authProviderId,
+      completion.modelActivation?.modelName,
+    );
     notify();
   }
 

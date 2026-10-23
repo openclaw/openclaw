@@ -2,6 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type {
   ModelAuthStatusResult,
+  ModelCatalogEntry,
   ProviderLoginOption,
   SystemAgentSetupDetectResult,
 } from "../../api/types.ts";
@@ -10,10 +11,11 @@ import { t } from "../../i18n/index.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { resolveAgentConfig, resolveModelPrimary } from "../../lib/agents/display.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
+import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 
 registerModelSetupEnglish();
 
-type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
+export type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
   kind: ProviderLoginOption["kind"] | "setup-secret";
   authProvider: string;
 };
@@ -138,4 +140,38 @@ export function resolveLoginSelection(
     modelRef,
     missing: { model, provider: canonicalModelAuthProviderId(modelProvider), authProvider },
   };
+}
+
+export function resolveReconnectChoice(groups: LoginProvider[]) {
+  const choices = groups
+    .flatMap((group) => group.choices)
+    .filter((choice) => choice.kind === "oauth" || choice.kind === "device-code");
+  return choices.length === 1 ? choices[0] : undefined;
+}
+
+export function resolveLoginCompletionModel(
+  catalog: ModelCatalogPresentation,
+  modelRef: string,
+  authProviderId: string | undefined,
+  modelName?: string,
+): ModelCatalogEntry | undefined {
+  const slash = modelRef.indexOf("/");
+  const provider = modelRef.slice(0, slash);
+  const id = modelRef.slice(slash + 1);
+  const known = catalog.models.find((model) => model.provider === provider && model.id === id);
+  const recommended =
+    !catalog.retired &&
+    catalog.models.find(
+      (model) =>
+        canonicalModelAuthProviderId(model.provider) === authProviderId &&
+        model.available === true &&
+        model.manualSelectionAllowed !== false &&
+        model.recommended === true,
+    );
+  const name = modelName ?? known?.name;
+  return recommended
+    ? { provider: recommended.provider, id: recommended.id, name: recommended.name }
+    : name
+      ? { provider, id, name }
+      : undefined;
 }

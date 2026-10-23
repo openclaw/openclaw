@@ -15,6 +15,8 @@ export type ModelAuthStatusProfile = Pick<
   expiry?: ModelAuthExpiry;
   /** True only for saved OAuth/token profiles this gateway can remove. */
   logoutSupported?: boolean;
+  /** True only for OAuth profiles owned by the selected agent's local auth store. */
+  reconnectSupported?: boolean;
   /** Credential refresh is owned by an external CLI rather than OpenClaw. */
   externallyManaged?: boolean;
   /** Where the effective credential came from. */
