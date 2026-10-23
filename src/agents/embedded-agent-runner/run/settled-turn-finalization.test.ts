@@ -197,6 +197,42 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
   });
 
+  it.each(["answered", "empty"] as const)(
+    "carries only a real finalizer answer across message-tool-only suppression (%s)",
+    async (outcome) => {
+      // #181226: the stranded-reply retry finalizes in message_tool_only mode with the
+      // harness-captured context. A real answer must reach the source channel; a failed
+      // recovery must leave no visible text for the retry's diagnostic to misread.
+      const attempt = settledAttempt(false);
+      attempt.settledTurnFinalizationContext = { source: "harness", data: [] } as never;
+      const input = finalizationInput(attempt, { sourceReplyDeliveryMode: "message_tool_only" });
+      backendMocks.finalize.mockResolvedValueOnce(
+        outcome === "answered"
+          ? finalizationReply("answered", "Update: shipped.")
+          : finalizationReply("empty"),
+      );
+
+      const result = await finalize(input);
+
+      if (outcome === "answered") {
+        expect(result.finalizationOutcome).toBe("answered");
+        expectPayload(result, { text: "Update: shipped." });
+        expect(
+          getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia![0]!)
+            ?.deliverDespiteSourceReplySuppression,
+        ).toBe(true);
+      } else {
+        expect(result.finalizationOutcome).toBe("failed");
+        expect(result.prepared.finalAssistantVisibleText).toBe("");
+        expect(
+          (result.prepared.payloadsWithToolMedia ?? []).filter(
+            (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression,
+          ),
+        ).toEqual([]);
+      }
+    },
+  );
+
   it("does not finalize an empty post-tool turn when media was delivered", async () => {
     const assistant = textAssistant();
     const attempt = makeAttempt({
