@@ -29,6 +29,7 @@ const { values } = parseArgs({
     runs: { type: "string", default: "6000" },
     cron: { type: "string", default: "40" },
     operations: { type: "string", default: "1000" },
+    "interval-ms": { type: "string", default: "0" },
     scenario: { type: "string", default: "all" },
     "start-at": { type: "string" },
     "barrier-dir": { type: "string" },
@@ -44,6 +45,7 @@ const root = path.resolve(values["state-dir"]);
 const port = integer(values.port, "port", 40000);
 assert(port <= 65535, "port must be loopback >=40000");
 const operations = integer(values.operations, "operations");
+const intervalMs = integer(values["interval-ms"], "interval-ms", 0);
 const cronJobs = integer(values.cron, "cron", 0);
 assert(cronJobs <= 200, "cron workload must fit the 200-row page");
 const deliveryOwner = "src/cron/isolated-agent/delivery-target-context.ts";
@@ -301,6 +303,7 @@ writeFileSync(configPath, JSON.stringify(config));
 const { startGatewayServer } = await import("../../src/gateway/server.js");
 const server = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
 let peer: ReturnType<typeof createGatewayWsClient> | undefined;
+let readinessReadFailures = 0;
 async function rpc(method: string, params: unknown) {
   assert(peer);
   const response = await peer.request(method, params, 120_000);
@@ -331,9 +334,19 @@ async function waitStart(label: string) {
 try {
   const deadline = Date.now() + 120_000;
   for (;;) {
-    const response = await fetch(`${origin}/readyz`);
-    await response.arrayBuffer();
-    if (response.ok) {
+    const ready = await fetch(`${origin}/readyz`)
+      .then(async (response) => {
+        await response.arrayBuffer();
+        return response.ok;
+      })
+      .catch((error: unknown) => {
+        readinessReadFailures++;
+        if (Date.now() >= deadline) {
+          throw error;
+        }
+        return false;
+      });
+    if (ready) {
       break;
     }
     assert(Date.now() < deadline, "Gateway readiness timed out");
@@ -522,6 +535,9 @@ try {
     start = performance.now();
     measuring = true;
     for (let index = 0; index < operations; index++) {
+      if (intervalMs > 0) {
+        await delay(intervalMs);
+      }
       const before = performance.now();
       await read(scenario);
       record("rpc.roundTripMs", performance.now() - before);
@@ -541,6 +557,7 @@ try {
     measurements[scenario.name] = {
       startedAt,
       operations,
+      intervalMs,
       elapsedMs: end - start,
       cpuUsPerOperation: (cpu.user + cpu.system) / operations,
       mainCpuUsPerOperation: (main.user + main.system) / operations,
@@ -572,13 +589,15 @@ try {
   }
   const report = {
     node: process.version,
+    intervalMs,
     fixture: fixture.summary,
     installed,
     ownerSources,
+    readinessReadFailures,
     cold,
     measurements,
     limitations:
-      "Gateway and WebSocket client share a process. CPU includes workers; main CPU includes the client and diagnostic collection. Handler timings are inclusive wall time, not CPU self time. Mentions is an empty-Inbox control. Reads are sequential on one connection, with no foreground model traffic.",
+      "Gateway and WebSocket client share a process. CPU includes workers; main CPU includes the client and diagnostic collection. Handler timings are inclusive wall time, not CPU self time. Mentions is an empty-Inbox control. Reads are sequential on one connection, with no foreground model traffic. RPC latency excludes interval waits; elapsed time, CPU, GC, promotion, and event-loop metrics include the whole paced observation window.",
   };
   writeFileSync(values.output, `${JSON.stringify(report, null, 2)}\n`);
   console.log(JSON.stringify(report));

@@ -4977,6 +4977,18 @@ count. Cold observations are separate from warm measurements. No foreground
 model traffic is generated, so this attributes local read work without claiming
 to reproduce production load or its event-loop stalls.
 
+The default rapid workload includes the public one-second `cron.list` response
+cache. To measure repeated full-list cache misses through the same public RPC,
+use `--scenario cron.full --operations 200 --interval-ms 1100`. The driver waits
+before every measured request, allowing the response to expire without changing
+cache policy or request identity. Confirm actual misses using the fallback-read
+counts; a 40-job page requires 40 baseline reads or one deduplicated read per
+uncached request. With 200 requests, p95 qualifies for comparison and p99 remains
+context. The report records `intervalMs`. RPC latency excludes each wait, while
+elapsed time, CPU, GC, promotion, and event-loop metrics cover the entire paced
+observation window, including ordinary idle/background work. This accelerated
+single-viewer cadence measures expiry behavior, not a claimed production rate.
+
 `--scenario cron.full` selects one flow; `--owner-dir` selects baseline source
 files at their repository-relative paths. For concurrent pairs, use separate
 state, HOME, OPENCLAW_HOME, TMPDIR, and ports, plus a shared `--barrier-dir` and
