@@ -56,6 +56,9 @@ async function openSessionActions(pane: Locator): Promise<Locator> {
 
 export async function openChatPanels(scope: Page | Locator): Promise<Locator> {
   const pane = nativePane(scope);
+  const headers = ".agent-chat__header--mobile, .sidebar-region__header, [data-region-header]";
+  await pane.locator(headers).filter({ visible: true }).first().waitFor();
+  await waitForLayoutSettled(pane.page(), "openclaw-chat-pane :is(" + headers + ")");
   if (await pane.locator(".agent-chat__header--mobile").isVisible()) {
     const trigger = pane.locator(".agent-chat__header--mobile .chat-header-session-menu__trigger");
     if (!(await pane.locator(".chat-mobile-host").isVisible())) {
