@@ -56,8 +56,8 @@ function createRuntime(
     "sessionMessageSubscribers" | "broadcastToConnIds"
   > & { now?: () => number },
 ) {
-  const { now, ...runtimeParams } = params;
-  if (now) vi.spyOn(Date, "now").mockImplementation(now);
+  const { now = Date.now, ...runtimeParams } = params;
+  vi.spyOn(Date, "now").mockImplementation(now);
   const subscribers = createSessionMessageSubscriberRegistry();
   const broadcastToConnIds = vi.fn<GatewayBroadcastToConnIdsFn>();
   const runtime = createOperatorApprovalSessionEventRuntime({
