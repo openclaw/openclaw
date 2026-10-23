@@ -342,6 +342,10 @@ await runWithFailedTrailer("macos-native", async () => {
                 "worker-schema-before",
                 "worker-schema-after",
                 "worker-schema-no-updater",
+                "gateway-status-before",
+                "gateway-status-after",
+                "gateway-status-pending-newer",
+                "gateway-status-healthy-newer",
               ]
             : ["thread-reasoning", "thread-tool-activity", "model-initial", "thread-restored"];
         const allowed = new RegExp(
