@@ -1,4 +1,4 @@
-import { createMemo, Errored, lazy, Loading, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, Errored, lazy, Loading, onSettled, Show } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-ui-reload.ts";
 import { reloadAfterRenderErrorOnce } from "../../app/stale-chunk-reload.ts";
@@ -261,13 +261,7 @@ function DraftBlock(props: {
 function PageContent(_props: { data: NewSessionRouteData | undefined }, host: PageHost) {
   const context = useOptionalApplication();
   // Native bridge roots do not inherit the router's error boundary.
-  const Content = () => {
-    const content = renderPageContent(host);
-    onSettled(() => {
-      renderedPages.add(host);
-    });
-    return content;
-  };
+  const Content = () => renderPageContent(host);
   const RenderError = (props: { error: unknown; reset: () => void }) => {
     onSettled(() => {
       let active = true;
@@ -298,6 +292,11 @@ function renderPageContent(host: PageHost) {
   owner.context = useOptionalApplication();
   const pageState = projectOwner(owner, (value) => value);
   const page = pageState.read;
+  const initialConnectionReady = () => page().isConnected;
+  onSettled(() => {
+    owner.connect();
+    return () => owner.disconnect();
+  });
   const revision = createMemo(() => ({ value: pageState.revision() }));
   const submissionError = createMemo(() => page().submission.error);
   const saving = createSubmissionAction(
@@ -336,9 +335,6 @@ function renderPageContent(host: PageHost) {
       />
     </NewSessionComposerTextareaContext>
   );
-  // Bind gateway facts before the first child read; teardown must also cover pre-settle disposal.
-  owner.connect();
-  onCleanup(() => owner.disconnect());
   onSettled(() => {
     const document = host.ownerDocument;
     const stops = [
@@ -414,118 +410,133 @@ function renderPageContent(host: PageHost) {
     const attachment = panel();
     return attachment ? { ...attachment.content } : null;
   };
+  // The draft binds Gateway facts before its first child reads defaults.
   return (
-    <>
-      <div
-        class={[
-          "new-session-page",
-          {
-            chat: Boolean(page().submission.pendingMessage),
-            "new-session-page--incognito": page().submission.visibility === "incognito",
-          },
-        ]}
-      >
-        <SessionBackgroundView context={page().context} surface="new-session" />
-        <Show when={!catalog.isTarget(page().data)}>
-          <NewSessionIncognitoControl
-            submission={visibilityControl}
-            draftAvailable={page().submission.capabilities.canStartAsDraft(page().context)}
-          />
-        </Show>
-        <NewSessionBody
-          error={submissionError()}
-          pendingMessage={page().submission.pendingMessage}
-          userId={userId()}
-          submitting={saving() || page().submission.submitting}
-          statusLabel={
-            page().context?.gateway.snapshot.phase === "connected"
-              ? undefined
-              : t("connection.reconnecting")
-          }
-          completion={completion()}
-          showDraft={Boolean(completed())}
-          renderDraft={() => (
-            <Show
-              when={Boolean(completed())}
-              fallback={
-                <DraftWelcome
-                  sessions={page().context?.sessions}
-                  options={page().welcomeOptions()}
-                  assistantNameControl={
-                    !catalog.isTarget(page().data) && page().place.agents().length > 1 ? (
-                      <DraftAgentSelect page={page} />
-                    ) : undefined
-                  }
-                  composer={<Draft />}
+    <Show when={initialConnectionReady()}>
+      {(_ready) => {
+        onSettled(() => {
+          renderedPages.add(host);
+        });
+        return (
+          <>
+            <div
+              class={[
+                "new-session-page",
+                {
+                  chat: Boolean(page().submission.pendingMessage),
+                  "new-session-page--incognito": page().submission.visibility === "incognito",
+                },
+              ]}
+            >
+              <SessionBackgroundView context={page().context} surface="new-session" />
+              <Show when={!catalog.isTarget(page().data)}>
+                <NewSessionIncognitoControl
+                  submission={visibilityControl}
+                  draftAvailable={page().submission.capabilities.canStartAsDraft(page().context)}
                 />
-              }
-            >
-              <Draft />
-            </Show>
-          )}
-          onOpenImage={owner.setImageLightbox}
-        />
-        <Show when={creationComposer()}>
-          {(composer) => (
-            <Errored
-              fallback={(error, reset) => <LazyViewError error={error()} onRetry={reset} inline />}
-            >
-              <Loading fallback={<LoadingState />}>
-                <CreationComposer composer={composer()} onOpenImage={owner.setImageLightbox} />
-              </Loading>
-            </Errored>
-          )}
-        </Show>
-        <ConnectMachineDialog
-          {...page().connectMachine.view(page().place.isAdmin(), () => {
-            owner.connectMachine.close();
-            owner.context?.navigate("devices");
-          })}
-        />
-        <Show when={lightbox()}>
-          {(item) => (
-            <ImageLightbox
-              mediaKind={item().kind ?? "image"}
-              gallery={item().gallery}
-              connectVideo={item().connectVideo}
-              loadDisplayImage={item().loadDisplayImage}
-              readOriginalBlob={item().readOriginalBlob}
-              src={item().src}
-              originalSrc={item().originalSrc ?? ""}
-              imageTitle={item().title}
-              imageWidth={item().width}
-              imageHeight={item().height}
-              onImage-lightbox-close={() => owner.setImageLightbox(null)}
-            />
-          )}
-        </Show>
-      </div>
-      <Show when={panel()}>
-        <aside class="new-session-attachment-panel">
-          <Show
-            when={panelError()}
-            fallback={
-              <Show when={page().attachmentPanelLoader.visibleState}>
-                <div role="status">{t("common.loading")}</div>
               </Show>
-            }
-          >
-            {(state) => (
-              <LazyViewError
-                error={state().error}
-                stale={state().stale}
-                onRetry={() => owner.attachmentPanelLoader.retry()}
-                onClose={owner.closeAttachmentPanel}
+              <NewSessionBody
+                error={submissionError()}
+                pendingMessage={page().submission.pendingMessage}
+                userId={userId()}
+                submitting={saving() || page().submission.submitting}
+                statusLabel={
+                  page().context?.gateway.snapshot.phase === "connected"
+                    ? undefined
+                    : t("connection.reconnecting")
+                }
+                completion={completion()}
+                showDraft={Boolean(completed())}
+                renderDraft={() => (
+                  <Show
+                    when={Boolean(completed())}
+                    fallback={
+                      <DraftWelcome
+                        sessions={page().context?.sessions}
+                        options={page().welcomeOptions()}
+                        assistantNameControl={
+                          !catalog.isTarget(page().data) && page().place.agents().length > 1 ? (
+                            <DraftAgentSelect page={page} />
+                          ) : undefined
+                        }
+                        composer={<Draft />}
+                      />
+                    }
+                  >
+                    <Draft />
+                  </Show>
+                )}
+                onOpenImage={owner.setImageLightbox}
               />
-            )}
-          </Show>
-          <openclaw-chat-detail-panel
-            prop:content={panelContent()}
-            onChat-detail-panel-close={owner.closeAttachmentPanel}
-          />
-        </aside>
-      </Show>
-    </>
+              <Show when={creationComposer()}>
+                {(composer) => (
+                  <Errored
+                    fallback={(error, reset) => (
+                      <LazyViewError error={error()} onRetry={reset} inline />
+                    )}
+                  >
+                    <Loading fallback={<LoadingState />}>
+                      <CreationComposer
+                        composer={composer()}
+                        onOpenImage={owner.setImageLightbox}
+                      />
+                    </Loading>
+                  </Errored>
+                )}
+              </Show>
+              <ConnectMachineDialog
+                {...page().connectMachine.view(page().place.isAdmin(), () => {
+                  owner.connectMachine.close();
+                  owner.context?.navigate("devices");
+                })}
+              />
+              <Show when={lightbox()}>
+                {(item) => (
+                  <ImageLightbox
+                    mediaKind={item().kind ?? "image"}
+                    gallery={item().gallery}
+                    connectVideo={item().connectVideo}
+                    loadDisplayImage={item().loadDisplayImage}
+                    readOriginalBlob={item().readOriginalBlob}
+                    src={item().src}
+                    originalSrc={item().originalSrc ?? ""}
+                    imageTitle={item().title}
+                    imageWidth={item().width}
+                    imageHeight={item().height}
+                    onImage-lightbox-close={() => owner.setImageLightbox(null)}
+                  />
+                )}
+              </Show>
+            </div>
+            <Show when={panel()}>
+              <aside class="new-session-attachment-panel">
+                <Show
+                  when={panelError()}
+                  fallback={
+                    <Show when={page().attachmentPanelLoader.visibleState}>
+                      <div role="status">{t("common.loading")}</div>
+                    </Show>
+                  }
+                >
+                  {(state) => (
+                    <LazyViewError
+                      error={state().error}
+                      stale={state().stale}
+                      onRetry={() => owner.attachmentPanelLoader.retry()}
+                      onClose={owner.closeAttachmentPanel}
+                    />
+                  )}
+                </Show>
+                <openclaw-chat-detail-panel
+                  prop:content={panelContent()}
+                  onChat-detail-panel-close={owner.closeAttachmentPanel}
+                />
+              </aside>
+            </Show>
+          </>
+        );
+      }}
+    </Show>
   );
 }
 
