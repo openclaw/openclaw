@@ -25,6 +25,69 @@ function historyPage(messages: unknown[], hasMore: boolean, nextOffset?: number)
 }
 
 suite.define(() => {
+  it("keeps keyboard focus on the earlier-history action while older history loads", async () => {
+    const page = await newChatPage(suite);
+    const message = (seq: number) => ({
+      __openclaw: { seq },
+      role: seq % 2 ? "user" : "assistant",
+      content: [{ type: "text", text: `Conversation message ${seq}` }],
+      timestamp: 1_800_000_000_000 + seq,
+    });
+    const messages = (first: number, count: number) =>
+      Array.from({ length: count }, (_, index) => message(first + index));
+    const gateway = await installMockGateway(page, {
+      deferredRequests: [{ method: "chat.history", match: { offset: 40 } }],
+      // A landed page stages the next one in the background; holding it keeps
+      // the post-load boundary state independent of that prefetch.
+      heldRequests: [{ method: "chat.history", match: { offset: 60 } }],
+      featureMethods: ["chat.metadata", "chat.startup"],
+      methodResponses: {
+        "chat.startup": historyPage(messages(41, 40), true, 40),
+        "chat.history": {
+          cases: [
+            { match: { offset: 40 }, response: historyPage(messages(21, 20), true, 60) },
+            { match: { offset: 60 }, response: historyPage(messages(1, 20), false) },
+          ],
+        },
+      },
+    });
+    const offsets = async () =>
+      (await gateway.getRequests("chat.history")).map(
+        (request) => (request.params as { offset?: number } | undefined)?.offset,
+      );
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+    await page.getByText("Conversation message 80", { exact: true }).waitFor();
+    await expectHistoryBoundaryState(pane, false);
+    const action = pane.locator(".chat-history-boundary__action");
+    // Chromium keeps reporting a control that turns disabled as focused until its
+    // next rendering step; without two frames the busy check passes on the old code.
+    const actionFocused = async () => {
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      return action.evaluate((element) => element === document.activeElement);
+    };
+    // Scrolling the control into view is reader intent: it starts the automatic
+    // load and arms the next one. Focus without scrolling so Enter is the trigger.
+    await action.evaluate((element) => (element as HTMLElement).focus({ preventScroll: true }));
+    await page.keyboard.press("Enter");
+    await gateway.waitForRequest("chat.history");
+    await expectHistoryBoundaryState(pane, true);
+    expect(await actionFocused()).toBe(true);
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Space");
+    expect(await offsets()).toEqual([40]);
+
+    await gateway.resolveDeferred("chat.history", undefined, { match: { offset: 40 } });
+    await expect.poll(offsets).toEqual([40, 60]);
+    await expectHistoryBoundaryState(pane, false);
+    expect(await actionFocused()).toBe(true);
+    await page.close();
+  });
   it.each(["cold", "warm"])(
     "fills once on %s reload, then pages to the beginning on upward input",
     async (temperature) => {

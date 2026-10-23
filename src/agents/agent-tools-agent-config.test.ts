@@ -13,7 +13,7 @@ import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import type { SandboxDockerConfig } from "./sandbox/types.docker.js";
+import type { SandboxDockerConfig } from "./sandbox/types.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
 
 type ToolWithExecute = {

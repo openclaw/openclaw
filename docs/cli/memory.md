@@ -249,6 +249,10 @@ openclaw memory search [query] [--query <text>] [--agent <id>] [--max-results <n
 - `--min-score <n>`: filter out matches below this score.
 
 Routine indexing can continue after search returns and does not add a warning.
+Standalone searches print results from the available index, then finish pending
+indexing before exiting so the next search can see file edits. When routed through
+the Gateway, results arrive before that indexing finishes; the Gateway keeps the
+request's resources alive until it settles.
 If automatic indexing failed, or the index identity is incompatible, human
 output warns that matches may be incomplete. With `--json`, the response adds
 `stale: true`, plus `warning` and `action` fields. Treat an empty `results`

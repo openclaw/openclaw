@@ -164,6 +164,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
         // The subscription probe forwards track with the original AsyncWorkScope receiver.
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
+        // The registry-copy probe forwards Map.set with the original map receiver.
+        "scripts/perf/subagent-maintenance-capture-measure.ts|typescript/unbound-method|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
         "src/agents/auth-profiles/oauth-refresh-fence.ts|preserve-caught-error|1",

@@ -1,5 +1,34 @@
 # Team-shaped synthetic state
 
+## Subagent maintenance capture
+
+`subagent-maintenance-capture-measure.ts` measures the production session
+maintenance preservation owner with 6,000 synthetic retained subagent runs and
+60 protected sessions. Before measurement it checks live overrides in both
+directions, a live-only row, and real worker update/deletion publications after
+preservation preparation. The returned protected-key digest must match across
+baseline and candidate. This measures the maintenance owner, not Gateway RPCs.
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/subagent-maintenance-capture-measure.ts \
+  --state-dir /path/to/new-state --operations 4000 --start-at <future-epoch-ms> \
+  --gc-log /path/to/capture.log --output /path/to/result.json > /path/to/capture.log 2>&1
+```
+
+Run each side in a fresh process and a new state directory. Setup and warmup
+precede `CAPTURE_READY`; use preparation CPUs until that marker, then assign the
+pair's interleaved measurement CPUs before the shared start. Use the campaign's
+exclusive lock and production guard, then swap placements for the second pair.
+The default one-millisecond yield between captures permits event-loop sampling;
+it is excluded from per-capture latency but included in elapsed time and CPU.
+Allocation includes collected objects. Registry `Map.set` row writes are counted
+in a separate unprofiled capture. GC reports count, total time, maximum pause,
+and tails with sample counts; promotion excludes setup and profiler-stop GC.
+Apply the campaign's sample-count and paired-delta rules. RSS high water includes
+setup. State and profile files remain in the task-owned directory for inspection
+and cleanup.
+
 ## Gateway startup and restart acceptance
 
 Use `scripts/bench-gateway-startup.ts` and `scripts/bench-gateway-restart.ts`
@@ -2446,6 +2475,7 @@ Supported scenarios:
 | `sessions.list`        | One compact sidebar page RPC, `archived=all`, `--limit` rows                                               |
 | `sessions.describe`    | One detailed parent-row RPC, including the harness's synthetic children                                    |
 | `sessions.patch`       | One title, expiring status-note, or model-selection mutation on a retained fixture session                 |
+| `sessions.cleanup`     | One cleanup RPC in warning mode, including current subagent preservation and commit compatibility checks   |
 | `connect`              | One owned socket replacement and validated hello handshake; no sidebar restoration                         |
 | `reconnect`            | One owned socket replacement, subscriptions, and verified current sidebar                                  |
 | `subscribe`            | One `sessions.subscribe` snapshot registration/refresh RPC on the sender, with the same page shape as list |
@@ -2490,6 +2520,88 @@ subscribe to session rows, so row publication is included. This scenario does
 not drive viewer-declaration churn or real running/settled agent lifecycles;
 use the separate `transcript-broadcast` or `memory-soak` turn scenario for that
 additional coverage.
+
+For subagent maintenance capture, use `--scenario sessions.cleanup --clients 1
+--runs 1 --operations 1000 --warmup-operations 2 --rounds 1 --allocations
+--trace-gc --capture-responses --entry src/entry.ts` with a separate 5,000-session,
+6,000-run fixture on each side. `--transcript-mib 0 --approvals 0 --cron 0
+--projects 0` keeps fixture writes small. The scenario sets and records
+`session.maintenance.mode=warn`: real cleanup admission and preservation checks
+run, while every response must report an unchanged nonempty session inventory.
+This is a maintenance RPC workload, not the production frequency of cleanup or
+session-list traffic. `sessions.patch` skips maintenance and cannot reproduce
+this allocation owner. First inspect a short baseline allocation profile for
+the subagent maintenance capture stack; do not use unrelated RPC allocation as
+proof. Run concurrent, swapped-core pairs with the campaign guard and shared
+`--start-at`, then apply its sample-count, GC-pause, and paired-baseline rules.
+
+For this maintenance workload, generate each fixture with the same recent fixed
+`--now` value. Before starting its Gateway, normalize the synthetic retained runs
+with the following owner-API transform (`FIXTURE` is that new fixture directory).
+It retains 6,000 terminal runs: 60 pending deliveries scheduled one day after the
+fixture timestamp, and 5,940 delivered runs. This avoids measuring startup
+recovery of the generator's interrupted runs or a due-delivery backlog. The
+transform asserts the persisted counts and records them in the fixture summary.
+Do not use it against live state.
+
+```sh
+node --import ./scripts/tsx.mjs --input-type=module - "$FIXTURE" <<'JS'
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+
+const root = path.resolve(process.argv[2]);
+const summaryPath = path.join(root, "team-shape-summary.json");
+const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
+assert.equal(summary.format, "openclaw-team-shape-v1");
+assert.equal(summary.retainedRuns, 6000);
+const { createGatewayBenchEnv } = await import("./scripts/lib/gateway-bench-runtime.ts");
+process.env = {
+  ...createGatewayBenchEnv(path.join(root, "home"), path.join(root, "openclaw.json"), {}),
+  OPENCLAW_STATE_DIR: root,
+  TMPDIR: path.join(root, "tmp"),
+};
+const state = await import("./src/state/openclaw-state-db.ts");
+const { loadSubagentRunsByIdsInDatabase } = await import("./src/agents/subagents/registry/subagent-registry.store.sqlite.ts");
+const { bindSubagentRunRecord } = await import("./src/agents/subagents/registry/subagent-registry.store.codec.ts");
+const { writeSubagentRunValuesInDatabase } = await import("./src/agents/subagents/registry/subagent-registry.store.kernel.ts");
+try {
+  const database = state.openOpenClawStateDatabase();
+  const ids = Array.from({ length: 6000 }, (_, index) => `team-shape-run-${index}`);
+  const runs = [...loadSubagentRunsByIdsInDatabase(database, ids).values()];
+  assert.equal(runs.length, 6000);
+  const pendingIds = new Set(runs.filter((run) => run.delivery.status === "pending").slice(0, 60).map((run) => run.runId));
+  assert.equal(pendingIds.size, 60);
+  const nextAttemptAt = summary.now + 86_400_000;
+  assert.ok(nextAttemptAt > Date.now(), "Generate the fixture with a current fixed --now");
+  for (const run of runs) {
+    const { startedAt, endedAt } = run.execution;
+    assert.equal(typeof endedAt, "number");
+    run.execution = { status: "terminal", startedAt, endedAt, outcome: run.execution.outcome ?? { status: "error", error: "Synthetic interruption retained" } };
+    run.expectsCompletionMessage = true;
+    run.completion = { ...run.completion, required: true };
+    if (pendingIds.has(run.runId)) {
+      run.delivery = { ...run.delivery, nextAttemptAt };
+      delete run.cleanupHandled;
+      delete run.cleanupCompletedAt;
+    } else {
+      run.delivery = { status: "delivered", deliveredAt: endedAt + 500 };
+      run.cleanupHandled = true;
+      run.cleanupCompletedAt = endedAt + 1000;
+    }
+  }
+  state.runOpenClawStateWriteTransaction((db) => writeSubagentRunValuesInDatabase(db, runs.map(bindSubagentRunRecord), []));
+  const verified = [...loadSubagentRunsByIdsInDatabase(database, ids).values()];
+  const counts = { terminal: verified.filter((run) => run.execution.status === "terminal").length, pending: verified.filter((run) => run.delivery.status === "pending").length, delivered: verified.filter((run) => run.delivery.status === "delivered").length };
+  assert.deepEqual(counts, { terminal: 6000, pending: 60, delivered: 5940 });
+  summary.maintenanceFixture = { ...counts, nextAttemptAt };
+  fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
+  console.log(JSON.stringify(summary.maintenanceFixture));
+} finally {
+  await state.closeOpenClawStateDatabaseAsync();
+}
+JS
+```
 
 The report includes allocation and promotion per completed patch, worker message
 counts and known payload bytes, and RPC p50/p95/p99 with sample counts. Worker
