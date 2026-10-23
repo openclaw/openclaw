@@ -4952,6 +4952,42 @@ tail includes its sample count. This simulation establishes persistence-path
 blocking behavior; it does not claim production throughput or macOS browser
 cookie-import latency.
 
+## Cron, board, and subscription read attribution
+
+`local-state-reads-measure.ts` starts an isolated Gateway on 5,000 synthetic
+sessions and 6,000 settled runs, with 40 disabled announce/last automations and
+three HTML board widgets. The scheduler remains enabled so cron reads use the
+same resident snapshot as a running Gateway. It measures compact and full
+`cron.list`, `board.get`, `sessions.messages.subscribe`, and an empty Inbox control.
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/local-state-reads-measure.ts \
+  --state-dir /path/to/new-synthetic-state --output /path/to/result.json \
+  --port 41615 --operations 1000 --trace-log /path/to/capture.log \
+  > /path/to/capture.log 2>&1
+```
+
+The report separates RPC admission/handler/dispatch timing, cron queue and
+execution, board FIFO wait and worker round trip, subscription phases, and cron
+fallback session-read counts. These are inclusive wall times, not handler CPU
+self time. CPU includes the Gateway, its workers, and the in-process WebSocket
+client. GC and promotion cover the main isolate; every tail reports its sample
+count. Cold observations are separate from warm measurements. No foreground
+model traffic is generated, so this attributes local read work without claiming
+to reproduce production load or its event-loop stalls.
+
+`--scenario cron.full` selects one flow; `--owner-dir` selects baseline source
+files at their repository-relative paths. For concurrent pairs, use separate
+state, HOME, OPENCLAW_HOME, TMPDIR, and ports, plus a shared `--barrier-dir` and
+`--side baseline|candidate`. Each scenario writes `<scenario>.<side>.ready` after
+preparation, then waits for `<scenario>.start` containing a future epoch in
+milliseconds. Prepare sequentially on the host's preparation CPUs, acquire one
+quiet slot, assign interleaved measurement CPUs, and release both sides together.
+Swap sides in the second pair and use the shared production guard. Apply the
+campaign's paired-mean, absolute-delta, GC-pause, and minimum-sample rules; a
+five-operation attribution run is diagnostic context, not a latency-tail verdict.
+
 ## Managed attachment cleanup
 
 `managed-attachment-cleanup-measure.mjs` exercises the actual managed-media
