@@ -222,20 +222,32 @@ function patchAttributes(
     if (name === "class") {
       const oldTokens = new Set(oldValue?.split(/\s+/).filter(Boolean));
       const tokens = new Set(value?.split(/\s+/).filter(Boolean));
-      for (const token of oldTokens) {
-        if (!tokens.has(token)) {
-          element.classList.remove(token);
-        }
-      }
-      for (const token of tokens) {
-        if (!oldTokens.has(token)) {
-          element.classList.add(token);
-        }
+      // Canonical tokens keep their serialized order; reader-owned state survives.
+      const retained = [...element.classList].filter(
+        (token) => !oldTokens.has(token) && !tokens.has(token),
+      );
+      const classes = [...tokens, ...retained].join(" ");
+      if (value === undefined && !classes) {
+        element.removeAttribute(name);
+      } else {
+        element.setAttribute(name, classes);
       }
     } else if (value === undefined) {
       element.removeAttribute(name);
     } else {
       element.setAttribute(name, value);
+    }
+  }
+  // An attribute added midway through a stream must take its one-shot position.
+  if (before.map(([name]) => name).join("\0") !== after.map(([name]) => name).join("\0")) {
+    const ordered = after.map(([name]) => [name, element.getAttribute(name)] as const);
+    for (const [name] of ordered) {
+      element.removeAttribute(name);
+    }
+    for (const [name, value] of ordered) {
+      if (value !== null) {
+        element.setAttribute(name, value);
+      }
     }
   }
 }

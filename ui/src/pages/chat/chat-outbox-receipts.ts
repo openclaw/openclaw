@@ -145,62 +145,6 @@ async function findChatOutboxSubmission(
   return { submission };
 }
 
-/** Reconcile exact pending custody before considering transcript consumption. */
-function reconcilePendingChatOutboxInput(
-  host: ChatHost,
-  outbox: StoredChatOutbox,
-  item: ChatQueueItem,
-  history: ChatHistoryResult,
-  pendingBefore: number | undefined,
-): "blocked" | "continue" | "accepted" | undefined {
-  const historySessionId = history.sessionInfo?.sessionId ?? history.sessionId;
-  if (item.sessionId && item.sessionId !== historySessionId) {
-    // Request ids are scoped to their physical session. A replacement's matching
-    // id cannot consume an old input or authorize sending it into the new chat.
-    if (item.sendState !== "unconfirmed" || item.sendError !== UNCONFIRMED_CHAT_SEND_ERROR) {
-      const parked = updateQueuedMessage(host, item.id, (entry) => ({
-        ...entry,
-        sendState: "unconfirmed",
-        sendError: UNCONFIRMED_CHAT_SEND_ERROR,
-      }));
-      surfaceChatDeliveryFailure(
-        host,
-        outbox.sessionKey,
-        outbox.agentId,
-        parked ? UNCONFIRMED_CHAT_SEND_ERROR : OFFLINE_QUEUE_STORAGE_ERROR,
-      );
-    }
-    return "blocked";
-  }
-  const inputReceipt = readChatInputReceipt(history, item);
-  if (inputReceipt === "pending" || inputReceipt === "cancelled") {
-    const pending = history.pendingInputs?.items.find((input) => input.runId === item.sendRunId);
-    const cancelled = inputReceipt === "cancelled" || pending?.state === "cancelled";
-    const confirmsLocal = Boolean(
-      !cancelled && historySessionId && (!item.sessionId || item.sendState === "unconfirmed"),
-    );
-    if (confirmsLocal && !confirmQueuedMessageCustody(host, item, historySessionId)) {
-      return "blocked";
-    }
-    if (
-      visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) &&
-      historySessionId === host.currentSessionId &&
-      pendingBefore === undefined
-    ) {
-      applyChatPendingInputs(host, history.pendingInputs, { receipts: history.inputReceipts });
-    }
-    if (cancelled) {
-      return removeDeliveredQueuedChatSendForRun(host, item.sendRunId, outbox) !== null ||
-        !readStoredChatOutbox(host, outbox)?.queue.some((entry) => entry.id === item.id)
-        ? "continue"
-        : "blocked";
-    }
-    // The server owns accepted-input recovery and ordering.
-    return "accepted";
-  }
-  return undefined;
-}
-
 export async function reconcileStoredChatOutboxHead(
   host: ChatHost,
   outbox: StoredChatOutbox,
@@ -559,15 +503,51 @@ export async function readCurrentStoredChatHistory(
       return "continue";
     }
     chatOutboxOwner(host).syncHost(host);
-    const pendingInput = reconcilePendingChatOutboxInput(
-      host,
-      outbox,
-      item,
-      history,
-      pendingBefore,
-    );
-    if (pendingInput !== undefined) {
-      return pendingInput;
+    // Reconcile exact pending custody before considering transcript consumption.
+    const historySessionId = history.sessionInfo?.sessionId ?? history.sessionId;
+    if (item.sessionId && item.sessionId !== historySessionId) {
+      // Request ids are scoped to their physical session. A replacement's matching
+      // id cannot consume an old input or authorize sending it into the new chat.
+      if (item.sendState !== "unconfirmed" || item.sendError !== UNCONFIRMED_CHAT_SEND_ERROR) {
+        const parked = updateQueuedMessage(host, item.id, (entry) => ({
+          ...entry,
+          sendState: "unconfirmed",
+          sendError: UNCONFIRMED_CHAT_SEND_ERROR,
+        }));
+        surfaceChatDeliveryFailure(
+          host,
+          outbox.sessionKey,
+          outbox.agentId,
+          parked ? UNCONFIRMED_CHAT_SEND_ERROR : OFFLINE_QUEUE_STORAGE_ERROR,
+        );
+      }
+      return "blocked";
+    }
+    const pendingInputReceipt = readChatInputReceipt(history, item);
+    if (pendingInputReceipt === "pending" || pendingInputReceipt === "cancelled") {
+      const pending = history.pendingInputs?.items.find((input) => input.runId === item.sendRunId);
+      const cancelled = pendingInputReceipt === "cancelled" || pending?.state === "cancelled";
+      const confirmsLocal = Boolean(
+        !cancelled && historySessionId && (!item.sessionId || item.sendState === "unconfirmed"),
+      );
+      if (confirmsLocal && !confirmQueuedMessageCustody(host, item, historySessionId)) {
+        return "blocked";
+      }
+      if (
+        visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) &&
+        historySessionId === host.currentSessionId &&
+        pendingBefore === undefined
+      ) {
+        applyChatPendingInputs(host, history.pendingInputs, { receipts: history.inputReceipts });
+      }
+      if (cancelled) {
+        return removeDeliveredQueuedChatSendForRun(host, item.sendRunId, outbox) !== null ||
+          !readStoredChatOutbox(host, outbox)?.queue.some((entry) => entry.id === item.id)
+          ? "continue"
+          : "blocked";
+      }
+      // The server owns accepted-input recovery and ordering.
+      return "accepted";
     }
     const inputReceipt = readChatInputReceipt(history, item);
     // Ordinary chat needs input consumption; command lifecycle receipts retain

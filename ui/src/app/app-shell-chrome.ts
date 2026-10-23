@@ -647,7 +647,8 @@ export class ShellChromeOwner {
       // the update that first renders the element.
       return;
     }
-    this.dispatchLazyShellEvent(event);
+    const { eventType, detail } = event;
+    window.dispatchEvent(new CustomEvent(eventType, { cancelable: true, detail }));
     // The palette clears its own intent when composition hands off the live input.
     if (component !== "palette") {
       this.clearPendingLazyAction(event);
@@ -705,10 +706,6 @@ export class ShellChromeOwner {
         this.pendingLazyAction === event &&
         (!event || persistLazyShellAction(event)),
     });
-  }
-
-  private dispatchLazyShellEvent({ eventType, detail }: LazyShellEvent): boolean {
-    return window.dispatchEvent(new CustomEvent(eventType, { cancelable: true, detail }));
   }
 
   private clearPendingLazyAction(event: LazyShellEvent): void {

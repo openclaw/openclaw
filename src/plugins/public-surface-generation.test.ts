@@ -76,10 +76,9 @@ function writeSource(root: string, version: string, extension: "ts" | "js" = "ts
 function write(root: string, name: string, contents: string) {
   return writeArtifact(path.join(root, name), contents);
 }
-function loadApi(pluginRoot: string, pluginId?: string) {
+function loadApi(pluginRoot: string) {
   return loadPluginPublicArtifactModuleSync<PublicApi>({
     pluginRoot,
-    pluginId,
     artifactBasename: "api.js",
   });
 }
@@ -376,11 +375,10 @@ describe("managed plugin public surfaces", () => {
     second.entry.default.register("second-instance");
     second.registry.plugins.unshift(first.record);
     second.publish();
-    const load = (pluginId?: string) => loadApi(root, pluginId);
+    const load = () => loadApi(root);
     expect(() => load()).toThrow(/ambiguous runtime ownership/);
-    expect(load("first").read()).toBe("first-instance");
-    expect(load("second").read()).toBe("second-instance");
     expect(inRequest(second.registry, () => load().read(), "first")).toBe("first-instance");
+    expect(inRequest(second.registry, () => load().read(), "second")).toBe("second-instance");
   });
 
   it.each([

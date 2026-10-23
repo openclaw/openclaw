@@ -621,6 +621,12 @@ and keep intermediate projections as JSONB until the navigation and byte counts
 cross the database boundary. The read remains bounded by the context page, and
 PostgreSQL transcript writes do not precompute navigation envelopes.
 
+Clean resident-actor appends write the transcript projection and session-window
+mutation in one PostgreSQL statement. Each write still targets its own table
+inside the existing locked transaction; commit and receipt publication keep
+their original boundaries. Batch imports, dirty projections, and native callers
+retain their existing flush paths.
+
 ## Anchors and backups
 
 A PostgreSQL store keeps a small SQLite anchor at its usual local database path.

@@ -356,6 +356,17 @@ describe("launchctl list detection", () => {
   });
 });
 
+it("does not park an external LaunchAgent", async () => {
+  await withEnvAsync(EXTERNAL_PROCESS, async () => {
+    using _ = vi.spyOn(process, "env", "get").mockReturnValue(ENV);
+    await expect(parkCurrentLaunchAgentForMaintenance()).resolves.toBe(false);
+  });
+
+  expectServiceCalls("print");
+  expect(getSelfAndAncestorPidsSync).toHaveBeenCalledOnce();
+  expect(park).not.toHaveBeenCalled();
+});
+
 describe("launchd process ancestry guards", () => {
   const markService = (label = "ai.openclaw.gateway", xpc = "0") => {
     for (const [key, value] of Object.entries({
@@ -446,7 +457,8 @@ describe("launchd process ancestry guards", () => {
   it("parks without env markers when the Gateway is an ancestor", async () => {
     getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
 
-    await expect(parkCurrentLaunchAgentForMaintenance({ env: ENV })).resolves.toBe(true);
+    using _ = vi.spyOn(process, "env", "get").mockReturnValue(ENV);
+    await expect(parkCurrentLaunchAgentForMaintenance()).resolves.toBe(true);
 
     expectServiceCalls("print", "disable");
     expect(park).toHaveBeenCalledWith({
@@ -561,7 +573,8 @@ describe("LaunchAgent service membership", () => {
       value: Promise.resolve(false),
     });
 
-    await expect(parkCurrentLaunchAgentForMaintenance({ env: ENV })).rejects.toThrow(
+    using _ = vi.spyOn(process, "env", "get").mockReturnValue(ENV);
+    await expect(parkCurrentLaunchAgentForMaintenance()).rejects.toThrow(
       "helper failed to spawn; restored launchd enable state",
     );
     expectServiceCalls(["print"], ["disable"], ["enable"]);

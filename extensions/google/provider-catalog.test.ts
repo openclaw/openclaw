@@ -2,7 +2,8 @@ import {
   clearLiveCatalogCacheForTests,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleLiveCatalogProvider } from "./provider-catalog-runtime.js";
 import {
   buildGoogleStaticCatalogProvider,
@@ -44,16 +45,17 @@ function inventory(body: unknown): LiveModelCatalogFetchGuard {
   }));
 }
 function discover(fetchGuard: LiveModelCatalogFetchGuard, strict = false) {
+  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(fetchGuard);
   return buildGoogleLiveCatalogProvider({
     discoveryMode: strict ? "strict" : undefined,
     apiKey: "GEMINI_API_KEY",
     discoveryApiKey: "resolved-google-key",
-    fetchGuard,
   });
 }
 
 describe("google provider catalog", () => {
   beforeEach(() => clearLiveCatalogCacheForTests());
+  afterEach(() => vi.restoreAllMocks());
 
   it("keeps Google AI Studio and Vertex model ids aligned", () => {
     expect(buildGoogleVertexStaticCatalogProvider().models.map((model) => model.id)).toEqual(
@@ -161,10 +163,10 @@ describe("google provider catalog", () => {
       { id: "gemini-3.9-flash", compat: undefined },
     ];
     const fetchGuard = inventory({ models: cases.map(({ id }) => liveRow(id)) });
+    vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(fetchGuard);
 
     const provider = await buildGoogleLiveCatalogProvider({
       apiKey: "GEMINI_API_KEY",
-      fetchGuard,
     });
 
     for (const { id, compat } of cases) {
@@ -188,11 +190,11 @@ describe("google provider catalog", () => {
     "rejects a malformed inventory: %j",
     async (body) => {
       const fetchGuard = inventory(body);
+      vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(fetchGuard);
       await expect(
         buildGoogleLiveCatalogProvider({
           discoveryMode: "strict",
           apiKey: "google-key",
-          fetchGuard,
         }),
       ).rejects.toThrow("invalid model");
     },

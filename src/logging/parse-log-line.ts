@@ -41,22 +41,6 @@ function parseMetaName(raw?: unknown): LogContext {
   };
 }
 
-function resolveContext(
-  value: Record<string, unknown>,
-  meta: Record<string, unknown> | undefined,
-): LogContext {
-  const metadataContext = parseMetaName(meta?.name);
-  if (meta?.name === value["0"]) {
-    return metadataContext;
-  }
-  const positionalContext = parseMetaName(value["0"]);
-  return {
-    subsystem: metadataContext.subsystem ?? positionalContext.subsystem,
-    module: metadataContext.module ?? positionalContext.module,
-    plugin: metadataContext.plugin ?? positionalContext.plugin,
-  };
-}
-
 /** Parses a raw log line into compact metadata and message text, or null for non-JSON lines. */
 export function parseLogLine(raw: string): ParsedLogLine | null {
   try {
@@ -65,7 +49,15 @@ export function parseLogLine(raw: string): ParsedLogLine | null {
       return null;
     }
     const meta = isRecord(parsed["_meta"]) ? parsed["_meta"] : undefined;
-    const context = resolveContext(parsed, meta);
+    let context = parseMetaName(meta?.name);
+    if (meta?.name !== parsed["0"]) {
+      const positionalContext = parseMetaName(parsed["0"]);
+      context = {
+        subsystem: context.subsystem ?? positionalContext.subsystem,
+        module: context.module ?? positionalContext.module,
+        plugin: context.plugin ?? positionalContext.plugin,
+      };
+    }
     const levelRaw = typeof meta?.logLevelName === "string" ? meta.logLevelName : parsed.level;
     return {
       time:

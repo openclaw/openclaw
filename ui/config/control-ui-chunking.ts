@@ -219,7 +219,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // modules can exceed the compressed-size budget after regrouping.
                 // Chat-only code can share a larger compression dictionary;
                 // shipped byte/request budgets still bound the output.
-                minSize: 128 * 1024,
+                minSize: (route === "chat" ? 256 : 128) * 1024,
                 maxSize: (route === "shared" ? 1280 : route === "chat" ? 1664 : 1408) * 1024,
               };
             }),

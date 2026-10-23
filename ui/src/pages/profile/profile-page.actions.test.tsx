@@ -35,6 +35,7 @@ it("shows pending coauthor consent and restores the accepted value after failure
   await waitForSolid(() => {
     expect(toggle()?.checked).toBe(true);
     expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
+    expect(toggle()?.disabled).toBe(false);
   });
   toggle()!.click();
   await waitForSolid(() => {
@@ -74,6 +75,7 @@ it.each(["identity", "navigation"])(
     await waitForSolid(() => {
       expect(toggle()?.checked).toBe(true);
       expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
+      expect(toggle()?.disabled).toBe(false);
     });
     toggle()!.click();
     await waitForSolid(() =>

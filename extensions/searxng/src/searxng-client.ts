@@ -33,8 +33,6 @@ const SEARXNG_BASE_URL_ENV_VAR = "SEARXNG_BASE_URL";
 const SEARXNG_BASE_URL_PATH = "plugins.entries.searxng.config.webSearch.baseUrl";
 const DEFAULT_TIMEOUT_SECONDS = 20;
 const MAX_RESPONSE_BYTES = 1_000_000;
-type SearxngEndpointMode = "selfHosted" | "strict";
-
 type SearxngResult = {
   url: string;
   title: string;
@@ -106,7 +104,7 @@ async function searxngEndpointTargetsPrivateNetwork(url: URL): Promise<boolean> 
   }
 }
 
-async function validateSearxngBaseUrl(baseUrl: string): Promise<SearxngEndpointMode> {
+async function validateSearxngBaseUrl(baseUrl: string): Promise<"selfHosted" | "strict"> {
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);

@@ -23,10 +23,6 @@ export type GatewayProtocolRequestTiming = {
   errorCode?: string;
 };
 
-type GatewayRequestSender = {
-  send: (data: string) => void;
-};
-
 type GatewayPendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -138,14 +134,15 @@ export class GatewayPendingRequests {
   }
 
   request<T>(
-    sender: GatewayRequestSender,
+    sender: { send: (data: string) => void },
     method: string,
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
     let id: string;
     try {
-      id = this.allocateRequestId();
+      this.requestSequence += 1;
+      id = `${this.requestSequence}:${this.opts.createRequestId()}`;
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
@@ -393,11 +390,6 @@ export class GatewayPendingRequests {
       this.finishTiming(id, pending, false, "CLIENT_CLOSED");
       pending.reject(error);
     }
-  }
-
-  private allocateRequestId(): string {
-    this.requestSequence += 1;
-    return `${this.requestSequence}:${this.opts.createRequestId()}`;
   }
 
   private finishTiming(

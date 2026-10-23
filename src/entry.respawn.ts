@@ -111,52 +111,40 @@ export function buildCliRespawnPlan(
       childExecArgv.unshift(WINDOWS_STACK_SIZE_FLAG);
       needsRespawn = true;
     }
-
-    if (!needsRespawn) {
-      return null;
+  } else {
+    const autoNodeExtraCaCerts =
+      params.autoNodeExtraCaCerts ??
+      resolveNodeStartupTlsEnvironment({
+        env,
+        execPath,
+        includeDarwinDefaults: false,
+      }).NODE_EXTRA_CA_CERTS;
+    if (
+      autoNodeExtraCaCerts &&
+      !isTruthyEnvValue(env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]) &&
+      !childEnv.NODE_EXTRA_CA_CERTS
+    ) {
+      childEnv.NODE_EXTRA_CA_CERTS = autoNodeExtraCaCerts;
+      childEnv[OPENCLAW_NODE_EXTRA_CA_CERTS_READY] = "1";
+      needsRespawn = true;
     }
 
-    const child = invocation(childExecArgv);
-    return {
-      command: child.command,
-      argv: child.args,
-      env: child.env,
-      detachForProcessTree: false,
-    };
-  }
-
-  const autoNodeExtraCaCerts =
-    params.autoNodeExtraCaCerts ??
-    resolveNodeStartupTlsEnvironment({
-      env,
-      execPath,
-      includeDarwinDefaults: false,
-    }).NODE_EXTRA_CA_CERTS;
-  if (
-    autoNodeExtraCaCerts &&
-    !isTruthyEnvValue(env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]) &&
-    !childEnv.NODE_EXTRA_CA_CERTS
-  ) {
-    childEnv.NODE_EXTRA_CA_CERTS = autoNodeExtraCaCerts;
-    childEnv[OPENCLAW_NODE_EXTRA_CA_CERTS_READY] = "1";
-    needsRespawn = true;
-  }
-
-  if (
-    !shouldSkipRespawnForArgv(argv, platform) &&
-    !isTruthyEnvValue(env[OPENCLAW_NODE_OPTIONS_READY]) &&
-    !hasExperimentalWarningSuppressed({ env, execArgv })
-  ) {
-    childEnv[OPENCLAW_NODE_OPTIONS_READY] = "1";
-    if (isStandaloneRuntimeExecutable(execPath)) {
-      // Compiled Bun treats runtime flags as CLI arguments, but honors NODE_OPTIONS.
-      childEnv.NODE_OPTIONS = [childEnv.NODE_OPTIONS, EXPERIMENTAL_WARNING_FLAG]
-        .filter(Boolean)
-        .join(" ");
-    } else {
-      childExecArgv.unshift(EXPERIMENTAL_WARNING_FLAG);
+    if (
+      !shouldSkipRespawnForArgv(argv, platform) &&
+      !isTruthyEnvValue(env[OPENCLAW_NODE_OPTIONS_READY]) &&
+      !hasExperimentalWarningSuppressed({ env, execArgv })
+    ) {
+      childEnv[OPENCLAW_NODE_OPTIONS_READY] = "1";
+      if (isStandaloneRuntimeExecutable(execPath)) {
+        // Compiled Bun treats runtime flags as CLI arguments, but honors NODE_OPTIONS.
+        childEnv.NODE_OPTIONS = [childEnv.NODE_OPTIONS, EXPERIMENTAL_WARNING_FLAG]
+          .filter(Boolean)
+          .join(" ");
+      } else {
+        childExecArgv.unshift(EXPERIMENTAL_WARNING_FLAG);
+      }
+      needsRespawn = true;
     }
-    needsRespawn = true;
   }
 
   if (!needsRespawn) {
@@ -168,7 +156,7 @@ export function buildCliRespawnPlan(
     command: child.command,
     argv: child.args,
     env: child.env,
-    detachForProcessTree: !isTerminalInteractiveRespawnArgv(argv),
+    detachForProcessTree: platform !== "win32" && !isTerminalInteractiveRespawnArgv(argv),
   };
 }
 

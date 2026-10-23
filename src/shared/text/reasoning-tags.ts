@@ -11,6 +11,19 @@ export type ReasoningTagMode = "strict" | "preserve";
 export type ReasoningTagTrim = "none" | "start" | "both";
 export type ReasoningTagScope = "all" | "leading";
 
+export const THINKING_TAG_NAMES = [
+  "think",
+  "thinking",
+  "thought",
+  "antthinking",
+  "antml:think",
+  "antml:thinking",
+  "antml:thought",
+  "mm:think",
+  "mm:thinking",
+  "mm:thought",
+] as const;
+
 const REASONING_AND_FINAL_TAG_NAMES = [...REASONING_TAG_NAMES, FINAL_TAG_NAME];
 const REASONING_OR_FINAL_TAG_RE = new RegExp(
   `<\\s*\\/?\\s*(?:${REASONING_AND_FINAL_TAG_NAMES.map(escapeRegExp).join("|")})(?=[\\s/>])`,

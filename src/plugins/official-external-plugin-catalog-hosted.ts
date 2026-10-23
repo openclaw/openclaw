@@ -298,7 +298,7 @@ function removeOfficialExternalPluginCatalogInstallAuthority(
 
 async function snapshotOrBundledFallbackResult(params: {
   error: unknown;
-  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore;
+  snapshotStore: HostedOfficialExternalPluginCatalogSnapshotStore;
   url: string;
   metadata?: HostedOfficialExternalPluginCatalogLoadResult["metadata"];
   expectedSha256?: string;
@@ -309,15 +309,13 @@ async function snapshotOrBundledFallbackResult(params: {
   now: Date;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
   let error = params.error;
-  if (params.snapshotStore) {
-    try {
-      const snapshot = await params.snapshotStore.read(params.url);
-      if (snapshot) {
-        return await loadHostedCatalogSnapshotResult({ ...params, snapshot });
-      }
-    } catch (snapshotErr) {
-      error = `${formatErrorMessage(params.error)}; snapshot fallback failed: ${formatErrorMessage(snapshotErr)}`;
+  try {
+    const snapshot = await params.snapshotStore.read(params.url);
+    if (snapshot) {
+      return await loadHostedCatalogSnapshotResult({ ...params, snapshot });
     }
+  } catch (snapshotErr) {
+    error = `${formatErrorMessage(params.error)}; snapshot fallback failed: ${formatErrorMessage(snapshotErr)}`;
   }
   if (params.verification?.mode === "signed") {
     return { source: "bundled-fallback", entries: [], error: formatErrorMessage(error) };
@@ -326,14 +324,10 @@ async function snapshotOrBundledFallbackResult(params: {
 }
 
 async function resolveHostedCatalogSnapshotStore(params: {
-  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore | null;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   stateDatabasePath?: string;
-}): Promise<HostedOfficialExternalPluginCatalogSnapshotStore | undefined> {
-  if (params.snapshotStore !== undefined) {
-    return params.snapshotStore ?? undefined;
-  }
+}): Promise<HostedOfficialExternalPluginCatalogSnapshotStore> {
   const { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } =
     await import("./official-external-plugin-catalog-snapshot-store.js");
   return createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
@@ -350,7 +344,6 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   expectedSha256?: string;
   offline?: boolean;
   requireSnapshotWrite?: boolean;
-  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore | null;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   stateDatabasePath?: string;
@@ -368,7 +361,6 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   }
   const { url } = source;
   const snapshotStore = await resolveHostedCatalogSnapshotStore({
-    snapshotStore: params?.snapshotStore,
     env: params?.env,
     stateDir: params?.stateDir,
     stateDatabasePath: params?.stateDatabasePath,
@@ -475,7 +467,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     if ("source" in parsed) {
       return parsed;
     }
-    if (snapshotStore && parsed.trust?.mode === "signed") {
+    if (parsed.trust?.mode === "signed") {
       const currentSnapshot = await snapshotStore.read(url.href);
       if (currentSnapshot?.trust?.mode === "signed") {
         const current =
@@ -520,7 +512,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       },
     );
     await snapshotStore
-      ?.write({
+      .write({
         body,
         metadata,
         savedAt: verifiedAt,

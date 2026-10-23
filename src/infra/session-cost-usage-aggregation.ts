@@ -15,7 +15,6 @@ export async function refreshCostUsageCacheForAgent(params: {
   databasePath?: string;
   maxFiles?: number;
   onRemaining?: (files: UsageCostPendingFile[]) => void;
-  sessionsDir?: string;
   storePath?: string;
   sessionFiles?: string[];
   startMs?: number;
@@ -28,7 +27,6 @@ export async function refreshCostUsageCacheForAgent(params: {
     const result = await runUsageCostWorker(prepared, {
       kind: "refresh",
       maxFiles: params.maxFiles,
-      sessionsDir: params.sessionsDir,
       sessionFiles: params.sessionFiles,
       startMs: params.startMs,
       rebuildRows: params.rebuildRows,

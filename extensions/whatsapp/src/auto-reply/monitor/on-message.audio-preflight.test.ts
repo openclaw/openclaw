@@ -53,11 +53,6 @@ vi.mock("./last-route.js", () => ({
   updateLastRouteInBackground: (...args: unknown[]) => updateLastRouteInBackgroundMock(...args),
 }));
 
-vi.mock("./peer.js", () => ({
-  resolvePeerId: (msg: { admission: { conversation: { id: string } } }) =>
-    msg.admission.conversation.id,
-}));
-
 vi.mock("../config.runtime.js", () => ({
   getRuntimeConfig: () => ({
     channels: {

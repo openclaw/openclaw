@@ -6,12 +6,48 @@ import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import { runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
+import {
+  isBenignUncaughtExceptionError,
+  isUncaughtExceptionHandled,
+} from "../infra/unhandled-rejections.js";
+import { defaultRuntime, restoreRuntimeTerminalState } from "../runtime.js";
 import {
   UpdateSchemaRefusalError,
   type UpdateSchemaRefusalDatabase,
 } from "../state/openclaw-update-schema-refusal.js";
 import { formatCliCommand } from "./command-format.js";
 import type { CronCliJobMatch } from "./cron-cli/cron-cli-error.js";
+import { isJsonOutputModeActive } from "./json-output-mode.js";
+import { exitAfterSignalExitBarriers } from "./signal-exit-barrier.js";
+
+export function handleCliUncaughtException(error: unknown, argv?: string[]): void {
+  if (isUncaughtExceptionHandled(error)) {
+    return;
+  }
+  if (isBenignUncaughtExceptionError(error)) {
+    console.warn(
+      "[openclaw] Non-fatal uncaught exception (continuing):",
+      formatUncaughtError(error),
+    );
+    return;
+  }
+  if (isJsonOutputModeActive(argv ?? process.argv)) {
+    defaultRuntime.writeJson(formatCliJsonFailure(error));
+  }
+  for (const line of formatCliFailureLines({
+    title: "OpenClaw hit an unexpected runtime error.",
+    error,
+    argv: argv ?? process.argv,
+  })) {
+    console.error(line);
+  }
+  for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
+    console.error("[openclaw]", message);
+  }
+  restoreRuntimeTerminalState("uncaught exception");
+  exitAfterSignalExitBarriers(1, "uncaught exception");
+}
 
 type FormatCliFailureOptions = {
   title: string;

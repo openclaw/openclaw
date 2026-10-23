@@ -821,10 +821,9 @@ export async function resolveManagedOutgoingMediaArtifactDownload(
 export async function resolveManagedOutgoingMediaUrlDownload(params: {
   sessionKey: string;
   url: string;
-  stateDir?: string;
 }): Promise<ManagedOutgoingMediaArtifactDownload | null> {
   const { url, sessionKey } = params;
-  const stateDir = params.stateDir ?? resolveStateDir();
+  const stateDir = resolveStateDir();
   const parsed = parseManagedOutgoingRoute(url);
   if (!parsed || parsed.sessionKey !== sessionKey) {
     return null;

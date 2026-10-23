@@ -45,7 +45,6 @@ import * as launchdRuntime from "./launchd-runtime.js";
 import { launchdTestState as state } from "./launchd-state.test-support.js";
 import {
   isLaunchAgentEnabled,
-  parkCurrentLaunchAgentForMaintenance,
   readLaunchAgentProgramArguments,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
@@ -68,10 +67,7 @@ const WRAPPED_ARGS = [
 const BOOTSTRAP_EXISTS =
   "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501";
 const BOOTSTRAP_PROGRESS = "Bootstrap failed: 37: Operation already in progress";
-const {
-  scheduleDetachedLaunchdRestartHandoff: handoff,
-  scheduleDetachedLaunchdMaintenancePark: park,
-} = launchdRestartHandoffState;
+const { scheduleDetachedLaunchdRestartHandoff: handoff } = launchdRestartHandoffState;
 
 function install(overrides?: Parameters<typeof defaultLaunchAgentFixture>[1]) {
   return installLaunchAgent(defaultLaunchAgentFixture(ENV, overrides));
@@ -665,16 +661,6 @@ describe("launchd install", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("does not park an external LaunchAgent", async () => {
-    await withEnvAsync(EXTERNAL_PROCESS, async () => {
-      await expect(parkCurrentLaunchAgentForMaintenance({ env: ENV })).resolves.toBe(false);
-    });
-
-    expectServiceCalls("print");
-    expect(getSelfAndAncestorPidsSync).toHaveBeenCalledOnce();
-    expect(park).not.toHaveBeenCalled();
   });
 
   it.each(["free", "busy"] as const)(

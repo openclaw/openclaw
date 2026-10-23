@@ -319,12 +319,8 @@ export async function stopLaunchAgent({
   );
 }
 
-export async function parkCurrentLaunchAgentForMaintenance(
-  params: {
-    env?: GatewayServiceEnv;
-  } = {},
-): Promise<boolean> {
-  const serviceEnv = params.env ?? (process.env as GatewayServiceEnv);
+export async function parkCurrentLaunchAgentForMaintenance(): Promise<boolean> {
+  const serviceEnv = process.env as GatewayServiceEnv;
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(serviceEnv);
   if (!(await isCurrentProcessInsideLaunchdService(label))) {

@@ -1,8 +1,8 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread, threadId } from "node:worker_threads";
 import { normalizeWindowsPathForComparison } from "@openclaw/fs-safe/path";
+import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export type SqliteReaderOwner = {
@@ -54,20 +54,16 @@ export type SqliteReaderDiagnostics = {
   activeReaders: SqliteReaderDiagnostic[];
 };
 
-const readerOwners = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteReaderOwners"),
-  () =>
-    new AsyncLocalStorage<
-      SqliteReaderOwner & {
-        timing: {
-          preparedAtMs: number;
-          hostAdmissionWaitMs: number;
-          databaseAdmissionWaitMs: number;
-          transactions: { count: number };
-        };
-      }
-    >(),
-);
+const readerOwners = new AsyncContext<
+  SqliteReaderOwner & {
+    timing: {
+      preparedAtMs: number;
+      hostAdmissionWaitMs: number;
+      databaseAdmissionWaitMs: number;
+      transactions: { count: number };
+    };
+  }
+>(Symbol.for("openclaw.sqliteReaderOwners"));
 
 const connections = resolveGlobalSingleton(Symbol.for("openclaw.sqliteReaderConnections"), () => ({
   nextId: 0,

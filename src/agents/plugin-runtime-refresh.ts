@@ -1,5 +1,4 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { AsyncContext } from "../shared/async-context.js";
 
 type Refresh = {
   active: boolean;
@@ -8,10 +7,7 @@ type Refresh = {
   requested: boolean;
 };
 
-const refreshScope = resolveGlobalSingleton(
-  Symbol.for("openclaw.agentPluginRuntimeRefresh"),
-  () => new AsyncLocalStorage<Refresh>(),
-);
+const refreshScope = new AsyncContext<Refresh>(Symbol.for("openclaw.agentPluginRuntimeRefresh"));
 
 /** Captured host control survives plugin callbacks without becoming run authority. */
 export function captureAgentPluginRuntimeRefresh() {

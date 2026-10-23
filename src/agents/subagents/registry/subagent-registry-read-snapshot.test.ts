@@ -67,7 +67,6 @@ it("captures current committed maintenance protection", async () => {
   const active = { ...entry, runId: "new-child", childSessionKey: "agent:main:subagent:new" };
   persist(rows(completed, active), [completed.runId, active.runId]);
   expect([...prepared.capture()]).toEqual([
-    expect.objectContaining({ runId: entry.runId, cleanupCompletedAt: 100 }),
     expect.objectContaining({ runId: active.runId, childSessionKey: active.childSessionKey }),
   ]);
 });

@@ -249,7 +249,7 @@ it.each([
             return await refreshUsage({
               agentId,
               databasePath: cachePath,
-              sessionsDir,
+              storePath: path.join(sessionsDir, "sessions.json"),
               agentDir: path.join(root, "agent-config"),
             });
           }

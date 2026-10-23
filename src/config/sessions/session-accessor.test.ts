@@ -689,7 +689,7 @@ describe("session accessor seam", () => {
     });
 
     expect(result.rejectedReason).toBeUndefined();
-    expect(result.appendedCount).toBe(1);
+    expect(result.messages.filter((m) => m.appended)).toHaveLength(1);
   });
 
   it("does not create database state for rejected memory-only transcript turns", async () => {
@@ -720,7 +720,7 @@ describe("session accessor seam", () => {
         },
       );
 
-      expect(result).toMatchObject({ appendedCount: 0, messages: [] });
+      expect(result).toMatchObject({ messages: [] });
       expect(fs.existsSync(databasePath)).toBe(false);
       expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
       expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
@@ -1593,7 +1593,7 @@ describe("session accessor seam", () => {
       () => expect(readEntry(scope)?.updatedAt).toBeGreaterThan(10),
     );
     const target = publicTarget(scope);
-    expect(result.appendedCount).toBe(66);
+    expect(result.messages.filter((m) => m.appended)).toHaveLength(66);
     expect(updates).toEqual(
       expectedMessages.map(({ message }, index) =>
         Object.assign(
@@ -1650,7 +1650,7 @@ describe("session accessor seam", () => {
         updateMode: "inline",
       }),
     );
-    expect(result.appendedCount).toBe(2);
+    expect(result.messages.filter((m) => m.appended)).toHaveLength(2);
     expect(publicUpdates).toEqual([invalidation(scope)]);
     expect(internalUpdates).toEqual([
       {
@@ -1699,7 +1699,7 @@ describe("session accessor seam", () => {
       }),
     );
 
-    expect(result.appendedCount).toBe(2);
+    expect(result.messages.filter((m) => m.appended)).toHaveLength(2);
     expect(updates).toEqual([invalidation(scope)]);
     await expect(loadEvents(scope)).resolves.toEqual(
       containing({ id: "diverging-turn-abandoned" }, { id: "diverging-turn-active" }),
@@ -1732,7 +1732,6 @@ describe("session accessor seam", () => {
       }),
     );
 
-    expect(result.appendedCount).toBe(1);
     expect(result.messages.map((message) => message.appended)).toEqual([false, true]);
     expect(updates).toEqual([
       expect.objectContaining({
@@ -1831,7 +1830,7 @@ describe("session accessor seam", () => {
         updateMode: "none",
       });
     const inserted = await attempt(100);
-    expect(inserted.appendedCount).toBe(1);
+    expect(inserted.messages.filter((m) => m.appended)).toHaveLength(1);
     expectEntry(scope, {
       abortedLastRun: false,
       restartRecoveryDeliveryRunId: "run-1",
@@ -1852,7 +1851,7 @@ describe("session accessor seam", () => {
       throw new Error("expected retryable admission");
     }
     const deduplicated = await attempt(300, buildRestartRecoveryExpectedState(retryable));
-    expect(deduplicated.appendedCount).toBe(0);
+    expect(deduplicated.messages.filter((m) => m.appended)).toHaveLength(0);
     expect(deduplicated.messages).toHaveLength(1);
     expectEntry(scope, {
       ...recoveryClaim,
@@ -1871,7 +1870,7 @@ describe("session accessor seam", () => {
       updatedAt: 350,
     }));
     const historicalMatch = await attempt(400);
-    expect(historicalMatch.appendedCount).toBe(0);
+    expect(historicalMatch.messages.filter((m) => m.appended)).toHaveLength(0);
     expect(historicalMatch.messages).toHaveLength(1);
     expectEntry(scope, { endedAt: 350, status: "done", updatedAt: expect.any(Number) });
     expectCleared(readEntry(scope), [
@@ -1914,7 +1913,7 @@ describe("session accessor seam", () => {
         updateMode: "file-only",
       });
 
-      expect(result).toMatchObject({ appendedCount: 0, rejectedReason: "session-rebound" });
+      expect(result).toMatchObject({ messages: [], rejectedReason: "session-rebound" });
       await expect(loadEvents(scope)).resolves.toEqual([]);
     },
   );
@@ -1997,7 +1996,7 @@ describe("session accessor seam", () => {
       predicateGate.resolve();
       const result = await pendingTurn;
 
-      expect(result).toMatchObject({ appendedCount: 0, rejectedReason: "session-rebound" });
+      expect(result).toMatchObject({ messages: [], rejectedReason: "session-rebound" });
       await expect(loadEvents(scope)).resolves.toEqual([]);
       expect(readEntry(scope)?.pendingFinalDelivery).toEqual(replacement.pendingFinalDelivery);
     },

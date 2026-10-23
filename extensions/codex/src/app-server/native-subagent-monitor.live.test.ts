@@ -4,8 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
@@ -249,6 +251,303 @@ describeLive("codex native subagent monitor live", () => {
         expect(recorder.deliveries).toEqual([]);
         await monitor.dispose();
       } finally {
+        await client.closeAndWait();
+      }
+    });
+  }, 900_000);
+
+  it("cancels the reused parent generation after its foreground owner unregisters", async () => {
+    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    if (!apiKey) {
+      throw new Error("OPENAI_API_KEY is required for this live test");
+    }
+    await withTempDir("openclaw-codex-native-reused-stop-", async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+      const options = resolveCodexAppServerRuntimeOptions({
+        pluginConfig: { appServer: { homeScope: "user" } },
+        env: {},
+      });
+      const client = await createIsolatedCodexAppServerClient({
+        startOptions: {
+          ...options.start,
+          env: { CODEX_HOME: path.join(root, "codex-home") },
+          clearEnv: ["CODEX_API_KEY", "OPENAI_API_KEY"],
+        },
+        agentDir: path.join(root, "agent"),
+        authProfileId: null,
+        timeoutMs: 120_000,
+      });
+      const releasePriorDelivery = createDeferred<void>();
+      try {
+        await client.request(
+          "account/login/start",
+          { type: "apiKey", apiKey },
+          { timeoutMs: 60_000 },
+        );
+        const started = await client.request(
+          "thread/start",
+          {
+            model: "gpt-5.5",
+            cwd: workspace,
+            approvalPolicy: "never",
+            sandbox: "read-only",
+            threadSource: "user",
+            experimentalRawEvents: true,
+            config: { "features.multi_agent": true },
+          },
+          { timeoutMs: 120_000 },
+        );
+        const parentThreadId = started.thread.id;
+        const completedParentTurns = new Set<string>();
+        const childTurns = new Map<string, string>();
+        const childTurnStatus = new Map<string, string>();
+        client.addNotificationHandler((notification) => {
+          const params = isJsonObject(notification.params) ? notification.params : undefined;
+          const turn = isJsonObject(params?.turn) ? params.turn : undefined;
+          if (
+            notification.method === "turn/completed" &&
+            params?.threadId === parentThreadId &&
+            typeof turn?.id === "string"
+          ) {
+            completedParentTurns.add(turn.id);
+          }
+          if (
+            notification.method === "turn/started" &&
+            typeof params?.threadId === "string" &&
+            params.threadId !== parentThreadId &&
+            typeof turn?.id === "string"
+          ) {
+            childTurns.set(params.threadId, turn.id);
+          }
+          if (
+            notification.method === "turn/completed" &&
+            typeof params?.threadId === "string" &&
+            params.threadId !== parentThreadId &&
+            typeof turn?.status === "string"
+          ) {
+            childTurnStatus.set(params.threadId, turn.status);
+          }
+        });
+
+        const deliveries: RecordedDelivery[] = [];
+        let priorDeliveryStarted = false;
+        const recorder = {
+          deliveries,
+          runtime: {
+            captureAgentHarnessCompletionCustody: async () => undefined,
+            createAgentHarnessCompletionEventSink: () => () => {},
+            deliverAgentHarnessCompletion: async (params: RecordedDelivery) => {
+              priorDeliveryStarted = true;
+              traceNativeLive("reused-prior-delivery-held", {
+                childThreadId: params.childSessionId,
+                status: params.status,
+              });
+              await releasePriorDelivery.promise;
+              deliveries.push(params);
+              return { delivered: true, path: "steered" as const };
+            },
+          },
+        };
+        let interruptIoCount = 0;
+        const monitor = new CodexNativeSubagentMonitor(client as never, recorder.runtime, {
+          interruptChildAndWait: (threadId, turnId, assertCurrent, timeoutMs) => {
+            interruptIoCount += 1;
+            traceNativeLive("reused-generation-interrupt-io", { threadId, turnId });
+            return interruptCodexTurnAndWaitBestEffort(client, {
+              threadId,
+              turnId,
+              assertCurrent,
+              timeoutMs,
+            });
+          },
+        });
+        const sessionKey = "live:reused-parent-stop";
+        const sessionId = "live-reused-parent-session";
+        const connectionFingerprint = "a".repeat(64);
+        const claims = new Map<string, string>();
+        const releases = new Set<string>();
+        const runGeneration = async (revision: string, requesterTurnRunId: string) => {
+          const requestCustody = Object.freeze({});
+          const releasePath = path.join(root, `${revision}.release`);
+          const parent = await monitor.registerParent({
+            parentThreadId,
+            requesterSessionKey: sessionKey,
+            requesterTurnRunId,
+            requestCustody,
+            completionScope: { requesterSessionKey: sessionKey, requesterAgentId: "live" },
+            historyOwner: {
+              parentThreadId,
+              sessionId,
+              lifecycleRevision: revision,
+              connectionFingerprint,
+            },
+            agentId: "live",
+            claimDirectChild: (childThreadId) => {
+              claims.set(revision, childThreadId);
+              return () => releases.add(childThreadId);
+            },
+          });
+          const turn = await client.request(
+            "turn/start",
+            {
+              threadId: parentThreadId,
+              input: [
+                {
+                  type: "text",
+                  text: `Spawn exactly one new native subagent. Give it this exact task: "Run this shell command exactly and wait until it exits: while [ ! -f '${releasePath}' ]; do sleep 1; done. Do not reply before the command exits. Then reply ${revision}." Do not wait for the child. Reply PARENT_${revision} immediately after spawning it.`,
+                  text_elements: [],
+                },
+              ],
+            },
+            { timeoutMs: 300_000 },
+          );
+          parent.bindTurn(turn.turn.id);
+          const childThreadId = await waitFor(
+            () => {
+              const claimed = claims.get(revision);
+              return completedParentTurns.has(turn.turn.id) &&
+                claimed &&
+                childTurns.has(claimed) &&
+                !childTurnStatus.has(claimed)
+                ? claimed
+                : undefined;
+            },
+            300_000,
+            `${revision} parent completion and active child turn`,
+          );
+          await parent.unregister();
+          traceNativeLive("reused-generation-ready", {
+            revision,
+            parentThreadId,
+            childThreadId,
+            childTurnId: childTurns.get(childThreadId) ?? null,
+          });
+          return { childThreadId, releasePath, requestCustody };
+        };
+
+        const first = await runGeneration("revision-1", "parent-run-1");
+        await fs.writeFile(first.releasePath, "release\n", "utf8");
+        await waitFor(
+          () => (priorDeliveryStarted ? true : undefined),
+          60_000,
+          "prior-generation held delivery",
+        );
+        expect(childTurnStatus.get(first.childThreadId)).toBe("completed");
+        expect(recorder.deliveries).toEqual([]);
+
+        const current = await runGeneration("revision-2", "parent-run-2");
+        expect(current.childThreadId).not.toBe(first.childThreadId);
+        expect(childTurnStatus.has(current.childThreadId)).toBe(false);
+        expect(releases.has(current.childThreadId)).toBe(false);
+
+        let foreignConsumerCalled = false;
+        await expect(
+          monitor.withDescendantCancellation(
+            {
+              parentThreadId,
+              agentId: "live",
+              sessionKey,
+              sessionId,
+              lifecycleRevision: "revision-2",
+              requesterTurnRunId: "foreign-parent-run",
+              acceptsRequest: () => false,
+              assertCurrent: () => {},
+            },
+            (cancel) => {
+              foreignConsumerCalled = true;
+              return cancel();
+            },
+          ),
+        ).rejects.toThrow("Codex descendant cancellation requester generation changed");
+        expect(foreignConsumerCalled).toBe(false);
+        expect(interruptIoCount).toBe(0);
+        traceNativeLive("reused-generation-foreign-rejected", { interruptIoCount });
+
+        let requesterCurrent = true;
+        let revokedError: unknown;
+        try {
+          await monitor.withDescendantCancellation(
+            {
+              parentThreadId,
+              agentId: "live",
+              sessionKey,
+              sessionId,
+              lifecycleRevision: "revision-2",
+              requesterTurnRunId: "parent-run-2",
+              acceptsRequest: (custody) => custody === current.requestCustody,
+              assertCurrent: () => {
+                if (!requesterCurrent) {
+                  throw new Error("live requester authority was revoked");
+                }
+              },
+            },
+            (cancel) => {
+              requesterCurrent = false;
+              return cancel();
+            },
+          );
+        } catch (error) {
+          revokedError = error;
+        }
+        const revokedMessage =
+          revokedError instanceof Error ? revokedError.message : String(revokedError);
+        traceNativeLive("reused-generation-revoked-error", {
+          message: revokedMessage,
+          interruptIoCount,
+        });
+        expect(revokedMessage).toBe("live requester authority was revoked");
+        requesterCurrent = true;
+        expect(interruptIoCount).toBe(0);
+        traceNativeLive("reused-generation-revoked-rejected", { interruptIoCount });
+
+        traceNativeLive("reused-generation-stop-start", {
+          parentThreadId,
+          selectedChildThreadId: current.childThreadId,
+          priorGenerationChildThreadId: first.childThreadId,
+        });
+        const cancellation = await monitor.withDescendantCancellation(
+          {
+            parentThreadId,
+            agentId: "live",
+            sessionKey,
+            sessionId,
+            lifecycleRevision: "revision-2",
+            requesterTurnRunId: "parent-run-2",
+            acceptsRequest: (custody) => custody === current.requestCustody,
+            assertCurrent: () => {},
+          },
+          (cancel) => cancel(),
+        );
+        traceNativeLive("reused-generation-stop-complete", {
+          killed: cancellation.killed,
+          cancelledRevision: cancellation.cancelledRequesters[0]?.lifecycleRevision ?? null,
+          selectedChildStatus: childTurnStatus.get(current.childThreadId) ?? null,
+          priorGenerationChildStatus: childTurnStatus.get(first.childThreadId) ?? "active",
+        });
+
+        expect(cancellation).toEqual({
+          killed: 1,
+          cancelledRequesters: [
+            {
+              agentId: "live",
+              sessionKey,
+              sessionId,
+              lifecycleRevision: "revision-2",
+              requesterTurnRunId: "parent-run-2",
+            },
+          ],
+        });
+        expect(childTurnStatus.get(current.childThreadId)).toBe("interrupted");
+        expect(interruptIoCount).toBe(1);
+        expect(releases.has(current.childThreadId)).toBe(true);
+        expect(recorder.deliveries).toEqual([]);
+
+        releasePriorDelivery.resolve();
+        await waitFor(() => recorder.deliveries[0], 60_000, "prior-generation delivery release");
+        await monitor.dispose();
+      } finally {
+        releasePriorDelivery.resolve();
         await client.closeAndWait();
       }
     });

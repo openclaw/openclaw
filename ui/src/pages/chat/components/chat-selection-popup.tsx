@@ -53,39 +53,6 @@ export function isChatSelectionPopupFocused(paneId: string): boolean {
   );
 }
 
-function selectionWithinChatBubble(
-  selection: Selection,
-  threadRoot: HTMLElement,
-): ChatSelectionSource | null {
-  if (selection.isCollapsed || selection.rangeCount !== 1) {
-    return null;
-  }
-  const range = selection.getRangeAt(0);
-  const container = range.commonAncestorContainer;
-  const element = container instanceof Element ? container : container.parentElement;
-  const bubble = element?.closest<HTMLElement>(".chat-bubble");
-  // A cross-message range has no single source message.
-  if (!bubble || !threadRoot.contains(bubble)) {
-    return null;
-  }
-  const text = selection.toString();
-  if (!text.trim()) {
-    return null;
-  }
-  const prefix = range.cloneRange();
-  prefix.selectNodeContents(bubble);
-  prefix.setEnd(range.startContainer, range.startOffset);
-  const start = prefix.toString().length;
-  prefix.setEnd(range.endContainer, range.endOffset);
-  return {
-    text,
-    start,
-    end: prefix.toString().length,
-    ...(bubble.dataset.messageId ? { messageId: bubble.dataset.messageId } : {}),
-    ...(bubble.dataset.entryId ? { entryId: bubble.dataset.entryId } : {}),
-  };
-}
-
 function positionPopup(popup: HTMLElement, anchor: DOMRect) {
   const viewport = window.visualViewport;
   const minLeft = (viewport?.offsetLeft ?? 0) + 8;
@@ -160,65 +127,6 @@ function mountPopup(
     listen(window.visualViewport, "resize", layout, { signal });
   }
   return signal;
-}
-
-function showChatSelectionPopup(
-  anchor: DOMRect,
-  selection: ChatSelectionSource,
-  actions: ChatSelectionPopupActions,
-) {
-  removeChatSelectionPopup();
-  let popup!: HTMLDivElement;
-  const activate = (action: () => void) => {
-    removeChatSelectionPopup();
-    window.getSelection()?.removeAllRanges();
-    action();
-  };
-  const dispose = render(
-    () => (
-      <Portal mount={document.body}>
-        <div
-          ref={(element) => {
-            popup = element;
-          }}
-          class="chat-selection-popup"
-          role="toolbar"
-          aria-label={t("chat.messages.selectionActions")}
-          onPointerDown={(event) => event.preventDefault()}
-        >
-          {actions.onAddToChat ? (
-            <button
-              type="button"
-              aria-label={t("chat.messages.addToChat")}
-              onClick={() => activate(() => actions.onAddToChat?.(selection, anchor))}
-            >
-              {t("chat.messages.addToChat")}
-            </button>
-          ) : undefined}
-          <button
-            type="button"
-            aria-label={t("chat.messages.askInSideChat")}
-            onClick={() => activate(() => actions.onAskSideChat(selection, anchor))}
-          >
-            {t("chat.messages.askInSideChat")}
-          </button>
-        </div>
-      </Portal>
-    ),
-    document.createElement("div"),
-  );
-  const signal = mountPopup(popup, () => positionPopup(popup, anchor), actions.paneId, dispose);
-  listen(
-    document,
-    "selectionchange",
-    () => {
-      const currentSelection = window.getSelection();
-      if (!currentSelection || currentSelection.isCollapsed) {
-        removeChatSelectionPopup();
-      }
-    },
-    { signal },
-  );
 }
 
 export function showChatAnnotationEditor(options: {
@@ -421,10 +329,89 @@ export function handleChatSelectionPointerUp(
     timer: window.setTimeout(() => {
       selectionPopupTimer = null;
       const selection = window.getSelection();
-      const source = selection ? selectionWithinChatBubble(selection, threadRoot) : null;
-      if (source && selection && threadRoot.isConnected) {
-        showChatSelectionPopup(selection.getRangeAt(0).getBoundingClientRect(), source, actions);
+      if (!selection || selection.isCollapsed || selection.rangeCount !== 1) {
+        return;
       }
+      const range = selection.getRangeAt(0);
+      const container = range.commonAncestorContainer;
+      const selectionElement = container instanceof Element ? container : container.parentElement;
+      const bubble = selectionElement?.closest<HTMLElement>(".chat-bubble");
+      // A cross-message range has no single source message.
+      if (!bubble || !threadRoot.contains(bubble)) {
+        return;
+      }
+      const text = selection.toString();
+      if (!text.trim()) {
+        return;
+      }
+      const prefix = range.cloneRange();
+      prefix.selectNodeContents(bubble);
+      prefix.setEnd(range.startContainer, range.startOffset);
+      const start = prefix.toString().length;
+      prefix.setEnd(range.endContainer, range.endOffset);
+      const source: ChatSelectionSource = {
+        text,
+        start,
+        end: prefix.toString().length,
+        ...(bubble.dataset.messageId ? { messageId: bubble.dataset.messageId } : {}),
+        ...(bubble.dataset.entryId ? { entryId: bubble.dataset.entryId } : {}),
+      };
+      if (!threadRoot.isConnected) {
+        return;
+      }
+      const anchor = selection.getRangeAt(0).getBoundingClientRect();
+      removeChatSelectionPopup();
+      let popup!: HTMLDivElement;
+      const activate = (action: () => void) => {
+        removeChatSelectionPopup();
+        window.getSelection()?.removeAllRanges();
+        action();
+      };
+      const dispose = render(
+        () => (
+          <Portal mount={document.body}>
+            <div
+              ref={(element) => {
+                popup = element;
+              }}
+              class="chat-selection-popup"
+              role="toolbar"
+              aria-label={t("chat.messages.selectionActions")}
+              onPointerDown={(pointerEvent) => pointerEvent.preventDefault()}
+            >
+              {actions.onAddToChat ? (
+                <button
+                  type="button"
+                  aria-label={t("chat.messages.addToChat")}
+                  onClick={() => activate(() => actions.onAddToChat?.(source, anchor))}
+                >
+                  {t("chat.messages.addToChat")}
+                </button>
+              ) : undefined}
+              <button
+                type="button"
+                aria-label={t("chat.messages.askInSideChat")}
+                onClick={() => activate(() => actions.onAskSideChat(source, anchor))}
+              >
+                {t("chat.messages.askInSideChat")}
+              </button>
+            </div>
+          </Portal>
+        ),
+        document.createElement("div"),
+      );
+      const signal = mountPopup(popup, () => positionPopup(popup, anchor), actions.paneId, dispose);
+      listen(
+        document,
+        "selectionchange",
+        () => {
+          const currentSelection = window.getSelection();
+          if (!currentSelection || currentSelection.isCollapsed) {
+            removeChatSelectionPopup();
+          }
+        },
+        { signal },
+      );
     }, 0),
   };
 }

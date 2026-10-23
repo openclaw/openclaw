@@ -147,21 +147,11 @@ function printMatrixEncryptionSetupResult(
 export function registerMatrixEncryptionCommands(root: Command): void {
   const encryption = root.command("encryption").description("Set up Matrix end-to-end encryption");
 
-  encryption
+  const setup = encryption
     .command("setup")
-    .description("Enable Matrix E2EE, bootstrap verification, and print next steps")
-    .option("--account <id>", "Account ID (for multi-account setups)")
-    .option(
-      "--recovery-key <key>",
-      "Recovery key to apply before bootstrap (prefer --recovery-key-stdin)",
-    )
-    .option("--recovery-key-stdin", "Read the Matrix recovery key from stdin")
-    .option(
-      "--force-reset-cross-signing",
-      "Force reset cross-signing identity before bootstrap (requires active recovery key)",
-    )
-    .option("--verbose", "Show detailed diagnostics")
-    .option("--json", "Output as JSON")
+    .description("Enable Matrix E2EE, bootstrap verification, and print next steps");
+  cli
+    .withMatrixVerificationBootstrapOptions(setup)
     .action(
       async (
         options: cli.MatrixCliOptions &

@@ -297,14 +297,13 @@ async function loadPluginCliCommandRegistryWithContext(params: {
 }
 
 export async function loadPluginCliDescriptors(
-  params: PluginCliPublicLoadParams,
+  params: Omit<PluginCliPublicLoadParams, "loaderOptions">,
 ): Promise<OpenClawPluginCliRootCommandDescriptor[]> {
   try {
     const prepared = resolvePreparedPluginCliLoad(params);
     const registry = await loadPluginCliMetadataRegistryWithContext(
       prepared,
       params.primaryCommand,
-      params.loaderOptions,
     );
     return collectUniqueCommandDescriptors(
       registry.cliRegistrars
@@ -369,17 +368,13 @@ export async function loadPluginCliRegistrationEntriesWithDefaults(
 }
 
 export async function resolvePluginCliRootOwnerIds(
-  params: PluginCliPublicLoadParams,
+  params: Omit<PluginCliPublicLoadParams, "loaderOptions">,
 ): Promise<string[] | null> {
   const primaryCommand = normalizeLowercaseStringOrEmpty(params.primaryCommand);
   if (!primaryCommand) {
     return null;
   }
   const prepared = resolvePreparedPluginCliLoad(params);
-  const ownerIds = await resolvePrimaryCommandPluginIds(
-    prepared,
-    primaryCommand,
-    params.loaderOptions,
-  );
+  const ownerIds = await resolvePrimaryCommandPluginIds(prepared, primaryCommand);
   return ownerIds ?? null;
 }

@@ -37,16 +37,6 @@ function greatestCommonDivisor(left: number, right: number): number {
   return right === 0 ? left : greatestCommonDivisor(right, left % right);
 }
 
-// A coprime stride visits every phrase in O(1) per bucket, even for old runs.
-function displayedPhraseIndex(seed: string, bucket: number, length: number): number {
-  const offset = fnv1aUtf16(`${seed}:offset`) % length;
-  let stride = length === 1 ? 0 : 1 + (fnv1aUtf16(`${seed}:stride`) % (length - 1));
-  while (greatestCommonDivisor(stride, length) !== 1) {
-    stride = (stride % (length - 1)) + 1;
-  }
-  return (offset + bucket * stride) % length;
-}
-
 type WorkingPhraseProps = {
   startMs: number | null;
   seed: string;
@@ -72,7 +62,14 @@ defineSolidBridge<WorkingPhraseProps>(
       }
       const bucket = Math.floor(sinceShown / WORKING_PHRASE_ROTATE_EVERY_MS);
       const length = props.phrases?.length ?? PHRASE_KEYS.length;
-      const index = displayedPhraseIndex(props.seed, bucket, length);
+      const seed = props.seed;
+      // A coprime stride visits every phrase in O(1) per bucket, even for old runs.
+      const offset = fnv1aUtf16(`${seed}:offset`) % length;
+      let stride = length === 1 ? 0 : 1 + (fnv1aUtf16(`${seed}:stride`) % (length - 1));
+      while (greatestCommonDivisor(stride, length) !== 1) {
+        stride = (stride % (length - 1)) + 1;
+      }
+      const index = (offset + bucket * stride) % length;
       return props.phrases ? props.phrases[index] : t(`chat.progressLabels.${PHRASE_KEYS[index]}`);
     });
     return (

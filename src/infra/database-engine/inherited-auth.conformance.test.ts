@@ -78,9 +78,9 @@ const inheritedProfile = `${inheritedProvider}:inherited`;
 const localKey = "synthetic-inheritauth-local-key";
 const inheritedKey = "synthetic-inheritauth-owner-key";
 
-function currentMainSnapshot() {
+function currentAgentSnapshot(agentId = "main") {
   const input = listConfiguredOwnerInputs(getRuntimeConfig(), undefined, true).find(
-    (entry) => entry.agentId === "main",
+    (entry) => entry.agentId === agentId,
   );
   return input && getPreparedModelRuntimeSnapshot(input);
 }
@@ -92,7 +92,7 @@ async function closeDatabases() {
 }
 
 describe.skipIf(!connection)("PostgreSQL inherited auth startup", () => {
-  // One real PostgreSQL startup, three model turns, and deferred saved-input recovery.
+  // One real PostgreSQL startup, four model turns, and deferred saved-input recovery.
   it("serves admitted agents and replays a deferred owner's saved input before fresh input", async ({
     signal,
   }) => {
@@ -245,7 +245,11 @@ process.emit = function(event, ...args) {
             skipBootstrap: true,
             workspace: state.workspaceDir,
           },
-          entries: { main: {}, owner: { model: { primary: `${inheritedProvider}/fixture` } } },
+          entries: {
+            main: {},
+            owner: { model: { primary: `${inheritedProvider}/fixture` } },
+            inheritor: { model: { primary: `${inheritedProvider}/fixture` } },
+          },
         },
         models: {
           mode: "replace",
@@ -449,8 +453,13 @@ process.emit = function(event, ...args) {
             timeout: 20_000,
           })
           .toBe(200);
-        const initial = currentMainSnapshot();
+        const initial = currentAgentSnapshot();
         expect(initial).toBeDefined();
+        const initialInheritor = currentAgentSnapshot("inheritor");
+        expect(initialInheritor).toBeDefined();
+        expect(
+          getPreparedModelRuntimeAuthStore(initialInheritor!)?.profiles[inheritedProfile],
+        ).toBeUndefined();
         expect(initial!.inheritedAuthDir).toBe(state.agentDir("owner"));
         expect(getPreparedModelRuntimeAuthStore(initial!)?.profiles).toEqual({
           [localProfile]: { type: "api_key", provider: localProvider, key: localKey },
@@ -470,7 +479,7 @@ process.emit = function(event, ...args) {
         enterPhase("owner-admission");
         const inheritedPublished = createDeferredCore();
         unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
-          const snapshot = currentMainSnapshot();
+          const snapshot = currentAgentSnapshot();
           if (
             event.phase === "published" &&
             snapshot &&
@@ -492,7 +501,7 @@ process.emit = function(event, ...args) {
         expect((await listSessionPendingInputs(owner)).items).toMatchObject([
           { runId: owner.sourceRunId, state: "interrupted" },
         ]);
-        const recovered = currentMainSnapshot();
+        const recovered = currentAgentSnapshot();
         expect(getPreparedModelRuntimeAuthStore(recovered!)?.profiles[inheritedProfile]).toEqual({
           type: "api_key",
           provider: inheritedProvider,
@@ -529,6 +538,23 @@ process.emit = function(event, ...args) {
           }),
         ).toEqual(["SAVED_OWNER", "FRESH_OWNER"]);
         expect((await listSessionPendingInputs(owner)).items).toEqual([]);
+        const inheritedSnapshot = currentAgentSnapshot("inheritor");
+        expect(inheritedSnapshot).toBeDefined();
+        expect(
+          getPreparedModelRuntimeAuthStore(inheritedSnapshot!)?.profiles[inheritedProfile],
+        ).toEqual({ type: "api_key", provider: inheritedProvider, key: inheritedKey });
+        const inheritor = await gateway.client.request<{ key: string }>("sessions.create", {
+          agentId: "inheritor",
+          model: `${inheritedProvider}/fixture`,
+          key: "agent:inheritor:admitted-owner",
+        });
+        const inheritedInput = "Reply with INHERITOR_OK after the owner is admitted.";
+        const inherited = await rpc.send(inheritor.key, inheritedInput, "admitted-owner");
+        expect(await rpc.wait(inherited.runId)).toMatchObject({ status: "ok" });
+        expect(
+          requests.find((request) => request.body.includes(inheritedInput))?.authorization,
+        ).toBe(`Bearer ${inheritedKey}`);
+        expectAssistantReply((await rpc.history(inheritor.key)).messages, "INHERITOR_OK");
         expect(providerErrors).toEqual([]);
       });
     } finally {

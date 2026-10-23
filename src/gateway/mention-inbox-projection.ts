@@ -13,10 +13,15 @@ const MAX_GLOBAL_ITEMS = 10_000;
 
 export type StoredMention = {
   id: string;
+  targetKey: string;
   recipientProfileId: string;
   source: ProcessedSource;
   message: MentionStoreMessage;
 };
+
+export function mentionTargetKey(sessionKey: string, agentId?: string): string {
+  return JSON.stringify([agentId, sessionKey]);
+}
 
 export type ProcessedSource = {
   key: string;
@@ -58,7 +63,16 @@ export function createMentionProjection(snapshot: MentionStoreSnapshot): InboxSt
     for (const [profileId, id] of stored.recipients) {
       const item: StoredMention | null =
         id && stored.message
-          ? { id, recipientProfileId: profileId, source, message: stored.message }
+          ? {
+              id,
+              targetKey: mentionTargetKey(
+                stored.message.content.sessionKey,
+                stored.message.content.agentId,
+              ),
+              recipientProfileId: profileId,
+              source,
+              message: stored.message,
+            }
           : null;
       source.recipients.set(profileId, item);
       if (item) {

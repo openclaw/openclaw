@@ -4,7 +4,8 @@ import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { CopyButton } from "./solid/copy-button.tsx";
 import { Icon } from "./solid/icon.tsx";
 
-type SecretRevealDialogOptions = {
+/** Keep one-time secrets visible until acknowledged, announcing refused dismissal. */
+export function showSecretRevealDialog(options: {
   title: string;
   message: string;
   /** No secret means normal dismissal: there is nothing for the operator to lose. */
@@ -14,10 +15,7 @@ type SecretRevealDialogOptions = {
   status?: "success";
   callout?: string;
   note?: string;
-};
-
-/** Keep one-time secrets visible until acknowledged, announcing refused dismissal. */
-export function showSecretRevealDialog(options: SecretRevealDialogOptions): Promise<void> {
+}): Promise<void> {
   return withPromiseModalHost<void>(undefined, (modal) => {
     modal.render(() => {
       const [dismissRefused, setDismissRefused] = createSignal(false);

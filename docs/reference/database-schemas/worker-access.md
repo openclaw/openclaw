@@ -64,6 +64,11 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+If PostgreSQL schema publication invalidates a shared-state reader's admission
+before its callback starts, the reader rolls back and retries admission once
+using the owner's current facts. It never retries caller work or refreshes an
+imported snapshot. Schema validation and live ownership checks remain in force.
+
 Startup client credential preparation uses the existing credential worker and
 its native custody admission. The admission's receipt postimage also decides
 whether legacy metadata needs upgrading, without a second receipt read. An app

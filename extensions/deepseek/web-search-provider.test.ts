@@ -45,6 +45,25 @@ function response() {
 }
 
 describeWebSearchProviderContracts("deepseek");
+it("exposes the current model credential as raw fallback metadata", () => {
+  const fallback = expectDefined(
+    createDeepSeekWebSearchProvider().getConfiguredCredentialFallback,
+    "Expected model credential fallback",
+  );
+  expect(fallback()).toBeUndefined();
+  expect(fallback({})).toBeUndefined();
+  const config = modelKey("https://api.deepseek.com");
+  expect(fallback(config)).toEqual({
+    path: "models.providers.deepseek.apiKey",
+    value: "model-key",
+  });
+  const ref = { source: "env", provider: "default", id: "SYNTHETIC_DEEPSEEK_KEY" } as const;
+  const provider = expectDefined(config.models?.providers?.deepseek, "Expected model provider");
+  provider.apiKey = ref;
+  expect(fallback(config)).toEqual({ path: "models.providers.deepseek.apiKey", value: ref });
+  expect(fallback(config)?.value).toBe(ref);
+});
+
 describe("DeepSeek search execution", () => {
   beforeEach(() => {
     vi.stubEnv("DEEPSEEK_API_KEY", KEY);

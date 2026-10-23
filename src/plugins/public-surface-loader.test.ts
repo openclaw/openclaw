@@ -98,7 +98,7 @@ describe("bundled plugin public surface loader", () => {
     );
   });
 
-  it("loads bundled artifacts from each caller's environment without changing process.env", async () => {
+  it("loads candidate artifacts from each caller's environment without changing process.env", async () => {
     const createEnvironment = (marker: string) => {
       const { bundledPluginsDir, pluginRoot } = pluginFixture();
       writeArtifact(
@@ -114,8 +114,8 @@ describe("bundled plugin public surface loader", () => {
     const firstEnvironment = createEnvironment("first");
     const secondEnvironment = createEnvironment("second");
     const loader = await freshLoader("caller-environment");
-    const load = (env: NodeJS.ProcessEnv) => loader.load({ ...publicArtifact, env });
-    expect(load(firstEnvironment).marker).toBe("first");
+    const load = (env: NodeJS.ProcessEnv) => loader.candidates({ ...candidateArtifacts, env });
+    expect(load(firstEnvironment)?.marker).toBe("first");
     expect(
       loader.candidates({
         dirName: "demo",
@@ -123,7 +123,7 @@ describe("bundled plugin public surface loader", () => {
         env: secondEnvironment,
       })?.marker,
     ).toBe("second");
-    expect(load(firstEnvironment).marker).toBe("first");
+    expect(load(firstEnvironment)?.marker).toBe("first");
   });
 
   it.each([false, true])(

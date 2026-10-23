@@ -354,15 +354,38 @@ describe("Team Reports site behavior", () => {
   });
 });
 
-it("keeps quiet members' owned-session links inside their filterable section without changing counts", () => {
+it("keeps members' owned-session links in their own active or quiet section without changing counts", () => {
   const report = document();
+  report.members[0]!.login = "ALIce";
+  report.members.push(makeMember(1, { login: "bob", display: "Bob" }));
   report.members.push(makeMember(0, { login: "quiet", display: "Quiet member" }));
   const before = JSON.stringify(report);
   const sessions: PersonWorkSessions = {
     available: true,
     sessions: [{ key: "agent:main:quiet-work", label: "Quiet member current work" }],
   };
-  const html = renderReportPage(ctx, report, null, [], new Map([["quiet", sessions]]));
+  const html = renderReportPage(
+    ctx,
+    report,
+    null,
+    [],
+    new Map([
+      ["quiet", sessions],
+      [
+        "alice",
+        {
+          available: true,
+          sessions: [{ key: "agent:main:alice-work", label: "Alice current work" }],
+        },
+      ],
+    ]),
+  );
+  const cards = [...html.matchAll(/<article class="person oc-card".*?<\/article>/g)];
+  expect(cards).toHaveLength(2);
+  expect(cards[0]?.[0]).toContain('data-work-session-key="agent:main:alice-work"');
+  expect(cards[0]?.[0]).toContain("Alice current work");
+  expect(cards[1]?.[0]).not.toContain("person-work-sessions");
+  expect(cards[0]?.[0]).not.toContain("Quiet member current work");
   expect(html.split("data-maintainer-quiet")[1]?.split("</li>")[0]).toContain(
     "Quiet member current work",
   );

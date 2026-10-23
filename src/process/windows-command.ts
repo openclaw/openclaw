@@ -203,9 +203,8 @@ export function resolveTrustedWindowsCmdExe(platform: NodeJS.Platform = process.
 export function resolveWindowsCommandShim(params: {
   command: string;
   cmdCommands: readonly string[];
-  platform?: NodeJS.Platform;
 }): string {
-  if ((params.platform ?? process.platform) !== "win32") {
+  if (process.platform !== "win32") {
     return params.command;
   }
   const basename = normalizeLowercaseStringOrEmpty(path.basename(params.command));

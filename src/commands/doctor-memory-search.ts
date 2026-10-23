@@ -20,6 +20,7 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getMemoryEmbeddingCommandSecretTargetIds } from "../cli/command-secret-targets.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import type { HealthCheckContext, HealthFinding } from "../flows/health-checks.js";
@@ -220,10 +221,11 @@ export async function collectMemorySearchHealthFindings(
 }
 
 async function inspectMemorySearchHealth(
-  cfg: OpenClawConfig,
+  sourceConfig: OpenClawConfig,
   opts: MemorySearchHealthOptions,
   emit: (diagnostic: { text: string; finding: HealthFinding | null }) => void,
 ): Promise<void> {
+  const cfg = captureRuntimeConfig(sourceConfig);
   const scopes = resolveMemoryDoctorAgentScopes(cfg);
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const labelAgents = scopes.length > 1;

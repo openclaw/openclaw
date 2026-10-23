@@ -232,7 +232,7 @@ export class RequestClient {
         const rateLimitBody = isDiscordRateLimitBody(parsed) ? parsed : undefined;
         throw new RateLimitError(response, {
           message: readDiscordMessage(rateLimitBody, "Rate limited"),
-          retry_after: readRetryAfter(rateLimitBody, response, 1),
+          retry_after: readRetryAfter(rateLimitBody, response),
           code: readDiscordCode(rateLimitBody),
           global: Boolean(rateLimitBody?.global),
         });

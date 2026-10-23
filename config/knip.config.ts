@@ -94,10 +94,13 @@ const repositoryScriptEntries = [
   // scripts/perf/README.md invokes this shared-writer benchmark by path.
   "scripts/bench-channel-ingress-writer.ts!",
   // The performance guide invokes these measurement commands by path.
+  "scripts/perf/adoption-candidates-measure.ts!",
   "scripts/perf/background-result-wait-measure.ts!",
   "scripts/perf/codex-process-inspection-measure.ts!",
   "scripts/perf/diagnostic-profile-measure.ts!",
+  "scripts/perf/owned-directory-events-measure.ts!",
   "scripts/perf/plugin-gateway-scope-measure.ts!",
+  "scripts/perf/session-catalog-selection-measure.ts!",
   "scripts/perf/session-pr-subscriptions-measure.ts!",
   "scripts/perf/session-tool-surface-measure.ts!",
   "scripts/perf/subagent-maintenance-capture-measure.ts!",
@@ -1093,6 +1096,10 @@ const config = {
     },
     "examples/ai-chat": {
       entry: ["index.mjs!"],
+      project: ["**/*.{js,mjs,cjs,ts,mts,cts}!"],
+    },
+    "examples/inline-incident": {
+      entry: ["index.ts!", "control-ui.ts!"],
       project: ["**/*.{js,mjs,cjs,ts,mts,cts}!"],
     },
     "qa/convex-credential-broker": {

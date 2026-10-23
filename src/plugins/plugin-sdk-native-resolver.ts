@@ -29,7 +29,6 @@ type ModuleWithResolver = typeof Module & {
 
 /** Resolver install options for CJS `_resolveFilename` and modern ESM loader hooks. */
 type InstallOpenClawPluginSdkNativeResolverOptions = {
-  modulePath?: string;
   pluginModulePath?: string;
   allowedParentRoots?: readonly string[];
   argv1?: string;
@@ -108,7 +107,7 @@ const BUN_NATIVE_ALIAS_FILTER = new RegExp(
 let installed = false;
 
 function resolveLoaderModulePath(options: InstallOpenClawPluginSdkNativeResolverOptions): string {
-  return options.modulePath ?? fileURLToPath(options.moduleUrl ?? import.meta.url);
+  return fileURLToPath(options.moduleUrl ?? import.meta.url);
 }
 
 function isNativeLoadableSdkTarget(targetPath: string): boolean {

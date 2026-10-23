@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,6 +18,7 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { AsyncContext } from "../shared/async-context.js";
 import { requesterCreatorProfileId } from "./requester-origin.js";
 import type {
   CronCreatorToolAuthorityMaterialization,
@@ -62,9 +62,12 @@ export function createCronCreatorAuthorityCapability(
     : undefined;
 }
 
-const activeCronCreatorAuthority = new AsyncLocalStorage<CronCreatorAuthorityRunScope>();
-const activeCronCreatorAuthorityResolver =
-  new AsyncLocalStorage<CronCreatorAuthorityResolverScope>();
+const activeCronCreatorAuthority = new AsyncContext<CronCreatorAuthorityRunScope>(
+  Symbol("cronCreatorAuthority"),
+);
+const activeCronCreatorAuthorityResolver = new AsyncContext<CronCreatorAuthorityResolverScope>(
+  Symbol("cronCreatorAuthorityResolver"),
+);
 
 /** Retain the Cron-only fence when tools materialize outside their creator scope. */
 export function bindActiveCronAuthorityCurrentness(

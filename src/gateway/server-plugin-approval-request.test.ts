@@ -138,7 +138,7 @@ describe("trusted plugin approval requests", () => {
         profileId: f.caller.authenticatedUserProfile!.profileId,
         scopes: ["operator.write"],
         assertCurrent: () => undefined,
-        readCurrentRoleAssignment: () => "writer",
+        readCurrentRoleFacts: () => ({ assignedRole: "writer" }),
       });
       let roleScopes: GatewayOperatorRoleDefinition["scopes"] = ["operator.write"];
       const cfg = () => writerConfig(roleScopes);

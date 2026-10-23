@@ -141,10 +141,8 @@ async function releaseGitLock(cleanup: LeaseCleanup): Promise<boolean> {
 export async function resolveWorktreeForPath(params: {
   sessionEntry?: { worktree?: { id: string } };
   candidatePaths: Array<string | undefined>;
-  env?: NodeJS.ProcessEnv;
 }): Promise<WorktreeRunSource | undefined> {
-  const env = params.env ?? process.env;
-  const context = captureOpenClawStateWorkerContext({ env });
+  const context = captureOpenClawStateWorkerContext({ env: process.env });
   const boundId = params.sessionEntry?.worktree?.id;
   if (boundId !== undefined) {
     // The session's stored binding is authoritative: if that worktree is gone the

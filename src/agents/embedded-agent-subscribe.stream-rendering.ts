@@ -17,7 +17,10 @@ import {
   readAgentAssistantSource,
 } from "../infra/agent-events.js";
 import { findFinalTagMatches } from "../shared/text/final-tags.js";
-import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
+import {
+  hasOrphanReasoningCloseBoundary,
+  THINKING_TAG_NAMES,
+} from "../shared/text/reasoning-tags.js";
 import {
   createTextProjection,
   trimTextFilter,
@@ -44,19 +47,7 @@ import {
   THINKING_TAG_SCAN_RE,
 } from "./embedded-agent-utils.js";
 
-const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
-  "final",
-  "think",
-  "thinking",
-  "thought",
-  "antthinking",
-  "antml:think",
-  "antml:thinking",
-  "antml:thought",
-  "mm:think",
-  "mm:thinking",
-  "mm:thought",
-] as const;
+const STREAM_STRIPPED_BLOCK_TAG_NAMES = ["final", ...THINKING_TAG_NAMES] as const;
 
 function isPotentialTrailingBlockTagFragment(fragment: string): boolean {
   if (!fragment.startsWith("<") || fragment.includes(">")) {

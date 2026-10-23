@@ -208,10 +208,10 @@ it("reads retained widget receipts and waits only for current live presentations
         expect((await readCold()).archive).toBeUndefined();
       });
 
-      const unbound = await createCanvasDocument(
-        { html: "<p>Unbound document</p>", cspSandbox: "scripts" },
-        { stateDir: state.stateDir },
-      );
+      const unbound = await createCanvasDocument({
+        html: "<p>Unbound document</p>",
+        cspSandbox: "scripts",
+      });
       const other = {
         ...scope,
         sessionKey: "agent:main:private-widget",

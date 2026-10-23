@@ -70,8 +70,8 @@ function unused(...mocks: unknown[]) {
   }
 }
 
-function expectAbandonment(expected: "timeout" | undefined, sessionFile: string) {
-  for (const identity of [{ sessionId }, { sessionKey }, { sessionFile }]) {
+function expectAbandonment(expected: "timeout" | undefined) {
+  for (const identity of [{ sessionId }, { sessionKey }]) {
     expect(resolveEmbeddedRunAbandonment(identity)).toBe(expected);
   }
 }
@@ -397,10 +397,6 @@ describe("embedded run ownership", () => {
     expect(observation(b)).toBeUndefined();
     expect(abandon(b)).toBe(true);
     expect(resolveEmbeddedRunAbandonment({ sessionId })).toBeUndefined();
-    expect(resolveEmbeddedRunAbandonment({ sessionFile: a.file })).toBe("timeout");
-    expect(resolveEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile: a.file })).toBe(
-      "timeout",
-    );
     expect(
       markEmbeddedRunRecoveringTimeout({
         sessionId: "different-incarnation",
@@ -434,18 +430,18 @@ describe("embedded run ownership", () => {
     expect(observation(b)).toBe("timeout");
   });
 
-  it("tracks timeout abandonment by session id, key, and file until a new run starts", () => {
+  it("tracks timeout abandonment by session id and key until a new run starts", () => {
     const sessionFile = "/tmp/abandoned-session.jsonl";
     const timeout = { sessionKey, reason: "timeout" } as const;
     const handle = activate(createRunHandle(), sessionKey, sessionFile);
     expect(markActiveEmbeddedRunAbandoned({ ...timeout, sessionId, handle, sessionFile })).toBe(
       true,
     );
-    expectAbandonment("timeout", sessionFile);
+    expectAbandonment("timeout");
     const next = createRunHandle();
     clearActiveEmbeddedRun(sessionId, handle, sessionKey, sessionFile);
     setActiveEmbeddedRun("next", next, sessionKey, sessionFile);
-    expectAbandonment(undefined, sessionFile);
+    expectAbandonment(undefined);
     expect(markActiveEmbeddedRunAbandoned({ ...timeout, sessionId: "next", handle: next })).toBe(
       true,
     );

@@ -18,6 +18,7 @@ import {
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { buildControlledSubagentRunsReadContext as readContext } from "./subagent-control-scope.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+import * as readTopology from "./subagent-registry-read-topology.js";
 import {
   persistRegistryFixture as publish,
   saveSubagentRegistryToSqlite as save,
@@ -166,9 +167,11 @@ it("hydrates latest controlled payloads with requester descendant topology", asy
   });
   save(runMap(old, latest, descendant));
   const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  const topology = vi.spyOn(readTopology, "buildSubagentRunReadTopology");
 
   const context = await readContext(requesterSessionKey);
 
+  expect(topology).toHaveBeenCalledOnce();
   expect(context.runs.map((entry) => entry.runId)).toEqual([latest.runId]);
   expect(context.list.pendingDescendants.get(latest.childSessionKey)).toBe(1);
   expect(context.list.childSessionsByController.get(latest.childSessionKey)).toEqual([

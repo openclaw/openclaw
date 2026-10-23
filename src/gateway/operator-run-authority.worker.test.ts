@@ -28,6 +28,7 @@ import { createGatewayMethodRegistry } from "./methods/registry.js";
 import {
   invalidateOperatorRolePolicy,
   publishOperatorRoleConfigChange,
+  resolveOperatorRolePolicy,
 } from "./operator-role-policy.js";
 import {
   captureChannelOperatorRunAuthority,
@@ -216,14 +217,15 @@ it("preserves the live operator source through principal capture without trustin
         getRuntimeConfig: context.getRuntimeConfig,
         ...sourceAuthority,
       });
-      const readers = [...captures.map(({ authority }) => authority), channel].flatMap(
-        (authority) => [
-          expectDefined(authority.readCurrentRoleAssignment, "role reader"),
-          expectDefined(authority.readCurrentGithubLogin, "GitHub reader"),
-        ],
+      const readers = [...captures.map(({ authority }) => authority), channel].map((authority) =>
+        expectDefined(authority.readCurrentRoleFacts, "role reader"),
       );
       for (const read of readers) {
-        expect(read()).toBeNull();
+        const facts = read();
+        expect(facts.assignedRole).toBeNull();
+        expect(facts.githubLogin ?? null).toBeNull();
+        Object.assign(facts, { assignedRole: "owner", githubLogin: "changed" });
+        expect(read()).toMatchObject({ assignedRole: null, githubLogin: null });
       }
       for (const retained of captures) {
         expect(retained.authority.assertCurrent).not.toThrow();
@@ -240,6 +242,35 @@ it("preserves the live operator source through principal capture without trustin
         retained.release();
       }
     }
+  }));
+
+it("checks a live access source once for each role-policy evaluation", () =>
+  withOperator(async ({ profile, client, context }) => {
+    setUserProfileRole(profile.id, "reader");
+    const config = readerConfig(["operator.read"]);
+    context.getRuntimeConfig = () => config;
+    let permitted = true;
+    const assertAccess = vi.fn(() => {
+      if (!permitted) {
+        throw new Error("access grant ended");
+      }
+    });
+    const captured = await capture({
+      client,
+      context,
+      sourceAuthority: { assertCurrent: assertAccess },
+    });
+    using _ = { [Symbol.dispose]: captured.release };
+    client.internal = { ...client.internal, operatorRunAuthority: captured.authority };
+    assertAccess.mockClear();
+
+    expect(resolveOperatorRolePolicy(client, config)).toBe(config.gateway.roles.definitions.reader);
+    expect(assertAccess).toHaveBeenCalledOnce();
+    permitted = false;
+    expect(() => resolveOperatorRolePolicy(client, config)).toThrow("access grant ended");
+    expect(assertAccess).toHaveBeenCalledTimes(2);
+    permitted = true;
+    expect(() => resolveOperatorRolePolicy(client, config)).toThrow("access grant ended");
   }));
 
 it.each(["capture", "operator tool"])(

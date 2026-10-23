@@ -60,7 +60,7 @@ type PreparationInput = {
 type Activation = {
   isCurrent: () => boolean;
   preparationReady: Promise<void>;
-  openAgent: (input: PreparationInput) => Promise<void>;
+  openAgent: (input: PreparationInput) => Promise<AsyncDisposable | void>;
   migrateAgent: (input: PreparationInput) => Promise<void | { maintain: () => Promise<void> }>;
   publishAgent: (input: PreparationInput) => Promise<void>;
 };
@@ -507,6 +507,7 @@ class AgentDatabaseStartupAdmission {
             async () => {
               await assertNotDeleted();
               await preparePendingAgentDatabase(refusal, { env, assertCurrent }, async () => {
+                await using prepared = new AsyncDisposableStack();
                 const input = {
                   agentId,
                   paths,
@@ -520,7 +521,10 @@ class AgentDatabaseStartupAdmission {
                 try {
                   assertCurrent();
                   phase("open");
-                  await activation.openAgent(input);
+                  const opened = await activation.openAgent(input);
+                  if (opened) {
+                    prepared.use(opened);
+                  }
                 } finally {
                   release?.();
                 }

@@ -505,9 +505,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
           onDragOver={drop.onDragover}
           onDrop={drop.onDrop}
         >
-          <Show when={current().draft.attachmentMode}>
-            <div class="cmd-palette__session-heading">{t("palette.startSession")}</div>
-          </Show>
           <CommandPaletteInput
             onAutofocusRef={(element) => {
               initialInput = element;

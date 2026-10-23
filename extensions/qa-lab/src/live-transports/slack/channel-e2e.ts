@@ -415,6 +415,18 @@ export function createSlackChannelE2e(params: {
     },
   };
 
+  const rememberSutReceipt = (messageId: string, threadId?: string) => {
+    receipts.set(messageId, {
+      message: {
+        id: messageId,
+        channelId: params.channelId,
+        threadId,
+        text: "",
+        actor: "sut",
+      },
+    });
+  };
+
   const recordScenarioMessages = async (afterMessageId: string, messageIds: readonly string[]) => {
     params.assertLease();
     const ingress = own(afterMessageId);
@@ -437,15 +449,7 @@ export function createSlackChannelE2e(params: {
       ) {
         continue;
       }
-      receipts.set(write.messageId, {
-        message: {
-          id: write.messageId,
-          channelId: params.channelId,
-          threadId: write.threadId,
-          text: "",
-          actor: "sut",
-        },
-      });
+      rememberSutReceipt(write.messageId, write.threadId);
     }
     await persist();
   };
@@ -504,15 +508,7 @@ export function createSlackChannelE2e(params: {
             receipts.get(write.threadId)?.message.actor === "driver" &&
             !receipts.has(write.messageId)
           ) {
-            receipts.set(write.messageId, {
-              message: {
-                id: write.messageId,
-                channelId: params.channelId,
-                threadId: write.threadId,
-                text: "",
-                actor: "sut",
-              },
-            });
+            rememberSutReceipt(write.messageId, write.threadId);
           }
           if (
             write.method === "files.completeUploadExternal" &&

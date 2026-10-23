@@ -58,6 +58,7 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
@@ -837,6 +838,17 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
   let peakOpenings = 0;
   const openingEntered = agentIds.map(() => createDeferredCore());
   const openingReleases = new Map(agentIds.map((id) => [id, createDeferredCore()]));
+  const openedGenerations = new Map<string, string | undefined>();
+  const publishedGenerations = new Map<string, string | undefined>();
+  const allOpened = createDeferredCore();
+  const readGeneration = async (agentId: string, pathname: string) => {
+    const execution = captureOpenClawAgentDatabaseExecution({ agentId, path: pathname, env });
+    try {
+      return execution.capturePreparedGenerationClaim()?.incarnation;
+    } finally {
+      await execution.release();
+    }
+  };
   const admitted = new Set<string>();
   const allAdmitted = createDeferredCore();
   const unsubscribe = sessionChanges.subscribe((change) => {
@@ -868,10 +880,27 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
             openingEntered[openings.length - 1]!.resolve();
             try {
               await withinTest(openingReleases.get(input.agentId)!.promise, signal);
-              await activation.openAgent(input);
+              const prepared = await activation.openAgent(input);
+              openedGenerations.set(
+                input.agentId,
+                await readGeneration(input.agentId, input.paths[0]!),
+              );
+              if (openedGenerations.size === agentIds.length) {
+                allOpened.resolve();
+              }
+              return prepared;
             } finally {
               activeOpenings -= 1;
             }
+          },
+          publishAgent: async (input) => {
+            // Five completed opens exceed the owner's four-idle-executor limit.
+            await withinTest(allOpened.promise, signal);
+            await activation.publishAgent(input);
+            publishedGenerations.set(
+              input.agentId,
+              await readGeneration(input.agentId, input.paths[0]!),
+            );
           },
         }),
       );
@@ -912,6 +941,11 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
     }
     await withinTest(allAdmitted.promise, signal);
     expect(peakOpenings).toBe(2);
+    expect([...openedGenerations.values()]).not.toContain(undefined);
+    expect(new Set([...openedGenerations.values(), ...publishedGenerations.values()]).size).toBe(
+      agentIds.length,
+    );
+    expect(publishedGenerations).toEqual(openedGenerations);
     expect(warnings).toHaveBeenCalledWith(
       "Skipped openclaw-agent.sqlite: database is not a configured target; run openclaw doctor to inspect retained data.",
     );
@@ -929,6 +963,7 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
     expect((await probeGateway(started.port, "/readyz")).status).toBe(200);
   } finally {
     unsubscribe();
+    allOpened.resolve();
     for (const release of openingReleases.values()) {
       release.resolve();
     }

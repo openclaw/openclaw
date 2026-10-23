@@ -203,34 +203,6 @@ export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: st
   sessionWorkspaceForHost(state).publish();
 }
 
-function openArtifact(
-  state: SessionWorkspaceHost,
-  workspace: SessionWorkspaceState,
-  artifactId: string,
-  disposition?: "pinned" | "preview",
-  intent?: "navigate",
-) {
-  void openWorkspaceItem(
-    state,
-    workspace,
-    `artifact:${artifactId}`,
-    () =>
-      readWorkspaceContent(state, workspace, (runtime) =>
-        runtime.loadSessionWorkspaceArtifactContent(state, workspace, artifactId),
-      ),
-    (result) => result.content,
-    `Failed to load artifact ${artifactId}`,
-    {
-      disposition,
-      intent,
-      label:
-        workspace.list?.artifacts?.find((artifact) => artifact.id === artifactId)?.title ||
-        t("chat.workspaceFiles.artifacts"),
-      resolveLabel: (result) => result.artifact?.title,
-    },
-  );
-}
-
 export function createSessionWorkspaceProps(
   state: SessionWorkspaceHost,
   options?: {
@@ -462,14 +434,30 @@ export function createSessionWorkspaceProps(
         loadSessionWorkspace(state, workspace);
       }, 160);
     },
-    onOpenArtifact: (artifactId: string, disposition?: "pinned" | "preview") =>
-      openArtifact(
+    onOpenArtifact: (artifactId: string, disposition?: "pinned" | "preview") => {
+      const artifactDisposition =
+        options?.presentation === "desktop" ? (disposition ?? "preview") : undefined;
+      const openIntent = options?.openIntent;
+      void openWorkspaceItem(
         state,
         workspace,
-        artifactId,
-        options?.presentation === "desktop" ? (disposition ?? "preview") : undefined,
-        options?.openIntent,
-      ),
+        `artifact:${artifactId}`,
+        () =>
+          readWorkspaceContent(state, workspace, (runtime) =>
+            runtime.loadSessionWorkspaceArtifactContent(state, workspace, artifactId),
+          ),
+        (result) => result.content,
+        `Failed to load artifact ${artifactId}`,
+        {
+          disposition: artifactDisposition,
+          intent: openIntent,
+          label:
+            workspace.list?.artifacts?.find((artifact) => artifact.id === artifactId)?.title ||
+            t("chat.workspaceFiles.artifacts"),
+          resolveLabel: (result) => result.artifact?.title,
+        },
+      );
+    },
     onOpenDiff: diffContent ? () => state.handleOpenSidebar(diffContent) : undefined,
   };
 }

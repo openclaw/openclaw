@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
@@ -38,6 +38,7 @@ type PairingTestDatabase = Pick<
 let fixtureRoot = "";
 let pairingEnv: NodeJS.ProcessEnv;
 let store: ReturnType<typeof pairingStoreFixture>;
+beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot));
 
 beforeAll(() => {
   fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pairing-"));
@@ -177,7 +178,6 @@ it("approves and dismisses account-scoped requests by opaque id", async () => {
       channel: "telegram",
       accountId: "beta",
       requestId: betaRequestId,
-      env,
     }),
   ).resolves.toMatchObject({ id: "shared-sender" });
   await expect(store.allow("beta")).resolves.toEqual([]);

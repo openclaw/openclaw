@@ -1,5 +1,4 @@
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
-import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import {
   captureOpenClawStateReadWorkerContext,
   captureOpenClawStateWorkerContext,
@@ -18,12 +17,10 @@ export async function writeHiddenGitHubSecretRecord(params: {
   name: string;
   value: string;
   expectedValue?: string;
-  updatedBy?: string | null;
-  database?: OpenClawStateDatabaseOptions;
 }): Promise<void> {
   assertHiddenGitHubSecretRecordName(params.name);
   assertSecretStoreValueLength(params.value, "secret");
-  const context = captureOpenClawStateWorkerContext(params.database);
+  const context = captureOpenClawStateWorkerContext();
   await observeSecretStoreMutation(
     runOpenClawStateWorkerOperation(context, (scope) =>
       scope.execute({
@@ -32,7 +29,6 @@ export async function writeHiddenGitHubSecretRecord(params: {
           name: params.name,
           value: params.value,
           expectedValue: params.expectedValue,
-          updatedBy: params.updatedBy,
           now: Date.now(),
         },
       }),

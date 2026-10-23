@@ -101,6 +101,22 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
   };
 }
 
+export function shouldPreserveSubagentForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
+  if (entry.killReconciliation || entry.killIntent) {
+    // Reconciliation tombstones own provider results until completion or cancellation settles.
+    return true;
+  }
+  if (typeof entry.cleanupCompletedAt === "number") {
+    return false;
+  }
+  return (
+    typeof entry.execution.endedAt !== "number" ||
+    (entry.expectsCompletionMessage === true && entry.delivery?.status !== "delivered") ||
+    entry.delivery?.status === "pending" ||
+    isDeliverySuspended(entry)
+  );
+}
+
 /** Copy only protection facts; live memory retains its existing, unnormalized semantics. */
 export function projectSubagentRunForMaintenance(
   entry: SubagentRunRecord,

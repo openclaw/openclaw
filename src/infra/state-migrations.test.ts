@@ -2331,11 +2331,11 @@ describe("state migrations", () => {
     const cfg = native.createConfig();
 
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
-    expect(detected.preview.filter((line) => line.startsWith("- Shared SQLite schema:"))).toEqual([
-      "- Shared SQLite schema: subagent recovery → original operator authority required",
-      "- Shared SQLite schema: replay, skill usage, and lease writes → smaller index maintenance",
-      "- Shared SQLite schema: GitHub publication requests → durable draft choice",
-      "- Shared SQLite schema: client credentials and native socket material → local owner",
+    // Pin only this test's tail; a full list broke whenever unrelated schema migrations landed.
+    const schemaLines = detected.preview.filter((line) =>
+      line.startsWith("- Shared SQLite schema:"),
+    );
+    expect(schemaLines.slice(-2)).toEqual([
       "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
       "- Shared SQLite schema: tables → SQLite STRICT typing",
     ]);

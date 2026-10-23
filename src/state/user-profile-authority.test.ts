@@ -39,6 +39,13 @@ async function fixture(validateSchema = false) {
   const check = (binding: Status, settlement: Status) => {
     const actual = [bound(), readAuthority(bound.transferable), readAuthority(settled)];
     expect(actual).toEqual([binding === "current", binding, settlement]);
+    if (settlement === "current") {
+      expect(() => authority.assertSettled(profile.id)).not.toThrow();
+    } else {
+      expect(() => authority.assertSettled(profile.id)).toThrow(
+        settlement === "uncertain" ? "requires canonical recovery" : "has not settled",
+      );
+    }
     expect(unrelated()).toBe(true);
   };
   return { options, profile, context, authority, bound, unrelated, settled, check };

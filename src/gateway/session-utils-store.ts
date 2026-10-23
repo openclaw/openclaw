@@ -241,7 +241,6 @@ export async function withQualifiedGatewaySessionEntry<T>(params: {
   cfg: OpenClawConfig;
   target: QualifiedSessionEntryAccessTarget;
   logicalStorePath: string;
-  env?: NodeJS.ProcessEnv;
   includeMembership: boolean;
   transcript?: import("../config/sessions/session-entry-read.types.js").SessionExactEntriesWorkerRequest["transcript"];
   includeLifecycle?: boolean;

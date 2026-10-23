@@ -151,9 +151,9 @@ describe("qa bundled plugin dir", () => {
         },
       },
     });
+    vi.stubEnv("OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH", path.join(f.repoRoot, "openclaw.json"));
     const overrides = await readQaLiveProviderConfigOverrides({
       providerIds: ["custom-openai", "openai", "inherited"],
-      env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: path.join(f.repoRoot, "openclaw.json") },
     });
     expect(overrides).toEqual({
       "custom-openai": providerConfig,

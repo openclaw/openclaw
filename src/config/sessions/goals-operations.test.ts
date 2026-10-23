@@ -280,7 +280,7 @@ describe("typed Goal operation persistence", () => {
       result: first.sessionTurnMutationResult?.result,
       replayed: true,
     });
-    expect(replay.appendedCount).toBe(0);
+    expect(replay.messages.filter((m) => m.appended)).toHaveLength(0);
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();
     expect(await loadTranscriptEvents(scope())).toEqual(eventsBefore);
     await expect(admit({ ...startOperation(), objective: "different" })).rejects.toMatchObject({
@@ -304,7 +304,7 @@ describe("typed Goal operation persistence", () => {
       messages: [{ message: { role: "user", content: "must not append" } }],
     });
     expect(replay).toMatchObject({
-      appendedCount: 0,
+      messages: [],
       sessionTurnMutationResult: {
         replayed: true,
         result: first.sessionTurnMutationResult?.result,
@@ -345,7 +345,7 @@ describe("typed Goal operation persistence", () => {
     await writeSql("DELETE FROM session_goal_operations WHERE operation_id = ?", "retained-0");
     const accepted = await admit();
     expect(accepted).toMatchObject({
-      appendedCount: 1,
+      messages: [{ appended: true }],
       sessionTurnMutationResult: { replayed: false },
     });
     const acceptedEntry = loadSessionEntry(scope());
@@ -444,7 +444,7 @@ describe("typed Goal operation persistence", () => {
     await expect(lookupReceipt()).rejects.toMatchObject({ code: "session-rebound" });
     await expect(admit()).resolves.toMatchObject({
       rejectedReason: "session-rebound",
-      appendedCount: 0,
+      messages: [],
     });
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();
   });

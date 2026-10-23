@@ -1903,7 +1903,6 @@ src/infra/exec-approval-policy-snapshot.ts	2
 src/infra/exec-approval-reply.ts	1
 src/infra/exec-approvals-allowlist.ts	7
 src/infra/exec-approvals-config.ts	4
-src/infra/exec-argv-analysis.ts	1
 src/infra/exec-host.ts	3
 src/infra/fetch-headers.ts	3
 src/infra/fetch.ts	5
@@ -2412,7 +2411,6 @@ ui/src/lib/chat/message-extract.ts	5
 ui/src/lib/chat/message-normalizer.ts	2
 ui/src/lib/chat/outbox-store-codec.ts	1
 ui/src/lib/chat/outbox-store.ts	1
-ui/src/lib/chat/tool-call-patch.ts	1
 ui/src/lib/chat/tool-cards.ts	1
 ui/src/lib/config/config-draft-model.ts	2
 ui/src/lib/keyboard-shortcuts.ts	1
@@ -2450,6 +2448,6 @@ ui/src/pages/chat/workspace-conflict.ts	2
 ui/src/pages/config/settings-search.ts	1
 ui/src/pages/config/view-diff.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
-ui/src/pages/labs/labs-registry.ts	4
+ui/src/pages/labs/labs-registry.ts	3
 ui/src/pages/new-session/preferences.ts	1
 ui/src/pages/portals/portal-reachability.ts	1

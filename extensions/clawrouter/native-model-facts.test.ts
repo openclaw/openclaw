@@ -7,6 +7,7 @@ import {
   clearLiveCatalogCacheForTests,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const providerAuthRuntimeMocks = vi.hoisted(() => ({
@@ -51,10 +52,11 @@ async function buildCatalog(providers: unknown[]) {
     finalUrl: "https://clawrouter.example/v1/catalog",
     release: async () => undefined,
   });
+  const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(fetchGuard);
+  onTestFinished(() => guardedFetch.mockRestore());
   return await buildClawRouterProviderConfig({
     apiKey: "fixture-key",
     baseUrl: "https://clawrouter.example",
-    fetchGuard,
   });
 }
 

@@ -13,11 +13,8 @@ import {
 import { mountSolid as render } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { renderSidebarAgentMenu as AgentMenu } from "./app-sidebar-agent-menu.tsx";
-import {
-  SidebarDropdown,
-  renderSidebarNavLink,
-  type SidebarDropdownProps,
-} from "./app-sidebar-nav-menus.tsx";
+import { SidebarDropdown, type SidebarDropdownProps } from "./app-sidebar-dropdown.tsx";
+import { renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import { renderSidebarSessionSectionHeader as SectionHeader } from "./app-sidebar-session-section-header.tsx";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import { SessionOrganizer } from "./session-organizer.ts";

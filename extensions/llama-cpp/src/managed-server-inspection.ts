@@ -56,7 +56,6 @@ async function fetchEndpoint(
 export async function inspectLlamaServerRuntime(params: {
   baseUrl: string;
   modelId: string;
-  backend?: LlamaServerAsset["backend"];
   loadError?: string;
 }): Promise<LlamaServerRuntimeFacts> {
   const root = params.baseUrl.replace(/\/v1\/?$/u, "").replace(/\/+$/u, "");
@@ -83,7 +82,7 @@ export async function inspectLlamaServerRuntime(params: {
   return {
     engine: "llama.cpp",
     state: health.ok && models.ok && props.ok && !params.loadError ? "ready" : "failed",
-    backend: params.backend,
+    backend: undefined,
     buildInfo: typeof propsRecord?.build_info === "string" ? propsRecord.build_info : undefined,
     model: { id: params.modelId, ...(pathValue ? { path: pathValue } : {}) },
     capabilities: {

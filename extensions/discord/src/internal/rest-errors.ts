@@ -164,11 +164,11 @@ export function isUnknownDiscordVoiceStateError(err: unknown): boolean {
   );
 }
 
-export function readRetryAfter(body: unknown, response: Response, fallbackSeconds = 0): number {
+export function readRetryAfter(body: unknown, response: Response): number {
   return (
     parseDiscordRetryAfterBodySeconds(asOptionalObjectRecord(body)?.retry_after) ??
     parseRetryAfterHeaderSeconds(response.headers.get("Retry-After")) ??
-    fallbackSeconds
+    1
   );
 }
 
@@ -223,7 +223,7 @@ export class RateLimitError extends DiscordError {
   ) {
     super(response, body);
     this.name = "RateLimitError";
-    this.retryAfter = readRetryAfter(body, response, 1);
+    this.retryAfter = readRetryAfter(body, response);
     this.scope = body.global ? "global" : readDiscordRateLimitScope(response);
     this.bucket = readDiscordRateLimitBucket(response);
   }

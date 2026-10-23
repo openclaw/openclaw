@@ -833,10 +833,14 @@ import fs from "node:fs";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
 import { isMainThread } from "node:worker_threads";
 if (isMainThread) {
-  const state = { active: false, counts: {}, installed: {}, firstAuthPolicyStacks: [],
+  const state = { active: false, counts: {}, callers: {}, installed: {}, firstAuthPolicyStacks: [],
     count(key) {
       if (!this.active) return;
       this.counts[key] = (this.counts[key] ?? 0) + 1;
+      if (key.endsWith(".assertSettled") || key.endsWith(".readProfileAuthority")) {
+        const caller = key + " <- " + new Error().stack.split("\n").slice(3, 6).join(" <- ").trim();
+        this.callers[caller] = (this.callers[caller] ?? 0) + 1;
+      }
       if (key === "auth-policy.stableStringify" && this.firstAuthPolicyStacks.length < 8)
         this.firstAuthPolicyStacks.push(new Error("auth-policy stringify caller").stack);
     } };
@@ -847,7 +851,8 @@ if (isMainThread) {
   const owners = new Set([
     "session-source-authority", "admitted-run-context", "operator-run-authority",
     "session-delivery-generation", "session-entry-source-authority", "session-event-handoff",
-    "session-tool-overrides", "auth-policy", "sqlite-worker-identity"
+    "session-tool-overrides", "auth-policy", "sqlite-worker-identity",
+    "user-profile-events", "user-profile-authority"
   ]);
   registerHooks({ load(url, context, nextLoad) {
     const loaded = nextLoad(url, context);
@@ -867,6 +872,14 @@ if (isMainThread) {
       (match, name) => match + count(name));
     source = source.replace(/function (assert\w+)\([^{}]*\)(?::[^{}]+)? \{/g,
       (match, name) => match + count(name));
+    if (owner === "user-profile-events") {
+      source = source.replace(/assertSettled\(this: void, profileIds: string \| readonly string\[\]\): void \{/g,
+        (match) => match + count("assertSettled"));
+    }
+    if (owner === "user-profile-authority") {
+      source = source.replace(/function readProfileAuthority\([^{}]+\{/g,
+        (match) => match + count("readProfileAuthority"));
+    }
     if (owner === "session-source-authority") {
       source = source.replace(/\(\) => \{\s*const scoped = sessionSourceScopes/g,
         (match) => match.replace("{", "{" + count("composedAssertion")));
@@ -963,10 +976,10 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     active = message.action === "start";
     if (active) { for (const key of Object.keys(counts)) counts[key] = 0; messages.clear(); }
     const host = globalThis[Symbol.for("openclaw.benchmark.authorityCounts")];
-    if (host) { host.active = active; if (active) { host.counts = {}; host.firstAuthPolicyStacks = []; } }
+    if (host) { host.active = active; if (active) { host.counts = {}; host.callers = {}; host.firstAuthPolicyStacks = []; } }
     process.send?.({ channel, id: message.id, counts: { ...counts }, profileId,
       sourceOverlay: globalThis[Symbol.for("openclaw.benchmark.sourceOverlay")],
-      ...(host ? { hostCounts: host.counts, installed: host.installed, firstAuthPolicyStacks: host.firstAuthPolicyStacks } : {}) });
+      ...(host ? { hostCounts: host.counts, hostCallers: host.callers, installed: host.installed, firstAuthPolicyStacks: host.firstAuthPolicyStacks } : {}) });
   }
   api.registerService({ id: "synthetic-authority-counters",
     start() {
@@ -2343,6 +2356,7 @@ async function controlAuthorityCounters(child: ChildProcess, action: "start" | "
               }
               return {
                 counts: message.hostCounts,
+                callers: message.hostCallers,
                 installed: message.installed,
                 firstAuthPolicyStacks: message.firstAuthPolicyStacks,
               };

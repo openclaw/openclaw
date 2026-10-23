@@ -10,7 +10,7 @@ import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { requestDebugOverlayToggle } from "../pages/debug/debug-overlay-contract.ts";
-import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-nav-menus.tsx";
+import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-dropdown.tsx";
 import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import {
   COMMAND_VALUE_PREFIX,
