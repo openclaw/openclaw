@@ -1105,6 +1105,8 @@ When a recovered turn starts with an eligible channel delivery route, OpenClaw
 sends a resumption notice to that conversation, retaining its account and topic.
 The final reply uses the same delivery route. Transcript-only turns stay private,
 and a turn that has already finished does not receive a late resumption notice.
+Channel-less operator turns remain channel-less after recovery; Control UI and
+WebChat turns retain their WebChat context.
 A failed notice does not restart or replay the recovered work. Main-session
 resumption notices are best-effort and live-only: automatic-delivery permission and the recovery
 owner are rechecked immediately before the channel send. They are not replayed

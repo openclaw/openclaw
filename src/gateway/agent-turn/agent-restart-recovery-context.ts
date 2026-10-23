@@ -57,9 +57,9 @@ export function resolveAgentRestartRecoveryContext(params: {
     entry.restartRecoverySourceIngress === "internal" &&
     !entry.restartRecoveryDeliveryContext
   ) {
-    // WebChat context lets message tools infer external recipients from session keys.
+    // A channel-less operator turn stays unbound; only an explicit WebChat route restores it.
     const route = parseSessionDeliveryRoute(params.resolvedSessionKey);
-    return !route || route.channel === INTERNAL_MESSAGE_CHANNEL
+    return route?.channel === INTERNAL_MESSAGE_CHANNEL
       ? { messageChannel: INTERNAL_MESSAGE_CHANNEL }
       : undefined;
   }

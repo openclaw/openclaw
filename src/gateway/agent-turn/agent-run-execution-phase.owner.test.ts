@@ -410,9 +410,12 @@ describe("startAgentRunExecution Gateway ownership", () => {
     sourceChannel?: string;
     replyChannel?: string;
     sessionDelivery?: SessionEntry["delivery"];
+    recoveryIngress?: SessionEntry["restartRecoverySourceIngress"];
     expectedChannel?: string;
   }>([
     { name: "unbound CLI" },
+    { name: "channel-less operator recovery", recoveryIngress: "internal" },
+    { name: "Control UI recovery", recoveryIngress: "control-ui", expectedChannel: "webchat" },
     { name: "CLI with internal delivery history", sessionDelivery: { kind: "internal" } },
     { name: "WebChat client", webchat: true, expectedChannel: "webchat" },
     { name: "WebChat continuation", sourceChannel: "webchat", expectedChannel: "webchat" },
@@ -435,6 +438,28 @@ describe("startAgentRunExecution Gateway ownership", () => {
     { name: "explicit internal channel", replyChannel: "webchat", expectedChannel: "webchat" },
   ])("preserves $name provider context through command resolution", async (testCase) => {
     const execution = createExecution();
+    const sessionEntry: SessionEntry = {
+      sessionId: "source-session",
+      updatedAt: 1,
+      delivery: testCase.sessionDelivery,
+      ...(testCase.recoveryIngress
+        ? {
+            restartRecoveryDeliveryRunId: execution.params.runId,
+            restartRecoveryDeliverySourceRunId: "interrupted-run",
+            restartRecoverySourceIngress: testCase.recoveryIngress,
+          }
+        : {}),
+    };
+    if (testCase.recoveryIngress) {
+      Object.assign(execution.params, {
+        canUseInternalRuntimeHandoff: true,
+        isRestartRecoveryResumeRun: true,
+        resolvedSessionId: sessionEntry.sessionId,
+        resolvedSessionKey: "agent:main:lab-recovery",
+        sessionEntry,
+      });
+      execution.params.request.expectedExistingSessionId = sessionEntry.sessionId;
+    }
     const client: AgentTurnPrincipal = {
       connect: {
         minProtocol: 1,
@@ -454,9 +479,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
         replyChannel: testCase.replyChannel,
       },
       cfg: {},
-      sessionEntry: testCase.sessionDelivery
-        ? { sessionId: "source-session", updatedAt: 1, delivery: testCase.sessionDelivery }
-        : undefined,
+      sessionEntry,
       agentId: "main",
       recipientChannel: testCase.sourceChannel,
       replyTo: "",
