@@ -249,6 +249,16 @@ try {
       "SELECT name,setting FROM pg_settings WHERE name IN ('max_parallel_workers_per_gather','max_parallel_workers','parallel_setup_cost','parallel_tuple_cost','min_parallel_table_scan_size','work_mem','jit','shared_buffers','random_page_cost','seq_page_cost') ORDER BY name",
     )
   ).rows;
+  const candidateIds = sources
+    .slice(0, 4)
+    .flatMap((source) =>
+      source.chunks.map((chunk) =>
+        memoryChunkRowId(source.source, source.entry.path, chunk, source.model),
+      ),
+    );
+  const excludedSessionPaths = [sources[1].entry.path, sources[2].entry.path];
+  // The measured production path never keeps the corpus embeddings in JavaScript.
+  sources.length = 0;
   let variant = "baseline",
     active;
   const original = db.query.bind(db),
@@ -468,13 +478,6 @@ try {
       }
     }
   }
-  const candidateIds = sources
-    .slice(0, 4)
-    .flatMap((source) =>
-      source.chunks.map((chunk) =>
-        memoryChunkRowId(source.source, source.entry.path, chunk, source.model),
-      ),
-    );
   const boundaries = [
     {
       name: "memory",
@@ -486,7 +489,7 @@ try {
         sourceFilter: {
           sql: " AND source IN (?)",
           params: ["sessions"],
-          excludedSessionPaths: [sources[1].entry.path, sources[2].entry.path],
+          excludedSessionPaths,
         },
       },
     },

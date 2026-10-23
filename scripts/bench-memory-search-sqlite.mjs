@@ -41,6 +41,7 @@ if (!Number.isInteger(n) || n < 30 || n % 10 !== 0) {
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.mkdirSync(OUT);
 const { sources } = createMemorySearchFixture(n);
+const fixtureHash = hash(sources.map((source) => hash(JSON.stringify(source))).join("\n"));
 const load = (file) => import(pathToFileURL(path.join(ROOT, file)).href);
 const { openNodeSqliteDatabase } = await load("src/infra/node-sqlite.ts");
 const { runSqliteImmediateTransactionSync } = await load("src/infra/sqlite-transaction.ts");
@@ -104,6 +105,7 @@ try {
       ),
     );
   }
+  sources.length = 0;
   const index = admitMemoryVectorIndex(db);
   const times = [];
   const hashes = [];
@@ -141,7 +143,7 @@ try {
     queries: count,
     warmup: 5,
     node: process.version,
-    fixtureHash: hash(sources.map((source) => hash(JSON.stringify(source))).join("\n")),
+    fixtureHash,
     boundary: "production searchMemoryVectorIndex through file-backed sqlite-vec subprocess",
     p50: percentile(0.5),
     p95: percentile(0.95),
