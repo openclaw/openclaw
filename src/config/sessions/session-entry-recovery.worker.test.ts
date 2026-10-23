@@ -148,27 +148,29 @@ test("restricts orphan discovery to the active-session index", async ({
   });
   const plans: string[] = [];
   const prototype = requireNodeSqlite().StatementSync.prototype;
-  // oxlint-disable-next-line typescript/unbound-method -- Forwarded with the intercepted statement below.
-  const all = prototype.all;
-  const observer = vi.spyOn(prototype, "all").mockImplementation(
-    new Proxy(all, {
-      apply(target, statement: StatementSync, args) {
-        const rows = Reflect.apply(target, statement, args);
-        if (
-          statement.sourceSQL.startsWith('select "session_key" from "session_nodes"') &&
-          statement.sourceSQL.includes("json_extract")
-        ) {
-          plans.push(
-            ...database.db
-              .prepare(`EXPLAIN QUERY PLAN ${statement.expandedSQL}`)
-              .all()
-              .map((row) => String(row.detail)),
-          );
-        }
-        return rows;
-      },
-    }),
-  );
+  const observers = (["all", "iterate"] as const).map((method) => {
+    // oxlint-disable-next-line typescript/unbound-method -- Forwarded with the intercepted statement below.
+    const read = prototype[method];
+    return vi.spyOn(prototype, method).mockImplementation(
+      new Proxy(read, {
+        apply(target, statement: StatementSync, args) {
+          const rows = Reflect.apply(target, statement, args);
+          if (
+            statement.sourceSQL.startsWith('select "session_key" from "session_nodes"') &&
+            statement.sourceSQL.includes("json_extract")
+          ) {
+            plans.push(
+              ...database.db
+                .prepare(`EXPLAIN QUERY PLAN ${statement.expandedSQL}`)
+                .all()
+                .map((row) => String(row.detail)),
+            );
+          }
+          return rows;
+        },
+      }),
+    );
+  });
   try {
     const result = await readSessionEntryList({
       kind: "session-entry-list",
@@ -178,7 +180,9 @@ test("restricts orphan discovery to the active-session index", async ({
     expect(result.entries.map(({ sessionKey }) => sessionKey)).toEqual(["agent:main:orphan"]);
     expect(plans).toEqual([expect.stringContaining("idx_agent_session_nodes_active")]);
   } finally {
-    observer.mockRestore();
+    for (const observer of observers) {
+      observer.mockRestore();
+    }
   }
 });
 

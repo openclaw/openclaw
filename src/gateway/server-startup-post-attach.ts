@@ -449,7 +449,6 @@ export async function startGatewayPostAttachRuntime(params: {
           );
           params.onGatewayLifetimeSidecars(...newGatewayLifetimeSidecars);
           params.log.info(formatGatewayStartupOutcomes(startupOutcomes.snapshot()));
-          params.onSidecarsReady?.();
           logGatewaySidecarsReady({
             log: params.log,
             getReadiness: params.getReadiness,
@@ -478,6 +477,8 @@ export async function startGatewayPostAttachRuntime(params: {
       }
       // Agent RPCs need marked predecessors; chat also waits for saved-input recovery.
       params.unlockStartupMethods({ keepChatSendUnavailable: true });
+      // Connect-time snapshots and legacy input routes share this admission barrier.
+      params.onSidecarsReady?.();
       await runGatewayStartupObservers({
         registry: sidecarRegistry,
         signal,

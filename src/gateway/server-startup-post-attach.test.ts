@@ -626,7 +626,6 @@ describe("startGatewayPostAttachRuntime", () => {
         onSidecarsReady,
       });
 
-      expect(onSidecarsReady).toHaveBeenCalledTimes(1);
       expect([...unavailableGatewayMethods]).toStrictEqual(methods);
       expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
       expect(hoisted.prepareInternalHooks).toHaveBeenCalledWith(
@@ -645,7 +644,6 @@ describe("startGatewayPostAttachRuntime", () => {
           activationSourceConfig: { hooks: { internal: { enabled: false } } },
         }),
       );
-      expect(log.info).toHaveBeenCalledWith("gateway ready");
       expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
         getConfig: expect.any(Function),
         shouldContinue: expect.any(Function),
@@ -654,11 +652,12 @@ describe("startGatewayPostAttachRuntime", () => {
         gatewayRuntime: expect.any(Object),
       });
       expect(hoisted.activateSubagentRegistry).not.toHaveBeenCalled();
-      expect(startupOrder).toEqual(["ready"]);
+      expect(startupOrder).toEqual([]);
       expect(startChannels).not.toHaveBeenCalled();
       expect(hoisted.markStartupOrphanedMainSessionsForRecovery).not.toHaveBeenCalled();
       postReadyWork.resolve();
       await markingEntered.promise;
+      expect(onSidecarsReady).not.toHaveBeenCalled();
       expect(startChannels).not.toHaveBeenCalled();
       expect(hoisted.activateSubagentRegistry).not.toHaveBeenCalled();
       expect([...unavailableGatewayMethods]).toStrictEqual(methods);
@@ -671,7 +670,7 @@ describe("startGatewayPostAttachRuntime", () => {
         expect.any(Function),
         undefined,
       );
-      expect(startupOrder).toEqual(["ready", "unlock", "registry", "unlock"]);
+      expect(startupOrder).toEqual(["unlock", "ready", "registry", "unlock"]);
       expect(methodsAtRecoveryRegistration).toStrictEqual([methods]);
     } finally {
       postReadyWork.resolve();
@@ -1980,7 +1979,8 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(onSidecarsReady).not.toHaveBeenCalled();
 
         gates[lastRuntime].resolve();
-        await startup;
+        const runtime = await startup;
+        await runtime.subagentRecoverySettled;
         expect(startChannels).toHaveBeenCalledOnce();
         expect(onSidecarsReady).toHaveBeenCalledOnce();
         expect(trace.measures).toContain("sidecars.connection-runtime");

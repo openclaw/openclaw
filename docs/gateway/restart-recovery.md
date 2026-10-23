@@ -70,8 +70,8 @@ agents continue loading. Startup preparation failures still report an error.
 
 Startup orphan marking runs after plugin loading and startup completion. It uses
 the existing active-session index to exclude archived rows before inspecting
-recovery metadata, without reading full transcripts. Channels, startup-gated RPCs,
-startup hooks, and saved-input replay still wait for marking; chat readiness stays
+recovery metadata, without reading full transcripts. Client connections, channels,
+startup-gated RPCs, startup hooks, and saved-input replay still wait for marking; chat readiness stays
 gated until saved-input recovery finishes. Marking failures produce a warning
 without aborting startup,
 and the existing recovery sweep retries failed stores. Main-session recovery and
