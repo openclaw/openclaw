@@ -5,6 +5,7 @@ import { reloadAfterRenderErrorOnce } from "../../app/stale-chunk-reload.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
 import { SessionBackgroundLayoutScope } from "../../components/session-background-layout-context.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
@@ -246,6 +247,22 @@ function DraftBlock(props: {
           voiceControl,
         })}
       />
+      <Show when={submission().blockedSubmitNotice()}>
+        <div
+          class="new-session-page__blocked-submit agent-chat__composer-status"
+          data-tone="info"
+          role="status"
+        >
+          <div class="agent-chat__composer-status-band">
+            <span class="agent-chat__composer-status-icon" aria-hidden="true">
+              <Icon name="info" />
+            </span>
+            <span class="agent-chat__composer-status-text">
+              {submission().blockedSubmitNotice()}
+            </span>
+          </div>
+        </div>
+      </Show>
       <Show when={!catalog.isTarget(props.page().data)}>
         <NewSessionIncognitoNotice
           active={submission().visibility === "incognito"}
