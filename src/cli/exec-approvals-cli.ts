@@ -55,6 +55,7 @@ import { callGatewayFromCli } from "./gateway-rpc.js";
 import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
 import { nodesCallOpts, resolveCliNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
+import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 type FileExecApprovalsSnapshot = Awaited<ReturnType<typeof loadSnapshotLocal>> & {
@@ -939,10 +940,7 @@ export function registerExecApprovalsCli(program: Command) {
     .option("--limit <n>", "Maximum rows to return (default 200)")
     .action(async (opts: ExecApprovalsCliOpts & { limit?: string }) => {
       await runApprovalsAction(opts, async () => {
-        const limit = parseStrictPositiveInteger(opts.limit);
-        if (opts.limit !== undefined && limit === undefined) {
-          throw new Error("--limit must be a positive integer.");
-        }
+        const limit = parseOptionalPositiveInteger(opts.limit, "--limit", ".");
         const result = (await callGatewayFromCli(
           "exec.approval.grants.list",
           opts,

@@ -34,14 +34,11 @@ async function withHostedDocumentServer<T>(
   run: (context: HostedDocumentContext) => Promise<T>,
 ): Promise<T> {
   return await withTempDir("openclaw-canvas-gateway-", async (stateDir) => {
-    const document = await createCanvasDocument(
-      { id: "host-switch-test", html: "<html><body>hosted</body></html>" },
-      { stateDir },
-    );
     const clients = new Set<GatewayWsClient>();
     return await withEnvAsync(
       { OPENCLAW_SKIP_CANVAS_HOST: params.skipHost, OPENCLAW_STATE_DIR: stateDir },
       async () => {
+        const document = await createCanvasDocument({ html: "<html><body>hosted</body></html>" });
         setRuntimeConfigSnapshot(params.config);
         const server = createGatewayHttpServer({
           clients,

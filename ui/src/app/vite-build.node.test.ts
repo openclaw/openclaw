@@ -228,7 +228,9 @@ it.each(["login", "attachment"] as const)(
   "prepares %s assets offline without preloading the wrong modules",
   async (kind) => {
     const attachment = kind === "attachment";
-    const entry = uiPath(attachment ? "components/app-sidebar.tsx" : "components/login-gate.ts");
+    const entry = uiPath(
+      attachment ? "components/app-sidebar.tsx" : "components/login-gate-solid.tsx",
+    );
     const dependency = attachment
       ? path.join(root, "resize.js")
       : uiPath("components/login-offline-fixture.ts");

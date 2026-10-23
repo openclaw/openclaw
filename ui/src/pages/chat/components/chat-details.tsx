@@ -205,12 +205,13 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     // Otherwise the inspector releases its column halfway through a side-panel
     // opening and makes the transcript shrink past its destination, then return.
     let dockingWidth = bounds.width;
-    if (isDesktop && pane && conversationVisible) {
+    // The chat frame still needs its destination width when Details anchors to main.
+    if (isDesktop && pane && frame) {
       const style = getComputedStyle(pane);
       const sideWidth = Number.parseFloat(style.getPropertyValue("--desktop-side-reserve"));
       const dividerWidth = Number.parseFloat(style.getPropertyValue("--desktop-divider-reserve"));
       const conversationIsSide =
-        frame?.closest("[data-region]")?.getAttribute("data-region") === "side";
+        frame.closest("[data-region]")?.getAttribute("data-region") === "side";
       // The pane uses border-box sizing; route-entry transforms must not
       // become the retained conversation width.
       dockingWidth = Number.parseFloat(style.width);

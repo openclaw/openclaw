@@ -594,7 +594,10 @@ describe("trusted plugin session facts", () => {
         state: "merged" as const,
         url: "https://github.com/synthetic/project/pull/27",
       };
-      fixture.load.mockResolvedValueOnce({ pullRequests: [pullRequest(pr)], rateLimited: false });
+      fixture.load.mockImplementation(async ({ sessionKey: key }) => ({
+        pullRequests: key === sessionKey ? [pullRequest(pr)] : [],
+        rateLimited: false,
+      }));
       await fixture.subscriptions.replace(fixture.client.connId, [sessionKey, queuedKey]);
       const result = await read([
         sessionKey,
@@ -617,7 +620,7 @@ describe("trusted plugin session facts", () => {
             archived: false,
             lastActivityAt: 1,
           },
-          { key: queuedKey, run: "active" },
+          { key: queuedKey, run: "active", pullRequests: [] },
         ],
       });
       releaseWait?.();
@@ -627,7 +630,7 @@ describe("trusted plugin session facts", () => {
       const listener = vi.fn();
       const unsubscribe = runtime.gateway.subscribeSessionChanges(listener);
       using _ = { [Symbol.dispose]: unsubscribe };
-      fixture.load.mockResolvedValueOnce({ pullRequests: [], rateLimited: false });
+      fixture.load.mockResolvedValue({ pullRequests: [], rateLimited: false });
       await fixture.subscriptions.pollNow();
       expect((await read()).sessions[0]?.pullRequests).toEqual([]);
       expect(listener).toHaveBeenCalledWith({ agentId: "main", sessionKey });

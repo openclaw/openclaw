@@ -138,7 +138,7 @@ suite.define(() => {
     await pollEnabled(start).toBe(true);
 
     await model.click();
-    await selectChatModelOption(page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]'));
+    await selectChatModelOption(page, "openai/gpt-5.6-luna");
     await pollText(model).toContain("GPT-5.6 Luna");
     await pollAttribute(where, "data-cloud-profile").toBe("aws");
     await pollAttribute(where, "data-machine-class").toBe("fast");
@@ -158,9 +158,7 @@ suite.define(() => {
     await page.keyboard.press("Escape");
 
     await model.click();
-    await selectChatModelOption(
-      page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
-    );
+    await selectChatModelOption(page, "anthropic/claude-sonnet-4-6");
     await pollAttribute(where, "data-cloud-profile").toBe("aws");
     await pollAttribute(where, "data-machine-class").toBe("fast");
     await pollEnabled(start).toBe(true);

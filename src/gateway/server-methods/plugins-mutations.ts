@@ -12,7 +12,11 @@ import type {
 import { withInstallActivity } from "../../infra/install-progress.js";
 import { pluginCatalogId } from "../../plugins/catalog-discovery.js";
 import { pluginInstallRequiresLocalHost } from "../../plugins/install-source-plan.js";
-import type { PluginRuntimeApplication } from "../../plugins/lifecycle.js";
+import {
+  capturePluginRuntimeApplications,
+  type PluginLifecycleRuntimeApply,
+  type PluginRuntimeApplication,
+} from "../../plugins/lifecycle.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 import {
   installManagedPlugin,
@@ -23,10 +27,7 @@ import {
 import { uninstallManagedPlugin } from "../../plugins/management-uninstall.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import {
-  captureGatewayPluginRuntimeApplications,
-  pluginLifecycleError,
-} from "./plugins-lifecycle-error.js";
+import { pluginLifecycleError } from "./plugins-lifecycle-error.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
@@ -61,7 +62,7 @@ function lifecycleHandler<T>(
     if (!assertValidParams(params, validate, method, respond)) {
       return;
     }
-    let captured: ReturnType<typeof captureGatewayPluginRuntimeApplications> | undefined;
+    let captured: ReturnType<typeof capturePluginRuntimeApplications> | undefined;
     let entered = false;
     try {
       const applyRuntime = context.applyPluginLifecycleChange;
@@ -95,12 +96,20 @@ function lifecycleHandler<T>(
             }
           : undefined;
       // Runtime application owns preparation through cleanup; its receipt is not final install success.
-      captured = captureGatewayPluginRuntimeApplications(
-        logger
-          ? (change) => withInstallActivity(logger, "runtime", () => applyRuntime(change))
-          : applyRuntime,
-        beforePersistentApply,
-      );
+      const applyCapturedRuntime: PluginLifecycleRuntimeApply = logger
+        ? (change) => withInstallActivity(logger, "runtime", () => applyRuntime(change))
+        : applyRuntime;
+      beforePersistentApply();
+      captured = capturePluginRuntimeApplications((change) => {
+        beforePersistentApply();
+        return applyCapturedRuntime({
+          ...change,
+          assertInvokerOwned: () => {
+            beforePersistentApply();
+            change.assertInvokerOwned?.();
+          },
+        });
+      });
       const lifecycle: PluginLifecycleOptions = {
         ...(logger ? { logger } : {}),
         applyRuntime: captured.applyRuntime,

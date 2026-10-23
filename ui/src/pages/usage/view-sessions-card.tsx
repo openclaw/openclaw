@@ -2,7 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { For, Show, createMemo, createSignal } from "solid-js";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
-import { providerDisplayLabel } from "../../components/provider-icon.ts";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
@@ -297,6 +297,7 @@ function SessionRows(props: {
               <Show when={copyIdentity()} keyed>
                 {(_identity) => {
                   let feedback!: HTMLSpanElement;
+                  let announcement!: HTMLSpanElement;
                   return (
                     <>
                       {" "}
@@ -309,6 +310,7 @@ function SessionRows(props: {
                           event.stopPropagation();
                           void handleCopyButton(event, label(), t("usage.sessions.copy"), {
                             feedback,
+                            announcement,
                           });
                         }}
                       >
@@ -318,6 +320,11 @@ function SessionRows(props: {
                         ref={(element) => (feedback = element)}
                         class="session-bar-copy-feedback"
                         hidden
+                      />
+                      <span
+                        ref={(element) => (announcement = element)}
+                        class="sr-only"
+                        role="status"
                       />{" "}
                     </>
                   );

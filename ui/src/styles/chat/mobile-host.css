@@ -617,12 +617,6 @@
   display: none;
 }
 
-/* This footer fade is unconditional and uses the outer chat surface. The host
-   now paints only the child's actual overflow boundaries on its own surface. */
-.sidebar-region--mobile-host .chat-subagents__detail-pane .chat-footer::before {
-  display: none;
-}
-
 @media (prefers-reduced-transparency: reduce), (forced-colors: active) {
   .chat-mobile-host__scroll-fades {
     display: none;

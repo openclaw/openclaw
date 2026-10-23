@@ -1,7 +1,8 @@
-import { createSignal, For, Show, onSettled } from "solid-js";
+import { createSignal, Errored, For, lazy, Loading, Show, onSettled } from "solid-js";
 import { isReactionEmoji } from "../../../../../packages/gateway-protocol/src/reaction-emoji.js";
-import { EmojiSearchPanel } from "../../../components/emoji-search-panel.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
+import { LoadingState } from "../../../components/solid/loading-state.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
@@ -11,6 +12,10 @@ import "./chat-message-reactions.css";
 import type { MessageReactionPlacement } from "./chat-message-reaction-model.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+const EmojiSearchPanel = lazy(() => import("../../../components/emoji-search-panel.tsx"), {
+  export: "EmojiSearchPanel",
+});
 
 const QUICK_REACTIONS = ["👍", "❤️", "🎉", "👀", "🚀", "😂"] as const;
 // Shown before the search has a query; quick reactions lead so the grid extends the palette.
@@ -54,6 +59,7 @@ export function MessageReactionPicker(props: MessageReactionPickerProps) {
   let popover: PopoverHandle | undefined;
   let trigger!: HTMLButtonElement;
   let searchInput: HTMLInputElement | undefined;
+  let backButton: HTMLButtonElement | undefined;
   const paletteButtons: HTMLButtonElement[] = [];
   const stop: (() => void)[] = [];
   const focusPicker = () => {
@@ -61,7 +67,9 @@ export function MessageReactionPicker(props: MessageReactionPickerProps) {
       return;
     }
     (custom()
-      ? searchInput
+      ? searchInput?.isConnected
+        ? searchInput
+        : backButton
       : (paletteButtons.find((button) => button.getAttribute("aria-pressed") === "true") ??
         paletteButtons[0])
     )?.focus();
@@ -92,6 +100,19 @@ export function MessageReactionPicker(props: MessageReactionPickerProps) {
     setCustom(true);
     onSettled(focusPicker);
   };
+  const back = () => (
+    <button
+      ref={(button) => {
+        backButton = button;
+      }}
+      class="back"
+      type="button"
+      aria-label={t("chat.reactions.back")}
+      onClick={showPalette}
+    >
+      <Icon name="arrowLeft" />
+    </button>
+  );
   const movePaletteFocus = (event: KeyboardEvent) => {
     const buttons = paletteButtons;
     const current = buttons.findIndex((button) => button === host.ownerDocument.activeElement);
@@ -195,35 +216,45 @@ export function MessageReactionPicker(props: MessageReactionPickerProps) {
           }
         >
           <div class="custom">
-            <EmojiSearchPanel
-              inputRef={(input) => {
-                searchInput = input;
-              }}
-              query={query()}
-              onQueryChange={search}
-              onSelect={select}
-              isSelected={(emoji) => props.activeEmoji.has(emoji)}
-              defaults={SEARCH_DEFAULTS}
-              searchLabel={t("chat.reactions.search")}
-              gridLabel={t("chat.reactions.emoji")}
-              emptyLabel={t("chat.reactions.noMatches")}
-              onInputKeyDown={(event) => {
-                if (event.key === "Backspace" && !event.currentTarget.value) {
-                  event.preventDefault();
-                  showPalette();
+            <Errored
+              fallback={(error, resetError) => (
+                <>
+                  {back()}
+                  <LazyViewError error={error()} onRetry={resetError} />
+                </>
+              )}
+            >
+              <Loading
+                fallback={
+                  <>
+                    {back()}
+                    <LoadingState />
+                  </>
                 }
-              }}
-              leading={
-                <button
-                  class="back"
-                  type="button"
-                  aria-label={t("chat.reactions.back")}
-                  onClick={showPalette}
-                >
-                  <Icon name="arrowLeft" />
-                </button>
-              }
-            />
+              >
+                <EmojiSearchPanel
+                  inputRef={(input) => {
+                    searchInput = input;
+                    onSettled(focusPicker);
+                  }}
+                  query={query()}
+                  onQueryChange={search}
+                  onSelect={select}
+                  isSelected={(emoji) => props.activeEmoji.has(emoji)}
+                  defaults={SEARCH_DEFAULTS}
+                  searchLabel={t("chat.reactions.search")}
+                  gridLabel={t("chat.reactions.emoji")}
+                  emptyLabel={t("chat.reactions.noMatches")}
+                  onInputKeyDown={(event) => {
+                    if (event.key === "Backspace" && !event.currentTarget.value) {
+                      event.preventDefault();
+                      showPalette();
+                    }
+                  }}
+                  leading={back()}
+                />
+              </Loading>
+            </Errored>
           </div>
         </Show>
       </Popover>

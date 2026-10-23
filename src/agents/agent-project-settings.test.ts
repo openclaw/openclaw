@@ -59,14 +59,13 @@ it("defaults project settings policy to sanitize", () => {
   expect(resolveEmbeddedAgentProjectSettingsPolicy()).toBe("sanitize");
 });
 
-it("applies sanitized plugin settings before project settings", () => {
+it("applies admitted plugin settings before project settings", () => {
   const snapshot = buildEmbeddedAgentSettingsSnapshot({
     globalSettings: {
       shellPath: "/bin/zsh",
       compaction: { reserveTokens: 20_000, keepRecentTokens: 20_000 },
     },
     pluginSettings: {
-      shellPath: "/tmp/blocked-shell",
       compaction: { keepRecentTokens: 64_000 },
       hideThinkingBlock: false,
     },

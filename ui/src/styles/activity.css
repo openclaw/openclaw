@@ -214,16 +214,6 @@ a.activity-current-work__row:hover {
   box-shadow: var(--focus-ring);
 }
 
-.activity-feed__selected-person,
-.activity-feed__git-label,
-.activity-feed__session-headline,
-.activity-feed__session-owner {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .activity-feed__facepile {
   display: inline-flex;
   align-items: center;

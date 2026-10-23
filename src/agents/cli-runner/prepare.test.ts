@@ -97,6 +97,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../auth-profiles/store-runtime.js";
+import { resolveBootstrapContextForRun as loadBootstrapContext } from "../bootstrap-files.js";
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
@@ -1758,7 +1759,7 @@ describe("prepareCliRunContext", () => {
       try {
         const preparation = withPluginRuntimeRegistryScope(custody.registry, () =>
           fixture.prepare({
-            config: { plugins: { slots: { contextEngine: engineId } } },
+            config: { plugins: { allow: ["fixture"], slots: { contextEngine: engineId } } },
             assertCurrent: () => {
               if (!current) {
                 throw new Error("CLI owner retired after engine acquisition");
@@ -1850,7 +1851,7 @@ describe("prepareCliRunContext", () => {
             model: "test-model",
             runId: "cli-custody-history-failure",
             timeoutMs: 1_000,
-            config: { plugins: { slots: { contextEngine: engineId } } },
+            config: { plugins: { allow: ["fixture"], slots: { contextEngine: engineId } } },
           }),
         ),
       ).rejects.toBe(historyFailure);
@@ -1900,7 +1901,7 @@ describe("prepareCliRunContext", () => {
         "plugin:fixture",
       );
       try {
-        const config = { plugins: { slots: { contextEngine: engineId } } };
+        const config = { plugins: { allow: ["fixture"], slots: { contextEngine: engineId } } };
         const context = await work.run(() =>
           withPluginRuntimeRegistryScope(custody.registry, async () => {
             if (ownership === "borrowed") {
@@ -2087,6 +2088,52 @@ describe("prepareCliRunContext", () => {
     expect(background.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
     expect(normal.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
   });
+
+  it.each([false, true])(
+    "keeps agent bootstrap and layers only execution AGENTS (explicit root: %s)",
+    async (explicitRoot) => {
+      setCliRunnerPrepareTestDeps({ resolveBootstrapContextForRun: loadBootstrapContext });
+      const { dir } = fixture.session;
+      const executionDir = path.join(dir, "execution");
+      const bootstrapDir = explicitRoot ? path.join(dir, "bootstrap-override") : dir;
+      fs.mkdirSync(executionDir);
+      fs.mkdirSync(bootstrapDir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "AGENTS.md"), "UNSELECTED-WORKSPACE");
+      for (const [name, content] of Object.entries({
+        "AGENTS.md": "CANONICAL-AGENT-RULE",
+        "SOUL.md": "CANONICAL-SOUL-MARKER",
+        "USER.md": "CANONICAL-USER-MARKER",
+        "MEMORY.md": "CANONICAL-MEMORY-MARKER",
+      })) {
+        fs.writeFileSync(path.join(bootstrapDir, name), content);
+      }
+      fs.writeFileSync(path.join(executionDir, "AGENTS.md"), "EXECUTION-PROJECT-RULE");
+      fs.writeFileSync(path.join(executionDir, "USER.md"), "EXECUTION-USER-MUST-NOT-OVERRIDE");
+      fs.writeFileSync(path.join(executionDir, "MEMORY.md"), "EXECUTION-MEMORY-MUST-NOT-OVERRIDE");
+
+      const context = await fixture.prepare({
+        config: { agents: { defaults: { workspace: dir }, entries: { main: {} } } },
+        sessionKey: "agent:main:main",
+        workspaceDir: executionDir,
+        cwd: executionDir,
+        ...(explicitRoot ? { bootstrapWorkspaceDir: bootstrapDir } : {}),
+      });
+
+      expect(context.cwd).toBe(executionDir);
+      expect(context.systemPrompt).toContain("CANONICAL-AGENT-RULE");
+      expect(context.systemPrompt).toContain("CANONICAL-SOUL-MARKER");
+      expect(context.systemPrompt).toContain("CANONICAL-USER-MARKER");
+      expect(context.systemPrompt).toContain("CANONICAL-MEMORY-MARKER");
+      expect(context.systemPrompt).toContain("EXECUTION-PROJECT-RULE");
+      expect(context.systemPromptReport.injectedWorkspaceFiles.at(-1)).toMatchObject({
+        path: path.join(executionDir, "AGENTS.md"),
+        origin: { kind: "execution-project", rootPath: executionDir },
+      });
+      expect(context.systemPrompt).not.toContain("EXECUTION-USER-MUST-NOT-OVERRIDE");
+      expect(context.systemPrompt).not.toContain("EXECUTION-MEMORY-MUST-NOT-OVERRIDE");
+      expect(context.systemPrompt).not.toContain("UNSELECTED-WORKSPACE");
+    },
+  );
 
   it("uses canonical repository skills for a managed worktree", async () => {
     const { dir } = fixture.session;

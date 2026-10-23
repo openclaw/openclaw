@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/auto-reply/reply/get-reply.fallback-transcript.test.ts",
   "src/config/sessions/session-actor-initialization.test.ts",
   "test/scripts/upgrade-survivor-acp-metadata.test.ts",
   "src/gateway/server-methods/chat-send-admission.reads.test.ts",
@@ -577,6 +578,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/commands-plugin.owner.test.ts",
   "src/auto-reply/reply/commands-plugin.test.ts",
   "src/auto-reply/reply/commands-plugin.native-subagents.test.ts",
+  "src/auto-reply/reply/commands-plugin.channel-native.test.ts",
   "src/auto-reply/reply/commands-plugin.scheduled-turns-restart.test.ts",
   "src/auto-reply/reply/commands-plugin.scheduled-turns.test.ts",
   "src/auto-reply/reply/commands-session-restart.test.ts",
@@ -677,6 +679,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/session-reset-acp.controller.test.ts",
   "src/auto-reply/reply/abort.test.ts",
   "src/auto-reply/reply/dispatch-from-config.pending-restart.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.transcript-reset.integration.test.ts",
   "src/auto-reply/reply/session.acp-reset-routing.test.ts",
   "src/auto-reply/reply/session-fork.test.ts",
   "src/auto-reply/reply/dispatch-acp.test.ts",
@@ -804,7 +807,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/sessions/session-manager-metadata-runtime.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-phase-lifecycle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-phase.admission.test.ts",
-  "src/agents/embedded-agent-runner/run/attempt-prompt-submit.steering.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-replay.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-replay-cohort.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-execution-settle.test.ts",
@@ -922,6 +924,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-participants-migration.test.ts",
   "src/state/openclaw-agent-trajectory-storage-migration.test.ts",
   "src/state/openclaw-agent-memory-revision-migration.test.ts",
+  "src/state/openclaw-agent-vector-decoder-migration.test.ts",
   "src/state/openclaw-agent-write-layout-migration.test.ts",
   "src/state/openclaw-agent-index-retirement-migration.test.ts",
   "src/state/openclaw-state-db-write-index-migration.test.ts",
@@ -1371,6 +1374,10 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/session-entry-persistence.test.ts",
   "src/infra/heartbeat-summary-snapshot.test.ts",
   "src/gateway/server-cron.projection.test.ts",
+  "src/infra/database-engine/plugin-lifecycle-lease.postgres.test.ts",
+  "src/infra/database-engine/session-path-alias.conformance.test.ts",
+  "src/infra/database-engine/session-archive-alias.conformance.test.ts",
+  "src/infra/database-engine/outcome-surfaces.postgres.test.ts",
 ];
 
 const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);

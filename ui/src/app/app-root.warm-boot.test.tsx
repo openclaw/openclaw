@@ -1,12 +1,13 @@
 /* @vitest-environment jsdom */
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
-import type { LoginGateProps } from "../components/login-gate.ts";
-import "../components/login-gate.ts";
+import type { LoginGateProps } from "../components/login-gate-solid.tsx";
+import "../components/login-gate-solid.tsx";
 import { i18n } from "../i18n/index.ts";
 import { storeDeviceAuthToken } from "../lib/nodes/index.ts";
 import { loadChatRoute, type ChatRouteData } from "../pages/chat/route-loader.ts";
@@ -18,12 +19,53 @@ import { createLegacyFocusEscape } from "./app-root-lit.ts";
 import { mountOpenClawApp } from "./app-root.tsx";
 import type { BootRecord } from "./boot-record.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
-import { DASHBOARD_DOCUMENT_ELEMENT, TERMINAL_PANEL_ELEMENT } from "./lazy-custom-element.ts";
 import { loadSettings, persistSessionToken } from "./settings.ts";
 
 // mock-isolation: root admission tests isolate shell rendering while exercising the real bootstrap owner.
 vi.mock("./app-host.tsx", () => ({
   OpenClawShell: () => document.createElement("openclaw-app-shell"),
+}));
+
+// mock-isolation: exercise root-to-panel inputs without board RPCs or terminal emulator custody.
+vi.mock("../components/board/board-document.tsx", () => ({
+  OpenClawBoardDocument: (
+    props: Omit<
+      Parameters<
+        (typeof import("../components/board/board-document.tsx"))["OpenClawBoardDocument"]
+      >[0],
+      "ref"
+    > & { ref?: JSX.Ref<HTMLElement> },
+  ) => (
+    <openclaw-board-document
+      ref={props.ref}
+      prop:gatewaySnapshot={props.gatewaySnapshot}
+      prop:sessions={props.sessions}
+      prop:sessionKey={props.sessionKey}
+      prop:preparedSession={props.preparedSession}
+      prop:onDocumentClose={props.onDocumentClose}
+    />
+  ),
+}));
+// mock-isolation: root panel inputs do not require an emulator or terminal session owner.
+vi.mock("../components/terminal/terminal-panel-registration.tsx", () => ({
+  TerminalPanelHost: (
+    props: Omit<
+      Parameters<
+        (typeof import("../components/terminal/terminal-panel-registration.tsx"))["TerminalPanelHost"]
+      >[0],
+      "ref"
+    > & { ref?: JSX.Ref<HTMLElement> },
+  ) => (
+    <openclaw-terminal-panel
+      ref={props.ref}
+      prop:client={props.client}
+      prop:gatewayConnected={props.gatewayConnected}
+      prop:available={props.available}
+      prop:agentId={props.agentId}
+      prop:themeMode={props.themeMode}
+      prop:fullscreen={props.fullscreen}
+    />
+  ),
 }));
 
 vi.mock("../pages/chat/route-loader.ts", async (importOriginal) => ({
@@ -115,9 +157,9 @@ async function createWarmSurface(warm = true, startup?: Promise<void>, authMetho
   const draw = async (patch: Partial<typeof snapshot> = {}) => {
     Object.assign(snapshot, patch);
     publish();
-    await settleRootContent();
+    await settleImports();
   };
-  await settleRootContent();
+  await settleImports();
   return { snapshot, container: host, publish, draw, start, rosterSubscriptions };
 }
 
@@ -139,9 +181,6 @@ async function createOfflineSurface(warm = false) {
 describe("warm boot app root", () => {
   it("loads a focused dashboard after startup and reports its committed result to automation", async () => {
     window.history.replaceState({}, "", "/focus/dashboard/main/12345678");
-    vi.spyOn(DASHBOARD_DOCUMENT_ELEMENT, "loadModule").mockRejectedValue(
-      new Error("Dashboard implementation isolated from root input test"),
-    );
     const starting = Promise.withResolvers<void>();
     const loading = Promise.withResolvers<ChatRouteData>();
     vi.mocked(loadChatRoute).mockReturnValue(loading.promise);
@@ -178,9 +217,6 @@ describe("warm boot app root", () => {
 
   it("retires a pending focus dashboard read before it can render or canonicalize", async () => {
     window.history.replaceState({}, "", "/focus/dashboard/main/12345678");
-    vi.spyOn(DASHBOARD_DOCUMENT_ELEMENT, "loadModule").mockRejectedValue(
-      new Error("Dashboard implementation isolated from root input test"),
-    );
     const loading = Promise.withResolvers<ChatRouteData>();
     vi.mocked(loadChatRoute).mockClear().mockReturnValue(loading.promise);
     const { container } = await createWarmSurface(false);
@@ -210,10 +246,6 @@ describe("warm boot app root", () => {
     onTestFinished(() => {
       document.documentElement.removeAttribute(CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE);
     });
-    // Keep this at the root-to-panel input boundary; Terminal's owner tests cover emulator custody.
-    vi.spyOn(TERMINAL_PANEL_ELEMENT, "loadModule").mockRejectedValue(
-      new Error("Terminal implementation isolated from root input test"),
-    );
     const { snapshot, container, draw } = await createWarmSurface(false);
     const client = createTestGatewayClient(vi.fn());
     const hello = {
@@ -338,7 +370,7 @@ describe("warm boot app root", () => {
     expectSurface([".connect-splash"], ["openclaw-login-gate"]);
     starting.resolve();
     await starting.promise;
-    await settleRootContent();
+    await settleImports();
     expect(container.querySelector("openclaw-login-gate")).not.toBeNull();
   });
 

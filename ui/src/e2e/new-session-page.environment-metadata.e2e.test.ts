@@ -103,7 +103,7 @@ suite.define(() => {
       const selectModel = async (id: string, label?: string) => {
         await page.keyboard.press("Escape");
         await modelSelect.click();
-        await selectChatModelOption(page.locator(`[data-chat-model-option="${id}"]`));
+        await selectChatModelOption(page, id);
         if (label) {
           await pollText(modelSelect).toContain(label);
         }

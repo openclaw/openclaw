@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import type { Profiler } from "node:inspector";
+import type { HeapProfiler, Profiler } from "node:inspector";
 import path from "node:path";
 import { finished } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
@@ -60,6 +60,7 @@ const { values } = parseArgs({
     "worker-allocations": { type: "boolean", default: false },
     diagnostics: { type: "boolean", default: false },
     "broadcast-timing": { type: "boolean", default: false },
+    "session-projection-counts": { type: "boolean", default: false },
     "session-projection-source": { type: "string" },
     "transport-counts": { type: "boolean", default: false },
     compressed: { type: "boolean", default: false },
@@ -75,6 +76,9 @@ const { values } = parseArgs({
     "stress-session-store": { type: "boolean", default: false },
     "transcript-hydration-counts": { type: "boolean", default: false },
     "operator-access-policy": { type: "boolean", default: false },
+    "session-event-wake": { type: "boolean", default: false },
+    "authority-counts": { type: "boolean", default: false },
+    "authority-source-preload": { type: "string" },
     "stress-subagents": { type: "boolean", default: false },
     "mixed-rpc": { type: "boolean", default: false },
     "dashboard-rpc": { type: "boolean", default: false },
@@ -102,7 +106,7 @@ const { values } = parseArgs({
     "activity-summaries": { type: "boolean", default: false },
     "recap-burst-repeats": { type: "string", default: "0" },
     "recap-burst-interval-ms": { type: "string", default: "50" },
-    runs: { type: "string", default: "20" },
+    runs: { type: "string" },
     sessions: { type: "string", default: "100" },
     "history-turns": { type: "string", default: "0" },
     "history-last-turns": { type: "string", default: "0" },
@@ -113,6 +117,7 @@ const { values } = parseArgs({
     "duration-ms": { type: "string", default: "3600000" },
     "warmup-ms": { type: "string", default: "300000" },
     "round-interval-ms": { type: "string", default: "15000" },
+    "rpc-interval-ms": { type: "string", default: "0" },
     "soak-rounds": { type: "string" },
     "memory-interval-ms": { type: "string", default: "60000" },
     "retained-profile-ms": { type: "string", default: "600000" },
@@ -120,6 +125,7 @@ const { values } = parseArgs({
     chunks: { type: "string", default: "100" },
     "chunk-interval-ms": { type: "string", default: "10" },
     "prompt-kib": { type: "string", default: "128" },
+    "chat-attachment-kib": { type: "string", default: "0" },
     "heap-snapshot": { type: "boolean", default: false },
     "session-census": { type: "boolean", default: false },
     "fingerprint-retention": { type: "boolean", default: false },
@@ -165,6 +171,7 @@ if (
     "sessions.list",
     "sessions.describe",
     "sessions.patch",
+    "sessions.cleanup",
     "connect",
     "reconnect",
     "subscribe",
@@ -174,10 +181,11 @@ if (
     "session-idle-retention",
     "memory-soak",
     "plugins.reload",
+    "plugin.scope",
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, sessions.describe, sessions.patch, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, or plugins.reload",
+    "--scenario must be sessions.list, sessions.describe, sessions.patch, sessions.cleanup, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, plugins.reload, or plugin.scope",
   );
 }
 const retentionScenario = scenario === "attempt-retention";
@@ -229,6 +237,14 @@ if (
   );
 }
 const toolScenario = scenario === "chat.send" || reasoningScenario;
+const chatAttachmentBytes =
+  integer(values["chat-attachment-kib"], "--chat-attachment-kib", 0) * 1024;
+if (chatAttachmentBytes && (scenario !== "chat.send" || values["session-event-wake"])) {
+  throw new Error("--chat-attachment-kib requires direct --scenario chat.send");
+}
+const chatAttachmentContent = chatAttachmentBytes
+  ? Buffer.alloc(chatAttachmentBytes, "Synthetic attachment text.\n").toString("base64")
+  : undefined;
 const turnScenario =
   scenario === "chat.send" ||
   scenario === "transcript-broadcast" ||
@@ -240,14 +256,16 @@ if (
   !values["stream-start-allocations"] &&
   !values["workload-cpu-profile"] &&
   !values["operator-access-policy"] &&
+  !(scenario === "chat.send" && values.diagnostics) &&
   !(["sessions.list", "sessions.patch"].includes(scenario) && values["capture-responses"]) &&
   scenario !== "transcript-broadcast" &&
+  scenario !== "plugin.scope" &&
   !retentionScenario &&
   !idleScenario &&
   !soakScenario
 ) {
   throw new Error(
-    "--scenario requires --allocations, --workload-cpu-profile, or --capture-responses for sessions.list/sessions.patch",
+    "--scenario requires --allocations, --workload-cpu-profile, --diagnostics for chat.send, or --capture-responses for sessions.list/sessions.patch",
   );
 }
 const operations = integer(
@@ -292,7 +310,7 @@ const exactClients = integer(
 if (exactClients > clientCount) {
   throw new Error("--exact-clients must not exceed --clients");
 }
-const runCount = scenario === "chat.send" ? 1 : integer(values.runs, "--runs");
+const runCount = integer(values.runs ?? (scenario === "chat.send" ? "1" : "20"), "--runs");
 const sessionCount = idleScenario ? integer(values.sessions, "--sessions") : runCount;
 const historyBytesPerTurn = 16 * 1024;
 const historyReasoningBytes = 4 * 1024;
@@ -324,6 +342,7 @@ const rounds = integer(values.rounds, "--rounds");
 const durationMs = integer(values["duration-ms"], "--duration-ms");
 const warmupMs = integer(values["warmup-ms"], "--warmup-ms", 0);
 const roundIntervalMs = integer(values["round-interval-ms"], "--round-interval-ms");
+const rpcIntervalMs = integer(values["rpc-interval-ms"], "--rpc-interval-ms", 0);
 const soakRounds =
   values["soak-rounds"] === undefined ? undefined : integer(values["soak-rounds"], "--soak-rounds");
 if (soakRounds !== undefined && !soakScenario) {
@@ -364,11 +383,49 @@ if (values["stress-session-store"] && !values["stress-tools"]) {
 }
 if (
   values["operator-access-policy"] &&
-  (scenario !== "chat.send" || !values["stress-tools"] || listIntervalMs !== 0)
+  (scenario !== "chat.send" || !values["stress-tools"] || runCount !== 1 || listIntervalMs !== 0)
 ) {
   throw new Error(
-    "--operator-access-policy requires --scenario chat.send --stress-tools and no polling",
+    "--operator-access-policy requires --scenario chat.send --stress-tools --runs 1 and no polling",
   );
+}
+if (values["session-event-wake"] && !values["operator-access-policy"]) {
+  throw new Error("--session-event-wake requires --operator-access-policy");
+}
+if (
+  values["authority-counts"] &&
+  (!values["operator-access-policy"] ||
+    path.resolve(values.entry) !== path.resolve("src/entry.ts") ||
+    values.allocations ||
+    values.diagnostics ||
+    values["trace-gc"] ||
+    values["cpu-profile"] ||
+    values["workload-cpu-profile"] ||
+    values["stream-start-allocations"])
+) {
+  throw new Error(
+    "--authority-counts requires --operator-access-policy --entry src/entry.ts in a separate pass without allocation, CPU, GC, or diagnostics profiling",
+  );
+}
+if (
+  values["authority-source-preload"] &&
+  (!values["operator-access-policy"] || path.resolve(values.entry) !== path.resolve("src/entry.ts"))
+) {
+  throw new Error(
+    "--authority-source-preload requires --operator-access-policy --entry src/entry.ts",
+  );
+}
+let authoritySourcePreload: { path: string; sha256: string } | undefined;
+if (values["authority-source-preload"]) {
+  const preloadPath = path.resolve(values["authority-source-preload"]);
+  try {
+    authoritySourcePreload = {
+      path: preloadPath,
+      sha256: createHash("sha256").update(readFileSync(preloadPath)).digest("hex"),
+    };
+  } catch (cause) {
+    throw new Error(`Cannot read --authority-source-preload: ${preloadPath}`, { cause });
+  }
 }
 if (values["stress-subagents"] && (!soakScenario || !values["stress-tools"])) {
   throw new Error("--stress-subagents requires memory-soak and --stress-tools");
@@ -442,6 +499,26 @@ if (
   path.resolve(values.entry) !== path.resolve("src/entry.ts")
 ) {
   throw new Error("--session-projection-source requires --entry src/entry.ts");
+}
+if (values["session-projection-counts"]) {
+  if (path.resolve(values.entry) !== path.resolve("src/entry.ts")) {
+    throw new Error("--session-projection-counts requires --entry src/entry.ts");
+  }
+  if (
+    values.allocations ||
+    values["worker-allocations"] ||
+    values["cpu-profile"] ||
+    values["workload-cpu-profile"] ||
+    values["broadcast-timing"] ||
+    values["transport-counts"] ||
+    values["stream-start-allocations"] ||
+    values["trace-gc"] ||
+    (soakScenario && retainedProfileMs > 0)
+  ) {
+    throw new Error(
+      "--session-projection-counts needs a separate pass without profiling or timing",
+    );
+  }
 }
 const sessionProjectionSource = values["session-projection-source"]
   ? realpathSync(path.resolve(values["session-projection-source"]))
@@ -529,6 +606,13 @@ const viewerIdentity = (index: number) =>
   `broadcast-viewer-${values["distinct-viewers"] ? index : 0}@example.invalid`;
 const viewerProfiles = new Set<string>();
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
+if (scenario === "sessions.cleanup") {
+  // Exercise live preservation admission repeatedly without consuming the fixture inventory.
+  cfg.session = {
+    ...cfg.session,
+    maintenance: { ...cfg.session?.maintenance, mode: "warn" },
+  };
+}
 applyMockOpenAiModelConfig(cfg, {
   mockPort,
   modelRef: "openai/gpt-4.1",
@@ -712,15 +796,133 @@ globalThis.fetch = async (input, options) => {
   );
 }
 let reloadPluginId: string | undefined;
-if (scenario === "plugins.reload") {
+let scopePluginId: string | undefined;
+if (scenario === "plugins.reload" || scenario === "plugin.scope") {
   const plugin = writePluginFixtures(output, { count: 1, activationOnStartup: true });
-  reloadPluginId = plugin.pluginIds[0];
+  if (scenario === "plugins.reload") {
+    reloadPluginId = plugin.pluginIds[0];
+  } else {
+    scopePluginId = plugin.pluginIds[0];
+    const pluginSource = path.join(plugin.pluginsDir, scopePluginId!, "index.cjs");
+    writeFileSync(
+      pluginSource,
+      `const { getPluginRuntimeGatewayRequestScope } = require("openclaw/plugin-sdk/plugin-runtime");
+const id = ${JSON.stringify(scopePluginId)};
+const source = ${JSON.stringify(pluginSource)};
+function currentScope() {
+  const scope = getPluginRuntimeGatewayRequestScope();
+  if (scope?.pluginId !== id || scope.pluginSource !== source || !scope.pluginOrigin ||
+      !scope.pluginRegistry || !scope.client) throw new Error("Synthetic plugin scope is missing");
+  return scope;
+}
+module.exports = { id, register(api) {
+  api.registerGatewayMethod("benchmark.pluginScope", async ({ params, respond }) => {
+    const before = currentScope();
+    await Promise.resolve();
+    const after = currentScope();
+    if (before !== after) throw new Error("Synthetic plugin scope changed across await");
+    respond(true, { pluginId: id, sequence: params.sequence, scopeVerified: true });
+  }, { scope: "operator.read" });
+} };\n`,
+    );
+  }
   cfg.plugins = {
     ...cfg.plugins,
     enabled: true,
     allow: [...new Set([...(cfg.plugins?.allow ?? []), ...plugin.pluginIds])],
     load: { paths: [plugin.pluginsDir] },
   };
+}
+const authorityPreload = path.join(output, "authority-counts-preload.mjs");
+if (values["authority-counts"]) {
+  // Source observation belongs to the rig; the production owners expose no benchmark hooks.
+  writeFileSync(
+    authorityPreload,
+    String.raw`
+import fs from "node:fs";
+import { registerHooks, syncBuiltinESMExports } from "node:module";
+import { isMainThread } from "node:worker_threads";
+if (isMainThread) {
+  const state = { active: false, counts: {}, callers: {}, installed: {}, firstAuthPolicyStacks: [],
+    count(key) {
+      if (!this.active) return;
+      this.counts[key] = (this.counts[key] ?? 0) + 1;
+      if (key.endsWith(".assertSettled") || key.endsWith(".readProfileAuthority")) {
+        const caller = key + " <- " + new Error().stack.split("\n").slice(3, 6).join(" <- ").trim();
+        this.callers[caller] = (this.callers[caller] ?? 0) + 1;
+      }
+      if (key === "auth-policy.stableStringify" && this.firstAuthPolicyStacks.length < 8)
+        this.firstAuthPolicyStacks.push(new Error("auth-policy stringify caller").stack);
+    } };
+  globalThis[Symbol.for("openclaw.benchmark.authorityCounts")] = state;
+  const statSync = fs.statSync;
+  fs.statSync = function (...args) { state.count("filesystem.statSync"); return statSync.apply(this, args); };
+  syncBuiltinESMExports();
+  const owners = new Set([
+    "session-source-authority", "admitted-run-context", "operator-run-authority",
+    "session-delivery-generation", "session-entry-source-authority", "session-event-handoff",
+    "session-tool-overrides", "auth-policy", "sqlite-worker-identity",
+    "user-profile-events", "user-profile-authority"
+  ]);
+  registerHooks({ load(url, context, nextLoad) {
+    const loaded = nextLoad(url, context);
+    const owner = url.match(/\/([^/]+)\.ts$/)?.[1];
+    if (!owners.has(owner)) return loaded;
+    // A matched baseline/candidate source overlay runs before this observer.
+    const raw = loaded.format === "module-typescript" ? loaded.source : fs.readFileSync(new URL(url));
+    if (raw == null) throw new Error("Authority overlay omitted source: " + owner);
+    let source = typeof raw === "string" ? raw : new TextDecoder().decode(raw);
+    const installed = {};
+    const count = (kind) => {
+      const key = owner + "." + kind;
+      installed[key] = (installed[key] ?? 0) + 1;
+      return "__authorityCounts.count(" + JSON.stringify(key) + ");";
+    };
+    source = source.replace(/const (assert\w*) = \((?:[^()]|\([^()]*\))*\) => \{/g,
+      (match, name) => match + count(name));
+    source = source.replace(/function (assert\w+)\([^{}]*\)(?::[^{}]+)? \{/g,
+      (match, name) => match + count(name));
+    if (owner === "user-profile-events") {
+      source = source.replace(/assertSettled\(this: void, profileIds: string \| readonly string\[\]\): void \{/g,
+        (match) => match + count("assertSettled"));
+    }
+    if (owner === "user-profile-authority") {
+      source = source.replace(/function readProfileAuthority\([^{}]+\{/g,
+        (match) => match + count("readProfileAuthority"));
+    }
+    if (owner === "session-source-authority") {
+      source = source.replace(/\(\) => \{\s*const scoped = sessionSourceScopes/g,
+        (match) => match.replace("{", "{" + count("composedAssertion")));
+    }
+    if (owner === "session-entry-source-authority") {
+      source = source.replace(/async prepareSessionSource\(\): Promise<PreparedSessionSourceAuthority> \{/g,
+        (match) => match + count("prepareSessionSource"));
+    }
+    if (owner === "operator-run-authority" || owner === "admitted-run-context") {
+      source = source.replace(/\(assertSource(?:s)?\) => \{/g,
+        (match) => match + count("composedGuard"));
+    }
+    if (owner === "sqlite-worker-identity" || owner === "auth-policy" || owner === "session-tool-overrides") {
+      const callee = owner === "sqlite-worker-identity" ? "statSync" : "stableStringify";
+      source = source.replace(new RegExp("\\b" + callee + "\\(", "g"), () =>
+        "(" + count(callee).slice(0, -1) + ", " + callee + ")(");
+    }
+    if (owner === "sqlite-worker-identity") {
+      source = source.replace(/realpathSync\.native\(/g, () =>
+        "(" + count("realpathSync.native").slice(0, -1) + ", realpathSync.native)(");
+    }
+    if (owner === "session-tool-overrides") {
+      if (!source.includes("  const intersectMap =")) throw new Error("Tool intersection observation source changed");
+      source = source.replace("  const intersectMap =", () => "  " + count("intersectSessionToolOverrides") + "const intersectMap =");
+    }
+    if (!Object.keys(installed).length) throw new Error("Authority observation source changed: " + owner);
+    state.installed[owner] = installed;
+    return { ...loaded, format: "module-typescript",
+      source: 'const __authorityCounts = globalThis[Symbol.for("openclaw.benchmark.authorityCounts")];\n' + source };
+  } });
+}
+`,
+  );
 }
 const authorityChannel = "openclaw-operator-authority-bench";
 const authorityEmail = "operator@authority.example.test";
@@ -783,7 +985,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         !["start", "stop"].includes(message.action)) return;
     active = message.action === "start";
     if (active) { for (const key of Object.keys(counts)) counts[key] = 0; messages.clear(); }
-    process.send?.({ channel, id: message.id, counts: { ...counts }, profileId });
+    const host = globalThis[Symbol.for("openclaw.benchmark.authorityCounts")];
+    if (host) { host.active = active; if (active) { host.counts = {}; host.callers = {}; host.firstAuthPolicyStacks = []; } }
+    process.send?.({ channel, id: message.id, counts: { ...counts }, profileId,
+      sourceOverlay: globalThis[Symbol.for("openclaw.benchmark.sourceOverlay")],
+      ...(host ? { hostCounts: host.counts, hostCallers: host.callers, installed: host.installed, firstAuthPolicyStacks: host.firstAuthPolicyStacks } : {}) });
   }
   api.registerService({ id: "synthetic-authority-counters",
     start() {
@@ -1122,6 +1328,7 @@ function createPollRandom(round: number, client: number) {
     return state / 0x1_0000_0000;
   };
 }
+const sessionEventRuns = new Map<string, { resolve: (runId: string) => void }>();
 let cohort:
   | {
       id: string;
@@ -1207,8 +1414,11 @@ const mock = createServer((req, res) => {
         : [];
     const toolOutput = toolOutputs.at(-1);
     const continuation = toolScenario && toolOutput !== undefined;
+    const primaryMessage = cohort
+      ? `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`
+      : undefined;
     const primary =
-      cohort &&
+      primaryMessage !== undefined &&
       facts.purpose === "benchmark-turn" &&
       !facts.hasToolOutput &&
       !continuation &&
@@ -1216,8 +1426,13 @@ const mock = createServer((req, res) => {
       index >= 1 &&
       index <= runCount &&
       lastUser !== undefined &&
-      stripInboundMetadata(lastUser).trim().split("\n")[0] ===
-        `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`;
+      (values["session-event-wake"]
+        ? lastUser.includes(primaryMessage)
+        : chatAttachmentContent
+          ? lastUser
+              .split("\n")
+              .some((line) => stripInboundMetadata(line).trim() === primaryMessage)
+          : stripInboundMetadata(lastUser).trim().split("\n")[0] === primaryMessage);
     const requestPhase = primary
       ? `primary:${index}`
       : continuation
@@ -1640,6 +1855,10 @@ const env = {
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
   ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
   ...(values["broadcast-timing"] ? { OPENCLAW_BENCH_BROADCAST_TIMING: "1" } : {}),
+  ...(process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1"
+    ? { OPENCLAW_BENCH_WORKER_ATTRIBUTION: "1" }
+    : {}),
+  ...(values["session-projection-counts"] ? { OPENCLAW_BENCH_SESSION_PROJECTION_COUNTS: "1" } : {}),
   ...(sessionProjectionSource
     ? { OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE: sessionProjectionSource }
     : {}),
@@ -2139,6 +2358,26 @@ async function controlAuthorityCounters(child: ChildProcess, action: "start" | "
       return value;
     };
     return {
+      ...(values["authority-counts"]
+        ? {
+            host: (() => {
+              if (!isRecord(message.hostCounts) || !isRecord(message.installed)) {
+                throw new Error("Authority source counters were not installed");
+              }
+              const entries = Object.entries(message.hostCounts);
+              if (entries.some(([, value]) => !Number.isSafeInteger(value) || Number(value) < 0)) {
+                throw new Error("Invalid authority source counts");
+              }
+              return {
+                counts: message.hostCounts,
+                callers: message.hostCallers,
+                installed: message.installed,
+                firstAuthPolicyStacks: message.firstAuthPolicyStacks,
+              };
+            })(),
+          }
+        : {}),
+      sourceOverlay: isRecord(message.sourceOverlay) ? message.sourceOverlay : undefined,
       profileId: message.profileId,
       authorize: count("authorize"),
       resume: count("resume"),
@@ -2229,6 +2468,15 @@ async function rpc(
   if (!response.ok) {
     throw new Error(`${method}: ${JSON.stringify(response.error)}`);
   }
+  if (
+    method === "chat.send" &&
+    (!isRecord(params) ||
+      !isRecord(response.payload) ||
+      response.payload.status !== "started" ||
+      response.payload.runId !== params.idempotencyKey)
+  ) {
+    throw new Error("chat.send did not acknowledge the requested fresh turn");
+  }
   if (values["github-options-connected"] && method === "sessions.github.options") {
     validateDashboardRpc(method, response.payload);
     if (
@@ -2301,12 +2549,63 @@ function latencySummary(latenciesMs: number[]) {
     p50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1] ?? null,
     p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? null,
     p99Ms: sorted[Math.ceil(sorted.length * 0.99) - 1] ?? null,
+    maxMs: sorted.at(-1) ?? null,
     latenciesMs,
   };
 }
 function readPromotion(profilePath: string, operationCount: number) {
   const gcTrace = readGatewayGcTrace(path.join(output, "gateway.stdout.log"), profilePath);
   return { gcTrace, promotedBytesPerOperation: gcTrace.promotedBytes / operationCount };
+}
+function readAuthorityAllocation(profilePath: string, operationCount: number) {
+  // Node's inspector declarations omit the CDP sample IDs emitted by heap sampling.
+  type AllocationNode = {
+    id: number;
+    callFrame: HeapProfiler.SamplingHeapProfileNode["callFrame"];
+    selfSize: number;
+    children: AllocationNode[];
+  };
+  const profile: { head: AllocationNode; samples: { nodeId: number }[] } = JSON.parse(
+    readFileSync(profilePath, "utf8"),
+  );
+  const owners = new Set([
+    "session-source-authority",
+    "admitted-run-context",
+    "operator-run-authority",
+    "session-event-handoff",
+  ]);
+  const families: Record<string, { sampledBytes: number; sampleCount: number }> = {};
+  const sampleCounts = new Map<number, number>();
+  for (const sample of profile.samples) {
+    sampleCounts.set(sample.nodeId, (sampleCounts.get(sample.nodeId) ?? 0) + 1);
+  }
+  const visit = (node: AllocationNode, parents: string[]) => {
+    const owner = node.callFrame.url.match(/\/([^/]+)\.(?:ts|js)$/)?.[1] ?? "";
+    const stack = [...parents, owner].slice(-8);
+    const family = stack.find((name) => owners.has(name));
+    if (family) {
+      const bucket = (families[family] ??= { sampledBytes: 0, sampleCount: 0 });
+      bucket.sampledBytes += node.selfSize;
+      bucket.sampleCount += sampleCounts.get(node.id) ?? 0;
+    }
+    for (const child of node.children) {
+      visit(child, stack);
+    }
+  };
+  visit(profile.head, []);
+  const sampledBytes = Object.values(families).reduce(
+    (sum, family) => sum + family.sampledBytes,
+    0,
+  );
+  return {
+    scope:
+      "outermost authority owner in each eight-frame allocation stack; main isolate, including collected objects",
+    operationCount,
+    sampledBytes,
+    estimatedBytesPerTurn: sampledBytes / operationCount,
+    sampleCount: Object.values(families).reduce((sum, family) => sum + family.sampleCount, 0),
+    families,
+  };
 }
 function sessionPatchParams(index: number, sequence: number): SessionsPatchParams {
   const changes: Omit<SessionsPatchParams, "key">[] = [
@@ -2662,7 +2961,7 @@ async function runRound(
     const turns = Promise.all(
       roundKeys.map(async (sessionKey, index) => {
         const turnStarted = performance.now();
-        const runId = randomUUID();
+        let runId: string = randomUUID();
         current.turns.set(index + 1, { runId, startedAt: turnStarted });
         const image = retentionScenario
           ? promptContent.update(Buffer.alloc(256 * 128 * 4))
@@ -2672,28 +2971,59 @@ async function runRound(
             image[alpha] = 255;
           }
         }
-        await rpc(client, scenario === "chat.send" ? "chat.send" : "agent", {
-          sessionKey,
-          message:
-            `Reply with benchmark stream ${index + 1}. Transcript-broadcast cohort ${current.id}.` +
-            (retentionScenario || idleScenario
-              ? `\nSynthetic prompt payload: ${promptContent.update(Buffer.alloc(promptBytes / 2)).toString("hex")}`
-              : ""),
-          deliver: false,
-          idempotencyKey: runId,
-          ...(image
-            ? {
-                attachments: [
-                  {
-                    type: "file",
-                    mimeType: "image/png",
-                    fileName: "synthetic-noise.png",
-                    content: encodePngRgba(image, 256, 128).toString("base64"),
-                  },
-                ],
-              }
-            : {}),
-        });
+        const message =
+          `Reply with benchmark stream ${index + 1}. Transcript-broadcast cohort ${current.id}.` +
+          (retentionScenario || idleScenario
+            ? `\nSynthetic prompt payload: ${promptContent.update(Buffer.alloc(promptBytes / 2)).toString("hex")}`
+            : "");
+        if (values["session-event-wake"]) {
+          const started = Promise.withResolvers<string>();
+          const timer = setTimeout(
+            () => started.reject(new Error("Session event did not start a run")),
+            45_000,
+          );
+          sessionEventRuns.set(sessionKey, started);
+          try {
+            await rpc(client, "system-event", { sessionKey, text: message, wake: true });
+            runId = await started.promise;
+            current.turns.get(index + 1)!.runId = runId;
+          } finally {
+            clearTimeout(timer);
+            sessionEventRuns.delete(sessionKey);
+          }
+        } else {
+          await rpc(client, scenario === "chat.send" ? "chat.send" : "agent", {
+            sessionKey,
+            message,
+            deliver: false,
+            idempotencyKey: runId,
+            ...(chatAttachmentContent
+              ? {
+                  attachments: [
+                    {
+                      type: "file",
+                      mimeType: "text/plain",
+                      fileName: "synthetic-attachment.txt",
+                      origin: "paste",
+                      content: chatAttachmentContent,
+                    },
+                  ],
+                }
+              : {}),
+            ...(image
+              ? {
+                  attachments: [
+                    {
+                      type: "file",
+                      mimeType: "image/png",
+                      fileName: "synthetic-noise.png",
+                      content: encodePngRgba(image, 256, 128).toString("base64"),
+                    },
+                  ],
+                }
+              : {}),
+          });
+        }
         const result = await rpc(client, "agent.wait", { runId, timeoutMs: 170_000 });
         if (
           !result ||
@@ -2968,6 +3298,16 @@ async function connectClient(index: number) {
         previousSeq = event.seq;
       }
       const payload = isRecord(event.payload) ? event.payload : undefined;
+      if (
+        event.event === "agent" &&
+        payload?.stream === "lifecycle" &&
+        isRecord(payload.data) &&
+        payload.data.phase === "start" &&
+        typeof payload.sessionKey === "string" &&
+        typeof payload.runId === "string"
+      ) {
+        sessionEventRuns.get(payload.sessionKey)?.resolve(payload.runId);
+      }
       if (values["activity-summaries"]) {
         const decoded = rowEvents.project(event);
         if (decoded.missingBaseline) {
@@ -3155,6 +3495,8 @@ try {
         : []),
       "--import",
       "./scripts/tsx.mjs",
+      ...(authoritySourcePreload ? ["--import", authoritySourcePreload.path] : []),
+      ...(values["authority-counts"] ? ["--import", authorityPreload] : []),
       "--import",
       "./scripts/lib/gateway-bench-profile-preload.ts",
       ...(values["transport-counts"]
@@ -3189,6 +3531,12 @@ try {
   for (let index = 0; index < clientCount; index++) {
     const client = await connectClient(index);
     if (index === 0) {
+      // Operator-created roots parent to main; a missing root suppresses ancestor envelopes.
+      await rpc(client, "sessions.create", {
+        key: "agent:main:main",
+        visibility: "shared",
+        displayName: "Synthetic broadcast root",
+      });
       if (!historyTurns) {
         const created = await rpc(client, "sessions.create", {
           key: parentKey,
@@ -3340,7 +3688,7 @@ try {
       validateDashboardRpc(method, await rpc(sender, method, params));
     }
   }
-  if (reloadPluginId) {
+  if (reloadPluginId || scopePluginId) {
     writeFileSync(
       path.join(output, "plugin-inventory.json"),
       JSON.stringify(await rpc(sender, "plugins.list", {}), null, 2),
@@ -3496,6 +3844,32 @@ try {
             } else if (scenario === "sessions.patch") {
               const params = sessionPatchParams(index, patchSequences[index]!++);
               assertSessionPatch(params, await rpc(workerClient, "sessions.patch", params));
+            } else if (scenario === "sessions.cleanup") {
+              const result = await rpc(workerClient, "sessions.cleanup", { agent: "main" });
+              if (
+                !isRecord(result) ||
+                result.agentId !== "main" ||
+                result.mode !== "warn" ||
+                result.dryRun !== false ||
+                result.applied !== true ||
+                result.wouldMutate !== false ||
+                typeof result.beforeCount !== "number" ||
+                result.beforeCount <= 0 ||
+                result.afterCount !== result.beforeCount
+              ) {
+                throw new Error("sessions.cleanup did not preserve the warning-mode fixture");
+              }
+            } else if (scenario === "plugin.scope") {
+              const sequence = offset + index;
+              const result = await rpc(workerClient, "benchmark.pluginScope", { sequence });
+              if (
+                !isRecord(result) ||
+                result.pluginId !== scopePluginId ||
+                result.sequence !== sequence ||
+                result.scopeVerified !== true
+              ) {
+                throw new Error("synthetic plugin RPC did not preserve its invocation scope");
+              }
             } else {
               const result = await rpc(workerClient, "plugins.reload", {
                 plugins: [{ pluginId: reloadPluginId }],
@@ -3508,6 +3882,9 @@ try {
           }
         }),
       );
+      if (rpcIntervalMs && offset + batchCount < operationCount) {
+        await delay(Math.max(0, batchStarted + rpcIntervalMs - performance.now()));
+      }
       if (scenario === "reconnect") {
         const startSpreadMs = Math.max(...reconnectStarted) - Math.min(...reconnectStarted);
         if (startSpreadMs > 5000) {
@@ -3719,7 +4096,7 @@ try {
     recapPhase = undefined;
     activeWorkCounts = undefined;
     const finishGatewayDiagnostics =
-      values.diagnostics || values["transport-counts"]
+      values.diagnostics || values["transport-counts"] || values["session-projection-counts"]
         ? await startGatewayDiagnostics(gateway)
         : undefined;
     const finishControllerDiagnostics = values.diagnostics
@@ -4001,6 +4378,13 @@ try {
         "Authority probe must observe policy assertions, real tools, and committed message updates",
       );
     }
+    if (
+      values["session-event-wake"] &&
+      values["authority-counts"] &&
+      !authorityCounts?.host?.counts["session-event-handoff.assertEffectCurrent"]
+    ) {
+      throw new Error("Session-event probe did not exercise its handoff effect authority");
+    }
     if (values["mixed-rpc"] && Object.values(rpcLatencies).some((latencies) => !latencies.length)) {
       throw new Error("mixed RPC workload must observe every method; increase cohort duration");
     }
@@ -4015,6 +4399,12 @@ try {
     );
     if (values["broadcast-timing"] && !broadcastTimings?.length) {
       throw new Error("Broadcast timing observed no calls in the measured window");
+    }
+    const projectionCounts = diagnostics?.gateway.groups.filter(
+      (group) => group.channel === "openclaw.benchmark.session-projection",
+    );
+    if (values["session-projection-counts"] && !projectionCounts?.length) {
+      throw new Error("Session projection counts observed no publications in the measured window");
     }
     assertGatewayAlive();
     if (clients.some((client) => client.ws.readyState !== client.ws.OPEN)) {
@@ -4156,6 +4546,39 @@ try {
         ? { allocatedMbPerTurn: allocation.estimatedAllocatedBytesPerOperation / 1_000_000 }
         : {}),
       diagnostics,
+      ...(values["session-projection-counts"]
+        ? {
+            sessionProjectionCounts: Object.fromEntries(
+              (projectionCounts ?? []).map((group) => {
+                const publications = group.metrics.publications?.total ?? 0;
+                const audienceCacheMisses = group.metrics.audienceCacheMisses?.total ?? 0;
+                const payloadCacheMisses = group.metrics.payloadCacheMisses?.total ?? 0;
+                const projectedRecipients = group.metrics.projectedRecipients?.total ?? 0;
+                const wirePayloads = group.metrics.wirePayloads?.total ?? 0;
+                return [
+                  group.operation,
+                  {
+                    publications,
+                    audienceCacheMisses,
+                    payloadCacheMisses,
+                    projectedRecipients,
+                    wirePayloads,
+                    audienceCacheMissesPerPublication: publications
+                      ? audienceCacheMisses / publications
+                      : null,
+                    payloadCacheMissesPerPublication: publications
+                      ? payloadCacheMisses / publications
+                      : null,
+                    projectedRecipientsPerPublication: publications
+                      ? projectedRecipients / publications
+                      : null,
+                    wirePayloadsPerPublication: publications ? wirePayloads / publications : null,
+                  },
+                ];
+              }),
+            ),
+          }
+        : {}),
       ...(values["broadcast-timing"]
         ? {
             broadcastLatencyMs: Object.fromEntries(
@@ -4423,8 +4846,9 @@ try {
   }
   let cronRuns;
   if (stressCronJobId) {
-    await rpc(sender, "cron.update", { id: stressCronJobId, patch: { enabled: false } });
+    // Snapshot completed runs before disabling can cancel an in-flight scheduled turn.
     const history = await rpc(sender, "cron.runs", { id: stressCronJobId, limit: 200 });
+    await rpc(sender, "cron.update", { id: stressCronJobId, patch: { enabled: false } });
     if (
       !isRecord(history) ||
       !Array.isArray(history.entries) ||
@@ -4522,8 +4946,11 @@ try {
     verifyHistoryReplay,
     revision: values.revision ?? null,
     operationsPerRound: turnScenario ? sessionCount : operations,
+    completedRounds: samples.length,
+    sessionResets,
     warmupOperations: turnScenario ? undefined : warmupOperations,
     rpcConcurrency,
+    rpcIntervalMs,
     reconnectStaggerMs,
     rpcLatencyScope:
       "client request-to-response; handler and queue timings are in Gateway diagnostics",
@@ -4605,12 +5032,18 @@ try {
     stressSessionStore: values["stress-session-store"],
     transcriptHydrationCounts: values["transcript-hydration-counts"],
     operatorAccessPolicy: values["operator-access-policy"],
+    sessionEventWake: values["session-event-wake"],
+    authorityCounts: values["authority-counts"],
+    authoritySourcePreload,
+    node: process.version,
     stressSubagents: values["stress-subagents"],
     cronRuns,
     ...(values["mixed-rpc"] ? { diffEditControlVerified: true, diffEditVisibilityMs } : {}),
     pollSeed: values["poll-seed"] ?? null,
     diagnostics: values.diagnostics,
     broadcastTiming: values["broadcast-timing"],
+    workerAttribution: process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1",
+    sessionProjectionCounts: values["session-projection-counts"],
     sessionProjectionSource,
     transportCounts: values["transport-counts"],
     compressed: proxyViewers,
@@ -4632,6 +5065,15 @@ try {
     recapBurstRepeats,
     recapBurstIntervalMs,
     runCount,
+    ...(scenario === "chat.send" && !values["session-event-wake"]
+      ? {
+          chatSendAck: latencySummary(
+            samples.flatMap((sample) => sample.rpc["chat.send"]?.latenciesMs ?? []),
+          ),
+          chatAttachmentBytes,
+        }
+      : {}),
+    ...(scenario === "sessions.cleanup" ? { sessionMaintenanceMode: "warn" } : {}),
     chunks: chunkCount,
     chunkIntervalMs,
     peakStreams,
@@ -4678,7 +5120,6 @@ try {
           historyTurns,
           historyLastTurns,
           historyPayloadBytes,
-          sessionResets,
           completedSoakRounds,
           initialRetainedResources,
           initialMemoryCollected: !values.allocations,
@@ -4696,6 +5137,14 @@ try {
               allocation: {
                 ...sample.allocation,
                 ...readPromotion(sample.allocation.profilePath, sample.allocation.operationCount),
+                ...(values["operator-access-policy"]
+                  ? {
+                      authority: readAuthorityAllocation(
+                        sample.allocation.profilePath,
+                        sample.allocation.operationCount,
+                      ),
+                    }
+                  : {}),
               },
             }
           : {}),

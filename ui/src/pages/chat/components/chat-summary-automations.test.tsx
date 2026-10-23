@@ -562,7 +562,7 @@ it.each([false, true])("retires automation access and late pages: loaded=%s", as
   expect(current.element.textContent).not.toContain("Retired automation");
 });
 
-it("shares the session inventory with consumers without starting another catalog", async () => {
+it("shares the mobile session inventory with consumers without starting another catalog", async () => {
   const current = source(createGatewayRequestMock(async () => page([job()])));
   const view = mountSolid(() => {
     let host!: HTMLElement;
@@ -572,7 +572,7 @@ it("shares the session inventory with consumers without starting another catalog
       <section ref={(element) => (host = element)}>
         {inventory.lifecycle}
         <output>{inventory.loaded() ? inventory.total() : "unknown"}</output>
-        <ChatSummaryAutomations {...props} inventory={inventory} />
+        <SessionAutomationMobileList inventory={inventory} basePath="" onOpenAutomation={vi.fn()} />
       </section>
     );
   });
@@ -591,7 +591,7 @@ it("shares the session inventory with consumers without starting another catalog
   view.unmount();
 });
 
-it("shares pending reads, retained rows, and failed refresh recovery with mobile", async () => {
+it("shares pending reads and failed refresh recovery between the mobile list and overview", async () => {
   const first = createDeferred<Page>();
   const refresh = createDeferred<Page>();
   const recovery = createDeferred<Page>();
@@ -603,7 +603,6 @@ it("shares pending reads, retained rows, and failed refresh recovery with mobile
     return (
       <section ref={(element) => (host = element)}>
         {inventory.lifecycle}
-        <ChatSummaryAutomations {...props} inventory={inventory} />
         <SessionAutomationMobileList inventory={inventory} basePath="" onOpenAutomation={vi.fn()} />
         <ChatDetailsMobileContent
           details={{
@@ -655,35 +654,33 @@ it("shares pending reads, retained rows, and failed refresh recovery with mobile
   });
   first.resolve(page([job()]));
   const rows = () => view.container.querySelectorAll<HTMLAnchorElement>("a");
-  await waitForSolid(() => expect(rows()).toHaveLength(2));
+  await waitForSolid(() => expect(rows()).toHaveLength(1));
   const retainedRows = [...rows()];
-  retainedRows[1]!.focus();
+  retainedRows[0]!.focus();
   current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
   await waitForSolid(() =>
-    expect(view.container.querySelectorAll('[aria-busy="true"]')).toHaveLength(2),
+    expect(view.container.querySelectorAll('[aria-busy="true"]')).toHaveLength(1),
   );
   expect(current.request).toHaveBeenCalledTimes(2);
   retainedRows.forEach((row, index) => expect(rows()[index]).toBe(row));
   refresh.reject(new Error("private inventory failure"));
   await waitForSolid(() => {
-    expect(view.container.querySelector(".chat-summary__automation-error")).toBeNull();
     expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
       "Couldn't update automations.",
     );
     expect(view.container.querySelector('[aria-busy="true"]')).toBeNull();
   });
   retainedRows.forEach((row, index) => expect(rows()[index]).toBe(row));
-  expect(document.activeElement).toBe(retainedRows[1]);
+  expect(document.activeElement).toBe(retainedRows[0]);
   expect(view.container.textContent).not.toContain("private inventory failure");
   view.container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
   await waitForSolid(() =>
-    expect(view.container.querySelectorAll('[aria-busy="true"]')).toHaveLength(2),
+    expect(view.container.querySelectorAll('[aria-busy="true"]')).toHaveLength(1),
   );
   expect(current.request).toHaveBeenCalledTimes(3);
   recovery.resolve(page([job({ name: "Recovered automation" })]));
   await waitForSolid(() => {
     expect(rows()[0]?.textContent).toContain("Recovered automation");
-    expect(rows()[1]?.textContent).toContain("Recovered automation");
     expect(view.container.querySelector('[role="alert"]')).toBeNull();
   });
   retainedRows.forEach((row, index) => expect(rows()[index]).toBe(row));

@@ -107,6 +107,7 @@ export const databaseEngineAdapters: {
               version: version - 1,
               postgres: migration.fromSchema.postgres,
               postgresFragments: migration.fromSchema.postgresFragments,
+              postgresVectorDecoderVersion: migration.fromSchema.postgresVectorDecoderVersion,
             },
             snapshot,
           );
@@ -121,6 +122,7 @@ export const databaseEngineAdapters: {
             version,
             postgres: migration.schema.postgres,
             postgresFragments: migration.schema.postgresFragments,
+            postgresVectorDecoderVersion: migration.schema.postgresVectorDecoderVersion,
           });
         }
       },

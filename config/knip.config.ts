@@ -72,8 +72,15 @@ const repositoryScriptEntries = [
   // setup-pnpm-store-cache invokes this helper from composite-action YAML.
   ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
+  // scripts/README.md invokes this warm-interaction benchmark CLI by path.
+  "scripts/bench-control-ui-interactions.ts!",
+  // #180983 invokes this isolated plugin-registration benchmark CLI by path.
+  "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-cold-load.ts!",
+  // scripts/control-ui-retention/README.md invokes this opt-in production census.
+  "scripts/control-ui-retention/retention-suite.ts!",
+  "scripts/control-ui-retention/vitest.config.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
   "scripts/bench-control-ui-dev-loop.mts!",
   // #179449 documents this document-handler benchmark CLI by path.
@@ -87,9 +94,21 @@ const repositoryScriptEntries = [
   // scripts/perf/README.md invokes this shared-writer benchmark by path.
   "scripts/bench-channel-ingress-writer.ts!",
   // The performance guide invokes these measurement commands by path.
+  "scripts/perf/adoption-candidates-measure.ts!",
+  "scripts/perf/background-result-wait-measure.ts!",
+  // #181383 invokes this committed Bash-output benchmark by path from a source checkout.
+  "scripts/perf/bash-output-measure.ts!",
   "scripts/perf/codex-process-inspection-measure.ts!",
   "scripts/perf/diagnostic-profile-measure.ts!",
+  "scripts/perf/owned-directory-events-measure.ts!",
+  "scripts/perf/plugin-gateway-scope-measure.ts!",
+  // #181150 invokes this reproducible session-row owner probe by path.
+  "scripts/perf/session-actor-row-facts-measure.ts!",
+  "scripts/perf/session-catalog-selection-measure.ts!",
   "scripts/perf/session-pr-subscriptions-measure.ts!",
+  "scripts/perf/session-tool-surface-measure.ts!",
+  "scripts/perf/subagent-maintenance-capture-measure.ts!",
+  "scripts/perf/subagent-sweep-measure.ts!",
   "scripts/perf/tool-schema-preparation-measure.ts!",
   // The performance guide and transcript driver invoke these tools and preloads by path.
   "scripts/lib/gateway-bench-transport-preload.ts!",
@@ -104,6 +123,12 @@ const repositoryScriptEntries = [
   "scripts/perf/worker-task-metrics-measure.ts!",
   // scripts/perf/README.md invokes this cold usage-cache measurement CLI by path.
   "scripts/perf/chat-metadata-burst-measure.ts!",
+  // scripts/perf/README.md invokes this model-prompt statistics measurement CLI by path.
+  "scripts/perf/model-prompt-stats-measure.ts!",
+  // scripts/perf/README.md invokes this synthetic mention Inbox benchmark by path.
+  "scripts/perf/mention-inbox-measure.ts!",
+  // scripts/perf/README.md invokes this main-thread stall measurement CLI by path.
+  "scripts/perf/main-thread-stall-measure.mjs!",
   // scripts/perf/README.md invokes this synthetic reload fixture by path.
   "scripts/perf/control-ui-reload-fixture.ts!",
   // docs/ci/checkout.md invokes this checkout materialization benchmark by path.
@@ -345,6 +370,8 @@ const repositoryScriptEntries = [
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
   "scripts/preflight-frozen-target-contracts.mjs!",
+  // #175328 invokes this real agent-exec streaming proof by path.
+  "scripts/proof-final-answer-stream.mts!",
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
   "scripts/pr-lib/ci-dispatch.mjs!",
@@ -663,7 +690,6 @@ const rootEntries = [
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
-  "src/hooks/llm-slug-generator.ts!",
   // Local-only test-state consumers are modeled by the full-tree test scan.
   "src/plugin-sdk/!(test-state).ts!",
 ] as const;
@@ -902,6 +928,8 @@ const config = {
     // MCP compatibility tests launch these subprocess fixtures by path; the full-tree scan owns them.
     "extensions/browser/src/browser/chrome-mcp.v1-peer.fixture.mjs",
     "extensions/qa-lab/src/suite-runtime-agent-tools.v1-peer.fixture.mjs",
+    // The Telegram context test loads this Worker by URL; the full-tree test scan owns it.
+    bundledPluginFile("telegram", "src/telegram-ingress-worker.context.test-support.mjs"),
     "**/live-*.ts",
     // This worker-thread proof entry is loaded from its test with new URL(),
     // which Knip cannot discover as a static import.
@@ -970,13 +998,12 @@ const config = {
     "ui/src/pages/chat/composer-persistence.{ts,tsx}": ["exports"],
     // The presentation fixture and focused UI tests consume these seams;
     // the full-tree companion scan continues to audit their actual consumers.
-    "ui/src/components/provider-icon.ts": ["exports"],
     "ui/src/components/terminal/terminal-panel.ts": ["types"],
     "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
     "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],
     "ui/src/pages/chat/components/chat-child-attention.tsx": ["types"],
-    "ui/src/pages/chat/components/chat-ci-automation-control.{ts,tsx}": ["types"],
-    "ui/src/pages/chat/components/chat-ci-details.{ts,tsx}": ["types"],
+    "ui/src/pages/chat/components/chat-ci-automation-control.tsx": ["types"],
+    "ui/src/pages/chat/components/chat-ci-details.tsx": ["types"],
     "ui/src/pages/chat/components/chat-clawhub-card.tsx": ["exports"],
     "ui/src/pages/chat/components/chat-details.tsx": ["types"],
     "ui/src/pages/chat/components/chat-question-card{,-view}.{ts,tsx}": ["types"],
@@ -1077,6 +1104,10 @@ const config = {
     },
     "examples/ai-chat": {
       entry: ["index.mjs!"],
+      project: ["**/*.{js,mjs,cjs,ts,mts,cts}!"],
+    },
+    "examples/inline-incident": {
+      entry: ["index.ts!", "control-ui.ts!"],
       project: ["**/*.{js,mjs,cjs,ts,mts,cts}!"],
     },
     "qa/convex-credential-broker": {

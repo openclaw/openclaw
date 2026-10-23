@@ -6,7 +6,7 @@ import { createInterval } from "../../../lib/reactive/timers.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ActivityHeadline } from "./chat-activity-headline-selection.ts";
-import { ChatToolIcon } from "./chat-tool-cards.solid.tsx";
+import { ChatToolIcon } from "./chat-tool-card-chrome.tsx";
 
 export type ChatActivityHeadlineProps = {
   contentRef?: (element: HTMLSpanElement) => void;

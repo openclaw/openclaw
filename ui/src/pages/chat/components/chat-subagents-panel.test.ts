@@ -224,6 +224,56 @@ it.each([undefined, false, true])(
   },
 );
 
+it.each([undefined, true])(
+  "retries a rejected Stop from the %s notice and restores mobile feedback focus",
+  async (mobile) => {
+    const row = child("retry");
+    const f = mountPanel((method, params) => {
+      if (method === "sessions.list") {
+        return page(asOptionalRecord(params)?.spawnedBy ? [row] : []);
+      }
+      if (method === "sessions.abort") {
+        throw new Error("Stop denied by fixture");
+      }
+      if (method === "chat.history") {
+        return { sessionId: row.sessionId, messages: [], hasMore: false, totalMessages: 0 };
+      }
+      return {};
+    }, mobile);
+    const stopSelector = mobile ? ".chat-subagents-mobile__stop" : ".chat-subagents__stop";
+    await waitForSolid(() => expect(f.panel.querySelector(stopSelector)).not.toBeNull());
+    f.panel.querySelector<HTMLButtonElement>(stopSelector)!.click();
+    if (mobile) {
+      const confirm = () =>
+        document.querySelector<HTMLButtonElement>("openclaw-modal-actions .danger");
+      await waitForSolid(() => expect(confirm()).not.toBeNull());
+      confirm()!.click();
+    }
+    const retry = () => f.panel.querySelector<HTMLButtonElement>('[role="alert"] button');
+    await waitForSolid(() =>
+      expect(f.panel.querySelector('[role="alert"]')?.textContent).toContain(
+        "Stop denied by fixture",
+      ),
+    );
+    if (mobile) {
+      // Touch navigation need not focus its row button.
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+      f.panel.querySelector<HTMLButtonElement>(openSelector(mobile))!.click();
+      await waitForSolid(() => expect(f.panel.querySelector("openclaw-chat-pane")).not.toBeNull());
+      f.panel.querySelector("openclaw-chat-pane")!.onBackToSubagents?.();
+      await waitForSolid(() => expect(document.activeElement).toBe(retry()));
+    }
+    const reads = () => f.request.mock.calls.filter(([method]) => method === "sessions.list");
+    const beforeRetry = reads().length;
+    retry()!.click();
+    await waitForSolid(() => expect(reads().length).toBeGreaterThan(beforeRetry));
+    await waitForSolid(() => expect(f.panel.querySelector('[role="alert"]')).toBeNull());
+    expect(f.panel.querySelector(openSelector(mobile))).not.toBeNull();
+  },
+);
+
 it("keeps desktop row Stop feedback independent, preserves navigation, and releases it at acknowledgement", async () => {
   const rows = [child("first"), child("second")];
   const aborted = createDeferred<{ aborted: boolean }>();

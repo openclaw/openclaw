@@ -160,13 +160,15 @@ it("hides archived pages in the restored sidebar before live data arrives", asyn
   });
   host.invalidate();
   await host.updateComplete;
-  expect(
-    dom.present(
-      '.sidebar-pages [data-session-key="agent:main:active"]',
-      '.sidebar-pages [data-session-key="agent:main:archived"]',
-      ".sidebar-pages .sidebar-session-sort",
-    ),
-  ).toEqual([true, false, false]);
+  await waitForSolid(() =>
+    expect(
+      dom.present(
+        '.sidebar-pages [data-session-key="agent:main:active"]',
+        '.sidebar-pages [data-session-key="agent:main:archived"]',
+        ".sidebar-pages .sidebar-session-sort",
+      ),
+    ).toEqual([true, false, false]),
+  );
 });
 
 it("sorts built-in Pages alphabetically without reordering dashboards", async () => {
@@ -198,7 +200,7 @@ it("sorts built-in Pages alphabetically without reordering dashboards", async ()
   );
 });
 
-it("paints the restored roster and workspace in the first sidebar update", async () => {
+it("paints the restored roster and workspace before live data arrives", async () => {
   const { host, dom } = await createCachedHost();
   host.sidebarAgentsMode = "chip";
   host.sidebarLiveActivity = false;
@@ -210,9 +212,11 @@ it("paints the restored roster and workspace in the first sidebar update", async
   });
   host.invalidate();
   await host.updateComplete;
-  expect(
-    dom.present('aside[data-snapshot-state="cached"]', "openclaw-sidebar-agent-roster"),
-  ).toEqual([true, true]);
+  await waitForSolid(() =>
+    expect(
+      dom.present('aside[data-snapshot-state="cached"]', "openclaw-sidebar-agent-roster"),
+    ).toEqual([true, true]),
+  );
   await waitForSolid(() => expect(dom.text('[data-agent-group="main"]')).toContain("Harbor"));
   expect(dom.query('[data-avatar="⚓"]')).not.toBeNull();
 });
@@ -240,6 +244,7 @@ it("keeps cached agent rows while the live roster settles", async () => {
     }),
   );
   const sessions = createTestSessionCapability(gateway.gateway);
+  await sessions.refresh({ agentId: "main" });
   const context = createContext(gateway.gateway, sessions, {
     defaultId: "main",
     mainKey: "main",

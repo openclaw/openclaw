@@ -32,22 +32,6 @@ function parseCliJsonl(raw: string, backend: ParseCliOutputParams["backend"], pr
   return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
 }
 
-function normalizedUsage(values: {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-}) {
-  return {
-    input: values.input,
-    output: values.output,
-    cacheRead: values.cacheRead,
-    cacheWrite: values.cacheWrite,
-    total: values.total,
-  };
-}
-
 describe("parseCliJson", () => {
   it.each([
     {
@@ -393,7 +377,7 @@ describe("parseCliJson", () => {
       expected: {
         text: "Gemini says hello",
         sessionId: "gemini-session-123",
-        usage: normalizedUsage({ input: 5, output: 5, cacheRead: 8, total: 21 }),
+        usage: { input: 5, output: 5, cacheRead: 8, total: 21 },
       },
     },
     {
@@ -413,7 +397,7 @@ describe("parseCliJson", () => {
       expected: {
         text: "Gemini says hello",
         sessionId: "gemini-session-789",
-        usage: normalizedUsage({ input: 5, output: 5, cacheRead: 8, total: 21 }),
+        usage: { input: 5, output: 5, cacheRead: 8, total: 21 },
       },
     },
   ])("$name", ({ input, expected }) => {

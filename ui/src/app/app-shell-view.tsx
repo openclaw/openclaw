@@ -1,6 +1,6 @@
 import "../lib/toast-host.tsx";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
 import { registerModalSurface } from "../components/overlay-registry.ts";
 import { LazySettingsSidebar } from "../components/settings-sidebar-lazy.tsx";
 import { GatewayStatus, gatewayStatusLabel } from "../components/solid/gateway-status.tsx";
@@ -16,15 +16,15 @@ import { t } from "../lib/reactive/i18n.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { registerToastContainer } from "../lib/toast.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
+import {
+  ShellComponentBoundary,
+  ShellRequestedComponent,
+} from "./app-shell-component-boundary.tsx";
+import type { ShellOwnedElements } from "./app-shell-components.ts";
 import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
-import {
-  ShellLazyOverlays,
-  type ShellElementAttributes,
-  type ShellOwnedElements,
-} from "./app-shell-lazy-view.tsx";
+import { ShellLazyOverlays, type ShellElementAttributes } from "./app-shell-lazy-view.tsx";
 import { readShellView, type ShellViewHost } from "./app-shell-view-state.ts";
-import { isOptionalElementDefined, APP_SIDEBAR_ELEMENT } from "./lazy-custom-element.ts";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
@@ -34,6 +34,32 @@ import { CollapsedHomeToggle } from "./shell-assistant-toggles.tsx";
 import { ShellLayoutProvider } from "./shell-layout-traits-solid.tsx";
 
 export type { ShellViewHost } from "./app-shell-view-state.ts";
+
+const NavigationSidebar = lazy(async () => {
+  await import("../components/app-sidebar.tsx");
+  // Keep the native host that callers assign before registration and move between layouts.
+  return {
+    default: (props: { host: ShellViewHost }) => {
+      onSettled(() => props.host.shellComponentMounted(props.host.navigationSidebar));
+      return <>{props.host.navigationSidebar}</>;
+    },
+  };
+});
+
+const MacosTitlebarControls = lazy(
+  () => import("../components/macos-titlebar-controls.runtime-solid.tsx"),
+  { export: "MacosTitlebarControls" },
+);
+const TerminalPanel = lazy(() => import("../components/terminal/terminal-panel-registration.tsx"), {
+  export: "TerminalPanelHost",
+});
+const ExecApproval = lazy(() => import("../components/exec-approval-solid.tsx"), {
+  export: "ExecApproval",
+});
+const OnboardingMemoryImport = lazy(
+  () => import("../components/onboarding-memory-import-solid.tsx"),
+  { export: "OnboardingMemoryImport" },
+);
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -73,6 +99,20 @@ export function ApplicationShell(props: {
   const footerStatus = createMemo(() =>
     shellConnectionStatus() || view().connectionRecovery ? view().gatewayStatus : null,
   );
+  function NavigationFallback() {
+    return (
+      <Show when={footerStatus()}>
+        <aside class="sidebar">
+          <div class="sidebar-shell">
+            <div class="sidebar-shell__content" />
+            <div class="sidebar-shell__footer">
+              <GatewayStatus {...footerStatus()!} row />
+            </div>
+          </div>
+        </aside>
+      </Show>
+    );
+  }
   const connectionAnnouncement = createMemo(() => {
     const kind = shellConnectionStatus();
     return kind
@@ -127,12 +167,14 @@ export function ApplicationShell(props: {
           {t("common.skipToMainContent")}
         </a>
         <Show when={view().nativeWebChrome && !view().onboarding}>
-          <openclaw-macos-titlebar-controls
-            inert={view().navDrawerOpen}
-            prop:historyOnly={view().settingsTakeover}
-            prop:canGoBack={props.host.nativeHistoryState().canGoBack}
-            prop:canGoForward={props.host.nativeHistoryState().canGoForward}
-          />
+          <ShellComponentBoundary label="openclaw-macos-titlebar-controls">
+            <MacosTitlebarControls
+              inert={view().navDrawerOpen}
+              historyOnly={view().settingsTakeover}
+              canGoBack={props.host.nativeHistoryState().canGoBack}
+              canGoForward={props.host.nativeHistoryState().canGoForward}
+            />
+          </ShellComponentBoundary>
         </Show>
         <Show when={!view().nativeEmbed}>
           <openclaw-app-topbar
@@ -250,27 +292,25 @@ export function ApplicationShell(props: {
             tabindex={view().mobileNavLayout ? -1 : undefined}
             inert={view().navigationSurfaceHidden}
           >
-            <Show when={view().settingsTakeover} fallback={props.host.navigationSidebar}>
+            <Show
+              when={view().settingsTakeover}
+              fallback={
+                <Show when={view().workspaceChromeVisible}>
+                  <Show
+                    when={(props.host.shellRevision(), !props.host.navigationSidebar.isConnected)}
+                  >
+                    <NavigationFallback />
+                  </Show>
+                  <ShellComponentBoundary label={t("palette.categories.navigation")}>
+                    <NavigationSidebar host={props.host} />
+                  </ShellComponentBoundary>
+                </Show>
+              }
+            >
               <LazySettingsSidebar
                 host={props.host}
                 sidebarProps={{ ...view().settingsSidebarProps, footerStatus: footerStatus() }}
               />
-            </Show>
-            <Show
-              when={
-                !view().settingsTakeover &&
-                !isOptionalElementDefined(APP_SIDEBAR_ELEMENT) &&
-                footerStatus()
-              }
-            >
-              <aside class="sidebar">
-                <div class="sidebar-shell">
-                  <div class="sidebar-shell__content" />
-                  <div class="sidebar-shell__footer">
-                    <GatewayStatus {...footerStatus()!} row />
-                  </div>
-                </div>
-              </aside>
             </Show>
           </div>
         </Show>
@@ -346,7 +386,7 @@ export function ApplicationShell(props: {
               retryContext={view().context}
               retryEnabled={view().gatewayConnected}
               retentionScope={view().presentationScope}
-              onNotFound={props.host.recoverNotFoundRoute}
+              onNotFound={() => props.host.shellNavigation.recoverNotFoundRoute()}
               notFoundRecoveryReady={view().gatewayConnected}
             />
           </ShellLayoutProvider>
@@ -354,21 +394,32 @@ export function ApplicationShell(props: {
         <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
           {connectionAnnouncement()}
         </span>
-        <openclaw-terminal-panel
-          ref={(element) => (props.host.terminalPanel = element)}
-          inert={view().navDrawerOpen}
-          prop:mobile={view().mobileNavLayout}
-          prop:client={view().gatewaySnapshot.client}
-          prop:gatewayConnected={view().gatewayConnected}
-          prop:available={view().terminalAvailable}
-          prop:agentId={view().selectedAgentId}
-          prop:sessionKey={view().sessionRoute ? props.host.activeSessionKey : null}
-          prop:suppressed={view().settingsTakeover || view().nativeEmbed}
-          prop:themeMode={view().context.theme.resolvedMode}
-          prop:basePath={view().context.basePath}
-        />
+        <ShellRequestedComponent
+          host={props.host}
+          component="terminal"
+          revision={props.host.shellRevision()}
+          label="terminal panel"
+        >
+          <TerminalPanel
+            ref={(element) => {
+              props.host.terminalPanel = element;
+              props.host.shellComponentMounted(element);
+            }}
+            inert={view().navDrawerOpen}
+            mobile={view().mobileNavLayout}
+            client={view().gatewaySnapshot.client}
+            gatewayConnected={view().gatewayConnected}
+            available={view().terminalAvailable}
+            agentId={view().selectedAgentId}
+            sessionKey={view().sessionRoute ? props.host.activeSessionKey : null}
+            suppressed={view().settingsTakeover || view().nativeEmbed}
+            themeMode={view().context.theme.resolvedMode}
+            basePath={view().context.basePath}
+          />
+        </ShellRequestedComponent>
         <Show when={!view().sessionRoute}>
           <ShellDocks
+            host={props.host}
             elements={props.host.elements}
             context={view().context}
             revision={props.host.shellRevision()}
@@ -395,14 +446,18 @@ export function ApplicationShell(props: {
             (props.host.shellRevision(), props.host.custodianMinimizeRequestId)
           }
         />
-        <Show
-          when={
-            (props.host.shellRevision(), isOptionalElementDefined(props.host.execApprovalElement))
-          }
+        <ShellRequestedComponent
+          host={props.host}
+          component="approvals"
+          revision={props.host.shellRevision()}
+          label={t("tabs.approvals")}
         >
-          <openclaw-exec-approval
-            ref={(element) => (props.host.elements.approvalOverlay = element)}
-            prop:props={{
+          <ExecApproval
+            ref={(element) => {
+              props.host.elements.approvalOverlay = element;
+              props.host.shellComponentMounted(element);
+            }}
+            props={{
               queue: view().overlaySnapshot.approvalQueue,
               busy: view().overlaySnapshot.approvalBusy,
               connected: view().gatewayConnected,
@@ -416,7 +471,7 @@ export function ApplicationShell(props: {
               ) => view().context.overlays.decideApproval(decision, approvalId),
             }}
           />
-        </Show>
+        </ShellRequestedComponent>
         <DevicePairSetup
           props={{
             open: view().overlaySnapshot.devicePairSetupOpen,
@@ -429,22 +484,18 @@ export function ApplicationShell(props: {
             onClose: () => view().context.overlays.closeDevicePairSetup(),
             onManageDevices: () => {
               view().context.overlays.closeDevicePairSetup();
-              props.host.navigate("devices");
+              props.host.shellNavigation.navigate("devices");
             },
             onGetApps: () => {
               view().context.overlays.closeDevicePairSetup();
-              props.host.navigate("apps");
+              props.host.shellNavigation.navigate("apps");
             },
           }}
         />
-        <Show
-          when={
-            view().memoryImportActive &&
-            (props.host.shellRevision(),
-            isOptionalElementDefined(props.host.onboardingMemoryImportElement))
-          }
-        >
-          <openclaw-onboarding-memory-import prop:active={true} prop:context={view().context} />
+        <Show when={view().memoryImportActive}>
+          <ShellComponentBoundary label={t("onboarding.memoryImport.title")} showLoading>
+            <OnboardingMemoryImport active={true} context={view().context} />
+          </ShellComponentBoundary>
         </Show>
         <openclaw-toast-host ref={(element) => (props.host.toastElement = element)} />
       </div>

@@ -22,7 +22,6 @@ import {
 import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 import { MemoryManagerReindexOps } from "./manager-reindex-ops.js";
 import {
-  resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexIdentityState,
 } from "./manager-reindex-state.js";
@@ -229,11 +228,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         providerKey: syncProviderKey ?? undefined,
         providerAliases: syncProviderIdentities.slice(1),
         configuredSources: resolveConfiguredSourcesForMeta(this.sources),
-        configuredScopeHash: resolveConfiguredScopeHash({
-          workspaceDir: this.workspaceDir,
-          extraPaths: this.settings.extraPaths,
-          multimodal: this.settings.multimodal,
-        }),
+        configuredScopeHash: this.resolveConfiguredMemoryScopeHash(),
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
         vectorReady,

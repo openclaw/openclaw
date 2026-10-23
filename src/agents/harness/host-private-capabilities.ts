@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   PreparedSessionEntryWorkerRead,
   SessionEntryWorkerRead,
@@ -17,6 +16,7 @@ import type {
   ReplyIncomingExecutionSelection,
 } from "../../sessions/session-controller.execution-selection.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { AsyncContext } from "../../shared/async-context.js";
 import type { ModelFallbackAvailability } from "../agent-scope.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "../tools/common.js";
@@ -197,10 +197,10 @@ export type PreparedToolAuthorityRead = {
   assertLegacyCurrent: () => void;
   retainCurrent?: PreparedQuestionCallerRead["retainCurrent"];
 };
-const toolAuthorityReadScope = new AsyncLocalStorage<{
+const toolAuthorityReadScope = new AsyncContext<{
   reads: PreparedToolAuthorityRead[];
   complete: boolean;
-}>();
+}>(Symbol("toolAuthorityReads"));
 const workerToolPreparations = new WeakMap<() => Promise<void>, { complete: boolean }>();
 
 export function bindWorkerToolPreparation<
@@ -432,7 +432,9 @@ export type PreparedQuestionAnswerAuthority = Readonly<{
   admitTranscriptAnswer?: (recorder: UserTurnTranscriptRecorder | undefined) => void;
 }>;
 
-const questionAnswerScope = new AsyncLocalStorage<PreparedQuestionAnswerAuthority | undefined>();
+const questionAnswerScope = new AsyncContext<PreparedQuestionAnswerAuthority>(
+  Symbol("questionAnswerAuthority"),
+);
 const questionAnswerCapabilities = new WeakMap<
   AgentHarnessHostCapabilities,
   PreparedQuestionAnswerAuthority

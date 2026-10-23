@@ -28,7 +28,6 @@ import {
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
 import { formatGoogleChatTextChunks } from "./format.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
-import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
 import {
   createGoogleChatIngressMonitor,
   type GoogleChatIngressLifecycle,
@@ -382,17 +381,25 @@ async function processGoogleChatEvent(
           route: { agentId: route.agentId, sessionKey: route.sessionKey },
           ctxPayload,
           delivery: {
-            durable: (payload, info) =>
-              resolveGoogleChatDurableReplyOptions({
-                payload: normalizeGoogleChatReplyTarget({
-                  payload,
-                  sourceMessageName: message.name,
-                  replyThreadName: effectiveReplyThreadName,
-                }),
-                infoKind: info.kind,
-                spaceId,
-                hasTypingMessage: Boolean(typingMessage),
-              }),
+            durable: (payload, info) => {
+              const normalizedPayload = normalizeGoogleChatReplyTarget({
+                payload,
+                sourceMessageName: message.name,
+                replyThreadName: effectiveReplyThreadName,
+              });
+              if (info.kind !== "final" || Boolean(typingMessage)) {
+                return false;
+              }
+              const threadId = normalizedPayload.replyToId?.trim() || undefined;
+              if (!threadId) {
+                return { to: spaceId, replyToId: null };
+              }
+              return {
+                to: spaceId,
+                replyToId: threadId,
+                threadId,
+              };
+            },
             deliver: async (payload) => {
               const normalizedPayload = normalizeGoogleChatReplyTarget({
                 payload,

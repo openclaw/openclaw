@@ -131,10 +131,10 @@ export async function retireStandaloneGitWrapper(params: {
     if (!matchesWindows && !matchesPosix) {
       continue;
     }
+    await createSystemPackageOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS).assertEntryUnowned(
+      wrapperPath,
+    );
     try {
-      await createSystemPackageOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS).assertEntryUnowned(
-        wrapperPath,
-      );
       // Filesystem and pkg reads can outlive this wrapper or the update's authority.
       const currentFile = await readRegularFile({ filePath: wrapperPath, maxBytes: 4096 });
       const current = await fs.lstat(wrapperPath, { bigint: true });
@@ -146,7 +146,12 @@ export async function retireStandaloneGitWrapper(params: {
       ) {
         throw new Error("The installer wrapper changed before retirement.");
       }
-      params.assertCurrent?.();
+    } catch (error) {
+      return { error: `Could not retire ${wrapperPath}: ${String(error)}` };
+    }
+    // Ownership refusals must remain errors, never optional filesystem warnings.
+    params.assertCurrent?.();
+    try {
       await fs.unlink(wrapperPath);
     } catch (error) {
       return { error: `Could not retire ${wrapperPath}: ${String(error)}` };
@@ -286,6 +291,7 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
   devTarget?: DevUpdateTarget;
 }): Promise<{
   schemaVersions?: OpenClawSchemaVersions;
+  nodeEngine?: string | null;
   metadataUnreadable?: string;
   failureCode?: "target-git-cache-stale";
 }> {
@@ -340,9 +346,7 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
     timeoutMs: params.timeoutMs,
   });
   return target.status === "ok"
-    ? target.schemaVersions
-      ? { schemaVersions: target.schemaVersions }
-      : {}
+    ? { schemaVersions: target.schemaVersions, nodeEngine: target.nodeEngine }
     : {
         metadataUnreadable: target.reason,
         ...(target.reason.startsWith("git show ")

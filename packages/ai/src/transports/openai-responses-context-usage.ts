@@ -19,7 +19,6 @@ import {
 import { sha256Hex } from "./transport-utils.js";
 
 type ReplayIdentity = NonNullable<Parameters<typeof buildProviderReplayContext>[1]>;
-type Projection = "transport" | "provider";
 
 function contextFingerprint(input: readonly unknown[], output: readonly unknown[] = []): string {
   // Continuation normalizes provider output into replayable input. Context accounting
@@ -43,7 +42,7 @@ export function recordResponsesContextUsage(
   identity: ReplayIdentity | undefined,
   request: ResponsesContinuationRequest,
   output: readonly unknown[],
-  projection: Projection,
+  projection: "transport" | "provider",
 ): void {
   const usage = message.usage.contextUsage;
   if (

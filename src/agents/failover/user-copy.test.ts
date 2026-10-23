@@ -62,6 +62,13 @@ describe("failover user copy", () => {
     );
   });
 
+  it("keeps already rendered billing copy classified as billing", () => {
+    for (const authMode of [undefined, "oauth"] as const) {
+      const stored = `${billingCopy({ provider: "openrouter", model: "moonshotai/kimi-k3", authMode })} | 402`;
+      expect(sanitizedCopy(stored, { errorContext: true })).toBe(billingCopy({}));
+    }
+  });
+
   it("renders provider-safe missing-key guidance", () => {
     expect(missingKeyCopy({ provider: "openai", providerGuidance: true })).toContain(
       "openclaw configure",

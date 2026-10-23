@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { operatorStandingGrantPublication } from "../../gateway/operator-approval-store.publication.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { jsonSetPath } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -656,11 +657,13 @@ export function updateCronRuntimeRow(
         ...(enabledChanged
           ? {
               enabled: enabled ? 1 : 0,
-              job_json: eb.fn<string>("json_set", [
+              job_json: jsonSetPath(
+                db,
                 eb.ref("job_json"),
                 eb.val("$.enabled"),
                 eb.fn<string>("json", [eb.val(enabled ? "true" : "false")]),
-              ]),
+                true,
+              ),
             }
           : {}),
       }))

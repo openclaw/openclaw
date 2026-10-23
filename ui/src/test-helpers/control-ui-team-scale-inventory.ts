@@ -9,6 +9,25 @@ import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 import { prepareTeamScaleSessionOwnership } from "./control-ui-sidebar-list-fixture.ts";
 import { compactCronJobFixture } from "./cron.ts";
 
+export const TEAM_SCALE_COUNTS = {
+  sessions: 300,
+  firstPage: 200,
+  pinned: 30,
+  owners: 34,
+  people: 120,
+  agents: 6,
+  plugins: 7,
+  cronJobs: 120,
+  childSessions: 54,
+  cronSessions: 24,
+  systemSessions: 12,
+  transcriptMessages: 240,
+  inlineWidgets: 12,
+  catalogHosts: 6,
+  catalogSessionsPerHost: 20,
+  presenceEvents: 12,
+} as const;
+
 type TeamScaleSession = GatewaySessionRow & { updatedAt: number; sessionId: string };
 
 export function createTeamScaleSessionInventory({
@@ -16,9 +35,11 @@ export function createTeamScaleSessionInventory({
   people,
   counts,
   offRosterSession = false,
+  sidebarPersistentChildren = false,
 }: {
   now: number;
   offRosterSession?: boolean;
+  sidebarPersistentChildren?: boolean;
   people: ControlUiMockPresenceUser[];
   counts: Record<
     "sessions" | "owners" | "pinned" | "childSessions" | "cronSessions" | "systemSessions",
@@ -77,6 +98,13 @@ export function createTeamScaleSessionInventory({
     delete pinnedRows[0]!.pinnedAt;
   }
   const pinnedKeys = pinnedRows.filter((row) => row.pinned).map((row) => row.key);
+  const persistentParent = sidebarPersistentChildren ? sessions[5]! : undefined;
+  if (persistentParent) {
+    persistentParent.owner = sessions[0]!.owner;
+    persistentParent.participants = [
+      { identity: { type: "profile", id: people[0]!.id }, label: people[0]!.name },
+    ];
+  }
   for (const row of pinnedRows.slice(1, -1)) {
     if (!row.participants?.some((participant) => participant.identity.id === people[0]!.id)) {
       row.participants?.push({
@@ -91,13 +119,20 @@ export function createTeamScaleSessionInventory({
     index++
   ) {
     const child = index < counts.childSessions;
+    const persistent = persistentParent !== undefined && index < 4;
     const cron = !child && index < counts.childSessions + counts.cronSessions;
     const kind = child ? "subagent" : cron ? "cron" : "system";
-    const parent = index < 18 ? selectedSessionKey : "agent:main:main";
+    const parent = persistent
+      ? persistentParent.key
+      : index < 18
+        ? selectedSessionKey
+        : "agent:main:main";
     const source = sessions[index % counts.sessions]!;
     sessions.push({
       ...source,
-      key: `agent:main:${kind}:team-scale-${index + 1}`,
+      key: persistent
+        ? `agent:main:chat:00000000-0000-4000-8000-${String(9000 + index).padStart(12, "0")}`
+        : `agent:main:${kind}:team-scale-${index + 1}`,
       isMain: false,
       sessionId: `team-${kind}-${index + 1}`,
       label: `Synthetic ${kind} ${index + 1}`,
@@ -113,9 +148,14 @@ export function createTeamScaleSessionInventory({
         ? { spawnedBy: parent, parentSessionKey: parent, childOwnerSessionKeys: [parent] }
         : {}),
       ...(!child && !cron ? { createdActor: { type: "system", id: "gateway" } } : {}),
+      ...(persistent ? { owner: sessions[1]!.owner, participants: [] } : {}),
     });
   }
-  for (const parent of [selectedSessionKey, "agent:main:main"]) {
+  for (const parent of [
+    selectedSessionKey,
+    "agent:main:main",
+    ...(persistentParent ? [persistentParent.key] : []),
+  ]) {
     const row = sessions.find((session) => session.key === parent);
     if (row) {
       row.childSessions = sessions
@@ -123,7 +163,15 @@ export function createTeamScaleSessionInventory({
         .map((session) => session.key);
     }
   }
-  return { sessions, pinnedRows, pinnedKeys, selectedSessionKey };
+  return {
+    sessions,
+    pinnedRows,
+    pinnedKeys,
+    selectedSessionKey,
+    sidebarPersistentChildren: persistentParent
+      ? { parentKey: persistentParent.key, childKeys: persistentParent.childSessions! }
+      : undefined,
+  };
 }
 
 export function createTeamScaleCronInventory(

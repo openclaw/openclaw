@@ -6,6 +6,8 @@ import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import * as configEnvVars from "../../config/config-env-vars.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
@@ -19,6 +21,7 @@ import {
   runOpenClawAgentWriteAdmission,
 } from "../../state/openclaw-agent-write-admission.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -667,4 +670,38 @@ it("keeps the explicit auth stateDir override ahead of ambient owner paths", asy
       expect(fs.existsSync(ambientRoot)).toBe(false);
     },
   );
+});
+
+it("leaves the writer free while the host decides auth usage admission", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = { agents: { entries: { main: {}, voice: {} } } };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    writeConfigMachineState(
+      SHARED_AUTH_STORE_STATE_KEY,
+      { location: "state-db" },
+      { env: state.env },
+    );
+    noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, state.env);
+    const store = createStore();
+    saveAuthProfileStore(store, undefined, saveOptions);
+    setRuntimeAuthProfileStoreSnapshot(store);
+    using contention = probe.writerLock(resolveOpenClawStateSqlitePath());
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      contention.observe(request.stage);
+      admit(request, grant);
+    });
+    await withAuthProfileUsage(store, profileId, undefined, ({ record }) =>
+      record({
+        kind: "failure",
+        expectedProfile: store.profiles[profileId],
+        observedAt: Date.now(),
+        reason: "auth",
+        whamResult: null,
+        probeEligible: false,
+      }),
+    );
+    expect(contention.observed).toEqual(["transaction:free", "commit:held"]);
+    expect(loadPersistedAuthProfileStore()?.usageStats?.[profileId]?.errorCount).toBe(1);
+    expect(store.usageStats?.[profileId]?.errorCount).toBe(1);
+  });
 });

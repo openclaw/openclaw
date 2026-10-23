@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import * as stableJson from "@openclaw/normalization-core/stable-stringify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertOperatorModelAllowed,
@@ -128,6 +129,44 @@ beforeEach(() => {
 afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("authenticated request mutation custody", () => {
+  it("retains the equivalent committed grant across checks and rejects the next revocation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const email = "retained-policy@example.test";
+      let committedConfig: OpenClawConfig = {
+        gateway: { auth: { identityScopes: { [email]: ["operator.admin"] } } },
+      };
+      setRuntimeConfigSnapshot(committedConfig);
+      const { captures, dispatch } = createCaptureFixture({
+        config: () => committedConfig,
+        profileId: ensureProfileForEmail(email).id,
+        method: "test.retained-policy",
+        policy: { role: "operator", authMethod: "token", verifiedIdentity: email },
+        requireGuard: true,
+      });
+      await dispatch("accepted-policy");
+      const retained = expectDefined(captures.at(-1), "accepted operator source");
+      using _ = { [Symbol.dispose]: retained.release };
+      const stringify = vi.spyOn(stableJson, "stableStringify");
+      try {
+        committedConfig = structuredClone(committedConfig);
+        retained.authority.assertCurrent();
+        stringify.mockClear();
+        retained.authority.assertCurrent();
+        expect(stringify).not.toHaveBeenCalled();
+
+        const acceptedConfig = committedConfig;
+        committedConfig = {
+          gateway: { auth: { identityScopes: { [email]: ["operator.read"] } } },
+        };
+        expect(retained.authority.assertCurrent).toThrow();
+        committedConfig = acceptedConfig;
+        expect(retained.authority.assertCurrent).toThrow();
+      } finally {
+        stringify.mockRestore();
+      }
+    });
+  });
+
   it("retains the remote grant assertion after accepted work leaves its request", async () => {
     setRuntimeConfigSnapshot({});
     const ingress = new AbortController();

@@ -586,7 +586,12 @@ export class SessionOrganizer {
     );
   }
 
-  sectionDragOver(event: DragEvent, sectionId: string, category?: string) {
+  sectionDragOver(
+    event: DragEvent,
+    sectionId: string,
+    category?: string,
+    targetSessionKey?: string,
+  ) {
     const dataTransfer = event.dataTransfer;
     if (
       sidebarSectionDragActive(dataTransfer) &&
@@ -617,10 +622,20 @@ export class SessionOrganizer {
       event.stopPropagation();
       return;
     }
+    if (sectionId === "pinned" && targetSessionKey) {
+      this.sessionDropTarget = null;
+      this.sidebarSectionDropTarget = null;
+      this.handleSidebarZoneDragOver(
+        event,
+        serializeSidebarEntry({ type: "session", key: targetSessionKey }),
+      );
+      return;
+    }
     event.preventDefault();
     if (dataTransfer) {
       dataTransfer.dropEffect = "move";
     }
+    this.sidebarZoneDropTarget = null;
     this.sessionDropTarget = sectionId;
     this.sidebarSectionDropTarget = null;
     this.notify();
@@ -641,14 +656,19 @@ export class SessionOrganizer {
     }
   }
 
-  sectionDrop(event: DragEvent, sectionId: string, category?: string) {
+  sectionDrop(event: DragEvent, sectionId: string, category?: string, targetSessionKey?: string) {
     const sourceSectionId = readSidebarSectionDragData(event.dataTransfer);
     const sessionKey = readSessionDragData(event.dataTransfer);
     if ((!sourceSectionId && !sessionKey) || (sourceSectionId && sectionId === "pinned")) {
       return;
     }
-    // Rows can be dragged from a browsed agent section, so search all caches.
-    const session = sessionKey ? this.deps.findSidebarMenuSessionByKey(sessionKey) : undefined;
+    // Shared moves use loaded rows; personal pins can also resolve outside the roster.
+    const session = sessionKey
+      ? (this.deps.findSidebarMenuSessionByKey(sessionKey) ??
+        (sectionId === "pinned"
+          ? this.deps.reconciledSidebarZone().sessionRows.get(sessionKey)
+          : undefined))
+      : undefined;
     if (!sourceSectionId && !this.sectionAcceptsSession(sectionId, category, session)) {
       event.stopPropagation();
       return;
@@ -663,7 +683,20 @@ export class SessionOrganizer {
       void this.reorderSidebarSection(sourceSectionId, sectionId, position);
     } else if (session && sectionId === "pinned") {
       if (session.pinnable) {
-        this.setPersonalSessionPin(session.key, true);
+        if (targetSessionKey && targetSessionKey !== session.key) {
+          const targetEntry = serializeSidebarEntry({ type: "session", key: targetSessionKey });
+          const position =
+            this.sidebarZoneDropTarget?.entry === targetEntry
+              ? this.sidebarZoneDropTarget.position
+              : "before";
+          this.writeSidebarEntryAt(
+            serializeSidebarEntry({ type: "session", key: session.key }),
+            targetEntry,
+            position,
+          );
+        } else {
+          this.setPersonalSessionPin(session.key, true);
+        }
       }
     } else if (session) {
       const nextCategory = category ?? null;

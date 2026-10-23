@@ -1,12 +1,15 @@
 import { createMemo, For, Show } from "solid-js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerLabsEnglish } from "../../../i18n/locales/en-labs.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { isSessionRunStateActive } from "../../../lib/session-run-state.ts";
 import { resolveChatSwarmParent } from "./chat-swarm-progress-parent.ts";
 import type { ChatSwarmProgressProps } from "./chat-swarm-progress-types.ts";
+
+registerEnglishCatalog(registerLabsEnglish);
 
 type SwarmDotStatus = "queued" | "running" | "done" | "failed";
 

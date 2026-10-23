@@ -304,6 +304,104 @@ describe("Codex runtime plugin install repair", () => {
     );
   });
 
+  const builtInConfig: OpenClawConfig = { agents: { entries: { main: {} } } };
+  const copilotModelOverrideConfig: OpenClawConfig = {
+    ...builtInConfig,
+    models: {
+      providers: {
+        "github-copilot": {
+          baseUrl: "https://api.githubcopilot.com",
+          agentRuntime: { id: "copilot" },
+          models: [
+            {
+              id: "gpt-4o",
+              name: "GPT-4o",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128_000,
+              maxTokens: 16_384,
+              agentRuntime: { id: "pi" },
+            },
+          ],
+        },
+      },
+    },
+  };
+  it.each<{
+    name: string;
+    model?: string;
+    cfg: OpenClawConfig;
+    install: boolean;
+  }>([
+    {
+      name: "built-in Copilot without explicit runtime opt-in",
+      model: "github-copilot/gpt-4o",
+      cfg: builtInConfig,
+      install: false,
+    },
+    {
+      name: "model override opting out of provider runtime",
+      model: "github-copilot/gpt-4o",
+      cfg: copilotModelOverrideConfig,
+      install: false,
+    },
+    {
+      name: "another model inheriting provider runtime",
+      model: "github-copilot/claude-sonnet-4",
+      cfg: copilotModelOverrideConfig,
+      install: true,
+    },
+    {
+      name: "another provider explicitly configured with Copilot runtime",
+      model: "openai/gpt-4o",
+      cfg: {
+        ...builtInConfig,
+        ...providerRuntime("openai", "copilot", "https://provider.example.test"),
+      },
+      install: false,
+    },
+    {
+      name: "Anthropic built-in",
+      model: "anthropic/claude-3",
+      cfg: builtInConfig,
+      install: false,
+    },
+    {
+      name: "OpenAI without Copilot runtime opt-in",
+      model: "openai/gpt-4o",
+      cfg: {
+        agents: {
+          entries: { main: {} },
+          defaults: { models: { "openai/gpt-4o": { agentRuntime: { id: "pi" } } } },
+        },
+      },
+      install: false,
+    },
+    { name: "undefined ref", cfg: builtInConfig, install: false },
+    { name: "empty ref", model: "", cfg: builtInConfig, install: false },
+    { name: "unprefixed ref", model: "gpt-4o", cfg: builtInConfig, install: false },
+    { name: "empty model id", model: "github-copilot/", cfg: builtInConfig, install: false },
+  ])("only installs an opted-in Copilot runtime: $name", async ({ model, cfg, install }) => {
+    if (install) {
+      mockInstall("installed", cfg, { pluginId: "copilot" });
+    }
+    const result = await selectRuntimes({
+      cfg,
+      model,
+      prompter: createWizardPrompter(),
+      runtime: runtime(),
+    });
+    expect(result).toEqual({ ok: true, cfg, codexInstalled: false });
+    if (install) {
+      expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ entry: expect.objectContaining({ pluginId: "copilot" }) }),
+      );
+    } else {
+      expect(mocks.ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
+    }
+  });
+
   it("keeps runtime installation prompt-free for silent supervision", async () => {
     const prompter = createWizardPrompter();
     mocks.ensureOnboardingPluginInstalled.mockImplementationOnce(async (params) => {

@@ -9,7 +9,6 @@ import { flush } from "../test-helpers/solid-settle.ts";
 import "../components/modal-dialog.tsx";
 import { CommandPaletteLoading } from "./app-shell-command-palette-loading-view.tsx";
 import { ShellCommandPaletteOwner } from "./app-shell-command-palette-loading.ts";
-import { COMMAND_PALETTE_ELEMENT, createLazyCustomElementRequests } from "./lazy-custom-element.ts";
 
 let restoreDialog: () => void;
 let container: HTMLDivElement;
@@ -33,10 +32,7 @@ const emptyActions = { request: () => {}, clear: () => {}, cancel: () => {}, pen
 function loaderHost<T extends object>(elements: T) {
   return {
     elements,
-    commandPaletteElement: COMMAND_PALETTE_ELEMENT,
-    lazyCustomElements: createLazyCustomElementRequests(),
-    chatNavigationOptions: () => undefined,
-    navigate: () => {},
+    shellNavigation: { chatNavigationOptions: () => undefined, navigate: () => {} },
   };
 }
 function mountLoading(state: ShellCommandPaletteOwner["loading"], onClose: () => void) {
@@ -74,6 +70,7 @@ async function mountLoader() {
   onTestFinished(disposeOwner);
   const close = vi.fn(() => state.clear());
   mountLoading(state, close);
+  await vi.dynamicImportSettled();
   flush();
   await container.querySelector("openclaw-modal-dialog")!.updateComplete;
   const input = container.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
@@ -101,7 +98,7 @@ describe("cold command palette input custody", () => {
 
   it.each(["open", "toggle"] as const)(
     "preserves the %s intent when the retained palette is detached",
-    (action) => {
+    async (action) => {
       const palette = () =>
         Object.assign(document.createElement("openclaw-command-palette"), {
           custodianAvailable: false,
@@ -120,9 +117,9 @@ describe("cold command palette input custody", () => {
         dispose: disposeRoot,
       }));
       onTestFinished(dispose);
-      mountLoading(owner.loading, () => {});
-
       owner[action]();
+      mountLoading(owner.loading, () => {});
+      await vi.dynamicImportSettled();
       flush();
       expect(detached.openPalette).not.toHaveBeenCalled();
       expect(detached.togglePalette).not.toHaveBeenCalled();
@@ -136,7 +133,7 @@ describe("cold command palette input custody", () => {
       const replacement = palette();
       container.append(replacement);
       host.elements.commandPalette = replacement;
-      request.mock.calls[0]?.[2]?.();
+      owner.open();
       expect(replacement.openPalette).toHaveBeenCalledOnce();
       const take = replacement.openPalette.mock.calls[0]?.[0];
       expect(typeof take).toBe("function");

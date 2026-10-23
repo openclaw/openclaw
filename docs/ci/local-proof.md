@@ -307,17 +307,26 @@ contents, its fresh current analysis also supplies the comparison counts.
 Changed snapshots retain both full analyses and historical-cache validation.
 Frozen targets without the aggregate command retain their original commands.
 
-The max-lines suppression inventory and environment-variable count budget use
-the same severity policy. After removing a suppression, remove its stale entry
-from `config/max-lines-baseline.txt`, or run
-`pnpm check:max-lines-ratchet --prune`. Keep the inventory shrinking; warning
-status does not authorize new suppressions or higher caps. The environment
-budget counts distinct `OPENCLAW_*` names in production `src/`, `packages/`, and
-`extensions/` source, excluding tests and QA Lab. Update
-`config/env-var-count-budget.txt` when cleanup reduces that count.
+The max-lines suppression inventory and the environment-variable count budget
+must describe the tree, and that check blocks in GitHub Actions as well as
+locally: an unlisted suppression, a stale inventory entry, or an `OPENCLAW_*`
+count that differs from the budget fails everywhere. Warning-only drift on
+`main` would otherwise fail every later local check for unrelated branches.
+Growth of either inventory relative to the merge base follows the severity
+policy above. A renamed suppressed file moves its inventory entry. After removing
+a suppression, remove its stale entry from `config/max-lines-baseline.txt`, or
+run `pnpm check:max-lines-ratchet --prune`. Keep the inventory shrinking;
+warning status does not authorize new suppressions or higher caps. The
+environment budget counts distinct `OPENCLAW_*` names in production `src/`,
+`packages/`, and `extensions/` source, excluding tests and QA Lab. Update
+`config/env-var-count-budget.txt` in the change that adds or removes a name;
+raising it needs owner approval.
 
 The policy also covers numeric bundle, declaration, package, startup memory,
 CPU, timing, and test-root budgets. Measurements and thresholds are unchanged.
+The core test shard root budget is a shared cost signal that no single change
+owns, so it warns locally as well as in CI; rebalance the shard configurations
+in `test/tsconfig/` when it reports.
 When a file or artifact exceeds a cap, extract a coherent module or investigate
 the added cost. Do not trim coverage, disable rules, or raise thresholds just
 to silence a warning.

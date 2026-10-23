@@ -87,7 +87,7 @@ If the New Session page fails during its initial render, the UI attempts one aut
 
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
-A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen.
+A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. While older messages load, **Show earlier** keeps keyboard focus and ignores repeated activation.
 
 GitHub item URLs and repository-qualified references such as `owner/repo#126` render as compact links. Use `PR owner/repo#126` for a pull request or `issue owner/repo#126` for an issue. References identified by keywords, such as `PR #126`, remain plain text without a repository qualifier. Project display names, the checkout, the project catalog, and other messages do not supply a destination. A standalone hash token that is also a valid hexadecimal color, such as `#126`, retains its color preview without a GitHub link.
 
@@ -184,6 +184,11 @@ Provider speed observations are tracked separately for each requested tier. Repe
 
 Metadata refreshes wait for an in-progress model-runtime replacement to publish. An agent whose model runtime is unavailable does not interrupt commands or model choices for healthy agents; its metadata becomes available when its owner publishes.
 
+The model picker searches across the full catalog, including models under collapsed
+providers and **All models**. Use the Up and Down arrow keys in the search field to
+move through results and Enter to select one. Large catalogs keep the same search
+and keyboard behavior while rendering only the visible portion of the list.
+
 New Session keeps previously fetched model choices selectable while their catalog
 refreshes in the background. Before the first catalog arrives, it does not turn a
 configured default into a model option. Command palette model results use the same
@@ -202,7 +207,9 @@ Thinking, speed, and context-window changes stay synchronized across panes showi
 While an agent works, completed commentary or preambles appear inline in the
 conversation when the model and runtime provide them. Narration keeps its
 formatting and position alongside tool activity; the working indicator remains
-a separate status for execution, startup, or approval. **Keep commentary** in
+a separate status for execution, startup, or approval. After a session is idle,
+a new run starts its own Working timer, including when it starts outside the
+Dashboard; earlier tool activity remains in the conversation. **Keep commentary** in
 the chat view menu controls whether commentary stays visible after the run,
 not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**

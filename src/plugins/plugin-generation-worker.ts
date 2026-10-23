@@ -1,5 +1,6 @@
 import path from "node:path";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
@@ -11,6 +12,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
+import { resolveBundledPluginReloadSource } from "./plugin-bundled-reload.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { createPluginGenerationNativeRoots } from "./plugin-generation-native-roots.js";
 import { GenerationCodec } from "./plugin-generation-worker-codec.js";
@@ -35,7 +37,12 @@ export type PreparedPluginGenerationArtifact = {
   artifact: PluginGenerationArtifact;
   attachModuleSource(callback: (filename: string) => string): void;
 };
-type PreparationParameters = { rootDir: string; source: string; standalone?: boolean };
+type PreparationParameters = {
+  rootDir: string;
+  source: string;
+  standalone?: boolean;
+  bundledReload?: boolean;
+};
 type PreparationOwner = { closing: boolean; clients: Set<() => Promise<void>> };
 const preparationOwners = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginPreparationOwners"),
@@ -51,12 +58,7 @@ function preparationOwnerFor(source: RetainedNativeWorkerSource): PreparationOwn
     source.retain(owner, async () => {
       retained.closing = true;
       const outcomes = await Promise.allSettled([...retained.clients].map((close) => close()));
-      const errors = outcomes.flatMap((outcome) =>
-        outcome.status === "rejected" ? [outcome.reason] : [],
-      );
-      if (errors.length) {
-        throw new AggregateError(errors, "Plugin preparation workers failed to close");
-      }
+      throwSettledAggregate(outcomes, "Plugin preparation workers failed to close");
     });
   }
   if (owner.closing) {
@@ -298,12 +300,22 @@ export async function preparePluginGenerationArtifact(
     }
   }
   try {
+    const bundledReloadSource = params.bundledReload
+      ? resolveBundledPluginReloadSource(params.rootDir)
+      : undefined;
     const artifact = await request({
       operation: "capture",
       captureId: 1,
       progressSignal: waitSignal,
-      rootDir: params.rootDir,
-      entryFile: params.standalone ? params.source : undefined,
+      rootDir: bundledReloadSource?.hostRoot ?? params.rootDir,
+      entryFile: bundledReloadSource
+        ? bundledReloadSource.ownedPaths.map((relative) =>
+            path.join(bundledReloadSource.hostRoot, relative),
+          )
+        : params.standalone
+          ? params.source
+          : undefined,
+      bundledReloadSource,
       storage,
       installRoots,
       readOnly,

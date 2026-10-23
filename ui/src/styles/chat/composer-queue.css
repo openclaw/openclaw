@@ -352,13 +352,6 @@
   color: var(--muted);
 }
 
-.chat-queue__error-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .chat-queue__actions {
   display: inline-flex;
   align-items: center;

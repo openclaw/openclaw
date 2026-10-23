@@ -548,6 +548,8 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     getGatewaySuspendAdmissionPhase() !== "accepting";
   const admitRawBatch = createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMetadata>({
     payload: options.payload,
+    prepareAdmission: options.prepareAdmission,
+    signal: drainAbortSignal,
     reuseAdmissionFactsForFreshClaims: options.reuseAdmissionFactsForFreshClaims,
     appendRetryDelaysMs: options.appendRetryDelaysMs,
     onDurableAdmission: options.onDurableAdmission,

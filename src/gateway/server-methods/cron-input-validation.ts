@@ -37,11 +37,13 @@ import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../../cron/types.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveHookExternalContentSource } from "../../security/external-content-source.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
@@ -326,6 +328,11 @@ export async function captureCronCreatorSession(
         callerScope.agentId,
       )
     : legacyActor;
+  const executionSessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? "";
+  const executionSession =
+    !hasRuntimeAuthority && job.payload.kind === "agentTurn" && executionSessionKey
+      ? await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionSessionKey, agentId })
+      : undefined;
   const inference =
     // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
     !hasRuntimeAuthority && job.payload.kind === "agentTurn" && job.sessionTarget !== "main"
@@ -334,7 +341,13 @@ export async function captureCronCreatorSession(
             cfg,
             agentId: agentId ?? resolveDefaultAgentId(cfg),
             model: job.payload.model,
+            isGmailHook:
+              (job.payload.externalContentSource ??
+                resolveHookExternalContentSource(
+                  parseAgentSessionKey(executionSessionKey)?.rest ?? executionSessionKey,
+                )) === "gmail",
             sessionEntry: callerScope ? creatorSession : undefined,
+            executionSessionEntry: executionSession?.entry,
           },
           caller,
         )

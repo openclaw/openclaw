@@ -11,7 +11,6 @@ import {
   readLatestSubagentOutputWithRetry,
 } from "./subagent-announce-output.test-support.js";
 import type { ChildCompletionRow } from "./subagent-announce-result.js";
-import { assistantCallsSessionsYield } from "./subagent-yield-output.js";
 
 describe("captureSubagentCompletionReply", () => {
   const sessionKey = "agent:main:subagent:child";
@@ -222,8 +221,9 @@ describe("readSubagentOutput", () => {
       content: "Waiting for child completion.",
       toolCalls: [{ name: "sessions_yield" }],
     };
-    expect(assistantCallsSessionsYield(assistant)).toBe(true);
-    await expectOutput([assistant, { role: "tool", content: '{"status":"yielded"}' }]);
+    await expectOutput([assistant, { role: "tool", content: '{"status":"yielded"}' }], undefined, {
+      status: "timeout",
+    });
   });
 
   it("summarizes top-level tool_calls after a timeout", () =>

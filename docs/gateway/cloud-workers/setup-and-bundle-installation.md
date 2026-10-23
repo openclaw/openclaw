@@ -43,6 +43,8 @@ Use a Crabbox bootstrap or image that supplies a supported Node.js release and n
 
 Headless Windows guests must include Crabbox's managed launcher at `C:\Program Files\Crabbox\bin\Start-CrabboxDetachedProcess.ps1`. It keeps the node alive after Crabbox closes its SSH command. Enrollment fails with guidance if the launcher is absent. A hidden PowerShell parent redirects node output to `node.log` under its isolated state directory because the launcher does not inherit SSH output handles.
 
+New native Windows workers use a short, account- and lease-specific state directory on the profile's drive, leaving more path-length headroom for tools launched from their workspaces. Existing workers keep their original state directory across enrollment retries and recovery; reprovision a worker to use the shorter layout. Linux and macOS paths are unchanged.
+
 Desktop-enabled Windows workers use Crabbox's interactive desktop service; see [native desktop prerequisites](/gateway/cloud-workers/desktop#native-windows-prerequisites).
 
 ## Bundle installation

@@ -2,7 +2,7 @@
 import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { placementControls } from "./placement.test-support.ts";
 import { resolveProjectChip } from "./project-chip.ts";
@@ -10,7 +10,7 @@ import { ProjectChip } from "./project-chip.tsx";
 import { pickerParams } from "./where-chip.test-support.ts";
 import { WhereChip } from "./where-chip.tsx";
 
-it("retains environment heading and device artwork through unrelated refreshes", () => {
+it("retains environment heading and device artwork through unrelated refreshes", async () => {
   const params = pickerParams(
     true,
     undefined,
@@ -19,6 +19,10 @@ it("retains environment heading and device artwork through unrelated refreshes",
   );
   const [current, setCurrent] = createSignal(params);
   const view = mountSolid(() => <WhereChip {...current()} />);
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".new-session-page__environment-list")).not.toBeNull(),
+  );
   const list = view.container.querySelector(".new-session-page__environment-list")!;
   const row = list.querySelector('[data-value="device:runner"]')!;
   const heading = list.querySelector(".new-session-page__environment-heading");
@@ -48,7 +52,7 @@ it("retains environment heading and device artwork through unrelated refreshes",
   expect(row.querySelector('[data-form="laptop"]')).not.toBeNull();
 });
 
-it("retains project artwork while current labels and selection remain live", () => {
+it("retains project artwork while current labels and selection remain live", async () => {
   const projects = [
     {
       id: "sample",
@@ -92,6 +96,9 @@ it("retains project artwork while current labels and selection remain live", () 
   };
   const [current, setCurrent] = createSignal(params);
   const view = mountSolid(() => <ProjectChip {...current()} />);
+  await waitForSolid(() =>
+    expect(view.container.querySelector('[data-value="project:sample"]')).not.toBeNull(),
+  );
   const row = view.container.querySelector('[data-value="project:sample"]')!;
   const icon = row.querySelector(".session-menu__icon svg");
   const observer = new MutationObserver(() => {});

@@ -4,6 +4,7 @@ import { en } from "./en.ts";
 const enMcp = {
   mcpServers: {
     signIn: "Sign in",
+    signInNamed: "Sign in {name}",
     authenticationSaved: "Authentication saved",
     signInFailed: "Sign-in did not finish. Check the MCP server settings and try again.",
     signInExpired: "This sign-in session ended. Close the dialog and sign in again.",
@@ -34,12 +35,15 @@ const enMcp = {
     connectRequired: "Connect to the gateway to change MCP servers.",
     adminRequired: "MCP server changes require operator.admin access.",
     enable: "Enable",
+    enableNamed: "Enable {name}",
     disable: "Disable",
+    disableNamed: "Disable {name}",
     removeNamed: "Remove {name}",
     removeConfirmTitle: "Remove {name}?",
     removeConfirmMessage:
       "This deletes the server's saved configuration, such as its command or URL, arguments, headers, and environment. This cannot be undone.",
     working: "Working…",
+    workingNamed: "Working… {name}",
   },
   mcpPage: {
     intro: "Connect and manage MCP servers that provide tools to OpenClaw.",

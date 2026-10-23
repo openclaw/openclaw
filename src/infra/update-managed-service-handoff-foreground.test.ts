@@ -77,6 +77,7 @@ it.runIf(process.platform !== "win32").each([
   );
   const fixturePath = path.join(root, "openclaw.mjs");
   const configPath = path.join(root, "openclaw.json");
+  const nativeProbePath = path.join(root, "native-recovery-probe");
   await fs.writeFile(
     path.join(root, "package.json"),
     JSON.stringify({ name: "openclaw", type: "module", version: "1.0.0" }),
@@ -128,6 +129,10 @@ it.runIf(process.platform !== "win32").each([
     `${bootstrap}
       const ledger = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.ledger).href)});
       export const { adoptUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunStep, recordUpdateRunVerification } = ledger;
+      export async function waitForGatewayUpdateRecovery() {
+        fs.writeFileSync(${JSON.stringify(nativeProbePath)}, "unexpected native service probe");
+        throw new Error("Foreground recovery does not own a native service");
+      }
       const handoff = await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorEntrypoints.handoff).href)});
       export async function assertForegroundUpdateOrigin(...args) {
         await handoff.assertForegroundUpdateOrigin(...args);
@@ -204,7 +209,9 @@ it.runIf(process.platform !== "win32").each([
             { name: "gateway verification", command: "gateway verification", cwd: root, durationMs: 1, exitCode: 0 },
           ] } : {}),
           ...(mode === "pending-sibling-unsafe" ? { recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" } } : {}),
-          ...(failed ? { reason: "fixture-recovery", recovery: { serviceRestartSafe: mode === "safe-recovery", version: "1.0.0" } } : {}),
+          ...(failed ? { reason: "fixture-recovery", recovery: mode === "safe-recovery"
+            ? { serviceRestartSafe: true, version: "1.0.0" }
+            : { serviceRestartSafe: false, reason: "runtime-verification-failed" } } : {}),
           after: { version: "1.0.0" } }), resolve));
         if (failed) process.exitCode = mode === "safe-recovery" ? 1 : 79;
         if (mode === "pending-sibling-failed-exit") process.exitCode = 1;
@@ -239,6 +246,7 @@ it.runIf(process.platform !== "win32").each([
         }
         Object.assign(params, { foregroundOrigin: origin, serviceRecovery: undefined, runId: run.runId,
           beforePark: true, commandArgv: [process.execPath, ${JSON.stringify(fixturePath)}, "update", "--json"], nodeExecArgv: [] });
+        if (mode === "safe-recovery") params.recovery = { serviceRestartSafe: true, version: "1.0.0" };
         const meta = JSON.parse(fs.readFileSync(params.metaPath, "utf8"));
         Object.assign(meta.meta, { root, runId: run.runId, foregroundOrigin: origin, completionOwner: "gateway-restart" });
         fs.writeFileSync(params.metaPath, JSON.stringify(meta));
@@ -363,6 +371,7 @@ it.runIf(process.platform !== "win32").each([
       replacementOwner?: string;
     };
     const log = await fs.readFile(prepared.logPath, "utf8");
+    await expect(fs.access(nativeProbePath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(result, log).toMatchObject({
       helperSignal: null,
       helperCode,

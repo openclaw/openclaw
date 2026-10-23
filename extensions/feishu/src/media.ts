@@ -88,37 +88,6 @@ function asHeaderMap(value: object | undefined): FeishuHeaderMap | undefined {
   return undefined;
 }
 
-function extractFeishuUploadKey(
-  response: FeishuUploadResponse,
-  params: {
-    key: "image_key" | "file_key";
-    errorPrefix: string;
-  },
-): string {
-  if (!response) {
-    throw new Error(`${params.errorPrefix}: empty response`);
-  }
-
-  const wrappedResponse = response as {
-    image_key?: string;
-    file_key?: string;
-    code?: number;
-    msg?: string;
-    data?: Partial<Record<"image_key" | "file_key", string>>;
-  };
-  if (wrappedResponse.code !== undefined && wrappedResponse.code !== 0) {
-    throw new Error(
-      `${params.errorPrefix}: ${wrappedResponse.msg || `code ${wrappedResponse.code}`}`,
-    );
-  }
-
-  const key = wrappedResponse[params.key] ?? wrappedResponse.data?.[params.key];
-  if (!key) {
-    throw new Error(`${params.errorPrefix}: no ${params.key} returned`);
-  }
-  return key;
-}
-
 function readHeaderValue(
   headers: Record<string, unknown> | undefined,
   name: string,
@@ -599,10 +568,26 @@ export async function sendMediaFeishu(
       errorPrefix,
       { includeNestedErrorLogId: true },
     );
-    const key = extractFeishuUploadKey(response, {
-      key: isImage ? "image_key" : "file_key",
-      errorPrefix,
-    });
+    const keyName = isImage ? "image_key" : "file_key";
+    if (!response) {
+      throw new Error(`${errorPrefix}: empty response`);
+    }
+
+    const wrappedResponse = response as {
+      image_key?: string;
+      file_key?: string;
+      code?: number;
+      msg?: string;
+      data?: Partial<Record<"image_key" | "file_key", string>>;
+    };
+    if (wrappedResponse.code !== undefined && wrappedResponse.code !== 0) {
+      throw new Error(`${errorPrefix}: ${wrappedResponse.msg || `code ${wrappedResponse.code}`}`);
+    }
+
+    const key = wrappedResponse[keyName] ?? wrappedResponse.data?.[keyName];
+    if (!key) {
+      throw new Error(`${errorPrefix}: no ${keyName} returned`);
+    }
     return isImage ? { image_key: key } : { file_key: key };
   });
   const result = await sendUploadedMediaFeishu(params, media, routing.msgType);

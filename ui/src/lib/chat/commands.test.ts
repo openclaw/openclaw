@@ -151,12 +151,6 @@ describe("getSlashCommandCompletions", () => {
       "essential-tools",
       "standard-session",
       "standard-agent",
-    ]);
-    expect(completionNames("", { showAll: true })).toEqual([
-      "essential-session",
-      "essential-tools",
-      "standard-session",
-      "standard-agent",
       "power-session",
     ]);
   });

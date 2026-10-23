@@ -14,7 +14,6 @@ import {
 import { parseActivationCommand } from "./group-activation.js";
 import { markInboundContextLabel } from "./reply/inbound-context-marker.js";
 import { resolveAuthorizedSessionResetCommand } from "./reply/session-reset-command.js";
-import { parseSendPolicyCommand } from "./send-policy.js";
 import type { MsgContext } from "./templating.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
 
@@ -643,17 +642,6 @@ describe("control command parsing", () => {
   ) {
     cases.forEach(([value, expected]) => expect(parse(value)).toEqual(expected));
   }
-
-  it("requires slash for send policy", () => {
-    expectCases(parseSendPolicyCommand, [
-      ["/send on", { hasCommand: true, mode: "allow" }],
-      ["/send: on", { hasCommand: true, mode: "allow" }],
-      ["/send", { hasCommand: true }],
-      ["/send:", { hasCommand: true }],
-      ["send on", { hasCommand: false }],
-      ["send", { hasCommand: false }],
-    ]);
-  });
 
   it("requires slash for activation", () => {
     expectCases(parseActivationCommand, [

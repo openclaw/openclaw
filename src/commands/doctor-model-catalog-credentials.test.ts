@@ -108,6 +108,26 @@ afterEach(async () => {
 });
 
 describe("doctor model catalog credential migration", () => {
+  it("refuses malformed UTF-8 root catalog credentials while importing healthy config", async () => {
+    const state = createState();
+    const catalogPath = path.join(state.agentDir, "models.json");
+    const source = Buffer.from(JSON.stringify({ providers: { root: provider("broken-key") } }));
+    source[source.indexOf("broken-key")] = 0xff;
+    fs.writeFileSync(catalogPath, source);
+
+    const result = await maybeMigrateModelCatalogCredentials(
+      migrationParams(state, {
+        models: { providers: { configured: provider("configured-key") } },
+      }),
+    );
+
+    expect(result).toMatchObject({ detected: 1, migrated: 1 });
+    expect(result.warnings.join("\n")).toContain("UTF-8");
+    expect(loadPersistedSharedAuthProfileStore(state.env)?.profiles).toEqual({
+      "configured:default": { type: "api_key", provider: "configured", key: "configured-key" },
+    });
+    expect(fs.readFileSync(catalogPath)).toEqual(source);
+  });
   it("copies config, root, and plugin catalog keys before runtime retires plaintext", async () => {
     const state = createState();
     const { agentDir } = state;

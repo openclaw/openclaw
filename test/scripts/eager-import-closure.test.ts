@@ -11,9 +11,10 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, posix, relative } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
+import { createRuntimeProcessEntrypoints } from "../../src/infra/runtime-process-manifest.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
@@ -105,8 +106,20 @@ it("keeps the PR wrapper inventory closed over runtime imports", () => {
     ...wrapperFiles,
     ...components.filter((file) => existsSync(file)),
   ]);
+  // Forked children resolve through the process manifest, not an import edge. Wrapper
+  // processes never select PostgreSQL, so its bridge (and unpinned pg) stays unextracted.
+  const entrypoints = new Map(Object.entries(createRuntimeProcessEntrypoints(import.meta.url)));
+  entrypoints.delete("postgresBridge");
+  const forked = closure.flatMap((file) =>
+    [...readFileSync(file, "utf8").matchAll(/resolveRuntimeProcessEntrypointUrl\(([^)]*)\)/g)]
+      .flatMap(([, argument]) => Array.from(argument!.matchAll(/"(\w+)"/g)))
+      .flatMap(([, name]) => {
+        const entry = entrypoints.get(name!);
+        return entry ? [posix.join("src/infra", `${entry.sourceWorkerName}.ts`)] : [];
+      }),
+  );
   const extracted = new Set(["scripts/pr", ...components]);
-  const missing = closure.filter(
+  const missing = [...new Set([...closure, ...forked])].filter(
     (file) => !file.startsWith("scripts/pr-lib/") && !extracted.has(file),
   );
   // Existing assets can be path-loaded; only absent inventory paths are stale.

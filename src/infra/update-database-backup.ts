@@ -320,6 +320,7 @@ export async function createUpdateDatabaseBackupInProcess(
   const { buildBackupArchivePath } = await import("../commands/backup-shared.js");
   const { createStoppedSqliteSnapshot, createVerifiedSqliteSnapshot } =
     await import("./sqlite-snapshot.js");
+  const { AGENT_FTS_SCHEMAS } = await import("../state/openclaw-agent-fts-schema.js");
   const databases: UpdateDatabaseBackup["databases"] = [];
   const sourceGenerations: UpdateDatabaseBackup["sourceGenerations"] = Object.fromEntries(
     inventory.missing.map((file) => [file, null]),
@@ -382,9 +383,10 @@ export async function createUpdateDatabaseBackupInProcess(
           },
           preserveRowIds: true,
           requireNonEmptySource: true,
+          // Owned FTS indexes are derived; whichever runtime admits this copy rebuilds them.
           integrity:
-            engines.get(sourcePath)?.engine === "sqlite" && input.integrityCheck
-              ? { check: input.integrityCheck }
+            engines.get(sourcePath)?.engine === "sqlite"
+              ? { check: input.integrityCheck ?? "full", ftsSchemas: AGENT_FTS_SCHEMAS }
               : undefined,
         });
     const engine = engines.get(sourcePath)!;

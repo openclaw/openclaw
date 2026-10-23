@@ -4,6 +4,7 @@
  * creates occurrences; this module stays free of runtime dependencies so cron
  * core can import it.
  */
+import type { OperationalRunInstanceRef } from "../agents/operational-run-instance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ScheduledExecutionContextResult,
@@ -18,7 +19,7 @@ export type ScheduledExecutionContext = ScheduledExecutionFacts &
   }>;
 
 /** Run-specific facts an executor supplies when its run is admitted. */
-export type ScheduledOccurrenceRun = {
+type ScheduledOccurrenceRun = {
   cfg: OpenClawConfig;
   agentId: string;
   runId: string;
@@ -31,7 +32,7 @@ export type ScheduledOccurrenceRun = {
 export type MintedScheduledExecution = Readonly<{
   result: ScheduledExecutionContextResult;
   /** Binds the context to the admitted run; the admission owner reads it through `current`. */
-  bind: (assertAdmitted: () => void) => void;
+  bind: (run: OperationalRunInstanceRef, assertAdmitted: () => void) => void;
   current: () => ScheduledExecutionContext | undefined;
   release: () => void;
 }>;

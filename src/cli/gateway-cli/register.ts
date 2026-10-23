@@ -16,6 +16,7 @@ import {
   resolveGatewayRpcOptionsWithLocalPort,
 } from "../gateway-rpc.js";
 import { formatHelpExamples } from "../help-format.js";
+import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
@@ -144,17 +145,6 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   return lines;
 }
 
-function parseOptionalPositiveIntegerOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-  const parsed = parseStrictPositiveInteger(raw);
-  if (parsed === undefined) {
-    throw new Error(`${label} must be a positive integer.`);
-  }
-  return parsed;
-}
-
 async function writeSupportExportFromCli(opts: {
   json?: boolean;
   output?: string;
@@ -174,8 +164,8 @@ async function writeSupportExportFromCli(opts: {
   };
   const result = await writeDiagnosticSupportExport({
     outputPath: opts.output,
-    logLimit: parseOptionalPositiveIntegerOption(opts.logLines, "--log-lines"),
-    logMaxBytes: parseOptionalPositiveIntegerOption(opts.logBytes, "--log-bytes"),
+    logLimit: parseOptionalPositiveInteger(opts.logLines, "--log-lines", "."),
+    logMaxBytes: parseOptionalPositiveInteger(opts.logBytes, "--log-bytes", "."),
     stabilityBundle: opts.stabilityBundle,
     readStatusSnapshot: async () => {
       const { gatherDaemonStatus } = await import("../daemon-cli/status.gather.js");

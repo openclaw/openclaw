@@ -5,7 +5,6 @@ import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-da
 import { cleanupReplyAgentRun } from "./agent-runner-core.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
-  createFollowupTurnTestTypingController,
   createFollowupTurnTestTurn,
   getFollowupTurnTestState,
   resetFollowupTurnTestState,
@@ -20,6 +19,7 @@ import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { FollowupRun } from "./queue/types.js";
 import type { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const admissionState = vi.hoisted(() => ({
   beforeAdmission: vi.fn<(queued: FollowupRun) => Promise<void>>(),
@@ -88,7 +88,7 @@ it("keeps cleanup runner options out of a deferred queued user turn", async ({ s
     runId: "queued-user-run",
     outcome: { kind: "aborted", reason: "user" },
   });
-  const typing = createFollowupTurnTestTypingController();
+  const typing = createMockTypingController();
   const defaults = { typing, typingMode: "never" as const, defaultModel: "gpt-test" };
   const userRunner = createFollowupRunner({
     ...defaults,

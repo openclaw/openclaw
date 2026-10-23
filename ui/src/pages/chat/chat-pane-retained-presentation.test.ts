@@ -540,10 +540,12 @@ describe("chat pane retained presentation lifecycle", () => {
       pane.active = true;
 
       const opening = openSessionWorkspaceFile(state, { path: "README.md" });
-      expect(getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "README.md", {
-        agentId: "main",
-      });
       expect(isSidebarSlotVisible(state.sidebarLayout, "workspace")).toBe(true);
+      await vi.waitFor(() =>
+        expect(getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "README.md", {
+          agentId: "main",
+        }),
+      );
 
       if (retirement === "hidden") {
         pane.presented = false;

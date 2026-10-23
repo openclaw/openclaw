@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "./loader.js";
@@ -623,7 +623,8 @@ describe("owned plugin inspections", () => {
         cfg: fixture.config,
         doctorFixCommand: "openclaw doctor --fix",
       });
-      await vi.waitFor(() => expect(fixture.state.connections).toHaveLength(1));
+      await Promise.race([fixture.state.disposalStarted.promise, warnings]);
+      expect(fixture.state.connections).toHaveLength(1);
       let completed = false;
       void warnings.then(() => {
         completed = true;

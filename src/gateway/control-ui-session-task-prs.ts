@@ -9,8 +9,14 @@ import type { ControlUiSessionTaskPullRequest } from "./control-ui-contract.js";
 import type { EntryRow } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
-// Only structural selections are shared. Audience checks remain live for every reader.
-const childrenByRevision = new WeakMap<object, Map<string, EntryRow[]>>();
+type PublicationNode = {
+  row: EntryRow;
+  identity: string;
+  session: TaskPublicationRead["sessions"][number];
+  children?: PublicationNode[];
+};
+// Row revisions own structural facts, never a viewer's permission to consume them.
+const nodesByRevision = new WeakMap<object, Map<EntryRow, PublicationNode>>();
 
 /** Traverse the row owner's indexed lineage; neither checkout nor transcript is evidence. */
 export function selectTaskPublicationSessions(
@@ -20,11 +26,33 @@ export function selectTaskPublicationSessions(
 ): TaskPublicationRead["sessions"] {
   // Registry publications can defer parent-index updates until row preparation.
   void projection.state;
+  const revision = projection.sharingRevision;
+  const nodes = revision
+    ? getOrCreateWeakOwnerMap(nodesByRevision, revision)
+    : new Map<EntryRow, PublicationNode>();
+  const prepare = (row: EntryRow): PublicationNode => {
+    const retained = nodes.get(row);
+    if (retained) {
+      return retained;
+    }
+    const node: PublicationNode = {
+      row,
+      identity: JSON.stringify([row.agentId, row.key, row.entry.sessionId]),
+      session: {
+        agentId: row.agentId,
+        sessionKey: row.key,
+        sessionId: row.entry.sessionId,
+        lifecycleRevision: row.entry.lifecycleRevision ?? null,
+      },
+    };
+    nodes.set(row, node);
+    return node;
+  };
   const seen = new Set<string>();
-  const pending = [root];
+  const pending = [prepare(root)];
   const sessions: TaskPublicationRead["sessions"] = [];
-  for (const row of pending) {
-    const identity = JSON.stringify([row.agentId, row.key, row.entry.sessionId]);
+  for (const node of pending) {
+    const { row, identity } = node;
     if (
       seen.has(identity) ||
       row.entry.incognito ||
@@ -34,21 +62,9 @@ export function selectTaskPublicationSessions(
       continue;
     }
     seen.add(identity);
-    sessions.push({
-      agentId: row.agentId,
-      sessionKey: row.key,
-      sessionId: row.entry.sessionId,
-      lifecycleRevision: row.entry.lifecycleRevision ?? null,
-    });
-    const revision = projection.sharingRevision;
-    const children = revision ? getOrCreateWeakOwnerMap(childrenByRevision, revision) : undefined;
-    let selected = children?.get(row.key);
-    if (!selected) {
-      selected = projection.selectEntries({ parentSessionKey: row.key });
-      // Acquisition may advance the revision; never label earlier candidates with its successor.
-      children?.set(row.key, selected);
-    }
-    pending.push(...selected);
+    sessions.push(node.session);
+    node.children ??= projection.selectEntries({ parentSessionKey: row }).map(prepare);
+    pending.push(...node.children);
   }
   return sessions.toSorted(
     (a, b) => a.sessionKey.localeCompare(b.sessionKey) || a.agentId.localeCompare(b.agentId),

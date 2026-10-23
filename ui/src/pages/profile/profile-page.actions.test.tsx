@@ -32,13 +32,23 @@ it("shows pending coauthor consent and restores the accepted value after failure
   const page = mountProfilePage(harness.context);
   const toggle = () =>
     page.querySelector<HTMLInputElement>('#settings-profile-identity [role="switch"]');
-  await waitForSolid(() => expect(toggle()).toMatchObject({ checked: true, disabled: false }));
+  await waitForSolid(() => {
+    expect(toggle()?.checked).toBe(true);
+    expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
+    expect(toggle()?.disabled).toBe(false);
+  });
   toggle()!.click();
-  await waitForSolid(() => expect(toggle()).toMatchObject({ checked: false, disabled: true }));
+  await waitForSolid(() => {
+    expect(toggle()?.checked).toBe(false);
+    expect(toggle()?.getAttribute("aria-disabled")).toBe("true");
+    expect(toggle()?.disabled).toBe(false);
+  });
+  toggle()!.click();
   expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1);
   saved.reject(new Error("Consent could not be saved"));
   await waitForSolid(() => {
-    expect(toggle()).toMatchObject({ checked: true, disabled: false });
+    expect(toggle()?.checked).toBe(true);
+    expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
     expect(page.textContent).toContain("Consent could not be saved");
   });
 });
@@ -62,7 +72,11 @@ it.each(["identity", "navigation"])(
     let page = mountProfilePage(harness.context);
     const toggle = () =>
       page.querySelector<HTMLInputElement>('#settings-profile-identity [role="switch"]');
-    await waitForSolid(() => expect(toggle()).toMatchObject({ checked: true, disabled: false }));
+    await waitForSolid(() => {
+      expect(toggle()?.checked).toBe(true);
+      expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
+      expect(toggle()?.disabled).toBe(false);
+    });
     toggle()!.click();
     await waitForSolid(() =>
       expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1),
@@ -80,12 +94,14 @@ it.each(["identity", "navigation"])(
       expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
         "Grace",
       );
-      expect(toggle()).toMatchObject({ checked: true, disabled: false });
+      expect(toggle()?.checked).toBe(true);
+      expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
     });
     saved.reject(new Error("Retired consent failure"));
     await saved.promise.catch(() => undefined);
     await waitForSolid(() => {
-      expect(toggle()).toMatchObject({ checked: true, disabled: false });
+      expect(toggle()?.checked).toBe(true);
+      expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
       expect(page.textContent).not.toContain("Retired consent failure");
     });
   },

@@ -50,7 +50,6 @@ vi.mock("../../auto-reply/reply/agent-runner-memory.js", () => ({
 // mock-isolation: Use the fixture config without ambient runtime or secret-Gateway state.
 vi.mock("../../auto-reply/reply/agent-runner-utils.js", () => ({
   resolveQueuedReplyExecutionConfig: async (config: OpenClawConfig) => config,
-  resolveQueuedReplyRuntimeConfig: (config: OpenClawConfig) => config,
 }));
 
 const withState = setupSessionMutationState();

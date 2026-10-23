@@ -135,9 +135,17 @@ function outbox(key: string, total = 2) {
     hasSessionDraft: (candidate: string) => total > 0 && candidate === key,
   };
 }
-function drag(target: Element, type: string, transfer: ReturnType<typeof createDataTransferStub>) {
+function drag(
+  target: Element,
+  type: string,
+  transfer: ReturnType<typeof createDataTransferStub>,
+  clientY = 0,
+) {
   const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperties(event, { dataTransfer: { value: transfer }, clientY: { value: 0 } });
+  Object.defineProperties(event, {
+    dataTransfer: { value: transfer },
+    clientY: { value: clientY },
+  });
   target.dispatchEvent(event);
   return event;
 }
@@ -161,7 +169,7 @@ describe("personal navigation rail", () => {
       [false, false],
     );
     await click(sidebar, '[data-navigation-view="pages"]');
-    expect(dom.query(".sidebar-pages")).not.toBeNull();
+    await waitForSolid(() => expect(dom.query(".sidebar-pages")).not.toBeNull());
     expect(dom.query(".sidebar-session-content")).toBeNull();
     expect(dom.query("aside.sidebar")).toBe(frame);
     expect(dom.query(".sidebar-rail__bottom")).toBe(bottom);
@@ -344,11 +352,16 @@ describe("personal navigation rail", () => {
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual([...retained, "route:usage"]);
     const pin = rail(sidebar, "route:usage")!;
+    const person = rail(sidebar, "person:offline");
+    const pinLink = pin.querySelector<HTMLAnchorElement>("a")!;
     const reorder = createDataTransferStub();
-    drag(pin.querySelector("a")!, "dragstart", reorder);
+    drag(pinLink, "dragstart", reorder);
     drag(rail(sidebar, "person:offline")!, "drop", reorder);
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual(["route:usage", ...retained]);
+    expect(rail(sidebar, "route:usage")).toBe(pin);
+    expect(rail(sidebar, "person:offline")).toBe(person);
+    expect(pin.querySelector("a")).toBe(pinLink);
     await sidebar.sidebarMenus.preloadMenuRenderer();
     pin.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await sidebar.updateComplete;
@@ -656,6 +669,42 @@ describe("personal navigation rail", () => {
     append({ key, label: "Current title", icon: "🚀" });
     await settleLitElement(sidebar);
     expect(link(sidebar, `session-rail:${key}`).getAttribute("aria-label")).toBe("Current title");
+  });
+
+  it("reorders a descriptor-only personal pin without requiring a loaded roster row", async () => {
+    const { sidebar, gateway, sessions, result, key, pending, read, dom } = await pinLookup();
+    gateway.publish({
+      hello: gatewayHelloForMethods(["sessions.describe"], ["operator.sessions.read"]),
+    });
+    const mine = "session:agent:main:mine";
+    const unloaded = `session:${key}`;
+    const shortcut = `session-rail:${key}`;
+    await update(sidebar, { sidebarEntries: [mine, unloaded, shortcut] });
+    pending.resolve({
+      session: { ...result.sessions[1]!, key, label: "Off-page pin" },
+    });
+    await pending.promise;
+    await settleLitElement(sidebar);
+    const pins = () =>
+      [...dom.all('[data-session-section="pinned"] .sidebar-recent-session')].map((row) =>
+        row.getAttribute("data-session-key"),
+      );
+    expect(pins()).toEqual(["agent:main:mine", key]);
+    const source = dom.query(`[data-session-section="pinned"] [data-session-key="${key}"]`)!;
+    const target = dom.query(
+      '[data-session-section="pinned"] [data-session-key="agent:main:mine"]',
+    )!;
+    expect(source.getAttribute("draggable")).toBe("true");
+    const transfer = createDataTransferStub();
+    drag(source, "dragstart", transfer);
+    drag(target, "dragover", transfer, -1);
+    drag(target, "drop", transfer);
+    await sidebar.updateComplete;
+    expect(sidebar.sidebarEntries).toEqual([unloaded, mine, shortcut]);
+    expect(pins()).toEqual([key, "agent:main:mine"]);
+    expect(read).toHaveBeenCalledExactlyOnceWith({ key });
+    expect(sessions.patch).not.toHaveBeenCalled();
+    expect(sessions.groupsPut).not.toHaveBeenCalled();
   });
 
   it("retires cached pin descriptors when the source changes without reading pins", async () => {

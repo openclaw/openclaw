@@ -532,9 +532,9 @@ describe("chat pane session menu boundary", () => {
     expect(draw({ ...row, sessionId: "retained", sharingRole: "owner" })).toBe(
       "Retained conversation",
     );
-    expect(container.querySelector(".chat-pane__session-title-button")?.getAttribute("title")).toBe(
-      "Rename session",
-    );
+    expect(
+      container.querySelector(".chat-pane__session-title-button")?.getAttribute("aria-label"),
+    ).toBe("Rename session Retained conversation");
     pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting" });
     expect(draw(row)).toBe("Retained conversation");
     expect(draw({ ...row, label: "Older scoped label" })).toBe("Retained conversation");

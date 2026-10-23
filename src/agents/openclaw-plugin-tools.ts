@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAgentToolAssistantTurnId } from "../../packages/agent-core/src/tool-execution-context.js";
-import { getRuntimeConfigSnapshot } from "../config/config.js";
+import { getRuntimeConfigSnapshot, selectLiveRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveMessageActionTurnAuthorization,
@@ -51,7 +51,6 @@ import { preparePluginToolExecutionCapabilities } from "./plugin-tool-execution.
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
-import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { captureGatewayToolCallerAssertion } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -256,13 +255,13 @@ function* resolveOpenClawPluginToolSteps(
   params: PluginToolOptions,
 ): Generator<Promise<void>, AnyAgentTool[], void> {
   const inputConfig = params.resolvedConfig ?? params.options?.config;
-  const availabilityConfig = resolveAgentRuntimeToolConfig(inputConfig);
+  const availabilityConfig = selectLiveRuntimeConfig(inputConfig);
   // Bind ownership before reload replaces the source snapshot. Explicit run
   // overrides stay isolated; runtime-owned contexts follow later publications.
   const followsRuntimeConfig =
     inputConfig === undefined || availabilityConfig === getRuntimeConfigSnapshot();
   const resolveCurrentRuntimeConfig = () =>
-    followsRuntimeConfig ? resolveAgentRuntimeToolConfig() : availabilityConfig;
+    followsRuntimeConfig ? selectLiveRuntimeConfig() : availabilityConfig;
   const pluginToolInputs = resolveOpenClawPluginToolInputs({
     options: params.options,
     resolvedConfig: params.resolvedConfig,

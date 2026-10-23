@@ -1,6 +1,7 @@
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { ControlUiSessionPullRequestSnapshot } from "../../../../src/gateway/control-ui-contract.js";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatDetailsEnglish } from "../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
@@ -28,6 +29,7 @@ import { createSessionAutomationInventory } from "./components/chat-summary-auto
 import { ProcessesPanelData } from "./processes-panel-data.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 export type MobileDetailsBindings = {
   sharing?: PreparedChatSessionSharing;

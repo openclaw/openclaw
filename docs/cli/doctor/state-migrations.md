@@ -14,6 +14,13 @@ and plugin inventory remain unchanged. If either changes or migrations remain
 unresolved, Doctor scans again without repeating preflight's detection notices
 or warnings.
 
+Legacy text imports require valid UTF-8. If a source contains malformed bytes,
+Doctor warns and skips that source instead of storing replacement characters.
+Independent migrations continue. The original bytes remain in the source or its
+reported `.migrated` archive; recover the text from a verified backup before
+retrying. Invalid Skill Workshop proposal or rollback files never restore text
+into workspace skills, and their bundles remain available for manual recovery.
+
 After an interrupted legacy session import, rerun `openclaw doctor --fix` against
 the same state directory. Doctor compares retained transcripts with the importer's
 repaired representation, including legacy provider names and duplicate session
@@ -283,8 +290,13 @@ the maintenance holds in the existing migration tables. It leaves valid in-fligh
 deletions with their lifecycle owner. For regular agents, quarantine retains a
 safe deletion tombstone until explicit restoration; it never resurrects a deleted
 agent merely by archiving malformed cleanup details. Recovery preserves held
-stores; it does not migrate or retire them. Runtime admission remains separate
-from Doctor's repair holds. Review the paths and use the
+stores. After missing-table reconstruction, Doctor automatically restores a
+configured agent's matching database after verifying its ownership metadata,
+absence of a deletion record, and a rollback backup of the database and shared
+recovery records. An intervening OpenClaw upgrade does not disqualify the store.
+Quarantined deletion records and unconfigured or mismatched stores still require
+explicit restoration. Runtime admission remains separate from Doctor's repair
+holds. Review the paths and use the
 noninteractive `openclaw agents add` command printed by Doctor to restore the
 intended agent, or `openclaw agents delete` to confirm deletion. An unconfigured
 agent must be restored before deletion. For a custom database filename, restore

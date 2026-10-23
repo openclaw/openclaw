@@ -195,6 +195,7 @@ export abstract class ChatPaneStateOwner {
   }
 
   dispose() {
+    this.context?.connectionBootstrap.cancelQueued(this);
     this.context?.connectionBootstrap.setForegroundPane(this, null);
     this.chatState.dispose();
     this.isConnected = false;
@@ -222,6 +223,7 @@ export abstract class ChatPaneStateOwner {
   sessionKey = "";
   // This session-keyed pane retains its initial skeleton through URL canonicalization.
   routeLoadingSkeleton = false;
+  deferSnapshotRows = false;
   routeResolutionPending = false;
   agentId?: string = undefined;
   inputRegion: ChatInputRegion = "page";

@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -25,13 +26,33 @@ import {
   createProvisionOwnerFixture,
   expectProvisionComplete,
 } from "./pr-worktree-owner.test-support.js";
+import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
+const schemaCases = [
+  [28, "checkout"],
+  [29, "checkout"],
+  [28, "unclassified extract"],
+] as const;
+
+function extractUnclassifiedWrapper() {
+  const source = tempDirs.make("openclaw-pr-anchor-");
+  copyPrWrapperSources(source);
+  linkPrWrapperDependencies(source);
+  // A forked preflight child missing from the extracted closure leaves the store unclassified.
+  rmSync(join(source, "src/state/openclaw-agent-schema-inspection.worker.ts"));
+  return source;
+}
 
 describePosix("repository-owned PR provisioning state", () => {
-  it.each([28, 29])("preserves private schema v%i state while provisioning", async (version) => {
-    const f = createProvisionOwnerFixture(tempDirs.make("openclaw-pr-schema-"));
+  it.each(schemaCases)("preserves private schema v%i state from %s", async (version, source) => {
+    const f = createProvisionOwnerFixture(
+      tempDirs.make("openclaw-pr-schema-"),
+      "native",
+      128,
+      source === "checkout" ? undefined : extractUnclassifiedWrapper(),
+    );
     const stateDir = join(f.canonical, ".local", "pr-state");
     const databasePath = join(stateDir, "state", "openclaw.sqlite");
     mkdirSync(join(stateDir, "state"), { recursive: true });

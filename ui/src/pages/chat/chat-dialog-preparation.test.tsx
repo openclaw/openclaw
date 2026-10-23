@@ -29,8 +29,8 @@ import {
 } from "./components/chat-session-workspace-state.ts";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace-types.ts";
 import type { FileSidebarContent } from "./components/chat-sidebar-content-types.ts";
-import { ChatSubagentMobileHeader } from "./components/chat-subagents-mobile.tsx";
-import * as draftDialog from "./components/file-draft-recovery-dialog-view.tsx";
+import { ChatSubagentMobileHeader } from "./components/chat-subagent-mobile-header.tsx";
+import * as draftDialog from "./components/file-draft-recovery-dialog-loading.tsx";
 import * as stopDialog from "./components/session-worker-stop-dialog.tsx";
 
 vi.mock("../../lib/toast.ts", async (importOriginal) => ({

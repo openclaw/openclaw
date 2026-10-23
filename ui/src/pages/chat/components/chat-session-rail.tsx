@@ -373,34 +373,38 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
   );
 }
 
-defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessionRailContent, {
-  propertyChanged: (host, key) => {
-    if (key === "companion" || key === "focusRequest") {
-      inputHandlers.get(host)?.();
-    }
+export const ChatSessionRail = defineSolidBridge<ChatSessionRailProps>(
+  "openclaw-chat-session-rail",
+  ChatSessionRailContent,
+  {
+    propertyChanged: (host, key) => {
+      if (key === "companion" || key === "focusRequest") {
+        inputHandlers.get(host)?.();
+      }
+    },
+    properties: {
+      presentation: { default: undefined, attribute: false },
+      sessionKey: { default: "", attribute: false },
+      agentId: { default: undefined, attribute: false },
+      assistantName: { default: undefined, attribute: false },
+      digest: { default: null, attribute: false },
+      running: { default: false, attribute: false },
+      activeRunId: { default: null, attribute: false },
+      pullRequests: { default: [], attribute: false },
+      companion: { default: { turns: [], loading: false, draft: "" }, attribute: false },
+      modelControls: { default: undefined, attribute: false },
+      client: { default: null, attribute: false },
+      connected: { default: false, attribute: false },
+      sendShortcut: { default: "enter", attribute: false },
+      inputDeviceId: { default: undefined, attribute: false },
+      onSubmit: { default: undefined, attribute: false },
+      onDraftChange: { default: undefined, attribute: false },
+      onAttachmentsChange: { default: undefined, attribute: false },
+      onOpenImage: { default: undefined, attribute: false },
+      attachmentLimits: { default: undefined, attribute: false },
+      uploadConfig: { default: undefined, attribute: false },
+      presented: { default: false, type: Boolean },
+      focusRequest: { default: undefined, attribute: false },
+    },
   },
-  properties: {
-    presentation: { default: undefined, attribute: false },
-    sessionKey: { default: "", attribute: false },
-    agentId: { default: undefined, attribute: false },
-    assistantName: { default: undefined, attribute: false },
-    digest: { default: null, attribute: false },
-    running: { default: false, attribute: false },
-    activeRunId: { default: null, attribute: false },
-    pullRequests: { default: [], attribute: false },
-    companion: { default: { turns: [], loading: false, draft: "" }, attribute: false },
-    modelControls: { default: undefined, attribute: false },
-    client: { default: null, attribute: false },
-    connected: { default: false, attribute: false },
-    sendShortcut: { default: "enter", attribute: false },
-    inputDeviceId: { default: undefined, attribute: false },
-    onSubmit: { default: undefined, attribute: false },
-    onDraftChange: { default: undefined, attribute: false },
-    onAttachmentsChange: { default: undefined, attribute: false },
-    onOpenImage: { default: undefined, attribute: false },
-    attachmentLimits: { default: undefined, attribute: false },
-    uploadConfig: { default: undefined, attribute: false },
-    presented: { default: false, type: Boolean },
-    focusRequest: { default: undefined, attribute: false },
-  },
-});
+);

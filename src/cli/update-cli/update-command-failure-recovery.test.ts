@@ -420,6 +420,76 @@ it.each(["managed-service-preflight", "gateway-stop-unverified"])(
   },
 );
 
+it.each([
+  { mutationStarted: false, dataAtRisk: false },
+  { mutationStarted: true, dataAtRisk: false },
+  { mutationStarted: false, dataAtRisk: true },
+])(
+  "records package-swap recovery (mutation=$mutationStarted, risk=$dataAtRisk)",
+  async ({ mutationStarted, dataAtRisk }) => {
+    const env = { ...process.env };
+    const run = { runId: updateLedger.createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    mockService(vi.fn(async () => ({ status: "unknown" })));
+    mockFreePort();
+    await useRealVerification();
+    const failure = await finishSuccessfulPackageSwitch(
+      { packageRoot: root, json: true, run },
+      {
+        mutationStarted,
+        shouldRestart: false,
+        opts: { json: true, restart: false, run },
+        preManagedServiceStop: {
+          stopped: false,
+          inspected: true,
+          runtimeInspected: true,
+          running: true,
+          serviceEnv: env,
+        },
+        result: resultWith({
+          mode: "pnpm",
+          root,
+          reason: "package-swap",
+          before: { version: "2026.9.5" },
+          ...(dataAtRisk && {
+            recovery: {
+              serviceRestartSafe: false,
+              reason: "runtime-verification-failed",
+              dataAtRisk: "unreadable-state",
+            },
+          }),
+          steps: [stepWith("package-swap", { exitCode: 1 })],
+        }),
+      },
+    ).catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      name: "UpdateCommandFailure",
+      result: { status: "error", reason: "package-swap" },
+    });
+    const recorded = updateLedger.getUpdateRun(run.runId, { env });
+    assert(recorded);
+    const report = renderUpdateRunReport(recorded).markdown;
+    if (mutationStarted || dataAtRisk) {
+      expect(verifyUpdatedGateway).toHaveBeenCalledOnce();
+      expect(recorded.steps).toContainEqual(
+        containing({ step: "gateway recovery verification", exitCode: 1 }),
+      );
+    } else {
+      expect(report).not.toContain("restart-unhealthy");
+      expect(recorded.steps).toContainEqual(
+        containing({ step: "gateway recovery observation", exitCode: 0 }),
+      );
+      expect(recorded.steps).toContainEqual(
+        containing({
+          step: "diagnostic:gateway recovery observation",
+          detail: "No recovery needed; still serving 2026.9.5. No service was stopped or started.",
+        }),
+      );
+      noCalls(mocks.activePort, mocks.managedService, verifyUpdatedGateway);
+    }
+    expect(mocks.converge).not.toHaveBeenCalled();
+  },
+);
+
 it("settles a headless package rollback without waiting for a Gateway", async () => {
   const { packageRoot, transaction } = await createRetainedPackageSwap(root);
   const configPath = path.join(process.env.OPENCLAW_STATE_DIR!, "openclaw.json");
@@ -507,7 +577,7 @@ it.each([
   { activated: true, json: false, deferred: true },
   { activated: true, json: true, deferred: true },
 ])(
-  "defers only recorded state contention (activated=$activated, json=$json, deferred=$deferred)",
+  "observes untouched failures and defers recorded state contention (activated=$activated, json=$json, deferred=$deferred)",
   async ({ activated, json, deferred }) => {
     const env = { ...process.env };
     const run = { runId: updateLedger.createUpdateRun({ trigger: "cli" }, { env }).runId, env };
@@ -573,8 +643,8 @@ it.each([
     if (!(failure instanceof ReportedUpdateCommandFailure)) {
       throw failure;
     }
-    expect(readRuntime).toHaveBeenCalledTimes(deferred ? 0 : 1);
-    expect(inspect).toHaveBeenCalledTimes(deferred ? 0 : 1);
+    expect(readRuntime).toHaveBeenCalledTimes(activated && !deferred ? 1 : 0);
+    expect(inspect).toHaveBeenCalledTimes(activated && !deferred ? 1 : 0);
     noCalls(sleep, waitForStartup);
     expect(elapsedMs).toBe(0);
     const recorded = updateLedger.getUpdateRun(run.runId, { env });
@@ -593,17 +663,24 @@ it.each([
       );
     }
     expect(recorded?.verification.serviceRunning).toBeUndefined();
-    expect(recorded?.verification.readyz).toBe(deferred ? undefined : false);
+    expect(recorded?.verification.readyz).toBe(activated && !deferred ? false : undefined);
     expect(recorded?.steps).toContainEqual(
       containing({ step: "candidate-doctor-lint", exitCode: 2 }),
     );
     const recoveryStep = recorded?.steps.find(
       (step) => step.step === "gateway recovery verification",
     );
-    expect(recoveryStep).toMatchObject({
-      status: deferred ? "completed" : "failed",
-      exitCode: deferred ? null : 1,
-    });
+    if (activated) {
+      expect(recoveryStep).toMatchObject({
+        status: deferred ? "completed" : "failed",
+        exitCode: deferred ? null : 1,
+      });
+    } else {
+      expect(recoveryStep).toBeUndefined();
+      expect(recorded?.steps).toContainEqual(
+        containing({ step: "gateway recovery observation", exitCode: 0 }),
+      );
+    }
     if (deferred) {
       expect(recoveryStep?.detail).toContain("deferred");
       expect(recoveryStep?.detail).toContain("service owner");

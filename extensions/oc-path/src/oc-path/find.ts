@@ -217,6 +217,10 @@ function dispatchSeg<T extends object, Child extends object>(
   context: WalkContext,
   memoIdentity: object = node,
 ): void {
+  if (i >= subs.length) {
+    context.onMatch(walked);
+    return;
+  }
   // Different recursive routes can reach the same node and remaining pattern.
   const remaining = subs.slice(i);
   let key: string;
@@ -352,10 +356,6 @@ const jsoncOps: WalkOps<JsoncValue> = {
   },
   walk(node, subs, i, walked, context) {
     checkDepth(walked);
-    if (i >= subs.length) {
-      context.onMatch(walked);
-      return;
-    }
     dispatchSeg(node, jsoncOps, subs, i, walked, context);
   },
 };
@@ -479,10 +479,6 @@ const yamlOps: WalkOps<Node> = {
   },
   walk(node, subs, i, walked, context) {
     checkDepth(walked);
-    if (i >= subs.length) {
-      context.onMatch(walked);
-      return;
-    }
     dispatchSeg(node, yamlOps, subs, i, walked, context);
   },
 };

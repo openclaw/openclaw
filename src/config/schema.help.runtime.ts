@@ -134,6 +134,18 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Enables Tool Search. When on, OpenClaw hides large tool catalogs behind structured search/describe/call tools during embedded runtime runs.",
   "tools.toolSearch.mode":
     'Choose the model-facing surface: "tools" (default) exposes structured search/describe/call tools; "directory" keeps a bounded tool directory visible, exposes a bounded set of likely or required schemas, and defers the rest behind search/describe/call.',
+  "tools.toolSearch.include":
+    "Presentation selectors for catalog-eligible, policy-approved tools. Omitted selects all eligible tools; [] selects none. Fields within a selector are ANDed; selectors are ORed. Unselected tools remain directly callable. Does not affect independent Code Mode or Codex-native search.",
+  "tools.toolSearch.include[].source":
+    'Tool origin: "openclaw" for core and non-MCP plugins, "mcp" for registered MCP tools, or "client" for client-supplied tools. Qualify names with a source to avoid matching lookalikes.',
+  "tools.toolSearch.include[].name":
+    "Registered tool name or * glob, using tool-policy normalization (including aliases). Name-only selectors match across sources. No regex support or tool-group expansion.",
+  "tools.toolSearch.exclude":
+    "Tools to keep directly visible instead of cataloging. Uses the same selectors as include; exclusion wins. Omitted or [] excludes nothing. Does not grant permissions or override direct-only and runtime-required tools.",
+  "tools.toolSearch.exclude[].source":
+    'Origin to exclude from cataloging: "openclaw", "mcp", or "client". ANDed with name when both are present.',
+  "tools.toolSearch.exclude[].name":
+    "Registered tool name or * glob to keep direct, using tool-policy normalization. Name-only selectors match across sources; use source qualification to avoid unintended matches.",
   "tools.toolSearch.searchDefaultLimit":
     "Default number of Tool Search results returned when the model omits a limit. Runtime clamps this to `maxSearchLimit`.",
   "tools.toolSearch.maxSearchLimit":

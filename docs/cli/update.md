@@ -904,6 +904,10 @@ Use `openclaw update status` and Doctor for recovery guidance.
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                                                 |
 | `--full-integrity-check`                         | Request full SQLite integrity checks during candidate migrations, including Doctor subprocesses. Also accepted by `update repair` and `update wizard`.                                                                                                                                                                                                            |
 
+Invalid `--channel` values are quoted as JSON strings in diagnostics, including
+escaped quotes, newlines, and control characters. This applies to `update`,
+`update repair`, and `update finalize`, in both human and `--json` output.
+
 There is no `--verbose` flag. Use `--dry-run` to preview planned actions,
 `--json` for machine-readable results, and `openclaw update status --json`
 for channel, availability, and the latest durable update report. Gateway console verbosity (`--verbose`) and

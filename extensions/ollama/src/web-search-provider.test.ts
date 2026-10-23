@@ -4,8 +4,8 @@ import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createOllamaWebSearchProvider } from "../web-search-provider.js";
 import { createLazyOllamaWebSearchProvider } from "./web-search-provider-registration.js";
-import { createOllamaWebSearchProvider } from "./web-search-provider.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock:

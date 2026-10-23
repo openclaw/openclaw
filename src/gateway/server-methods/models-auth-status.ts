@@ -316,7 +316,6 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               cfg,
               providerId: authProvider,
               agentId: scope.agentId,
-              stopReason: "auth-revoked",
             });
       const refreshWarning = await refreshAfterCredentialMutation(context, scope.agentId);
       const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");

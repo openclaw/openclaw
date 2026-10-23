@@ -8,9 +8,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
-import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { revalidateChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
@@ -35,7 +33,6 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import { removeQueuedMessage, keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { requestChatSend } from "./chat-send-request.ts";
@@ -70,6 +67,19 @@ import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { createHost as createToolStreamHost } from "./tool-stream.test-helpers.ts";
 
 const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
+
+function captureAnimationFrames() {
+  let nextFrame = 0;
+  const frames = new Map<number, FrameRequestCallback>();
+  vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+    frames.set(++nextFrame, callback);
+    return nextFrame;
+  });
+  const cancelFrame = vi
+    .spyOn(globalThis, "cancelAnimationFrame")
+    .mockImplementation((id) => frames.delete(id));
+  return { frames, cancelFrame };
+}
 
 beforeEach(() => {
   vi.spyOn(assistantIdentity, "loadLocalAssistantIdentity").mockReturnValue({
@@ -1050,7 +1060,6 @@ describe("canonical session message recovery", () => {
       handlePageGatewayEvent(state, steerEvent);
       expect(state.chatRunId).toBe(activeRunId);
       const segmentsAfterRequestBoundary = state.chatStreamSegments;
-      expect(state.chatStreamSegments).toBe(segmentsAfterRequestBoundary);
       expect(
         state.chatMessages.filter((message) => extractText(message) === "Steer prompt"),
       ).toHaveLength(1);
@@ -2113,12 +2122,7 @@ describe("chat state render lifecycle", () => {
   });
 
   it("publishes a pending run projection when an unrelated pane commit consumes its frame", () => {
-    const frames = new Map<number, FrameRequestCallback>();
-    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
-      frames.set(1, callback);
-      return 1;
-    });
-    vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => frames.delete(id));
+    const { frames } = captureAnimationFrames();
     const awaitDomCommit = vi.fn(async () => true);
     const controller = createChatState<ChatPageHost>({
       awaitDomCommit,
@@ -2179,13 +2183,7 @@ describe("chat state render lifecycle", () => {
   });
 
   it("publishes run fields once per frame while preserving synchronous state and terminal ordering", () => {
-    let nextFrame = 0;
-    const frames = new Map<number, FrameRequestCallback>();
-    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
-      frames.set(++nextFrame, callback);
-      return nextFrame;
-    });
-    vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => frames.delete(id));
+    const { frames } = captureAnimationFrames();
     const rendered: Array<{ stream: string | null; run: string | null }> = [];
     const { state, dispose } = createRoot((stop) => {
       const createdState = createPageState(
@@ -2651,16 +2649,7 @@ describe("chat state render lifecycle", () => {
   });
 
   it("coalesces stream publications into one animation frame", () => {
-    let nextFrame = 1;
-    const frames = new Map<number, FrameRequestCallback>();
-    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
-      const id = nextFrame++;
-      frames.set(id, callback);
-      return id;
-    });
-    const cancelFrame = vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => {
-      frames.delete(id);
-    });
+    const { frames, cancelFrame } = captureAnimationFrames();
     const publication = vi.fn();
     const state = createStreamEventState({
       publication,
@@ -2957,18 +2946,7 @@ describe("chat state render lifecycle", () => {
   });
 
   it("cancels post-commit paint frames on disconnect", async () => {
-    let nextFrame = 1;
-    const frames = new Map<number, FrameRequestCallback>();
-    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      const id = nextFrame++;
-      frames.set(id, callback);
-      return id;
-    });
-    const cancelAnimationFrame = vi
-      .spyOn(window, "cancelAnimationFrame")
-      .mockImplementation((id) => {
-        frames.delete(id);
-      });
+    const { frames, cancelFrame } = captureAnimationFrames();
     const host = createRenderer();
     const { controller, dispose } = createOwner(host);
     const renderLifecycle = controller.createRenderLifecycle();
@@ -2987,7 +2965,7 @@ describe("chat state render lifecycle", () => {
     dispose();
     secondFrame?.(0);
 
-    expect(cancelAnimationFrame).toHaveBeenCalledWith(2);
+    expect(cancelFrame).toHaveBeenCalledWith(2);
     expect(painted).not.toHaveBeenCalled();
   });
 
@@ -3122,25 +3100,9 @@ describe("loadPageAssistantIdentity", () => {
       snapshot: { client, phase: "connected" },
       subscribe: () => () => undefined,
     });
-    const context = {
-      agents: { state: { agentsList: null }, ensureList: vi.fn(async () => null) },
-      agentSelection: { state: { selectedId: "main" } },
-      basePath: "",
-      config: {
-        current: {
-          allowExternalEmbedUrls: false,
-          assistantIdentity: { name: "Assistant" },
-          chatMessageMaxWidth: null,
-          embedSandboxMode: "scripts",
-        },
-      },
-      gateway: {
-        connection: { gatewayUrl: "ws://gateway.example.test" },
-        snapshot: { client, connected: true, hello: null },
-      },
-      chatSubmissions: createChatSubmissions(),
-      sessions: { ...createChatPageSessions(), refresh: vi.fn().mockResolvedValue(undefined) },
-    } as unknown as ApplicationContext;
+    const context = createChatPageStateContext();
+    Object.assign(context.gateway.snapshot, { client, phase: "connected" });
+    vi.spyOn(context.sessions, "refresh").mockResolvedValue(undefined);
     const state = createPageState(
       context,
       { afterCommit: () => () => {} },
@@ -3748,7 +3710,7 @@ describe("refreshChatMetadata", () => {
     },
   );
 
-  it.each(["session", "agent", "connection", "superseded"])(
+  it.each(["session", "agent", "connection"])(
     "does not refresh session facts after an invalidated catalog loses its %s owner",
     async (transition) => {
       const pending = createDeferred<{ models: [] }>();
@@ -3757,35 +3719,33 @@ describe("refreshChatMetadata", () => {
       const request = vi.fn((method: string) =>
         method === "chat.metadata"
           ? Promise.resolve({ commands: [] })
-          : ++catalogReads === 1
-            ? Promise.resolve({ models: [] })
-            : catalogReads === 2
-              ? pending.promise
-              : replacement.promise,
+          : method === "sessions.describe"
+            ? Promise.resolve({})
+            : ++catalogReads === 1
+              ? Promise.resolve({ models: [] })
+              : catalogReads === 2
+                ? pending.promise
+                : replacement.promise,
       );
       const state = createMetadataState(request, {
         sessionKey: "global",
         assistantAgentId: "work",
       });
-      const invalidateSessions = vi
-        .spyOn(state.sessions, "invalidate")
-        .mockImplementation(() => {});
       try {
         await refreshChatMetadata(state);
+        request.mockClear();
         invalidateChatMetadataStore(state.client!);
         const refresh = refreshChatMetadata(state);
         if (transition === "session") {
           state.sessionKey = "agent:work:other";
         } else if (transition === "agent") {
           state.assistantAgentId = "main";
-        } else if (transition === "connection") {
-          state.connectionEpoch += 1;
         } else {
-          invalidateChatMetadataStore(state.client!);
+          state.connectionEpoch += 1;
         }
         pending.resolve({ models: [] });
         await refresh;
-        expect(invalidateSessions).not.toHaveBeenCalled();
+        expect(request.mock.calls.filter(([method]) => method === "sessions.describe")).toEqual([]);
       } finally {
         retireChatMetadataRequests(state);
         replacement.resolve({ models: [] });

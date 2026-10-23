@@ -178,154 +178,142 @@ async function prepareDoctorLintExecution(
   const cleanupWarnings: HealthFinding[] | undefined = isUpdateDoctorLintPass(sourceEnv)
     ? []
     : undefined;
-  const run = () =>
-    prepareDoctorLintStateExecution(
-      runtime,
-      opts,
-      sevMin,
-      sourceEnv,
-      cleanupWarnings,
-      onChecksComplete,
-    );
-  let execution: DoctorLintExecution | undefined;
+  const runStateChecks = async (): Promise<DoctorLintExecution> => {
+    const updateReadiness = isPostCoreConvergencePass(sourceEnv) ? "post-plugin" : undefined;
+    const effectiveOpts: DoctorLintCliOptions = updateReadiness
+      ? { ...opts, updateReadiness }
+      : opts;
+    const { resolveBundledHealthCheckPluginStateMode } =
+      await import("../flows/bundled-health-checks.js");
+    const pluginStateMode = resolveBundledHealthCheckPluginStateMode(effectiveOpts);
+    let coreChecks: readonly DoctorHealthCheck[] | undefined;
+    const deferredCheckIds = new Set<string>();
+    if (resolveUpdateRehearsalRoot(sourceEnv) && !updateReadiness && !opts.onlyIds?.length) {
+      const { resolveDoctorContributionHealthChecks } =
+        await import("../flows/doctor-health-contributions.js");
+      coreChecks = await resolveDoctorContributionHealthChecks();
+      for (const check of coreChecks) {
+        if (
+          (check.updateWork?.kind === "inspection" || check.updateWork?.kind === "standalone") &&
+          (opts.includeAllChecks === true || isHealthCheckEnabledByDefault(check)) &&
+          !opts.skipIds?.includes(check.id)
+        ) {
+          deferredCheckIds.add(check.id);
+        }
+      }
+    }
+    // The copied repair and readiness gates do not need optional agent tool projections.
+    const prepareRuntimeValidation =
+      !deferredCheckIds.has(RUNTIME_TOOL_SCHEMA_CHECK_ID) &&
+      (pluginStateMode === "isolated" ||
+        !effectiveOpts.onlyIds?.length ||
+        effectiveOpts.onlyIds.includes(RUNTIME_TOOL_SCHEMA_CHECK_ID));
+    const readConfigSnapshot = async (
+      deferredPluginMigrations?: readonly DeferredPluginMigration[],
+    ) => {
+      const io =
+        pluginStateMode === "direct"
+          ? { readConfigFileSnapshot, readConfigFileSnapshotWithPluginMetadata }
+          : createConfigIO({
+              env: sourceEnv,
+              configPath: resolveConfigPath(sourceEnv, resolveStateDir(sourceEnv)),
+              observe: false,
+              pluginValidation: pluginStateMode === "deferred" ? "core-only" : undefined,
+              deferredPluginMigrations,
+            });
+      return pluginStateMode === "deferred" || !prepareRuntimeValidation
+        ? io.readConfigFileSnapshot({ observe: false })
+        : (
+            await io.readConfigFileSnapshotWithPluginMetadata({
+              observe: false,
+              prepareValidation: "runtime",
+            })
+          ).snapshot;
+    };
+    let checksReported = false;
+    let completedExecution: DoctorLintExecution | undefined;
+    try {
+      return await withReadOnlyPluginStateSnapshot(
+        sourceEnv,
+        async (runWithPluginStateSnapshot) => {
+          const stateView: DoctorLintStateView = {
+            coreChecks,
+            deferredCheckIds,
+            cleanupWarnings,
+            pluginMetadataEnv: sourceEnv,
+            sourceEnv,
+            readConfigSnapshot,
+            runWithPluginStateSnapshot,
+          };
+          if (pluginStateMode !== "isolated" && !onChecksComplete) {
+            return (completedExecution = await executeDoctorLint(
+              runtime,
+              effectiveOpts,
+              sevMin,
+              stateView,
+            ));
+          }
+          return await stateView.runWithPluginStateSnapshot(async (pluginMetadataEnv) => {
+            const pending = readDeferredPluginMigrations({ env: pluginMetadataEnv });
+            const disposals: Array<() => Promise<void>> = [];
+            try {
+              const execution = await executeDoctorLint(runtime, effectiveOpts, sevMin, {
+                ...stateView,
+                pluginMetadataEnv,
+                readConfigSnapshot: () => readConfigSnapshot(pending),
+                runWithPluginStateSnapshot: async (run) => run(pluginMetadataEnv),
+                deferInspectionDisposal: onChecksComplete
+                  ? (dispose) => disposals.push(dispose)
+                  : undefined,
+              });
+              completedExecution = execution;
+              onChecksComplete?.(execution);
+              checksReported = onChecksComplete !== undefined;
+              return execution;
+            } finally {
+              // This join stays inside the private state/env scope, including when output fails.
+              for (const dispose of disposals) {
+                try {
+                  await dispose();
+                } catch (error) {
+                  runtime.error(
+                    `${UPDATE_DOCTOR_DISPOSAL_WARNING_PREFIX}: ${scrubDoctorErrorMessage(error)}`,
+                  );
+                }
+              }
+            }
+          });
+        },
+        cleanupWarnings,
+      );
+    } catch (error) {
+      if (checksReported || !(error instanceof DoctorLintStateSnapshotError)) {
+        throw error;
+      }
+      return createStateSnapshotFailureExecution(
+        runtime,
+        effectiveOpts,
+        sevMin,
+        error,
+        completedExecution,
+      );
+    }
+  };
+  let snapshotExecution: DoctorLintExecution | undefined;
   try {
-    return await withOpenClawStateDatabaseReadSnapshot(async () => (execution = await run()), {
-      env: sourceEnv,
-      lazy: Boolean(opts.onlyIds?.length),
-    });
+    return await withOpenClawStateDatabaseReadSnapshot(
+      async () => (snapshotExecution = await runStateChecks()),
+      {
+        env: sourceEnv,
+        lazy: Boolean(opts.onlyIds?.length),
+      },
+    );
   } catch (error) {
-    if (!execution || !cleanupWarnings || !(error instanceof SqliteSnapshotCleanupError)) {
+    if (!snapshotExecution || !cleanupWarnings || !(error instanceof SqliteSnapshotCleanupError)) {
       throw error;
     }
     recordSnapshotCleanupWarning(cleanupWarnings);
-    return execution;
-  }
-}
-
-async function prepareDoctorLintStateExecution(
-  runtime: RuntimeEnv,
-  opts: DoctorLintCliOptions,
-  sevMin: NonNullable<ReturnType<typeof parseHealthFindingSeverity>>,
-  sourceEnv: NodeJS.ProcessEnv,
-  cleanupWarnings: HealthFinding[] | undefined,
-  onChecksComplete?: (execution: DoctorLintExecution) => void,
-): Promise<DoctorLintExecution> {
-  const updateReadiness = isPostCoreConvergencePass(sourceEnv) ? "post-plugin" : undefined;
-  const effectiveOpts: DoctorLintCliOptions = updateReadiness ? { ...opts, updateReadiness } : opts;
-  const { resolveBundledHealthCheckPluginStateMode } =
-    await import("../flows/bundled-health-checks.js");
-  const pluginStateMode = resolveBundledHealthCheckPluginStateMode(effectiveOpts);
-  let coreChecks: readonly DoctorHealthCheck[] | undefined;
-  const deferredCheckIds = new Set<string>();
-  if (resolveUpdateRehearsalRoot(sourceEnv) && !updateReadiness && !opts.onlyIds?.length) {
-    const { resolveDoctorContributionHealthChecks } =
-      await import("../flows/doctor-health-contributions.js");
-    coreChecks = await resolveDoctorContributionHealthChecks();
-    for (const check of coreChecks) {
-      if (
-        (check.updateWork?.kind === "inspection" || check.updateWork?.kind === "standalone") &&
-        (opts.includeAllChecks === true || isHealthCheckEnabledByDefault(check)) &&
-        !opts.skipIds?.includes(check.id)
-      ) {
-        deferredCheckIds.add(check.id);
-      }
-    }
-  }
-  // The copied repair and readiness gates do not need optional agent tool projections.
-  const prepareRuntimeValidation =
-    !deferredCheckIds.has(RUNTIME_TOOL_SCHEMA_CHECK_ID) &&
-    (pluginStateMode === "isolated" ||
-      !effectiveOpts.onlyIds?.length ||
-      effectiveOpts.onlyIds.includes(RUNTIME_TOOL_SCHEMA_CHECK_ID));
-  const readConfigSnapshot = async (
-    deferredPluginMigrations?: readonly DeferredPluginMigration[],
-  ) => {
-    const io =
-      pluginStateMode === "direct"
-        ? { readConfigFileSnapshot, readConfigFileSnapshotWithPluginMetadata }
-        : createConfigIO({
-            env: sourceEnv,
-            configPath: resolveConfigPath(sourceEnv, resolveStateDir(sourceEnv)),
-            observe: false,
-            pluginValidation: pluginStateMode === "deferred" ? "core-only" : undefined,
-            deferredPluginMigrations,
-          });
-    return pluginStateMode === "deferred" || !prepareRuntimeValidation
-      ? io.readConfigFileSnapshot({ observe: false })
-      : (
-          await io.readConfigFileSnapshotWithPluginMetadata({
-            observe: false,
-            prepareValidation: "runtime",
-          })
-        ).snapshot;
-  };
-  let checksReported = false;
-  let completedExecution: DoctorLintExecution | undefined;
-  try {
-    return await withReadOnlyPluginStateSnapshot(
-      sourceEnv,
-      async (runWithPluginStateSnapshot) => {
-        const stateView: DoctorLintStateView = {
-          coreChecks,
-          deferredCheckIds,
-          cleanupWarnings,
-          pluginMetadataEnv: sourceEnv,
-          sourceEnv,
-          readConfigSnapshot,
-          runWithPluginStateSnapshot,
-        };
-        if (pluginStateMode !== "isolated" && !onChecksComplete) {
-          return (completedExecution = await executeDoctorLint(
-            runtime,
-            effectiveOpts,
-            sevMin,
-            stateView,
-          ));
-        }
-        return await stateView.runWithPluginStateSnapshot(async (pluginMetadataEnv) => {
-          const pending = readDeferredPluginMigrations({ env: pluginMetadataEnv });
-          const disposals: Array<() => Promise<void>> = [];
-          try {
-            const execution = await executeDoctorLint(runtime, effectiveOpts, sevMin, {
-              ...stateView,
-              pluginMetadataEnv,
-              readConfigSnapshot: () => readConfigSnapshot(pending),
-              runWithPluginStateSnapshot: async (run) => run(pluginMetadataEnv),
-              deferInspectionDisposal: onChecksComplete
-                ? (dispose) => disposals.push(dispose)
-                : undefined,
-            });
-            completedExecution = execution;
-            onChecksComplete?.(execution);
-            checksReported = onChecksComplete !== undefined;
-            return execution;
-          } finally {
-            // This join stays inside the private state/env scope, including when output fails.
-            for (const dispose of disposals) {
-              try {
-                await dispose();
-              } catch (error) {
-                runtime.error(
-                  `${UPDATE_DOCTOR_DISPOSAL_WARNING_PREFIX}: ${scrubDoctorErrorMessage(error)}`,
-                );
-              }
-            }
-          }
-        });
-      },
-      cleanupWarnings,
-    );
-  } catch (error) {
-    if (checksReported || !(error instanceof DoctorLintStateSnapshotError)) {
-      throw error;
-    }
-    return createStateSnapshotFailureExecution(
-      runtime,
-      effectiveOpts,
-      sevMin,
-      error,
-      completedExecution,
-    );
+    return snapshotExecution;
   }
 }
 
@@ -463,15 +451,48 @@ async function executeDoctorLint(
 
   const checks: HealthCheck[] = [
     stateSchemaHealthCheck,
-    ...coreChecks.map((check) =>
-      withCoreLintContext(
-        check,
+    ...coreChecks.map((check): HealthCheck => {
+      const checkCtx =
         legacyHeartbeatConfig && check.id === HEARTBEAT_CADENCE_CHECK_ID
           ? { ...coreCtx, cfg: legacyHeartbeatConfig }
-          : coreCtx,
-        availabilityFindings,
-      ),
-    ),
+          : coreCtx;
+      return {
+        ...check,
+        detect(_ctx, scope) {
+          const detect = async () => [
+            ...(await check.detect(checkCtx, scope)),
+            ...availabilityFindings.filter((finding) => finding.checkId === check.id),
+          ];
+          const inspectPrivate = async (run: typeof detect) => {
+            let completed: HealthFinding[] | undefined;
+            try {
+              return await checkCtx.runWithPrivateStateSnapshot(
+                async () => (completed = await run()),
+              );
+            } catch (error) {
+              if (!completed?.length || !(error instanceof DoctorLintStateSnapshotError)) {
+                throw error;
+              }
+              return [...completed, createStateSnapshotFailureFinding(error)];
+            }
+          };
+          if (check.id === SKILLS_READINESS_CHECK_ID) {
+            // Discovery needs source-profile eligibility; generated links use the private install roots.
+            return inspectPrivate(() => checkCtx.runWithSourceState(detect));
+          }
+          if (
+            check.id === RUNTIME_TOOL_SCHEMA_CHECK_ID ||
+            check.id === PROJECT_CLONE_SHAPE_CHECK_ID
+          ) {
+            return inspectPrivate(detect);
+          }
+          // Source-bound loaders must keep the launch selectors of their retained read owner.
+          return check.id === AUTH_PROFILE_CHECK_ID || check.id === HEARTBEAT_CADENCE_CHECK_ID
+            ? checkCtx.runWithSourceState(detect)
+            : detect();
+        },
+      };
+    }),
     ...extensionChecks,
   ];
   const runOpts: DoctorLintRunOptions = {
@@ -562,48 +583,6 @@ async function executeDoctorLint(
           process.stdout.write(`    fix: ${f.fixHint}\n`);
         }
       }
-    },
-  };
-}
-
-function withCoreLintContext(
-  check: HealthCheck,
-  ctx: DoctorHealthCheckContext & {
-    readonly deep?: boolean;
-    readonly runWithPrivateStateSnapshot: DoctorLintStateRunner;
-    readonly runWithSourceState: DoctorLintStateRunner;
-  },
-  availabilityFindings: readonly HealthFinding[],
-): HealthCheck {
-  return {
-    ...check,
-    detect(_ctx, scope) {
-      const detect = async () => [
-        ...(await check.detect(ctx, scope)),
-        ...availabilityFindings.filter((finding) => finding.checkId === check.id),
-      ];
-      const inspectPrivate = async (run: typeof detect) => {
-        let completed: HealthFinding[] | undefined;
-        try {
-          return await ctx.runWithPrivateStateSnapshot(async () => (completed = await run()));
-        } catch (error) {
-          if (!completed?.length || !(error instanceof DoctorLintStateSnapshotError)) {
-            throw error;
-          }
-          return [...completed, createStateSnapshotFailureFinding(error)];
-        }
-      };
-      if (check.id === SKILLS_READINESS_CHECK_ID) {
-        // Discovery needs source-profile eligibility; generated links use the private install roots.
-        return inspectPrivate(() => ctx.runWithSourceState(detect));
-      }
-      if (check.id === RUNTIME_TOOL_SCHEMA_CHECK_ID || check.id === PROJECT_CLONE_SHAPE_CHECK_ID) {
-        return inspectPrivate(detect);
-      }
-      // Source-bound loaders must keep the launch selectors of their retained read owner.
-      return check.id === AUTH_PROFILE_CHECK_ID || check.id === HEARTBEAT_CADENCE_CHECK_ID
-        ? ctx.runWithSourceState(detect)
-        : detect();
     },
   };
 }

@@ -101,7 +101,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
   private modelAuthRefresh: { generation: number; agentId: string; requested: boolean } | null =
     null;
   private readonly stopSubscriptions: Array<() => void>;
-  private outboxRuntime: typeof import("../pages/chat/chat-outbox-owner.ts") | null = null;
+  private outboxRuntime: typeof import("../lib/chat/outbox-attention.ts") | null = null;
   private disposed = false;
 
   constructor(
@@ -137,7 +137,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       listen(globalThis, "storage", this.syncDismissalsFromStorage),
     ];
     // Share the chat owner’s live overlays without putting its send graph in shell startup.
-    void import("../pages/chat/chat-outbox-owner.ts")
+    void import("../lib/chat/outbox-attention.ts")
       .then((runtime) => {
         if (!this.disposed) {
           this.outboxRuntime = runtime;

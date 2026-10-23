@@ -14,6 +14,7 @@
  */
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
+import { readScheduledToolTargets } from "../cron/execution-context-registry.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
@@ -120,8 +121,12 @@ function* assembleOpenClawCodingTools(
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const { isMemoryFlushRun, memoryFlush, memoryFlushWritePath } =
     resolveMemoryFlushToolSetup(options);
+  // Hook and join-intro turns run through the cron runner as "event" jobs; they
+  // get the same current-job automations scope as scheduled runs.
   const cronSelfRemoveOnlyJobId =
-    options?.trigger === "cron" && options.jobId?.trim() ? options.jobId.trim() : undefined;
+    (options?.trigger === "cron" || options?.trigger === "event") && options.jobId?.trim()
+      ? options.jobId.trim()
+      : undefined;
   // Prefer the already-resolved sandbox context policy. Recomputing from
   // sessionKey/config can lose the real sandbox agent when callers pass a
   // legacy alias like `main` instead of an agent session key.
@@ -437,6 +442,7 @@ function* assembleOpenClawCodingTools(
             gatewayCallerChannel: gatewayCaller.channel,
             gatewayCallerLocal: gatewayCaller.local,
             gatewayCallerScheduled: gatewayCaller.scheduled,
+            scheduledToolTargets: readScheduledToolTargets(options),
             admitScheduledMessageInvocation: options?.messageActionTurnCapability
               ? messageInvocationPolicy.admit
               : undefined,

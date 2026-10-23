@@ -656,10 +656,9 @@ export function resetSessionAccessorMocks() {
       const message =
         options.messages[0]?.prepareMessageAfterIdempotencyCheck?.(candidate) ?? candidate;
       if (!message) {
-        return { appendedCount: 0, messages: [], sessionEntry: scope.sessionEntry };
+        return { messages: [], sessionEntry: scope.sessionEntry };
       }
       return {
-        appendedCount: 1,
         messages: [
           {
             appended: true,

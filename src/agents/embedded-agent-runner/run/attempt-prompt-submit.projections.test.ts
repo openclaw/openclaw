@@ -959,7 +959,6 @@ describe("tool-result projection persistence at dispatch", () => {
       images: [],
       modelPrompt: "read files",
       onFinalPromptText: () => {},
-      onSteeringAcknowledged: () => {},
       runtimeOnly: false,
       systemPrompt: "test prompt",
       toolResultAggregateMaxChars: 8_000,

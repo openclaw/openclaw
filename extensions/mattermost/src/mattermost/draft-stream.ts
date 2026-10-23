@@ -11,7 +11,7 @@ import {
 } from "./client.js";
 
 const MATTERMOST_STREAM_MAX_CHARS = 4000;
-const DEFAULT_THROTTLE_MS = 1000;
+const THROTTLE_MS = 1200;
 
 type MattermostDraftPublishedPart = {
   messageId: string;
@@ -33,12 +33,10 @@ export function createMattermostDraftStream(params: {
   client: MattermostClient;
   channelId: string;
   rootId?: string;
-  throttleMs?: number;
   chunkText?: (text: string) => string[];
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }) {
-  const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const streamState = { stopped: false, final: false };
   let terminalAcceptedDeliveryError: Error | undefined;
   const retainAcceptedDeliveryFailure = (err: unknown) => {
@@ -133,7 +131,7 @@ export function createMattermostDraftStream(params: {
     clearWithStop,
     seal: sealLifecycle,
   } = createFinalizableDraftLifecycle({
-    throttleMs,
+    throttleMs: THROTTLE_MS,
     state: streamState,
     sendOrEditStreamMessage,
     readMessageId: () => currentGeneration.postId,
@@ -337,7 +335,7 @@ export function createMattermostDraftStream(params: {
   };
 
   params.log?.(
-    `mattermost stream preview ready (maxChars=${MATTERMOST_STREAM_MAX_CHARS}, throttleMs=${throttleMs})`,
+    `mattermost stream preview ready (maxChars=${MATTERMOST_STREAM_MAX_CHARS}, throttleMs=${THROTTLE_MS})`,
   );
 
   return {

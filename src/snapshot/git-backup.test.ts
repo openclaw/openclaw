@@ -402,7 +402,7 @@ it("uses a commit-scoped fallback identity when Git has no configured email", as
     GIT_TERMINAL_PROMPT: "0",
   });
 
-  const result = await create({ gitEnv });
+  const result = await withBackupStateEnv(gitEnv, () => create());
 
   expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
   expect(

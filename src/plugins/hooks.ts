@@ -21,6 +21,7 @@ import {
   withAgentRunId,
   withoutIncognitoLlmContent,
 } from "./hook-agent-observations.js";
+import { createChannelIngressHookRunner } from "./hook-channel-ingress.js";
 import { readClaimingHookAdmission } from "./hook-claim-admission.js";
 import {
   type GateHookResult,
@@ -36,6 +37,10 @@ import type {
   BeforeAgentFinalizeRetry,
   HookFailurePolicy,
   HookRunnerOptions,
+  HookContext,
+  HookEvent,
+  HookResult,
+  ModifyingHookPolicy,
   VoidHookContextProjection,
   VoidHookRunOptions,
 } from "./hook-runner-types.js";
@@ -48,7 +53,6 @@ import type {
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
-  PluginHookHandlerMap,
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookInboundClaimContext,
@@ -96,12 +100,6 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
     ]),
   );
 
-type HookEvent<K extends PluginHookName> = Parameters<PluginHookHandlerMap[K]>[0];
-type HookContext<K extends PluginHookName> = Parameters<PluginHookHandlerMap[K]>[1];
-type HookResult<K extends PluginHookName> = Exclude<
-  Awaited<ReturnType<PluginHookHandlerMap[K]>>,
-  void
->;
 type ClaimingHookName = {
   [K in PluginHookName]: [HookResult<K>] extends [never]
     ? never
@@ -109,27 +107,6 @@ type ClaimingHookName = {
       ? K
       : never;
 }[PluginHookName];
-
-type ModifyingHookPolicy<K extends PluginHookName> = {
-  mergeResults?: (
-    accumulated: HookResult<K> | undefined,
-    next: HookResult<K>,
-    registration: PluginHookRegistration<K>,
-    event: HookEvent<K>,
-  ) => HookResult<K>;
-  isolateEventPerHandler?: boolean;
-  eventForHandler?: (event: HookEvent<K>, result: HookResult<K> | undefined) => HookEvent<K>;
-  mergeNullResults?: boolean;
-  shouldStop?: (result: HookResult<K>) => boolean;
-  terminalLabel?: string;
-  includeRegistration?: (registration: PluginHookRegistration<K>) => boolean;
-  assertHandlerBoundaryActive?: () => void;
-  onHandlerResult?: (params: {
-    hook: PluginHookRegistration<K>;
-    result: HookResult<K> | undefined;
-  }) => void;
-  onHandlerError?: (hook: PluginHookRegistration<K>, failOpen: boolean) => void;
-};
 
 type PluginTargetedInboundClaimOutcome =
   | {
@@ -213,6 +190,7 @@ export function createHookRunner(
   const catchErrors = options.catchErrors ?? true;
   const failurePolicyByHook = {
     before_agent_run: "fail-closed",
+    before_channel_ingress: "fail-closed",
     ...options.failurePolicyByHook,
   } satisfies Partial<Record<PluginHookName, HookFailurePolicy>>;
   const voidHookTimeoutMsByHook = {
@@ -1071,6 +1049,11 @@ export function createHookRunner(
     runBeforeCompaction: bindVoidHook("before_compaction"),
     runAfterCompaction: bindVoidHook("after_compaction"),
     runBeforeReset: bindVoidHook("before_reset"),
+    runBeforeChannelIngress: createChannelIngressHookRunner({
+      getHooks: () => getHooksForName(registry, "before_channel_ingress"),
+      run: (event, context, policy) =>
+        runModifyingHook("before_channel_ingress", event, context, policy),
+    }),
     runBeforeAgentRun,
     runInboundClaim: bindClaimingHook("inbound_claim"),
     runInboundClaimForPlugin,

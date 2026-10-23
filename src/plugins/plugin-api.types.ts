@@ -185,6 +185,10 @@ type OpenClawPluginAgentEventsApi = {
 };
 
 type OpenClawPluginAgentApi = {
+  /** Optional; requires contracts.subagentProfiles and native-subagent-profiles-v1. */
+  registerSubagentProfile?: (
+    profile: import("./subagent-profile.types.js").PluginSubagentProfile,
+  ) => void;
   events: OpenClawPluginAgentEventsApi;
 };
 
@@ -210,6 +214,12 @@ type OpenClawPluginLifecycleApi = Partial<
  * @see https://docs.openclaw.ai/plugins/sdk-overview#api-stability
  */
 export type OpenClawPluginApi = {
+  /** Data for an installed native view, with a portable text summary. */
+  inlineView: (
+    viewId: string,
+    payload: import("./host-hook-json.js").PluginJsonValue,
+    options: { version: number; summary: string },
+  ) => import("./inline-view.js").PluginInlineViewResult;
   id: string;
   name: string;
   version?: string;

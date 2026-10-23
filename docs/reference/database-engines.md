@@ -522,6 +522,10 @@ Keep this directory private and retain the complete set. Former PostgreSQL
 namespaces are not dropped automatically.
 
 All destination stores are privately migrated and verified before publication.
+Agent and shared-state columns normally created on a feature's first use are
+completed in the private copy when absent, preserving existing rows with `NULL`
+values and leaving the original SQLite store unchanged. Unknown columns still
+refuse the port.
 The command replaces each store atomically, switches config last while preserving
 SecretRefs, environment references, and includes, then archives its completed
 manifest with the captures. After success, start the Gateway through its service
@@ -620,6 +624,12 @@ PostgreSQL model-context navigation reads parse each selected transcript row onc
 and keep intermediate projections as JSONB until the navigation and byte counts
 cross the database boundary. The read remains bounded by the context page, and
 PostgreSQL transcript writes do not precompute navigation envelopes.
+
+Clean resident-actor appends write the transcript projection and session-window
+mutation in one PostgreSQL statement. Each write still targets its own table
+inside the existing locked transaction; commit and receipt publication keep
+their original boundaries. Batch imports, dirty projections, and native callers
+retain their existing flush paths.
 
 ## Anchors and backups
 

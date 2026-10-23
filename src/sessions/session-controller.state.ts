@@ -4,6 +4,12 @@ import { isEmbeddedRunHandleCompacting } from "../agents/embedded-agent-runner/r
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import { diagnosticLogger as diag, logSessionStateChange } from "../logging/diagnostic-runtime.js";
+import {
+  isDiagnosticSessionStateCurrent,
+  peekDiagnosticSessionState,
+  type SessionRef,
+  type SessionStateValue,
+} from "../logging/diagnostic-session-state.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { assertTurnAdmission } from "./session-controller.admission-rule.js";
 import {
@@ -549,6 +555,60 @@ export function clearReplyRunState(params: {
   });
   notifyGatewayWorkMetricsChanged();
   notifyReplyRunEnded(entry);
+}
+
+/** Repair only the projection; missing execution never releases retained writer or input custody. */
+export function reconcileSessionControllerDiagnosticState(
+  params: SessionRef & { stateGeneration?: number; expectedState?: SessionStateValue },
+): "idle" | "waiting" | undefined {
+  if (
+    params.stateGeneration === undefined ||
+    !isDiagnosticSessionStateCurrent({
+      ...params,
+      generation: params.stateGeneration,
+      state: params.expectedState,
+    })
+  ) {
+    return undefined;
+  }
+  const entries = [
+    ...new Set(
+      [params.sessionKey, params.sessionId].flatMap((key) =>
+        key ? findSessionControllerEntries(key) : [],
+      ),
+    ),
+  ];
+  if (entries.some((entry) => entry.active)) {
+    return undefined;
+  }
+  const observed = peekDiagnosticSessionState(params);
+  if (!observed) {
+    return undefined;
+  }
+  const state =
+    observed.queueDepth > 0 ||
+    entries.some(
+      (entry) =>
+        entry.attachment ||
+        entry.followupBarrier ||
+        entry.successorBarrier ||
+        entry.mailbox?.entries.length ||
+        entry.mailbox?.claim ||
+        entry.lifecycle,
+    )
+      ? "waiting"
+      : "idle";
+  logSessionStateChange({
+    ...params,
+    state,
+    reason: state === "waiting" ? "session_work_pending" : "stale_session_state_reconciled",
+    consumeQueuedTurn: false,
+  });
+  // Publish first: waking the mailbox may synchronously start a successor.
+  for (const entry of entries) {
+    entry.mailbox?.wake();
+  }
+  return state;
 }
 
 /** Incoming sources consult the same owner policy as the autonomous timer. */

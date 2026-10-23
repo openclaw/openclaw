@@ -26,6 +26,8 @@ type SubagentAnnounceResultDeps = Pick<
 
 export type PreparedAnnounceResult = { text: string | undefined; isCurrent: () => boolean };
 
+type SubagentFinalAnswerDeps = Omit<SubagentAnnounceResultDeps, "readSubagentRun">;
+
 export class SubagentAnnouncePreparationConflictError extends Error {
   override name = "SubagentAnnouncePreparationConflictError";
 }
@@ -59,18 +61,45 @@ export async function readSubagentRunAnnounceResultUsing(
   ) {
     return { text: capturedResult, isCurrent };
   }
+  if (!resolveSubagentChildAgentId(child)) {
+    return { text: capturedResult, isCurrent };
+  }
+  const answer = await readSubagentRunFinalAnswerUsing(child, deps, () => {
+    if (!isCurrent()) {
+      throw new SubagentAnnouncePreparationConflictError(
+        "The completed child run's transcript identity changed during announcement.",
+      );
+    }
+  });
+  if (!answer) {
+    return {
+      text: `[truncated-by-retention: complete child answer unavailable]\n${terminalReply.text}`,
+      isCurrent,
+    };
+  }
+  return { text: answer, isCurrent };
+}
+
+/**
+ * Read the complete visible final answer this exact run recorded, including an archived
+ * transcript after delete-mode cleanup. The bounded lifecycle preview is not consulted.
+ */
+export async function readSubagentRunFinalAnswerUsing(
+  child: SubagentRunRecord,
+  deps: SubagentFinalAnswerDeps,
+  assertCurrent?: () => void,
+): Promise<string | undefined> {
   const runId = child.runId;
-  const childSessionKey = child.childSessionKey;
   const childAgentId = resolveSubagentChildAgentId(child);
   if (!childAgentId) {
-    return { text: capturedResult, isCurrent };
+    return undefined;
   }
   const target = child.execution.transcriptTarget;
   const agentId = target?.agentId ?? childAgentId;
   const storePath =
     target?.storePath ??
     deps.resolveSessionStorePathCore(deps.getRuntimeConfig().session?.store, { agentId });
-  const sessionKey = target?.sessionKey ?? childSessionKey;
+  const sessionKey = target?.sessionKey ?? child.childSessionKey;
   return withSubagentSessionSource({ agentId, storePath, sessionKey }, async (source) => {
     const sourcePath = source?.path ?? storePath;
     const sessionId =
@@ -87,19 +116,8 @@ export async function readSubagentRunAnnounceResultUsing(
       event = (await deps.findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId }, runId))
         ?.event;
     }
-    if (!isCurrent()) {
-      throw new SubagentAnnouncePreparationConflictError(
-        "The completed child run's transcript identity changed during announcement.",
-      );
-    }
-    const answer = isRecord(event) ? extractStoredAssistantText(event.message) : undefined;
-    if (!answer) {
-      return {
-        text: `[truncated-by-retention: complete child answer unavailable]\n${terminalReply.text}`,
-        isCurrent,
-      };
-    }
-    return { text: answer, isCurrent };
+    assertCurrent?.();
+    return (isRecord(event) ? extractStoredAssistantText(event.message) : undefined) || undefined;
   });
 }
 

@@ -480,7 +480,7 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
         (agent) => agent.status === "running" || agent.status === "waiting",
       ) ?? [],
   );
-  const hasGoal = () => Boolean(props.goal && !props.goal.hidden);
+  const hasGoal = () => Boolean(props.goal);
   onSettled(() => {
     const scroll = observeScrollState(
       strip,
@@ -615,7 +615,7 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
             onOpen={(source) => props.goal!.onOpen(source)}
           />
         </Show>
-        <Show when={!props.approvalPending && props.progress?.showInChat}>
+        <Show when={!props.approvalPending && props.progress}>
           <ActivityPill
             registerButton={registerButton}
             family="progress"

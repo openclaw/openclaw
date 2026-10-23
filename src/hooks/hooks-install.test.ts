@@ -1,7 +1,7 @@
 // Hook installs must preserve discovery and execution across copied and linked layouts.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runPluginInstallCommand } from "../cli/plugins-install-command.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import {
@@ -60,6 +60,7 @@ describe.each([
       setInternalHooksEnabled(true);
     } finally {
       await state.cleanup();
+      vi.unstubAllEnvs();
       pinConfigDir();
     }
   });
@@ -117,12 +118,11 @@ describe.each([
         fs.readFile(path.resolve(installPath, hookPath, "handler.js"), "utf-8"),
       ).resolves.toContain("hello-hook");
 
-      const options = { bundledHooksDir: state.path("bundled-none") };
+      vi.stubEnv("OPENCLAW_BUNDLED_HOOKS_DIR", state.path("bundled-none"));
       const discovered = loadWorkspaceHookEntries(state.workspaceDir, {
-        ...options,
         config: installed.config,
       });
-      const prepared = await prepareInternalHooks(installed.config, state.workspaceDir, options);
+      const prepared = await prepareInternalHooks(installed.config, state.workspaceDir);
       prepared.commit();
       const event = createInternalHookEvent("command", "new", "test-session");
       await triggerInternalHook(event);

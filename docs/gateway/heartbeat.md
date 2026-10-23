@@ -65,6 +65,12 @@ former location. Writes through an already-open file descriptor remain
 recoverable there. A file recreated after completed migration is retained and
 reported; it does not overwrite the operator-owned job.
 
+If existing scratch differs from `HEARTBEAT.md` and was not imported from that
+file, Doctor preserves the scratch and original file, prints a notice, and
+completes the conversion. Explicitly unset scratch stays unset. The automation
+uses its existing scratch; review the retained file before copying any wanted
+instructions into the job. Repeating Doctor keeps both originals and succeeds.
+
 Doctor prints this one-time note when migration completes:
 
 > Migrated heartbeats now use standard Automations delivery. Heartbeat-specific duplicate suppression and no-route skipping were removed: repeated updates can be delivered, and a missing route no longer skips the run before execution. Delivery failures follow ordinary automation handling. Review the migrated jobs' delivery settings if you relied on either behavior.
@@ -96,6 +102,12 @@ Doctor supports the heartbeat configuration and task shapes shipped from July
 2026 onward. Older shapes are outside this migration. If an input cannot be
 converted faithfully, Doctor retains it and reports the problem instead of
 silently discarding its scheduling or delivery settings.
+
+A bare `tasks:` line followed by ordinary checklist bullets stays unchanged in
+the monitor's scratch, including scratch imported by an earlier Doctor. It does
+not create scheduled jobs or block retirement. Incomplete task declarations still
+require repair; update admission and Doctor use the same task validation, and
+Doctor leaves an incomplete `HEARTBEAT.md` in place before importing it.
 
 <a id="defaults" />
 <a id="what-the-heartbeat-prompt-is-for" />

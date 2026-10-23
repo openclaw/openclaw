@@ -135,26 +135,6 @@ export function createModelProviderLogin(options: LoginOptions) {
     );
   }
 
-  function providerActions() {
-    view.read();
-    return {
-      canMutate: options.canStart(),
-      loginBusy: busy(),
-      onConnect: (card: ModelProviderCard) => open([card.id, ...card.credentialProviderIds]),
-      canConnect: (card: ModelProviderCard) =>
-        loginProviders([card.id, ...card.credentialProviderIds]).length > 0,
-    };
-  }
-
-  function pageActions() {
-    view.read();
-    return {
-      onConnect: () => open(),
-      connectDisabled: !options.canStart() || busy(),
-      loginMessage: message,
-    };
-  }
-
   function selection() {
     const { context, agentId, authStatus } = options.getScope();
     return resolveLoginSelection(
@@ -354,26 +334,6 @@ export function createModelProviderLogin(options: LoginOptions) {
     inventoryRequest?.result.resolve(null);
     completionCatalog.clear();
   });
-
-  function wizardViewProps() {
-    view.read();
-    const current = wizard.viewProps({
-      mode: loginMode === "access" ? "auth" : loginMode,
-      busy: mutationActive,
-      refreshWarning,
-      doneMessage: runner.state.authLabel
-        ? t("modelSetup.providerConnected", { provider: runner.state.authLabel })
-        : t("modelSetup.wizard.connected"),
-      doneDescription: completionModel
-        ? t("modelProviders.login.modelReady", { model: completionModel.name })
-        : undefined,
-    });
-    return {
-      ...current,
-      // Config admission can precede the runner's committed presentation.
-      admissionPending: mutationActive && current.state.phase === "idle",
-    };
-  }
 
   function doneAction() {
     view.read();
@@ -705,13 +665,41 @@ export function createModelProviderLogin(options: LoginOptions) {
       return busy();
     },
     get providerActions() {
-      return providerActions();
+      view.read();
+      return {
+        canMutate: options.canStart(),
+        loginBusy: busy(),
+        onConnect: (card: ModelProviderCard) => open([card.id, ...card.credentialProviderIds]),
+        canConnect: (card: ModelProviderCard) =>
+          loginProviders([card.id, ...card.credentialProviderIds]).length > 0,
+      };
     },
     get pageActions() {
-      return pageActions();
+      view.read();
+      return {
+        onConnect: () => open(),
+        connectDisabled: !options.canStart() || busy(),
+        loginMessage: message,
+      };
     },
     get wizardViewProps() {
-      return wizardViewProps();
+      view.read();
+      const current = wizard.viewProps({
+        mode: loginMode === "access" ? "auth" : loginMode,
+        busy: mutationActive,
+        refreshWarning,
+        doneMessage: runner.state.authLabel
+          ? t("modelSetup.providerConnected", { provider: runner.state.authLabel })
+          : t("modelSetup.wizard.connected"),
+        doneDescription: completionModel
+          ? t("modelProviders.login.modelReady", { model: completionModel.name })
+          : undefined,
+      });
+      return {
+        ...current,
+        // Config admission can precede the runner's committed presentation.
+        admissionPending: mutationActive && current.state.phase === "idle",
+      };
     },
     saving: presentation.wizardSaving,
     doneAction,

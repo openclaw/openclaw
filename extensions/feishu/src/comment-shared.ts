@@ -8,10 +8,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeCommentFileType, type CommentFileType } from "./comment-target.js";
 import { captureFeishuSendAuthority } from "./send-context.js";
-import {
-  getFeishuSendRateLimitCode,
-  getFeishuSendRateLimitCodeFromResponse,
-} from "./send-rate-limit.js";
 
 export type FeishuDriveCommentReply = {
   reply_id?: string;
@@ -118,6 +114,26 @@ export function formatFeishuApiError(
 
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
+const FEISHU_SEND_RATE_LIMIT_CODES = new Set([230020, 11232]);
+
+function getFeishuSendRateLimitCode(error: unknown): number | undefined {
+  if (!isRecord(error)) {
+    return undefined;
+  }
+  const response = isRecord(error.response) ? error.response : undefined;
+  if (response?.status === 429) {
+    return 429;
+  }
+  return getFeishuSendRateLimitCodeFromResponse(response?.data);
+}
+
+function getFeishuSendRateLimitCodeFromResponse(response: unknown): number | undefined {
+  if (!isRecord(response)) {
+    return undefined;
+  }
+  const code = response.code;
+  return typeof code === "number" && FEISHU_SEND_RATE_LIMIT_CODES.has(code) ? code : undefined;
+}
 
 export async function requestFeishuApi<T>(
   request: () => Promise<T>,

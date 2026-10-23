@@ -392,7 +392,9 @@ export function renderSessionSection(params: {
             <div class="sidebar-recent-sessions__list" role="list" aria-label={label()}>
               {renderPendingSessionCreateRow(pendingCreate, true)}
               <For each={section().rows} keyed={(session) => session.key}>
-                {(session) => <SessionTree host={host()} session={session()} />}
+                {(session) => (
+                  <SessionTree host={host()} session={session()} pinReorder={pinned()} />
+                )}
               </For>
             </div>
           ) : undefined}

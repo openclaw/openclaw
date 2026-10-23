@@ -147,3 +147,18 @@
     height: 44px;
   }
 }
+
+.chat-subagents__native {
+  padding: 8px;
+  font-size: var(--control-ui-text-sm);
+}
+
+.chat-subagents__native h3 {
+  margin: 0;
+  font-size: inherit;
+}
+
+.chat-subagents__native p {
+  margin: 4px 0 8px;
+  font-size: var(--control-ui-text-xs);
+}

@@ -91,7 +91,8 @@ suite.define(() => {
       expect(geometry.rightInset, JSON.stringify(geometry)).toBeCloseTo(geometry.leftInset, 1);
       expect(geometry.rowLeft).toBeCloseTo(geometry.listLeft, 1);
       expect(geometry.rowRight).toBeCloseTo(geometry.listRight, 1);
-      expect(geometry.clearance).toBeGreaterThanOrEqual(8);
+      // The mobile rail reserves 6px gutters to preserve session title space.
+      expect(geometry.clearance).toBeGreaterThanOrEqual(width === 390 ? 6 : 8);
       if (overflow) {
         expect(geometry.maskImage.match(/linear-gradient/g)).toHaveLength(2);
         expect(geometry.maskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("100%");

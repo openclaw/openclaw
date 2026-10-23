@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import type { CiaoService } from "@homebridge/ciao";
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import {
   registerUncaughtExceptionHandler,
@@ -8,8 +9,50 @@ import {
 } from "openclaw/plugin-sdk/runtime";
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
-import { classifyCiaoProcessError } from "./ciao.js";
-import { formatBonjourError } from "./errors.js";
+
+function formatBonjourError(err: unknown): string {
+  if (err instanceof Error) {
+    const trimmedMessage = err.message.trim();
+    const msg = trimmedMessage || err.name || String(err).trim();
+    if (err.name && err.name !== "Error") {
+      return msg === err.name ? err.name : `${err.name}: ${msg}`;
+    }
+    return msg;
+  }
+  return String(err);
+}
+
+const CIAO_NETMASK_ASSERTION_MESSAGE_RE =
+  /IP ADDRESS VERSION MUST MATCH\.\s+NETMASK CANNOT HAVE A VERSION DIFFERENT FROM THE ADDRESS!?/u;
+// Restricted sandboxes (NemoClaw, Docker-in-Docker, k3s with locked-down policy)
+// can refuse os.networkInterfaces(), which ciao calls during NetworkManager init.
+// Node surfaces this as a SystemError mentioning the libuv syscall by name.
+const CIAO_INTERFACE_ENUMERATION_FAILURE_RE = /\bUV_INTERFACE_ADDRESSES\b/u;
+
+type CiaoProcessErrorClassification =
+  | { kind: "netmask-assertion"; formatted: string }
+  | { kind: "interface-enumeration-failure"; formatted: string };
+
+function classifyCiaoProcessError(reason: unknown): CiaoProcessErrorClassification | null {
+  for (const candidate of collectErrorGraphCandidates(reason, (current) => [
+    current.cause,
+    current.reason,
+    current.original,
+    current.error,
+    current.data,
+    ...(Array.isArray(current.errors) ? current.errors : []),
+  ])) {
+    const formatted = formatBonjourError(candidate);
+    const message = formatted.toUpperCase();
+    if (CIAO_NETMASK_ASSERTION_MESSAGE_RE.test(message)) {
+      return { kind: "netmask-assertion", formatted };
+    }
+    if (CIAO_INTERFACE_ENUMERATION_FAILURE_RE.test(message)) {
+      return { kind: "interface-enumeration-failure", formatted };
+    }
+  }
+  return null;
+}
 
 type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;

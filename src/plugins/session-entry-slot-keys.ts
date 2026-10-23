@@ -160,6 +160,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "restartRecoveryRequesterSenderId",
   "restartRecoverySameChannelThreadRequired",
   "restartRecoverySourceIngress",
+  "restartRecoverySourceMessageChannel",
   "restartRecoverySourceReplyDeliveryMode",
   "restartRecoveryTerminalDeliveryEvidence",
   "restartRecoveryHarnessCompletion",

@@ -262,16 +262,16 @@ it("switches Gateway hosting only when available and follows the native owner's 
   expect(toggleInput(hosting).checked).toBe(false);
   toggle(page, title, true);
   expect(set).toHaveBeenCalledExactlyOnceWith("app.keepGatewayRunning", true, expect.any(Function));
-  await waitForSolid(() => expect(toggleInput(hosting).disabled).toBe(true));
+  await waitForSolid(() => expect(toggleInput(hosting).hasAttribute("aria-disabled")).toBe(true));
   const saved = createNativeDeviceSettingsSnapshot();
   saved.app.keepGatewayRunning = true;
   settle(0, saved);
-  await waitForSolid(() => expect(toggleInput(hosting).disabled).toBe(false));
+  await waitForSolid(() => expect(toggleInput(hosting).hasAttribute("aria-disabled")).toBe(false));
   expect(toggleInput(hosting).checked).toBe(true);
   toggle(page, title, false);
   expect(set).toHaveBeenLastCalledWith("app.keepGatewayRunning", false, expect.any(Function));
   settle(1, saved, new Error("Gateway did not become ready."));
-  await waitForSolid(() => expect(toggleInput(hosting).disabled).toBe(false));
+  await waitForSolid(() => expect(toggleInput(hosting).hasAttribute("aria-disabled")).toBe(false));
   expect(toggleInput(hosting).checked).toBe(true);
   await waitForSolid(() =>
     expect(hosting.querySelector('[role="alert"]')?.textContent).toContain(
@@ -281,11 +281,11 @@ it("switches Gateway hosting only when available and follows the native owner's 
   toggle(page, title, false);
   flush();
   expect(hosting.querySelector('[role="alert"]')).toBeNull();
-  await waitForSolid(() => expect(toggleInput(hosting).disabled).toBe(true));
+  await waitForSolid(() => expect(toggleInput(hosting).hasAttribute("aria-disabled")).toBe(true));
   expect(row(page, title)).toBe(hosting);
   // Native Cancel returns the accepted snapshot unchanged.
   settle(2, saved);
-  await waitForSolid(() => expect(toggleInput(hosting).disabled).toBe(false));
+  await waitForSolid(() => expect(toggleInput(hosting).hasAttribute("aria-disabled")).toBe(false));
   expect(toggleInput(hosting).checked).toBe(true);
   expect(row(page, title)).toBe(hosting);
   saved.app.keepGatewayRunningAvailable = false;
@@ -310,7 +310,9 @@ it("leaves a held Gateway confirmation without delaying profile cleanup or leaki
 
   const next = await mount("openclaw-device-page", capability);
   settle(0, createNativeDeviceSettingsSnapshot(), new Error("Retired confirmation"));
-  await waitForSolid(() => expect(toggleInput(row(next, title)).disabled).toBe(false));
+  await waitForSolid(() =>
+    expect(toggleInput(row(next, title)).hasAttribute("aria-disabled")).toBe(false),
+  );
   expect(row(next, title).querySelector('[role="alert"]')).toBeNull();
 });
 

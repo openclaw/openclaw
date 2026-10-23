@@ -8,6 +8,7 @@ import {
   decorativeEmoji,
   decorativePrefix,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentWorkspaceDir,
@@ -45,7 +46,11 @@ import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import type { RunPluginInstallCommandParams } from "./plugins-install-preflight.js";
 import type { RunPluginUpdateCommandParams } from "./plugins-update-command.js";
-import { formatCliRequirements, formatCliStatusTable } from "./skills-hooks-cli.format.js";
+import {
+  formatCliRequirements,
+  formatCliStatusTable,
+  sanitizeCliDescriptorText,
+} from "./skills-hooks-cli.format.js";
 
 type HooksReportOptions = {
   agent?: string;
@@ -66,7 +71,7 @@ function formatHookStatus(hook: HookStatusEntry, detailed = false): string {
   }
   const reason =
     hook.blockedReason && hook.blockedReason !== "missing requirements"
-      ? hook.blockedReason
+      ? sanitizeTerminalText(hook.blockedReason)
       : detailed
         ? "missing requirements"
         : "missing";
@@ -143,14 +148,18 @@ function formatHooksList(report: HookStatusReport, opts: HooksListOptions): stri
     sourceColumn: { key: "Source", header: "Source", minWidth: 12, flex: true },
     verbose: opts.verbose,
     rows: hooks.map((hook) => {
-      const emoji = hook.emoji ?? decorativeEmoji("🔗");
-      const name = theme.command(hook.name);
+      const emoji = sanitizeTerminalText(hook.emoji ?? decorativeEmoji("🔗"));
+      const name = theme.command(sanitizeTerminalText(hook.name));
       return {
         Status: formatHookStatus(hook),
         Hook: emoji ? `${emoji} ${name}` : name,
-        Description: theme.muted(hook.description),
-        Source: hook.managedByPlugin ? `plugin:${hook.pluginId ?? "unknown"}` : hook.source,
-        Missing: opts.verbose ? theme.warn(formatHookMissingSummary(hook)) : "",
+        Description: theme.muted(sanitizeCliDescriptorText(hook.description)),
+        Source: sanitizeTerminalText(
+          hook.managedByPlugin ? `plugin:${hook.pluginId ?? "unknown"}` : hook.source,
+        ),
+        Missing: opts.verbose
+          ? theme.warn(sanitizeTerminalText(formatHookMissingSummary(hook)))
+          : "",
       };
     }),
   });
@@ -166,7 +175,7 @@ function formatHookInfo(
       const failure = formatCliJsonFailure(`Hook "${hookName}" not found.`);
       return JSON.stringify({ ...failure, hook: hookName }, null, 2);
     }
-    return `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`;
+    return `Hook "${sanitizeTerminalText(hookName)}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`;
   }
 
   if (opts.json) {
@@ -181,27 +190,27 @@ function formatHookInfo(
     );
   }
 
-  const emoji = hook.emoji ?? decorativeEmoji("🔗");
+  const emoji = sanitizeTerminalText(hook.emoji ?? decorativeEmoji("🔗"));
   const lines = [
-    `${emoji ? `${emoji} ` : ""}${theme.heading(hook.name)} ${formatHookStatus(hook, true)}`,
+    `${emoji ? `${emoji} ` : ""}${theme.heading(sanitizeTerminalText(hook.name))} ${formatHookStatus(hook, true)}`,
     "",
-    hook.description,
+    sanitizeCliDescriptorText(hook.description),
     "",
     theme.heading("Details:"),
-    `${theme.muted("  Source:")} ${hook.source}${hook.managedByPlugin ? ` (${hook.pluginId ?? "unknown"})` : ""}`,
-    `${theme.muted("  Path:")} ${shortenHomePath(hook.filePath)}`,
-    `${theme.muted("  Handler:")} ${shortenHomePath(hook.handlerPath)}`,
+    `${theme.muted("  Source:")} ${sanitizeTerminalText(hook.source)}${hook.managedByPlugin ? ` (${sanitizeTerminalText(hook.pluginId ?? "unknown")})` : ""}`,
+    `${theme.muted("  Path:")} ${sanitizeTerminalText(shortenHomePath(hook.filePath))}`,
+    `${theme.muted("  Handler:")} ${sanitizeTerminalText(shortenHomePath(hook.handlerPath))}`,
   ];
   if (hook.homepage) {
-    lines.push(`${theme.muted("  Homepage:")} ${hook.homepage}`);
+    lines.push(`${theme.muted("  Homepage:")} ${sanitizeTerminalText(hook.homepage)}`);
   }
   if (hook.events.length > 0) {
-    lines.push(`${theme.muted("  Events:")} ${hook.events.join(", ")}`);
+    lines.push(`${theme.muted("  Events:")} ${sanitizeTerminalText(hook.events.join(", "))}`);
   }
   if (hook.unknownEvents.length > 0) {
     lines.push(
       theme.warn(
-        `  ⚠ Event${hook.unknownEvents.length === 1 ? "" : "s"} not emitted by core (likely typo): ${hook.unknownEvents.join(", ")}`,
+        `  ⚠ Event${hook.unknownEvents.length === 1 ? "" : "s"} not emitted by core (likely typo): ${sanitizeTerminalText(hook.unknownEvents.join(", "))}`,
       ),
     );
   }
@@ -209,7 +218,7 @@ function formatHookInfo(
     lines.push(theme.muted("  Managed by plugin; enable/disable via hooks CLI not available."));
   }
   if (hook.blockedReason) {
-    lines.push(`${theme.muted("  Blocked reason:")} ${hook.blockedReason}`);
+    lines.push(`${theme.muted("  Blocked reason:")} ${sanitizeTerminalText(hook.blockedReason)}`);
   }
 
   lines.push(...formatCliRequirements(hook, HOOK_REQUIREMENT_GROUPS, hook.configChecks));
@@ -257,7 +266,9 @@ function formatHooksCheck(report: HookStatusReport, opts: HooksReportOptions): s
         reasons.unshift(hook.blockedReason);
       }
       const emoji = hook.emoji ?? decorativeEmoji("🔗");
-      lines.push(`  ${emoji ? `${emoji} ` : ""}${hook.name} - ${reasons.join("; ")}`);
+      lines.push(
+        sanitizeTerminalText(`  ${emoji ? `${emoji} ` : ""}${hook.name} - ${reasons.join("; ")}`),
+      );
     }
   }
 
@@ -386,7 +397,7 @@ async function runOneShotHooksCliAction(
   const result = await action().catch((err: unknown) => {
     rethrowExpectedCliError(err);
     const message = formatErrorMessage(err);
-    const humanOutput = `${theme.error("Error:")} ${message}`;
+    const humanOutput = `${theme.error("Error:")} ${sanitizeTerminalText(message)}`;
     if (failureOwner === "root") {
       throw new ExpectedCliError({ message, humanOutput, machineOutput: message });
     }

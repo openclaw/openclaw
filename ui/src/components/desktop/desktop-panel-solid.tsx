@@ -4,10 +4,11 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
-import { createDesktopFullscreen } from "../desktop-fullscreen.ts";
+import { createDesktopFullscreen, type DesktopFullscreen } from "../desktop-fullscreen.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
 import { nativeDockPanelCss as dockStyles } from "../dock-panel-styles.ts";
-import { FullscreenButton } from "../fullscreen-solid.tsx";
+import { Icon } from "../solid/icon.tsx";
+import "../tooltip.ts";
 import { StrokeIcon } from "../solid/stroke-icon.tsx";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
@@ -48,7 +49,7 @@ const ownerFor = (host: DesktopPanelElement) => {
   }
   return owner;
 };
-defineSolidBridge<DesktopPanelInputs, Methods>(
+export const DesktopPanel = defineSolidBridge<DesktopPanelInputs, Methods>(
   "openclaw-desktop-panel",
   (inputs, host) => {
     const retained = owners.has(host);
@@ -119,6 +120,33 @@ declare module "@solidjs/web" {
       } & { embedded?: boolean };
     }
   }
+}
+
+function FullscreenButton(props: { controller: DesktopFullscreen }) {
+  const label = () =>
+    t(
+      props.controller.active()
+        ? "desktop.exitFullscreen"
+        : props.controller.supported()
+          ? "desktop.enterFullscreen"
+          : "desktop.fullscreenUnavailable",
+    );
+  return (
+    <openclaw-tooltip prop:content={label()}>
+      <button
+        class="bp-icon desktop-fullscreen-button"
+        type="button"
+        aria-label={label()}
+        aria-pressed={props.controller.active() ? "true" : "false"}
+        aria-disabled={props.controller.supported() ? "false" : "true"}
+        onClick={(event) => void props.controller.toggle(event.currentTarget)}
+      >
+        <span class="desktop-fullscreen-icon" aria-hidden="true">
+          <Icon name={props.controller.active() ? "minimize" : "maximize"} />
+        </span>
+      </button>
+    </openclaw-tooltip>
+  );
 }
 
 function PictureInPictureButton(props: {

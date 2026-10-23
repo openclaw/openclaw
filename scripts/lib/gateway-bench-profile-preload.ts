@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import v8, { getHeapSpaceStatistics, queryObjects, writeHeapSnapshot } from "node:v8";
 import { isMainThread } from "node:worker_threads";
-import { getWorkerMessageMetrics } from "../../src/infra/worker-message-metrics.ts";
+import { getSessionRowSelectionMetrics } from "../../src/infra/gateway-work-metrics.ts";
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 import {
   GATEWAY_PROFILE_CHANNEL,
@@ -18,6 +18,11 @@ import {
   type GatewayCpuUsageSnapshot,
   type GatewayResourceSnapshot,
 } from "./gateway-bench-profile.ts";
+import {
+  gatewayBenchMessageLabel,
+  instrumentGatewayBenchWorkerSource,
+  startGatewayBenchWorkerMessages,
+} from "./gateway-bench-worker-messages.ts";
 import { GatewayBenchWorkerProfiler } from "./gateway-bench-worker-profile.ts";
 
 function sampleCpu(): GatewayCpuUsageSnapshot {
@@ -45,6 +50,7 @@ function sampleResources(): GatewayResourceSnapshot {
     ...sampleCpu(),
     memory: process.memoryUsage(),
     heapSpaces: getHeapSpaceStatistics(),
+    sessionRowSelections: getSessionRowSelectionMetrics(),
     // These resource types keep the event loop alive; they are not ownership IDs.
     activeResources: Object.fromEntries(
       [...counts].toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
@@ -60,14 +66,23 @@ if (isMainThread) {
     throw new Error("Gateway profiling requires the benchmark IPC channel");
   }
   const broadcastTiming = process.env.OPENCLAW_BENCH_BROADCAST_TIMING === "1";
+  const workerAttribution = process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1";
+  const workerAttributionSourceHooks = new Set<string>();
+  const sessionProjectionCounts = process.env.OPENCLAW_BENCH_SESSION_PROJECTION_COUNTS === "1";
   const sessionProjectionSource = process.env.OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE;
+  const historySource = process.env.OPENCLAW_BENCH_HISTORY_SOURCE;
   let broadcastTimingInstalled = false;
-  if (broadcastTiming || sessionProjectionSource) {
+  let sessionProjectionCountsInstalled = false;
+  if (
+    broadcastTiming ||
+    sessionProjectionCounts ||
+    sessionProjectionSource ||
+    workerAttribution ||
+    historySource
+  ) {
     const entry = new URL("../../src/entry.ts", import.meta.url);
     if (!process.argv[1] || realpathSync(process.argv[1]) !== realpathSync(entry)) {
-      throw new Error(
-        "Broadcast timing and session projection sources require --entry src/entry.ts",
-      );
+      throw new Error("Benchmark source instrumentation requires --entry src/entry.ts");
     }
     const projectionSources = new Map<string, string>();
     if (sessionProjectionSource) {
@@ -76,6 +91,9 @@ if (isMainThread) {
         "session-row-presentation.ts",
         "session-sharing-read.ts",
         "session-utils-list.ts",
+        "session-ancestor-references.ts",
+        "server-connection-state.ts",
+        "server-methods/sessions-read.ts",
       ]) {
         projectionSources.set(
           new URL(`../../src/gateway/${file}`, import.meta.url).href,
@@ -83,11 +101,108 @@ if (isMainThread) {
         );
       }
     }
+    if (historySource) {
+      for (const file of ["chat-history-session-read.ts", "chat-history-handler.ts"]) {
+        projectionSources.set(
+          new URL(`../../src/gateway/server-methods/${file}`, import.meta.url).href,
+          readFileSync(path.join(historySource, file), "utf8"),
+        );
+      }
+    }
     const owner = new URL("../../src/gateway/server-broadcast.ts", import.meta.url).href;
+    const workerOwners = new Map(
+      ["worker-message-metrics.ts", "sqlite-worker-operation-admission.ts", "worker-cpu.ts"].map(
+        (file) => [new URL(`../../src/infra/${file}`, import.meta.url).href, file],
+      ),
+    );
+    workerOwners.set(
+      new URL("../../packages/worker-runtime/src/worker-task-pool-core.ts", import.meta.url).href,
+      "worker-task-pool-core.ts",
+    );
+    const transformWorkerSource = workerAttribution
+      ? (await import("esbuild")).transformSync
+      : undefined;
+    const projectionOwner = new URL(
+      "../../src/gateway/session-event-projection.ts",
+      import.meta.url,
+    ).href;
+
     registerHooks({
       load(url, context, nextLoad) {
         const loaded = nextLoad(url, context);
+        const workerOwner = workerAttribution && workerOwners.get(url);
+        if (workerOwner) {
+          const source = instrumentGatewayBenchWorkerSource(
+            workerOwner,
+            readFileSync(new URL(url), "utf8"),
+          );
+          workerAttributionSourceHooks.add(workerOwner);
+          if (workerOwner === "worker-task-pool-core.ts" && transformWorkerSource) {
+            // The package core uses parameter properties; Node's strip-only mode cannot load it.
+            return {
+              ...loaded,
+              format: "module",
+              source: transformWorkerSource(source, {
+                loader: "ts",
+                format: "esm",
+                target: "node26",
+                sourcemap: "inline",
+                sourcefile: fileURLToPath(url),
+              }).code,
+            };
+          }
+          return {
+            ...loaded,
+            format: "module-typescript",
+            source,
+          };
+        }
         const projectionSource = projectionSources.get(url);
+        if (sessionProjectionCounts && url === projectionOwner) {
+          let source = projectionSource ?? readFileSync(new URL(url), "utf8");
+          const replacements = [
+            [
+              "    const audiences = new Map<",
+              `    const benchmarkProjectionPayloads = new Set<object>();
+    benchmarkSessionProjectionChannel.publish({ operation: event, publications: 1 });
+    const audiences = new Map<`,
+            ],
+            [
+              "      if (!audience) {",
+              `      if (!audience) {
+        benchmarkSessionProjectionChannel.publish({ operation: event, audienceCacheMisses: 1 });`,
+            ],
+            [
+              "      if (!projected) {",
+              `      if (!projected) {
+        benchmarkSessionProjectionChannel.publish({ operation: event, payloadCacheMisses: 1 });`,
+            ],
+            [
+              "      return {\n        payload: wirePayload,",
+              `      benchmarkSessionProjectionChannel.publish({
+        operation: event,
+        projectedRecipients: 1,
+        wirePayloads: benchmarkProjectionPayloads.has(wirePayload) ? 0 : 1,
+      });
+      benchmarkProjectionPayloads.add(wirePayload);
+      return {
+        payload: wirePayload,`,
+            ],
+          ] as const;
+          for (const [anchor, replacement] of replacements) {
+            if (source.split(anchor).length !== 2) {
+              throw new Error(
+                "Session projection count anchors changed; update the benchmark observer",
+              );
+            }
+            source = source.replace(anchor, replacement);
+          }
+          source = `import { channel as benchmarkProjectionDiagnosticChannel } from "node:diagnostics_channel";
+const benchmarkSessionProjectionChannel = benchmarkProjectionDiagnosticChannel("openclaw.benchmark.session-projection");
+${source}`;
+          sessionProjectionCountsInstalled = true;
+          return { ...loaded, format: "module-typescript", source };
+        }
         if (projectionSource !== undefined) {
           // Preserve canonical imports and original TypeScript lines in sampled stacks.
           return { ...loaded, format: "module-typescript", source: projectionSource };
@@ -134,6 +249,8 @@ ${source}`;
       },
     });
   }
+  // Import after installing source observers; an eager import bypasses the load hook.
+  const { getWorkerMessageMetrics } = await import("../../src/infra/worker-message-metrics.ts");
   if (process.env.OPENCLAW_BENCH_FIRST_TEXT === "1") {
     const { onAgentEvent } = await import("../../src/infra/agent-events.js");
     onAgentEvent((event) => {
@@ -197,6 +314,10 @@ ${source}`;
     GatewayProfileCommand["kind"],
     Map<string, { count: number; bytes: number }>
   >();
+  const workerAttributionCaptures = new Map<
+    GatewayProfileCommand["kind"],
+    ReturnType<typeof startGatewayBenchWorkerMessages>
+  >();
   const nativeDeserialize = v8.deserialize;
   const measuredDeserialize: typeof v8.deserialize = (buffer) => {
     const value: unknown = nativeDeserialize(buffer);
@@ -205,7 +326,7 @@ ${source}`;
       typeof value === "object" &&
       "kind" in value &&
       typeof value.kind === "string"
-        ? value.kind
+        ? gatewayBenchMessageLabel(value.kind)
         : "untyped";
     for (const groups of deserializeCaptures.values()) {
       let metric = groups.get(kind);
@@ -341,6 +462,14 @@ ${source}`;
       reply("Broadcast timing owner was not loaded; source attribution is unavailable");
       return;
     }
+    if (
+      sessionProjectionCounts &&
+      !sessionProjectionCountsInstalled &&
+      message.action === "start"
+    ) {
+      reply("Session projection owner was not loaded; count attribution is unavailable");
+      return;
+    }
     if (message.kind === "diagnostics") {
       const captureId = message.captureId;
       if (message.action === "start") {
@@ -412,6 +541,9 @@ ${source}`;
         diagnosticCaptures.set(message.kind, startGatewayBenchDiagnostics());
         workerMessageStarts.set(message.kind, getWorkerMessageMetrics());
         deserializeCaptures.set(message.kind, new Map());
+        if (workerAttribution) {
+          workerAttributionCaptures.set(message.kind, startGatewayBenchWorkerMessages());
+        }
         v8.deserialize = measuredDeserialize;
         syncBuiltinESMExports();
         if (message.kind === "heap") {
@@ -422,6 +554,8 @@ ${source}`;
           throw new Error(`Gateway ${message.kind} profile has not started`);
         }
         const deserialized = Object.fromEntries(deserializeCaptures.get(message.kind) ?? []);
+        const workerAttributionResult = workerAttributionCaptures.get(message.kind)?.();
+        workerAttributionCaptures.delete(message.kind);
         deserializeCaptures.delete(message.kind);
         if (deserializeCaptures.size === 0) {
           v8.deserialize = nativeDeserialize;
@@ -464,6 +598,16 @@ ${source}`;
             JSON.stringify(workerMessages),
             { mode: 0o600 },
           );
+          if (workerAttributionResult) {
+            writeFileSync(
+              `${message.profilePath}.worker-attribution.json`,
+              JSON.stringify({
+                ...workerAttributionResult,
+                sourceHooks: [...workerAttributionSourceHooks].toSorted(),
+              }),
+              { mode: 0o600 },
+            );
+          }
           writeFileSync(
             `${message.profilePath}.deserialize.json`,
             JSON.stringify({ scope: "main-isolate", groups: deserialized }),
@@ -495,6 +639,10 @@ ${source}`;
     v8.deserialize = nativeDeserialize;
     syncBuiltinESMExports();
     deserializeCaptures.clear();
+    for (const finish of workerAttributionCaptures.values()) {
+      finish();
+    }
+    workerAttributionCaptures.clear();
     for (const finish of namedDiagnostics.values()) {
       finish();
     }

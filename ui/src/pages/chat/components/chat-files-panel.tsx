@@ -8,7 +8,6 @@ import {
   createSignal,
   onSettled,
   refresh,
-  untrack,
 } from "solid-js";
 import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
@@ -60,12 +59,17 @@ const hostedTabNotifiers = new WeakMap<HTMLElement, () => void>();
 const FILE_COLUMN_MIN_WIDTH = 176;
 
 /** The workspace owns tab order and selection; this view retains retiring app DOM. */
-defineSolidBridge<Props, Methods>(
+export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
   "openclaw-chat-files-panel",
   (props, host) => {
     const contentId = `chat-files-content-${++filesPanelSequence}`;
     const tabFocus = createTabFocus();
     const pages = new Map<string, HTMLElement>();
+    const pageRef = (id: string) =>
+      elementRef((element: HTMLDivElement) => {
+        pages.set(id, element);
+        return () => pages.delete(id);
+      });
     let contentElement!: HTMLDivElement;
     let catalog!: HTMLDivElement;
     // Local geometry survives file navigation, but not a change of session.
@@ -303,12 +307,19 @@ defineSolidBridge<Props, Methods>(
           </Show>
           <For each={rendered().previews} keyed={(preview) => preview.id}>
             {(preview) => {
-              // Registration and cleanup follow the keyed row's lifetime, not its current data.
-              const initialPreviewId = untrack(() => preview().id);
               const entry = () => {
                 rendered();
                 return preview();
               };
+              const FilePath = () => (
+                <span
+                  ref={createTextOverflow(() => entry().label)}
+                  class="sidebar-file-view__path"
+                  title={entry().label}
+                >
+                  {entry().label}
+                </span>
+              );
               const readResult = createMemo(() => ({ pending: entry().readResult }), {
                 equals: (previous, next) => previous.pending === next.pending,
               });
@@ -330,12 +341,7 @@ defineSolidBridge<Props, Methods>(
               });
               return (
                 <div
-                  ref={[
-                    elementRef((element) => {
-                      pages.set(initialPreviewId, element);
-                      return () => pages.delete(initialPreviewId);
-                    }),
-                  ]}
+                  ref={[pageRef(preview().id)]}
                   class="chat-files-panel__page"
                   data-app-tab-id={entry().content.kind === "mcp-app" ? entry().id : undefined}
                   hidden={rendered().activeId !== entry().id || entry().catalogVisible === true}
@@ -345,13 +351,7 @@ defineSolidBridge<Props, Methods>(
                       class="chat-files-panel__fallback-rail sidebar-file-view__path-bar session-panel-rail"
                       data-presentation="desktop"
                     >
-                      <span
-                        ref={createTextOverflow(() => entry().label)}
-                        class="sidebar-file-view__path"
-                        title={entry().label}
-                      >
-                        {entry().label}
-                      </span>
+                      <FilePath />
                     </div>
                   </Show>
                   <Show when={rendered().presentation === "mobile"}>
@@ -379,13 +379,7 @@ defineSolidBridge<Props, Methods>(
                               class="sidebar-file-view__path-bar session-panel-rail"
                               data-presentation="desktop"
                             >
-                              <span
-                                ref={createTextOverflow(() => entry().label)}
-                                class="sidebar-file-view__path"
-                                title={entry().label}
-                              >
-                                {entry().label}
-                              </span>
+                              <FilePath />
                             </div>
                             <div class="sidebar-file-view__workspace-body">
                               <PanelEmptyState

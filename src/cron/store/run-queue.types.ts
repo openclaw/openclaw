@@ -1,6 +1,6 @@
 import type { CronEventAdmission } from "../event-source.js";
 import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronStoredJob } from "../types.js";
 import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 export type CronRunRequestContext = {
@@ -11,7 +11,7 @@ export type CronRunRequestContext = {
 };
 
 export type CronQueuedRun = {
-  job: CronJob;
+  job: CronStoredJob;
   runReceipt: CronRunReceiptHandle;
   migrationPending?: boolean;
 };

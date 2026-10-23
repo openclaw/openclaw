@@ -265,6 +265,7 @@ describe("renderChatComposer controls", () => {
         queued("waiting-idle-1", { createdAt: 4, sendState: "waiting-idle" }),
       ],
     });
+    await vi.dynamicImportSettled();
     const steer = await waitForSolid(() => {
       const buttons = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__action")];
       expect(buttons).toHaveLength(2);
@@ -308,6 +309,7 @@ describe("renderChatComposer controls", () => {
 
     pressComposerEnter(container);
     expect(onQueueSteer).not.toHaveBeenCalled();
+    await vi.dynamicImportSettled();
     await waitForSolid(() => expect(container.querySelector(".chat-queue__item")).not.toBeNull());
     expect(container.querySelector(".chat-queue__action")).toBeNull();
   });

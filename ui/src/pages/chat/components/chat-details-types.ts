@@ -71,10 +71,6 @@ type ChatDetailsEnvironmentData = Pick<
 
 /** Published assistant-artifact/dashboard facts and real destination/icon operations. */
 export type ChatDetailsOutputs = ChatOutputsDesktopProps;
-export type ChatDetailsOutputsIcons = Pick<
-  ChatDetailsOutputs,
-  "renderArtifactIcon" | "renderViewAllIcon"
->;
 
 // Both the composing view and Details consume this contract; child components
 // must not import their parent renderer to recover accepted pane facts.

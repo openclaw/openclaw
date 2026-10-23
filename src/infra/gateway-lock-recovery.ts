@@ -83,11 +83,8 @@ export async function inspectGatewayLockRecovery(options: { env?: NodeJS.Process
 }
 
 /** Explicit operator confirmation is bound to file identity, bytes, heartbeat and lease facts. */
-export async function recoverGatewayLock(options: {
-  env?: NodeJS.ProcessEnv;
-  confirmation: string;
-}) {
-  const inspection = await inspectGatewayLockRecovery(options);
+export async function recoverGatewayLock(options: { confirmation: string }) {
+  const inspection = await inspectGatewayLockRecovery();
   if (inspection.confirmation !== options.confirmation) {
     throw new Error(
       "Gateway lock or heartbeat changed since inspection; run `openclaw gateway recover-lock` again.",

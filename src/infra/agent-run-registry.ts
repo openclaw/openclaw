@@ -105,6 +105,7 @@ function storeRunContext(runId: string, context: AgentRunContext, predecessor?: 
   context.localModelWait = undefined;
   context.eventState = { seq: 0 };
   context.modelCallSequence = { value: 0 };
+  context.acceptedUserReply = undefined;
   context.registeredAt ??= Date.now();
   getAgentRunRegistryState().contexts.set(runId, context);
   recordAgentEventRouting(runId, context, predecessor);
@@ -381,6 +382,7 @@ export function claimAgentRunDelegatedAuthority(
     releaseAgentRunContext(runId, claimId);
     throw new Error("agent run delegated authority lost its lifecycle during admission");
   }
+  context.acceptedUserReply = undefined;
   context.delegatedAuthority = authority;
   context.assertSourceCurrent = assertSourceCurrent;
   return authority;

@@ -685,6 +685,22 @@ gc_pr_worktrees() {
       fi
       continue
     fi
+    # A failed clone has no review state or PR registration. Retire only its
+    # directory, even while the PR is open; keep branches for a native retry.
+    local checkout_state
+    if checkout_state=$(pr_worktree_state "$dir" "" entry) &&
+      printf '%s\n' "$checkout_state" | jq -e '.failedTemplateClone' >/dev/null; then
+      if remove_worktree_if_present "$dir" "$dry_run"; then
+        if [ "$dry_run" = true ]; then
+          echo "would remove $dir (failed template clone)"
+        else
+          echo "removed $dir (failed template clone)"
+        fi
+        removed=$((removed + 1))
+      fi
+      release_pr_operation_lock
+      continue
+    fi
     local state
     state=$(pr_gh pr view "$pr" --json state --jq .state) || {
       [ "$?" -ne 75 ] || { release_pr_operation_lock; return 1; }

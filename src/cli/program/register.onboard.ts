@@ -182,17 +182,18 @@ export function registerOnboardRuntimeOptions(
     .option("--import-secrets", "Import supported secrets during onboarding migration", false);
 }
 
-export async function resolveOnboardCommandOptions(
+export async function runOnboardCommand(
   opts: Record<string, unknown>,
   command: Command,
   runtime: RuntimeEnv,
-): Promise<OnboardOptions | false> {
+): Promise<void> {
   if (opts.customImageInput === true && opts.customTextInput === true) {
     const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
     const message = "Use either --custom-image-input or --custom-text-input, not both.";
-    return rejectOnboardingOption({ json: opts.json === true }, runtime, message);
+    rejectOnboardingOption({ json: opts.json === true }, runtime, message);
+    return;
   }
-  return {
+  const onboardingOptions: OnboardOptions = {
     workspace: readStringValue(opts.workspace),
     agentName: readStringValue(opts.agentName),
     team: opts.team === true ? true : undefined,
@@ -247,6 +248,8 @@ export async function resolveOnboardCommandOptions(
     importSecrets: Boolean(opts.importSecrets),
     json: Boolean(opts.json),
   };
+  const { setupWizardCommand } = await import("../../commands/onboard.js");
+  await setupWizardCommand(onboardingOptions, runtime);
 }
 
 export function registerOnboardFlowOptions(command: Command): Command {
@@ -395,16 +398,7 @@ export function registerOnboardCommand(program: Command): void {
         );
         return;
       }
-      const onboardingOptions = await resolveOnboardCommandOptions(
-        opts as Record<string, unknown>,
-        commandRuntime,
-        defaultRuntime,
-      );
-      if (!onboardingOptions) {
-        return;
-      }
-      const { setupWizardCommand } = await import("../../commands/onboard.js");
-      await setupWizardCommand(onboardingOptions, defaultRuntime);
+      await runOnboardCommand(opts as Record<string, unknown>, commandRuntime, defaultRuntime);
     });
   });
 }

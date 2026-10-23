@@ -53,8 +53,6 @@ function startIngress(params: Partial<IngressOptions> = {}) {
     maxQueuedAdmissions: 1_000,
     admissionRateLimit: { windowMs: 60_000, maxEvents: 1_000 },
     onError: vi.fn(),
-    pollIntervalMs: 60_000,
-    adoptionStallTimeoutMs: 5_000,
     ...params,
   });
   activeIngress.push(ingress);

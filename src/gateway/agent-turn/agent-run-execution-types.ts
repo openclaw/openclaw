@@ -14,7 +14,8 @@ import type { PreparedAgentRunDispatch } from "./agent-run-admission-types.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export type StartAgentRunExecutionParams = {
-  assertContextCurrent?: () => void;
+  /** Gateway instance lifetime only; execution checks its retained principal itself. */
+  assertGatewayLifetimeCurrent?: () => void;
   executionSource?: SessionSourceAssertion;
   prepared: PreparedAgentRunDispatch;
   mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;

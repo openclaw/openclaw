@@ -211,9 +211,8 @@ export function isSystemEventContextChanged(
 export function enqueueSystemEventEntry(
   text: string,
   options: SystemEventOptions,
-  receiptOptions?: ReceiptOptions,
 ): SystemEvent | null {
-  const event = enqueueOwnedSystemEventEntry(text, options, receiptOptions);
+  const event = enqueueOwnedSystemEventEntry(text, options);
   return event ? cloneSystemEvent(event) : null;
 }
 

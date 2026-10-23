@@ -11,6 +11,7 @@ import type {
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { collectUnreadHiddenRunRows } from "../../components/app-sidebar-session-parent.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
@@ -51,6 +52,8 @@ import {
 } from "./components/chat-pull-requests.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { scheduleChatScroll } from "./scroll.ts";
+
+registerChatSessionEnglish();
 
 const NO_PULL_REQUESTS: ControlUiSessionPullRequest[] = [];
 

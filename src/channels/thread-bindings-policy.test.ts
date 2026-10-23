@@ -1,10 +1,13 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   resolveThreadBindingIdleTimeoutMs,
+  resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMs,
+  resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
   supportsAutomaticThreadBindingSpawn,
 } from "./thread-bindings-policy.js";
@@ -68,24 +71,35 @@ it("uses spawnSessions for both subagent and ACP spawn policy", () => {
   }
 });
 
-it("lets account config override channel spawnSessions and spawn context", () => {
-  const policy = resolveThreadBindingSpawnPolicy({
-    cfg: {
-      channels: {
-        discord: {
-          threadBindings: { spawnSessions: false, defaultSpawnContext: "fork" },
-          accounts: {
-            work: {
-              threadBindings: { spawnSessions: true, defaultSpawnContext: "isolated" },
+it.each(["work", "Work"])("lets account %s config override channel thread bindings", (key) => {
+  const cfg = {
+    channels: {
+      discord: {
+        threadBindings: {
+          spawnSessions: false,
+          defaultSpawnContext: "fork",
+          idleHours: 24,
+          maxAgeHours: 48,
+        },
+        accounts: {
+          [key]: {
+            threadBindings: {
+              spawnSessions: true,
+              defaultSpawnContext: "isolated",
+              idleHours: 1,
+              maxAgeHours: 2,
             },
           },
         },
       },
     },
-    channel: "discord",
-    accountId: "work",
-    kind: "subagent",
-  });
+  } as OpenClawConfig;
+  const scope = { cfg, channel: "discord", accountId: "work" };
 
-  expect(policy).toMatchObject({ spawnEnabled: true, defaultSpawnContext: "isolated" });
+  expect(resolveThreadBindingSpawnPolicy({ ...scope, kind: "subagent" })).toMatchObject({
+    spawnEnabled: true,
+    defaultSpawnContext: "isolated",
+  });
+  expect(resolveThreadBindingIdleTimeoutMsForChannel(scope)).toBe(60 * 60 * 1000);
+  expect(resolveThreadBindingMaxAgeMsForChannel(scope)).toBe(2 * 60 * 60 * 1000);
 });

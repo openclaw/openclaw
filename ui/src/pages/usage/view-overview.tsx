@@ -6,7 +6,7 @@ import {
   createEmptyCostUsageTotals,
 } from "../../../../src/infra/session-cost-usage-totals.js";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
-import { providerDisplayLabel } from "../../components/provider-icon.ts";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
@@ -37,14 +37,12 @@ function SummaryStat(props: {
   value: string | number;
   sub: string;
   tone?: "good" | "warn" | "bad";
-  class?: string;
   compactValue?: boolean;
 }) {
   return (
     <div
       class={[
         "stat usage-summary-card",
-        props.class,
         props.tone ? `usage-summary-card--${props.tone}` : undefined,
       ]}
     >
@@ -293,7 +291,6 @@ function renderInsightList(
   items: InsightItem[],
   emptyLabel: string,
   options?: {
-    className?: string;
     listClassName?: string;
     error?: boolean;
   },
@@ -302,7 +299,7 @@ function renderInsightList(
   const max = Math.max(0, ...items.map((item) => item.weight));
   const share = (item: InsightItem) => (max > 0 ? (item.weight / max) * 100 : 0);
   return (
-    <div class={["usage-insight-card", options?.className]}>
+    <div class="usage-insight-card">
       <div class="usage-insight-title">{title}</div>
       {items.length === 0 ? (
         <div class="muted">{emptyLabel}</div>

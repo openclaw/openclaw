@@ -160,16 +160,16 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
       expect(footerReattachments).toEqual([]);
 
       // The fix must retain height queries, not just avoid their invalidations.
-      const fadeDisplay = () => style(page, ".chat-footer", "display", "::before");
+      const fadeContent = () => style(page, ".chat-footer", "content", "::before");
       const editorCap = () => style(page, "textarea", "max-height").then(Number.parseFloat);
-      expect(await fadeDisplay()).not.toBe("none");
+      expect(await fadeContent()).toBe("none");
       const tallEditorCap = await editorCap();
       await page.setViewportSize({ width: 1200, height: 260 });
       const shortConversation = await getRect(page, ".chat-main__conversation");
       const thread = await getRect(page, ".chat-thread");
       const footer = await getRect(page, ".chat-footer");
       expect(shortConversation.height).toBe(260);
-      expect(await fadeDisplay()).toBe("none");
+      expect(await fadeContent()).toBe("none");
       expect(await editorCap()).toBeLessThan(tallEditorCap);
       expect(thread.height).toBeGreaterThan(0);
       expect(thread.bottom).toBeLessThanOrEqual(footer.top);
@@ -345,18 +345,13 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
               const box = element(selector).getBoundingClientRect();
               return { bottom: box.bottom, top: box.top, height: box.height, width: box.width };
             };
-            const footer = element(".chat-footer").getBoundingClientRect();
-            const threadElement = element(".chat-thread");
-            const thread = threadElement.getBoundingClientRect();
             const fade = getComputedStyle(element(".chat-footer"), "::before");
             return {
               composer: rect(".agent-chat__composer-shell"),
               conversation: rect(".chat-main__conversation"),
               footer: rect(".chat-footer"),
               input: rect(".agent-chat__input"),
-              fadeInsetLeft: footer.left + Number.parseFloat(fade.left) - thread.left,
-              fadeInsetRight: thread.right - (footer.right - Number.parseFloat(fade.right)),
-              scrollbarSize: (thread.width - threadElement.clientWidth) / 2,
+              fadeContent: fade.content,
               thread: rect(".chat-thread"),
             };
           });
@@ -382,8 +377,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         expect(await page.locator(".agent-chat__composer-notices").isVisible()).toBe(false);
         expect(await page.locator(".chat-footer__context").isVisible()).toBe(withPullRequest);
         expect(await geometry()).toEqual(before);
-        expect(before.fadeInsetLeft).toBeGreaterThanOrEqual(before.scrollbarSize);
-        expect(before.fadeInsetRight).toBeGreaterThanOrEqual(before.scrollbarSize);
+        expect(before.fadeContent).toBe("none");
         expect(before.thread.bottom).toBeLessThanOrEqual(before.footer.top);
         await setHtml(
           page,

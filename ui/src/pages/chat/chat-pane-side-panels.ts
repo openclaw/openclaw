@@ -153,12 +153,8 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
           return;
         }
         this.mobilePresentation.height = height;
-        if (mode) {
-          this.mobilePresentation.mode = mode;
-        }
-        if (reservedHeight !== undefined) {
-          this.mobilePresentation.reservedHeight = reservedHeight;
-        }
+        this.mobilePresentation.mode = mode;
+        this.mobilePresentation.reservedHeight = reservedHeight;
       },
       keyboardVisible:
         this.mobilePresentation.publishedKeyboard ?? shellViewport.snapshot?.keyboardVisible,

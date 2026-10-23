@@ -1,6 +1,8 @@
+import { Check } from "typebox/value";
 import { afterEach, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/index.js";
+import { ModelsListResultSchema } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import * as ownership from "../../agents/harness/session-runtime-ownership.js";
@@ -285,11 +287,32 @@ it("matches the safe models.list session projection for two differently restrict
         defaultModel: "openai/" + ids[i],
       });
       expect(JSON.stringify(result)).not.toMatch(
-        /synthetic-private-key|apiKeySupported|authProfile|credentials|refresh|family/,
+        /synthetic-private-key|apiKeySupported|authProfile|credentials|refresh/,
       );
+      // These fixture rows declare no family, so none may be invented.
+      expect(result.models[0]).not.toHaveProperty("family");
       catalogs.push(result);
     }
     expect(catalogs[0]!.revision).not.toBe(catalogs[1]!.revision);
+  });
+});
+
+it("gives the requester reader the family a catalog declares, never a malformed one", async () => {
+  await fixture(async ({ owner, requesters }) => {
+    const [declared, malformed] = owner.modelCatalog.entries;
+    declared!.family = "openai";
+    // Catalog sources normalize families; the public projection still never trusts a raw one.
+    malformed!.family = "Open AI";
+    const families = [];
+    for (const requester of requesters) {
+      const gateway = await requester.gateway();
+      expect(Check(ModelsListResultSchema, gateway)).toBe(true);
+      const result = await requester.models.list();
+      expect(result).toEqual(projectRequesterModelCatalog(gateway));
+      expect(JSON.stringify(result)).not.toMatch(/synthetic-private-key|apiKeySupported/);
+      families.push(result.models.map(({ id, family }) => [id, family]));
+    }
+    expect(families).toEqual([[[ids[0], "openai"]], [[ids[1], undefined]]]);
   });
 });
 

@@ -2,7 +2,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
+import type { BundledPluginReloadSource } from "./plugin-bundled-reload.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
 import type { PluginNativeRecovery } from "./plugin-native-admission.js";
@@ -43,6 +45,7 @@ type PluginGenerationCaptureArguments = [
   moduleSource?: (filename: string) => string,
   nativeRecovery?: PluginNativeRecovery,
   dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
+  bundledReloadSource?: BundledPluginReloadSource,
 ];
 const sourceCustody = new AsyncLocalStorage<{
   sources: Map<string, SourceCustody>;
@@ -68,12 +71,7 @@ function createPluginGenerationSourceCustody() {
       const results = await Promise.allSettled(
         [...this.sources.values()].map(({ source }) => source.disposeAsync()),
       );
-      const errors = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length) {
-        throw new AggregateError(errors, "Plugin source custody cleanup failed");
-      }
+      throwSettledAggregate(results, "Plugin source custody cleanup failed");
       this.sources.clear();
     },
   };
@@ -99,8 +97,15 @@ export function createPluginGenerationCapture<
   ) => T,
 ) {
   return (...args: PluginGenerationCaptureArguments): T => {
-    const [rootDir, entryFile, execute, moduleSource, nativeRecovery, dependencyLookupBoundary] =
-      args;
+    const [
+      rootDir,
+      entryFile,
+      execute,
+      moduleSource,
+      nativeRecovery,
+      dependencyLookupBoundary,
+      bundledReloadSource,
+    ] = args;
     const custody =
       execute && !nativeRecovery && !dependencyLookupBoundary && sourceCustody.getStore();
     if (!custody) {
@@ -111,6 +116,7 @@ export function createPluginGenerationCapture<
       typeof entryFile === "string"
         ? path.resolve(entryFile)
         : entryFile?.map((file) => path.resolve(file)),
+      bundledReloadSource,
     ]);
     let retained = custody.sources.get(key);
     if (!retained) {
@@ -122,6 +128,7 @@ export function createPluginGenerationCapture<
         undefined,
         undefined,
         undefined,
+        bundledReloadSource,
         undefined,
         true,
       );
@@ -135,10 +142,19 @@ export function createPluginGenerationCapture<
     const fork = retained.source.fork();
     try {
       fork.native?.retain(getPluginCache());
-      return create(rootDir, entryFile, execute, moduleSource, undefined, undefined, {
-        source: fork,
-        files: retained.files,
-      });
+      return create(
+        rootDir,
+        entryFile,
+        execute,
+        moduleSource,
+        undefined,
+        undefined,
+        bundledReloadSource,
+        {
+          source: fork,
+          files: retained.files,
+        },
+      );
     } catch (error) {
       fork.dispose();
       throw error;

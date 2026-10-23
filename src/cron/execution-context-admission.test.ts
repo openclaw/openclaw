@@ -20,6 +20,7 @@ vi.mock("../config/sessions/session-delivery-generation.js", async (importOrigin
 
 const { admitScheduledOccurrence } = await import("./execution-context-admission.js");
 const { prepareCronRunAdmission } = await import("./run-admission.js");
+const { readScheduledToolTargets } = await import("./execution-context-registry.js");
 const { buildScheduledParentPauseNotice } = await import("./scheduled-occurrence.js");
 
 const PARENT_KEY = "agent:main:dashboard:parent";
@@ -115,6 +116,51 @@ const LINKED_JOB = {
 };
 
 describe("admitScheduledOccurrence", () => {
+  it("rechecks a stored Discord requester's owner status for each occurrence", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+    });
+    const stored = job({
+      ...LINKED_JOB,
+      toolsAllowProvenance: {
+        version: 1,
+        source: "authenticated-requester",
+        channelRequester: {
+          version: 1,
+          channel: "discord",
+          accountId: "default",
+          senderId: "100000000000000001",
+        },
+      },
+    });
+
+    // Reuse the persisted requester, not the creator's historical owner status.
+    for (const [senderId, owner] of [
+      ["100000000000000001", true],
+      ["100000000000000002", false],
+    ] as const) {
+      const cfg = { commands: { ownerAllowFrom: [`discord:${senderId}`] } };
+      const occurrence = await admitScheduledOccurrence({
+        cfg,
+        job: stored,
+        agentId: "main",
+        trigger: "cron",
+      });
+      try {
+        expect(occurrence.mint({ ...RUN, cfg }).result).toMatchObject({
+          status: "ready",
+          facts: {
+            authority: { owner, basis: owner ? "channel-owner" : "none" },
+            resources: { memory: { source: "parent", owner } },
+          },
+        });
+      } finally {
+        occurrence.release();
+      }
+    }
+  });
+
   it("binds the context to the admitted run and releases it on close", async () => {
     const { minted } = await mint(job({ scheduledToolPolicy: { version: 1, mode: "trusted" } }));
     expect(minted.result.status).toBe("ready");
@@ -170,6 +216,36 @@ describe("admitScheduledOccurrence", () => {
     expect(prepareSessionGenerationFacts).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: "parent-session", lifecycleRevision: "rev-1" }),
     );
+  });
+
+  it("exposes a child's board and media targets to tool construction for the run", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+    });
+    const { occurrence, minted } = await mint(job(LINKED_JOB));
+    const admission = prepareCronRunAdmission({
+      cfg: {},
+      agentId: "main",
+      runId: "run-1",
+      sessionKey: "agent:main:cron:job-1:run:s1",
+      jobId: "job-1",
+      deliveryAttemptFence: null,
+      scheduledExecution: minted,
+    });
+    const admitted = await admission.preparedRunAdmission.admit("embedded");
+    const targets = readScheduledToolTargets(admitted);
+    expect(targets).toMatchObject({ boardSessionKey: PARENT_KEY });
+    expect(() => targets?.assertCurrent()).not.toThrow();
+    generationAssert.mockImplementationOnce(() => {
+      throw new Error("parent reset");
+    });
+    expect(() => targets?.assertCurrent()).toThrow("parent reset");
+    admission.close();
+    expect(readScheduledToolTargets(admitted)).toBeUndefined();
+    // Tools built during the run keep the assertion; it must refuse after the run settles.
+    expect(() => targets?.assertCurrent()).toThrow("settled");
+    occurrence.release();
   });
 
   it("reports a removed parent as a pause without throwing", async () => {

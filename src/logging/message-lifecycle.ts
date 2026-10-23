@@ -1,3 +1,7 @@
+import {
+  isSessionRunActive,
+  isSessionRunActiveForKey,
+} from "../sessions/session-controller.queries.js";
 import { logMessageProcessed, logMessageQueued, logSessionStateChange } from "./diagnostic.js";
 
 type MessageLifecycleRef = {
@@ -53,7 +57,14 @@ export function createDiagnosticMessageLifecycle(
       logSessionStateChange({
         sessionId: ref.sessionId,
         sessionKey: ref.sessionKey,
-        state: "processing",
+        // Receiving input precedes admission; retained cleanup may still hold its turn.
+        state: (
+          ref.sessionKey
+            ? isSessionRunActiveForKey(ref.sessionKey)
+            : ref.sessionId && isSessionRunActive(ref.sessionId)
+        )
+          ? "processing"
+          : "waiting",
         reason: params.processingReason,
       });
     },

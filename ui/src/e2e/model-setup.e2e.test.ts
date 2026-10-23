@@ -228,7 +228,7 @@ suite.define(() => {
         await page.emulateMedia({ colorScheme: "dark" });
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
 
-        const signInLink = page.getByRole("link", { name: "Open sign-in" });
+        const signInLink = page.getByRole("link", { name: "Reopen browser tab" });
         await expect.poll(() => signInLink.getAttribute("href")).toBe(signInUrl);
         const wizardBody = page.locator(".model-setup-wizard__body");
         await expect
@@ -238,7 +238,7 @@ suite.define(() => {
         await expect
           .poll(() => wizardBody.evaluate((element) => element.scrollWidth <= element.clientWidth))
           .toBe(true);
-        await page.getByRole("button", { name: "Cancel" }).waitFor();
+        await page.getByRole("button", { name: "Cancel sign-in" }).waitFor();
 
         const detectCountBeforeCompletion = (await gateway.getRequests(rpc.detect)).length;
         await gateway.resolveDeferred(rpc.next);

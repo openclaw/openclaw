@@ -10,7 +10,10 @@ import {
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiScreenshotFrame,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -150,6 +153,51 @@ async function capturePublication(page: Page, name: string) {
 }
 
 suite.define(() => {
+  it("shows mobile publication only for an eligible branch or retained attempt", async () => {
+    const { page, gateway, watchedKey } = await openPublicationChat(
+      { "sessions.github.publish": terminalFailure },
+      {},
+      { viewport: { width: 393, height: 852 } },
+    );
+    await closeChatDetails(page);
+    await gateway.waitForRequest("sessions.github.options");
+    const pill = page.locator('.activity-pill[data-family="publication"]');
+    const empty = { pullRequests: [], rateLimited: false, status: "ready" };
+    await emitPullRequests(gateway, watchedKey, empty);
+    if (captureUiProof) {
+      const frame = await takeControlUiScreenshotFrame(
+        page,
+        page.locator(".chat-main"),
+        [page.locator("textarea")],
+        { animations: "disabled" },
+      );
+      await writeFile(path.join(publicationProofDir, "empty-workspace.png"), frame.png);
+    }
+    await pollCount(pill).toBe(0);
+
+    // Branch discovery already establishes publishable work, including binary-only
+    // changes whose text addition/deletion counts are zero or unavailable.
+    await emitPullRequests(
+      gateway,
+      watchedKey,
+      publicationState("openclaw/ready", {
+        additions: 0,
+        deletions: 0,
+      }),
+    );
+    await pollCount(pill).toBe(1);
+    await emitPullRequests(gateway, watchedKey, empty);
+    await pollCount(pill).toBe(0);
+
+    await emitPullRequests(gateway, watchedKey, publicationState("openclaw/ready"));
+    await pill.click();
+    await page.getByRole("button", { name: "Publish PR", exact: true }).click();
+    await pollCount(page.locator('.chat-pr__publication-outcome[data-state="failed"]')).toBe(1);
+    await closeChatDetails(page);
+    await emitPullRequests(gateway, watchedKey, empty);
+    await pollText(pill).toContain("Publish failed");
+  });
+
   it("shows detected PRs in Details with rate-limit staleness", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
@@ -682,6 +730,7 @@ suite.define(() => {
       branch: "openclaw/publication-a",
       headCommit: "a".repeat(40),
     });
+    await openChatPublication(page);
     await expect.poll(publishingBState).toEqual({ count: 1, disabled: [true] });
     expect(
       await page.locator('a[href="https://github.com/openclaw/openclaw/pull/125301"]').count(),
@@ -725,7 +774,9 @@ suite.define(() => {
     await pollText(page.locator("[data-publication-account]")).toContain("Publish as @system-bot");
     expect(
       await page
-        .getByRole("link", { name: "Create a pull request for openclaw/rejected-publication" })
+        .locator(
+          'a[href="https://github.com/openclaw/openclaw/pull/new/openclaw/rejected-publication"]',
+        )
         .count(),
     ).toBe(0);
     await capturePublication(page, "03-publication-failed.png");

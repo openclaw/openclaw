@@ -20,7 +20,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
-import { retireHeartbeatWithDoctor } from "./doctor-heartbeat-retirement.js";
+import {
+  maybeMigrateHeartbeatCadenceToCron,
+  retireHeartbeatWithDoctor,
+} from "./doctor-heartbeat-retirement.js";
 import {
   collectHeartbeatScratchMigrationFindings,
   maybeMigrateHeartbeatFilesToScratch,
@@ -86,6 +89,123 @@ function sharedHeartbeatConfig(workspace: string, ollamaEvery = "0m") {
 }
 
 describe("HEARTBEAT.md cron scratch migration", () => {
+  it.each(["file", "imported scratch"])(
+    "retires a checklist with an entry-less tasks: marker from %s",
+    async (source) => {
+      const fixture = await createFixture();
+      const content = "# Checklist\n\ntasks:\n- check the queue\n- review alerts\n";
+      await fs.writeFile(fixture.heartbeatPath, content);
+      if (source === "imported scratch") {
+        await maybeMigrateHeartbeatFilesToScratch({ cfg: fixture.cfg, shouldRepair: true });
+      }
+
+      const retired = await retireHeartbeatWithDoctor(fixture.cfg);
+
+      expect(retired.agents?.defaults?.heartbeat).toBeUndefined();
+      const { monitor, storePath } = await loadMonitor();
+      expect(readCronJobScratchState(storePath, monitor.id).scratch?.content).toBe(content);
+      expect(
+        withExistingOpenClawStateDatabaseReadOnly(({ db }) =>
+          readDefaultProactiveJobReceiptInDatabase(db, storePath, "main"),
+        ),
+      ).toMatchObject({ jobId: monitor.id, phase: "complete" });
+      await expect(fs.lstat(fixture.heartbeatPath)).rejects.toMatchObject({ code: "ENOENT" });
+      const jobs = (await loadCronJobsStore(storePath)).jobs;
+      expect(jobs).toHaveLength(1);
+      await retireHeartbeatWithDoctor(retired);
+      expect((await loadCronJobsStore(storePath)).jobs).toEqual(jobs);
+    },
+  );
+
+  it("retains an incomplete task source before importing or archiving it", async () => {
+    const fixture = await createFixture();
+    const content = "tasks:\n- name: inbox\n  interval: 1h\n";
+    await fs.writeFile(fixture.heartbeatPath, content);
+
+    await expect(retireHeartbeatWithDoctor(fixture.cfg)).rejects.toThrow(
+      "no complete name/interval/prompt entries",
+    );
+
+    await expect(fs.readFile(fixture.heartbeatPath, "utf8")).resolves.toBe(content);
+    const { monitor, storePath } = await loadMonitor();
+    expect(readCronJobScratchState(storePath, monitor.id).scratch).toBeUndefined();
+  });
+
+  it.each(["0m", "15m"])(
+    "finishes the Doctor pass with disabled defaults and an explicit %s sibling",
+    async (every) => {
+      const fixture = await createFixture();
+      fixture.cfg.agents!.defaults!.systemAgent = { agentId: "main" };
+      fixture.cfg.agents!.defaults!.heartbeat = {
+        every: "0m",
+        target: "discord",
+        to: "channel:synthetic",
+        directPolicy: "block",
+      };
+      fixture.cfg.agents!.entries!.other = {
+        workspace: path.join(fixture.root, "other"),
+        heartbeat: { every },
+      };
+      await fs.writeFile(fixture.heartbeatPath, "# HEARTBEAT.md\n# Proactive checks\n");
+      const retired = await retireHeartbeatWithDoctor(fixture.cfg);
+      await maybeMigrateHeartbeatCadenceToCron({ cfg: retired, shouldRepair: true });
+      await maybeMigrateHeartbeatFilesToScratch({ cfg: retired, shouldRepair: true });
+      const storePath = resolveCronJobsStorePathFromConfig(retired);
+      const store = await loadCronJobsStore(storePath);
+      expect(store.jobs.find((job) => job.agentId === "main")?.enabled).toBe(false);
+      expect(store.jobs).toHaveLength(2);
+      expect(store.jobs.find((job) => job.agentId === "other")?.enabled).toBe(every !== "0m");
+      for (const agentId of ["main", "other"]) {
+        expect(
+          withExistingOpenClawStateDatabaseReadOnly(({ db }) =>
+            readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId),
+          ),
+        ).toMatchObject({ phase: "complete" });
+      }
+      await retireHeartbeatWithDoctor(retired);
+      expect((await loadCronJobsStore(storePath)).jobs).toEqual(store.jobs);
+    },
+  );
+
+  it.each(["admission", "repair"])(
+    "preserves differing legacy scratch and its source during %s",
+    async (phase) => {
+      const fixture = await createFixture();
+      const source = "# Original instructions\r\nKeep the deployment healthy.\r\n";
+      const runtimeScratch = "Runtime notes from the last heartbeat\n";
+      await fs.writeFile(fixture.heartbeatPath, source);
+      const storePath = resolveCronJobsStorePathFromConfig(fixture.cfg);
+      const monitors = await ensureHeartbeatMonitorJobs(fixture.cfg, storePath);
+      const monitor = monitors.get("main")!;
+      writeCronJobScratchForMaintenance({
+        storePath,
+        jobId: monitor.id,
+        content: runtimeScratch,
+        expectedRevision: 0,
+      });
+      const originalScratch = readCronJobScratchState(storePath, monitor.id);
+      expect(originalScratch.scratch?.sourceSha256).toBeUndefined();
+
+      if (phase === "admission") {
+        await expect(
+          assertHeartbeatScratchMigrationUnambiguous(fixture.cfg, process.env),
+        ).resolves.toBeUndefined();
+      } else {
+        const next = await retireHeartbeatWithDoctor(fixture.cfg);
+        expect(next.agents?.defaults?.heartbeat).toBeUndefined();
+        expect(
+          withExistingOpenClawStateDatabaseReadOnly(({ db }) =>
+            readDefaultProactiveJobReceiptInDatabase(db, storePath, "main"),
+          ),
+        ).toMatchObject({ jobId: monitor.id, phase: "complete" });
+        await expect(retireHeartbeatWithDoctor(next)).resolves.toEqual(next);
+      }
+
+      expect(readCronJobScratchState(storePath, monitor.id)).toEqual(originalScratch);
+      await expect(fs.readFile(fixture.heartbeatPath, "utf8")).resolves.toBe(source);
+    },
+  );
+
   it("previews without mutation, then migrates, archives, and reruns idempotently", async () => {
     const fixture = await createFixture();
     const content = `# Operations\n\ntasks:\n  - name: inbox\n    interval: 1h\n    prompt: Check inbox\n`;
@@ -193,15 +313,14 @@ describe("HEARTBEAT.md cron scratch migration", () => {
         await fs.writeFile(path.join(pendingWorkspace, "HEARTBEAT.md"), content);
       }
       const originalConfig = structuredClone(cfg);
-      await expect(assertHeartbeatScratchMigrationUnambiguous(cfg, process.env)).rejects.toThrow(
-        `Agent "${completedId}" has completed cutover`,
-      );
+      await expect(
+        assertHeartbeatScratchMigrationUnambiguous(cfg, process.env),
+      ).resolves.toBeUndefined();
       expect((await loadCronJobsStore(storePath)).jobs).toEqual(completedJobs);
       expect(receipt(pendingId)).toBeUndefined();
 
-      await expect(retireHeartbeatWithDoctor(cfg)).rejects.toThrow(
-        `Agent "${completedId}" has completed cutover`,
-      );
+      const next = await retireHeartbeatWithDoctor(cfg);
+      await expect(retireHeartbeatWithDoctor(next)).resolves.toEqual(next);
 
       await expect(fs.readFile(fixture.heartbeatPath, "utf8")).resolves.toBe(content);
       expect(cfg).toEqual(originalConfig);
@@ -210,7 +329,7 @@ describe("HEARTBEAT.md cron scratch migration", () => {
       ).toEqual(completedJobs);
       expect(readCronJobScratchState(storePath, completedJob.id)).toEqual(completedScratch);
       expect(receipt(completedId)).toEqual(completedReceipt);
-      expect(receipt(pendingId)).toMatchObject({ phase: "pending" });
+      expect(receipt(pendingId)).toMatchObject({ phase: "complete" });
       const pendingJob = (await loadCronJobsStore(storePath)).jobs.find(
         (job) => job.agentId === pendingId,
       )!;
@@ -377,7 +496,8 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     });
 
     expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain("scratch was explicitly unset");
+    expect(result.warnings).toEqual([]);
+    expect(result.notices?.join("\n")).toContain("scratch was explicitly unset");
     await expect(fs.readFile(fixture.heartbeatPath, "utf8")).resolves.toBe("recreated\n");
     expect(readCronJobScratchState(storePath, monitor.id).scratch).toBeUndefined();
   });

@@ -10,6 +10,8 @@ import {
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
 import "./chat-detail-panel.tsx";
+// Ownership tests start with preview code ready; chat-html-preview-loading.test.tsx covers cold imports.
+import "./chat-html-preview-element.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { setFileDraft } from "./chat-file-drafts.ts";
 import type { ChatHtmlPreviewElement } from "./chat-html-preview-element.tsx";

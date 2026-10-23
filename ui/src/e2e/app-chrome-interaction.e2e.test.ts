@@ -90,11 +90,11 @@ suite.define(() => {
         await page.locator('[data-chat-model-select="true"]').click();
         const modelOptions = page.locator(".chat-controls__model-options");
         await expect.poll(() => modelOptions.isVisible()).toBe(true);
-        await expectChrome(page, { ".chat-thread": "text", ".sidebar": "none" }, [
-          ".chat-thread",
-          ".sidebar-shell__body",
-          ".chat-controls__model-options",
-        ]);
+        await expectChrome(
+          page,
+          { ".chat-thread": "none", ".chat-text": "text", ".sidebar": "none" },
+          [".chat-thread", ".sidebar-shell__body", ".chat-controls__model-options"],
+        );
         expect(
           await modelOptions.evaluate((element) => ({
             overflowX: getComputedStyle(element).overflowX,

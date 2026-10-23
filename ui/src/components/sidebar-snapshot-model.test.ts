@@ -26,6 +26,34 @@ function displayRow(key: string, label: string, pinned = false) {
     pinned ? key : "",
   );
 }
+
+it("roundtrips hidden-run child queries without retaining incognito parent keys", () => {
+  const parent = displayRow("agent:main:parent", "Parent");
+  const child = displayRow("agent:main:child", "Child");
+  const hiddenRun = "agent:main:subagent:review";
+  const incognitoRun = "agent:main:subagent:incognito-private";
+  const captured = snapshotSessions([
+    { ...parent, children: [child], childLoadParentKeys: [parent.key, hiddenRun, incognitoRun] },
+  ]);
+  expect(captured[0]?.childLoadParentKeys).toEqual([parent.key, hiddenRun]);
+  const saved = parseSidebarSnapshot(structuredClone({ ...model, sessions: captured }));
+  expect(saved).not.toBeNull();
+  const restored = restoreSnapshotSession(saved!.sessions[0]!, parent.key);
+  expect(restored.childLoadParentKeys).toEqual([parent.key, hiddenRun]);
+  expect(restored.children.map((row) => row.key)).toEqual([child.key]);
+  const legacyParent = { ...captured[0], childLoadParentKeys: undefined };
+  expect(parseSidebarSnapshot({ ...model, sessions: [legacyParent] })).toBeNull();
+  expect(
+    parseSidebarSnapshot({ ...model, sessions: [{ ...legacyParent, children: [] }] }),
+  ).not.toBeNull();
+  expect(
+    parseSidebarSnapshot({
+      ...model,
+      sessions: [{ ...captured[0], childLoadParentKeys: [parent.key, incognitoRun] }],
+    }),
+  ).toBeNull();
+});
+
 it("keeps primary routing and header facts in the display snapshot without private or live authority", () => {
   const stable = {
     key: "agent:main:dashboard:cedar",

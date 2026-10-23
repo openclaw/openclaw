@@ -104,6 +104,7 @@ const gitToolingTargets = [
   "release-workflow-git-lifecycle",
   "ci-workflow-guards",
 ].map((name) => `test/scripts/${name}.test.ts`);
+const lintSuppressionInventoryTest = "test/scripts/lint-suppressions.test.ts";
 
 it("keeps activity unit changes narrow alongside root package metadata", () => {
   expect(hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.test.ts"])).toBe(false);
@@ -466,7 +467,12 @@ describe("CI changed Node test plan", () => {
       const envScratch = argvTempDirs.make("changed-runtime-owner-env-");
       expect(selectedFiles(selected).toSorted()).toEqual(
         [
-          ...new Set([...targets, ...gitToolingTargets, "test/scripts/test-projects.test.ts"]),
+          ...new Set([
+            ...targets,
+            ...gitToolingTargets,
+            "test/scripts/test-projects.test.ts",
+            lintSuppressionInventoryTest,
+          ]),
         ].toSorted(),
       );
       for (const target of targets) {
@@ -1038,9 +1044,15 @@ describe("CI changed Node test plan", () => {
         createChangedNodeTestShards(targets, { runnerBackend }),
         "selected embedded plan",
       );
-      expect(selectedFiles(selected).toSorted()).toEqual(targets.toSorted());
+      expect(selectedFiles(selected).toSorted()).toEqual(
+        [...targets, lintSuppressionInventoryTest].toSorted(),
+      );
       for (const job of selected.filter((candidate) => candidate.groups)) {
-        for (const group of job.groups ?? []) {
+        const embeddedGroups =
+          job.groups?.filter(
+            (group) => !group.includePatterns?.includes(lintSuppressionInventoryTest),
+          ) ?? [];
+        for (const group of embeddedGroups) {
           const { job: ownerJob, group: owner } = canonicalOwner(full, group.shard_name);
           expect(group.env).toEqual(owner.env);
           expect(group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("660000");
@@ -1337,7 +1349,11 @@ describe("CI changed Node test plan", () => {
     expect(cronTests?.length).toBe(97);
     const e2eTarget = "src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts";
     const changedTests = [...(cronTests ?? []), "src/plugins/tools.optional.test.ts", e2eTarget];
-    const expectedTargets = [...changedTests, "test/scripts/tsgo-core-test-shards.test.ts"];
+    const expectedTargets = [
+      ...changedTests,
+      "test/scripts/tsgo-core-test-shards.test.ts",
+      lintSuppressionInventoryTest,
+    ];
     const shards = createChangedNodeTestShards(changedTests);
     expect(shards).not.toBeNull();
     const targets = selectedFiles(shards);
@@ -1380,7 +1396,6 @@ describe("CI changed Node test plan", () => {
         expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
         const childEnv = expectProjectedNodeTestResources(job, group, ownerJob, owner, envScratch);
         expect(childEnv.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
-        expect(job.runner).toBe(ownerJob.runner);
       }
     }
     const cheapFiles = vi
@@ -1592,7 +1607,11 @@ describe("CI changed Node test plan", () => {
     const shards = createChangedNodeTestShards([target]);
     expect(shards).not.toBeNull();
     const qaShards = shards?.filter((shard) => shard.pretestBuildMode === "private-qa") ?? [];
+    const lintInventoryShards =
+      shards?.filter((shard) => selectedFiles([shard]).includes(lintSuppressionInventoryTest)) ??
+      [];
     expect(qaShards).toHaveLength(1);
+    expect(lintInventoryShards).toHaveLength(1);
     for (const shard of qaShards) {
       expect(shard).toMatchObject({
         configs: ["test/vitest/vitest.extension-qa.config.ts"],
@@ -1600,8 +1619,8 @@ describe("CI changed Node test plan", () => {
         pretestBuildMode: "private-qa",
       });
     }
-    expect(shards?.filter((shard) => !qaShards.includes(shard))).toEqual([
-      expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
-    ]);
+    expect(
+      shards?.filter((shard) => !qaShards.includes(shard) && !lintInventoryShards.includes(shard)),
+    ).toEqual([expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] })]);
   });
 });

@@ -552,16 +552,13 @@ export function createUsagePage(context: ApplicationContext) {
       detail: {
         context: {
           weight: details.session.data?.contextWeight,
-          loading: details.session.loading,
           read: details.session.read,
           status: details.session.status,
         },
         timeSeries,
-        timeSeriesLoading: details.timeSeries.loading,
         timeSeriesRead: details.timeSeries.read,
         timeSeriesStatus: details.timeSeries.status,
         sessionLogs: details.sessionLogs.data,
-        sessionLogsLoading: details.sessionLogs.loading,
         sessionLogsRead: details.sessionLogs.read,
         sessionLogsStatus: details.sessionLogs.status,
       },

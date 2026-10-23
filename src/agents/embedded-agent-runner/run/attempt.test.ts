@@ -695,6 +695,7 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
   it.each`
     name                                   | deltas                      | options                                    | expected
     ${"repairs trailing junk"}             | ${[json, "xx"]}             | ${{ fullResult: true }}                    | ${allRepaired}
+    ${"repairs spaced trailing junk"}      | ${[json, "\n ab;"]}         | ${{ fullResult: true }}                    | ${allRepaired}
     ${"preserves valid JSON"}              | ${[json.slice(0, -1), "}"]} | ${{ fullResult: true }}                    | ${allRepaired}
     ${"rejects leading prose"}             | ${[`please use ${json}`]}   | ${{}}                                      | ${[{}, {}]}
     ${"clears oversized trailing repairs"} | ${[json, "oops"]}           | ${{}}                                      | ${[{}, {}]}

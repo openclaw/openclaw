@@ -38,6 +38,7 @@ import { getCurrentSessionControllerOwner } from "../../sessions/session-control
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronExecutionIdle } from "../execution-idle.js";
+import { CronOperatorSourceError } from "../operator-source-error.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
@@ -526,9 +527,11 @@ async function runCronIsolatedAgentTurnInTrace(
                 interruptedByRestart,
                 errorClassification: interruptedByRestart
                   ? { kind: "aborted" }
-                  : errorReason
-                    ? { kind: "reason", reason: errorReason }
-                    : undefined,
+                  : err instanceof CronOperatorSourceError
+                    ? { kind: "permanent" }
+                    : errorReason
+                      ? { kind: "reason", reason: errorReason }
+                      : undefined,
                 executionStarted,
                 usage,
                 ...(admissionDisposition ? { admissionDisposition } : {}),

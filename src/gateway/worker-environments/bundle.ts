@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import * as tar from "tar";
 import { resolveStateDir } from "../../config/paths.js";
 import { sha256File } from "../../infra/directory-durability.js";
+import { FsSafeError, root } from "../../infra/fs-safe.js";
 import { isExactSemverVersion, resolveNpmJsonEntries } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
@@ -24,9 +25,9 @@ import {
   WORKER_BUNDLE_CHUNK_PATH_PATTERN,
   type WorkerBundleHashEntry,
 } from "../../shared/worker-bundle-hash.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { VERSION } from "../../version.js";
 import type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js";
-import { collectWorkerBundleManifest } from "./bundle-staging.js";
 import type {
   WorkerBundleArtifact,
   WorkerBundleBuildOptions,
@@ -417,9 +418,54 @@ export async function prepareWorkerBundle(
   await fs.mkdir(cacheDir, { recursive: true });
   const stagingRoot = await fs.mkdtemp(path.join(cacheDir, ".staging-"));
   try {
-    // Stage the exact bytes and modes first so a concurrent dev rebuild cannot make the
-    // archived payload diverge from its content hash.
-    const manifest = await collectWorkerBundleManifest(packageRoot, stagingRoot);
+    const [source, artifacts] = await Promise.all([
+      root(packageRoot, { maxBytes: Infinity }),
+      fs.readdir(path.join(packageRoot, "dist/worker")),
+    ]).catch((error: unknown) => {
+      throw new Error(
+        `OpenClaw worker deploy artifact is missing; build the running package at ${packageRoot}`,
+        { cause: error },
+      );
+    });
+    const chunks = artifacts.filter((name) => WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(name));
+    // Drain in-flight writes before cleanup can remove staging and mask the original error.
+    const { results, hasError, firstError } = await runTasksWithConcurrency({
+      tasks: [...WORKER_BUNDLE_ARTIFACT_PATHS, ...chunks].map((artifactPath) => async () => {
+        const relativeSourcePath = `dist/worker/${artifactPath}`;
+        const { buffer } = await source
+          .read(relativeSourcePath, { symlinks: "reject", hardlinks: "allow" })
+          .catch((error: unknown) => {
+            if (error instanceof FsSafeError && error.category === "policy") {
+              throw new Error(`Unsafe worker deploy artifact: ${relativeSourcePath}`, {
+                cause: error,
+              });
+            }
+            throw new Error(
+              `OpenClaw worker deploy artifact is missing; build the running package at ${packageRoot}`,
+              { cause: error },
+            );
+          });
+        // Stage exactly the hashed bytes so a concurrent rebuild cannot diverge archive and hash.
+        await fs.writeFile(path.join(stagingRoot, artifactPath), buffer, {
+          flag: "wx",
+          mode: WORKER_BUNDLE_ARTIFACT_MODE,
+        });
+        return {
+          path: artifactPath,
+          mode: WORKER_BUNDLE_ARTIFACT_MODE,
+          size: buffer.byteLength,
+          sha256: createHash("sha256").update(buffer).digest("hex"),
+        };
+      }),
+      limit: 16,
+      errorMode: "stop",
+    });
+    if (hasError) {
+      throw firstError;
+    }
+    const manifest = results.toSorted((left, right) =>
+      compareWorkerBundlePaths(left.path, right.path),
+    );
     const bundleHash = hashWorkerBundleManifest(manifest);
     const tarballPath = path.join(cacheDir, `${bundleHash}.tgz`);
     if (!(await cachedTarballMatches(tarballPath, manifest))) {

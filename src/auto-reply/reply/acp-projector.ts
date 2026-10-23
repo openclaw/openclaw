@@ -40,40 +40,6 @@ type BufferedToolDelivery = {
   meta?: AcpDispatchDeliveryMeta;
 };
 
-function shouldFlushLiveBufferOnBoundary(text: string): boolean {
-  return (
-    text.length >= ACP_LIVE_HARD_FLUSH_CHARS ||
-    text.endsWith("\n\n") ||
-    /[.!?][)"'`]*\s$/.test(text) ||
-    (text.length >= ACP_LIVE_SOFT_FLUSH_CHARS && /\s$/.test(text))
-  );
-}
-
-function shouldFlushLiveBufferOnIdle(text: string): boolean {
-  return (
-    text.length >= ACP_LIVE_IDLE_MIN_CHARS ||
-    /[.!?][)"'`]*$/.test(text.trimEnd()) ||
-    text.includes("\n")
-  );
-}
-
-function renderToolSummaryText(
-  event: Extract<AcpRuntimeEvent, { type: "tool_call" }>,
-  shouldSendFullToolDetails: boolean,
-): string {
-  const showDetails =
-    shouldSendFullToolDetails || normalizeOptionalLowercaseString(event.kind) !== "execute";
-  const title = showDetails ? normalizeOptionalString(event.title) : undefined;
-  const status = normalizeOptionalString(event.status);
-  const fallback = showDetails ? normalizeOptionalString(event.text) : undefined;
-  const display = resolveToolDisplay({
-    name: "tool_call",
-    meta:
-      [title, status && `status=${status}`].filter(Boolean).join(" · ") || fallback || "tool call",
-  });
-  return formatToolSummary(display);
-}
-
 export function createAcpReplyProjector(params: {
   cfg: OpenClawConfig;
   shouldSendToolSummaries: () => Promise<boolean>;
@@ -147,7 +113,14 @@ export function createAcpReplyProjector(params: {
     if (!bufferedText) {
       return;
     }
-    if (idle && !shouldFlushLiveBufferOnIdle(bufferedText)) {
+    if (
+      idle &&
+      !(
+        bufferedText.length >= ACP_LIVE_IDLE_MIN_CHARS ||
+        /[.!?][)"'`]*$/.test(bufferedText.trimEnd()) ||
+        bufferedText.includes("\n")
+      )
+    ) {
       return;
     }
     const text = bufferedText;
@@ -227,10 +200,20 @@ export function createAcpReplyProjector(params: {
       markHiddenToolBoundary(event);
       return;
     }
-    const renderedToolSummary = renderToolSummaryText(
-      event,
-      await params.shouldSendFullToolDetails(),
-    );
+    const shouldSendFullToolDetails = await params.shouldSendFullToolDetails();
+    const showDetails =
+      shouldSendFullToolDetails || normalizeOptionalLowercaseString(event.kind) !== "execute";
+    const title = showDetails ? normalizeOptionalString(event.title) : undefined;
+    const toolStatus = normalizeOptionalString(event.status);
+    const fallback = showDetails ? normalizeOptionalString(event.text) : undefined;
+    const display = resolveToolDisplay({
+      name: "tool_call",
+      meta:
+        [title, toolStatus && `status=${toolStatus}`].filter(Boolean).join(" · ") ||
+        fallback ||
+        "tool call",
+    });
+    const renderedToolSummary = formatToolSummary(display);
     const toolSummary = truncateText(renderedToolSummary, ACP_MAX_SESSION_UPDATE_CHARS);
     const hash = renderedToolSummary.trim();
     const toolCallId = normalizeOptionalString(event.toolCallId);
@@ -316,7 +299,12 @@ export function createAcpReplyProjector(params: {
         lastVisibleOutputTail = safeText.slice(-1) || lastVisibleOutputTail;
         bufferedText += safeText;
         if (isLive) {
-          if (shouldFlushLiveBufferOnBoundary(bufferedText)) {
+          if (
+            bufferedText.length >= ACP_LIVE_HARD_FLUSH_CHARS ||
+            bufferedText.endsWith("\n\n") ||
+            /[.!?][)"'`]*\s$/.test(bufferedText) ||
+            (bufferedText.length >= ACP_LIVE_SOFT_FLUSH_CHARS && /\s$/.test(bufferedText))
+          ) {
             clearLiveIdleTimer();
             flushLiveBuffer();
           } else {

@@ -174,8 +174,8 @@ it("reuses involvement facts until session replacement or profile publication", 
   expect(select(mergedAdaId)).toEqual([]);
 });
 
-it("expires cached child owners without a session or registry publication", () => {
-  const key = "agent:main:subagent:child";
+it("expires bounded non-native child owners without a session or registry publication", () => {
+  const key = "agent:main:legacy-child";
   const parent = "agent:main:dashboard:parent";
   const projection = projectionFixture({
     store: { [key]: entry({ updatedAt: now, spawnedBy: parent }) },

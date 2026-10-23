@@ -1,6 +1,7 @@
 import { supportsClaudeAdaptiveThinking } from "openclaw/plugin-sdk/provider-model-shared";
 import { expect, it } from "vitest";
 import { makeModel } from "./model-contract-cases.test-support.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildAnthropicProvider } from "./register.runtime.js";
 
 const modernIds = [
@@ -58,6 +59,8 @@ it("clones released snapshot ids from their dateless manifest template", () => {
     makeModel("claude-haiku-4-5-20251001", {
       mediaInput: { image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" } },
       compat: { codeMode: "capable" },
+      // The Anthropic catalog declares one developer for every model it serves.
+      family: "anthropic",
     }),
   );
   expect(resolveModel("claude-haiku-4-9-20251001")).toBeUndefined();
@@ -76,6 +79,26 @@ it("carries manifest catalog compat onto hand-built modern rows", () => {
     expect(model?.id).toBe(id);
     expect(model?.compat).toBeUndefined();
     expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  }
+});
+
+it("carries manifest context-window choices onto hand-built modern rows", () => {
+  // Session window selection needs these choices even when live discovery has no rows.
+  const models = manifest.modelCatalog.providers.anthropic.models;
+  const selectable = models.filter((model) => model.contextWindows);
+  expect(selectable.length).toBeGreaterThan(0);
+  for (const { id, contextWindows, contextWindowDefault } of selectable) {
+    expect(resolveModel(id), id).toMatchObject({ contextWindows, contextWindowDefault });
+  }
+  // Claude CLI rows take their choices from their catalog rows, and models that
+  // declare none gain none. Ids this builder declines resolve to no row.
+  for (const rows of [
+    selectable.flatMap(({ id }) => resolveModel(id, "claude-cli") ?? []),
+    models.filter((model) => !model.contextWindows).flatMap(({ id }) => resolveModel(id) ?? []),
+  ]) {
+    for (const row of rows) {
+      expect(row.contextWindows, row.id).toBeUndefined();
+    }
   }
 });
 

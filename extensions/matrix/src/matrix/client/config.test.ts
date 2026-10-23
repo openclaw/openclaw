@@ -371,7 +371,7 @@ describe("Matrix auth/config live surfaces", () => {
   it("rejects public http homeservers even when private-network access is enabled", async () => {
     await expect(
       resolveValidatedMatrixHomeserverUrl("http://matrix.example.org:8008", {
-        allowPrivateNetwork: true,
+        dangerouslyAllowPrivateNetwork: true,
         lookupFn: createLookupFn([{ address: "93.184.216.34", family: 4 }]),
       }),
     ).rejects.toThrow(

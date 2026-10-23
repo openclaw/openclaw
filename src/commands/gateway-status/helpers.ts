@@ -99,14 +99,6 @@ export function resolveTargets(
   return targets;
 }
 
-function isLoopbackProbeTarget(target: Pick<GatewayStatusTarget, "kind" | "url">): boolean {
-  if (target.kind === "localLoopback") {
-    return true;
-  }
-  const url = URL.parse(target.url);
-  return url !== null && isLoopbackHost(url.hostname);
-}
-
 export function resolveProbeBudgetMs(
   overallMs: number,
   target: Pick<GatewayStatusTarget, "kind" | "active" | "url">,
@@ -120,7 +112,8 @@ export function resolveProbeBudgetMs(
   if (target.kind === "localLoopback") {
     return Math.min(800, overallMs);
   }
-  if (!isLoopbackProbeTarget(target)) {
+  const url = URL.parse(target.url);
+  if (url === null || !isLoopbackHost(url.hostname)) {
     return Math.min(1500, overallMs);
   }
   return overallMs;

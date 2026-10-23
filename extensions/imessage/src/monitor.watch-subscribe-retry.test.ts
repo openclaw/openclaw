@@ -5,8 +5,8 @@ import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { createIMessageRpcClient, IMessageRpcClient } from "./client.js";
-import { monitorIMessageProvider } from "./monitor.js";
 import type { attachIMessageMonitorAbortHandler } from "./monitor/abort-handler.js";
+import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
 import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./monitor/types.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";

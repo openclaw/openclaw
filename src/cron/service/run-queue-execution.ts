@@ -1,10 +1,12 @@
 import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
+import { waitForSessionRunIdle } from "../../sessions/session-controller.wait.js";
 import type { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { clearCronJobActive } from "../active-jobs.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { cronEventPayload } from "../event-source.js";
 import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
+import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import { cronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import type { CronQueuedRun } from "../store/run-queue.types.js";
 import { hasUnstartedCronAdmission } from "./admission-deferred.js";
@@ -48,6 +50,13 @@ export async function launchCronRun(
   cancel: (reason: string) => Promise<void>,
 ) {
   const { options } = pending;
+  const continuationSession =
+    entry.job.operatorSource && resolveCronSessionTargetSessionKey(entry.job.sessionTarget);
+  if (continuationSession) {
+    await waitForSessionRunIdle(continuationSession, undefined, {
+      signal: state.schedulerScope.signal,
+    });
+  }
   await ensureLoaded(state);
   pending.context.admission.assertCurrent();
   // Transfer ends the plugin's admission authority; this accepted occurrence
@@ -87,7 +96,7 @@ export async function launchCronRun(
     return;
   }
   const manual = options.source === "manual" || options.source === "event";
-  const admittedJob = structuredClone(entry.job);
+  const admittedJob = structuredClone(continuationSession ? current : entry.job);
   if (options.onExit) {
     admittedJob.enabled = false;
   }
@@ -97,6 +106,9 @@ export async function launchCronRun(
     : (options.onExit?.payload?.(structuredClone(entry.job)) ??
       options.payload ??
       executionJob.payload);
+  if (options.payload) {
+    delete executionJob.operatorSource;
+  }
   if (options.delivery) {
     const configured = executionJob.delivery;
     executionJob.delivery = {

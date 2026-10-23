@@ -333,7 +333,6 @@ export function applyNpmFreshnessBypassEnv(
 export function createNpmProjectInstallEnv(
   env: NodeJS.ProcessEnv,
   options: NpmProjectInstallEnvOptions = {},
-  now = new Date(),
 ): NodeJS.ProcessEnv {
   const nextEnv = resolveRuntimeScriptEnv(env);
   for (const key of Object.keys(nextEnv)) {
@@ -365,7 +364,7 @@ export function createNpmProjectInstallEnv(
     npm_config_save: "false",
     ...(options.cacheDir ? { npm_config_cache: options.cacheDir } : {}),
   };
-  applyNpmFreshnessBypassEnv(installEnv, now, options);
+  applyNpmFreshnessBypassEnv(installEnv, new Date(), options);
   applyPosixNpmScriptShellEnv(installEnv);
   return installEnv;
 }

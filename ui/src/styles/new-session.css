@@ -496,20 +496,6 @@ span.new-session-page__select {
   display: none;
 }
 
-/* Icon templates only carry paths; without an explicit stroke rule the SVGs
-   render as solid black fills (invisible-blob chips in dark mode). */
-.new-session-page__trigger-chevron svg,
-.new-session-page__target-icon svg,
-.new-session-page__browser-nav svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .new-session-page__trigger-chevron svg {
   width: 10px;
   height: 10px;
@@ -1026,12 +1012,6 @@ span.new-session-page__select {
   animation: btn-spinner-spin 2.25s linear infinite;
 }
 
-.new-session-page__start-submit--blocked {
-  cursor: var(--cursor-action);
-  filter: saturate(0.45);
-  opacity: 0.48;
-}
-
 /* Keep a long first prompt visible before scrolling. The shared auto-height
    controller measures content; this surface owns its ten-line visual cap. */
 /* No inset of its own: the editor's breathing room is the composer surface's
@@ -1324,6 +1304,10 @@ span.new-session-page__select {
   .new-session-page__composer {
     /* Keep privacy context above the writing surface, never below it. */
     order: 1;
+  }
+
+  .new-session-page__blocked-submit {
+    order: 2;
   }
 
   .new-session-page__composer .new-session-page__message {

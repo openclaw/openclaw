@@ -27,7 +27,7 @@ const SINKS: ReadonlyArray<readonly [string, string, string, string?]> = [
   ["irc/src/monitor", "channelIngress: access", coreBuilder],
   [
     "line/src/bot-message-context",
-    "channelIngress: params.channelIngress",
+    "channelIngress,",
     injected,
     "getLineRuntime().channel.inbound.buildContext",
   ],

@@ -154,6 +154,8 @@ describe("session category mutations", () => {
     await h.listStarted.promise;
     h.list.resolve(result({ category: "Beta", updatedAt: 2 }));
     await h.list.promise;
+    await flushRead();
+    expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
   });
 
   it.each(["session", "connection"])(

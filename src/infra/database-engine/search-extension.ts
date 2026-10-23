@@ -69,12 +69,17 @@ export function admitStoreSearchExtension(
       searchExtensions: { ...base.searchExtensions, [name]: definition },
     };
     db.exec(
-      postgresSearchSql(definition, facts.namespace, {
-        text: existing.some((item) => Object.keys(item.text ?? {}).length > 0),
-        vector: existing.some(
-          (item) => item.mode !== "keyword-only" && Object.keys(item.vector ?? {}).length > 0,
-        ),
-      }),
+      postgresSearchSql(
+        definition,
+        facts.namespace,
+        {
+          text: existing.some((item) => Object.keys(item.text ?? {}).length > 0),
+          vector: existing.some(
+            (item) => item.mode !== "keyword-only" && Object.keys(item.vector ?? {}).length > 0,
+          ),
+        },
+        base.postgresVectorDecoderVersion,
+      ),
     );
     if (!Object.keys(base.searchExtensions ?? {}).length) {
       // sqlite-allow-raw: Engine-owned metadata is outside the application catalog seal.

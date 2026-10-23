@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { beforeEach, expect, it, vi } from "vitest";
+import { computeBaseConfigSchemaResponse } from "../../../src/config/schema-base.js";
 import { importCustomThemeFromUrl } from "../pages/config/custom-theme-import.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -709,5 +710,42 @@ suite.define(() => {
         releaseImport();
       }
     });
+  });
+
+  it("keeps the curated locale out of the generic UI prefs form", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 1000, width: 1440 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            // Locale unset: the reported bare empty box came from this state.
+            "config.get": configResponse({ theme: "claw" }, "locale-omitted-1"),
+            "config.schema": computeBaseConfigSchemaResponse({
+              generatedAt: "2026-10-15T00:00:00.000Z",
+            }),
+          },
+        });
+
+        const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
+        expect(response?.status()).toBe(200);
+        await waitForControlUiSettingsTakeover(page);
+        await gateway.waitForRequest("config.get");
+
+        // Appearance → Language still owns the setting.
+        const languageRow = settingsRow(page, "Language");
+        await expect.poll(() => languageRow.locator("openclaw-select-picker").count()).toBe(1);
+
+        // The generic UI prefs form must not re-render it as a bare text box.
+        await page.getByRole("tab", { name: "UI", exact: true }).click();
+        const panel = page.locator("#config-section-panel");
+        await expect.poll(() => panel.textContent()).toContain("Prefs");
+        expect(await panel.locator('input[aria-label="Locale"]').count()).toBe(0);
+        expect(await panel.locator('input[aria-label="Interface language"]').count()).toBe(0);
+      },
+    );
   });
 });

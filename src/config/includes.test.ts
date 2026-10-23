@@ -71,8 +71,8 @@ async function withFiles(files: Record<string, unknown> = {}) {
   return {
     at,
     write,
-    scan: (parsed: unknown, allowedRoots?: string[]) =>
-      collectIncludePathsRecursive({ configPath: filename, parsed, allowedRoots }),
+    scan: (parsed: unknown, env?: NodeJS.ProcessEnv) =>
+      collectIncludePathsRecursive({ configPath: filename, parsed, env }),
     resolve: (parsed: unknown, options?: Parameters<typeof resolveIncludes>[3]) =>
       resolveIncludes(parsed, filename, undefined, options),
   };
@@ -294,7 +294,8 @@ it("honors explicitly allowed include roots", async () => {
   const { at, scan } = await withFiles();
   const sharedIncludePath = at("shared/shared.json5");
   await writeFixture(sharedIncludePath, "{ shared: true }\n", true);
-  expect(await scan({ $include: sharedIncludePath }, [at("shared")])).toEqual([
+  const env = { OPENCLAW_INCLUDE_ROOTS: at("shared") };
+  expect(await scan({ $include: sharedIncludePath }, env)).toEqual([
     await fs.realpath(sharedIncludePath),
   ]);
 });

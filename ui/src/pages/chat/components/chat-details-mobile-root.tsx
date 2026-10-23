@@ -60,6 +60,7 @@ type ChatDetailsMobileRootOrigin = {
 export type ChatDetailsMobileRootProps = {
   /** The mobile host owns hidden/inert, mounting, scroll, focus and navigation retention. */
   presented: boolean;
+  sessionTitle?: string;
   labels: Record<
     | "people"
     | "taskProgress"
@@ -92,7 +93,6 @@ export type ChatDetailsMobileRootProps = {
   publicationEntry?: ChatDetailsMobileEntry;
   automations?: ChatDetailsMobileCollection<CronCompactJob["id"]>;
   outputs?: ChatDetailsMobileEntry;
-  outputsNotice?: JSX.Element;
   /** Supply even for one version; omission is not a greater-than-one policy. */
   versions?: ChatDetailsMobileEntry;
   onNavigate: (
@@ -191,6 +191,9 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
 
   return (
     <div class="chat-details-mobile-root">
+      <Show when={props.sessionTitle}>
+        <h2 class="chat-details-mobile-root__title">{props.sessionTitle}</h2>
+      </Show>
       <Show when={props.people || props.sharingOptions}>
         <RootGroup name="people" label={props.labels.people} heading={false}>
           <Show when={props.people}>
@@ -319,20 +322,17 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
           </RootGroup>
         </Show>
       </Loading>
-      <Show when={props.outputs || props.outputsNotice}>
-        <RootGroup name="outputs" label={props.labels.generatedFiles}>
-          <Show when={props.outputs}>
-            {(entry) => (
-              <RootEntry
-                entry={entry()}
-                icon="fileText"
-                destination={{ kind: "outputs" }}
-                root={props}
-              />
-            )}
-          </Show>
-          {props.outputsNotice}
-        </RootGroup>
+      <Show when={props.outputs}>
+        {(entry) => (
+          <RootGroup name="outputs" label={props.labels.generatedFiles}>
+            <RootEntry
+              entry={entry()}
+              icon="fileText"
+              destination={{ kind: "outputs" }}
+              root={props}
+            />
+          </RootGroup>
+        )}
       </Show>
       <Show when={props.versions && props.versions.metadata !== 0 && props.versions}>
         {(entry) => (

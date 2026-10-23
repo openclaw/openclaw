@@ -869,7 +869,6 @@ export async function preflightPluginNpmInstallPolicyRuntime(
     packageName: string;
     pluginId?: string;
     sourcePath: string;
-    sourcePathKind: "file" | "directory";
   },
 ): Promise<InstallSecurityScanResult | undefined> {
   const pluginId = params.pluginId ?? params.packageName;
@@ -878,7 +877,7 @@ export async function preflightPluginNpmInstallPolicyRuntime(
     origin: { type: "plugin-npm", packageName: params.packageName },
     source: params.source ?? resolvePolicySource({ requestKind: "plugin-npm" }),
     sourcePath: params.sourcePath,
-    sourcePathKind: params.sourcePathKind,
+    sourcePathKind: "file",
     requestKind: "plugin-npm",
     plugin: {
       contentType: "package",

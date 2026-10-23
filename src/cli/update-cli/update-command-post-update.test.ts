@@ -27,6 +27,7 @@ import {
   mockVerifiedGatewayRun,
   programArguments,
   registerForegroundFinalizationTests,
+  registerVerifiedActivationFailureTests,
   registerManagedInstallEnvironmentTest,
   recordVerifiedGatewayRun,
   successfulPluginUpdate,
@@ -345,6 +346,8 @@ describe("successful update finalization ordering", () => {
     expectBefore(mocks.restartService, mocks.checkCompletionStatus);
   });
 
+  registerVerifiedActivationFailureTests({ tempDirs, mocks });
+
   it("restarts when completion cache refresh reports failure", async () => {
     const root = tempDirs.make("openclaw-completion-failure-");
     await fs.writeFile(
@@ -414,12 +417,22 @@ describe("successful update finalization ordering", () => {
   });
 
   it.each([
-    { name: "retires the wrapper before persisting and printing success", denied: false },
+    {
+      name: "retires the wrapper before persisting and printing success",
+      denied: false,
+      verified: false,
+    },
     {
       name: "recovers and retains the package before reporting failed wrapper retirement",
       denied: true,
+      verified: false,
     },
-  ])("$name", async ({ denied }) => {
+    {
+      name: "keeps a verified target successful when wrapper retirement fails",
+      denied: true,
+      verified: true,
+    },
+  ])("$name", async ({ denied, verified }) => {
     const home = tempDirs.make("openclaw-finalize-wrapper-");
     const previousRoot = path.join(home, "old-root");
     const wrapper = path.join(home, ".local", "bin", "openclaw");
@@ -448,11 +461,24 @@ describe("successful update finalization ordering", () => {
     const complete = vi.fn<NonNullable<FinishUpdateParams["packageTransaction"]>["complete"]>(
       async ({ activationVerified }) => (activationVerified ? undefined : retained),
     );
+    if (verified) {
+      mocks.restartService.mockImplementationOnce(async ({ onVerified }) => {
+        onVerified?.(Date.now());
+        return "ok";
+      });
+    }
     const finishing = finishSuccessfulPackageSwitch(
-      { previousRoot, packageRoot: path.join(home, "package") },
-      { packageTransaction: { backupRoot: previousRoot, rollback: vi.fn(), complete } },
+      {
+        previousRoot,
+        packageRoot: path.join(home, "package"),
+        ...(verified ? { restartEnvironment: process.env } : {}),
+      },
+      {
+        installKindChanged: true,
+        packageTransaction: { backupRoot: previousRoot, rollback: vi.fn(), complete },
+      },
     );
-    if (denied) {
+    if (denied && !verified) {
       await expectUpdateFailure(finishing, "wrapper-retirement-failed", {
         detail: expect.stringContaining("unlink denied"),
       });
@@ -473,6 +499,21 @@ describe("successful update finalization ordering", () => {
       );
     } else {
       await finishing;
+      expect(rollback).not.toHaveBeenCalled();
+      if (verified) {
+        expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
+          status: "ok",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              advisory: {
+                kind: "recoverable-maintenance",
+                message: expect.stringContaining("unlink denied"),
+              },
+            }),
+          ]),
+        });
+        expect(mocks.markSentinelFailure).not.toHaveBeenCalled();
+      }
       expect(mocks.writeSentinel).toHaveBeenCalledTimes(2);
       expectBefore(unlink, mocks.writeSentinel, 0, 1);
       expectBefore(mocks.writeSentinel, mocks.printResult, 1);

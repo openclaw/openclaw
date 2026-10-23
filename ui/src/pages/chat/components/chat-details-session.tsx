@@ -3,7 +3,9 @@ import type { SessionParticipant } from "../../../../../packages/gateway-protoco
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerSessionProgressEnglish } from "../../../i18n/locales/en-session-progress.ts";
 import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -29,7 +31,10 @@ import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-reques
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
 
+registerEnglishCatalog(registerSessionProgressEnglish);
+
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 type Props = {
   props?: ChatDetailsProps;
@@ -140,6 +145,14 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           const session = () => props.props?.selectedSession;
           const creatorName = () => session()?.createdActor?.label || session()?.createdActor?.id;
           const owner = () => session()?.owner?.actor;
+          const OwnerAttribution = () => (
+            <div class="chat-details__person">
+              <span>{t("chat.sessionDetails.owner")}</span>
+              <span ref={createTextOverflow(() => owner()?.label || owner()?.id || owner()?.type)}>
+                {owner()?.label || owner()?.id || owner()?.type}
+              </span>
+            </div>
+          );
           const people = () => session()?.expandedParticipants ?? session()?.participants ?? [];
           const count = () => session()?.participantCount ?? people().length;
           const partialPeople = () =>
@@ -284,18 +297,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                               </span>
                               <Icon name="chevronDown" />
                             </summary>
-                            {owner() && (
-                              <div class="chat-details__person">
-                                <span>{t("chat.sessionDetails.owner")}</span>
-                                <span
-                                  ref={createTextOverflow(
-                                    () => owner()?.label || owner()?.id || owner()?.type,
-                                  )}
-                                >
-                                  {owner()?.label || owner()?.id || owner()?.type}
-                                </span>
-                              </div>
-                            )}
+                            {owner() && <OwnerAttribution />}
                             <For each={people()}>
                               {(person) => (
                                 <div class="chat-details__person">
@@ -380,16 +382,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                             </div>
                           </Show>
                           <Show when={owner() && !owner()?.identity}>
-                            <div class="chat-details__person">
-                              <span>{t("chat.sessionDetails.owner")}</span>
-                              <span
-                                ref={createTextOverflow(
-                                  () => owner()?.label || owner()?.id || owner()?.type,
-                                )}
-                              >
-                                {owner()?.label || owner()?.id || owner()?.type}
-                              </span>
-                            </div>
+                            <OwnerAttribution />
                           </Show>
                         </ChatDetailsDesktopSection>
                       </Show>

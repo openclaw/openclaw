@@ -587,9 +587,18 @@ export async function deliverChatQueueItem(
           sendOptions,
         );
         if (typeof parked === "string") {
-          if (parked === "pending" && outbox.queue[0]?.id !== item.id) {
-            // Reconcile older restored rows without delaying this turn's active-run policy.
-            void scheduleOutboxDrain(host, outbox, chatOutboxDrainDependencies);
+          if (parked === "pending") {
+            // A local busy flag can outlive a missed terminal event. Reconcile
+            // through the outbox owner before leaving the follow-up parked.
+            void scheduleOutboxDrain(
+              host,
+              outbox,
+              chatOutboxDrainDependencies,
+              undefined,
+              undefined,
+              undefined,
+              true,
+            );
           }
           return parked;
         }
