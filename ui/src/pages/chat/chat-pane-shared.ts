@@ -2,7 +2,7 @@ import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-co
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { capturePlacementStartupConnection } from "../../app/session-placement-startup.ts";
-import { menuOwnsShortcut } from "../../components/menu-shortcuts.ts";
+import { findMenuSearch, menuOwnsShortcut } from "../../components/menu-shortcuts.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
@@ -211,7 +211,9 @@ function openDropdownOwnsKey(root: HTMLElement, key: string): boolean {
       overlay.open &&
       overlay.surface.matches('[role="menu"][popover]') &&
       !overlay.surface.closest("[inert]") &&
-      (CHAT_DROPDOWN_KEYS.has(key) || menuOwnsShortcut(overlay.surface, key)),
+      (CHAT_DROPDOWN_KEYS.has(key) ||
+        menuOwnsShortcut(overlay.surface, key) ||
+        (key.length === 1 && Boolean(findMenuSearch(overlay.surface)))),
   );
 }
 
