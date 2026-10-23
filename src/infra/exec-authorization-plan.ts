@@ -661,7 +661,6 @@ export async function planExecAuthorization(params: {
   command?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  platform?: string | null;
 }): Promise<ExecAuthorizationPlan> {
   const command =
     params.command ??
@@ -694,7 +693,6 @@ export async function planExecAuthorization(params: {
         command: inlineCommand,
         cwd: params.cwd,
         env: params.env,
-        platform: params.platform,
       });
       if (shellPlan.ok) {
         const nestedSegments = shellPlan.groups.flatMap((group) =>
@@ -756,7 +754,6 @@ export async function planExecAuthorization(params: {
             {
               cwd: params.cwd,
               env: params.env,
-              platform: normalizePlanningPlatform(params.platform),
             },
             segment.sourceArgv,
           )

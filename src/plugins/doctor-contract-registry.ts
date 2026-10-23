@@ -105,7 +105,6 @@ type PluginDoctorRegistryParams = {
   /** Candidate generation prepared by the install owner before publication. */
   manifestRegistry?: PluginManifestRegistry;
   historicalWebhookListeners?: boolean;
-  startup?: boolean;
   /** Port preflight inspects retained data even when its selected owner is disabled. */
   includeDisabled?: boolean;
 };
