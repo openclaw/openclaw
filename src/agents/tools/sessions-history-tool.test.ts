@@ -8,7 +8,12 @@ import {
   ChatPendingInputsPageSchema,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { requestContext } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
+import { bindSessionRowProjection } from "../../gateway/session-row-projection-access.js";
+import { createSessionRowProjectionFixture } from "../../gateway/session-row-projection.test-support.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { describeSessionLinkRule } from "../tool-description-presets.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
@@ -168,6 +173,109 @@ afterAll(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+it.each(["same", "channel", "account", "missing"] as const)(
+  "enforces channel visibility before transcript reads (%s target)",
+  async (difference) => {
+    const requester = "agent:main:slack:channel:c111:thread:100.001";
+    const target =
+      difference === "channel"
+        ? "agent:main:slack:channel:c222:thread:100.002"
+        : "agent:main:slack:channel:c111:thread:100.002";
+    const store = writeSessionStore(`channel-${difference}.json`, {
+      [requester]: { sessionId: "requester", updatedAt: 1 },
+      [target]: { sessionId: "target", updatedAt: 1 },
+    });
+    const cfg: OpenClawConfig = {
+      session: { store },
+      tools: { sessions: { visibility: "channel" } },
+    };
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: requester,
+      config: cfg,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.resolve") {
+          return { key: target } as T;
+        }
+        if (request.method === "sessions.describe") {
+          const key = (request.params as { key: string }).key;
+          const isTarget = key === target;
+          const channel = isTarget && difference === "channel" ? "c222" : "c111";
+          return {
+            session: {
+              key,
+              agentId: "main",
+              sessionId: isTarget ? "target" : "requester",
+              ...(isTarget && difference === "missing"
+                ? {}
+                : {
+                    chatType: "channel",
+                    space: "t111",
+                    origin: { provider: "slack", chatType: "channel" },
+                    deliveryContext: {
+                      channel: "slack",
+                      accountId: isTarget && difference === "account" ? "other" : "default",
+                      to: `channel:${channel}`,
+                    },
+                  }),
+            },
+          } as T;
+        }
+        if (request.method === "chat.history") {
+          return { messages: [{ role: "user", content: "channel-scoped context" }] } as T;
+        }
+        return {} as T;
+      },
+    });
+    const execute = () => tool.execute("channel-history", { sessionKey: target });
+    const delivery = {
+      kind: "external",
+      route: {
+        channel: "slack",
+        accountId: "default",
+        target: { to: "channel:c111", chatType: "channel" },
+      },
+      context: { channel: "slack", accountId: "default", to: "channel:c111" },
+      origin: { provider: "slack", chatType: "channel" },
+    } as const;
+    const projection = createSessionRowProjectionFixture({
+      cfg,
+      storePath: store,
+      store: {
+        [requester]: {
+          sessionId: "requester",
+          updatedAt: 1,
+          space: "t111",
+          chatType: "channel",
+          delivery,
+        },
+        [target]: {
+          sessionId: "target",
+          updatedAt: 1,
+          space: "t111",
+          chatType: "channel",
+          delivery,
+        },
+      },
+    });
+    const context = bindSessionRowProjection(requestContext(cfg), () => projection);
+    const result =
+      difference === "same"
+        ? await withPluginRuntimeGatewayRequestScope(
+            { context, isWebchatConnect: () => false },
+            execute,
+          )
+        : await execute();
+    if (difference === "same") {
+      expect(JSON.stringify(result.details)).toContain("channel-scoped context");
+    } else {
+      expect(result.details).toMatchObject({ status: "forbidden" });
+      expect(requests.some((request) => request.method === "chat.history")).toBe(false);
+    }
+  },
+);
 
 it("declares complete success and closed error contracts", async () => {
   const tool = createHistoryToolWithMessage("hello");

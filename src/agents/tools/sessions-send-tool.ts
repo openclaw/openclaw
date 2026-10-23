@@ -436,6 +436,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         cfg,
         storePath: opts?.expectedTargetStorePath,
         agentId: targetAgentId,
+        ...access,
         expectedSessionId,
         ...(opts?.signal ? { signal: opts.signal } : {}),
         targetSessionKey: resolvedKey,

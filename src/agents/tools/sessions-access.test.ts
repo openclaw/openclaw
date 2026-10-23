@@ -391,6 +391,45 @@ it.each([
   },
 );
 
+it("denies same-channel sibling status before its mutation consumer", async () => {
+  const requester = "agent:main:slack:channel:c111:thread:100.001";
+  const sibling = "agent:main:slack:channel:c111:thread:100.002";
+  const row = (key: string) => ({
+    key,
+    agentId: "main",
+    sessionId: key === requester ? "requester-session" : "sibling-session",
+    chatType: "channel" as const,
+    space: "t111",
+    origin: { provider: "slack", chatType: "channel" as const },
+    deliveryContext: { channel: "slack", accountId: "default", to: "channel:c111" },
+  });
+  const gateway = vi.fn(async (request: { method?: string; params?: { key?: string } }) => ({
+    session: row(request.params?.key ?? requester),
+  }));
+
+  const access = await resolveSessionToolAccess({
+    action: "status",
+    requesterAgentId: "main",
+    requesterSessionKey: requester,
+    targetAgentId: "main",
+    targetSessionKey: sibling,
+    requesterOwned: false,
+    visibility: "channel",
+    a2aPolicy: createAgentToAgentPolicy({}),
+    callGateway: gateway as never,
+  });
+
+  expect(access).toMatchObject({
+    allowed: false,
+    reasonCode: "channel_retrieval_only",
+    missingEvidence: ["status"],
+  });
+  expect(gateway.mock.calls.map(([request]) => request.method)).toEqual([
+    "sessions.describe",
+    "sessions.describe",
+  ]);
+});
+
 it("does not apply a bare-key scoped grant to another agent's session", async () => {
   const targets: string[] = [];
   const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) => {
