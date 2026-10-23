@@ -6,9 +6,18 @@ import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-con
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { restoreChatModelRefreshFocus } from "./chat-model-picker-search.ts";
-import type { ChatModelCatalogStateProps } from "./chat-model-types.ts";
 
 registerEnglishCatalog(registerModelControlsEnglish);
+
+type ChatModelCatalogStateProps = {
+  state: ModelCatalogState | undefined;
+  hasOptions: boolean;
+  hasSelectableOptions: boolean;
+  onModelSetup?: () => void;
+  errorLabel?: string;
+  retryTarget?: { disabled: boolean; groupId: string; onRetry: (groupId: string) => unknown };
+  emptyLabel?: string;
+};
 
 export function ChatModelCatalogRefresh(props: { state: ModelCatalogState | undefined }) {
   const label = createMemo(() => {

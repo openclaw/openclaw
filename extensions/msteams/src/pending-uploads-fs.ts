@@ -55,18 +55,6 @@ function buildChunkKey(id: string, index: number): string {
   return `${buildUploadKey(id)}:chunk:${String(index).padStart(4, "0")}`;
 }
 
-function recordToUpload(record: PendingUploadMetaRecord, buffer: Buffer): PendingUpload {
-  return {
-    id: record.id,
-    buffer,
-    filename: record.filename,
-    contentType: record.contentType,
-    conversationId: record.conversationId,
-    consentCardActivityId: record.consentCardActivityId,
-    createdAt: record.createdAt,
-  };
-}
-
 async function deleteUploadRows(
   id: string,
   metaStore: PluginStateKeyedStore<PendingUploadMetaRecord>,
@@ -154,7 +142,16 @@ async function readUploadRows(
     }
     chunks.push(Buffer.from(chunk.dataBase64, "base64"));
   }
-  return recordToUpload(meta, Buffer.concat(chunks, meta.byteLength));
+  const buffer = Buffer.concat(chunks, meta.byteLength);
+  return {
+    id: meta.id,
+    buffer,
+    filename: meta.filename,
+    contentType: meta.contentType,
+    conversationId: meta.conversationId,
+    consentCardActivityId: meta.consentCardActivityId,
+    createdAt: meta.createdAt,
+  };
 }
 
 async function pruneUploadStore(
