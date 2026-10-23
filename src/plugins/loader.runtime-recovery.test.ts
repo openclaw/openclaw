@@ -156,7 +156,7 @@ it.each(["installed", "bundled-mjs"] as const)(
           expect(await oldTool.execute("previous", {})).toMatchObject({
             content: [{ text: "original:1" }],
           });
-          const recovery = capturePluginRuntimeRecovery(oldRecord)!;
+          const recovery = (await capturePluginRuntimeRecovery(oldRecord))!;
           try {
             await disposePluginRegistryInstances(previous);
             const candidate = withPluginCache(operationCache, () =>
@@ -250,7 +250,7 @@ it("joins a failed candidate's declared stop hook before recovering the previous
   );
   const config = pluginFixtureConfig(plugin, { config: { fail: false } });
   const options = { config, runtimeSideEffects: true };
-  let recovery: ReturnType<typeof capturePluginRuntimeRecovery>;
+  let recovery: Awaited<ReturnType<typeof capturePluginRuntimeRecovery>>;
   const stop = (registry: PluginRegistry) =>
     createHookRunner(registry, { catchErrors: false }).runGatewayStop(
       { reason: "plugin replacement" },
@@ -258,7 +258,7 @@ it("joins a failed candidate's declared stop hook before recovering the previous
     );
   try {
     const old = load(options);
-    recovery = capturePluginRuntimeRecovery(old.plugins[0]!);
+    recovery = await capturePluginRuntimeRecovery(old.plugins[0]!);
     const manifestRegistry = getPluginRuntimeLoadContext(old)!.manifestRegistry;
     await stop(old);
     await disposePluginRegistryInstances(old);

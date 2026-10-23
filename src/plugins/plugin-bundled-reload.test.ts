@@ -133,7 +133,7 @@ it("keeps host shared imports available to bundled Workers across recovery and d
   expect(load(instance).increment()).toBe(1);
   expect(host.count).toBe(1);
   await runWorker(load(instance).workerUrl);
-  const recovery = withPluginSourceCaptureDirectory(captures, () =>
+  const recovery = await withPluginSourceCaptureDirectory(captures, () =>
     instance.captureModuleLoaderRecovery(),
   );
   await instance.dispose();
@@ -262,7 +262,7 @@ it.each([
   expect(load(second).increment()).toBe(2);
   expect(host.count).toBe(2);
   expect(await second.run(() => load(second).late())).toBe("B late");
-  const recovery = withPluginSourceCaptureDirectory(captures, () =>
+  const recovery = await withPluginSourceCaptureDirectory(captures, () =>
     second.captureModuleLoaderRecovery(),
   );
   await second.dispose();

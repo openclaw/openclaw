@@ -23,7 +23,7 @@ afterEach(() => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-it("joins worker-backed recovery cleanup without blocking foreground work", async () => {
+it("captures and releases worker-backed recovery without blocking foreground work", async () => {
   useNoBundledPlugins();
   const plugin = writePlugin({
     id: "recovery-cleanup",
@@ -58,8 +58,6 @@ it("joins worker-backed recovery cleanup without blocking foreground work", asyn
         expect(captureParent).toBeDefined();
         const capturesBefore = fs.readdirSync(captureParent!);
         const recovery = createPluginReloadRecovery(previous, prepareGatewayPluginLoad);
-        recovery.capture(new Set([plugin.id]));
-        expect(fs.readdirSync(captureParent!)).toHaveLength(capturesBefore.length + 1);
         const capture = posts.mock.calls.findIndex(
           ([value]) =>
             isRecord(value) && isRecord(value.input) && value.input.operation === "capture",
@@ -79,8 +77,18 @@ it("joins worker-backed recovery cleanup without blocking foreground work", asyn
           foregroundRan = true;
         });
         try {
-          await recovery.dispose();
+          await recovery.capture(new Set([plugin.id]));
           await foreground;
+          expect(foregroundAtReplies).not.toHaveLength(0);
+          expect(foregroundAtReplies.every(Boolean)).toBe(true);
+          expect(fs.readdirSync(captureParent!)).toHaveLength(capturesBefore.length + 1);
+          foregroundAtReplies.length = 0;
+          foregroundRan = false;
+          const nextForeground = Promise.resolve().then(() => {
+            foregroundRan = true;
+          });
+          await recovery.dispose();
+          await nextForeground;
           expect(foregroundAtReplies).not.toHaveLength(0);
           expect(foregroundAtReplies.every(Boolean)).toBe(true);
           expect(fs.readdirSync(captureParent!)).toEqual(capturesBefore);
@@ -136,7 +144,7 @@ it("replaces a worker-backed plugin when its previous captured source is missing
         fs.rmSync(capturedRoot!, { recursive: true });
         const recovery = createPluginReloadRecovery(previous, prepareGatewayPluginLoad);
         try {
-          expect(recovery.capture(new Set([plugin.id]))).toEqual([
+          expect(await recovery.capture(new Set([plugin.id]))).toEqual([
             `Plugin ${plugin.id} captured source is missing. Continuing replacement; rollback cannot restore this plugin's previous code.`,
           ]);
           expect([...recovery.unavailablePluginIds]).toEqual([plugin.id]);

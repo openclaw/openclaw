@@ -55,7 +55,9 @@ export class PluginInstance {
   sourceDigest?: string;
   private moduleLoader?: (source: string) => unknown;
   private setupCache?: PluginCache;
-  private captureModuleRecovery?: () => PluginModuleLoaderRecovery;
+  private captureModuleRecovery?: () =>
+    | PluginModuleLoaderRecovery
+    | Promise<PluginModuleLoaderRecovery>;
   private moduleSourceExists?: false | ((source: string) => boolean);
   private accepting = true;
   private replacementReserved = false;
@@ -525,17 +527,19 @@ export class PluginInstance {
     return this.moduleSourceExists && this.moduleSourceExists(source);
   }
 
-  bindModuleLoaderRecovery(capture: () => PluginModuleLoaderRecovery): void {
+  bindModuleLoaderRecovery(
+    capture: () => PluginModuleLoaderRecovery | Promise<PluginModuleLoaderRecovery>,
+  ): void {
     this.captureModuleRecovery = capture;
   }
 
-  captureModuleLoaderRecovery(): PluginModuleLoaderRecovery {
+  async captureModuleLoaderRecovery(): Promise<PluginModuleLoaderRecovery> {
     if (this.disposing || this.owner?.revoked || this.controller.signal.aborted) {
       throw new PluginInstanceUnavailableError(this.pluginId);
     }
     // A failed drain can leave this owner quiesced, still holding its original
     // loader. Host capture may copy that code without reopening ordinary calls.
-    return this.runCleanup(() => {
+    return await this.runCleanup(() => {
       if (!this.captureModuleRecovery) {
         throw new Error(`Plugin ${this.pluginId} has no recoverable module loader`);
       }

@@ -17,12 +17,12 @@ function createOwner() {
 }
 
 describe("Gateway plugin runtime generation", () => {
-  it("preserves readiness when rollback restores an already unavailable startup plugin", () => {
+  it("preserves readiness when rollback restores an already unavailable startup plugin", async () => {
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(createPluginRecord({ id: "startup-error", status: "error" }));
     const selected = new Set(["startup-error"]);
     const recovery = createPluginReloadRecovery(registry, prepareGatewayPluginLoad);
-    expect(recovery.capture(selected)).toEqual([]);
+    expect(await recovery.capture(selected)).toEqual([]);
     const generation = createOwner();
     generation.finishReload(
       undefined,
