@@ -8,6 +8,7 @@ import {
   type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { captureExecRequestOwners, withExecRequestTurn } from "../infra/exec-request-context.js";
 import {
   prepareGatewaySuspend,
   resetGatewaySuspendCoordinatorForLifecycleRestart,
@@ -721,7 +722,20 @@ it("preserves independent stdout and stderr parser state", async () => {
     }
     return runtimeManagedRun(input);
   });
-  const outcome = await (await runTestExecProcess()).promise;
+  const identity = { runId: "output-owner", sessionId: "output-session" };
+  const updates: string[] = [];
+  const outcome = await withExecRequestTurn({ identity }, async () => {
+    const run = await runTestExecProcess({
+      requestOwners: captureExecRequestOwners(identity),
+      onUpdate: (update) => {
+        if (update.details?.status === "running") {
+          updates.push(update.details.tail ?? "");
+        }
+      },
+    });
+    return run.promise;
+  });
   expect(outcome.aggregated).toBe("outerrOUTERR");
   expect(outcome.aggregated).not.toContain("\\x1b");
+  expect(updates.at(-1)).toBe("outerrOUTERR");
 });

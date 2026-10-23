@@ -1,10 +1,33 @@
 /* @vitest-environment jsdom */
+import type { JSX } from "@solidjs/web";
 import { createSignal, Show } from "solid-js";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
+import { ApplicationProvider } from "../../../lib/reactive/context.ts";
+import { createTestSessionCapability } from "../../../lib/sessions/session-capability.test-support.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
+import { createContext } from "../../../test-helpers/app-sidebar.ts";
+import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { CanvasWidgetMount } from "./canvas-widget-mount.tsx";
+
+function mountCanvas(ui: () => JSX.Element) {
+  const container = document.body.appendChild(document.createElement("div"));
+  onTestFinished(() => container.remove());
+  const { gateway } = createApplicationGateway();
+  const sessions = createTestSessionCapability(gateway);
+  const context = createContext(gateway, sessions);
+  onTestFinished(disposeSidebarContextLifecycles);
+  return mountSolid(
+    () => (
+      <ApplicationProvider host={container} value={context}>
+        {ui()}
+      </ApplicationProvider>
+    ),
+    { container },
+  );
+}
 
 const properties = {
   docId: "cv_counter",
@@ -20,7 +43,7 @@ const widget = (host: ParentNode) => host.querySelector("openclaw-canvas-widget-
 
 it("updates a mounted widget and replaces it when its session or document changes", () => {
   const [current, setCurrent] = createSignal(properties);
-  const root = mountSolid(() => <CanvasWidgetMount {...current()} />);
+  const root = mountCanvas(() => <CanvasWidgetMount {...current()} />);
   flush();
   const host = root.container;
   const element = widget(host);
@@ -57,7 +80,7 @@ it("updates a mounted widget and replaces it when its session or document change
 it("remounts across transcript rows when atomic moves are unavailable", () => {
   expect(typeof Element.prototype.moveBefore).toBe("undefined");
   const [row, setRow] = createSignal("live-tool-output");
-  const root = mountSolid(() => (
+  const root = mountCanvas(() => (
     <Show when={row()} keyed>
       {(_key) => <CanvasWidgetMount {...properties} />}
     </Show>
@@ -75,7 +98,7 @@ it("remounts across transcript rows when atomic moves are unavailable", () => {
 it("pauses a retained widget while its transcript is hidden and resumes the same element", () => {
   const [presented, setPresented] = createSignal(true);
   const [current, setCurrent] = createSignal(properties);
-  const root = mountSolid(() => (
+  const root = mountCanvas(() => (
     <ContentPresentation value={presented}>
       <CanvasWidgetMount {...current()} />
     </ContentPresentation>

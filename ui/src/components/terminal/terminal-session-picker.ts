@@ -19,7 +19,7 @@ type PickerDependencies = {
 };
 
 export function createTerminalSessionPicker(deps: PickerDependencies) {
-  const [open, setOpen] = createSignal(deps.initialOpen());
+  const [open, setOpen] = createSignal(false);
   let acceptedSessions: TerminalSessionInfo[] = [];
   const [request, setRequest] = createSignal<{
     key: number;
@@ -102,6 +102,8 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
   }
 
   onSettled(() => {
+    // Lazy bridge inputs bind after the component body has created this picker.
+    setOpen(deps.initialOpen());
     const stop = listen(
       document,
       "pointerdown",

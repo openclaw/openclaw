@@ -118,7 +118,7 @@ describe("Session Observer actions", () => {
         await waitForSolid(() => {
           expect(page.request).toHaveBeenCalledWith("config.patch", expect.anything());
           expect(page.outlet.textContent).toContain("Saving…");
-          expect(toggle.disabled).toBe(true);
+          expect(toggle.getAttribute("aria-disabled")).toBe("true");
           expect(toggle.checked).toBe(false);
         });
         expect(page.observerToggle()).toBe(toggle);
@@ -132,7 +132,7 @@ describe("Session Observer actions", () => {
         }
         await waitForSolid(() => {
           expect(page.outlet.textContent).not.toContain("Saving…");
-          expect(toggle.disabled).toBe(false);
+          expect(toggle.getAttribute("aria-disabled")).toBeNull();
           expect(toggle.checked).toBe(result !== "saved");
         });
         expect(page.observerToggle()).toBe(toggle);
@@ -155,7 +155,7 @@ describe("Session Observer actions", () => {
       page.held.reject(new Error("Synthetic observer save failed"));
       await waitForSolid(() => {
         expect(page.outlet.textContent).toContain("Synthetic observer save failed");
-        expect(page.observerToggle().disabled).toBe(false);
+        expect(page.observerToggle().getAttribute("aria-disabled")).toBeNull();
       });
 
       page.request.mockImplementationOnce(() => retried.promise);
@@ -170,7 +170,7 @@ describe("Session Observer actions", () => {
       });
       await waitForSolid(() => {
         expect(page.observerToggle().checked).toBe(false);
-        expect(page.observerToggle().disabled).toBe(false);
+        expect(page.observerToggle().getAttribute("aria-disabled")).toBeNull();
         expect(page.outlet.textContent).not.toContain("Synthetic observer save failed");
       });
     } finally {
@@ -223,7 +223,9 @@ describe("Session Observer actions", () => {
       expect(page.outlet.querySelector(".page-title")?.textContent).toBe("Advanced");
       expect(page.outlet.textContent).not.toContain("Saving…");
       await page.router.navigate("appearance", page.context);
-      await waitForSolid(() => expect(page.observerToggle()?.disabled).toBe(false));
+      await waitForSolid(() =>
+        expect(page.observerToggle()?.getAttribute("aria-disabled")).toBeNull(),
+      );
       expect(page.observerToggle().checked).toBe(true);
     } finally {
       await page.dispose();

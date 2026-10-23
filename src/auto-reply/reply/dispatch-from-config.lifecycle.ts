@@ -45,6 +45,7 @@ import type {
 import { restoreArchivedDispatchSession } from "./dispatch-session-archive.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { isExplicitSteerCommandTurn } from "./explicit-steer-routing.js";
+import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
@@ -585,6 +586,21 @@ export function createDispatchReplyOperationCoordinator(
     params.replyOptions?.abortSignal;
   let observedReplyDelivery = false;
   let agentRunTerminalOutcome: "completed" | "failed" | undefined;
+  const observeDeliveryProgress = (
+    deliveryOutcome: Promise<ReplyDispatchDeliveryOutcome> | undefined,
+    event: string,
+  ) => {
+    const operation = dispatchReplyOperation;
+    void deliveryOutcome?.then(
+      (outcome) => {
+        if (outcome === "delivered") {
+          operation?.watchdog.progress("finalization", event);
+        }
+      },
+      () => {},
+    );
+  };
+
   const markObservedReplyDelivery = async () => {
     if (observedReplyDelivery) {
       return;
@@ -715,6 +731,7 @@ export function createDispatchReplyOperationCoordinator(
     isDispatchOperationAborted,
     isPreDispatchOperationAborted,
     markObservedReplyDelivery,
+    observeDeliveryProgress,
     releasePreDispatchLifecycleAdmission,
     runWithDispatchLifecycleAdmission,
     throwIfDispatchOperationAborted,

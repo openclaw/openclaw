@@ -275,7 +275,7 @@ describe("openclaw-mcp-servers-card", () => {
       "browser sign-in recovery link",
     );
     expect(link).toMatchObject({ href: loginUrl, target: "_blank" });
-    expect(link.textContent).toContain("Open sign-in");
+    expect(link.textContent).toContain("Reopen browser tab");
     expect(open).toHaveBeenCalledWith(loginUrl, "_blank", "noopener,noreferrer");
     connection.publish({
       ...connection.gateway.snapshot,

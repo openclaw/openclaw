@@ -117,7 +117,7 @@ export function registerGatewayStartupAdmissionTests(params: {
     expectStops(1);
   });
 
-  it.each(["subagent", "gateway_start"] as const)(
+  it.each(["orphans", "gateway_start"] as const)(
     "retires startup %s admission parked behind suspension when the Gateway closes",
     async (stage) => {
       const gatewayStart = vi.fn<PluginHookHandlerMap["gateway_start"]>(async () => {});
@@ -137,8 +137,8 @@ export function registerGatewayStartupAdmissionTests(params: {
         return null;
       });
       const sidecarsReady = vi.fn();
-      // The subagent row isolates recovery admission; the hook row owns hook admission.
-      if (stage === "subagent") {
+      // The orphan row isolates recovery admission; the hook row owns hook admission.
+      if (stage === "orphans") {
         pluginRegistry.typedHooks.length = 0;
         hookLoad.release();
       }
@@ -169,14 +169,15 @@ export function registerGatewayStartupAdmissionTests(params: {
         .mockImplementation((run, origin, signal) => {
           const work = runWithAdmission(run, origin, signal);
           if (
-            origin === (stage === "subagent" ? "startup:subagent-recovery" : "hooks:gateway-start")
+            origin ===
+            (stage === "orphans" ? "startup:main-session-orphans" : "hooks:gateway-start")
           ) {
             admissionParked.resolve();
           }
           return work;
         });
       try {
-        expect(sidecarsReady).toHaveBeenCalledOnce();
+        expect(sidecarsReady).not.toHaveBeenCalled();
         if (stage === "gateway_start") {
           postReadyWork.resolve();
           await hookLoad.entered;
@@ -191,8 +192,9 @@ export function registerGatewayStartupAdmissionTests(params: {
         connectionWork.beginClose();
         // Close retains admitted imports, but must retire parked admission without reopening it.
         await connectionWork.drain();
+        expect(sidecarsReady).toHaveBeenCalledTimes(stage === "orphans" ? 0 : 1);
         expect(gatewayStart).not.toHaveBeenCalled();
-        expect(refresh).toHaveBeenCalledTimes(stage === "subagent" ? 0 : 1);
+        expect(refresh).toHaveBeenCalledTimes(stage === "orphans" ? 0 : 1);
       } finally {
         admissionSpy.mockRestore();
         suspension?.release();

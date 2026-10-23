@@ -202,7 +202,11 @@ when its verified sender has a
 person whose current role grants `operator.admin`. That sender must also pass the
 channel's command authorization. Unlinked, unverified, or demoted senders see
 `undefined`, even when the channel lets them run the command, and every native
-call rechecks the link and role. The host records the channel command text once,
+call rechecks the link and role. Demoting that person, removing their role, or
+unlinking the identity revokes the requester's retained work as it does for a
+Gateway operator: a child still waiting for a Swarm slot fails at once with a
+visible error, and work that missed the change refuses at its next admission
+check. The host records the channel command text once,
 as that message's input: a reply adds only the response, and a continuing agent
 turn reuses the same input. A native slash surface targeting a different
 `CommandTargetSessionKey` than the current dispatch session gets no capability.
@@ -304,8 +308,10 @@ also refuses manual force runs, so a disabled schedule cannot spend attempts.
 Each run restores the original requester and revalidates current operator,
 provider-account, session, plugin, and native tool authority. It reuses the
 command-scoped native-child eligibility producer. Reset, deletion, revocation,
-expired budgets, and unloaded plugins fail closed. Stored source facts are not
-execution authority. No caller can choose a different parent or delivery route.
+expired budgets, and unloaded plugins fail closed. Revoking a channel requester
+also fails a child that an earlier occurrence queued, without waiting for its
+Swarm slot. Stored source facts are not execution authority. No caller can
+choose a different parent or delivery route.
 
 Within one Gateway process, schedules bind the exact managed plugin instance,
 not just its ID, version, or source path. Registry adoption of that same
@@ -319,18 +325,17 @@ unloading, is an ordinary refusal that retries at the next occurrence.
 Accepted schedules survive a Gateway restart on hosts advertising
 `command-scheduled-turns-restart-v1` in `api.runtime.capabilities`. The accepted
 result's `survivesRestart` reports this for each schedule; when it is true, do
-not re-enroll that schedule after a restart. When it is false, as for
-core-bundled plugins, which load host-owned modules without a captured source
-digest, or absent on hosts without the capability, the schedule ends with the
-Gateway process and a plugin must re-enroll from a later
-eligible requester command. After a restart, each
-schedule keeps its original deadline, `maxRuns` and spent attempts, and a missed
+not re-enroll that schedule after a restart. When it is false, or absent on
+hosts without the capability, the schedule ends with the Gateway process and a
+plugin must re-enroll from a later eligible requester command. That happens only
+when the loaded plugin code has no sound identity, described below. After a
+restart, each schedule keeps its original deadline, `maxRuns` and spent attempts, and a missed
 occurrence follows the scheduler's normal startup deferral. Its next
 occurrence re-arms it onto the newly loaded instance of the same plugin code, in
 the same scheduler transaction that claims the occurrence. Matching metadata is
 not enough: the instance must have the same plugin ID, source, root and version,
-must still register the target command, and must have loaded source with exactly
-the digest captured when the schedule was accepted. That
+must still register the target command, and must have loaded exactly the code
+identity captured when the schedule was accepted. That
 occurrence then restores the original requester and rechecks it, the parent
 session and the plugin exactly as any other occurrence does. A demoted or
 removed requester is refused before the command runs. If the plugin is disabled,
@@ -342,14 +347,30 @@ restart is not replayed once its command may have started, so a restart never
 runs one occurrence twice. Neither persisted jobs nor restart continuity restore
 execution authority on their own.
 
+The code identity of an installed or configured plugin is the digest of its
+captured source. A core-bundled plugin loads host-owned modules instead, so its
+identity is the exact OpenClaw build the Gateway process loaded: the record in
+that build's `dist/build-info.json` (build ID, version, commit and build time),
+read once when the process starts, together with the plugin's ID and the real
+paths of its root and entry inside that build's own `dist` or `dist-runtime`
+extensions. Every build records a new build time, even under an explicit build
+ID, so after a host upgrade, downgrade or rebuild a bundled plugin's schedule
+ends exactly as a changed installed plugin's does, even at the same paths and
+plugin version, and returning to the original build later does not revive it. A Gateway run from
+source has no build record, and a bundled plugin loaded from outside its build's
+output (a source checkout or an override directory) has no identity, so those
+schedules report `survivesRestart: false` and end with the process.
+
 Schedules are stored under a dedicated `pluginCommand` payload kind. An older
 Gateway that does not support scheduled command turns treats that row as an
 invalid job and never runs it as an ordinary model prompt. Restart continuity is
 stored privately in the job's runtime state and leaves the stored schedule
 unchanged. After a rollback, a Gateway that supports scheduled turns but not
 restart continuity ignores it and ends each schedule at its next occurrence, as
-it ends its own schedules after a restart. That ended schedule stays ended after
-upgrading again.
+it ends its own schedules after a restart. A Gateway with restart continuity
+that predates bundled-plugin build identities finds no matching code for a
+bundled plugin's schedule and ends it the same way. That ended schedule stays
+ended after upgrading again.
 
 Scheduled invocations expose native spawn/collect, not another scheduling
 capability. Direct command `llm.complete` and `continueAgent` are refused:

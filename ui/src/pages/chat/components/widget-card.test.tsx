@@ -507,7 +507,9 @@ describe("widget-card", () => {
       }),
       { boardProvider: provider },
     );
-    expect(canvas.querySelector("openclaw-canvas-widget-view")).not.toBeNull();
+    await waitForSolid(() =>
+      expect(canvas.querySelector("openclaw-canvas-widget-view")).not.toBeNull(),
+    );
     pinButton(canvas)?.click();
     await vi.waitFor(() => {
       expect(pinWidget).toHaveBeenCalledWith({
@@ -809,21 +811,29 @@ describe("widget-card", () => {
     ["strict", "scripts", false],
     ["trusted", undefined, true],
     ["trusted", "strict", false],
-  ] as const)("applies %s policy to preview sandbox %s", (embedSandboxMode, sandbox, scripted) => {
-    const { provider, snapshot } = boardProvider();
-    snapshot.value = { widgets: [{ name: "canvas-cv_clock" }] };
-    const host = mountWidget(
-      { ...preview, sandbox },
-      { embedSandboxMode, boardProvider: provider },
-    );
-    const managedView = host.querySelector("openclaw-canvas-widget-view");
-    expect(managedView !== null).toBe(sandbox !== "strict");
-    expect(pinButton(host) !== null).toBe(scripted);
-    if (managedView) {
-      expect(managedView.allowScripts).toBe(scripted);
-      expect(host.querySelector("iframe")).toBeNull();
-    } else {
-      expect(host.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
-    }
-  });
+  ] as const)(
+    "applies %s policy to preview sandbox %s",
+    async (embedSandboxMode, sandbox, scripted) => {
+      const { provider, snapshot } = boardProvider();
+      snapshot.value = { widgets: [{ name: "canvas-cv_clock" }] };
+      const host = mountWidget(
+        { ...preview, sandbox },
+        { embedSandboxMode, boardProvider: provider },
+      );
+      await waitForSolid(() =>
+        expect(host.querySelector("openclaw-canvas-widget-view") !== null).toBe(
+          sandbox !== "strict",
+        ),
+      );
+      const managedView = host.querySelector("openclaw-canvas-widget-view");
+      expect(managedView !== null).toBe(sandbox !== "strict");
+      expect(pinButton(host) !== null).toBe(scripted);
+      if (managedView) {
+        expect(managedView.allowScripts).toBe(scripted);
+        expect(host.querySelector("iframe")).toBeNull();
+      } else {
+        expect(host.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
+      }
+    },
+  );
 });
