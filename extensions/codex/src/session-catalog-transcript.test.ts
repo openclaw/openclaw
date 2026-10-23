@@ -55,16 +55,143 @@ function readTranscript(control: CodexSessionCatalogControl, limit: number, curs
   });
 }
 
+it.each(["inProgress", "in_progress", "running"])(
+  "keeps %s items with partial output as calls",
+  async (status) => {
+    const { control } = nativeItemControl([
+      catalogThreadItem("active", {
+        type: "commandExecution",
+        command: "check",
+        status,
+        aggregatedOutput: "Partial output",
+      }),
+    ]);
+    const page = await readTranscript(control, 1);
+    expect(page.items[0]).toMatchObject({ type: "toolCall", toolInput: { command: "check" } });
+  },
+);
+
+it("preserves completed invocations, unknown outcomes, and reasoning without expanding native pages", async () => {
+  const patch = "@@ -1 +1 @@\n-" + "old ".repeat(150) + "\n+" + "new ".repeat(150) + "\n";
+  const source = [
+    catalogThreadItem("failed", {
+      type: "commandExecution",
+      command: "false",
+      cwd: "/repo",
+      aggregatedOutput: "",
+      status: "failed",
+      exitCode: 1,
+    }),
+    catalogThreadItem("quiet", {
+      type: "mcpToolCall",
+      server: "docs",
+      tool: "lookup",
+      arguments: { query: "guide" },
+      result: null,
+      status: "completed",
+    }),
+    catalogThreadItem("dynamic", {
+      type: "dynamicToolCall",
+      tool: "custom",
+      arguments: ["guide"],
+      contentItems: [{ type: "inputText", text: "found" }],
+      success: false,
+      status: "failed",
+    }),
+    catalogThreadItem("unknown", {
+      type: "commandExecution",
+      command: "native-command",
+      aggregatedOutput: "recorded output",
+      status: "new-native-status",
+    }),
+    catalogThreadItem("declined", {
+      type: "commandExecution",
+      command: "publish",
+      status: "declined",
+    }),
+    catalogThreadItem("commentary", { phase: "commentary", text: "Checking." }),
+    catalogThreadItem("patch", {
+      type: "fileChange",
+      status: "completed",
+      changes: [
+        { path: "/repo/example.ts", kind: { type: "update", move_path: null }, diff: patch },
+      ],
+    }),
+    catalogThreadItem("reasoning", {
+      type: "reasoning",
+      summary: ["Summary"],
+      content: ["Details"],
+    }),
+  ];
+  const { control } = nativeItemControl(source);
+  const first = await readTranscript(control, 2);
+  const second = await readTranscript(control, 2, first.nextCursor);
+  const third = await readTranscript(control, 2, second.nextCursor);
+  const pages = [first, second, third];
+  while (pages.at(-1)?.nextCursor) {
+    pages.push(await readTranscript(control, 2, pages.at(-1)?.nextCursor));
+  }
+  const items = pages.flatMap((page) => page.items).toReversed();
+
+  expect(items.map((item) => item.id)).toEqual(source.map((item) => item.id));
+  expect(items[0]).toMatchObject({
+    type: "toolResult",
+    text: "",
+    toolName: "bash",
+    toolCallId: "failed",
+    toolInput: { command: "false", cwd: "/repo" },
+    isError: true,
+    exitCode: 1,
+    activity: { status: "failed" },
+    toolDetails: { status: "failed", exitCode: 1 },
+  });
+  expect(items[1]).toMatchObject({
+    type: "toolResult",
+    text: "",
+    toolName: "docs.lookup",
+    toolCallId: "quiet",
+    toolInput: { query: "guide" },
+    isError: false,
+  });
+  expect(items[2]).toMatchObject({
+    type: "toolResult",
+    text: "found",
+    toolName: "custom",
+    toolCallId: "dynamic",
+    toolInput: ["guide"],
+    isError: true,
+  });
+  expect(items[3]).toMatchObject({ type: "toolResult", text: "recorded output" });
+  expect(items[3]?.isError).toBeUndefined();
+  expect(items[4]).toMatchObject({ activity: { status: "blocked" } });
+  expect(items[5]).toMatchObject({ phase: "commentary" });
+  expect(items[6]).toMatchObject({
+    toolInput: {
+      changes: [{ path: "/repo/example.ts", diff: patch, stat: { added: 1, removed: 1 } }],
+    },
+    toolDetails: { status: "completed" },
+    activity: { name: "apply_patch", status: "completed" },
+  });
+  expect(items[7]).toMatchObject({ type: "reasoning", text: "Summary\n\nDetails" });
+  expect(pages.at(-1)?.nextCursor).toBeUndefined();
+});
+
 it("cuts native pages by wire bytes without losing raw output or advancing past omitted items", async () => {
   const output = "海🌱\n".repeat(80_000);
-  const source = Array.from({ length: 36 }, (_, index) => commandItem(`tool-${index}`, output));
+  const source = Array.from({ length: 36 }, (_, index) =>
+    catalogThreadItem(`tool-${index}`, {
+      type: "commandExecution",
+      command: output,
+      aggregatedOutput: output,
+    }),
+  );
   const { control, listItemPage } = nativeItemControl(source);
   const first = await readTranscript(control, 50);
   const second = await readTranscript(control, 7, first.nextCursor);
   const third = await readTranscript(control, 50, second.nextCursor);
   const pages = [first, second, third];
-  if (third.nextCursor) {
-    pages.push(await readTranscript(control, 50, third.nextCursor));
+  while (pages.at(-1)?.nextCursor && pages.length < source.length) {
+    pages.push(await readTranscript(control, 50, pages.at(-1)?.nextCursor));
   }
   const delivered = pages.flatMap((page) => page.items);
 
