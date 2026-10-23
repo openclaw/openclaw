@@ -49,6 +49,15 @@ export function resolveAgentRestartRecoveryContext(params: {
   ) {
     return undefined;
   }
+  if (
+    params.isRestartRecoveryResumeRun &&
+    entry.restartRecoverySourceMessageChannel !== undefined &&
+    entry.restartRecoverySourceMessageChannel !== INTERNAL_MESSAGE_CHANNEL
+  ) {
+    return entry.restartRecoverySourceMessageChannel === null
+      ? undefined
+      : { messageChannel: entry.restartRecoverySourceMessageChannel };
+  }
   if (params.isRestartRecoveryResumeRun && entry.restartRecoverySourceIngress === "control-ui") {
     return { messageChannel: INTERNAL_MESSAGE_CHANNEL, pinnedWidgetAuthoring: true };
   }
@@ -57,9 +66,10 @@ export function resolveAgentRestartRecoveryContext(params: {
     entry.restartRecoverySourceIngress === "internal" &&
     !entry.restartRecoveryDeliveryContext
   ) {
-    // A channel-less operator turn stays unbound; only an explicit WebChat route restores it.
+    // Older in-flight claims omitted the channel; retain their WebChat fallback.
+    // WebChat context can infer recipients, so external session routes stay excluded.
     const route = parseSessionDeliveryRoute(params.resolvedSessionKey);
-    return route?.channel === INTERNAL_MESSAGE_CHANNEL
+    return !route || route.channel === INTERNAL_MESSAGE_CHANNEL
       ? { messageChannel: INTERNAL_MESSAGE_CHANNEL }
       : undefined;
   }

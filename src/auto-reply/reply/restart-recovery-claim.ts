@@ -426,8 +426,7 @@ export function createReplyRestartRecoveryClaimController(
     }
 
     const deliveryContext = params.resolveDeliveryContext(entry);
-    const recoverableDeliveryContext =
-      deliveryContext && sourceTurnId ? deliveryContext : undefined;
+    const recoverableDeliveryContext = sourceTurnId ? deliveryContext : undefined;
     if (recoverableDeliveryContext && !strandedRetryRunId) {
       const sourceMessage = recorder?.getPersistedMessage?.() ?? (await recorder?.resolveMessage());
       const persistedSourceTurnId = normalizeOptionalString(sourceMessage?.idempotencyKey);
@@ -530,6 +529,9 @@ export function createReplyRestartRecoveryClaimController(
           : operatorSource && params.inputProvenance?.kind === "inter_session"
             ? "internal"
             : operatorSource?.snapshot.sourceIngress,
+      restartRecoverySourceMessageChannel: transfersControlUiClaim
+        ? entry.restartRecoverySourceMessageChannel
+        : undefined,
       restartRecoverySourceReplyDeliveryMode: transfersControlUiClaim
         ? undefined
         : params.sourceReplyDeliveryMode,

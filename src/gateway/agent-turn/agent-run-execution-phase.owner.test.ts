@@ -2,8 +2,14 @@ import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
-import { prepareEmbeddedSessionState } from "../../agents/command/session-preparation.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+} from "../../agents/admitted-run-context.js";
+import {
+  prepareCommandSessionRecoveryEntry,
+  prepareEmbeddedSessionState,
+} from "../../agents/command/session-preparation.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
@@ -410,7 +416,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
     sourceChannel?: string;
     replyChannel?: string;
     sessionDelivery?: SessionEntry["delivery"];
-    recoveryIngress?: SessionEntry["restartRecoverySourceIngress"];
+    recoveryIngress?: "internal" | "control-ui";
     expectedChannel?: string;
   }>([
     { name: "unbound CLI" },
@@ -438,19 +444,46 @@ describe("startAgentRunExecution Gateway ownership", () => {
     { name: "explicit internal channel", replyChannel: "webchat", expectedChannel: "webchat" },
   ])("preserves $name provider context through command resolution", async (testCase) => {
     const execution = createExecution();
-    const sessionEntry: SessionEntry = {
+    let sessionEntry: SessionEntry = {
       sessionId: "source-session",
       updatedAt: 1,
       delivery: testCase.sessionDelivery,
-      ...(testCase.recoveryIngress
-        ? {
-            restartRecoveryDeliveryRunId: execution.params.runId,
-            restartRecoveryDeliverySourceRunId: "interrupted-run",
-            restartRecoverySourceIngress: testCase.recoveryIngress,
-          }
-        : {}),
     };
     if (testCase.recoveryIngress) {
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "operator",
+        scopes: ["operator.read"],
+        assertCurrent() {},
+        recoverySnapshot: {
+          profileId: "operator",
+          scopes: ["operator.read"],
+          assignedRole: null,
+          githubLogin: null,
+          grant: null,
+          aliasBindingIds: [],
+          authPolicy: {
+            generation: "",
+            grantGeneration: "grant",
+            role: "operator",
+            authMethod: "token",
+          },
+          controlUiAdmin: false,
+          localOperator: false,
+          sourceIngress: testCase.recoveryIngress,
+        },
+      });
+      sessionEntry = prepareCommandSessionRecoveryEntry({
+        entry: sessionEntry,
+        sessionId: sessionEntry.sessionId,
+        sessionKey: "agent:main:lab-recovery",
+        agentId: "main",
+        runId: "interrupted-run",
+        now: 1,
+        lifecycleGeneration: getAgentRunLifecycleGeneration(),
+        isSessionRollover: false,
+        opts: { message: "continue", operatorAuthority, messageChannel: testCase.expectedChannel },
+      }).nextEntry;
+      sessionEntry.restartRecoveryDeliveryRunId = execution.params.runId;
       Object.assign(execution.params, {
         canUseInternalRuntimeHandoff: true,
         isRestartRecoveryResumeRun: true,

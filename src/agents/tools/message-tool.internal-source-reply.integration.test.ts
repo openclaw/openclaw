@@ -82,7 +82,7 @@ afterEach(() => {
 
 describe("WebChat message tool internal source reply", () => {
   it.each([
-    { sessionKey: "agent:main:dashboard:recovered-cli", delivers: false },
+    { sessionKey: "agent:main:dashboard:recovered-cli", delivers: true },
     { sessionKey: "agent:main:webchat:dm:recovered-cli", delivers: true },
     { sessionKey: "agent:main:telegram:direct:123", delivers: false },
   ])(
