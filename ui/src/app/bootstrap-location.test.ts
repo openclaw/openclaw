@@ -135,16 +135,20 @@ describe("resolveInitialApplicationLocation", () => {
   );
 
   it.each([
-    ["/settings/appearance", "", "main"],
-    ["/sessions", "?session=agent%3Amain%3Amain", "agent:main:main"],
+    ["/settings/appearance", "", "main", ""],
+    ["/sessions", "?session=agent%3Amain%3Amain", "agent:main:main", ""],
+    ["/chat/main", "", "agent:research:workspace", ""],
+    ["/chat/main/", "", "agent:research:workspace", ""],
+    ["/openclaw/chat/main", "", "agent:research:workspace", "/openclaw"],
+    ["/openclaw/chat/main/", "", "agent:research:workspace", "/openclaw"],
   ])(
     "preserves explicit %s state without waiting for defaults",
-    async (pathname, search, sessionKey) => {
+    async (pathname, search, sessionKey, basePath) => {
       const cold = gateway({ phase: "connecting", client: null });
       const location = { pathname, search, hash: "" };
-      await expect(resolveLocation({ location, sessionKey, gateway: cold })).resolves.toBe(
-        location,
-      );
+      await expect(
+        resolveLocation({ location, basePath, sessionKey, gateway: cold }),
+      ).resolves.toBe(location);
       expect(cold.subscribe).not.toHaveBeenCalled();
     },
   );

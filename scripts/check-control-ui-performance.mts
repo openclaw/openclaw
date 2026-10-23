@@ -56,10 +56,10 @@ const controlUiPerformanceBudgets = {
   startupJsRequests: 9,
   chatBootJsRequests: 25,
   newBootJsRequests: 19,
-  // Deferred menus and closed dialogs: 1,349,135 B Chat and 823,357 B New Session.
-  // Retain the stricter prior caps after the current-main measurement refresh.
-  chatBootJsGzipBytes: 1_400_431,
-  newBootJsGzipBytes: 834_356,
+  // Creation transfer split: 1,347,441 B Chat and 822,816 B New Session.
+  // Preserve the incoming caps' relative headroom against the matched main build.
+  chatBootJsGzipBytes: 1_398_738,
+  newBootJsGzipBytes: 833_875,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   startupJsGzipBytes: 325_081,

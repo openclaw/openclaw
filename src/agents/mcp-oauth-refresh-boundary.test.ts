@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { readMcpOAuthStore } from "./mcp-oauth-store.js";
 import * as oauthStore from "./mcp-oauth-store.js";
@@ -259,8 +260,19 @@ describe("real MCP SDK token HTTP and durable owner", () => {
     const holder = resolveMcpOAuthAccessToken({ identity, fetchFn });
     try {
       await awaitGateBeforeSettlement(entered.promise, holder, "refresh settled before HTTP");
+      // The waiter first checks for a reusable token without the lease; cancel once it waits.
+      const waiting = createDeferred();
+      const acquire = leaseAcquisition.acquireOpenClawStateLease;
+      const acquisition = vi
+        .spyOn(leaseAcquisition, "acquireOpenClawStateLease")
+        .mockImplementation((params) => {
+          waiting.resolve();
+          return acquire(params);
+        });
       const controller = new AbortController();
       const waiter = resolveMcpOAuthAccessToken({ identity, fetchFn, signal: controller.signal });
+      await waiting.promise;
+      acquisition.mockRestore();
       controller.abort();
       // Rejects while the holder still owns the lease.
       await expect(waiter).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });

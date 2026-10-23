@@ -122,7 +122,7 @@ it.each<[string, TerminalDeliveryInput, boolean]>([
   ["aborted silent run", { meta: { ...silent, aborted: true } }, false],
   ["failed silent run", { meta: { ...silent, error: privateError } }, false],
   ["settled yield", { meta: { yielded: true }, requesterContinuationSettled: true }, true],
-  ["legacy empty receipt", { payloads: [] }, false],
+  ["legacy empty optional receipt", { payloads: [] }, true],
 ])("replays %s without inventing visible delivery", async (_name, result, delivered) => {
   const stored = project(result);
   const classified = await delivery(stored);

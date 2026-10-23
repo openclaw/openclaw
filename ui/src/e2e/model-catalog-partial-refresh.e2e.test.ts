@@ -172,7 +172,7 @@ suite.define(() => {
           await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
           await model.click();
           const available = composer.locator('[data-chat-model-option="openai/gpt-5.4"]');
-          await revealChatModelOption(available);
+          await revealChatModelOption(composer, "openai/gpt-5.4");
           await expect.poll(() => available.isVisible()).toBe(true);
           expect(await composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
           await model.click();

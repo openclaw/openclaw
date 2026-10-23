@@ -39,6 +39,8 @@ retrying. If no valid summary is produced, the original history remains in conte
 and no compaction entry is written. Branch navigation also rejects truncated
 summaries and leaves the current branch unchanged.
 
+If the summary output budget is exhausted without visible text, a reasoning model may have spent the allowance on thinking. Set `agents.defaults.compaction.thinkingLevel` to `"off"` if the model supports it, or use `agents.defaults.compaction.model` to select a model that can summarize within the available output budget. The error identifies the selected model, the summary allowance, and the model's configured `maxTokens`. The summary allowance is also limited by compaction's reserved budget, so increasing `maxTokens` alone may not raise it.
+
 Built-in summarization receives text, not image pixels. Omitted images and other non-text input receive markers such as `[image data omitted from summary input]`, without claiming that a model processed the data. The first eight affected messages receive at most two fixed markers each; further omissions receive one aggregate statement. These additions, including newly retained role labels and separators, total at most 847 UTF-8 bytes per summarizer request and count toward token estimates. Existing text is not capped by this omission budget. Custom compaction providers still receive the original message content.
 
 <Note>

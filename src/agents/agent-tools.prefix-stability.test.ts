@@ -104,6 +104,34 @@ it("offers the same message definition on a source-bound completion turn", () =>
   expect(assemble(true)).toEqual(assemble(false));
 });
 
+it.each(["agent:main:operator-task", "agent:main:telegram:direct:owner"])(
+  "keeps message definitions stable across CLI, recovery, and announce sources in %s",
+  (sessionKey) => {
+    const messageDefinition = (options: ToolOptions) => {
+      const tool = createOpenClawCodingTools({ ...session, ...options, sessionKey }).find(
+        (entry) => entry.name === "message",
+      )!;
+      return JSON.stringify({ description: tool.description, parameters: tool.parameters });
+    };
+    const cli = messageDefinition({ messageProvider: undefined, messageTo: undefined });
+    for (const sourceTool of [undefined, "subagent_announce", "subagent_settle"]) {
+      expect(
+        messageDefinition({
+          messageProvider: "webchat",
+          messageTo: "recovery-source",
+          currentMessageId: "recovery-message",
+          senderId: "recovery-sender",
+          senderIsOwner: true,
+          sourceReplyDeliveryMode: "message_tool_only",
+          ...(sourceTool && {
+            inputProvenance: { kind: "inter_session", sourceChannel: "internal", sourceTool },
+          }),
+        }),
+      ).toBe(cli);
+    }
+  },
+);
+
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-prefix-handoff-");
 it("offers the session's tool definitions and refuses tools outside the replayed authority", async () => {
   const store = path.join(sessionDirs.make(), "{agentId}", "sessions.json");

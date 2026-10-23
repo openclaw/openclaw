@@ -16,6 +16,7 @@ import {
   readGatewayResources,
   startGatewayDiagnostics,
 } from "../../scripts/lib/gateway-bench-profile.js";
+import type { startGatewayBenchWorkerMessages } from "../../scripts/lib/gateway-bench-worker-messages.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 
 const nodeExecutable = requireNodeTool("node");
@@ -25,9 +26,10 @@ const fixturePath = (name: string) =>
   fileURLToPath(new URL(`./fixtures/${name}.mjs`, import.meta.url));
 const readJson = async <T>(file: string): Promise<T> => JSON.parse(await readFile(file, "utf8"));
 
-function spawnFixture(args: string[], directory?: string, ipc = true) {
+function spawnFixture(args: string[], directory?: string, ipc = true, env?: NodeJS.ProcessEnv) {
   const child = spawn(nodeExecutable, args, {
     stdio: ipc ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
+    env,
   });
   const closed = once(child, "close");
   let stderr = "";
@@ -103,6 +105,265 @@ function heapBytesUnder(
     )
   );
 }
+
+it("preserves native trace-flag inheritance and explicit worker baseline preload propagation", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "transcript-worker-preload-"));
+  onTestFinished(() => rm(directory, { recursive: true, force: true }));
+  const resultPath = path.join(directory, "result.json");
+  const baselineOwner = new URL(
+    "../../src/config/sessions/session-actor-replica.ts",
+    import.meta.url,
+  ).href;
+  await writeFile(
+    path.join(directory, "worker.mjs"),
+    `import { parentPort } from "node:worker_threads";
+     parentPort.postMessage({
+       resolved: import.meta.resolve(${JSON.stringify(baselineOwner)}),
+       inheritedTrace: process.execArgv.includes("--trace-gc-nvp"),
+       baseline: process.env.OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS,
+       output: process.env.OPENCLAW_BENCH_WORKER_MEMORY_DIR,
+       sentinel: process.env.BENCH_WORKER_SENTINEL,
+     });`,
+  );
+  const entry = path.join(directory, "entry.mjs");
+  await writeFile(
+    entry,
+    `import { Worker } from "node:worker_threads";
+     import { once } from "node:events";
+     import { writeFileSync } from "node:fs";
+     const results = [];
+     for (const options of [{}, { execArgv: [], env: { BENCH_WORKER_SENTINEL: "explicit" } }]) {
+       const worker = new Worker(new URL("./worker.mjs", import.meta.url), options);
+       const [[result], [code]] = await Promise.all([once(worker, "message"), once(worker, "exit")]);
+       if (code !== 0) throw new Error("Worker exited with code " + code);
+       results.push(result);
+     }
+     writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify(results));`,
+  );
+  const { closed, stderr } = spawnFixture(
+    [
+      "--trace-gc-nvp",
+      "--import",
+      new URL("../../scripts/perf/transcript-worker-memory-preload.ts", import.meta.url).href,
+      entry,
+    ],
+    undefined,
+    false,
+    {
+      ...process.env,
+      OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS: "1",
+      OPENCLAW_BENCH_WORKER_MEMORY_DIR: directory,
+      BENCH_WORKER_SENTINEL: "inherited",
+    },
+  );
+  expect(await closed, stderr()).toEqual([0, null]);
+  const common = {
+    resolved: baselineOwner.replace(/\.ts$/u, ".baseline.ts"),
+    baseline: "1",
+    output: directory,
+  };
+  expect(await readJson(resultPath)).toEqual([
+    { ...common, inheritedTrace: true, sentinel: "inherited" },
+    { ...common, inheritedTrace: false, sentinel: "explicit" },
+  ]);
+});
+
+it("attributes worker receipts without retaining labels or treating unsized messages as empty", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-message-attribution-"));
+  onTestFinished(() => rm(directory, { recursive: true, force: true }));
+  const profilePath = path.join(directory, "heap");
+  const workerPath = path.join(directory, "session-transcript.worker.mjs");
+  await writeFile(
+    workerPath,
+    `import { parentPort } from "node:worker_threads";
+     parentPort.on("message", ({ taskId, input }) => {
+       parentPort.postMessage({ status: "ok", taskId, value: input.value });
+     });`,
+  );
+  const { child, stderr } = spawnFixture([
+    "--import",
+    new URL("../../scripts/tsx.mjs", import.meta.url).href,
+    "--input-type=module",
+    "-e",
+    `
+    process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION = "1";
+    process.argv[1] = ${JSON.stringify(fileURLToPath(new URL("../../src/entry.ts", import.meta.url)))};
+    await import(${JSON.stringify(preloadUrl)});
+    const { observeWorkerMessage, recordWorkerMessage } = await import(${JSON.stringify(new URL("../../src/infra/worker-message-metrics.ts", import.meta.url).href)});
+    const { createSqliteWorkerOperationAdmission } = await import(${JSON.stringify(new URL("../../src/infra/sqlite-worker-operation-admission.ts", import.meta.url).href)});
+    const { WorkerTaskPool } = await import(${JSON.stringify(new URL("../../src/infra/worker-task-pool.ts", import.meta.url).href)});
+    const { MessageChannel, Worker } = await import("node:worker_threads");
+    const { once } = await import("node:events");
+    const { pathToFileURL } = await import("node:url");
+    const v8 = await import("node:v8");
+    process.channel.ref();
+    process.on("message", message => {
+      if (!message.run) return;
+      if (message.run === "tasks") {
+        void (async () => {
+          const pool = new WorkerTaskPool({
+            workerUrl: pathToFileURL(${JSON.stringify(workerPath)}),
+            workerOptions: { execArgv: [] },
+            maxWorkers: 1,
+          });
+          let getterCalls = 0;
+          let completed;
+          const external = new Worker('const { parentPort } = require("node:worker_threads"); parentPort.on("message", value => parentPort.postMessage(value));', { eval: true, execArgv: [] });
+          try {
+            const values = [];
+            for (const kind of ["session-row-facts", "history-page", "fixture-private-task"]) {
+              values.push(await pool.run({ kind, value: "x".repeat(2048) }, {}));
+            }
+            const response = once(external, "message");
+            external.postMessage({ get text() { getterCalls++; return "y".repeat(1024); } });
+            const [echoed] = await response;
+            completed = { complete: true, getterCalls, replyBytes: values.reduce((sum, value) => sum + value.length, 0), echoedBytes: echoed.text.length };
+          } finally {
+            await pool.close();
+            await external.terminate();
+          }
+          process.send(completed);
+        })().catch(error => process.send({ error: String(error) }));
+        return;
+      }
+      const privateKind = "fixture-private-identifier";
+      observeWorkerMessage({ status: "notification", value: { kind: privateKind, text: "x".repeat(4096) } }, "from_worker");
+      const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
+      admission.port.postMessage({ stage: "transaction", decision: new SharedArrayBuffer(4), facts: { publication: { kind: "session-actor-admission", snapshot: { entry: { skillsSnapshot: "s".repeat(1024) } } } } });
+      admission.port.postMessage({ kind: "native-commit", payloadBytes: 40, committed: { version: 1, sequence: 1, facts: { kind: "committed", receipt: { kind: "session-actor-committed", phase: "appendTranscriptEvent", postimage: { entry: { systemPromptReport: "p".repeat(2048) } } } } } });
+      admission.service();
+      admission.finish();
+      const { port1, port2 } = new MessageChannel();
+      observeWorkerMessage({ status: "notification", port: port1 }, "from_worker");
+      port1.close(); port2.close();
+      recordWorkerMessage("lifecycle", "from_worker");
+      v8.deserialize(v8.serialize({ kind: privateKind, value: 42 }));
+      process.send({ complete: true });
+    });
+    process.send({ ready: true });
+  `,
+  ]);
+  await waitMessage(child, "ready");
+  await controlGatewayProfile(child, "heap", "start", profilePath);
+  expect(await sendMessage(child, { run: true }), stderr()).toEqual({ complete: true });
+  await controlGatewayProfile(child, "heap", "stop", profilePath);
+  const result = await readJson<ReturnType<ReturnType<typeof startGatewayBenchWorkerMessages>>>(
+    `${profilePath}.worker-attribution.json`,
+  );
+  expect(result.overflowMessages).toBe(0);
+  expect(result.groups.reduce((sum, group) => sum + group.messages, 0)).toBe(5);
+  expect(result.groups).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "task_notification",
+        messages: 2,
+        serializedMessages: 1,
+        serializedBytes: expect.any(Number),
+        failedSerializationMessages: 1,
+      }),
+      expect.objectContaining({
+        kind: "authority",
+        operation: "transaction",
+        facts: "session-actor-admission",
+        sharedBufferMessages: 1,
+        sharedBackingBytes: 4,
+        serializedMessages: 1,
+      }),
+      expect.objectContaining({
+        kind: "authority",
+        operation: "native-commit",
+        receipt: "session-actor-committed",
+        knownPayloadBytes: 40,
+        serializedMessages: 1,
+      }),
+      expect.objectContaining({
+        kind: "lifecycle",
+        unavailableMessageValues: 1,
+        serializedMessages: 0,
+      }),
+    ]),
+  );
+  expect(
+    result.groups.find((group) => group.kind === "task_notification")?.serializedBytes,
+  ).toBeGreaterThan(4096);
+  const authority = result.groups.find((group) => group.operation === "transaction");
+  expect(authority?.sections["authorityEntry.skillsSnapshot"]?.serializedBytes).toBeGreaterThan(
+    1024,
+  );
+  const receipt = result.groups.find((group) => group.operation === "native-commit");
+  expect(receipt?.phase).toBe("appendTranscriptEvent");
+  expect(receipt?.sections["postimageEntry.systemPromptReport"]?.serializedBytes).toBeGreaterThan(
+    2048,
+  );
+  expect(JSON.stringify(result)).not.toContain("fixture-private-identifier");
+  const deserialized = await readJson<{ groups: Record<string, { count: number; bytes: number }> }>(
+    `${profilePath}.deserialize.json`,
+  );
+  expect(deserialized.groups.other).toMatchObject({ count: 1 });
+  expect(deserialized.groups).not.toHaveProperty("fixture-private-identifier");
+  const taskProfilePath = path.join(directory, "tasks");
+  await controlGatewayProfile(child, "heap", "start", taskProfilePath);
+  expect(await sendMessage(child, { run: "tasks" }), stderr()).toEqual({
+    complete: true,
+    getterCalls: 1,
+    replyBytes: 6144,
+    echoedBytes: 1024,
+  });
+  await controlGatewayProfile(child, "heap", "stop", taskProfilePath);
+  const tasks = await readJson<
+    ReturnType<ReturnType<typeof startGatewayBenchWorkerMessages>> & { sourceHooks: string[] }
+  >(`${taskProfilePath}.worker-attribution.json`);
+  expect(tasks.sourceHooks).toEqual([
+    "sqlite-worker-operation-admission.ts",
+    "worker-cpu.ts",
+    "worker-message-metrics.ts",
+    "worker-task-pool-core.ts",
+  ]);
+  expect(tasks.overflowTaskReplies).toBe(0);
+  expect(tasks.taskReplies).toHaveLength(3);
+  expect(tasks.taskReplies.map((group) => group.operation).toSorted()).toEqual([
+    "history-page",
+    "session-row-facts",
+    "task",
+  ]);
+  for (const group of tasks.taskReplies) {
+    expect(group).toMatchObject({
+      script: "session-transcript.worker.js",
+      outcome: "ok",
+      messages: 1,
+      serializedMessages: 1,
+      failedSerializationMessages: 0,
+    });
+    expect(group.serializedBytes).toBeGreaterThan(2048);
+  }
+  const transport = tasks.groups.find(
+    (group) => group.kind === "task_reply" && group.direction === "from_worker",
+  );
+  expect(transport).toMatchObject({ messages: 3, script: "session-transcript.worker.js" });
+  expect(transport?.serializedBytes).toBe(
+    tasks.taskReplies.reduce((sum, group) => sum + group.serializedBytes, 0),
+  );
+  expect(tasks.groups).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "other",
+        direction: "from_worker",
+        script: "other",
+        messages: 1,
+        serializedMessages: 1,
+        unavailableMessageValues: 0,
+        serializedBytes: expect.any(Number),
+      }),
+      expect.objectContaining({
+        kind: "other",
+        direction: "to_worker",
+        messages: 1,
+        unavailableMessageValues: 1,
+      }),
+    ]),
+  );
+  expect(JSON.stringify(tasks)).not.toContain("fixture-private-task");
+});
 
 it("attributes broadcast allocations through deep stacks without double counting", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-broadcast-profile-"));

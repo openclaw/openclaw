@@ -1038,6 +1038,12 @@ checkpoint clears the warning; a large WAL alone does not mean a checkpoint is
 blocked. File-size observation failures are recorded and logged separately from
 SQLite's completion result; they do not turn a completed checkpoint into a failure.
 
+Non-quiet checkpoint logs use the same warning threshold, including explicit and
+final-close checkpoints; a blocked checkpoint still returns an incomplete result.
+Best-effort incremental vacuum quietly skips writer contention before its
+transaction starts and retries on the next maintenance pass. Failures after
+transaction entry retain their diagnostics.
+
 Periodic maintenance yields before native work so the Gateway event loop can
 continue. After yielding, it rechecks the same database owner, physical file,
 and captured maintenance authority. Retirement cancels and joins pending work.

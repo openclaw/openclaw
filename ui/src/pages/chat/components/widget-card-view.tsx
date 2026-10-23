@@ -10,11 +10,10 @@ import {
   untrack,
   useContext,
 } from "solid-js";
-import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
 import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
+import type { McpAppViewProps } from "../../../components/mcp-app-view-types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerMcpAppEnglish } from "../../../i18n/locales/en-mcp-app.ts";
 import {
@@ -43,7 +42,7 @@ import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../../lib/widget-theme.ts";
 import { BrowserTabCardHost } from "./browser-tab-card.tsx";
-import { CanvasWidgetMount } from "./canvas-widget-mount.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   WidgetCardMenu,
   type WidgetAction,
@@ -59,6 +58,31 @@ registerMcpAppEnglish();
 const YouTubeVideoCard = lazy(() => import("./youtube-video-card.tsx"), {
   export: "YouTubeVideoCard",
 });
+
+const CanvasWidgetMount = lazy(() => import("./canvas-widget-mount.tsx"), {
+  export: "CanvasWidgetMount",
+});
+
+const McpAppPreview = lazy(async () => {
+  await import("../../../components/mcp-app-view.tsx");
+  // Native hosts retain their context admission when a transcript is detached.
+  return { default: McpAppHost };
+});
+
+function McpAppHost(
+  props: Pick<McpAppViewProps, "sessionKey" | "viewId" | "height" | "onHeightChange" | "title">,
+) {
+  return (
+    <mcp-app-view
+      prop:sessionKey={props.sessionKey}
+      prop:viewId={props.viewId}
+      prop:height={props.height}
+      prop:onHeightChange={props.onHeightChange}
+      style={{ display: "block", "min-height": `${props.height}px` }}
+      title={props.title}
+    />
+  );
+}
 
 type WidgetCardOptions = {
   rawText?: string | null;
@@ -358,30 +382,6 @@ function PreviewFrame(props: {
   );
 }
 
-const loadMcpAppView = () => import("../../../components/mcp-app-view.tsx");
-
-const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.tsx");
-
-function WidgetRegistration(props: { tagName: string; loadModule: () => Promise<unknown> }) {
-  const ready = createMemo(() =>
-    ensureCustomElementDefined(props.tagName, props.loadModule).then(() => null),
-  );
-  return (
-    <Errored
-      fallback={(error, reset) => (
-        <LazyViewError
-          error={error()}
-          onRetry={() => reset()}
-          actionLabel={t("common.retry")}
-          inline
-        />
-      )}
-    >
-      <Loading>{ready()}</Loading>
-    </Errored>
-  );
-}
-
 function WidgetContent(props: {
   preview: CanvasToolPreview;
   sandbox: string;
@@ -424,11 +424,22 @@ function WidgetContent(props: {
         >
           {(_managed) => {
             return (
-              <>
-                <WidgetRegistration
-                  tagName="openclaw-canvas-widget-view"
-                  loadModule={loadCanvasWidgetView}
-                />
+              <ChatLazyBoundary
+                fallback={
+                  <div
+                    style={{
+                      display: "block",
+                      "min-height": `${
+                        props.options?.widgetLayout?.read(
+                          `canvas:${props.preview.viewId!.trim()}`,
+                        ) ??
+                        props.preview.preferredHeight ??
+                        420
+                      }px`,
+                    }}
+                  />
+                }
+              >
                 <CanvasWidgetMount
                   onElement={props.onExportSource}
                   docId={props.preview.viewId!.trim()}
@@ -448,7 +459,7 @@ function WidgetContent(props: {
                   allowScripts={props.sandbox.includes("allow-scripts")}
                   connectionGeneration={getCanvasWidgetFrameConnectionGeneration()}
                 />
-              </>
+              </ChatLazyBoundary>
             );
           }}
         </Show>
@@ -459,19 +470,19 @@ function WidgetContent(props: {
         const height = () =>
           props.options?.widgetLayout?.read(key()) ?? props.preview.preferredHeight ?? 600;
         return (
-          <>
-            <WidgetRegistration tagName="mcp-app-view" loadModule={loadMcpAppView} />
-            <mcp-app-view
-              prop:sessionKey={props.options?.sessionKey ?? ""}
-              prop:viewId={app().viewId}
-              prop:height={height()}
-              prop:onHeightChange={(nextHeight: number) =>
+          <ChatLazyBoundary
+            fallback={<div style={{ display: "block", "min-height": `${height()}px` }} />}
+          >
+            <McpAppPreview
+              sessionKey={props.options?.sessionKey ?? ""}
+              viewId={app().viewId}
+              height={height()}
+              onHeightChange={(nextHeight: number) =>
                 props.options?.widgetLayout?.write(key(), nextHeight)
               }
-              style={{ display: "block", "min-height": `${height()}px` }}
               title={props.preview.title?.trim() || t("mcpApp.title")}
             />
-          </>
+          </ChatLazyBoundary>
         );
       }}
     </Show>
