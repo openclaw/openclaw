@@ -399,7 +399,10 @@ suite.define(() => {
       await polledAttribute(image, "alt").toBe("hover.png");
       await page.keyboard.press("ArrowLeft");
       await polledAttribute(image, "alt").toBe("after.png");
-      expect(renditionSources()).toEqual(sources);
+      await expectLoadedImage(image);
+      // Routing disables Chromium's HTTP cache, so a revisited native image can refetch.
+      // The gallery unit test owns loader reuse; here retain selection order and coverage.
+      expect([...new Set(renditionSources())]).toEqual(sources);
       expect(mediaRequests.every((request) => request.variant === "thumbnail")).toBe(true);
       const requestedDownload = page.waitForEvent("download");
       await exactButton(lightbox, "Download image").click();
