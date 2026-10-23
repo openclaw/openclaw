@@ -243,8 +243,7 @@ catalogSuite.define(() => {
           const error = page.locator(".cron-error-banner");
           await error.waitFor({ state: "visible" });
           expect(await error.textContent()).toContain("Catalog transport unavailable");
-          await openPicker(picker);
-          expect(await modelOption("published").count()).toBe(1);
+          await waitForModel("published");
           await screenshot("read-failure");
 
           rejectCatalogReplies = false;

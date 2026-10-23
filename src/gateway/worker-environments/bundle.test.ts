@@ -14,7 +14,6 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import * as bundleStaging from "./bundle-staging.js";
 import {
   createWorkerBundleProducer,
   resolveWorkerNpmInstallationArtifact,
@@ -580,16 +579,20 @@ describe("worker bundle producer", () => {
       await writeFixture(baselineRoot, originalContents);
       await writeFixture(packageRoot, originalContents);
       const baseline = await producer(baselineRoot, path.join(root, "baseline-cache")).prepare();
-      const originalCollect = bundleStaging.collectWorkerBundleManifest;
+      const originalWriteFile = fs.writeFile;
       let sourceMutated = false;
-      const stagingSpy = vi
-        .spyOn(bundleStaging, "collectWorkerBundleManifest")
-        .mockImplementation(async (...args) => {
-          const manifest = await originalCollect(...args);
+      const stagingWrite = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+        await originalWriteFile(...args);
+        const [target] = args;
+        if (
+          typeof target === "string" &&
+          path.basename(target) === "worker.mjs" &&
+          path.dirname(target).startsWith(`${cacheDir}${path.sep}.staging-`)
+        ) {
           sourceMutated = true;
-          await fs.writeFile(artifactPath(packageRoot), changedContents);
-          return manifest;
-        });
+          await originalWriteFile(artifactPath(packageRoot), changedContents);
+        }
+      });
 
       try {
         const artifact = await producer(packageRoot, cacheDir).prepare();
@@ -601,7 +604,7 @@ describe("worker bundle producer", () => {
         expect(artifact.bundleHash).toBe(baseline.bundleHash);
         await expect(readText(extractDir, "worker.mjs")).resolves.toBe(originalContents);
       } finally {
-        stagingSpy.mockRestore();
+        stagingWrite.mockRestore();
       }
     });
   });

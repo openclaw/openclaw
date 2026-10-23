@@ -160,6 +160,13 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
+it("recovers an explicitly selected oversized artifact before the next sandbox preparation", async () => {
+  await archiveFixture();
+  const { proveOversizedWorkspaceRecovery } =
+    await import("./local-workspace-recovery.test-support.js");
+  await proveOversizedWorkspaceRecovery({ owner, canonical, stateRoot });
+});
+
 it.each([false, true])(
   "settles old runtime-file results (source already copied: %s)",
   async (copied) => {

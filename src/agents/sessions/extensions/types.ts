@@ -34,7 +34,7 @@ import type {
   ToolExecutionMode,
 } from "../../runtime/index.js";
 import type { BashResult } from "../bash-executor.js";
-import type { CompactionPreparation, CompactionResult } from "../compaction/index.js";
+import type { CompactionPreparation, CompactionResult } from "../compaction/compaction.js";
 import type { EventBus } from "../event-bus.js";
 import type { ExecOptions, ExecResult } from "../exec.js";
 import type { ReadonlyFooterDataProvider } from "../footer-data-provider.js";

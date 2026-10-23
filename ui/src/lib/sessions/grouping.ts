@@ -172,12 +172,10 @@ export function groupSessionRows(params: {
   rows: readonly GatewaySessionRow[];
   mode: SessionsGroupBy;
   knownCategories?: readonly string[];
-  now?: number;
 }): SessionRowGroup[] {
-  const now = params.now ?? Date.now();
   const groupId =
     params.mode === "date"
-      ? createDateGroupResolver(now)
+      ? createDateGroupResolver(Date.now())
       : (row: GatewaySessionRow) => resolveSessionGroupId(row, params.mode);
   const byId = new Map<string, GatewaySessionRow[]>();
   for (const row of params.rows) {

@@ -668,7 +668,8 @@ openclaw backup record --status failed --target host-restic --error "Backup dest
 ```
 
 `--status ok|failed` and `--target <label>` are required. `--bytes <n>` optionally
-records a nonnegative integer byte count; `--error <text>` records a diagnostic.
+records a nonnegative decimal integer byte count (not radix or exponent notation);
+`--error <text>` records a diagnostic.
 `--json` emits a machine-readable result. The command adds a `kind: "external"`
 outcome using the same best-effort recording semantics as built-in backups. It
 does not run or verify the external backup. Use a stable target label and run
