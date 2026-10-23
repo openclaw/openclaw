@@ -6,8 +6,11 @@ import * as usageCacheSqlite from "../infra/session-cost-usage-cache.sqlite.js";
 import { USAGE_COST_ROLLUP_SCOPE } from "../infra/session-cost-usage-rollup-codec.js";
 import {
   closeOpenClawAgentDatabasesAsync,
+  isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { supportsOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { maybeRepairLegacyRuntimeFiles } from "./doctor-usage-cost-cache.js";
 
@@ -195,6 +198,71 @@ describe("legacy usage-cost cache cleanup", () => {
       }
     },
   );
+  it("retires legacy rows through the Doctor maintenance owner and leaves clean stores untouched", async () => {
+    const root = tempDirs.make("openclaw-usage-cost-doctor-custody-");
+    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
+    const staleDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
+    const cleanDatabase = openOpenClawAgentDatabase({ agentId: "clean", env });
+    const current = { valueJson: '{"fixture":"current"}', blob: Uint8Array.of(0, 17, 255) };
+    for (const database of [staleDatabase, cleanDatabase]) {
+      database.db
+        .prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, 'current', ?, ?, NULL, 1)",
+        )
+        .run(USAGE_COST_ROLLUP_SCOPE, current.valueJson, current.blob);
+      database.db
+        .prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, 'refresh-lock', '{}', NULL, NULL, 1)",
+        )
+        .run("session-cost-usage");
+    }
+    for (const [scope, key] of [
+      ["session-cost-usage", "cache"],
+      ["session-cost-usage-rollup-v1", "retired"],
+      ["session-cost-usage-rollup-v2", "retired-v2"],
+    ] as const) {
+      staleDatabase.db
+        .prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, '{}', NULL, NULL, 1)",
+        )
+        .run(scope, key);
+    }
+    const cleanPath = cleanDatabase.path;
+    await closeOpenClawAgentDatabasesAsync();
+    const cleanBefore = await fs.readFile(cleanPath);
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent() {},
+    });
+    try {
+      await maintenance.run(async () => {
+        expect(supportsOpenClawAgentDatabaseExecution({ agentId: "main", env })).toBe(false);
+        await maybeRepairLegacyRuntimeFiles(true, env);
+        expect(note).not.toHaveBeenCalledWith(
+          expect.stringContaining("requires its existing native owner"),
+          "Doctor warnings",
+        );
+        const reopened = openOpenClawAgentDatabase({ agentId: "main", env });
+        const query = "SELECT scope, key, value_json, blob FROM cache_entries ORDER BY scope, key";
+        const rows = reopened.db.prepare(query).all();
+        expect(rows).toEqual([
+          { key: "refresh-lock", scope: "session-cost-usage", value_json: "{}", blob: null },
+          {
+            key: "current",
+            scope: USAGE_COST_ROLLUP_SCOPE,
+            value_json: current.valueJson,
+            blob: current.blob,
+          },
+        ]);
+        await maybeRepairLegacyRuntimeFiles(true, env);
+        expect(reopened.db.prepare(query).all()).toEqual(rows);
+      });
+    } finally {
+      await maintenance.close();
+    }
+    expect(isOpenClawAgentDatabaseOpen(cleanPath)).toBe(false);
+    expect(await fs.readFile(cleanPath)).toEqual(cleanBefore);
+  });
   it.each([
     ["unreadable agent root", "root", "readdir", "EACCES", false, true],
     ["unreadable temp entry", "entry", "stat", "EIO", true, true],

@@ -296,6 +296,25 @@ export function pruneSessionCostUsageRollupsInDatabase(
   });
 }
 
+/** Keep clean Doctor targets read-only instead of reopening them for an empty deletion. */
+export function hasLegacySessionCostUsageCacheInDatabase(db: EngineConnection): boolean {
+  return (
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<AgentCacheDatabase>(db)
+        .selectFrom("cache_entries")
+        .select("key")
+        .where((eb) =>
+          eb.or([
+            eb.and([eb("scope", "=", LEGACY_CACHE_SCOPE), eb("key", "=", LEGACY_CACHE_KEY)]),
+            eb("scope", "in", RETIRED_ROLLUP_SCOPES),
+          ]),
+        )
+        .limit(1),
+    ).rows.length > 0
+  );
+}
+
 /** Doctor owns retired scopes; ordinary refreshes only prune observed stale rows. */
 export function retireLegacySessionCostUsageCacheInDatabase(db: EngineConnection): void {
   return withSqliteDatabaseWriteScope(db, [], () => {
