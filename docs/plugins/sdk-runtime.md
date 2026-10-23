@@ -340,6 +340,34 @@ cleanup registration. This covers `onDiagnosticEvent` and
 `onInternalDiagnosticEvent` from `openclaw/plugin-sdk/diagnostic-runtime`, as well
 as host-owned diagnostic subscriptions created on the plugin's behalf.
 
+### Handle native client errors
+
+Attach an `error` listener before connecting any long-lived native client that
+emits error events, including `pg.Client` and `pg.Pool`. A `try`/`catch` around
+queries does not handle an error emitted after the call returns or while the
+connection is idle. An unhandled emitter error can become an uncaught exception
+and terminate the Gateway.
+
+Handle the event without throwing or leaving an unhandled recovery promise.
+Log the failure and mark affected functionality unavailable so dependent tools
+report a useful error. Replace unusable clients and invalidate cached
+initialization as part of the plugin's recovery path. Registered services can
+report the failure through `ctx.serviceHealth?.reportFailure(error)` and call
+`clearFailure()` after successful recovery; see
+[service health reporting](/plugins/sdk-runtime/gateway-and-nodes#gateway-service-events).
+
+Keep the listener attached until the client has closed, and release the client
+in `api.lifecycle.onDispose(...)` or the service's `stop()` method. A PostgreSQL
+server disconnect can emit `57P01` followed by an uncoded connection-termination
+error. Suppressing a SQLSTATE in a process-wide exception handler neither handles
+all these events nor restores the failed connection. This guidance concerns
+plugin-owned clients; OpenClaw's state database remains managed by its own owner.
+
+Test idle disconnects against a disposable database by terminating only the
+plugin client's own backend. Verify that the Gateway stays responsive, affected
+tools report unavailability, and those tools work again after the plugin's
+connection recovery succeeds.
+
 ### Instance-bound background context
 
 Managed instances also expose the additive
@@ -365,8 +393,10 @@ cleanup owner. Like the other instance lifecycle fields, it can be absent on an
 API host without a managed instance.
 
 Inspection release reports settled disposal failures without marking the managed
-resources as still retained. Prepared-model shutdown records those failures and
-can finish after cleanup settles. Unfinished disposal and failed host cleanup
+resources as still retained. It joins physical cleanup even when an earlier
+bounded retirement report timed out, so that timeout does not poison later
+Gateway closes. Prepared-model shutdown records callback failures and can finish
+after cleanup settles. Unfinished disposal and failed host cleanup
 prerequisites still prevent shutdown from reporting a completed resource release.
 
 Stopping or restarting the Gateway preserves persistent plugin session state and

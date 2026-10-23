@@ -9,9 +9,9 @@ import {
 import { DEFAULT_MAX_CACHE_ENTRIES } from "./types.js";
 
 const circuitKeys = new Set<string>();
-function recordCircuitBreakerTimeout(key: string, cooldownMs: number) {
+function recordCircuitBreakerTimeout(key: string) {
   circuitKeys.add(key);
-  recordTimeout(key, cooldownMs);
+  recordTimeout(key);
 }
 
 describe("active-memory timeout circuit breakers", () => {
@@ -35,33 +35,52 @@ describe("active-memory timeout circuit breakers", () => {
     vi.useRealTimers();
   });
 
-  it("keeps recent timeout circuits active after earlier circuits expire", () => {
+  it("allows elapsed cooldown without disturbing more recent circuits", () => {
     const cooldownMs = 5_000;
-    recordCircuitBreakerTimeout("old", cooldownMs);
+    recordCircuitBreakerTimeout("old");
     vi.advanceTimersByTime(cooldownMs - 1);
-    recordCircuitBreakerTimeout("recent", cooldownMs);
+    recordCircuitBreakerTimeout("recent");
     vi.advanceTimersByTime(1);
-    recordCircuitBreakerTimeout("new", cooldownMs);
+    recordCircuitBreakerTimeout("new");
 
     expect(isCircuitBreakerOpen("old", 1, cooldownMs)).toBe(false);
     expect(isCircuitBreakerOpen("recent", 1, cooldownMs)).toBe(true);
     expect(isCircuitBreakerOpen("new", 1, cooldownMs)).toBe(true);
   });
 
-  it("restarts an expired key before adding a new timeout", () => {
+  it("counts spaced timeouts even when another key times out between them", () => {
     const cooldownMs = 5_000;
-    recordCircuitBreakerTimeout("same", cooldownMs);
-    vi.advanceTimersByTime(cooldownMs);
-    recordCircuitBreakerTimeout("same", cooldownMs);
+    recordCircuitBreakerTimeout("same");
+    for (let index = 0; index < 2; index++) {
+      vi.advanceTimersByTime(cooldownMs + 1);
+      recordCircuitBreakerTimeout("peer");
+      recordCircuitBreakerTimeout("same");
+    }
 
-    expect(isCircuitBreakerOpen("same", 1, cooldownMs)).toBe(true);
-    expect(isCircuitBreakerOpen("same", 2, cooldownMs)).toBe(false);
+    expect(isCircuitBreakerOpen("same", 3, cooldownMs)).toBe(true);
+    expect(isCircuitBreakerOpen("peer", 3, cooldownMs)).toBe(false);
+  });
+
+  it("retains the timeout streak through a cooldown probe until reset", () => {
+    const cooldownMs = 5_000;
+    recordCircuitBreakerTimeout("probe");
+    recordCircuitBreakerTimeout("probe");
+    expect(isCircuitBreakerOpen("probe", 2, cooldownMs)).toBe(true);
+
+    vi.advanceTimersByTime(cooldownMs);
+    expect(isCircuitBreakerOpen("probe", 2, cooldownMs)).toBe(false);
+    recordCircuitBreakerTimeout("probe");
+    expect(isCircuitBreakerOpen("probe", 2, cooldownMs)).toBe(true);
+
+    resetCircuitBreaker("probe");
+    recordCircuitBreakerTimeout("probe");
+    expect(isCircuitBreakerOpen("probe", 2, cooldownMs)).toBe(false);
   });
 
   it("evicts the oldest key when the existing cache capacity is exceeded", () => {
     const cooldownMs = 120_000;
     for (let index = 0; index <= DEFAULT_MAX_CACHE_ENTRIES; index++) {
-      recordCircuitBreakerTimeout(`model-${index}`, cooldownMs);
+      recordCircuitBreakerTimeout(`model-${index}`);
     }
 
     expect(isCircuitBreakerOpen("model-0", 1, cooldownMs)).toBe(false);
@@ -72,11 +91,11 @@ describe("active-memory timeout circuit breakers", () => {
   it("refreshes an existing key before evicting the least recently updated peer", () => {
     const cooldownMs = 120_000;
     for (let index = 0; index < DEFAULT_MAX_CACHE_ENTRIES; index++) {
-      recordCircuitBreakerTimeout(`model-${index}`, cooldownMs);
+      recordCircuitBreakerTimeout(`model-${index}`);
     }
     vi.advanceTimersByTime(1);
-    recordCircuitBreakerTimeout("model-0", cooldownMs);
-    recordCircuitBreakerTimeout("newest", cooldownMs);
+    recordCircuitBreakerTimeout("model-0");
+    recordCircuitBreakerTimeout("newest");
 
     expect(isCircuitBreakerOpen("model-0", 2, cooldownMs)).toBe(true);
     expect(isCircuitBreakerOpen("model-0", 3, cooldownMs)).toBe(false);
@@ -91,7 +110,7 @@ describe("active-memory timeout circuit breakers", () => {
     const otherModelKey = buildCircuitBreakerKey("agent-a", "provider-a", "model-b");
     const otherAgentKey = buildCircuitBreakerKey("agent-b", "provider-a", "model-a");
 
-    recordCircuitBreakerTimeout(timedOutKey, cooldownMs);
+    recordCircuitBreakerTimeout(timedOutKey);
 
     expect(isCircuitBreakerOpen(timedOutKey, 1, cooldownMs)).toBe(true);
     expect(isCircuitBreakerOpen(otherProviderKey, 1, cooldownMs)).toBe(false);

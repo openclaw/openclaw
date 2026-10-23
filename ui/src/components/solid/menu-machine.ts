@@ -12,6 +12,33 @@ import type { MenuNavigationOptions, MenuRuntime } from "./menu-runtime.ts";
 
 export type { MenuNavigationOptions } from "./menu-runtime.ts";
 
+export type MenuControls = {
+  readonly elements: ReadonlySet<HTMLElement>;
+  ref(this: void): (element: HTMLElement) => void;
+};
+
+/** One tree's controls or items, registered by their rendering owners. */
+export function createMenuControls(): MenuControls {
+  const elements = new Set<HTMLElement>();
+  return {
+    elements,
+    ref() {
+      let current: HTMLElement | undefined;
+      onCleanup(() => {
+        if (current) {
+          elements.delete(current);
+        }
+      });
+      return (element) => {
+        if (current) {
+          elements.delete(current);
+        }
+        elements.add((current = element));
+      };
+    },
+  };
+}
+
 export type MenuBinding = {
   itemRef(): (element: HTMLElement) => void;
   items(): HTMLElement[];
@@ -44,7 +71,7 @@ export function useMenuMachine(
   parent?: MenuBinding,
   options: MenuNavigationOptions = {},
 ): MenuBinding {
-  const itemNodes = new Set<HTMLElement>();
+  const { elements: itemNodes, ref: itemRef } = createMenuControls();
   const ownsTarget = (target: HTMLElement) =>
     ![...overlay.children].some((child) => child.open && containsComposed(child.surface, target)) &&
     (options.surface === "listbox"
@@ -251,20 +278,7 @@ export function useMenuMachine(
   return {
     runtime: current,
     items,
-    itemRef() {
-      let item: HTMLElement | undefined;
-      onCleanup(() => {
-        if (item) {
-          itemNodes.delete(item);
-        }
-      });
-      return (element) => {
-        if (item) {
-          itemNodes.delete(item);
-        }
-        itemNodes.add((item = element));
-      };
-    },
+    itemRef,
     highlightedValue: () => current()?.read().highlightedValue ?? null,
     highlightedValueNow: () => runtime?.service.context.get("highlightedValue") ?? null,
     setHighlightedValue,

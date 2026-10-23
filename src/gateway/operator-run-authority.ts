@@ -20,10 +20,12 @@ import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import type { UserChannelAuthorizationReference } from "../state/user-profiles.types.js";
 import { isBrowserOperatorUiClient } from "../utils/message-channel.js";
+import { createChannelOperatorRevocation } from "./channel-operator-revocation.js";
 import {
   onGatewayDeviceSourceRevoked,
   readGatewayDeviceSourceAuthority,
   readGatewayDeviceSourceIdentity,
+  readGatewayDeviceReconnectSourceIdentity,
   retainGatewayDeviceRevocation,
 } from "./device-revocation.js";
 import {
@@ -57,7 +59,11 @@ type OperatorSource = {
 };
 
 // Comparison records live only while captured work retains their original authority.
-const operatorSources = new WeakMap<GatewayClient, Set<OperatorSource>>();
+type OperatorSourceBucket = {
+  owner: object;
+  entries: Set<OperatorSource>;
+};
+const operatorSources = new WeakMap<object, OperatorSourceBucket>();
 const continuationAuthorities = resolveGlobalSingleton(
   Symbol.for("openclaw.gatewayOperatorContinuationAuthorities"),
   () => new WeakMap<AdmittedRunOperatorAuthority, AdmittedRunOperatorAuthority>(),
@@ -71,11 +77,11 @@ export function bindGatewayOperatorContinuationAuthority(
   continuationAuthorities.set(work, source);
 }
 
-function getOperatorSources(client: GatewayClient): Set<OperatorSource> {
-  let sources = operatorSources.get(client);
+function getOperatorSources(owner: object): OperatorSourceBucket {
+  let sources = operatorSources.get(owner);
   if (!sources) {
-    sources = new Set();
-    operatorSources.set(client, sources);
+    sources = { owner, entries: new Set() };
+    operatorSources.set(owner, sources);
   }
   return sources;
 }
@@ -92,8 +98,12 @@ function retainOperatorSource(
   client: GatewayClient,
   owners: OperatorSource["owners"],
   membership: string | undefined,
+  callerGuard: (() => boolean) | undefined,
 ) {
-  const sources = getOperatorSources(client);
+  const clientSources = getOperatorSources(client);
+  const deviceSource = readGatewayDeviceReconnectSourceIdentity(callerGuard, clientSources.owner);
+  // A reconnect joins comparison records, never either request's live authority.
+  const sources = deviceSource ? getOperatorSources(deviceSource).entries : clientSources.entries;
   let source =
     membership === undefined
       ? undefined
@@ -212,6 +222,7 @@ export function captureChannelOperatorRunAuthority(input: {
     getConfig: params.getRuntimeConfig,
     resolvePolicy: (cfg) => resolveRole(cfg)?.modelPolicy,
   });
+  const revocation = createChannelOperatorRevocation(params);
   return createAdmittedRunOperatorAuthority({
     profileId: params.profileId,
     channelRecoverySource: params.recoveryReference
@@ -220,7 +231,9 @@ export function captureChannelOperatorRunAuthority(input: {
     scopes: params.scopes,
     rolePolicy: prepareRunRolePolicy(sourceRolePolicy(role)),
     gatewayAccessGrant: params.gatewayAccessGrant,
-    assertCurrent: params.assertCurrent,
+    assertCurrent: revocation.assertCurrent,
+    signal: revocation.signal,
+    retain: revocation.retain,
     readCurrentRoleAssignment: () => params.assignedRole,
     readCurrentGithubLogin: () => params.githubLogin ?? null,
     get modelPolicy() {
@@ -234,11 +247,16 @@ export function captureChannelOperatorRunAuthority(input: {
         }
       });
       // Recheck through the channel assertion so cancellation keeps its revocation error.
-      params.signal?.addEventListener("abort", listener, { once: true });
+      const signals = [params.signal, revocation.signal];
+      for (const signal of signals) {
+        signal?.addEventListener("abort", listener, { once: true });
+      }
       return () => {
         releaseProfile();
         releasePolicy();
-        params.signal?.removeEventListener("abort", listener);
+        for (const signal of signals) {
+          signal?.removeEventListener("abort", listener);
+        }
       };
     },
   });
@@ -535,6 +553,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
       client,
       sourceOwners,
       readOperatorModelPolicyMembership(modelPolicy.original),
+      params.hasCurrentClientAuthority,
     );
     releaseSource = source.release;
     const grant =

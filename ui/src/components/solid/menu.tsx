@@ -1,5 +1,5 @@
 import { dynamic, type JSX } from "@solidjs/web";
-import { For, Show, createMemo, onCleanup, onSettled, untrack, merge } from "solid-js";
+import { For, Show, createMemo, onSettled, untrack, merge } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { createAnchoredOverlay } from "../../lib/reactive/overlay-anchor.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -9,12 +9,14 @@ import { createOverlay, type Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed, registryFor } from "../overlay-registry.ts";
 import { Icon } from "./icon.tsx";
 import { MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
-import { useMenuMachine, type MenuBinding } from "./menu-machine.ts";
+import { useMenuMachine, type MenuBinding, type MenuControls } from "./menu-machine.ts";
 import { MenuNavigationError } from "./menu-navigation-error.tsx";
 import { useOverlayControl } from "./overlay-control.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
 import overlayStyles from "./overlay.css?inline";
 import "./overlay.css";
+
+export { createMenuControls, type MenuControls } from "./menu-machine.ts";
 
 export type MenuItemBindings = Pick<
   JSX.HTMLAttributes<HTMLElement>,
@@ -93,33 +95,6 @@ export function closeMenusWithin(root: Pick<Node, "contains"> & { ownerDocument:
       overlay.request(false);
     }
   }
-}
-
-export type MenuControls = {
-  readonly elements: ReadonlySet<HTMLElement>;
-  ref(this: void): (element: HTMLElement) => void;
-};
-
-/** One tree's embedded controls, registered by their rendering owners. */
-export function createMenuControls(): MenuControls {
-  const elements = new Set<HTMLElement>();
-  return {
-    elements,
-    ref() {
-      let current: HTMLElement | undefined;
-      onCleanup(() => {
-        if (current) {
-          elements.delete(current);
-        }
-      });
-      return (element) => {
-        if (current) {
-          elements.delete(current);
-        }
-        elements.add((current = element));
-      };
-    },
-  };
 }
 
 export type MenuProps = {

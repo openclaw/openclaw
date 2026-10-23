@@ -405,7 +405,7 @@ async function reusePublicationArtifacts(env) {
     evidence.schema === "openclaw.release-validation-evidence/v4" &&
       evidence.valid === true &&
       evidence.directRoot === true &&
-      evidence.conclusions?.allRequiredSucceeded === true &&
+      evidence.current?.conclusion === "success" &&
       evidence.root?.runId === env.EVIDENCE_ROOT_RUN_ID &&
       evidence.root.targetSha === env.TARGET_SHA &&
       root?.workflowSha === env.PARENT_WORKFLOW_SHA,

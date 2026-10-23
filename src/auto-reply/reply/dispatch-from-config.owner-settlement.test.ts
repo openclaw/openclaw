@@ -382,6 +382,57 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     }
   });
 
+  it.each([
+    ["block", "delivered", "reply:block_delivered"],
+    ["block", "cancelled", "reply:block_delivered"],
+    ["block", "failed", "reply:block_delivered"],
+    ["final", "delivered", "reply:final_delivered"],
+    ["final", "cancelled", "reply:final_delivered"],
+    ["final", "failed", "reply:final_delivered"],
+  ])("renews %s finalization only for its %s receipt", async (kind, outcome, event) => {
+    const observed = vi.fn();
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: async (payload) => (outcome === "cancelled" ? null : payload),
+      deliver: async () => {
+        if (outcome === "failed") {
+          throw new PlatformMessageNotDispatchedError("synthetic receipt failure", {
+            cause: new Error("offline"),
+          });
+        }
+      },
+      onError: () => {},
+    });
+    try {
+      await dispatchOwned({
+        sessionKey: "agent:main:receipt-progress",
+        dispatcher,
+        replyResolver: async (_ctx, options) => {
+          const watchdog = options?.replyOperation?.watchdog;
+          if (!watchdog) {
+            throw new Error("missing receipt owner");
+          }
+          const progress = watchdog.progress.bind(watchdog);
+          vi.spyOn(watchdog, "progress").mockImplementation((...args) => {
+            observed(...args);
+            return progress(...args);
+          });
+          if (kind === "block") {
+            await requireBlockReplyHandler(options?.onBlockReply)({ text: "receipt answer" });
+            return undefined;
+          }
+          return { text: "receipt answer" };
+        },
+      });
+      await dispatcher.waitForIdle();
+      expect(
+        observed.mock.calls.some(([phase, name]) => phase === "finalization" && name === event),
+      ).toBe(outcome === "delivered");
+    } finally {
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+    }
+  });
+
   it("renews finalization only for delivered content, not transport callbacks", async () => {
     const forwarded = vi.fn(async () => true);
     await dispatchOwned({

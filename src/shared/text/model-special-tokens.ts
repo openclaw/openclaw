@@ -139,7 +139,7 @@ function projectModelSpecialTokens(text: string): ProjectedTokenText {
  *
  * @see https://github.com/openclaw/openclaw/issues/40020
  */
-export function stripModelSpecialTokens(text: string): string {
+function stripModelSpecialTokens(text: string): string {
   return projectModelSpecialTokens(text).text;
 }
 
@@ -150,7 +150,7 @@ export function stripModelSpecialTokens(text: string): string {
  * delta, a fence-capable tilde run that can change whether an earlier token is code-owned,
  * or Markdown ownership is unsettled according to the canonical parser.
  */
-export function createModelSpecialTokenProjector(): (input: TextProjection) => TextProjection {
+function createModelSpecialTokenProjector(): (input: TextProjection) => TextProjection {
   let inputLength = 0;
   let output = "";
   let active = false;

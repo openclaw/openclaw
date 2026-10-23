@@ -168,7 +168,7 @@ describe("workspace file tabs", () => {
       }
       void openSessionWorkspaceFile(state, { path: "draft.md" });
       if (timing === "during read") {
-        expect(getFile).toHaveBeenCalledTimes(2);
+        await vi.waitFor(() => expect(getFile).toHaveBeenCalledTimes(2));
         setFileDraft(content, { content: "UNSAVED", expectedHash: "old" });
         const updated = nextWorkspaceUpdate(state);
         read.resolve({ ...initial, file: { ...initial.file, content: "NEW", hash: "new" } });
@@ -197,7 +197,7 @@ describe("workspace file tabs", () => {
       const preview = getSessionWorkspace(state).previews[0]!;
       const content = preview.content;
       void openSessionWorkspaceFile(state, { path: "stale.md" });
-      expect(getFile).toHaveBeenCalledTimes(2);
+      await vi.waitFor(() => expect(getFile).toHaveBeenCalledTimes(2));
       if (change === "session") {
         state.sessionKey = "agent:main:other";
       }
@@ -253,6 +253,7 @@ describe("workspace file tabs", () => {
       const retained = getSessionWorkspace(state).previews[0]!;
       void openSessionWorkspaceFile(state, { path: olderPath });
       void openSessionWorkspaceFile(state, { path: "/workspace/notes.md" });
+      await vi.waitFor(() => expect(pending.size).toBe(2));
       const older = () => {
         const request = pending.get(olderPath)!;
         if (failed) {
@@ -374,8 +375,8 @@ describe("workspace file tabs", () => {
     }
     expect(getSessionWorkspace(state).activePreviewId).toBe(retained.id);
     const revalidation = openSessionWorkspaceFile(state, { path: aliasPath, line: 9 });
-    expect(getFile).toHaveBeenCalledTimes(dirty ? 2 : 3);
     expect(retained.content).toMatchObject({ navigation: { line: 9 } });
+    await vi.waitFor(() => expect(getFile).toHaveBeenCalledTimes(dirty ? 2 : 3));
     // Finish the draft-retention scenario before exercising the public close path.
     setFileDraft(originalContent, null);
     await requestCloseSessionWorkspacePreview(state, retained.id);
@@ -400,6 +401,7 @@ describe("workspace file tabs", () => {
     };
     void openSessionWorkspaceFile(state, { path: "README.md", line: 2 });
     void openSessionWorkspaceFile(state, { path: "/workspace/README.md", line: 7 });
+    await vi.waitFor(() => expect(pending.size).toBe(2));
     const aliasUpdated = nextWorkspaceUpdate(state);
     pending.get("/workspace/README.md")!(response);
     await aliasUpdated;
@@ -417,9 +419,9 @@ describe("workspace file tabs", () => {
     expect(getSessionWorkspace(state).activePreviewId).toBe("attachment:other");
     expect(retained.content).toMatchObject({ navigation: { line: 7 } });
     void openSessionWorkspaceFile(state, { path: "README.md", line: 9 });
-    expect(getFile).toHaveBeenCalledTimes(3);
     expect(getSessionWorkspace(state).activePreviewId).toBe(retained.id);
     expect(retained.content).toMatchObject({ navigation: { line: 9 } });
+    await vi.waitFor(() => expect(getFile).toHaveBeenCalledTimes(3));
   });
 
   it.each(["image", "unsupported"] as const)(
