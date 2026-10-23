@@ -125,7 +125,6 @@ export function captureCronJobSourceAuthority(jobId: string): (() => boolean) | 
   return () => {
     if (
       getCurrentCronActiveJobMarker(jobId) !== marker ||
-      marker.messageSourceAuthorityRevoked ||
       (marker.jobRemoved && !isCronSelfRemovalCurrent(marker)) ||
       marker.cancellation?.kind === "requested"
     ) {

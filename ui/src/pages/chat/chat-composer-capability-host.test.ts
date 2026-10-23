@@ -213,6 +213,7 @@ function createAddServerHarness(
         target: "docs-mcp",
       },
     ) {
+      await vi.dynamicImportSettled();
       await waitForSolid(() => expect(query("form")).not.toBeNull());
       const form = query("form");
       container
@@ -333,7 +334,8 @@ describe("ChatComposerCapabilityHost", () => {
     const state = createState();
     host.props(context, state, undefined, "main").onAddServer?.();
     const container = mountDialogs(host, context, state);
-    await Promise.resolve();
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => expect(container.querySelector("form")).not.toBeNull());
 
     const scope = container.querySelector<HTMLInputElement>(
       'input.settings-segmented__input[value="everywhere"]',

@@ -8,7 +8,7 @@ import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.js";
-import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
+import type { CronJob, CronRunStatus, CronStoredJob, CronTriggerEvalOutcome } from "../types.js";
 import {
   autoDisableCronJob,
   maybeAutoDisableCronJobAfterRunFailure,
@@ -85,7 +85,7 @@ function assignNextRunAtMs(
 /** Applies run outcome state, delivery state, backoff/next-run scheduling, and delete-after-run policy. */
 export function applyJobResult(
   state: CronJobPolicyContext,
-  job: CronJob,
+  job: CronStoredJob,
   result: CronJobRunResult,
   opts: {
     // Manual force runs update outcome state but are out-of-band for cadence.
@@ -326,10 +326,9 @@ export function applyJobResult(
     if (
       result.status === "error" &&
       result.errorClassification?.kind === "permanent" &&
-      isPluginCommandCronJob(job)
+      (isPluginCommandCronJob(job) || job.operatorSource)
     ) {
-      // The bound plugin instance is gone for good: retire on this first refusal instead of
-      // erroring until generic auto-disable, whose re-enable advice could never help.
+      // A retired plugin or unusable continuation source cannot recover through retries.
       job.enabled = false;
       job.state.nextRunAtMs = undefined;
       job.state.startupCatchupAtMs = undefined;

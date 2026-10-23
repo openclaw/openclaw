@@ -639,7 +639,6 @@ src/config/mutate.snapshot.ts
 src/config/mutate.ts
 src/config/mutation-conflict.ts
 src/config/normalize-exec-safe-bin.ts
-src/config/normalize-paths.ts
 src/config/official-external-channel-secret-schema.ts
 src/config/patch-replace-paths.ts
 src/config/paths.ts

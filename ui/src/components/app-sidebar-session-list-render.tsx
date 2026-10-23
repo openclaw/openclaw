@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, untrack } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import {
   presenceViewerActivity,
@@ -107,41 +107,39 @@ function renderSessionListBody(params: {
   );
   return (
     <For each={params.sections} keyed={(section) => section.id}>
-      {(section) => {
-        // For keys this branch by id; all changing section facts remain reactive below.
-        const initialSectionId = untrack(() => section().id);
-        if (initialSectionId.startsWith("catalog:")) {
-          return (
-            <Show when={catalogsBySectionId().get(section().id)}>
-              {(catalog) => (
-                <params.catalogRenderer
-                  host={host()}
-                  snapshot={params.catalogs}
-                  catalog={catalog()}
-                />
-              )}
+      {(section) => (
+        <Show
+          when={section().id.startsWith("catalog:")}
+          fallback={
+            // Empty personal sections are omitted by the projection. Other empty sections retain their drag destinations.
+            <Show
+              when={
+                !(section().id === "work" && section().totalRowCount === 0) &&
+                !(
+                  section().id === "ungrouped" &&
+                  section().totalRowCount === 0 &&
+                  !params.nativeSessionsHaveMore &&
+                  !host().sessionOwnershipVisibility.filters &&
+                  host().sessionsStatusFilter === "active" &&
+                  host().sessionOrganizer.draggingSessionKey === null
+                )
+              }
+            >
+              <SessionSection host={host()} section={section()} personHeaders={personHeaders()} />
             </Show>
-          );
-        }
-        // Empty personal sections are omitted by the projection. Other empty sections retain their drag destinations.
-        return (
-          <Show
-            when={
-              !(section().id === "work" && section().totalRowCount === 0) &&
-              !(
-                section().id === "ungrouped" &&
-                section().totalRowCount === 0 &&
-                !params.nativeSessionsHaveMore &&
-                !host().sessionOwnershipVisibility.filters &&
-                host().sessionsStatusFilter === "active" &&
-                host().sessionOrganizer.draggingSessionKey === null
-              )
-            }
-          >
-            <SessionSection host={host()} section={section()} personHeaders={personHeaders()} />
+          }
+        >
+          <Show when={catalogsBySectionId().get(section().id)}>
+            {(catalog) => (
+              <params.catalogRenderer
+                host={host()}
+                snapshot={params.catalogs}
+                catalog={catalog()}
+              />
+            )}
           </Show>
-        );
-      }}
+        </Show>
+      )}
     </For>
   );
 }

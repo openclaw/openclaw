@@ -553,7 +553,7 @@ describe("event Web Push classification", () => {
         cause: new Error("invalid key length"),
       });
       mocks.sender.mockRejectedValueOnce(failure);
-      finishAgent(createDelivery({ log: { warn: mocks.warn } }), { runId: "failure-run" });
+      finishAgent(createDelivery(), { runId: "failure-run" });
       await vi.waitFor(() => expect(mocks.warn).toHaveBeenCalledOnce());
       expect(mocks.warn).toHaveBeenCalledWith("event Web Push delivery could not complete", {
         category: "agent-finished",

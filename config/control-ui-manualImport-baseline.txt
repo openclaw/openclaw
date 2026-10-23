@@ -30,7 +30,6 @@ ui/src/components/session-organizer.ts	3
 ui/src/components/session-placement.runtime.ts	1
 ui/src/components/sidebar-attention-store.ts	1
 ui/src/components/sidebar-menus-render.tsx	1
-ui/src/components/sidebar-menus.tsx	1
 ui/src/components/sidebar-people.ts	1
 ui/src/components/terminal/terminal-pending-actions.ts	1
 ui/src/components/tooltip-title.ts	1

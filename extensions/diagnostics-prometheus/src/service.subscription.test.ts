@@ -713,13 +713,17 @@ openclaw_queue_lane_wait_seconds_count{lane="main"} 2`);
         heapSizeLimitBytes: 1000,
         externalBytes: 20,
         arrayBuffersBytes: 10,
-        workerCount: 12,
-        workerHeaps: Array.from({ length: 12 }, (_, index) => ({
-          script: `worker-${index % 8}.js`,
+        workerCount: 39,
+        workerHeaps: Array.from({ length: 39 }, (_, index) => ({
+          script: `worker-${index}.js`,
           workerSlot: index + 1,
           heapUsed: 100,
           heapTotal: 200,
           heapSizeLimitBytes: 1000,
+          heapSpaces: Array.from({ length: 10 }, (_value, space) => ({
+            space_name: `space_${space}`,
+            space_used_size: 10,
+          })),
         })),
         workerTaskMetrics: Array.from({ length: 100 }, (_, index) => ({
           workerClass: "compute" as const,
@@ -739,6 +743,16 @@ openclaw_queue_lane_wait_seconds_count{lane="main"} 2`);
       "incremental",
       "weak_processing",
     ] as const) {
+      for (let workerSlot = 1; workerSlot <= 61; workerSlot++) {
+        metrics.record({
+          type: "diagnostic.gc",
+          kind,
+          reason: "other",
+          thread: "code-mode-node.worker.js",
+          workerSlot,
+          durationMs: 10,
+        });
+      }
       for (const durationMs of [20, 30]) {
         metrics.record({
           type: "diagnostic.gc",
@@ -753,6 +767,15 @@ openclaw_queue_lane_wait_seconds_count{lane="main"} 2`);
       expectMetrics(rendered)(`openclaw_gc_duration_seconds_count{${labels}} 2
 openclaw_gc_duration_seconds_sum{${labels}} 0.05
 openclaw_gc_duration_seconds_bucket{kind="${kind}",le="0.025",reason="other",thread="main"} 1`);
+    }
+    for (const reason of ["forced", "none"] as const) {
+      metrics.record({
+        type: "diagnostic.gc",
+        kind: "scavenge",
+        reason,
+        thread: "main",
+        durationMs: 10,
+      });
     }
     for (const phase of `authority admission preparation attachments replyContext authoring persist runAdmission
 replyInitialization snapshot worktree effects response dispatch`.split(/\s+/)) {
@@ -775,10 +798,11 @@ replyInitialization snapshot worktree effects response dispatch`.split(/\s+/)) {
         64: "run_completed_total run_duration_seconds_count harness_run_total harness_run_duration_seconds_count model_call_total model_call_duration_seconds_count model_usage_duration_seconds_count tool_execution_total tool_execution_duration_seconds_count",
         128: "gen_ai_client_token_usage_count",
         1: "worktree_preparation_seconds_count secret_egress_requests_total gateway_http_cancelled_total",
-        9: "heap_used_ratio worker_count",
-        24: "code_mode_worker_heap_bytes",
+        40: "heap_used_ratio worker_count",
+        78: "code_mode_worker_heap_bytes",
+        390: "worker_heap_space_used_bytes",
         14: "chat_send_phase_seconds_count",
-        4: "gc_duration_seconds_count",
+        250: "gc_duration_seconds_count",
       }).flatMap(([count, names]) =>
         names.split(" ").map((name) => [name, Number(count)] as const),
       ),
@@ -796,6 +820,8 @@ replyInitialization snapshot worktree effects response dispatch`.split(/\s+/)) {
     expect(actualFamilies).toEqual(expectedFamilies);
     expect(core).not.toContain("openclaw_prometheus_series_dropped_total");
     expectMetrics(core)(`openclaw_gateway_rpc_handler_seconds_count{method="sessions.list"} 1
+openclaw_gc_duration_seconds_count{kind="weak_processing",reason="other",slot="61",thread="code-mode-node.worker.js"} 1
+openclaw_gc_duration_seconds_count{kind="scavenge",reason="forced",thread="main"} 1
 openclaw_worker_gc_collections_total{kind="scavenge",script="worker-0.js",worker_class="compute"} 7
 openclaw_queue_lane_size{lane="later"} 1`);
   });
