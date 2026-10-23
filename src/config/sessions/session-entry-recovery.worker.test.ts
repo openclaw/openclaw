@@ -1,9 +1,10 @@
 import { copyFileSync, renameSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -18,6 +19,7 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
 import { test } from "./session-entry-fixture.test-support.js";
+import { readSessionEntryList } from "./session-entry-list.worker.js";
 import {
   iteratePendingExecNotificationEntriesInWorker,
   readPendingInputRecoveryEntriesInWorker,
@@ -126,6 +128,58 @@ test("selects recovery claims and main-session startup orphans", async ({ store:
     ...claims,
   ]);
   expect(await keys()).toHaveLength(Object.keys(entries).length);
+});
+
+test("restricts orphan discovery to the active-session index", async ({
+  store: { database, store },
+}) => {
+  for (let index = 0; index < 32; index++) {
+    writeSessionEntry(database, `agent:main:archived-${index}`, {
+      sessionId: `archived-${index}`,
+      updatedAt: 1,
+      archivedAt: 1,
+      abortedLastRun: true,
+    });
+  }
+  writeSessionEntry(database, "agent:main:orphan", {
+    sessionId: "orphan",
+    updatedAt: 1,
+    abortedLastRun: true,
+  });
+  const plans: string[] = [];
+  const prototype = requireNodeSqlite().StatementSync.prototype;
+  // oxlint-disable-next-line typescript/unbound-method -- Forwarded with the intercepted statement below.
+  const all = prototype.all;
+  const observer = vi.spyOn(prototype, "all").mockImplementation(
+    new Proxy(all, {
+      apply(target, statement: StatementSync, args) {
+        const rows = Reflect.apply(target, statement, args);
+        if (
+          statement.sourceSQL.startsWith('select "session_key" from "session_nodes"') &&
+          statement.sourceSQL.includes("json_extract")
+        ) {
+          plans.push(
+            ...database.db
+              .prepare(`EXPLAIN QUERY PLAN ${statement.expandedSQL}`)
+              .all()
+              .map((row) => String(row.detail)),
+          );
+        }
+        return rows;
+      },
+    }),
+  );
+  try {
+    const result = await readSessionEntryList({
+      kind: "session-entry-list",
+      database: { agentId: store.agentId, path: store.storePath },
+      scope: { ...store, mainSessionRecovery: "orphans" },
+    });
+    expect(result.entries.map(({ sessionKey }) => sessionKey)).toEqual(["agent:main:orphan"]);
+    expect(plans).toEqual([expect.stringContaining("idx_agent_session_nodes_active")]);
+  } finally {
+    observer.mockRestore();
+  }
 });
 
 test("pages exec owners without unrelated entries or saved prompts", async ({
