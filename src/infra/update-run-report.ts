@@ -160,9 +160,16 @@ export function formatUpdateRunRecovery(
       recovery?.serviceRestartSafe === false ? `; restart remains unsafe (${reason})` : "";
     return `${recovery?.packageRollbackVerified ? "package rollback verified; " : ""}verified serving ${bounded(version, 120)}${constraint}`;
   }
-  const code = observation.failureFacts?.[0]?.code;
+  // A timeout cannot hide an observed negative response or identity/service refusal.
+  const code =
+    observation.failureFacts?.find(
+      (fact) => fact.code !== "timeout" && fact.code !== "gateway-readiness-unverified",
+    )?.code ?? observation.failureFacts?.[0]?.code;
   if (!code) {
     return "Gateway readiness is pending; recovery check completed without verified readiness";
+  }
+  if (code === "timeout" || code === "gateway-readiness-unverified") {
+    return `Gateway readiness unverified (${code})`;
   }
   return code === "gateway-probe-failed"
     ? `recovery check failed (${code})`

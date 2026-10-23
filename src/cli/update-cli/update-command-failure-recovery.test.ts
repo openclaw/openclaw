@@ -381,7 +381,7 @@ it.each(
 );
 
 it.each(["managed-service-preflight", "gateway-stop-unverified"])(
-  "records untouched %s as no recovery needed and still serving before",
+  "records untouched %s without treating native running as serving proof",
   async (reason) => {
     const { verifyUpdateFailureRecovery } = await import("./update-command-failure-recovery.js");
     const env = { ...process.env };
@@ -412,7 +412,7 @@ it.each(["managed-service-preflight", "gateway-stop-unverified"])(
         name: "gateway recovery observation",
         exitCode: 0,
         diagnostics: [
-          "No recovery needed; still serving 2026.10.3. No service was stopped or started.",
+          "No recovery needed; installation unchanged at 2026.10.3. Native service was observed running; readiness was not checked. No service was stopped or started.",
         ],
       }),
     );
@@ -593,7 +593,7 @@ it.each([
       );
     }
     expect(recorded?.verification.serviceRunning).toBeUndefined();
-    expect(recorded?.verification.readyz).toBe(deferred ? undefined : false);
+    expect(recorded?.verification.readyz).toBeUndefined();
     expect(recorded?.steps).toContainEqual(
       containing({ step: "candidate-doctor-lint", exitCode: 2 }),
     );
@@ -703,10 +703,12 @@ it.each(["observation", "terminal", "standalone"] as const)(
     const recorded = updateLedger.getUpdateRun(run.runId, { env });
     expect(recorded).toMatchObject({
       confirmedAtMs: null,
-      verification: { readyz: false },
+      verification: { settled: false },
       status: publication === "observation" ? "running" : "failed",
     });
     expect(recorded?.verification.runningVersion).toBeUndefined();
+    expect(recorded?.verification.readyz).toBeUndefined();
+    expect(recorded?.verification.coreReady).toBeUndefined();
     expect(
       recorded?.steps.findLast((step) => step.step === "gateway recovery verification")?.exitCode,
     ).toBeNull();

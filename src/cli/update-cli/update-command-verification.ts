@@ -174,7 +174,7 @@ export async function verifyPreviousManagedGatewayForUpdate(
 function updateGatewayHealthFacts(
   health: GatewayRestartSnapshot,
   port: number,
-  readyz: boolean,
+  readyz: boolean | undefined,
   coreReady?: boolean,
 ): NonNullable<UpdateRunResult["verification"]> {
   return {
@@ -196,10 +196,11 @@ function updateGatewayHealthFacts(
       ...(health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? []),
       ...(health.unavailablePlugins?.map((error) => JSON.stringify(error)) ?? []),
     ],
-    channelsReady: readyz && getGatewayChannelWarnings(health).length === 0,
+    channelsReady:
+      readyz === undefined ? undefined : readyz && getGatewayChannelWarnings(health).length === 0,
     settled: health.healthy,
     readyz,
-    ...(coreReady !== undefined ? { coreReady } : {}),
+    coreReady,
   };
 }
 
@@ -226,6 +227,11 @@ export async function verifyUpdatedGateway(
     deadline: params.opts.run?.deadline ?? params.deadline,
   });
   const coreReady = http?.coreReady ?? readyz;
+  // No HTTP response is missing evidence, not an unhealthy response.
+  const httpFailed =
+    !coreReady &&
+    http !== undefined &&
+    [http.healthz, http.readyz].some((status) => status != null && status !== 200);
   const verificationWarnings = getGatewayChannelWarnings(health, http).map(({ id, error }) =>
     redactSupportDiagnosticLine(
       `Channel health warning (${id}: ${error}). Run openclaw channels status --probe or openclaw health --json to inspect it.`,
@@ -249,19 +255,17 @@ export async function verifyUpdatedGateway(
   }
   const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
   assertCurrent();
+  const verification = updateGatewayHealthFacts(
+    health,
+    params.gatewayPort,
+    // The observer owns positive readiness even when raw HTTP details are unavailable.
+    readyz || http?.readyz != null ? readyz : undefined,
+    coreReady || httpFailed ? http?.coreReady : undefined,
+  );
   if (params.purpose === "recovery") {
-    params.result.verification = updateGatewayHealthFacts(
-      health,
-      params.gatewayPort,
-      readyz,
-      http?.coreReady,
-    );
+    params.result.verification = verification;
   } else if (proofOptions.run) {
-    recordUpdateRunVerification(
-      proofOptions.run.runId,
-      updateGatewayHealthFacts(health, params.gatewayPort, readyz, http?.coreReady),
-      proofOptions.run,
-    );
+    recordUpdateRunVerification(proofOptions.run.runId, verification, proofOptions.run);
   }
   const serviceDefinitionRefusal = health.runtime?.systemd?.startRefusal;
   if (
@@ -385,7 +389,6 @@ export async function verifyUpdatedGateway(
         health.waitOutcome === "still-starting" ? "still-starting" : "gateway-readiness-pending",
     };
   }
-  const httpFailed = http !== undefined && !coreReady;
   const diagnosticLines: [string, ...string[]] = [
     params.purpose === "package-replacement"
       ? "Package update installed; Gateway readiness remains unverified with --no-restart. Its replacement restart may still be starting."
@@ -416,9 +419,11 @@ export async function verifyUpdatedGateway(
         ? "plugin-errors"
         : httpFailed
           ? "readyz-unhealthy"
-          : !serviceRunning
+          : !serviceRunning && health.runtime.status === "stopped"
             ? "service-not-running"
-            : (health.waitOutcome ?? "restart-unhealthy");
+            : health.waitOutcome && health.waitOutcome !== "healthy"
+              ? health.waitOutcome
+              : "gateway-readiness-unverified";
   const facts: UpdateFailureFact[] = [];
   for (const [mismatch, label, code] of [
     [health.versionMismatch, "version", "version-mismatch"],
@@ -436,10 +441,10 @@ export async function verifyUpdatedGateway(
     facts.push({
       check: "readyz",
       code: "readyz-unhealthy",
-      message: `Gateway readiness endpoint returned HTTP ${http.readyz ?? "unavailable"}; expected HTTP 200.`,
+      message: `Gateway HTTP readiness returned healthz=${http.healthz ?? "unavailable"}, readyz=${http.readyz ?? "unavailable"}; expected HTTP 200.`,
     });
   }
-  if (!serviceRunning) {
+  if (!serviceRunning && health.runtime.status === "stopped") {
     facts.push({
       check: "service",
       code: "service-not-running",
@@ -451,8 +456,8 @@ export async function verifyUpdatedGateway(
   }
   if (!facts.length || health.waitOutcome === "timeout") {
     facts.push({
-      check: "settled",
-      code: health.waitOutcome ?? "restart-unhealthy",
+      check: reason === "gateway-readiness-unverified" ? "readyz" : "settled",
+      code: health.waitOutcome === "timeout" ? "timeout" : reason,
       message:
         health.probeError ??
         `Gateway readiness was not verified; service status: ${health.runtime.status ?? "unknown"}${health.startupPhase ? `; startup phase: ${health.startupPhase}` : ""}. Check ${formatCliCommand("openclaw gateway status --deep", params.serviceEnv)}.`,

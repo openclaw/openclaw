@@ -115,7 +115,7 @@ export async function verifyUpdateFailureRecovery(params: {
           exitCode: 0,
           diagnostics: [
             untouched
-              ? `No recovery needed; ${params.preManagedServiceStop?.running ? "still serving" : "installation unchanged at"} ${result.before?.version ?? recorded?.before.version ?? "the previous version"}. No service was stopped or started.`
+              ? `No recovery needed; installation unchanged at ${result.before?.version ?? recorded?.before.version ?? "the previous version"}.${params.preManagedServiceStop?.running ? " Native service was observed running; readiness was not checked." : ""} No service was stopped or started.`
               : "Gateway readiness was not checked: no Gateway service or listener was present before maintenance.",
           ],
         });

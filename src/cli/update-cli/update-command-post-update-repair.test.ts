@@ -965,8 +965,8 @@ describe("post-activation failure settlement without inference", () => {
       const report = getUpdateRun(run.runId, { env: run.env });
       expect(report?.verification).toMatchObject({
         serviceRunning: recovered,
-        readyz: recovered,
       });
+      expect(report?.verification.readyz).toBe(recovered ? true : undefined);
       const rendered = renderUpdateRunReport(report!).lines.join("\n");
       if (migration) {
         expect(report?.status).toBe("failed");

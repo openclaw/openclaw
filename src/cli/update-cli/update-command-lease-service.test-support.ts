@@ -156,15 +156,16 @@ export function registerLeaseServiceRestorationTests(params: {
       expect(restart).toHaveBeenCalledOnce();
       expect(await fs.readFile(serviceState, "utf8")).toBe(restartFails ? "stopped" : "running");
       if (restartFails || failDoctor) {
-        expect(listUpdateRuns()[0]).toMatchObject({
+        const failedRun = listUpdateRuns()[0];
+        expect(failedRun).toMatchObject({
           status: "failed",
           reason: restartFails ? "doctor-gateway-restoration-failed" : "doctor-failed",
           verification: {
             serviceRunning: !restartFails,
-            readyz: !restartFails,
             ...(!restartFails && { recovery: { service: "healthy" } }),
           },
         });
+        expect(failedRun?.verification.readyz).toBe(restartFails ? undefined : true);
       } else {
         params.expectSuccess();
       }

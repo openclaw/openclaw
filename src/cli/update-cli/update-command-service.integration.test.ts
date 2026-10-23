@@ -157,6 +157,15 @@ vi.mock("../../daemon/systemd-user-transport.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd-user-transport.js")>()),
   resolveSystemdUserTransport: async () => undefined,
 }));
+// This suite owns a synthetic user unit, not the host's installed system services.
+vi.mock("../../daemon/systemd-unit-load-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-unit-load-paths.js")>()),
+  DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS: [],
+}));
+vi.mock("../../daemon/inspect.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/inspect.js")>()),
+  findSystemGatewayServices: async () => [],
+}));
 vi.mock("./update-command-service-drain.js", () => ({
   withGatewayMaintenanceDrain: async (_params: unknown, stop: () => Promise<unknown>) =>
     await stop(),

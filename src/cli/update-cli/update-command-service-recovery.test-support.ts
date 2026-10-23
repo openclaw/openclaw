@@ -319,11 +319,12 @@ export function registerRecoveryTests(
           status: "skipped",
           reason: "still-starting",
         });
-        expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
+        const recorded = getUpdateRun(run.runId, { env: run.env });
+        expect(recorded).toMatchObject({
           status: "skipped",
           reason: "still-starting",
           confirmedAtMs: null,
-          verification: { serviceRunning: true, pid: 4242, readyz: false },
+          verification: { serviceRunning: true, pid: 4242 },
           steps: expect.arrayContaining([
             expect.objectContaining({
               step: "warning:gateway verification",
@@ -331,6 +332,7 @@ export function registerRecoveryTests(
             }),
           ]),
         });
+        expect(recorded?.verification.readyz).toBeUndefined();
         expect(mocks.running).toBe(true);
       }
       expect(mocks.events).toEqual([

@@ -350,7 +350,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
         resolveGatewayRestartProbeContext(params.serviceEnv, undefined, deadline.signal),
       );
       assertCurrent();
-      http = await deadline.read("HTTP readiness", () =>
+      const observedHttp = await deadline.read("HTTP readiness", () =>
         waitForGatewayHttpReadiness({
           requireChannelHealth: false,
           config: context.config,
@@ -359,15 +359,23 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
           deadlineAt: performance.now() + remainingMs(),
           probeTimeoutMs: probeTimeoutMs(),
           delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
-          onObservation: (observation) =>
+          onObservation: (observation) => {
+            // Retain actual responses when a later probe is unavailable or interrupted.
+            http = {
+              ...observation,
+              healthz: observation.healthz ?? http?.healthz ?? null,
+              readyz: observation.readyz ?? http?.readyz ?? null,
+            };
             params.onProgress?.(
               "http",
               `HTTP healthz=${observation.healthz ?? "unavailable"}; readyz=${observation.readyz ?? "unavailable"}`,
-            ),
+            );
+          },
           signal: deadline.signal,
         }),
       );
       assertCurrent();
+      http ??= observedHttp;
       const readyz = http.readyz === 200;
       if (
         health.healthy &&

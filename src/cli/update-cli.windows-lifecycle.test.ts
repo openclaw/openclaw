@@ -510,7 +510,7 @@ describe("update-cli", () => {
           reason:
             fault === "enable-committed"
               ? "windows-task-autostart-restore-failed"
-              : "restart-unhealthy",
+              : "gateway-readiness-unverified",
         });
         if (fault === "disable-committed") {
           expect(lastWriteJsonCall()).toMatchObject({

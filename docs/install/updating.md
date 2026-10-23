@@ -153,6 +153,13 @@ updaters. Positive handoff descendants, OpenClaw identities, and retained-runtim
 path holders also block repair. This does not relax Doctor's artifact-custody
 checks or remove retained recovery data.
 
+Recovery reports distinguish an unavailable or timed-out readiness observation
+from an observed unhealthy response. Native service status alone does not verify
+that the Gateway is serving. A later health check can verify the same process
+without another restart; the original update outcome and recovery backups remain
+unchanged until their existing owners complete recovery. This requires the
+installed updater to contain the fix.
+
 If the retained verifier cannot authenticate to the restarted Gateway, it stops
 retrying that rejection. Local HTTP readiness and runtime version/build identity
 can verify activation instead, with an RPC authentication warning recorded in

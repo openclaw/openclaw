@@ -367,7 +367,7 @@ describe("update-cli", () => {
           name: "gateway recovery observation",
           exitCode: 0,
           diagnostics: [
-            "No recovery needed; still serving 1.0.0. No service was stopped or started.",
+            "No recovery needed; installation unchanged at 1.0.0. Native service was observed running; readiness was not checked. No service was stopped or started.",
           ],
         }),
       ],

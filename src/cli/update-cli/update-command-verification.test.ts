@@ -352,9 +352,10 @@ it.each(["slow inspection", "hung readiness"] as const)(
       })(opts);
     });
     const requests: string[] = [];
+    let answerReadiness = !hung;
     await listen((req, res) => {
       requests.push(req.url ?? "");
-      if (!hung || req.url === "/healthz") {
+      if (answerReadiness || req.url === "/healthz") {
         res.writeHead(200).end();
       }
     });
@@ -386,15 +387,64 @@ it.each(["slow inspection", "hung readiness"] as const)(
       expect(result.steps[0]?.termination).toBeUndefined();
       return;
     }
-    await expect(verification).resolves.toMatchObject({ ok: false, summary: "readyz-unhealthy" });
+    await expect(verification).resolves.toMatchObject({
+      ok: false,
+      summary: "gateway-readiness-unverified",
+    });
     expect(Date.now() - startedAt).toBeLessThan(5_000);
-    expect(result.verification).toMatchObject({ readyz: false, settled: false });
+    expect(result.verification?.readyz).toBeUndefined();
+    expect(result.verification?.coreReady).toBeUndefined();
+    expect(result.verification?.settled).toBe(false);
     expect(result.steps[0]).toMatchObject({
       exitCode: 1,
       failureFacts: expect.arrayContaining([
-        expect.objectContaining({ check: "readyz", code: "readyz-unhealthy" }),
+        expect.objectContaining({ check: "readyz", code: "gateway-readiness-unverified" }),
       ]),
     });
+    const report = reportFor(result);
+    expect(report).toContain("Gateway readiness unverified (gateway-readiness-unverified)");
+    expect(report).not.toContain("not serving");
+    expect(report).not.toContain("HTTP not ready");
+    const publicReport = await prepareUpdateFailureReport(
+      { attemptId: "foreground-readiness", result },
+      { env: {}, stateDir: "/fixture/state" },
+    );
+    expect(publicReport.body).toContain(
+      "Recovery outcome: Gateway readiness unverified (gateway-readiness-unverified)",
+    );
+    expect(publicReport.body).not.toContain("not serving");
+    const complete = vi.fn<PackageUpdateTransaction["complete"]>(async () => undefined);
+    await recordUpdatePackageCompletion(
+      {
+        root: "/synthetic-package",
+        opts: { json: true },
+        packageTransaction: { backupRoot: "/synthetic-backup", complete, rollback: vi.fn() },
+      },
+      result,
+      () => {},
+    );
+    expect(complete).not.toHaveBeenCalledWith({ activationVerified: true }, expect.anything());
+    answerReadiness = true;
+    await expect(
+      verifyGateway({
+        purpose: "recovery",
+        expectedVersion: "2026.9.5",
+        expectedBuildId: undefined,
+        waitForStartup: false,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(reportFor(result)).toContain("verified serving 2026.9.5");
+    vi.mocked(service.readRuntime).mockResolvedValue({ status: "stopped" });
+    await verifyGateway({
+      purpose: "recovery",
+      expectedVersion: "2026.9.5",
+      expectedBuildId: undefined,
+      requireRunningService: true,
+      waitForStartup: false,
+    });
+    expect(reportFor(result)).not.toContain("verified serving");
+    expect(reportFor(result)).toContain("not serving");
+    expect(runUpdatedInstallGatewayCommand).not.toHaveBeenCalled();
     expect(result.steps[0]?.termination).toBeUndefined();
     expect(result.steps[0]?.advisory).toBeUndefined();
     expect(restart.sleep).not.toHaveBeenCalled();
@@ -403,6 +453,55 @@ it.each(["slow inspection", "hung readiness"] as const)(
     }
   },
 );
+
+it("retains an observed unhealthy HTTP response when readiness observation times out", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  gatewayFixture({
+    server: { version: candidate.version, buildId: candidate.buildId, bootId: "negative-http" },
+  });
+  let readinessRequests = 0;
+  await listen((req, res) => {
+    if (req.url === "/healthz") {
+      res.writeHead(200).end();
+    } else if (readinessRequests++ === 0) {
+      res.writeHead(503).end();
+    }
+  });
+  const observed = createDeferred();
+  result.status = "error";
+  const verification = verifyGateway({
+    purpose: "recovery",
+    requireRunningService: true,
+    timeoutMs: 1_000,
+    onProgress: (stage, reason) => {
+      if (stage === "http" && reason.includes("readyz=503")) {
+        observed.resolve();
+      }
+    },
+  });
+  try {
+    await Promise.race([
+      observed.promise,
+      verification.then(() => {
+        throw new Error("Verification ended before observing HTTP 503");
+      }),
+    ]);
+    restart.monotonicClock.nowMs = 1_000;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(verification).resolves.toMatchObject({ ok: false, summary: "readyz-unhealthy" });
+    expect(result.steps[0]?.failureFacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "readyz-unhealthy" }),
+        expect.objectContaining({ code: "timeout" }),
+      ]),
+    );
+    expect(reportFor(result)).toContain("not serving (readyz-unhealthy)");
+  } finally {
+    controller.abort();
+    await verification.catch(() => {});
+    vi.useRealTimers();
+  }
+});
 
 it.each(["first read", "after listener observation", "recovery"])(
   "records expired readiness work before it settles (%s)",
@@ -513,7 +612,7 @@ it("prefers a pending recovery observation over previously saved healthy facts",
   expect(publicReport.body).not.toContain("verified serving");
   expect(publicReport.body).toContain("readiness is pending");
   expect(readUpdateRunReportHealth).toHaveBeenLastCalledWith(
-    expect.objectContaining({ readyz: false, settled: false, port: 19101 }),
+    expect.objectContaining({ readyz: undefined, settled: false, port: 19101 }),
     expect.anything(),
   );
 });

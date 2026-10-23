@@ -110,6 +110,35 @@ function render(patch: Partial<ReportRecord>) {
 
 afterEach(() => vi.restoreAllMocks());
 
+it.each([
+  { codes: ["timeout"], expected: "Gateway readiness unverified (timeout)" },
+  {
+    codes: ["gateway-readiness-unverified"],
+    expected: "Gateway readiness unverified (gateway-readiness-unverified)",
+  },
+  { codes: ["timeout", "readyz-unhealthy"], expected: "not serving (readyz-unhealthy)" },
+  { codes: ["auth-rejected", "timeout"], expected: "not serving (auth-rejected)" },
+  { codes: ["version-mismatch", "timeout"], expected: "not serving (version-mismatch)" },
+  { codes: ["service-not-running", "timeout"], expected: "not serving (service-not-running)" },
+])(
+  "reports recovery evidence rather than assuming a timeout means stopped: $codes",
+  ({ codes, expected }) => {
+    const report = renderRecord(
+      failed({
+        steps: [
+          {
+            ...recoveryStep,
+            status: "failed",
+            exitCode: 1,
+            failureFacts: codes.map((code) => ({ check: "settled", code })),
+          },
+        ],
+      }),
+    );
+    expect(report.markdown).toContain(`Recorded recovery: ${expected}.`);
+  },
+);
+
 it("reports repeated database-path advisories once across Doctor phases", () => {
   const detail =
     "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.";
