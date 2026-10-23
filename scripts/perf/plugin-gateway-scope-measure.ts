@@ -168,20 +168,10 @@ async function run(count: number, latencies?: number[]) {
 
 async function countEntries(invoke: () => unknown) {
   // Instrument only this probe; the allocation and CPU passes use native methods.
-  let installs = 0;
-  // oxlint-disable-next-line typescript/unbound-method -- The probe forwards the original receiver.
-  const original = AsyncLocalStorage.prototype.enterWith;
-  const probe = mock.method(
-    AsyncLocalStorage.prototype,
-    "enterWith",
-    function (this: AsyncLocalStorage<unknown>, store: unknown) {
-      installs++;
-      return Reflect.apply(original, this, [store]);
-    },
-  );
+  const probe = mock.method(AsyncLocalStorage.prototype, "enterWith");
   try {
     await invoke();
-    return installs;
+    return probe.mock.callCount();
   } finally {
     probe.mock.restore();
     probe.mock.resetCalls();
