@@ -738,6 +738,10 @@ it.each([
       }
       if (restarting) {
         await restartEntered.promise;
+        const loadParent = () => accessor.loadSessionEntry(recovery.target);
+        const entry = loadParent();
+        const sourceId = expectDefined(entry?.restartRecoveryDeliverySourceRunId, "source");
+        expect(sourceId).not.toBe(interruptedRunId);
         const harness = createAgentEventTestHarness();
         try {
           const shutdown = await prepareGatewayRunShutdown({
@@ -750,20 +754,16 @@ it.each([
             removeChatRun: () => undefined,
             broadcast: harness.broadcast,
             nodeSendToSession: harness.nodeSendToSession,
-            markMainSessionsAbortedForRestart: (params) =>
-              markRestartAbortedMainSessions({ ...params, cfg: config, stateDir }).then(
-                () => undefined,
-              ),
+            markMainSessionsAbortedForRestart: async (params) => {
+              await markRestartAbortedMainSessions({ ...params, cfg: config, stateDir });
+            },
           });
           shutdownReleased = shutdown.released;
-          const interrupted = expectDefined(
-            accessor.loadSessionEntry(recovery.target),
-            "interrupted cron parent",
-          );
+          const interrupted = expectDefined(loadParent(), "interrupted cron parent");
           expect(interrupted).toMatchObject({
             status: "interrupted",
             mainRestartRecovery: { cycleId: expect.any(String) },
-            restartRecoveryDeliverySourceRunId: interruptedRunId,
+            restartRecoveryDeliverySourceRunId: sourceId,
           });
           if (scenario !== "restart") {
             expect(interrupted.restartRecoveryTerminalRunIds).toContain(

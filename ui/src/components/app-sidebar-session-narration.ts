@@ -8,6 +8,7 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import { extractAssistantPhaseText } from "../../../src/shared/chat-message-content.js";
 import { createChangeListeners } from "../../../src/shared/listeners.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
+import { stripAssistantMessageText } from "../lib/chat/assistant-message-text.ts";
 import { pickFreshestObserverDigest } from "../lib/observer-digest.ts";
 import {
   isSessionNarrationEvent,
@@ -20,7 +21,6 @@ import {
   isUiGlobalSessionKey,
   normalizeAgentId,
 } from "../lib/sessions/session-key.ts";
-import { stripThinkingTags } from "../lib/strip-thinking-tags.ts";
 import type { SidebarRecentSession, SidebarToolActivity } from "./app-sidebar-session-types.ts";
 import {
   deriveSidebarNarrationLine,
@@ -362,7 +362,7 @@ export function createSidebarNarration() {
     }
     const deltaText = typeof record.deltaText === "string" ? record.deltaText : "";
     const messageText = message
-      ? stripThinkingTags(extractAssistantPhaseText(message) ?? "")
+      ? stripAssistantMessageText(message, extractAssistantPhaseText(message) ?? "", "narration")
       : null;
     const consumed = streams.get(key)?.consumedLength ?? 0;
     // A newly subscribed sidebar can join mid-run. Within one run the server's

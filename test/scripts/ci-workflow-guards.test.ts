@@ -5517,7 +5517,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       );
       writeExecutable(path.join(bin, "node"), [
         "#!/bin/sh",
-        'if [ "$1" = "--import" ]; then shift; shift; exec "$REAL_GATEWAY_NODE" "$@"; fi',
+        'if [ "$1" = "--import" ]; then shift; shift; if [ "$1" != "scripts/test-ui-real-gateway.mts" ]; then exec "$REAL_GATEWAY_NODE" "$@"; fi; fi',
         'printf "%s\\n" "$@" > "$REAL_GATEWAY_COMMAND_ARGS"',
         'printf "%s" "${OPENCLAW_VITEST_INCLUDE_FILE:-}" > "$REAL_GATEWAY_INCLUDE_PATH"',
         'printf "called\\n" >> "$REAL_GATEWAY_COMMAND_CALLS"',
@@ -5582,14 +5582,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         }
         expect(readFileSync(callsPath, "utf8").trim().split("\n")).toEqual(["called"]);
         const args = readFileSync(argsPath, "utf8").trim().split("\n");
-        expect(args.slice(0, 6)).toEqual([
-          "scripts/run-vitest.mjs",
-          "run",
-          "--config",
-          prebuilt ? prebuiltConfig : serialConfig,
-          "--configLoader",
-          "runner",
-        ]);
         const reporterArgs = frozen
           ? []
           : [
@@ -5602,10 +5594,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
               "--reporter",
               "./scripts/lib/vitest-resource-reporter.mts",
             ];
-        expect(args.slice(6, 6 + reporterArgs.length)).toEqual(reporterArgs);
-        expect(args.slice(6 + reporterArgs.length).toSorted()).toEqual(
-          prebuilt ? ["--exclude", desktop] : frozenRealGatewayFiles.toSorted(),
-        );
+        if (frozen) {
+          expect(args.slice(0, 6)).toEqual([
+            "scripts/run-vitest.mjs",
+            "run",
+            "--config",
+            prebuilt ? prebuiltConfig : serialConfig,
+            "--configLoader",
+            "runner",
+          ]);
+          expect(args.slice(6).toSorted()).toEqual(
+            prebuilt ? ["--exclude", desktop] : frozenRealGatewayFiles.toSorted(),
+          );
+        } else {
+          expect(args).toEqual(["scripts/test-ui-real-gateway.mts", ...reporterArgs]);
+        }
         const selectedConfig = createPrebuiltUiE2eVitestConfig(
           { OPENCLAW_VITEST_INCLUDE_FILE: readFileSync(includePath, "utf8") },
           [testNodeExecPath, ...args],
@@ -5613,12 +5616,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         selectedFiles.push(
           ...(selectedConfig.test?.include ?? []).filter((file) => file !== desktop),
         );
-        expect(
-          resolveRunVitestSpawnEnv(
-            { CI: "true", OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000" },
-            args.slice(1),
-          ).OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
-        ).toBe("300000");
+        if (frozen) {
+          expect(
+            resolveRunVitestSpawnEnv(
+              { CI: "true", OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000" },
+              args.slice(1),
+            ).OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
+          ).toBe("300000");
+        }
       }
       expect(new Set(selectedFiles).size).toBe(selectedFiles.length);
       expect(selectedFiles.toSorted()).toEqual(

@@ -219,3 +219,21 @@ it.each(["iPhone", "Android"])(
     }
   },
 );
+
+it.each(["chat", "new-session"] as const)(
+  "keeps reverse Tab native with slash suggestions in %s",
+  async (surface) => {
+    const view = surface === "chat" ? renderComposerFixture() : renderNewSession();
+    const before = document.createElement("button");
+    before.textContent = "Before composer";
+    document.body.append(before, view.container);
+    onTestFinished(() => before.remove());
+    const textarea = view.container.querySelector("textarea")!;
+    await userEvent.fill(textarea, "/to");
+    await expect.element(page.getByRole("listbox")).toBeVisible();
+    await userEvent.tab({ shift: true });
+    expect(textarea.value).toBe("/to");
+    expect(document.activeElement).not.toBe(textarea);
+    expect(document.activeElement).not.toBe(document.body);
+  },
+);

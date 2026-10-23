@@ -33,47 +33,6 @@ export async function requestPlaceCatalog(
   };
 }
 
-export type SessionMenuItemOptions = {
-  value: string;
-  label: string;
-  accessibleProvider?: string;
-  description?: string;
-  icon?: unknown;
-  sub?: string;
-  checked: boolean;
-  disabled?: boolean;
-  title?: string;
-  keepOpen?: boolean;
-  compact?: boolean;
-  capacityLabel?: string;
-  platform?: string;
-  summary?: string;
-  selectedSummary?: string;
-  hasSubmenu?: boolean;
-  suggested?: boolean;
-  capabilityLabels?: readonly string[];
-  hardware?: string;
-  hideDetails?: boolean;
-  remediation?: "enable-session-hosting" | "update-device";
-  provider?: string;
-  trust?: DraftCloudProfile["trust"];
-  onSelect: () => void;
-};
-
-export type CloudProfileMenuItemsOptions = {
-  profiles: readonly DraftCloudProfile[];
-  selectedId: string;
-  selectedOs?: string;
-  selectedMachine?: string;
-  onSelectOs?: (osId: string) => void;
-  onSelectMachine?: (machineId: string) => void;
-  submitting: boolean;
-  disabled?: boolean;
-  disabledReason?: string;
-  profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
-  onSelect: (profileId: string, useDefaults?: boolean) => void;
-};
-
 export type CloudChoiceMenuItemsOptions = {
   kind: "machine" | "os";
   choices: readonly (WorkerMachineOption & WorkerOperatingSystem)[];

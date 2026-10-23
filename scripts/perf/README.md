@@ -116,6 +116,41 @@ Apply the campaign's sample-count and paired-delta rules. RSS high water include
 setup. State and profile files remain in the task-owned directory for inspection
 and cleanup.
 
+## Session catalog selection
+
+`session-catalog-selection-measure.ts` invokes the real `sessions.catalog.list`
+handler with a real row projection over 5,000 persisted synthetic sessions split
+between two agents. Two synthetic providers consume the shared planning snapshot
+and return 16 rows each. Every measured call follows a committed metadata update
+and waits for the row owner to settle before reading its order;
+`--unchanged` instead measures repeated calls at one revision. This is in-process
+handler evidence, without transport, model calls, or external provider IO.
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/session-catalog-selection-measure.ts \
+  --state-dir /path/to/new-state --operations 4000 --start-at <future-epoch-ms> \
+  --gc-log /path/to/capture.log --output /path/to/result.json > /path/to/capture.log 2>&1
+```
+
+Run on the approved benchmark host with a new state directory per process. Setup
+and warmup precede `CATALOG_READY`; use preparation CPUs until that marker, then
+the pair's interleaved measurement CPUs. Hold one quiet lock and use the shared
+production guard; swap placements in the second pair. Add `--allocations` for a
+separate paired allocation pass including objects collected by minor and major GC.
+Handler latency excludes the metadata write and row settling; allocation, GC, promotion, CPU, and
+elapsed time include the write, settling, response hashing, and the one-millisecond pacing
+yield. Selection and catalog allocation subtrees are reported separately.
+
+Compare the initial/final full ordered entry hashes and complete response-sequence
+hash across baseline and candidate: no response fields are omitted. Assertions
+check both providers ran and saw all rows and the expected selection revisions.
+Twenty unchanged warmup calls provide context; use `--unchanged --operations 4000`
+for a full unchanged comparison. GC reports totals per call, collection counts,
+maximum pauses and tails; all tails include sample counts. Apply the campaign's
+paired-delta, sample-count and absolute GC pause rules. RSS high water includes
+setup; retained state and allocation profiles are task-owned cleanup artifacts.
+
 ## Gateway startup and restart acceptance
 
 Use `scripts/bench-gateway-startup.ts` and `scripts/bench-gateway-restart.ts`
@@ -288,6 +323,12 @@ while raw frames preserve delivery order for inspection.
 
 Use separate identical fixtures and ports for both sides. The common
 `--start-at` starts subscribe timing; notification timing starts 30 seconds later.
+Add `--list-every 8` to interleave a 200-row sidebar list with every eight stored-row
+updates. The allocation window includes these requests and reports their latency
+separately. Resource snapshots include selection counts by kind and caller; the
+run must observe parent selections during the notification window. This exercises
+the retained sidebar and task-PR descendant paths together, without assuming that
+their synthetic ratio is the production ratio.
 A missed scheduled phase fails the run. Compare concurrent pairs under one
 host measurement lock, use interleaved physical cores, and swap sides for the
 second pair. Repeat with `--clients 1` to distinguish fixed from per-tab costs.
@@ -297,9 +338,10 @@ per side; total GC remains the gate. Reject a mean paired regression of at least
 20%, or a metric at least 10% worse in both pairs. Inspect family allocation
 share and snapshot captures alongside total allocation at the matched workload.
 To compare a small owner-only change without another source tree, place candidate
-copies of `control-ui-session-task-prs.ts` and `control-ui-session-pr-subscriptions.ts`
+copies of `control-ui-session-task-prs.ts`, `control-ui-session-pr-subscriptions.ts`,
+and `session-row-scope.ts`
 beside the originals with a `.candidate.ts` suffix and pass `--owner-suffix candidate`.
-The child verifies both substitutions loaded; results record both owner hashes
+The child verifies all substitutions loaded; results record the owner hashes
 and the optional `--revision` label.
 
 ## Async context allocation
@@ -691,6 +733,47 @@ participate in normal recovery; their next attempt is delayed one day from the
 reference time. Generate a fresh fixture for each startup comparison. Cron jobs,
 heartbeats, channels, plugins, browser automation and network discovery are
 disabled so this workload does not call models or external integrations.
+
+## Measure idle Gateway allocation and timer work
+
+`idle-gateway-measure.ts` connects one real Control UI client to an owned Gateway,
+then sends no application requests during the measured window. Use a freshly
+generated, offline team-shape fixture for each side; omitting `--state-dir`
+retains the small empty-state workload. `--output` must name a new artifact
+directory. The fixture config is preserved and an isolated measurement config
+is written under the output directory.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/idle-gateway-measure.ts \
+  --state-dir /srv/perf-sandbox/<lane>/fixture-a \
+  --output /srv/perf-sandbox/<lane>/idle-a \
+  --entry src/entry.ts --port 41563 --minutes 3 --settle-seconds 60 \
+  --start-at <future-epoch-ms> --allocations
+```
+
+Run on the authorized benchmark host under its measurement lock, resource limits
+and production guard. Concurrent baseline/candidate runs need separate fixtures,
+output directories and loopback ports (40000 or higher), the same `--start-at`,
+and the host's interleaved CPU sets, swapped for the second pair. The start barrier
+follows readiness and settling; a missed barrier fails the run. Actual capture
+timestamps are recorded so placement and start skew remain visible.
+
+`result.json` records main-isolate CPU, GC durations and counts, event-loop p99 and
+sample count, and V8 promoted bytes for the capture only. `--allocations` uses the
+shared private IPC profiler to include objects collected by minor and major GC;
+the saved heap profile and summary include the top allocation sites and estimated
+bytes per minute and second. Worker allocations are excluded. `--profile` captures
+a main-isolate CPU profile and its diagnostics over the measured window; promotion
+accounting requires a run without `--profile`. Run CPU and allocation profiling
+separately. Neither profiling mode exposes an inspector listener or copies operator
+credentials.
+
+Use `--timers` in a separate attribution run to collect per-timer callback counts,
+CPU and worker snapshots. It instruments timer creation and adds periodic IPC
+samples, so leave it off for allocation/GC acceptance comparisons. Compare paired
+per-minute allocation, promotion and total GC time; retain counts and maximum
+pause alongside any tail percentile, applying the campaign's sample-count and
+absolute-delta rules rather than treating sparse tails as gates.
 
 ## Measure clean-close seals across app versions
 

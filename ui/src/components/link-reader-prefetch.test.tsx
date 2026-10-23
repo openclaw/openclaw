@@ -151,6 +151,25 @@ describe("GitHub preview warming", () => {
     const scan = vi.spyOn(container.firstElementChild!, "querySelectorAll");
     await show();
     expect(scan).not.toHaveBeenCalled();
+
+    links[0]!.firstChild!.textContent = "Streaming label";
+    links[0]!.append(document.createTextNode(" continued"));
+    await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
+    expect(scan).not.toHaveBeenCalled();
+    expect(observer().targets.has(links[0]!)).toBe(true);
+
+    const emphasis = document.createElement("strong");
+    emphasis.textContent = "formatted label";
+    links[0]!.append(emphasis);
+    await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
+    expect(scan).not.toHaveBeenCalled();
+    emphasis.remove();
+    await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
+    expect(scan).not.toHaveBeenCalled();
+    expect(observer().targets.has(links[0]!)).toBe(true);
   });
 
   it.each(["session", "capabilities"])(
@@ -218,7 +237,7 @@ describe("GitHub preview warming", () => {
     gate.mockClear();
     resolve.mockClear();
 
-    container.firstElementChild!.append(document.createTextNode("streaming delta"));
+    links[0]!.href = href(1);
     await vi.advanceTimersByTimeAsync(0);
     flushIdleScans();
     expect(resolve).not.toHaveBeenCalled();
@@ -261,14 +280,15 @@ describe("GitHub preview warming", () => {
   it("rechecks excluded ancestry on a scan without reparsing the claim", async () => {
     const [link] = await show();
     const resolve = vi.spyOn(linkTargets, "resolveLinkReaderTarget");
-    container.classList.add("chat-source-card");
-    container.firstElementChild!.append(document.createTextNode("delta"));
+    const excluded = document.createElement("div");
+    excluded.className = "chat-source-card";
+    excluded.append(link!);
+    container.firstElementChild!.append(excluded);
     await vi.advanceTimersByTimeAsync(0);
     flushIdleScans();
     expect(observer().targets.size).toBe(0);
     expect(resolve).not.toHaveBeenCalled();
-    container.classList.remove("chat-source-card");
-    container.firstElementChild!.append(document.createTextNode("delta"));
+    container.firstElementChild!.append(link!);
     await vi.advanceTimersByTimeAsync(0);
     flushIdleScans();
     expect(observer().targets.has(link!)).toBe(true);
@@ -320,12 +340,12 @@ describe("GitHub preview warming", () => {
     flushIdleScans();
     expect(observer().targets.has(link)).toBe(true);
     Object.assign(inner, { readers: [] });
-    container.firstElementChild!.append(document.createTextNode("delta"));
+    provider.dispatchEvent(new Event("link-reader-capabilities-changed"));
     await vi.advanceTimersByTimeAsync(0);
     flushIdleScans();
     expect([...observer().targets]).toEqual([outer]);
     Object.assign(inner, { readers: [TEST_LINK_READER] });
-    container.firstElementChild!.append(document.createTextNode("delta"));
+    provider.dispatchEvent(new Event("link-reader-capabilities-changed"));
     await vi.advanceTimersByTimeAsync(0);
     flushIdleScans();
     expect(observer().targets.has(link)).toBe(true);
@@ -399,7 +419,11 @@ describe("GitHub preview warming", () => {
     const link = document.createElement("a");
     link.className = "markdown-github-link";
     link.href = href(1);
-    container.firstElementChild!.append(link);
+    const subtree = document.createElement("section");
+    subtree.append(link);
+    const fragment = document.createDocumentFragment();
+    fragment.append(subtree);
+    container.firstElementChild!.append(fragment);
     await vi.advanceTimersByTimeAsync(0);
     flushIdleScans();
     expect(observer().targets.has(link)).toBe(true);
@@ -411,6 +435,21 @@ describe("GitHub preview warming", () => {
     observer().intersect([link]);
     await vi.advanceTimersByTimeAsync(200);
     expect(prefetch).toHaveBeenCalledTimes(2);
+
+    subtree.remove();
+    await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
+    expect(observer().targets.has(link)).toBe(false);
+
+    const shadowHost = document.createElement("div");
+    const shadowLink = document.createElement("a");
+    shadowLink.href = href(3);
+    shadowHost.attachShadow({ mode: "open" }).append(shadowLink);
+    subtree.replaceChildren(shadowHost);
+    container.firstElementChild!.append(subtree);
+    await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
+    expect(observer().targets.has(shadowLink)).toBe(false);
   });
 
   it.each(

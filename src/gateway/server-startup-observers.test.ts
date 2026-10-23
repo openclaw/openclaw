@@ -10,6 +10,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { captureSessionTarget } from "../sessions/session-controller.target.js";
+import { GatewayInputRecovery } from "./agent-input-recovery.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import {
   markGatewayStartupMainSessionOrphans,
@@ -18,21 +19,19 @@ import {
 import { captureGatewayScopeMatcher } from "./session-runtime-scope.js";
 
 const mocks = vi.hoisted(() => ({
-  prewarm: vi.fn(async () => {}),
-  delivery: vi.fn(async () => {}),
-  exec: vi.fn(async () => {}),
+  delivery: vi.fn<typeof import("./session-send-recovery.js").recoverSessionSendDeliveries>(),
+  exec: vi.fn<typeof import("../agents/bash-tools.exec-notify.js").recoverExecExitNotifications>(),
 }));
 const markOrphans = vi.hoisted(() => vi.fn<typeof markStartupOrphanedMainSessionsForRecovery>());
+const resumeDeletions = vi.hoisted(() =>
+  vi.fn<typeof import("./server-agent-deletion-recovery.js").resumeAgentDeletions>(),
+);
 
 // mock-isolation: Control both storage-owner failure contracts without opening agent databases.
 vi.mock("../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
   markStartupOrphanedMainSessionsForRecovery: markOrphans,
 }));
 
-// mock-isolation: Hold recovery I/O at the owner boundary without allocating native readers.
-vi.mock("./server-history-prewarm.js", () => ({
-  prewarmGatewaySessionHistory: mocks.prewarm,
-}));
 // mock-isolation: Hold delivery recovery without reading persisted channel deliveries.
 vi.mock("./session-send-recovery.js", () => ({
   recoverSessionSendDeliveries: mocks.delivery,
@@ -43,20 +42,142 @@ vi.mock("../agents/bash-tools.exec-notify.js", () => ({
 }));
 // mock-isolation: Agent deletion and watch-notice persistence are independent startup owners.
 vi.mock("./server-agent-deletion-recovery.js", () => ({
-  resumeAgentDeletions: vi.fn(async () => {}),
+  resumeAgentDeletions: resumeDeletions,
 }));
 // mock-isolation: Watch-notice persistence is independent of recovery activation ordering.
 vi.mock("../sessions/session-state-events.js", () => ({
   sweepSessionStateWatchNotices: vi.fn(async () => {}),
 }));
 
+function completedRecovery() {
+  const settled = Promise.resolve();
+  return { initial: settled, pending: new Map<string, Promise<void>>(), settled };
+}
+
 beforeEach(() => {
   markOrphans.mockReset();
+  resumeDeletions.mockReset().mockResolvedValue(undefined);
   for (const mock of Object.values(mocks)) {
-    mock.mockReset().mockResolvedValue(undefined);
+    mock.mockReset().mockImplementation(completedRecovery);
   }
 });
 afterEach(() => resetGatewayWorkAdmission());
+
+it.each(["initial", "deletion", "delivery", "exec", "registry-load", "registry-activation"])(
+  "keeps fresh input closed when %s recovery fails",
+  async (stage) => {
+    const error = new Error("saved input store unavailable");
+    const fail = () => {
+      throw error;
+    };
+    let loadSubagentRegistryActivation: Parameters<
+      typeof runGatewayStartupObservers
+    >[0]["loadSubagentRegistryActivation"] = () => completedRecovery;
+    switch (stage) {
+      case "initial": {
+        const failed = Promise.reject(error);
+        void failed.catch(() => {});
+        mocks.delivery.mockReturnValue({ initial: failed, pending: new Map(), settled: failed });
+        break;
+      }
+      case "deletion":
+        resumeDeletions.mockRejectedValue(error);
+        break;
+      case "delivery":
+        mocks.delivery.mockImplementation(fail);
+        break;
+      case "exec":
+        mocks.exec.mockImplementation(fail);
+        break;
+      case "registry-load":
+        loadSubagentRegistryActivation = fail;
+        break;
+      case "registry-activation":
+        loadSubagentRegistryActivation = () => fail;
+        break;
+    }
+    const gate = new GatewayInputRecovery();
+    const unlock = vi.fn(() => gate.releaseInitial());
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    await runGatewayStartupObservers({
+      registry: createEmptyPluginRegistry(),
+      resolveGatewayContext: () => createContext(),
+      loadSubagentRegistryActivation,
+      signal: new AbortController().signal,
+      port: 0,
+      config: {},
+      workspaceDir: "/unused",
+      getCron: () => undefined,
+      trackInputRecovery: (progress) => gate.track(progress),
+      unlockStartupMethods: unlock,
+      createHookRunner: async (...args) =>
+        (await import("../plugins/hooks.js")).createHookRunner(...args),
+      refreshLatestUpdateRestartSentinel: async () => {},
+      log,
+      logHooks: log,
+    });
+    expect(unlock).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(error.message));
+    await expect(gate.waitForAgentInputRecovery("main")).rejects.toBe(error);
+  },
+);
+
+it("opens healthy agents after initial recovery while joining deferred recovery on shutdown", async ({
+  signal,
+}) => {
+  const pending = createDeferred();
+  const unlocked = createDeferred();
+  const gate = new GatewayInputRecovery();
+  const initial = Promise.resolve();
+  mocks.delivery.mockReturnValue({
+    initial,
+    pending: new Map([["owner", pending.promise]]),
+    settled: pending.promise,
+  });
+  const recovered = vi.fn();
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  let settled = false;
+  const controller = new AbortController();
+  const observers = runGatewayStartupObservers({
+    registry: createEmptyPluginRegistry(),
+    resolveGatewayContext: () => createContext(),
+    loadSubagentRegistryActivation: () => completedRecovery,
+    signal: controller.signal,
+    port: 0,
+    config: {},
+    workspaceDir: "/unused",
+    getCron: () => undefined,
+    trackInputRecovery: (progress) => gate.track(progress),
+    unlockStartupMethods: () => {
+      gate.releaseInitial();
+      unlocked.resolve();
+    },
+    onSubagentRecoverySettled: recovered,
+    createHookRunner: async (...args) =>
+      (await import("../plugins/hooks.js")).createHookRunner(...args),
+    refreshLatestUpdateRestartSentinel: async () => {},
+    log,
+    logHooks: log,
+  }).then(() => {
+    settled = true;
+  });
+  try {
+    await withinTest(unlocked.promise, signal);
+    expect(gate.isPending("main")).toBe(false);
+    expect(gate.isPending("owner")).toBe(true);
+    expect(recovered).not.toHaveBeenCalled();
+    controller.abort();
+    expect(settled).toBe(false);
+    pending.resolve();
+    await observers;
+    expect(recovered).toHaveBeenCalledOnce();
+    expect(gate.isPending("owner")).toBe(false);
+  } finally {
+    controller.abort();
+    pending.resolve();
+    await observers;
+  }
+});
 
 it.each(["rejected", "failed-target"] as const)(
   "holds orphan admission through a config reload after a %s scan",
@@ -124,7 +245,7 @@ it.each(["rejected", "failed-target"] as const)(
   },
 );
 
-it.for(["prewarm", "delivery", "exec"] as const)(
+it.for(["delivery", "exec"] as const)(
   "activates healthy subagents while %s waits for another agent database",
   async (blocked, { signal }) => {
     const prepared = createDeferred();
@@ -140,7 +261,7 @@ it.for(["prewarm", "delivery", "exec"] as const)(
     const sessionId = "startup-exec-recovery";
     const storePath = "/synthetic/startup-exec-recovery";
     let operation: ReturnType<typeof createReplyOperation> | undefined;
-    mocks[blocked].mockImplementation(async () => {
+    mocks[blocked].mockImplementation(() => {
       if (blocked === "exec") {
         operation = createReplyOperation({
           sessionKey,
@@ -154,8 +275,10 @@ it.for(["prewarm", "delivery", "exec"] as const)(
         });
       }
       entered.resolve();
-      await prepared.promise;
-      operation?.complete();
+      const settled = prepared.promise.then(() => {
+        operation?.complete();
+      });
+      return { initial: settled, pending: new Map(), settled };
     });
     const controller = new AbortController();
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -163,8 +286,9 @@ it.for(["prewarm", "delivery", "exec"] as const)(
     const observers = runGatewayStartupObservers({
       registry: createEmptyPluginRegistry(),
       resolveGatewayContext,
-      loadSubagentRegistryActivation: () => async () => {
+      loadSubagentRegistryActivation: () => () => {
         activated.resolve();
+        return completedRecovery();
       },
       createHookRunner: async (...args) =>
         (await import("../plugins/hooks.js")).createHookRunner(...args),
@@ -195,15 +319,13 @@ it.for(["prewarm", "delivery", "exec"] as const)(
     });
     try {
       await withinTest(Promise.all([activated.promise, refreshed.promise]), signal);
-      if (blocked !== "prewarm") {
-        await withinTest(entered.promise, signal);
+      await withinTest(entered.promise, signal);
+      expect(settled).toBe(false);
+      if (blocked === "delivery") {
+        await withinTest(registryRecovery.promise, signal);
+        expect(recovered).not.toHaveBeenCalled();
+        expect(unlock).not.toHaveBeenCalled();
         expect(settled).toBe(false);
-        if (blocked === "delivery") {
-          await withinTest(registryRecovery.promise, signal);
-          expect(recovered).not.toHaveBeenCalled();
-          expect(unlock).not.toHaveBeenCalled();
-          expect(settled).toBe(false);
-        }
       }
       if (blocked === "exec") {
         expect(operation).toBeDefined();
@@ -243,7 +365,7 @@ it("joins recovery preparation when shutdown retires suspended startup admission
     });
   const controller = new AbortController();
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  const activate = vi.fn(async () => {});
+  const activate = vi.fn(completedRecovery);
   const observers = runGatewayStartupObservers({
     registry: createEmptyPluginRegistry(),
     resolveGatewayContext: () => createContext(),

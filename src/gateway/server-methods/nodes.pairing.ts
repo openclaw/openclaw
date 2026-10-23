@@ -43,7 +43,6 @@ function emitNodePairingDeniedSecurityEvent(params: {
   authz: DeviceManagementAuthz;
   nodeId: string;
   controlId: "node.pair.approve" | "node.pair.reject" | "node.rename";
-  reason: string;
 }): void {
   emitDeviceManagementSecurityEvent({
     action: "device.pairing.denied",
@@ -54,7 +53,7 @@ function emitNodePairingDeniedSecurityEvent(params: {
     policyId: "gateway.device-pairing",
     decision: "deny",
     controlId: params.controlId,
-    reason: params.reason,
+    reason: "device-ownership-mismatch",
     attributes: { role: "node" },
   });
 }
@@ -90,7 +89,6 @@ async function enforcePendingNodePairingOwnership(params: {
     authz,
     nodeId: pending.nodeId,
     controlId,
-    reason: "device-ownership-mismatch",
   });
   params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, deniedMessage));
   return false;
@@ -359,7 +357,6 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
           authz,
           nodeId: authz.normalizedTargetDeviceId,
           controlId: "node.rename",
-          reason: "device-ownership-mismatch",
         });
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "node rename denied"));
         return;

@@ -35,6 +35,7 @@ const { values } = parseArgs({
     operations: { type: "string", default: "1000" },
     subscribes: { type: "string", default: "256" },
     "interval-ms": { type: "string", default: "20" },
+    "list-every": { type: "string", default: "0" },
     "start-at": { type: "string" },
   },
 });
@@ -43,6 +44,11 @@ const integer = (value: string, label: string, min = 1) =>
 const port = integer(values.port, "--port", 40000);
 assert(port <= 65535);
 const channel = "session-pr-subscriptions-bench";
+const benchmarkOwners = [
+  "control-ui-session-task-prs",
+  "control-ui-session-pr-subscriptions",
+  "session-row-scope",
+];
 type BenchReply = {
   notifications: number;
   scopeCount: number;
@@ -55,9 +61,7 @@ if (values.child) {
   if (values["owner-suffix"]) {
     assert(/^[a-z0-9-]+$/.test(values["owner-suffix"]));
     const owners = new Set(
-      ["control-ui-session-task-prs", "control-ui-session-pr-subscriptions"].map(
-        (name) => new URL(`../../src/gateway/${name}.ts`, import.meta.url).href,
-      ),
+      benchmarkOwners.map((name) => new URL(`../../src/gateway/${name}.ts`, import.meta.url).href),
     );
     registerHooks({
       resolve(specifier, context, nextResolve) {
@@ -162,7 +166,7 @@ if (values.child) {
   });
   const server = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
   if (values["owner-suffix"]) {
-    assert.equal(ownerLoads.size, 2, "Both candidate owners must be loaded");
+    assert.equal(ownerLoads.size, benchmarkOwners.length, "All candidate owners must be loaded");
   }
   process.send?.({ channel, action: "ready" });
   for (const signal of ["SIGTERM", "SIGINT"] as const) {
@@ -186,6 +190,7 @@ if (values.child) {
   const operations = integer(values.operations, "--operations");
   const subscribes = integer(values.subscribes, "--subscribes");
   const interval = integer(values["interval-ms"], "--interval-ms");
+  const listEvery = integer(values["list-every"], "--list-every", 0);
   const env = createGatewayBenchEnv(path.join(root, "home"), path.join(root, "openclaw.json"), {
     startupTrace: false,
     caseEnv: {
@@ -342,6 +347,18 @@ if (values.child) {
     const errors = createWriteStream(path.join(output, "gateway-stderr.log"));
     gateway.stderr?.pipe(errors);
     await command("ready");
+    const readyDeadline = Date.now() + 180_000;
+    while (
+      !(await fetch(`http://127.0.0.1:${port}/readyz`, {
+        signal: AbortSignal.timeout(5000),
+      }).then((response) => response.ok))
+    ) {
+      assert(
+        gateway.exitCode === null && gateway.signalCode === null && Date.now() < readyDeadline,
+        "Gateway readiness failed; see gateway.log",
+      );
+      await delay(250);
+    }
     for (let index = 0; index < clients; index++) {
       const challenge = Promise.withResolvers<{ nonce: string; ts: number }>();
       const peer = createGatewayWsClient({
@@ -443,6 +460,7 @@ if (values.child) {
       await delay(notifyAt - Date.now());
     }
     const notifyLatency: number[] = [];
+    const listLatency: number[] = [];
     const schedulingDelay: number[] = [];
     const profilePath = path.join(output, "notify.heapprofile");
     let finalSettlement: BenchReply | undefined;
@@ -465,12 +483,32 @@ if (values.child) {
               })
             ).elapsedMs,
           );
+          if (listEvery && index % listEvery === 0) {
+            const page = await rpc(peers[index % clients]!, "sessions.list", {
+              limit: 200,
+              rowMode: "sidebar",
+              archived: "all",
+            });
+            assert(isRecord(page.payload) && Array.isArray(page.payload.sessions));
+            assert(page.payload.sessions.length > 0, "Sidebar selection returned no rows");
+            listLatency.push(page.elapsedMs);
+          }
         }
         finalSettlement = await command("settle");
       },
     );
     const { notifications } = await command("stop");
     assert(notifications >= operations, "The stored-row notification path was not exercised");
+    const parentSelections = (snapshot: typeof allocation.sessionRowSelections.before) =>
+      snapshot?.selections.reduce(
+        (total, item) => total + (item.kind === "parent" ? item.calls : 0),
+        0,
+      ) ?? 0;
+    assert(
+      parentSelections(allocation.sessionRowSelections.after) >
+        parentSelections(allocation.sessionRowSelections.before),
+      "The subscription workload did not exercise parent selection",
+    );
     await delay(100);
     const promotion = readGatewayGcTrace(path.join(output, "gateway.log"), profilePath);
     const family = familyBytes(profilePath);
@@ -498,7 +536,7 @@ if (values.child) {
       finalSettlement,
       revision: values.revision ?? null,
       testedOwners: Object.fromEntries(
-        ["control-ui-session-task-prs", "control-ui-session-pr-subscriptions"].map((name) => {
+        benchmarkOwners.map((name) => {
           const suffix = values["owner-suffix"] ? `.${values["owner-suffix"]}` : "";
           const owner = new URL(`../../src/gateway/${name}${suffix}.ts`, import.meta.url);
           return [name, createHash("sha256").update(readFileSync(owner)).digest("hex")];
@@ -513,9 +551,11 @@ if (values.child) {
       keysPerClient: keyCount,
       operations,
       intervalMs: interval,
+      listEvery,
       notifications,
       subscribeLatency: summarize(subscribeLatency),
       notifyRpcLatency: summarize(notifyLatency),
+      listLatency: listLatency.length ? summarize(listLatency) : null,
       schedulingDelay: summarize(schedulingDelay),
       initialSnapshotHash,
       finalSnapshotHash,

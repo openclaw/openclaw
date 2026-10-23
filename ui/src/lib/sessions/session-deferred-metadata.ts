@@ -16,11 +16,10 @@ import {
 
 type MetadataField = "label" | "icon" | "color" | "category";
 type MetadataFieldOwner = ReturnType<typeof createOptimisticRowField<MetadataField>>;
-type MetadataFields = Record<MetadataField, MetadataFieldOwner>;
 
 export function deferSessionMetadataPatch(
   host: SessionMutationsHost,
-  metadataFields: MetadataFields,
+  metadataFields: Record<MetadataField, MetadataFieldOwner>,
   patch: SessionPatchRoute,
   key: string,
   patchParams: SessionPatch,

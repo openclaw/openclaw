@@ -274,6 +274,7 @@ export async function finishGatewayStartup(params: {
           logHooks,
           logChannels,
           unlockStartupMethods: kernel.unlockStartupMethods,
+          trackInputRecovery: kernel.trackInputRecovery,
           refreshChatMetadata: chatMetadataLifecycle.refresh,
           loadStartupPlugins: async () => {
             const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");

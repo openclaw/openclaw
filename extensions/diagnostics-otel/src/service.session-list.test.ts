@@ -11,12 +11,82 @@ import {
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expect, test } from "vitest";
-import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
+import {
+  collectTestMetrics,
+  installRealOtelSdkTestHarness,
+  installTestMeter,
+} from "./service.real-sdk.test-support.js";
 import { startOtelService, stopStartedOtelServices } from "./service.test-helpers.js";
 
 installRealOtelSdkTestHarness();
 const emit = (event: Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0]) =>
   emitTrustedDiagnosticEventWithPrivateData(event, {});
+
+test("preserves cumulative session-row totals across restarts, isolated by provider and prefix", async () => {
+  const first = installTestMeter();
+  const sample = (calls: number, resets: number) =>
+    emit({
+      type: "diagnostic.memory.sample",
+      memory: {
+        rssBytes: 100,
+        heapUsedBytes: 40,
+        heapTotalBytes: 80,
+        externalBytes: 10,
+        arrayBuffersBytes: 5,
+        sessionRowSelections: {
+          selections: [{ kind: "parent", task: "control-ui-pr", calls, rows: calls * 3 }],
+          resets,
+        },
+      },
+    });
+  const expectTotals = async (
+    reader: PeriodicExportingMetricReader,
+    calls: number,
+    resets: number,
+    prefix = "openclaw.",
+  ) => {
+    await waitForDiagnosticEventsDrained();
+    const recorded = await collectTestMetrics(reader, `${prefix}session.row.`);
+    expect(
+      Object.fromEntries(
+        recorded.map((metric) => [
+          metric.descriptor.name,
+          metric.dataPoints.map((point) => point.value),
+        ]),
+      ),
+    ).toEqual({
+      [`${prefix}session.row.selections`]: [calls],
+      [`${prefix}session.row.selection.rows`]: [calls * 3],
+      [`${prefix}session.row.selection.resets`]: [resets],
+    });
+  };
+  await startOtelService({ traces: false, metrics: true });
+  sample(4, 2);
+  await expectTotals(first.reader, 4, 2);
+  await stopStartedOtelServices();
+
+  await startOtelService({ traces: false, metrics: true });
+  sample(6, 3);
+  sample(6, 3);
+  await expectTotals(first.reader, 6, 3);
+  await stopStartedOtelServices();
+
+  await startOtelService({
+    traces: false,
+    metrics: true,
+    configure: (ctx) => {
+      ctx.config.diagnostics!.otel!.metricNamePrefix = "alternate.";
+    },
+  });
+  sample(6, 3);
+  await expectTotals(first.reader, 6, 3, "alternate.");
+  await stopStartedOtelServices();
+
+  const second = installTestMeter();
+  await startOtelService({ traces: false, metrics: true });
+  sample(8, 4);
+  await expectTotals(second.reader, 8, 4);
+});
 
 test("exports trusted session list retirements and base misses as bounded counters", async () => {
   const reader = new PeriodicExportingMetricReader({

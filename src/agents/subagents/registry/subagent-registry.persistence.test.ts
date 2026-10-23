@@ -438,7 +438,7 @@ describe("subagent registry persistence", () => {
       recoveryRuntime: createSubagentPersistenceRuntime(callGateway),
       resolveGatewayContext: () => gateway as never,
     };
-    await activateSubagentRegistry(gateway.resolveGatewayContext);
+    await activateSubagentRegistry(gateway.resolveGatewayContext).settled;
     const wait = createAgentsWaitTool({
       agentSessionKey: "agent:main:main",
       agentId: "main",
@@ -694,7 +694,7 @@ describe("subagent registry persistence", () => {
     const resolveGatewayContext = () => gateway;
     gateway.resolveGatewayContext = resolveGatewayContext;
     if (change === "Gateway replacement") {
-      await activateSubagentRegistry(resolveGatewayContext);
+      await activateSubagentRegistry(resolveGatewayContext).settled;
     }
     const runId = "held-resume-read";
     const now = Date.now();

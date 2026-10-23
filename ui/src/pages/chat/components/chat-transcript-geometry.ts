@@ -199,9 +199,11 @@ export function measureTranscriptRow(
 }
 
 export function maxTranscriptScrollOffset(element: HTMLElement | null): number | null {
-  return element && element.clientHeight > 0
-    ? Math.max(0, element.scrollHeight - element.clientHeight)
-    : null;
+  if (!element) {
+    return null;
+  }
+  const clientHeight = element.clientHeight;
+  return clientHeight > 0 ? Math.max(0, element.scrollHeight - clientHeight) : null;
 }
 
 export function createPositionRailGutter(

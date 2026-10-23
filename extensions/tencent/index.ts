@@ -1,8 +1,13 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { createProviderConnectionPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
+import {
+  createPayloadPatchStreamWrapper,
+  type OpenAICompatibleThinkingLevel,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   buildTokenHubProvider,
   buildTokenPlanProvider,
@@ -15,7 +20,35 @@ import {
   TOKENPLAN_PROVIDER_ID,
 } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { wrapTencentProviderStream } from "./stream.js";
+
+const TENCENT_PROVIDER_IDS: ReadonlySet<string> = new Set([
+  TOKENHUB_PROVIDER_ID,
+  TOKENPLAN_PROVIDER_ID,
+]);
+
+type StreamOptions = NonNullable<Parameters<StreamFn>[2]> & { reasoningEffort?: unknown };
+
+// Only hy3 has a verified two-rung override. Other models retain shared effort handling.
+const TENCENT_TWO_RUNG_EFFORT_MAP: Readonly<Record<string, string>> = {
+  off: "none",
+  none: "none",
+  minimal: "high",
+  low: "high",
+  medium: "high",
+  high: "high",
+  xhigh: "high",
+};
+
+function resolveRequestedEffort(
+  thinkingLevel: OpenAICompatibleThinkingLevel,
+  options: StreamOptions | undefined,
+): string | undefined {
+  const raw =
+    (typeof options?.reasoningEffort === "string" && options.reasoningEffort) ||
+    options?.reasoning ||
+    thinkingLevel;
+  return raw ? raw.trim().toLowerCase() : undefined;
+}
 
 const TENCENT_PROVIDERS = [
   {
@@ -115,7 +148,26 @@ export default definePluginEntry({
           TENCENT_PROVIDER_CATALOG.augmentModelCatalog().filter(
             (entry) => entry.provider === provider.providerId,
           ),
-        wrapStreamFn: wrapTencentProviderStream,
+        wrapStreamFn: (ctx) =>
+          createPayloadPatchStreamWrapper(
+            ctx.streamFn,
+            ({ payload, options }) => {
+              const requested = resolveRequestedEffort(ctx.thinkingLevel, options);
+              const mapped =
+                requested && Object.hasOwn(TENCENT_TWO_RUNG_EFFORT_MAP, requested)
+                  ? TENCENT_TWO_RUNG_EFFORT_MAP[requested]
+                  : undefined;
+              if (mapped !== undefined) {
+                payload.reasoning_effort = mapped;
+              }
+            },
+            {
+              shouldPatch: ({ model }) =>
+                TENCENT_PROVIDER_IDS.has(model.provider) &&
+                model.api === "openai-completions" &&
+                model.id === "hy3",
+            },
+          ),
       });
     }
   },

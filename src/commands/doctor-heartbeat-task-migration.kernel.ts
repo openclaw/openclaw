@@ -25,9 +25,11 @@ import { getCronStoreKysely } from "../cron/store/schema.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { migrateHeartbeatPrompt } from "./doctor-heartbeat-legacy.js";
 import {
   heartbeatTaskDeclarationKey,
   isHeartbeatTaskCronJob,
+  MIGRATED_HEARTBEAT_TASK_DESCRIPTION,
 } from "./doctor-heartbeat-task-identity.js";
 import { analyzeLegacyHeartbeatTasks, type LegacyHeartbeatTask } from "./heartbeat-task-legacy.js";
 
@@ -76,7 +78,7 @@ function taskPayload(monitor: CronJob, message: string) {
     throw new Error(`Automation ${monitor.id} has not completed heartbeat conversion`);
   }
   const { skipIfScratchEmpty: _skipIfScratchEmpty, ...payload } = monitor.payload;
-  return { ...payload, message };
+  return { ...payload, message: migrateHeartbeatPrompt(message) };
 }
 
 function taskJobInput(params: TaskJobInput) {
@@ -87,7 +89,7 @@ function taskJobInput(params: TaskJobInput) {
   return {
     displayName: truncateUtf16Safe(`Heartbeat task: ${params.task.name}`, 200),
     name: params.task.name,
-    description: "Migrated from heartbeat monitor scratch by openclaw doctor.",
+    description: MIGRATED_HEARTBEAT_TASK_DESCRIPTION,
     agentId: params.agentId,
     enabled: params.monitor.enabled,
     schedule: {

@@ -28,10 +28,14 @@ describe("conversation position rail", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("does not recompute settled marker labels for live preview deltas", () => {
+  it("does not inspect settled markers or labels while the live preview is closed", () => {
     let roleReads = 0;
+    let idReads = 0;
     const marker = {
-      id: "answer",
+      get id() {
+        idReads++;
+        return "answer";
+      },
       anchorId: "answer",
       get role(): "assistant" {
         roleReads++;
@@ -69,8 +73,10 @@ describe("conversation position rail", () => {
         liveMarkers: [{ ...marker, message: message("answer", "assistant", text, 1) }],
       });
       roleReads = 0;
+      idReads = 0;
       flush();
       expect(roleReads).toBe(0);
+      expect(idReads).toBe(0);
     }
     view.unmount();
   });

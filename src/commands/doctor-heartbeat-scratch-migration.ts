@@ -32,11 +32,22 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-sta
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { shortenHomePath } from "../utils.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
-import { resolveLegacyHeartbeatAgents } from "./doctor-heartbeat-legacy.js";
+import {
+  resolveLegacyHeartbeatAgents,
+  resolveLegacyHeartbeatConfig,
+} from "./doctor-heartbeat-legacy.js";
 import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
 
 const LEGACY_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+function resolveHeartbeatFileAgentIds(cfg: OpenClawConfig): string[] {
+  const enrolled = new Set(resolveLegacyHeartbeatAgents(cfg).map((agent) => agent.agentId));
+  // Explicit settings still own files when another agent's enrollment excludes them.
+  return listAgentIds(cfg).filter(
+    (agentId) => enrolled.has(agentId) || resolveLegacyHeartbeatConfig(cfg, agentId) !== undefined,
+  );
+}
 
 type HeartbeatScratchMigrationResult = {
   changes: string[];
@@ -396,39 +407,38 @@ export async function collectHeartbeatScratchMigrationFindings(
     fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to migrate HEARTBEAT.md into cron scratch.`,
   } as const;
   const findings: HealthFinding[] = [];
-  const migrationAgents = resolveLegacyHeartbeatAgents(cfg);
-  for (const agent of migrationAgents) {
+  for (const agentId of resolveHeartbeatFileAgentIds(cfg)) {
     const heartbeatPath = path.join(
-      resolveAgentWorkspaceDir(cfg, agent.agentId, env),
+      resolveAgentWorkspaceDir(cfg, agentId, env),
       LEGACY_HEARTBEAT_FILENAME,
     );
     try {
-      const source = await readHeartbeatSource(cfg, agent.agentId, { env });
+      const source = await readHeartbeatSource(cfg, agentId, { env });
       if (!source) {
         continue;
       }
       findings.push({
         ...MIGRATION_FINDING_DEFAULTS,
-        target: agent.agentId,
+        target: agentId,
         path: heartbeatPath,
         requirement: "legacy-heartbeat-file",
-        message: `Agent "${agent.agentId}" still stores heartbeat instructions in HEARTBEAT.md.`,
+        message: `Agent "${agentId}" still stores heartbeat instructions in HEARTBEAT.md.`,
       });
     } catch (error) {
       findings.push({
         ...MIGRATION_FINDING_DEFAULTS,
-        target: agent.agentId,
+        target: agentId,
         path: heartbeatPath,
         requirement: "heartbeat-file-migration-blocked",
         severity: "error",
-        message: `Agent "${agent.agentId}" HEARTBEAT.md cannot be migrated: ${errorMessage(error)}`,
+        message: `Agent "${agentId}" HEARTBEAT.md cannot be migrated: ${errorMessage(error)}`,
       });
     }
   }
   return findings;
 }
 
-/** Migrates each enrolled agent's heartbeat file into its stable monitor job. */
+/** File ownership is independent of enrollment; disabled agents retain their scratch too. */
 export async function maybeMigrateHeartbeatFilesToScratch(params: {
   cfg: OpenClawConfig;
   shouldRepair: boolean;
@@ -439,21 +449,19 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
   const changes: string[] = [];
   const warnings: string[] = [];
   const notices: string[] = [];
-  const migrationAgents = resolveLegacyHeartbeatAgents(params.cfg);
+  const migrationAgents = resolveHeartbeatFileAgentIds(params.cfg);
   if (!params.shouldRepair) {
-    for (const agent of migrationAgents) {
+    for (const agentId of migrationAgents) {
       try {
-        const source = await readHeartbeatSource(params.cfg, agent.agentId, { env });
+        const source = await readHeartbeatSource(params.cfg, agentId, { env });
         if (source) {
           note(
-            `${shortenHomePath(source.path)} will migrate into automation scratch for ${agent.agentId}.`,
+            `${shortenHomePath(source.path)} will migrate into automation scratch for ${agentId}.`,
             "Heartbeat migration preview",
           );
         }
       } catch (error) {
-        warnings.push(
-          `Agent "${agent.agentId}" HEARTBEAT.md cannot be migrated: ${errorMessage(error)}`,
-        );
+        warnings.push(`Agent "${agentId}" HEARTBEAT.md cannot be migrated: ${errorMessage(error)}`);
       }
     }
     noteDoctorMigrationResult({ warnings });

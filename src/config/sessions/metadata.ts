@@ -102,6 +102,12 @@ export function prepareSessionMetaPatch(params: {
   );
   return {
     group: prepareGroupSessionPatch(params),
+    privateTelegramTopicName:
+      params.ctx.ChatType === "direct" &&
+      params.ctx.MessageThreadId != null &&
+      sourceChannel === "telegram"
+        ? normalizeOptionalString(params.ctx.ThreadLabel)
+        : undefined,
     clearAvatar: params.ctx.ConversationAvatar === "",
     origin: deriveSessionOrigin(params.ctx, {
       skipSystemEventOrigin: params.skipSystemEventOrigin,

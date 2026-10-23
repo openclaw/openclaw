@@ -98,6 +98,7 @@ async function fixture() {
   sidebar.activeRouteId = "plugin";
   sidebar.activePluginTabId = "briefing/daily";
   await selectSidebarView(sidebar, "pages");
+  await vi.waitFor(() => expect(pageRow(sidebar, "route:usage")).not.toBeNull());
   await settleLitElement(sidebar);
   return {
     sidebar,

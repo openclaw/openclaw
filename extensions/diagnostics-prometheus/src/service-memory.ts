@@ -123,6 +123,29 @@ export function recordMemorySample(
       message.unmeasuredMessages,
     );
   }
+  for (const selection of memory.sessionRowSelections?.selections ?? []) {
+    const labels = { kind: selection.kind, task: selection.task };
+    store.counterValue(
+      "openclaw_session_row_selections_total",
+      "Successful resident session-row selections by query shape and enclosing task.",
+      labels,
+      selection.calls,
+    );
+    store.counterValue(
+      "openclaw_session_row_selection_rows_total",
+      "Resident session rows returned by selections, before federation and visibility filtering.",
+      labels,
+      selection.rows,
+    );
+  }
+  if (memory.sessionRowSelections) {
+    store.counterValue(
+      "openclaw_session_row_selection_resets_total",
+      "Broad session-row selection invalidations, including topology replacement and disposal.",
+      {},
+      memory.sessionRowSelections.resets,
+    );
+  }
   for (const worker of memory.workerLifecycle ?? []) {
     store.counterValue(
       "openclaw_worker_started_total",

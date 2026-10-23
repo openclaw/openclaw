@@ -397,6 +397,15 @@ it("keeps cross-agent inheritance bound to a stored qualified parent", () =>
     expectInherited(parentKey, "work-model");
     expect(children(parentKey, "work")).toEqual([]);
     expect(children(parentKey, "main")).toEqual([key]);
+    expect(children("AGENT:WORK:MAIN", "main")).toEqual([key]);
+    expect(
+      projection
+        .selectEntries({
+          agentId: "main",
+          parentSessionKey: projection.describe({ agentId: "work", key: parentKey })!,
+        })
+        .map((child) => child.key),
+    ).toEqual([key]);
     writeParent("work-parent", 3, "updated-work-model");
     await projection.ensureMaterialized();
     expectInherited(parentKey, "updated-work-model");
@@ -449,6 +458,9 @@ it.each(["global", "unknown"])(
       expect(snapshotRow(projection, key)?.model).toBe("after");
       expect(snapshotRow(projection, sentinel, "work")?.childSessions).toEqual([key]);
       const oldOwner = projection.describe({ agentId: "work", key: sentinel })!;
+      expect(
+        projection.selectEntries({ parentSessionKey: oldOwner }).map((row) => row.key),
+      ).toEqual([key]);
       cfg = {
         ...cfg,
         agents: { ...cfg.agents, defaults: { sessionStore: { agentId: "main" } } },

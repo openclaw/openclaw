@@ -57,6 +57,11 @@ async function installSessionSharing(
       members: [],
       role,
       allowedVisibilities: visibilities,
+      permissions: Array.from({ length: 30 }, (_, i) => ({
+        identityId: `member-${i}`,
+        level: "read",
+        options: ["read", "send"],
+      })),
       identities: [
         owner,
         ...Array.from({ length: 30 }, (_, i) => human(`member-${i}`, `Member ${i}`)),
@@ -241,7 +246,7 @@ suite.define(() => {
           sessionKey,
           "Mobile menu",
           "owner",
-          "draft",
+          "read-only",
           colorScheme === "light",
         );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -335,7 +340,7 @@ suite.define(() => {
           await host.getByRole("button", { name: /^Sharing options/ }).click();
         }
         try {
-          await sharing.getByRole("heading", { name: "Session members", exact: true }).waitFor();
+          await sharing.getByRole("heading", { name: "Permissions", exact: true }).waitFor();
         } finally {
           console.info("MOBILE_SHARING_RECOVERY", {
             documentRequests,
@@ -343,7 +348,7 @@ suite.define(() => {
             failedRequests,
           });
         }
-        const lastMember = sharing.getByRole("checkbox", { name: /^Member 29,/ });
+        const lastMember = sharing.getByRole("button", { name: /^Member 29, Can read/ });
         await lastMember.scrollIntoViewIfNeeded();
         expect(await sharing.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         await lastMember.click({ trial: true });
@@ -358,9 +363,9 @@ suite.define(() => {
         const search = sharing.getByRole("searchbox", { name: "Search people and agents…" });
         await search.fill("Member 29");
         await lastMember.waitFor();
-        await sharing.getByRole("button", { name: /^Draft / }).click();
+        await sharing.getByRole("button", { name: /^Read-only/ }).click();
         const access = host.locator('[data-mobile-page="sharing-access"]');
-        await access.getByRole("button", { name: /^Draft / }).waitFor();
+        await access.getByRole("button", { name: /^Read-only/ }).waitFor();
         await host
           .locator(".chat-mobile-host__header")
           .getByRole("button", { name: "Back", exact: true })
@@ -385,10 +390,10 @@ suite.define(() => {
         }
         await search.waitFor();
         expect(await search.inputValue()).toBe("Member 29");
-        await sharing.getByRole("button", { name: /^Draft / }).click();
-        await access.getByRole("button", { name: /^Draft / }).waitFor();
+        await sharing.getByRole("button", { name: /^Read-only/ }).click();
+        await access.getByRole("button", { name: /^Read-only/ }).waitFor();
         expect(
-          await access.getByRole("button", { name: /^Draft / }).getAttribute("aria-pressed"),
+          await access.getByRole("button", { name: /^Read-only/ }).getAttribute("aria-pressed"),
         ).toBe("true");
         await gateway.deferNext("session.visibility.set");
         await access.getByRole("button", { name: /^Shared / }).click();

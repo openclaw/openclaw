@@ -28,17 +28,13 @@ import { setupVisibleSchema } from "./setup-schema.ts";
 
 registerSettingsEnglish();
 
-type StaticSettingsBlock = SettingsSearchBlock & {
-  searchText: string;
-};
-
 const STATIC_SETTINGS_BLOCKS: readonly SettingsSearchTarget[] =
   Object.values(SETTINGS_SEARCH_TARGETS);
 
 function resolveStaticSettingsBlock(
   block: SettingsSearchTarget,
   snapshot: NativeDeviceSettingsSnapshot | null,
-): StaticSettingsBlock {
+): SettingsSearchBlock & { searchText: string } {
   const label = t(block.labelKey);
   const nativeKeys = snapshot
     ? Object.entries(block.nativeSearchKeys ?? {})

@@ -485,7 +485,7 @@ it("consumes admitted board absence for a cohort and observes first use and publ
     });
   }));
 
-it.each(["worker", "exact", "row-facts"] as const)(
+it.each(["worker", "exact", "full", "children", "worktree", "source-checks", "row-facts"] as const)(
   "refuses unavailable session metadata in the %s reader instead of reporting missing sessions",
   (reader) =>
     withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -503,8 +503,19 @@ it.each(["worker", "exact", "row-facts"] as const)(
               kind: "session-exact-entries",
               database: { agentId: "main", path: storePath },
               env,
-              sessionKeys,
-              projection: reader === "exact" ? "exact" : "list",
+              ...(reader === "children"
+                ? {
+                    selection: { kind: "children" as const, parentSessionKeys: sessionKeys },
+                    projection: "list" as const,
+                  }
+                : {
+                    sessionKeys,
+                    projection:
+                      reader === "exact" || reader === "full" || reader === "worktree"
+                        ? reader
+                        : "list",
+                  }),
+              ...(reader === "source-checks" ? { sourceChecks: [] } : {}),
             }).entries;
       expect(read()).toEqual([]);
       fs.mkdirSync(path.dirname(storePath), { recursive: true });

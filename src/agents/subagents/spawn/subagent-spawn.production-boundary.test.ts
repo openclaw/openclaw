@@ -80,6 +80,7 @@ import {
 import { cleanupProvisionalSession } from "./subagent-spawn-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 import { registerNativeCancellationCases } from "./subagent-spawn.cancellation.test-support.js";
+import { registerCollectorResultSpawnCases } from "./subagent-spawn.collector-results.test-support.js";
 import { registerGuestSpawnCases } from "./subagent-spawn.guest.test-support.js";
 import { registerParticipantSpawnCases } from "./subagent-spawn.participants.test-support.js";
 import { registerNativePluginSpawnCases } from "./subagent-spawn.plugin-native.test-support.js";
@@ -365,6 +366,11 @@ describe("recursive spawn production boundary", () => {
     settleRootWork: (keepObserving) => settleRootWork(keepObserving),
   });
   registerNativePluginSpawnCases({
+    ...boundSpawnFixture,
+    settleRootWork: (keepObserving) => settleRootWork(keepObserving),
+    waitForEmbeddedRun,
+  });
+  registerCollectorResultSpawnCases({
     ...boundSpawnFixture,
     settleRootWork: (keepObserving) => settleRootWork(keepObserving),
     waitForEmbeddedRun,

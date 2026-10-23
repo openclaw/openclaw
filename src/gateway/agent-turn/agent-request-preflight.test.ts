@@ -43,6 +43,10 @@ async function runRequest(
   return { respond, result, replay };
 }
 
+const collectorContinuationRefusal = expect.stringMatching(
+  /^Collector children \(spawned with collect=true\) are one-shot: .*after they finish or time out\. Collect the result with agents_wait .*start a new child with sessions_spawn/u,
+);
+
 function expectRejected(
   { result, respond }: { result: unknown; respond: ReturnType<typeof vi.fn> },
   details: Record<string, unknown> = { code: "INVALID_REQUEST" },
@@ -266,6 +270,7 @@ describe("agent request Swarm preflight", () => {
         backend: true,
         includeCollectorFields: false,
       }),
+      { code: "INVALID_REQUEST", message: collectorContinuationRefusal },
     );
   });
 
@@ -296,7 +301,8 @@ describe("agent request Swarm preflight", () => {
       launchPending: false,
       completed: true,
     });
-    expectRejected(ordinary);
+    // Callers learn the one-shot contract and its alternatives, not an internal field name.
+    expectRejected(ordinary, { code: "INVALID_REQUEST", message: collectorContinuationRefusal });
 
     subagentRuns.clear();
     const replayed = await runCollector({

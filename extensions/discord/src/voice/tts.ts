@@ -1,31 +1,6 @@
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 import { sanitizeVoiceReplyTextForSpeech } from "./sanitize.js";
-
-export async function transcribeVoiceAudio(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  filePath: string;
-}) {
-  const result = await getDiscordRuntime().mediaUnderstanding.transcribeAudioFile({
-    filePath: params.filePath,
-    cfg: params.cfg,
-    agentDir: resolveAgentDir(params.cfg, params.agentId),
-    mime: "audio/wav",
-  });
-  return {
-    text: normalizeOptionalString(result.text),
-    processing: result.decision?.attachmentProcessing?.[0],
-    unavailable:
-      result.decision?.outcome === "skipped" &&
-      result.decision.attachmentDispositions?.[0]?.kind === "no-model" &&
-      result.decision.attachmentProcessing?.[0] === "omitted" &&
-      result.decision.attachments.length > 0 &&
-      result.decision.attachments.every((attachment) => attachment.attempts.length === 0),
-  };
-}
 
 export async function synthesizeVoiceReplyAudio(params: {
   cfg: OpenClawConfig;

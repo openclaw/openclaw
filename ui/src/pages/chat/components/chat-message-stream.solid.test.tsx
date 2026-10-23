@@ -1,11 +1,13 @@
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { chatStartupStatusLabel } from "../chat-run-startup.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
 import { StreamGroup, type StreamGroupPart } from "./chat-message-stream-view.tsx";
+import { projectChatPositions } from "./chat-position-projection.ts";
 
 function renderStartup(...args: Parameters<typeof chatStartupStatusLabel>) {
   const startupLabel = chatStartupStatusLabel(...args);
@@ -92,4 +94,32 @@ it("retains the bubble and completed markdown while replacing stream snapshots a
     expect(view.container.querySelector(".chat-text")?.textContent).toContain("A growing" + suffix);
   }
   expect(bubble?.classList.contains("streaming")).toBe(false);
+});
+
+it("prepares interleaved stream snapshots once for the rail and bubble", () => {
+  const normalize = vi.spyOn(messageNormalizer, "normalizeMessage");
+  onTestFinished(() => normalize.mockRestore());
+  const first = {
+    kind: "stream",
+    key: "stream:answer",
+    startedAt: 1,
+    isStreaming: true,
+    text: "<thinking>Hidden</thinking>First answer",
+    thinking: "Explicit reasoning",
+  } as const;
+  const second = { ...first, text: "Second answer" };
+  const positions = (part: typeof first | typeof second) =>
+    projectChatPositions([{ kind: "stream-run", key: "run", parts: [part] }], new Map(), new Map());
+  const railFirst = positions(first);
+  const railSecond = positions(second);
+  const [parts, setParts] = createSignal<StreamGroupPart[]>([first]);
+  const view = mountSolid(() => <StreamGroup parts={parts()} options={{}} />);
+  flush();
+  expect(view.container.querySelector(".chat-text p")?.textContent).toBe("First answer");
+  setParts([second]);
+  flush();
+  expect(view.container.querySelector(".chat-text p")?.textContent).toBe("Second answer");
+  expect(normalize).toHaveBeenCalledTimes(2);
+  expect(positions(first).markers[0]?.message).toBe(railFirst.markers[0]?.message);
+  expect(positions(second).markers[0]?.message).toBe(railSecond.markers[0]?.message);
 });

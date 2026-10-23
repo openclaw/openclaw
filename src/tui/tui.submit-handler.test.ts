@@ -273,8 +273,11 @@ it.each([
   { platform: "win32", env: { MSYSTEM: "MINGW64" }, enabled: true },
   { platform: "darwin", env: { TERM_PROGRAM: "Apple_Terminal" }, enabled: true },
   { platform: "linux", env: { MSYSTEM: "MINGW64" }, enabled: false },
-])("detects paste fallback for $platform/$env", ({ platform, env, enabled }) => {
-  expect(shouldEnableWindowsGitBashPasteFallback({ platform, env })).toBe(enabled);
+] as const)("detects paste fallback for $platform/$env", ({ platform, env, enabled }) => {
+  using mocks = new DisposableStack();
+  mocks.use(vi.spyOn(process, "platform", "get").mockReturnValue(platform));
+  mocks.use(vi.spyOn(process, "env", "get").mockReturnValue(env));
+  expect(shouldEnableWindowsGitBashPasteFallback()).toBe(enabled);
 });
 
 it.each([

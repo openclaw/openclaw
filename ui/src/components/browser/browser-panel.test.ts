@@ -35,7 +35,7 @@ function attachAnnotationOverlay(panel: HTMLElement) {
   overlay.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
 
   const dispatchPointer = (
-    type: "pointerdown" | "pointermove",
+    type: "pointerdown" | "pointermove" | "pointerup",
     clientX: number,
     clientY: number,
   ) => {
@@ -284,6 +284,57 @@ describe("normalizeBrowserUrlDraft", () => {
 
     panel.suppressed = false;
     await waitForSolid(() => expect(panel.browserPanelIsOpen()).toBe(true));
+  });
+
+  it("undoes one annotation and clears the rest across retained panel updates", async () => {
+    stubScreenshotMedia();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    const panel = document.createElement("openclaw-browser-panel");
+    panel.available = true;
+    panel.embedded = true;
+    panel.presented = true;
+    panel.client = createBrowserPageClient("target-1").client;
+    mountSolid(() => panel);
+    await waitForSolid(() => expect(panel.querySelector(".bp-shot")).not.toBeNull());
+    (await openBrowserActions(panel))
+      .querySelector<HTMLElement>('[role="menuitem"][aria-label="Annotate page"]')!
+      .click();
+    await panel.updateComplete;
+    const buttons = [...panel.querySelectorAll<HTMLButtonElement>(".bp-annotatebar button")];
+    const undo = buttons[0]!;
+    const clear = buttons[1]!;
+    expect(buttons.map((button) => button.title || button.textContent?.trim())).toEqual([
+      "Undo",
+      "Clear",
+      "Exit annotate mode",
+      "Send to chat",
+    ]);
+    const { dispatchPointer } = attachAnnotationOverlay(panel);
+    for (const retained of [false, true]) {
+      if (retained) {
+        panel.tabsInHeader = true;
+        await panel.updateComplete;
+        expect([...panel.querySelectorAll(".bp-annotatebar button")]).toEqual(buttons);
+      }
+      expect(undo.disabled).toBe(true);
+      expect(clear.disabled).toBe(true);
+      for (const x of [10, 30]) {
+        dispatchPointer("pointerdown", x, 20);
+        dispatchPointer("pointermove", x + 10, 40);
+        dispatchPointer("pointerup", x + 10, 40);
+      }
+      await panel.updateComplete;
+      expect(undo.disabled).toBe(false);
+      expect(clear.disabled).toBe(false);
+      undo.click();
+      await panel.updateComplete;
+      expect(undo.disabled).toBe(false);
+      expect(clear.disabled).toBe(false);
+      clear.click();
+      await panel.updateComplete;
+      expect(undo.disabled).toBe(true);
+      expect(clear.disabled).toBe(true);
+    }
   });
 
   it.each(["close", "suppress", "disconnect"] as const)(

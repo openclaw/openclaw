@@ -1,3 +1,4 @@
+import { recordSessionRowSelectionReset } from "../infra/gateway-work-metrics.js";
 import { isIncognitoSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -36,6 +37,7 @@ export function createSessionRowProjectionRevisions(
   const publishSelection = (row?: Row, removed = false) => {
     if (!row) {
       invalidate(true);
+      recordSessionRowSelectionReset();
     }
     const change: SelectionChange = row
       ? {

@@ -369,13 +369,7 @@ function EmojiPopup(props: {
     };
   });
   return (
-    <div
-      ref={(node) => {
-        surface = node;
-      }}
-      class="oc-overlay emoji-menu-popup"
-      popover="manual"
-    >
+    <div ref={(node) => (surface = node)} class="oc-overlay emoji-menu-popup" popover="manual">
       <ComposerMenu
         class="emoji-menu"
         id={paneDomId(props.paneId, "emoji-menu-listbox")}
