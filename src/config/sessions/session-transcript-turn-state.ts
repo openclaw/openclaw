@@ -35,6 +35,7 @@ export function buildRestartRecoveryExpectedState(
     restartRecoveryRequesterSource: entry.restartRecoveryRequesterSource,
     restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
     restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
+    restartRecoveryReplyExpectation: entry.restartRecoveryReplyExpectation,
     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
     status: entry.status,
   };
@@ -101,6 +102,8 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
           expectedState.restartRecoverySourceIngress &&
         selected.entry.restartRecoverySourceReplyDeliveryMode ===
           expectedState.restartRecoverySourceReplyDeliveryMode &&
+        selected.entry.restartRecoveryReplyExpectation ===
+          expectedState.restartRecoveryReplyExpectation &&
         sameRestartRecoveryTerminalRunIds(
           selected.entry.restartRecoveryTerminalRunIds,
           expectedState.restartRecoveryTerminalRunIds,

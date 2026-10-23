@@ -221,6 +221,7 @@ it.each([
       },
     });
     const { nextEntry } = prepareCommandSessionRecoveryEntry({
+      cfg: {},
       entry: {
         sessionId: "requester-session",
         lifecycleRevision: "requester-revision",
@@ -235,6 +236,7 @@ it.each([
       isSessionRollover: false,
       opts: {
         message: "Child completed",
+        replyExpectation: "result-required",
         operatorAuthority,
         ...(requesterProfileId
           ? {
@@ -258,6 +260,7 @@ it.each([
     }
     expect(nextEntry).toMatchObject({
       restartRecoveryDeliverySourceRunId: runId,
+      restartRecoveryReplyExpectation: "result-required",
       restartRecoverySourceIngress: "internal",
       restartRecoveryOperatorSource: {
         agentId: "main",
@@ -304,6 +307,7 @@ it.each(["channel", "delegate", "generated-media", "recovery"] as const)(
         : {}),
     };
     const prepared = prepareCommandSessionRecoveryEntry({
+      cfg: {},
       agentId: "main",
       sessionKey: "agent:main:destination",
       sessionId: entry.sessionId,
@@ -341,6 +345,52 @@ it.each(["channel", "delegate", "generated-media", "recovery"] as const)(
         sourceRunId: kind === "recovery" ? "original-run" : "current-run",
         requesterOrigin: { senderId: kind === "recovery" ? "original-requester" : "bob" },
       },
+    });
+  },
+);
+
+it.each([
+  { override: undefined, provenance: "external_user", silence: "allow", expected: "required" },
+  { override: "optional", provenance: "external_user", silence: "allow", expected: "optional" },
+  {
+    override: "result-required",
+    provenance: "external_user",
+    silence: "allow",
+    expected: "result-required",
+  },
+  { override: undefined, provenance: "internal_system", silence: "allow", expected: "optional" },
+  { override: undefined, provenance: "inter_session", silence: "allow", expected: "optional" },
+  { override: undefined, provenance: "inter_session", silence: "disallow", expected: "required" },
+] as const)(
+  "captures effective $expected command reply policy for $provenance with override=$override and silence=$silence",
+  ({ override, provenance, silence, expected }) => {
+    const { nextEntry } = prepareCommandSessionRecoveryEntry({
+      cfg: { surfaces: { slack: { silentReply: { group: silence } } } },
+      agentId: "main",
+      sessionKey: "agent:main:destination",
+      sessionId: "destination-session",
+      entry: { sessionId: "destination-session", updatedAt: 1, chatType: "group" },
+      runId: "current-run",
+      now: 2,
+      lifecycleGeneration: getAgentRunLifecycleGeneration(),
+      isSessionRollover: false,
+      opts: {
+        message: "Continue the requested work",
+        messageChannel: "slack",
+        replyExpectation: override,
+        inputProvenance: { kind: provenance },
+        requesterOrigin: {
+          sessionKey: "agent:main:slack:channel:requesters",
+          messageProvider: "slack",
+          senderId: "requester",
+        },
+      },
+    });
+
+    expect(nextEntry).toMatchObject({
+      restartRecoveryDeliveryRunId: "current-run",
+      restartRecoveryDeliverySourceRunId: "current-run",
+      restartRecoveryReplyExpectation: expected,
     });
   },
 );

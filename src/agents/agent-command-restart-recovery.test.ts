@@ -20,6 +20,7 @@ const scopedPolicy = {
   restartRecoverySourceIngress: "internal",
   restartRecoverySourceReplyDeliveryMode: "automatic",
   restartRecoveryForceSafeTools: true,
+  restartRecoveryReplyExpectation: "required",
 } as const;
 
 it("persists a scoped restart-safe policy and clears retired media constraints", () => {
@@ -29,12 +30,14 @@ it("persists a scoped restart-safe policy and clears retired media constraints",
       ...session,
       restartRecoveryDeliveryMediaUrls: ["/tmp/old.png"],
       restartRecoverySuppressTextDelivery: true,
+      restartRecoveryReplyExpectation: "result-required",
     },
     forceRestartSafeTools: true,
     runId: "scoped-run",
     sourceIngress: "internal",
     sourceRunId: "scoped-run",
     sourceReplyDeliveryMode: "automatic",
+    replyExpectation: "required",
   });
   expect(claimed).toMatchObject({
     ...scopedPolicy,
@@ -55,6 +58,7 @@ it("preserves the claimed route when delivery preparation resolves an alias", ()
       restartRecoveryDeliveryContext: { channel: "telegram", to: "-100123", threadId: 1 },
     },
     runId: "recovery-run",
+    replyExpectation: "optional",
   });
   expect(claimed).toMatchObject({
     ...scopedPolicy,

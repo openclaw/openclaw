@@ -205,6 +205,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
       scope,
       (entry) =>
         prepareCommandSessionRecoveryEntry({
+          cfg: {},
           entry,
           ...scope,
           runId: command.runId!,

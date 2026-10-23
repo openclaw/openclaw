@@ -318,6 +318,7 @@ async function agentCommandInternalOwned(
         await prepareDeliveryForRun(entry);
         const { nextEntry, guardedHarnessCompletion, isCompletionCurrent } =
           prepareCommandSessionRecoveryEntry({
+            cfg,
             entry,
             sessionId,
             sessionKey,

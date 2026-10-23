@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
+import { lifecycleAdmissionByOperation } from "../../sessions/session-controller.state.js";
 import { createDeliverySuite } from "./agent-runner-delivery-suite.test-support.js";
 import { createReplyAgentRestartRecoveryController } from "./agent-runner-restart-recovery.js";
 import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
@@ -15,6 +16,7 @@ it.each(["claimless", "recovered"] as const)(
     const { storePath, replyOperation: operation, followupRun } = fixture.context;
     const sessionKey = fixture.context.sessionKey!;
     const { sessionId } = fixture;
+    followupRun.run.terminalReplyExpectation = "required";
     const admissionRunId = "gateway-current-run";
     const sourceTurnId = admission === "recovered" ? "gateway-original-source" : admissionRunId;
     let entry: SessionEntry = {
@@ -70,6 +72,13 @@ it.each(["claimless", "recovered"] as const)(
       expect(
         resolveRestartRecoverySteeringBlockReason(entry, sessionId, target?.sourceTurnId ?? ""),
       ).toBeUndefined();
+      if (admission === "recovered") {
+        // Accepted input retains custody until the execution writer adopts it.
+        const adoptInput = lifecycleAdmissionByOperation.get(operation)?.adoptInput;
+        expect(adoptInput).toBeDefined();
+        await adoptInput?.();
+        expect(entry.restartRecoveryReplyExpectation).toBe("required");
+      }
       expect(entry.restartRecoveryTerminalRunIds).toEqual(["gateway-previous-run"]);
     } finally {
       await controller.clear();

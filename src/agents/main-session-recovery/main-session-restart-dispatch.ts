@@ -144,9 +144,8 @@ export async function resumeMainSession(
       },
     );
   }
-  const isCurrent = () => {
-    return source ? matchesRequester(source.readCurrent()) : retained?.isCurrent() === true;
-  };
+  const isCurrent = () =>
+    source ? matchesRequester(source.readCurrent()) : retained?.isCurrent() === true;
   if (!isCurrent()) {
     return "skipped";
   }
@@ -511,6 +510,8 @@ async function resumeMainSessionWithinAdmission(
           throw new Error("Restart recovery admission is no longer current.");
         }
       },
+      // Internal recovery provenance must not weaken the original input obligation.
+      replyExpectation: params.entry.restartRecoveryReplyExpectation,
       executionSource: params.executionSource,
       prepareDispatchCurrent: () =>
         runWithAgentToolSourceExecutionScope(params.completionSource, async () => {
