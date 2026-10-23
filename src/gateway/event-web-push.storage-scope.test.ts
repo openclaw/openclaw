@@ -228,7 +228,7 @@ it("orders binding and pairing reads before rebinding without retaining provider
   await upsertBinding(stateDir, "profile-a", 1);
   order.length = 0;
   const warnings = createWarnLogCapture("web-push-storage-scope");
-  onTestFinished(warnings.cleanup);
+  onTestFinished(() => warnings.cleanup());
   const delivery = createEventWebPushDelivery({
     getRuntimeConfig: () => ({}),
     stateDir,
