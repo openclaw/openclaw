@@ -121,7 +121,6 @@ async function waitForApprovalEvent(params: {
 async function waitForObservedApprovalEvent(params: {
   context: MatrixQaScenarioContext;
   expectedApprovalId: string;
-  expectedKind: ChannelApprovalKind;
   excludedRoomIds?: string[];
   roomIds: string[];
   timeoutMs: number;
@@ -140,6 +139,7 @@ async function waitForObservedApprovalEvent(params: {
     return roomIds.some((roomId) =>
       isExpectedApprovalEvent(event, {
         ...params,
+        expectedKind: "exec",
         roomId,
       }),
     );
@@ -150,7 +150,7 @@ async function waitForObservedApprovalEvent(params: {
     if (observedMatch) {
       assertApprovalMetadata({
         event: observedMatch,
-        expectedKind: params.expectedKind,
+        expectedKind: "exec",
       });
       return observedMatch;
     }
@@ -487,7 +487,6 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
     context,
     excludedRoomIds: [context.roomId],
     expectedApprovalId: approvalId,
-    expectedKind: "exec",
     roomIds: dmRoomIds,
     timeoutMs: context.timeoutMs,
   });
