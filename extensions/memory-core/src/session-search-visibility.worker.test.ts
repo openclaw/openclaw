@@ -50,40 +50,8 @@ it.each([false, true])(
         ...hit,
         path: "sessions/main/telegram:direct:legacy.jsonl.reset.2026-08-11T08-00-00.000Z",
       };
-      const readKeys: unknown[] = [];
-      using observers = new DisposableStack();
-      const postMessage = Worker.prototype.postMessage;
-      observers.use(
-        vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-          this: Worker,
-          message: unknown,
-          transferList,
-        ) {
-          const input = isRecord(message) ? message.input : undefined;
-          if (isRecord(input) && input.kind === "session-entry-read" && isRecord(input.scope)) {
-            readKeys.push(input.scope.sessionKey);
-          }
-          return postMessage.call(this, message, transferList);
-        }),
-      );
-      const emit = Worker.prototype.emit;
-      observers.use(
-        vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
-          this: Worker,
-          event,
-          ...args: unknown[]
-        ) {
-          const message = args[0];
-          const reply = isRecord(message) && isRecord(message.value) ? message.value : undefined;
-          const value = reply?.ok === true && isRecord(reply.value) ? reply.value : undefined;
-          if (event === "message" && value && Array.isArray(value.entries)) {
-            readKeys.push(
-              ...value.entries.map((row) => (isRecord(row) ? row.sessionKey : undefined)),
-            );
-          }
-          return emit.call(this, event, ...args);
-        }),
-      );
+      using posted = vi.spyOn(Worker.prototype, "postMessage");
+      using emitted = vi.spyOn(Worker.prototype, "emit");
       const hits = [hit, { ...hit, startLine: 3, endLine: 4 }];
       const filtered = await filterMemorySearchHitsBySessionVisibility({
         cfg: {
@@ -99,6 +67,22 @@ it.each([false, true])(
           : undefined,
       });
       expect(filtered).toEqual(recall ? [archiveHit] : hits);
+      const readKeys: unknown[] = [];
+      posted.mock.calls.forEach(([message]: readonly unknown[]) => {
+        const input = isRecord(message) ? message.input : undefined;
+        if (isRecord(input) && input.kind === "session-entry-read" && isRecord(input.scope)) {
+          readKeys.push(input.scope.sessionKey);
+        }
+      });
+      emitted.mock.calls.forEach(([event, message]: readonly unknown[]) => {
+        const reply = isRecord(message) && isRecord(message.value) ? message.value : undefined;
+        const value = reply?.ok === true && isRecord(reply.value) ? reply.value : undefined;
+        if (event === "message" && value && Array.isArray(value.entries)) {
+          readKeys.push(
+            ...value.entries.map((row) => (isRecord(row) ? row.sessionKey : undefined)),
+          );
+        }
+      });
       const expectedKeys = [...(recall ? [anchor] : []), visible, shared, legacyArchive];
       expect(readKeys).toHaveLength(expectedKeys.length);
       expect(readKeys).toEqual(expect.arrayContaining(expectedKeys));
