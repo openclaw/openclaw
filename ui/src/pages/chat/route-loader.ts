@@ -372,6 +372,16 @@ export async function loadChatRoute(
     };
   }
   if (target.kind === "literal") {
+    const deferSnapshotRows =
+      face === "chat" &&
+      parseAgentSessionKey(target.sessionKey)?.rest.startsWith("dashboard:") &&
+      Boolean(sessionKeyUuid(target.sessionKey));
+    const gateway = context.gateway.snapshot;
+    if (deferSnapshotRows && gateway.client && gateway.phase !== "connected") {
+      // Match snapshot routes: send connect before mounting the cached pane.
+      await gateway.client.initialConnectSent;
+      signal.throwIfAborted();
+    }
     let defaultsKnown =
       defaultsUsable ||
       context.sessions.cachedRoutingDefaults?.scope === "per-sender" ||
@@ -441,6 +451,7 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey: target.sessionKey,
+      ...(deferSnapshotRows ? { deferSnapshotRows: true as const } : {}),
       ...sessionRouteHints(routeLocation),
       face,
       ...(canonicalLocation
@@ -593,12 +604,6 @@ export async function loadSessionPage(
   face: BoardFace,
   { location, signal, cause, deps }: RouteLoaderOptions,
 ) {
-  const gateway = context.gateway.snapshot;
-  if (gateway.client && gateway.phase !== "connected") {
-    // Literal and cached routes share the network window for their first pane mount.
-    await gateway.client.initialConnectSent;
-    signal.throwIfAborted();
-  }
   const current =
     cause === "revalidate"
       ? context.router

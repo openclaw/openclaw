@@ -56,7 +56,7 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
       connected: this.context.gateway.snapshot.phase === "connected",
       promise: reading
         .then(async (storedSnapshot) => {
-          if (!hydration.connected || this.routeResolutionPending) {
+          if ((!hydration.connected && this.deferSnapshotRows) || this.routeResolutionPending) {
             if (
               this.routeResolutionPending &&
               this.context.gateway.snapshot.phase !== "connected"
