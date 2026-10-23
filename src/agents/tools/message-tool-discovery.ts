@@ -21,6 +21,7 @@ import { listRouteBindings } from "../../config/bindings.js";
 import { readExactSessionDeliveryContext } from "../../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
+import { resolveImplicitMessageActionTarget } from "../../infra/outbound/message-action-normalization.js";
 import { actionHasTarget } from "../../infra/outbound/message-action-spec.js";
 import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-policy.js";
 import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
@@ -30,7 +31,11 @@ import {
   parseAgentSessionKey,
   parseSessionDeliveryRoute,
 } from "../../routing/session-key.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import { listChannelSupportedActionsSteps } from "../channel-tools.js";
 import { buildMessageToolSchemaFromActions } from "./message-tool-schema.js";
 export type MessageToolDiscoveryParams = {
@@ -186,6 +191,19 @@ export function resolveEffectiveCurrentChannelContext(options?: MessageToolCurre
   return projectCurrentChannelContext(
     options,
     inferDeliveryFromSessionKey(options?.agentSessionKey),
+  );
+}
+
+/** Use the message tool's effective route and target defaulting for reply guidance. */
+export function hasMessageToolSourceConversation(
+  options?: MessageToolCurrentContextOptions,
+): boolean {
+  const context = resolveEffectiveCurrentChannelContext(options);
+  const channel = normalizeMessageChannel(context.currentChannelProvider);
+  return Boolean(
+    channel &&
+    isDeliverableMessageChannel(channel) &&
+    resolveImplicitMessageActionTarget(context, "send"),
   );
 }
 

@@ -1,15 +1,12 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { buildProviderRegistry, runCapability } from "./runner.js";
-import { withAudioFixture } from "./runner.test-utils.js";
+import { runMediaFixture } from "./runner-case.test-support.js";
+import { buildProviderRegistry } from "./runner.js";
 import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
 
 vi.mock("../plugins/capability-provider-runtime.js", async () => {
@@ -17,9 +14,9 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
   return createEmptyCapabilityProviderMockModule();
 });
 
-const modelAuthTestControl = vi.hoisted(() => ({
+const authControl = vi.hoisted(() => ({
   forceMissingProvider: false,
-  store: undefined as AuthProfileStore | undefined,
+  store: { version: 1, profiles: {} } satisfies AuthProfileStore,
 }));
 
 vi.mock("../agents/model-auth.js", async (importOriginal) => {
@@ -27,20 +24,16 @@ vi.mock("../agents/model-auth.js", async (importOriginal) => {
   return {
     ...actual,
     resolveApiKeyForProviderCore: async (
-      ...args: Parameters<typeof actual.resolveApiKeyForProviderCore>
+      params: Parameters<typeof actual.resolveApiKeyForProviderCore>[0],
     ) => {
-      if (modelAuthTestControl.forceMissingProvider) {
+      if (authControl.forceMissingProvider) {
         throw new actual.ProviderAuthError(
           "missing-provider-auth",
-          args[0].provider,
-          `No API key found for provider "${args[0].provider}".`,
+          params.provider,
+          `No API key found for provider "${params.provider}".`,
         );
       }
-      const [params] = args;
-      return await actual.resolveApiKeyForProviderCore({
-        ...params,
-        store: modelAuthTestControl.store ?? params.store,
-      });
+      return actual.resolveApiKeyForProviderCore({ ...params, store: authControl.store });
     },
   };
 });
@@ -61,139 +54,90 @@ const AUTH_ENV = {
   LOCAL_AUDIO_API_KEY: undefined,
   REMOTE_AUDIO_API_KEY: undefined,
   OPENCLAW_AGENT_DIR: undefined,
-} satisfies Record<string, string | undefined>;
-
-beforeEach(() => {
-  modelAuthTestControl.forceMissingProvider = false;
-  modelAuthTestControl.store = { version: 1, profiles: {} };
-});
-
-type AudioResult = Awaited<ReturnType<typeof runCapability>>;
+};
+const remoteProvider: ModelProviderConfig = {
+  api: "openai-completions",
+  baseUrl: "https://example.invalid/v1",
+  models: [],
+};
 
 type AudioCase = {
-  provider?: string;
-  model?: string;
-  providerConfig?: ModelProviderConfig;
-  entry?: Partial<MediaUnderstandingModelConfig>;
+  remote?: boolean;
+  profile?: string;
   resolveAuth?: MediaUnderstandingProvider["resolveAuth"];
-  env?: Record<string, string | undefined>;
+  missing?: boolean;
 };
+type Expected = { apiKey: string; auth: AudioTranscriptionRequest["auth"] } | { reason: string };
 
 const noAuth = () => ({ kind: "none" as const, source: "media plugin no-auth" });
 
-async function withAudioCase(
-  params: AudioCase,
-  check: (result: AudioResult, requests: AudioTranscriptionRequest[]) => void,
-) {
-  const provider = params.provider ?? "local-audio";
-  const model = params.model ?? "whisper-local";
+async function checkAudioCase(params: AudioCase, expected: Expected) {
+  authControl.forceMissingProvider = params.missing ?? true;
+  authControl.store = { version: 1, profiles: {} };
+  const provider = params.remote ? "remote-audio" : "local-audio";
+  const model = params.remote ? "remote-whisper" : "whisper-local";
   const requests: AudioTranscriptionRequest[] = [];
   const cfg: OpenClawConfig = {
-    ...(params.providerConfig
-      ? { models: { providers: { [provider]: params.providerConfig } } }
-      : {}),
+    ...(params.remote ? { models: { providers: { [provider]: remoteProvider } } } : {}),
     tools: {
       media: {
-        models: [{ type: "provider", provider, model, capabilities: ["audio"], ...params.entry }],
+        models: [{ provider, model, capabilities: ["audio"], profile: params.profile }],
         audio: { enabled: true },
       },
     },
   };
-  const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-audio-auth-"));
-  try {
-    await withEnvAsync(params.env ?? AUTH_ENV, async () => {
-      await withAudioFixture("openclaw-audio-auth", async ({ ctx, media, cache }) => {
-        const result = await runCapability({
-          capability: "audio",
-          cfg,
-          ctx,
-          attachments: cache,
-          media,
-          agentDir,
-          providerRegistry: buildProviderRegistry({
-            [provider]: {
-              id: provider,
-              capabilities: ["audio"],
-              resolveAuth: params.resolveAuth,
-              transcribeAudio: async (request) => {
-                requests.push(request);
-                return { text: request.apiKey, model: request.model };
-              },
+  await withTestDir({ prefix: "openclaw-local-audio-auth-" }, async (agentDir) => {
+    await withEnvAsync(AUTH_ENV, async () => {
+      const result = await runMediaFixture("audio", "openclaw-audio-auth", {
+        cfg,
+        agentDir,
+        providerRegistry: buildProviderRegistry({
+          [provider]: {
+            id: provider,
+            capabilities: ["audio"],
+            resolveAuth: params.resolveAuth,
+            transcribeAudio: async (request) => {
+              requests.push(request);
+              return { text: request.apiKey, model: request.model };
             },
-          }),
-        });
-        check(result, requests);
+          },
+        }),
       });
-    });
-  } finally {
-    await fs.rm(agentDir, { recursive: true, force: true });
-  }
-}
-
-function expectAuthenticated(
-  result: AudioResult,
-  requests: AudioTranscriptionRequest[],
-  apiKey: string,
-) {
-  expect(result.decision.outcome).toBe("success");
-  expect(result.outputs[0]?.text).toBe(apiKey);
-  expect(requests).toHaveLength(1);
-  expect(requests[0]?.apiKey).toBe(apiKey);
-}
-
-function expectRejected(
-  result: AudioResult,
-  requests: AudioTranscriptionRequest[],
-  reason: string,
-) {
-  expect(result.decision.outcome).toBe("failed");
-  expect(result.decision.attachments[0]?.attempts[0]?.reason).toContain(reason);
-  expect(requests).toHaveLength(0);
-}
-
-describe("runCapability media auth", () => {
-  it("regression #74644: uses explicit plugin no-auth after generic auth misses", async () => {
-    modelAuthTestControl.forceMissingProvider = true;
-    await withAudioCase({ resolveAuth: noAuth }, (result, requests) => {
-      expectAuthenticated(result, requests, CUSTOM_LOCAL_AUTH_MARKER);
-      expect(requests[0]?.auth).toEqual(noAuth());
+      if ("reason" in expected) {
+        expect(result.decision.outcome).toBe("failed");
+        expect(result.decision.attachments[0]?.attempts[0]?.reason).toContain(expected.reason);
+        expect(requests).toEqual([]);
+      } else {
+        expect(result).toMatchObject({
+          decision: { outcome: "success" },
+          outputs: [{ text: expected.apiKey }],
+        });
+        expect(requests.map(({ apiKey, auth }) => ({ apiKey, auth }))).toEqual([expected]);
+      }
     });
   });
+}
 
-  it("allows a media auth hook to provide an API key after normal auth misses", async () => {
-    modelAuthTestControl.forceMissingProvider = true;
-    const auth = { kind: "api-key" as const, apiKey: "hook-key", source: "media auth hook" };
-    await withAudioCase({ resolveAuth: () => auth }, (result, requests) => {
-      expectAuthenticated(result, requests, "hook-key");
-      expect(requests[0]?.auth).toEqual(auth);
-    });
-  });
-
-  it("rejects a remote provider when generic auth is missing and its hook returns null", async () => {
-    modelAuthTestControl.forceMissingProvider = true;
-    await withAudioCase(
-      {
-        provider: "remote-audio",
-        model: "remote-whisper",
-        resolveAuth: () => null,
-        providerConfig: {
-          api: "openai-completions",
-          baseUrl: "https://example.invalid/v1",
-          models: [],
-        },
-      },
-      (result, requests) => {
-        expectRejected(result, requests, 'No API key found for provider "remote-audio"');
-      },
-    );
-  });
-
-  it("does not let plugin no-auth override an explicit missing profile", async () => {
-    await withAudioCase(
-      { entry: { profile: "missing-profile" }, resolveAuth: noAuth },
-      (result, requests) => {
-        expectRejected(result, requests, 'No credentials found for profile "missing-profile"');
-      },
-    );
-  });
-});
+const hookAuth = { kind: "api-key", apiKey: "hook-key", source: "media auth hook" } as const;
+it.each<[string, AudioCase, Expected]>([
+  [
+    "#74644: plugin no-auth after generic auth misses",
+    { resolveAuth: noAuth },
+    { apiKey: CUSTOM_LOCAL_AUTH_MARKER, auth: noAuth() },
+  ],
+  [
+    "plugin API key after generic auth misses",
+    { resolveAuth: () => hookAuth },
+    { apiKey: "hook-key", auth: hookAuth },
+  ],
+  [
+    "rejects remote provider with missing generic auth and a null hook",
+    { remote: true, resolveAuth: () => null },
+    { reason: 'No API key found for provider "remote-audio"' },
+  ],
+  [
+    "plugin no-auth cannot override a missing explicit profile",
+    { missing: false, profile: "missing-profile", resolveAuth: noAuth },
+    { reason: 'No credentials found for profile "missing-profile"' },
+  ],
+])("runCapability media auth: %s", (_name, params, expected) => checkAudioCase(params, expected));

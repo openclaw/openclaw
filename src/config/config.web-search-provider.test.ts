@@ -1,39 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { buildWebSearchProviderConfig } from "./test-helpers.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: { log: vi.fn(), error: vi.fn() },
-}));
+// mock-isolation: Capture validation diagnostics without writing to the CLI runtime.
+vi.mock("../runtime.js", () => ({ defaultRuntime: { log: vi.fn(), error: vi.fn() } }));
 
+// mock-isolation: Validate the synthetic provider catalog, not installed operator plugins.
 vi.mock("../plugins/manifest-registry.js", () => {
-  const providers = [
-    ["brave", "brave"],
-    ["firecrawl", "firecrawl"],
-    ["gemini", "google"],
-    ["grok", "xai"],
-    ["kimi", "moonshot"],
-    ["minimax", "minimax"],
-    ["perplexity", "perplexity"],
-    ["searxng", "searxng"],
-    ["tavily", "tavily"],
-  ] as const;
-  const secretInput = {
-    oneOf: [
-      { type: "string" },
-      {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          source: { type: "string" },
-          provider: { type: "string" },
-          id: { type: "string" },
-        },
-        required: ["source", "provider", "id"],
-      },
-    ],
-  };
+  const providers = Object.entries({ brave: "brave", gemini: "google" });
   const configSchema = {
     type: "object",
     additionalProperties: false,
@@ -41,7 +16,7 @@ vi.mock("../plugins/manifest-registry.js", () => {
       webSearch: {
         type: "object",
         additionalProperties: false,
-        properties: { apiKey: secretInput, baseUrl: secretInput, model: { type: "string" } },
+        properties: { apiKey: { type: "string" } },
       },
     },
   };
@@ -90,89 +65,68 @@ function searchConfig(provider: string, providerConfig?: Record<string, unknown>
   return buildWebSearchProviderConfig({ provider, providerConfig });
 }
 
-describe("web search provider config", () => {
-  it("allows bundled web search config outside the explicit plugin allowlist", () => {
-    const res = validateWebSearchConfig({
-      ...searchConfig("brave"),
-      plugins: {
-        allow: ["imessage", "memory-core"],
-        entries: { brave: { config: { webSearch: { apiKey: "test-brave-key" } } } }, // pragma: allowlist secret
-      },
-    });
-    expect(res.ok).toBe(true);
-    expect(
-      res.warnings.some(
-        (warning) =>
-          warning.path === "plugins.entries.brave" &&
-          warning.message.includes("plugin disabled (not in allowlist) but config is present"),
-      ),
-    ).toBe(false);
+it("allows bundled web search config outside the explicit plugin allowlist", () => {
+  const res = validateWebSearchConfig({
+    ...searchConfig("brave"),
+    plugins: {
+      allow: ["imessage", "memory-core"],
+      entries: { brave: { config: { webSearch: { apiKey: "test-brave-key" } } } }, // pragma: allowlist secret
+    },
   });
+  expect(res.ok).toBe(true);
+  expect(
+    res.warnings.some(
+      (warning) =>
+        warning.path === "plugins.entries.brave" &&
+        warning.message.includes("plugin disabled (not in allowlist) but config is present"),
+    ),
+  ).toBe(false);
+});
 
-  it("detects legacy scoped provider config for bundled providers", () => {
-    expect(
-      validateWebSearchConfig({
-        tools: {
-          web: {
-            search: {
-              provider: "gemini",
-              gemini: { apiKey: "legacy-key" },
-            },
-          },
-        },
-      }).ok,
-    ).toBe(false);
-  });
+it("detects legacy scoped provider config for bundled providers", () => {
+  const search = { provider: "gemini", gemini: { apiKey: "legacy-key" } };
+  expect(validateWebSearchConfig({ tools: { web: { search } } }).ok).toBe(false);
+});
 
-  it("accepts provider ids registered by installed plugin manifests", () => {
-    expect(validateWebSearchConfig(searchConfig("acme-search")).ok).toBe(true);
-  });
+it("accepts provider ids registered by installed plugin manifests", () => {
+  expect(validateWebSearchConfig(searchConfig("acme-search")).ok).toBe(true);
+});
 
-  it("rejects installable provider ids when the plugin is not active", () => {
-    const res = validateWebSearchConfig(searchConfig("brave"), missingPlugins);
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues).toContainEqual(
-        expect.objectContaining({
-          path: "tools.web.search.provider",
-          message:
-            'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
-          allowedValues: expect.arrayContaining(["brave"]),
-        }),
-      );
-    }
-  });
+it.each([
+  [
+    "brave",
+    missingPlugins,
+    'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
+    ["brave"],
+  ],
+  ["brvae", undefined, "unknown web_search provider: brvae", ["acme-search", "brave", "gemini"]],
+] as const)("rejects unavailable provider %s", (provider, options, message, allowedValues) => {
+  const result = validateWebSearchConfig(searchConfig(provider), options);
+  assert(!result.ok);
+  expect(result.issues).toContainEqual(
+    expect.objectContaining({
+      path: "tools.web.search.provider",
+      message,
+      allowedValues: expect.arrayContaining([...allowedValues]),
+    }),
+  );
+});
 
-  it("warns for unavailable installable providers with stale plugin config", () => {
-    const res = validateWebSearchConfig(searchConfig("brave", {}), missingPlugins);
-    expect(res.ok).toBe(true);
-    const warning = res.warnings.find((entry) => entry.path === "tools.web.search.provider");
-    expect(warning?.message).toContain("web_search provider is not available: brave");
-    expect(warning?.message).toContain('configured plugin "brave" is unavailable');
-  });
+it("warns for unavailable installable providers with stale plugin config", () => {
+  const res = validateWebSearchConfig(searchConfig("brave", {}), missingPlugins);
+  expect(res.ok).toBe(true);
+  const warning = res.warnings.find((entry) => entry.path === "tools.web.search.provider");
+  expect(warning?.message).toContain("web_search provider is not available: brave");
+  expect(warning?.message).toContain('configured plugin "brave" is unavailable');
+});
 
-  it("rejects unknown provider ids without plugin evidence", () => {
-    const res = validateWebSearchConfig(searchConfig("brvae"));
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues).toContainEqual(
-        expect.objectContaining({
-          path: "tools.web.search.provider",
-          message: "unknown web_search provider: brvae",
-          allowedValues: expect.arrayContaining(["acme-search", "brave", "gemini"]),
-        }),
-      );
-    }
-  });
-
-  it("warns for unknown provider ids with stale plugin config", () => {
-    const res = validateWebSearchConfig(searchConfig("missing-third-party", {}));
-    expect(res.ok).toBe(true);
-    expect(res.warnings).toContainEqual(
-      expect.objectContaining({
-        path: "tools.web.search.provider",
-        message: expect.stringContaining("unknown web_search provider: missing-third-party"),
-      }),
-    );
-  });
+it("warns for unknown provider ids with stale plugin config", () => {
+  const res = validateWebSearchConfig(searchConfig("missing-third-party", {}));
+  expect(res.ok).toBe(true);
+  expect(res.warnings).toContainEqual(
+    expect.objectContaining({
+      path: "tools.web.search.provider",
+      message: expect.stringContaining("unknown web_search provider: missing-third-party"),
+    }),
+  );
 });

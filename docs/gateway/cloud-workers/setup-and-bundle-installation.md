@@ -27,7 +27,9 @@ Private package access uses [setup secrets](/gateway/config-cloud-workers#setup-
 
 ### Native Windows prerequisites
 
-For `windows/normal`, Crabbox executes `settings.setup` with Windows PowerShell. Write setup commands for PowerShell; Linux, macOS, and Windows (WSL2) continue to use POSIX scripts. For example, this prerequisite check uses the machine's existing Node and npm installation:
+For `windows/normal`, Crabbox executes `settings.setup` with Windows PowerShell. Write setup commands for PowerShell; Linux, macOS, and Windows (WSL2) continue to use POSIX scripts. A profile with setup cannot override its OS across that interpreter boundary: OpenClaw rejects the request before allocation and omits incompatible OS and machine choices. Use a separate profile with `settings.target: "windows/normal"` and PowerShell setup for native Windows. Profiles without setup retain all backend-supported OS choices. OpenClaw does not inspect or translate scripts; you remain responsible for compatibility between POSIX targets.
+
+For example, this prerequisite check uses the machine's existing Node and npm installation:
 
 ```powershell
 $ErrorActionPreference = 'Stop'

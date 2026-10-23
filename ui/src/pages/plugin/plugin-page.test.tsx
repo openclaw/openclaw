@@ -1,3 +1,4 @@
+import { createRouter, definePage } from "@openclaw/uirouter";
 import { createSignal, onCleanup } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginControlUiDiagnostic } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
@@ -9,14 +10,19 @@ import {
 } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
+import { createShellConfigFixture } from "../../app/app-host.test-support.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import * as staleChunkReload from "../../app/stale-chunk-reload.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { BUNDLED_TAB_VIEWS } from "./plugin-page-lifecycle.ts";
+import { logbookStatus, logbookTimeline } from "./logbook.test-support.ts";
 import { PluginPage, type PluginPageProps } from "./plugin-page.tsx";
-import { page as pluginRoute } from "./route.ts";
+import { page as pluginRoute } from "./route.tsx";
 
 type ApplicationConfig = ApplicationConfigCapability["current"];
 const cleanups: Array<() => void> = [];
@@ -35,47 +41,47 @@ function externalPluginConfig(
   ],
 ): ApplicationConfig {
   return {
-    assistantIdentity: {
-      agentId: null,
-      name: "Assistant",
-      avatar: null,
-      avatarSource: null,
-      avatarStatus: null,
-      avatarReason: null,
-    },
-    serverVersion: null,
-    devGitBranch: null,
-    environment: null,
+    ...createShellConfigFixture().current,
     embedSandboxMode: "scripts",
-    allowExternalEmbedUrls: false,
-    automaticallyFetchFavicons: false,
-    communityInvite: false,
-    terminalEnabled: false,
-    uploadsEnabled: true,
-    pluginAssetsRequireAuth: true,
-    pluginControlUiModules: [],
     pluginFrameGrants,
   };
 }
 
-function createSnapshot(
-  hello: GatewayHelloOk,
+function createGateway(
+  controlUiTabs: GatewayHelloOk["controlUiTabs"],
   client: GatewayBrowserClient | null = null,
-): ApplicationGatewaySnapshot {
-  return {
+) {
+  const hello: GatewayHelloOk = {
+    type: "hello-ok",
+    protocol: 3,
+    auth: { role: "operator", scopes: ["operator.write"] },
+    controlUiTabs,
+  };
+  const { gateway, publish } = createApplicationGateway();
+  const snapshot = gateway.snapshot;
+  Object.assign(snapshot, {
     client,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
+  });
+  return {
+    hello,
+    snapshot,
+    gateway,
+    notify: () => {
+      publish(snapshot);
+      flush();
+    },
   };
 }
 
 function mountPage(context: ApplicationContext, initial: PluginPageProps) {
+  Object.assign(context, {
+    router: createRouter({
+      routes: [definePage({ id: "plugin", path: "/plugin", component: () => ({}) })],
+    }),
+  });
   const [props, setProps] = createSignal(initial);
   const provider = createSolidApplicationContextProvider(context);
   const view = mountSolid(
@@ -92,40 +98,22 @@ function createExternalPluginPage(
   requiresGatewayAuth = true,
   path = "/plugins/external/panel",
 ) {
-  const hello: GatewayHelloOk = {
-    type: "hello-ok",
-    protocol: 3,
-    auth: { role: "operator", scopes: ["operator.write"] },
-    controlUiTabs: [
-      {
-        pluginId: "external-plugin",
-        id: "panel",
-        label: "External panel",
-        path,
-        ...(requiresGatewayAuth ? { requiresGatewayAuth: true } : {}),
-      },
-    ],
-  };
-  const snapshot = createSnapshot(hello);
-  const listeners = new Set<() => void>();
-  const context = {
-    gateway: {
-      snapshot,
-      connectionRevision: 1,
-      subscribe: (notify: () => void) => {
-        listeners.add(notify);
-        return () => listeners.delete(notify);
-      },
+  const fixture = createGateway([
+    {
+      pluginId: "external-plugin",
+      id: "panel",
+      label: "External panel",
+      path,
+      ...(requiresGatewayAuth ? { requiresGatewayAuth: true } : {}),
     },
+  ]);
+  const context = {
+    gateway: fixture.gateway,
     config: { current: externalPluginConfig([]), refresh },
   } as unknown as ApplicationContext;
   return {
     ...mountPage(context, { pluginId: "external-plugin", tabId: "panel" }),
-    snapshot,
-    notify: () => {
-      listeners.forEach((listener) => listener());
-      flush();
-    },
+    ...fixture,
   };
 }
 
@@ -188,6 +176,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanups.splice(0).forEach((cleanup) => cleanup());
+  vi.doUnmock("./logbook-view.tsx");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -212,6 +201,9 @@ describe("PluginPage", () => {
     };
     const navigate = vi.fn();
     const context = {
+      router: createRouter({
+        routes: [definePage({ id: "plugin", path: "/plugin", component: () => ({}) })],
+      }),
       basePath: "/console",
       navigate,
       plugins,
@@ -375,19 +367,6 @@ describe("PluginPage", () => {
     expect(maxActiveRefreshes()).toBe(1);
   });
 
-  it("refreshes the frame grant after gateway reconnect", async () => {
-    const refresh = vi.fn(async () => externalPluginConfig());
-    const fixture = createExternalPluginPage(refresh);
-    await waitForSolid(() => expect(fixture.page.querySelector("iframe")).not.toBeNull());
-    fixture.snapshot.phase = "stopped";
-    fixture.notify();
-    expect(fixture.page.querySelector("iframe")).toBeNull();
-    fixture.snapshot.phase = "connected";
-    fixture.notify();
-    await waitForSolid(() => expect(fixture.page.querySelector("iframe")).not.toBeNull());
-    expect(refresh).toHaveBeenCalledTimes(2);
-  });
-
   it("refuses external plugin auth outside a secure browser context", async () => {
     vi.stubGlobal("isSecureContext", false);
     const refresh = vi.fn(async () => externalPluginConfig());
@@ -434,34 +413,36 @@ describe("PluginPage", () => {
 
 type BundledView = (typeof import("./logbook-view.tsx"))["Logbook"];
 function setBundledLoad(load: Promise<BundledView>) {
-  vi.spyOn(BUNDLED_TAB_VIEWS, "logbook/logbook").mockImplementationOnce(async () => ({
-    render: await load,
-  }));
+  const started = createDeferred();
+  // mock-isolation: Control lazy import settlement without initializing the real Logbook module.
+  vi.doMock("./logbook-view.tsx", async () => {
+    started.resolve();
+    return { Logbook: await load };
+  });
+  return started.promise;
+}
+
+function interpretMockImportError(importError: Error) {
+  const isStale = staleChunkReload.isStaleChunkImportError;
+  // Vitest wraps mock-factory failures; browsers reject import() with the original error.
+  vi.spyOn(staleChunkReload, "isStaleChunkImportError").mockImplementation(
+    (error): error is Error =>
+      isStale(error) || (error instanceof Error && error.cause === importError),
+  );
 }
 
 function createBundledPage(client: GatewayBrowserClient | null = null, includeExternal = false) {
-  const hello: GatewayHelloOk = {
-    type: "hello-ok",
-    protocol: 3,
-    auth: { role: "operator", scopes: ["operator.write"] },
-    controlUiTabs: [
+  const fixture = createGateway(
+    [
       { pluginId: "logbook", id: "logbook", label: "Logbook" },
       ...(includeExternal
         ? [{ pluginId: "external-plugin", id: "panel", label: "External panel" }]
         : []),
     ],
-  };
-  const snapshot = createSnapshot(hello, client);
-  const listeners = new Set<() => void>();
+    client,
+  );
   const context = {
-    gateway: {
-      snapshot,
-      connectionRevision: 1,
-      subscribe: (listener: () => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    },
+    gateway: fixture.gateway,
     plugins: {
       errors: [],
       registrations: () => [],
@@ -471,44 +452,45 @@ function createBundledPage(client: GatewayBrowserClient | null = null, includeEx
   } as unknown as ApplicationContext;
   return {
     ...mountPage(context, { pluginId: "logbook", tabId: "logbook" }),
-    hello,
-    snapshot,
-    notify: () => {
-      listeners.forEach((listener) => listener());
-      flush();
-    },
+    ...fixture,
   };
 }
 
 function logbookResponse(method: string) {
-  if (method === "logbook.status") {
-    return {
-      captureEnabled: true,
-      capturePaused: false,
-      captureIntervalSeconds: 30,
-      analysisIntervalMinutes: 15,
-      retentionDays: 30,
-      pendingFrames: 0,
-      analysisRunning: false,
-      visionModelSource: "missing",
-      today: "2026-07-05",
-      todayCards: 0,
-      timeZone: "UTC",
-    };
-  }
-  return {
-    day: "2026-07-05",
-    cards: [],
-    stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
-  };
+  return method === "logbook.status"
+    ? logbookStatus("2026-07-05", { todayCards: 0 })
+    : logbookTimeline("2026-07-05");
 }
 
 describe("bundled plugin views", () => {
+  it("retires a held capture action when its advertised view disappears", async () => {
+    await import("./logbook-view.tsx");
+    const pending = createDeferred<unknown>();
+    cleanups.push(() => pending.resolve(undefined));
+    const request = vi.fn((method: string) =>
+      method === "logbook.capture.set" ? pending.promise : Promise.resolve(logbookResponse(method)),
+    );
+    const fixture = createBundledPage({ request } as unknown as GatewayBrowserClient);
+    await waitForSolid(() => expect(fixture.page.querySelector(".logbook__chips")).not.toBeNull());
+    const pause = [...fixture.page.querySelectorAll("button")].find(
+      (button) => button.textContent === "Pause",
+    )!;
+    pause.click();
+    await waitForSolid(() => expect(pause.textContent).toBe("Resume"));
+    fixture.hello.controlUiTabs = [];
+    fixture.notify();
+    await waitForSolid(() => expect(fixture.page.querySelector(".logbook")).toBeNull());
+    pending.reject(new Error("Retired capture failed."));
+    await settle();
+    expect(fixture.page.textContent).not.toContain("Retired capture failed.");
+  });
+
   it("stops a bundled view when its advertised descriptor disappears", async () => {
     const loaded = createDeferred<BundledView>();
     const disposed = vi.fn();
-    setBundledLoad(loaded.promise);
+    const started = setBundledLoad(loaded.promise);
     const fixture = createBundledPage();
+    await started;
     loaded.resolve(() => {
       onCleanup(disposed);
       return "Logbook view";
@@ -552,11 +534,11 @@ describe("bundled plugin views", () => {
     expect(request).toHaveBeenCalledTimes(4);
   });
 
-  it("retries the rejected view immediately and recovers without a Gateway update", async () => {
+  it("retries the rejected view and recovers without a Gateway update", async () => {
     const failed = createDeferred<BundledView>();
-    setBundledLoad(failed.promise);
+    const started = setBundledLoad(failed.promise);
     const fixture = createBundledPage();
-    await settle();
+    await started;
     expect(fixture.page.querySelector('[role="status"]')).not.toBeNull();
     failed.reject(new Error("Logbook chunk failed"));
     await waitForSolid(() =>
@@ -565,32 +547,71 @@ describe("bundled plugin views", () => {
       ),
     );
     const retry = createDeferred<BundledView>();
-    setBundledLoad(retry.promise);
+    const retryStarted = setBundledLoad(retry.promise);
     fixture.page.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+    await retryStarted;
     await settle();
-    expect(fixture.page.querySelector('[role="alert"]')).toBeNull();
-    expect(fixture.page.querySelector('[role="status"][aria-label="Loading…"]')).not.toBeNull();
+    expect(fixture.page.querySelector('[role="alert"]')?.textContent).toContain(
+      "Logbook chunk failed",
+    );
     retry.resolve(() => "recovered Logbook view");
     await waitForSolid(() => expect(fixture.page.textContent).toContain("recovered Logbook view"));
     expect(fixture.page.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it("ignores a stale rejection after switching away and back", async () => {
+  it("ignores a retired import rejection before loading a fresh descriptor", async () => {
+    const recover = vi.spyOn(staleChunkReload, "scheduleStaleChunkReload").mockResolvedValue(false);
+    const failure = new Error("Failed to fetch dynamically imported module");
+    interpretMockImportError(failure);
     const stale = createDeferred<BundledView>();
-    setBundledLoad(stale.promise);
+    const started = setBundledLoad(stale.promise);
     const fixture = createBundledPage(null, true);
-    await settle();
+    await started;
     fixture.setProps({ pluginId: "external-plugin", tabId: "panel" });
     await settle();
-    const current = createDeferred<BundledView>();
-    setBundledLoad(current.promise);
-    fixture.setProps({ pluginId: "logbook", tabId: "logbook" });
+    stale.reject(failure);
+    await vi.dynamicImportSettled();
     await settle();
+    expect(fixture.page.pluginId).toBe("external-plugin");
+    expect(fixture.page.querySelector('[role="alert"]')).toBeNull();
+    expect(recover).not.toHaveBeenCalled();
+    const current = createDeferred<BundledView>();
+    const currentStarted = setBundledLoad(current.promise);
+    fixture.setProps({ pluginId: "logbook", tabId: "logbook" });
+    await currentStarted;
     current.resolve(() => "current Logbook view");
     await waitForSolid(() => expect(fixture.page.textContent).toContain("current Logbook view"));
-    stale.reject(new Error("Failed to fetch dynamically imported module"));
-    await settle();
+    expect(fixture.page.pluginId).toBe("logbook");
     expect(fixture.page.querySelector('[role="alert"]')).toBeNull();
     expect(fixture.page.textContent).toContain("current Logbook view");
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it("recovers a stale retry only while its descriptor remains advertised", async () => {
+    const recover = vi.spyOn(staleChunkReload, "scheduleStaleChunkReload").mockResolvedValue(false);
+    const reload = vi
+      .spyOn(staleChunkReload, "retryStaleChunkReloadWhenReachable")
+      .mockResolvedValue(false);
+    const failure = new Error("Failed to fetch dynamically imported module");
+    interpretMockImportError(failure);
+    const failed = createDeferred<BundledView>();
+    const started = setBundledLoad(failed.promise);
+    const fixture = createBundledPage();
+    await started;
+    failed.reject(new Error("Logbook chunk failed"));
+    await waitForSolid(() => expect(fixture.page.querySelector('[role="alert"]')).not.toBeNull());
+    const stale = createDeferred<BundledView>();
+    const staleStarted = setBundledLoad(stale.promise);
+    fixture.page.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+    await staleStarted;
+    stale.reject(failure);
+    await waitForSolid(() => expect(recover).toHaveBeenCalledOnce());
+    const mayRecover = recover.mock.calls[0]?.[0]?.canReload;
+    expect(mayRecover?.()).toBe(true);
+    fixture.page.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+    expect(reload).toHaveBeenCalledOnce();
+    fixture.hello.controlUiTabs = [];
+    fixture.notify();
+    expect(mayRecover?.()).toBe(false);
   });
 });

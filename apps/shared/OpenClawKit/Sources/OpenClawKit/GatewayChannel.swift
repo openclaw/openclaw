@@ -570,7 +570,7 @@ public actor GatewayChannelActor {
             "maxProtocol": ProtoAnyCodable(protocols.upperBound),
             "client": ProtoAnyCodable(client),
             // The channel reconstructs rosters before delivery to macOS/iOS subscribers.
-            "caps": ProtoAnyCodable(options.caps + (role == "operator" ? ["presence-deltas"] : [])),
+            "caps": ProtoAnyCodable(options.caps + (role == "operator" ? ["presence-deltas", "health-summary"] : [])),
             "locale": ProtoAnyCodable(primaryLocale),
             "userAgent": ProtoAnyCodable(ProcessInfo.processInfo.operatingSystemVersionString),
             "role": ProtoAnyCodable(role),

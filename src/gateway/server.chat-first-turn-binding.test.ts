@@ -9,7 +9,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activeExecRequestOwners } from "../infra/exec-request-context.js";
-import { areHeartbeatsEnabled, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import type { RpcSourceRef } from "../sessions/session-controller.rpc-sources.js";
 import {
   getRpcSourceIdentity,
@@ -58,9 +57,7 @@ it("binds a first native chat.send before streaming and persists its stopped par
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined = undefined;
   let original: RpcSourceRef | undefined = undefined;
   const lifecycle: Array<{ phase?: unknown; sessionId?: unknown; aborted?: unknown }> = [];
-  const heartbeatsEnabled = areHeartbeatsEnabled();
   await using cleanup = new AsyncDisposableStack();
-  cleanup.defer(() => setHeartbeatsEnabled(heartbeatsEnabled));
   cleanup.defer(() => state.cleanup());
   cleanup.defer(() => observeSubscriptions.mockRestore());
   cleanup.defer(async () => {
@@ -75,18 +72,16 @@ it("binds a first native chat.send before streaming and persists its stopped par
       requestRpcSourceCancellation(original);
     }
   });
-  // A zero interval still permits event-driven wakes to consume the scripted response.
-  setHeartbeatsEnabled(false);
   const provider = buildMockOpenAiResponsesProvider(
     await listenProvider(providerServer),
     "first-turn",
   );
   const cfg = {
+    cron: { enabled: false },
     agents: {
       defaults: {
         workspace: state.workspaceDir,
         skipBootstrap: true,
-        heartbeat: { every: "0m" },
         model: { primary: provider.modelRef },
         models: {
           [provider.modelRef]: {

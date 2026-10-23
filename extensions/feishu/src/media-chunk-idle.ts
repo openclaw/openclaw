@@ -2,11 +2,9 @@ import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-stor
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 class FeishuInboundMediaTimeoutError extends Error {
-  readonly chunkTimeoutMs: number;
   constructor(chunkTimeoutMs: number) {
     super(`Feishu media download stalled: no data received for ${chunkTimeoutMs}ms`);
     this.name = "FeishuInboundMediaTimeoutError";
-    this.chunkTimeoutMs = chunkTimeoutMs;
   }
 }
 

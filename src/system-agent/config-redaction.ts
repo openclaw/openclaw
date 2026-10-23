@@ -28,6 +28,7 @@ import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizePluginPolicyId } from "../plugins/plugin-policy-id.js";
 import type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
+import { mapNestedStrings } from "../shared/map-nested-strings.js";
 
 type SystemAgentConfigRedactionSource = {
   config?: OpenClawConfig;
@@ -332,14 +333,13 @@ export function isSystemAgentSensitiveConfigValue(path: string, value: unknown):
 function isSensitiveConfigPathParts(
   path: string[],
   metadata: SystemAgentConfigRedactionMetadata,
-  includeAncestors = true,
 ): boolean {
   const { uiHints } = metadata;
   const canonicalPath = path.join(".");
   const sensitiveHint = resolveConfigUiHint(
     path,
     uiHints,
-    includeAncestors,
+    true,
     (candidate) => candidate.sensitive !== undefined,
   );
   if (sensitiveHint?.sensitive === true || isSensitiveConfigPath(canonicalPath)) {
@@ -518,31 +518,17 @@ function redactInvalidKernelChannelConfig(key: string, value: unknown): unknown 
   );
 }
 
-function replaceRedactionSentinels(value: unknown): unknown {
-  if (value === REDACTED_SENTINEL) {
-    return "<redacted>";
-  }
-  if (Array.isArray(value)) {
-    return value.map(replaceRedactionSentinels);
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, replaceRedactionSentinels(entry)]),
-    );
-  }
-  return value;
-}
-
 /** Redact a config object before any subtree is projected into a model-visible result. */
 export function redactSystemAgentConfig(
   value: unknown,
   source?: SystemAgentConfigRedactionSource,
 ): unknown {
   const metadata = resolveSystemAgentConfigRedactionMetadata(source);
-  return replaceRedactionSentinels(
+  return mapNestedStrings(
     redactConfigObject(
       redactUnknownDynamicOwners(value, metadata, source?.valid === false),
       metadata.uiHints,
     ),
+    (text) => (text === REDACTED_SENTINEL ? "<redacted>" : text),
   );
 }

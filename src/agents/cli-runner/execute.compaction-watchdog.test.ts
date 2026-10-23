@@ -9,20 +9,25 @@ import {
   markDiagnosticEmbeddedRunStarted,
   resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
+import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import {
   logSessionStateChange,
   startGatewayDiagnosticHeartbeat,
 } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 import type { CliBackendParseJsonlLifecycleEvent } from "../../plugins/cli-backend.types.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
-import { defaultCliWatchdogClock } from "./execute-plugin-watchdog.js";
+import * as pluginWatchdog from "./execute-plugin-watchdog.js";
 import { waitUntilAborted } from "./execute-plugin.test-support.js";
 import { executePreparedCliRun } from "./execute.js";
 import {
   createManagedRun,
-  setCliRunnerExecuteTestDeps,
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
@@ -144,8 +149,9 @@ afterEach(async () => {
   for (const owner of owners.splice(0)) {
     closeDiagnosticEmbeddedRunOwner(owner);
   }
+  testing.resetSessionControllerForTest();
   supervisorSpawnMock.mockReset();
-  setCliRunnerExecuteTestDeps({ watchdogClock: defaultCliWatchdogClock });
+  vi.restoreAllMocks();
   resetDiagnosticStateForTest();
   vi.useRealTimers();
 });
@@ -180,27 +186,74 @@ it.each(["success", "failed"] as const)("releases compaction liveness after %s",
   expect(snapshot(context).activeBackendLivenessDeadlineAtMs).toBeUndefined();
 });
 
-it("requests diagnostics recovery when compaction never ends", async () => {
+it("requests controller-owned recovery when compaction never ends", async () => {
+  vi.useRealTimers();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(Date.parse("2026-09-24T00:00:00Z"));
   const context = contextFor("compaction-stuck");
-  const recover = diagnostics(context);
-  // Silence only the competing watchdog so recovery is observed at its own heartbeat.
-  setCliRunnerExecuteTestDeps({
-    watchdogClock: { now: () => Date.now(), setTimeout: () => () => {} },
+  const { sessionId, sessionKey } = context.params;
+  if (!sessionKey) {
+    throw new Error("Compaction recovery fixture requires a session key");
+  }
+  const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+  operation.setPhase("running");
+  const watchdogAttempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+  const owner = createDiagnosticEmbeddedRunOwner({ ...context.params, watchdogAttempt });
+  owners.push(owner);
+  context.params.diagnosticOwner = owner;
+  context.params.replyOperation = operation;
+  context.params.abortSignal = operation.abortSignal;
+  logSessionStateChange({ ...context.params, state: "processing" });
+  markDiagnosticEmbeddedRunStarted({ ...context.params, owner });
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const recover = vi.fn(recoverStuckDiagnosticSession);
+  startGatewayDiagnosticHeartbeat(
+    scheduler,
+    { diagnostics: { enabled: true } },
+    { recoverStuckSession: recover, sampleLiveness: () => null },
+  );
+  const createWatchdog = pluginWatchdog.createCliPluginWatchdog;
+  vi.spyOn(pluginWatchdog, "createCliPluginWatchdog").mockImplementationOnce((params) => {
+    const watchdog = createWatchdog(params);
+    watchdog.dispose();
+    return watchdog;
   });
-  const { run, started, finish } = startCompaction(context);
-  await started.promise;
-  await vi.advanceTimersByTimeAsync(WORK_GRACE_MS - HEARTBEAT_MS);
-  expect(recover).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(2 * HEARTBEAT_MS);
-  expect(recover).toHaveBeenCalled();
-  expect(recover.mock.calls[0]?.[0]).toMatchObject({
-    sessionId: context.params.sessionId,
-    sessionKey: context.params.sessionKey,
-    allowActiveAbort: true,
+  const flow = startCompaction(context);
+  const startedAt = await flow.started.promise;
+  operation.registerExecutionCleanup(async () => {
+    await Promise.allSettled([flow.run]);
   });
-  expect(STUCK_SESSION_MS).toBeLessThan(WORK_GRACE_MS);
-  finish.resolve();
-  await run;
+  try {
+    for (let elapsed = HEARTBEAT_MS; elapsed < STUCK_SESSION_MS; elapsed += HEARTBEAT_MS) {
+      vi.setSystemTime(startedAt + elapsed);
+      await clock.advanceTo(startedAt + elapsed);
+      expect(recover).not.toHaveBeenCalled();
+      expect(flow.settled).not.toHaveBeenCalled();
+    }
+    vi.setSystemTime(startedAt + STUCK_SESSION_MS);
+    expect(operation.watchdog.decide().action).toBe("stop");
+    await clock.advanceTo(startedAt + STUCK_SESSION_MS);
+    expect(recover).toHaveBeenCalledOnce();
+    expect(recover).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation,
+        sessionId: context.params.sessionId,
+        sessionKey: context.params.sessionKey,
+        allowActiveAbort: true,
+      }),
+    );
+    await recover.mock.results[0]?.value;
+    expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+    expect(flow.settled).toHaveBeenCalledOnce();
+    await expect(flow.run).rejects.toThrow();
+    expect(operation.abortSignal.aborted).toBe(true);
+  } finally {
+    flow.finish.resolve();
+    await Promise.allSettled([flow.run]);
+    operation.complete();
+    await scheduler.stop();
+  }
 });
 
 it("bounds compaction silence from the last record while a parsed tool is active", async () => {

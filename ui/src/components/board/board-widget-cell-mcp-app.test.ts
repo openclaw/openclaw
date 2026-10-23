@@ -2,15 +2,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
-import { boardWidget } from "./board-view.test-support.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { testId, boardWidget } from "./board-view.test-support.ts";
+import type {
+  BoardWidgetCellCallbacks,
+  BoardWidgetCellProps,
+} from "./board-widget-cell-options.ts";
 import {
   callbacks,
   cleanupCells,
   mountCell,
   mountElement,
 } from "./board-widget-cell.test-support.ts";
-import type { BoardWidgetCellCallbacks, BoardWidgetCellProps } from "./board-widget-cell.ts";
-import "./board-widget-cell.ts";
+import "./board-widget-cell.solid.tsx";
 
 class TestMcpAppView extends HTMLElement {
   sessionKey = "";
@@ -70,7 +74,7 @@ async function settle(cell: BoardWidgetCell): Promise<void> {
 }
 
 const app = (cell: BoardWidgetCell) => cell.querySelector<TestMcpAppView>("mcp-app-view");
-const stale = (cell: BoardWidgetCell) => cell.querySelector('[data-test-id="board-mcp-app-stale"]');
+const stale = (cell: BoardWidgetCell) => testId(cell, "board-mcp-app-stale");
 const waitForApp = (cell: BoardWidgetCell) => vi.waitFor(() => expect(app(cell)).not.toBeNull());
 function mountLease(
   viewId: string,
@@ -133,7 +137,8 @@ afterEach(() => {
 describe("board MCP App cell lifecycle", () => {
   it("admits one action per tick and restores controls after it fails", async () => {
     const removal = deferred();
-    const remove = vi.fn(() => removal.promise);
+    const retry = deferred();
+    const remove = vi.fn().mockReturnValueOnce(removal.promise).mockReturnValueOnce(retry.promise);
     const cell = await mount(
       { remove },
       { widget: widget({ contentKind: "html", grantState: "pending" }) },
@@ -149,10 +154,38 @@ describe("board MCP App cell lifecycle", () => {
     removal.reject(new Error("Removal failed"));
     await settle(cell);
 
-    expect(cell.querySelector('[data-test-id="board-widget-action-error"]')?.textContent).toContain(
-      "Removal failed",
+    await waitForSolid(() =>
+      expect(testId(cell, "board-widget-action-error")?.textContent).toContain("Removal failed"),
     );
     expect(allow.disabled).toBe(false);
+    cell.selectMenuItem("remove");
+    await settle(cell);
+    expect(testId(cell, "board-widget-action-error")).toBeNull();
+    expect(cell.querySelector('[data-test-id="board-grant-allow"]')).toBe(allow);
+    expect(allow.disabled).toBe(true);
+    retry.reject(new Error("Retry failed differently"));
+    await settle(cell);
+    expect(allow.disabled).toBe(false);
+    await waitForSolid(() =>
+      expect(testId(cell, "board-widget-action-error")?.textContent).toContain(
+        "Retry failed differently",
+      ),
+    );
+  });
+
+  it("does not publish an old action failure into a replacement widget", async () => {
+    const removal = deferred();
+    const current = widget({ contentKind: "html", grantState: "pending" });
+    const cell = await mount({ remove: () => removal.promise }, { widget: current });
+    cell.selectMenuItem("remove");
+    await settle(cell);
+    await update(cell, { widget: { ...current, name: "replacement" } });
+    removal.reject(new Error("Retired widget failed"));
+    await settle(cell);
+    expect(testId(cell, "board-widget-action-error")).toBeNull();
+    expect(
+      cell.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')?.disabled,
+    ).toBe(false);
   });
 
   it.each([
@@ -172,10 +205,10 @@ describe("board MCP App cell lifecycle", () => {
         },
         { widget: current },
       );
-      const error = () => cell.querySelector('[data-test-id="board-widget-action-error"]');
+      const error = () => testId(cell, "board-widget-action-error");
       cell.selectMenuItem("remove");
       await settle(cell);
-      expect(error()?.textContent).toContain("Removal failed");
+      await waitForSolid(() => expect(error()?.textContent).toContain("Removal failed"));
 
       await update(cell, { widget: { ...current, title: "Updated title" }, active: false });
       expect(error()?.textContent).toContain("Removal failed");
@@ -190,7 +223,7 @@ describe("board MCP App cell lifecycle", () => {
     async (recovery) => {
       const current = widget({ contentKind: "html" });
       const cell = await mount({}, { widget: current });
-      expect(cell.querySelector('[data-test-id="board-widget-error"]')).not.toBeNull();
+      expect(testId(cell, "board-widget-error")).not.toBeNull();
       expect(cell.querySelector(".board-widget__body--scrollable")).not.toBeNull();
 
       await update(cell, {
@@ -201,9 +234,7 @@ describe("board MCP App cell lifecycle", () => {
           throw new Error("Frame unavailable");
         },
       });
-      expect(cell.querySelector('[data-test-id="board-widget-error"]')?.textContent).toContain(
-        "Frame unavailable",
-      );
+      expect(testId(cell, "board-widget-error")?.textContent).toContain("Frame unavailable");
       expect(cell.querySelector(".board-widget__body--scrollable")).not.toBeNull();
 
       if (recovery === "in-place revision") {
@@ -212,7 +243,7 @@ describe("board MCP App cell lifecycle", () => {
       } else {
         await update(cell, { widgetFrameUrl: () => "/recovered-frame" });
       }
-      expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
+      expect(testId(cell, "board-widget-error")).toBeNull();
       expect(cell.querySelector(".board-widget__body--scrollable")).toBeNull();
       expect(cell.querySelector("iframe")?.getAttribute("src")).toBe("/recovered-frame");
     },
@@ -262,10 +293,10 @@ describe("board MCP App cell lifecycle", () => {
       sessionKey: "agent:main:test",
       viewId: "fixed-view",
     });
-    expect(cell.querySelector('[data-test-id="board-pending"]')).not.toBeNull();
+    expect(testId(cell, "board-pending")).not.toBeNull();
     await update(cell, { widget: widget({ grantState: "granted" }) });
     expect(app(cell)).not.toBeNull();
-    expect(cell.querySelector('[data-test-id="board-pending"]')).toBeNull();
+    expect(testId(cell, "board-pending")).toBeNull();
   });
 
   it("keeps active offscreen behavior while retaining inactive ready views", async () => {
@@ -309,7 +340,6 @@ describe("board MCP App cell lifecycle", () => {
     const retired = deferred();
     const refreshWidgetAppView = vi.fn(async () => ({
       status: "stale" as const,
-      error: "lease rejected",
     }));
     const cell = await mount({ refreshWidgetAppView });
     await waitForApp(cell);
@@ -373,7 +403,6 @@ describe("board MCP App cell lifecycle", () => {
       20_000,
       vi.fn(async () => ({
         status: "stale" as const,
-        error: "temporary gateway failure",
       })),
     );
     await advance(cell, 5_000);

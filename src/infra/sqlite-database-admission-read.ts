@@ -15,7 +15,7 @@ import {
   admitSqliteDatabaseFactValue,
   type Admission,
   type AdmissionFactValue,
-  type SqliteDatabaseAdmissionKey,
+  type SqliteDatabaseFactKey,
   type StagedAdmissionFact,
   type SqliteDatabaseAdmissionRegistry,
 } from "./sqlite-database-admission-record.js";
@@ -42,7 +42,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
   release: (record: Admission) => void;
   publishFact: <T>(
     record: Admission,
-    key: SqliteDatabaseAdmissionKey<T>,
+    key: SqliteDatabaseFactKey<T>,
     value: AdmissionFactValue,
     revision: number,
   ) => void;
@@ -66,7 +66,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
   }
   function getSqliteDatabaseAdmission<T>(
     database: DatabaseSync | PostgresSqlConnection,
-    key: SqliteDatabaseAdmissionKey<T>,
+    key: SqliteDatabaseFactKey<T>,
     options: { existingOnly?: boolean } = {},
   ): T | undefined {
     const anchor = sqlPublicationAnchor(database);
@@ -126,7 +126,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
 
   function getOrLoadSqliteDatabaseAdmissionForPath<T>(
     location: string,
-    key: SqliteDatabaseAdmissionKey<T>,
+    key: SqliteDatabaseFactKey<T>,
     load: () => T | undefined,
   ): T | undefined {
     const read = (record: Admission | undefined): T | undefined => {
@@ -150,6 +150,18 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     return key.lifetime === "process"
       ? withPathAdmission(location, read)
       : read(pathAdmission(location));
+  }
+
+  /** Optional preparation consumes only facts already delivered to this isolate. */
+  function peekSqliteDatabaseAdmissionForPath<T>(
+    location: string,
+    key: SqliteDatabaseFactKey<T>,
+  ): T | undefined {
+    const record = state.registry.forLocation(location);
+    const fact = record?.facts.get(key.name);
+    return record && fact && valid(record, fact)
+      ? readSqliteDatabaseAdmissionFact(fact, key)
+      : undefined;
   }
 
   function getSqliteDatabaseSchemaRevision(
@@ -187,6 +199,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     getSqliteDatabaseAdmission,
     getSqliteDatabaseSchemaRevision,
     getOrLoadSqliteDatabaseAdmissionForPath,
+    peekSqliteDatabaseAdmissionForPath,
     hasSqliteDatabaseSchemaAdmissionForPath,
     getSqliteDatabaseAdmissionIdentityForPath,
     hasSqliteDatabaseSchemaAdmissionForIdentity,

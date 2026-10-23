@@ -20,7 +20,6 @@ import {
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import type {
   OpenClawStateReadCommand,
-  OpenClawStateReadResult,
   OpenClawStateReadRequest,
 } from "../../../state/openclaw-state-read.types.js";
 import type { WorkerWriteOperationContext } from "../../../state/worker-operation-registry.js";
@@ -36,13 +35,27 @@ import type {
   SubagentRegistryWrite,
   SubagentRegistryWriteReceipt,
 } from "./subagent-registry.store.types.js";
+import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("state/worker");
+
+type SubagentRunsReadResult =
+  | {
+      type: "subagents.runs";
+      projection?: never;
+      runs: Map<string, SubagentRunRecord>;
+      descendants?: { sessionKeys: Set<string>; runIds: readonly string[] };
+    }
+  | {
+      type: "subagents.runs";
+      projection: "maintenance";
+      runs: Map<string, SubagentRunMaintenanceRecord>;
+    };
 
 export function readSubagentRunsInWorker(
   db: EngineConnection,
   command: Extract<OpenClawStateReadCommand, { type: "subagents.runs" }>,
-): Extract<OpenClawStateReadResult, { type: "subagents.runs" }> {
+): SubagentRunsReadResult {
   if (command.scope.kind === "maintenance") {
     return {
       type: command.type,
@@ -75,7 +88,7 @@ export function readSubagentRunsInWorker(
   return { type: command.type, runs: new Map(rows.map((entry) => [entry.runId, entry])) };
 }
 
-/** One private reader pins the snapshot; backpressure bounds decoded facts in flight. */
+/** The single SELECT owns its snapshot; backpressure bounds decoded facts in flight. */
 export async function streamSubagentRegistryInWorker(
   input: OpenClawStateReadRequest,
   channel: WorkerTaskChannel,
@@ -91,10 +104,6 @@ export async function streamSubagentRegistryInWorker(
   const errors: unknown[] = [];
   let count = 0;
   try {
-    // sqlite-allow-raw -- Keep the complete streamed read on one read-only snapshot.
-    db.exec(
-      isPostgresSqlConnection(db) ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" : "BEGIN",
-    );
     assertStateReadSchema(db, input.databasePath);
     if (!isPostgresSqlConnection(db)) {
       admitSqliteSchema(db);
@@ -128,13 +137,6 @@ export async function streamSubagentRegistryInWorker(
     if (!isPostgresSqlConnection(db) && isSqliteCorruptionError(error)) {
       invalidateOpenClawStateRuntimeIntegrity(db);
     }
-    errors.push(error);
-  }
-  try {
-    if (db.isTransaction) {
-      db.exec("ROLLBACK"); // sqlite-allow-raw -- End the read snapshot before releasing its reader.
-    }
-  } catch (error) {
     errors.push(error);
   }
   try {

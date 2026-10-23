@@ -78,6 +78,7 @@ function mockSendContext(
   api: TeamsApiClient,
   params: {
     conversationType: "channel" | "groupChat" | "personal";
+    conversationId?: string;
     replyStyle: "thread" | "top-level";
     threadId?: string;
     activityId?: string;
@@ -88,15 +89,16 @@ function mockSendContext(
 ) {
   const { conversationType, replyStyle, threadId, activityId, threadActivityId, sharePointSiteId } =
     params;
+  const resolvedConversationId = params.conversationId ?? conversationId;
   mockState.resolveMSTeamsSendContext.mockResolvedValue({
     app: { api },
     appId: "app-id",
-    conversationId,
+    conversationId: resolvedConversationId,
     ref: {
       serviceUrl,
       agent: { id: "28:bot", name: "OpenClaw", role: "bot" },
       user: { id: "29:user" },
-      conversation: { id: conversationId, conversationType },
+      conversation: { id: resolvedConversationId, conversationType },
       ...(threadId ? { threadId } : {}),
       ...(activityId ? { activityId } : {}),
     },
@@ -214,7 +216,7 @@ const attachmentRoutingCases = [
     `${conversationId};messageid=incoming-activity-1`,
   ],
   ["top-level channel", "channel", "top-level", threadRoot, undefined, conversationId],
-  ["group chat", "groupChat", "thread", threadRoot, undefined, conversationId],
+  ["group chat", "groupChat", "thread", threadRoot, undefined, "19:group-id@thread.v2"],
 ] as const;
 
 beforeEach(() => {
@@ -231,7 +233,10 @@ describe.each(["file", "card", "poll"] as const)("Microsoft Teams %s thread rout
     "routes %s through the real Teams SDK",
     async (_label, conversationType, replyStyle, threadId, activityId, expectedConversationId) => {
       await withRealTeamsSdkHttp(async ({ api, requests }) => {
+        const resolvedConversationId =
+          conversationType === "groupChat" ? expectedConversationId : conversationId;
         mockSendContext(api, {
+          conversationId: resolvedConversationId,
           conversationType,
           replyStyle,
           threadId,
@@ -242,7 +247,7 @@ describe.each(["file", "card", "poll"] as const)("Microsoft Teams %s thread rout
               : undefined,
           ...(kind === "file" ? { sharePointSiteId: "sharepoint-site-1" } : {}),
         });
-        const target = { cfg: {}, to: conversationId };
+        const target = { cfg: {}, to: resolvedConversationId };
         const result =
           kind === "file"
             ? await sendMessageMSTeams({
@@ -260,6 +265,14 @@ describe.each(["file", "card", "poll"] as const)("Microsoft Teams %s thread rout
                   },
                 })
               : await sendPollMSTeams({ ...target, question: "Ship it?", options: ["Yes", "No"] });
+        if (kind === "file") {
+          expect(mockState.uploadAndShareSharePoint).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              chatId: resolvedConversationId,
+              siteId: "sharepoint-site-1",
+            }),
+          );
+        }
         expect(requests).toHaveLength(1);
         expect(requests[0]).toMatchObject({
           path: `${new URL(serviceUrl).pathname}/v3/conversations/${expectedConversationId}/activities`,
@@ -279,7 +292,10 @@ describe.each(["file", "card", "poll"] as const)("Microsoft Teams %s thread rout
               : { attachments: [{ contentType: "application/vnd.microsoft.card.adaptive" }] }),
           },
         });
-        expect(result).toMatchObject({ messageId: "sdk-http-message-1", conversationId });
+        expect(result).toMatchObject({
+          messageId: "sdk-http-message-1",
+          conversationId: resolvedConversationId,
+        });
       });
     },
   );
@@ -364,6 +380,10 @@ describe("Microsoft Teams attachments", () => {
       });
 
       expect(mockState.sendMSTeamsMessages).toHaveBeenCalledOnce();
+      expect(mockState.sendMSTeamsMessages.mock.calls[0]?.[0].messages).toEqual([
+        { text: "Here is the image" },
+        { mediaUrl: `data:image/png;base64,${Buffer.from("image-content").toString("base64")}` },
+      ]);
       expect(mockState.uploadAndShareSharePoint).not.toHaveBeenCalled();
       expect(requests).toEqual([]);
       expect(result.messageId).toBe("text-message-1");

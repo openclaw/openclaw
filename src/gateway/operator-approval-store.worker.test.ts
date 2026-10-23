@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
-import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals-allow-always.js";
@@ -10,9 +8,10 @@ import {
   updateExecApprovals,
 } from "../infra/exec-approvals-store.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import * as readOwner from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -570,111 +569,81 @@ it("queues a brief approval burst through shared input admission", async () => {
   }
 });
 
-it("leaves the writer free while the host decides approval admission", async () => {
+it("commits verdicts during a terminal history read and rejects revoked read authority", async ({
+  signal,
+}) => {
   const databaseOptions = options();
-  // Materialize the state file so the competing connection can open it.
-  openOpenClawStateDatabase(databaseOptions);
-  const competitor = new DatabaseSync(resolveOpenClawStateSqlitePath(databaseOptions.env));
-  competitor.exec("PRAGMA busy_timeout = 0");
-  const observed: string[] = [];
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      createAdmission((request, grant) => {
-        try {
-          competitor.exec("BEGIN IMMEDIATE");
-          competitor.exec("ROLLBACK");
-          observed.push(`${request.stage}:free`);
-        } catch (error) {
-          if (!isSqliteLockError(error)) {
-            throw error;
-          }
-          observed.push(`${request.stage}:held`);
-        }
-        admit(request, grant);
-      }, attachment),
-  );
-  try {
-    await store.insertOperatorApproval({ approval: approval("contention"), databaseOptions });
-  } finally {
-    competitor.close();
+  for (const id of ["earlier", "later"]) {
+    await store.insertOperatorApproval({ approval: approval(id), databaseOptions });
   }
-  expect(observed).toEqual(["transaction:free", "commit:held"]);
-});
-
-it("commits a competing write while a busy host delays initial approval admission", async () => {
-  const databaseOptions = options();
-  // Materialize the state file so the competing connection can open it.
-  openOpenClawStateDatabase(databaseOptions);
-  const dbPath = resolveOpenClawStateSqlitePath(databaseOptions.env);
-  const HOST_BUSY_MS = 800;
-  const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-  const busy = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-  // The competing writer runs on its own thread so it can write while the host main thread is busy.
-  const competitor = new Worker(
-    `
-    const { parentPort, workerData } = require("node:worker_threads");
-    const { DatabaseSync } = require("node:sqlite");
-    const db = new DatabaseSync(workerData.path);
-    db.exec("PRAGMA busy_timeout = " + workerData.busyTimeoutMs);
-    const gate = new Int32Array(workerData.gate);
-    Atomics.wait(gate, 0, 0);
-    const start = Date.now();
-    try {
-      db.exec("BEGIN IMMEDIATE");
-      db.exec("CREATE TABLE IF NOT EXISTS busy_host_probe (id INTEGER PRIMARY KEY)");
-      db.exec("INSERT INTO busy_host_probe (id) VALUES (1)");
-      db.exec("COMMIT");
-      parentPort.postMessage({ ok: true, elapsedMs: Date.now() - start });
-    } catch (error) {
-      parentPort.postMessage({ ok: false, error: String(error), elapsedMs: Date.now() - start });
-    } finally {
-      db.close();
-    }
-  `,
-    {
-      eval: true,
-      workerData: { path: dbPath, busyTimeoutMs: 200, gate: gate.buffer },
-    },
-  );
-  const competing = new Promise<{ ok: boolean; error?: string; elapsedMs: number }>((resolve) => {
-    competitor.once("message", resolve);
-  });
-  const trace: string[] = [];
-  let delayedOnce = false;
-  // The Gateway main thread is the host: block it for HOST_BUSY_MS while answering initial
-  // admission, and run the competing write inside that busy window.
-  probe.admission(workerAdmission, (request, grant, admit) => {
-    if (request.stage === "transaction" && !delayedOnce) {
-      delayedOnce = true;
-      Atomics.store(gate, 0, 1);
-      Atomics.notify(gate, 0);
-      Atomics.wait(busy, 0, 0, HOST_BUSY_MS);
-      trace.push(`initial approval admission answered after ${HOST_BUSY_MS}ms of host delay`);
-    }
-    admit(request, grant);
-  });
-  try {
-    await store.insertOperatorApproval({ approval: approval("busy-host"), databaseOptions });
-    const outcome = await competing;
-    trace.push(
-      `[${outcome.ok ? "ok" : "FAILED"}] competing write elapsed ${outcome.elapsedMs}ms` +
-        (outcome.error ? `: ${outcome.error}` : ` (host busy ${HOST_BUSY_MS}ms)`),
-    );
-    const pendingApprovals = await store.listPendingOperatorApprovals({
+  const ready = createDeferredCore();
+  const release = createDeferredCore();
+  const unblock = () => release.resolve();
+  signal.addEventListener("abort", unblock, { once: true });
+  const executeRead = readOwner.executeExistingOpenClawStateRead;
+  const observed = vi
+    .spyOn(readOwner, "executeExistingOpenClawStateRead")
+    .mockImplementationOnce(async (...args) => {
+      const result = await executeRead(...args);
+      expect(result).toMatchObject({ history: { records: [{ id: "earlier", status: "denied" }] } });
+      ready.resolve();
+      await release.promise;
+      return result;
+    });
+  const resolve = (id: string) =>
+    store.resolveOperatorApproval({
+      id,
+      decision: "deny",
+      resolver: { kind: "device", id: "reviewer" },
       nowMs: 2000,
       databaseOptions,
     });
-    trace.push(
-      `approval persisted after admission resumed: ${pendingApprovals.some(
-        (record) => record.id === "busy-host",
-      )}`,
-    );
-    console.log(`[busy-host proof]\n${trace.join("\n")}`);
-    expect(outcome.ok).toBe(true);
-    expect(outcome.elapsedMs).toBeLessThan(HOST_BUSY_MS);
-    expect(pendingApprovals.some((record) => record.id === "busy-host")).toBe(true);
+  const earlier = resolve("earlier");
+  let current = true;
+  const history = store.listTerminalOperatorApprovals({
+    nowMs: 3000,
+    databaseOptions,
+    assertCurrent() {
+      if (!current) {
+        throw new Error("synthetic history authority revoked");
+      }
+    },
+  });
+  const result = history.then(
+    (value) => ({ value }),
+    (error: unknown) => {
+      ready.reject(error);
+      return { error };
+    },
+  );
+  try {
+    await ready.promise;
+    expect(await earlier).toMatchObject({ outcome: "resolved" });
+    expect(await resolve("later")).toMatchObject({ outcome: "resolved" });
+    current = false;
+    release.resolve();
+    expect(await result).toMatchObject({ error: new Error("synthetic history authority revoked") });
+    observed.mockRestore();
+    const fresh = await store.listTerminalOperatorApprovals({ nowMs: 3000, databaseOptions });
+    expect(fresh.records.map((record) => record.id)).toEqual(["later", "earlier"]);
   } finally {
-    await competitor.terminate();
+    release.resolve();
+    signal.removeEventListener("abort", unblock);
+    await Promise.allSettled([earlier, result]);
   }
+});
+
+it("leaves the writer free while the host decides approval admission", async () => {
+  const databaseOptions = options();
+  openOpenClawStateDatabase(databaseOptions);
+  using contention = probe.writerLock(resolveOpenClawStateSqlitePath(databaseOptions.env));
+  probe.admission(workerAdmission, (request, grant, admit) => {
+    contention.observe(request.stage);
+    admit(request, grant);
+  });
+  await store.insertOperatorApproval({ approval: approval("contention"), databaseOptions });
+  expect(contention.observed).toEqual(["transaction:free", "commit:held"]);
+  expect(await store.listPendingOperatorApprovals({ nowMs: 2000, databaseOptions })).toEqual([
+    expect.objectContaining({ id: "contention" }),
+  ]);
 });

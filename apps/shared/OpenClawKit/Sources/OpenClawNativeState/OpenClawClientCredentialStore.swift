@@ -295,6 +295,7 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
         }
     }
 
+    // periphery:ignore - Package tests verify restored-token replacement and byte-exact compare-and-swap.
     /// Restored backups may retain the path while redacting the token to NULL.
     public func replaceSocketCredentials(_ candidate: SocketCredentials, expectedToken: String?) throws -> Bool {
         try self.transaction {

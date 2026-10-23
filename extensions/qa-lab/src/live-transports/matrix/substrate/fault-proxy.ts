@@ -45,14 +45,12 @@ type MatrixQaFaultProxyForwardedResponse = {
   status: number;
 };
 
-export type MatrixQaFaultProxyExchange = {
-  context?: unknown;
+type MatrixQaFaultProxyExchange = {
   request: MatrixQaFaultProxyRequest;
   response: MatrixQaFaultProxyForwardedResponse;
 };
 
 export type MatrixQaFaultProxyObserver = {
-  createExchangeContext?: (request: MatrixQaFaultProxyRequest) => unknown;
   onExchange?: (exchange: MatrixQaFaultProxyExchange) => Promise<void> | void;
 };
 
@@ -293,19 +291,16 @@ export async function startMatrixQaFaultProxy(
     activeAbortControllers.add(abortController);
     void (async () => {
       let observedRequest: MatrixQaFaultProxyRequest | undefined;
-      let observedContext: unknown;
       let observerNotified = false;
       const observeExchange = async (
         request: MatrixQaFaultProxyRequest,
         response: MatrixQaFaultProxyForwardedResponse,
-        context?: unknown,
       ) => {
         if (!params.onExchange) {
           return;
         }
         observerNotified = true;
         await params.onExchange({
-          ...(context !== undefined ? { context } : {}),
           request,
           response,
         });
@@ -339,8 +334,6 @@ export async function startMatrixQaFaultProxy(
           search: requestUrl.search,
         };
         observedRequest = request;
-        const context = params.createExchangeContext?.(request);
-        observedContext = context;
         const registeredRule = registeredRules.find((candidate) => candidate.rule.match(request));
         const rule = registeredRule?.rule;
         if (rule && registeredRule) {
@@ -353,7 +346,7 @@ export async function startMatrixQaFaultProxy(
           registeredRule.hits.push(hit);
           if (rule.response) {
             const response = normalizeJsonResponse(rule.response(request));
-            await observeExchange(request, response, context);
+            await observeExchange(request, response);
             writeForwardedResponse(res, response);
             return;
           }
@@ -372,7 +365,7 @@ export async function startMatrixQaFaultProxy(
                 response: forwarded,
               })
             : forwarded;
-        await observeExchange(request, response, context);
+        await observeExchange(request, response);
         writeForwardedResponse(res, response);
       } catch (error) {
         const httpError = error instanceof MatrixQaFaultProxyHttpError ? error : undefined;
@@ -387,7 +380,7 @@ export async function startMatrixQaFaultProxy(
         });
         if (observedRequest && !observerNotified) {
           try {
-            await observeExchange(observedRequest, response, observedContext);
+            await observeExchange(observedRequest, response);
           } catch {
             // Capture is diagnostic; its failure must not strand the original HTTP response.
           }

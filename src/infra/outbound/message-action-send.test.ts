@@ -1,7 +1,4 @@
-// Covers plugin-dispatched message actions, target resolution, dry-run behavior,
-// and plugin tool-result extraction.
 import fs from "node:fs/promises";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -59,6 +56,18 @@ function gatewayMessageParams() {
     "gateway message params",
   );
 }
+function sendTo(
+  channel: string,
+  target: string,
+  params: Record<string, unknown>,
+  options: Omit<SendInput, "params"> = {},
+) {
+  return runMessageAction({ gateway: cli, ...options, params: { channel, target, ...params } });
+}
+const gatewaySend = (params: Record<string, unknown>, options?: Omit<SendInput, "params">) =>
+  sendTo("gatewaychat", "user-123", params, options);
+const cardSend = (params: Record<string, unknown>, options?: Omit<SendInput, "params">) =>
+  sendTo("cardchat", "channel:test-card", params, options);
 
 describe("runMessageAction plugin dispatch", () => {
   beforeEach(() => {
@@ -159,11 +168,7 @@ describe("runMessageAction plugin dispatch", () => {
       });
       registerGatewayChat(vi.fn());
       mocks.callGatewayLeastPrivilege.mockResolvedValue(receipt);
-      const result = await runMessageAction({
-        params: { channel: "gatewaychat", target: "user-123", message: "omitted" },
-        agentId: "main",
-        gateway: cli,
-      });
+      const result = await gatewaySend({ message: "omitted" }, { agentId: "main" });
       expect(result.payload).toEqual(receipt);
       expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(accepted ? 1 : 0);
     });
@@ -198,10 +203,7 @@ describe("runMessageAction plugin dispatch", () => {
             sendResult: { channel, to: "user-123", via: "gateway", mediaUrl },
           });
         }
-        await runMessageAction({
-          params: { channel, target: "user-123", buffer, filename, mimeType: "text/plain" },
-          gateway: cli,
-        });
+        await sendTo(channel, "user-123", { buffer, filename, mimeType: "text/plain" });
         const expected = {
           mediaUrl,
           mediaUrls: [mediaUrl],
@@ -250,10 +252,8 @@ describe("runMessageAction plugin dispatch", () => {
         };
       });
 
-      await runMessageAction({
-        params: {
-          channel: "gatewaychat",
-          target: "user-123",
+      await gatewaySend(
+        {
           path: "/sandbox/chart.txt",
           filePath: "/sandbox/chart.txt",
           fileUrl: "/sandbox/chart.txt",
@@ -267,15 +267,16 @@ describe("runMessageAction plugin dispatch", () => {
             },
           ],
         },
-        sandboxRoot: "/host-mirror",
-        sandboxContainerWorkdir: "/sandbox",
-        workspaceMediaAccess: {
-          localRoots: ["/host-mirror", "/sandbox"],
-          readFile: workspaceReadFile,
-          workspaceDir: "/host-mirror",
+        {
+          sandboxRoot: "/host-mirror",
+          sandboxContainerWorkdir: "/sandbox",
+          workspaceMediaAccess: {
+            localRoots: ["/host-mirror", "/sandbox"],
+            readFile: workspaceReadFile,
+            workspaceDir: "/host-mirror",
+          },
         },
-        gateway: cli,
-      });
+      );
 
       const messageParams = gatewayMessageParams();
       const stagedPath = String(messageParams.media);
@@ -309,18 +310,15 @@ describe("runMessageAction plugin dispatch", () => {
         spokenText: "hello there",
       });
 
-      await runMessageAction({
-        cfg: {
-          ...createEnabledMessageActionConfig("gatewaychat"),
-          tts: { auto: "tagged" },
-        } as OpenClawConfig,
-        params: {
-          channel: "gatewaychat",
-          target: "user-123",
-          message: "[[tts:text]]hello there[[/tts:text]]",
+      await gatewaySend(
+        { message: "[[tts:text]]hello there[[/tts:text]]" },
+        {
+          cfg: {
+            ...createEnabledMessageActionConfig("gatewaychat"),
+            tts: { auto: "tagged" },
+          } as OpenClawConfig,
         },
-        gateway: cli,
-      });
+      );
 
       expectRecordFields(
         gatewayMessageParams(),
@@ -340,30 +338,12 @@ describe("runMessageAction plugin dispatch", () => {
     const chart = (title: string, categories: string[], name: string, values: number[]) => ({
       blocks: [{ type: "chart", chartType: "line", title, categories, series: [{ name, values }] }],
     });
-    const handleAction = vi.fn(
-      async ({ cfg, params }: { cfg: OpenClawConfig; params: Record<string, unknown> }) => {
-        const message = typeof params.message === "string" ? params.message : "";
-        const responsePrefix = Object.values(cfg.channels ?? {}).find(
-          (entry): entry is { responsePrefix?: string } =>
-            typeof entry === "object" && entry !== null && "responsePrefix" in entry,
-        )?.responsePrefix;
-        const rawMessage =
-          responsePrefix && message.startsWith(`${responsePrefix} `)
-            ? message.slice(responsePrefix.length + 1)
-            : message;
-        let detectedCard = false;
-        try {
-          detectedCard = isRecord((JSON.parse(rawMessage) as { body?: unknown }).body);
-        } catch {
-          // Non-JSON text remains a normal plugin message.
-        }
-        return jsonResult({
-          ok: true,
-          presentation: params.presentation ?? null,
-          message: params.message ?? null,
-          detectedCard,
-        });
-      },
+    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+      jsonResult({
+        ok: true,
+        presentation: params.presentation ?? null,
+        message: params.message ?? null,
+      }),
     );
 
     const cardPlugin: ChannelPlugin = {
@@ -406,14 +386,7 @@ describe("runMessageAction plugin dispatch", () => {
       };
       mocks.callGatewayLeastPrivilege.mockResolvedValueOnce({ ok: true, messageId: "card-1" });
 
-      const result = await runMessageAction({
-        params: {
-          channel: "cardchat",
-          target: "channel:test-card",
-          presentation,
-        },
-        gateway: cli,
-      });
+      const result = await cardSend({ presentation });
 
       expect(result).toMatchObject({ kind: "send", handledBy: "plugin" });
       expect(handleAction).not.toHaveBeenCalled();
@@ -433,16 +406,7 @@ describe("runMessageAction plugin dispatch", () => {
         messageId: "card-location",
       });
 
-      const result = await runMessageAction({
-        cfg,
-        params: {
-          channel: "cardchat",
-          target: "channel:test-card",
-          message: "hello",
-          location: "",
-        },
-        gateway: cli,
-      });
+      const result = await cardSend({ message: "hello", location: "" }, { cfg });
 
       expect(result).toMatchObject({ kind: "send", handledBy: "plugin" });
       expect(handleAction).not.toHaveBeenCalled();
@@ -467,18 +431,14 @@ describe("runMessageAction plugin dispatch", () => {
       });
       registerLocalCardPlugin();
 
-      const result = await runMessageAction({
-        params: {
-          channel: "cardchat",
-          target: "channel:test-card",
-          message: "Deployment trend",
-          presentation,
+      const result = await cardSend(
+        { message: "Deployment trend", presentation },
+        {
+          agentId: "main",
+          sessionKey: sourceSessionKey,
+          suppressTranscriptMirror: true,
         },
-        gateway: cli,
-        agentId: "main",
-        sessionKey: sourceSessionKey,
-        suppressTranscriptMirror: true,
-      });
+      );
 
       expect(result).toMatchObject({ kind: "send", handledBy: "core" });
       expect(handleAction).not.toHaveBeenCalled();
@@ -506,18 +466,14 @@ describe("runMessageAction plugin dispatch", () => {
       mocks.executeSendAction.mockResolvedValueOnce({ handledBy: "core", payload: { ok: true } });
       registerLocalCardPlugin();
 
-      await runMessageAction({
-        ...(actionOrigin ? { actionOrigin } : {}),
-        params: {
-          channel: "cardchat",
-          target: "channel:test-card",
-          message: "Deployment trend",
-          presentation,
+      await cardSend(
+        { message: "Deployment trend", presentation },
+        {
+          ...(actionOrigin ? { actionOrigin } : {}),
+          agentId: "main",
+          suppressTranscriptMirror: true,
         },
-        gateway: cli,
-        agentId: "main",
-        suppressTranscriptMirror: true,
-      });
+      );
 
       const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
       const executeContext = readRecordField(executeCall, "ctx", "execute send context");
@@ -544,7 +500,7 @@ describe("runMessageAction plugin dispatch", () => {
       expect(result).toMatchObject({
         kind: "send",
         handledBy: "plugin",
-        payload: { ok: true, detectedCard: true },
+        payload: { ok: true },
       });
       const pluginParams = readRecordField(readFirstPluginCall(handleAction), "params", "params");
       expect(pluginParams.message).toBe(`[Nexus] ${cardJson}`);

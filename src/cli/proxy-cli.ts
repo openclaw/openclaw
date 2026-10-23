@@ -1,5 +1,6 @@
 import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
-import { InvalidArgumentError, type Command } from "commander";
+import { InvalidArgumentError, Option, type Command } from "commander";
+import { captureQueryPresetSchema } from "../proxy-capture/cli-contract.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
 import { collectOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
@@ -128,9 +129,10 @@ export function registerProxyCli(program: Command) {
   proxy
     .command("query")
     .description("Run a built-in query preset against captured traffic")
-    .requiredOption(
-      "--preset <name>",
-      "Query preset: double-sends, retry-storms, cache-busting, ws-duplicate-frames, missing-ack, error-bursts",
+    .addOption(
+      new Option("--preset <name>", "Query preset")
+        .choices(captureQueryPresetSchema.options)
+        .makeOptionMandatory(),
     )
     .option("--json", "Print machine-readable JSON")
     .option("--session <id>", "Restrict to a capture session id")

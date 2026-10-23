@@ -44,6 +44,16 @@ vi.mock("./reply-agent-turn-preparation.js", async (importOriginal) => ({
   prepareReplyAgentTurn: (...args: unknown[]) => state.admit(...args),
 }));
 
+// mock-isolation: Presentation tests use synthetic operations; real owner admission is
+// exercised by followup-runner.queue-custody.test.ts through the production runner.
+vi.mock("./reply-turn-admission-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-turn-admission-lifecycle.js")>()),
+  runWithReplyOperationLifecycleAdmission: async (
+    _operation: unknown,
+    run: () => Promise<unknown>,
+  ) => await run(),
+}));
+
 vi.mock("./followup-turn-execution.js", () => ({
   executeFollowupTurn: (...args: unknown[]) => state.execute(...args),
 }));

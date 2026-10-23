@@ -2,6 +2,7 @@
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { EXEC_TIMEOUT_RETRY_GUIDANCE } from "../../../../src/agents/bash-tools.exec-output.js";
 import { cloneEnvWithPlatformSemantics } from "../../../../src/config/config-env-vars.js";
 import {
   readTranscriptExportSnapshotReadOnlySync,
@@ -195,7 +196,6 @@ export {
 export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 export type { CanonicalSessionReaderContinuation } from "../../../../src/config/sessions/session-canonical-key.js";
 export type { SessionEntry } from "../../../../src/config/sessions/types.js";
-export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
 export {
   parseSqliteSessionFileMarker,
   resolveStorePath,
@@ -287,3 +287,16 @@ export {
 export const readSessionResetRecallCutoffInWorker = bindTranscriptRead(
   (runtime) => runtime.readSessionResetRecallCutoffInWorker,
 );
+
+/** Recognize historical exec notices when exporting conversation text for memory. */
+export function isExecCompletionEvent(event: string): boolean {
+  const trimmed = event.trim();
+  if (/^exec finished(?::|\s*\()/i.test(trimmed)) {
+    return true;
+  }
+  const match =
+    /^exec (completed|failed) \(([a-z0-9_-]{1,64}), (code -?\d+|signal [^)]+)\)(?: :: ([\s\S]*)|\n\n([\s\S]+))?$/i.exec(
+      trimmed,
+    );
+  return Boolean(match && (match[5] === undefined || match[5] === EXEC_TIMEOUT_RETRY_GUIDANCE));
+}

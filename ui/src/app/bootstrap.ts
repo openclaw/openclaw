@@ -169,7 +169,6 @@ export function bootstrapApplication(): ApplicationRuntime {
     settings,
     startup.password ?? "",
     hasPendingGateway ? "" : (startup.pendingBootstrapToken ?? ""),
-    undefined,
     {
       persistDefaultConnectionSettings: documentMode === null,
       ownsWarmBoot,
@@ -472,7 +471,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       lastPostConnectClient = client;
       const ifNeeded = firstConfigConnection;
       firstConfigConnection = false;
-      void config.refresh({ ifNeeded });
+      void config.refresh({ ifNeeded, signal: startupLifecycle.signal });
       void connectionBootstrap.run("session-observer", () =>
         sendSessionObserverVisibility(client, loadChatObserverDisplayPreference() !== "off"),
       );
@@ -623,7 +622,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     },
     start: () => {
       if (!startupLifecycle.signal.aborted) {
-        void config.refresh({ ifNeeded: true });
+        void config.refresh({ ifNeeded: true, signal: startupLifecycle.signal });
       }
       const stopRouter = () => router.stop();
       if (startsApplicationRouter) {

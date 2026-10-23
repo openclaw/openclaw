@@ -148,7 +148,14 @@ describe("diagnostic run activity listener lifecycle", () => {
   it("releases embedded run-id indexes without diagnostic event tracking", () => {
     const ref = { sessionId: "reused-session", sessionKey: "agent:main:reused" };
 
+    markDiagnosticEmbeddedRunStarted({ sessionId: ref.sessionId, runId: "first-run" });
     markDiagnosticEmbeddedRunStarted({ ...ref, runId: "first-run" });
+    markDiagnosticEmbeddedRunStarted({ ...ref, sessionId: "parallel-session" });
+    for (const alias of [{ sessionId: ref.sessionId }, { sessionKey: ref.sessionKey }]) {
+      expectActivity(alias, { activeWorkKind: "embedded_run" });
+    }
+    markDiagnosticEmbeddedRunEnded({ ...ref, sessionId: "parallel-session" });
+    expectActivity(ref, { activeWorkKind: "embedded_run" });
     markDiagnosticEmbeddedRunEnded(ref);
     markDiagnosticRunProgress({ runId: "first-run", reason: "stale-first-run" });
     expectActivity(ref, { activeWorkKind: undefined, lastProgressReason: "embedded_run:ended" });
@@ -220,6 +227,26 @@ describe("argument-churn liveness", () => {
 
     vi.setSystemTime(startedAt + 60_000);
     expectActivity(ref, { lastProgressAgeMs: 60_000, lastProgressReason: "model_call:stream" });
+  });
+
+  it("keeps a later same-timestamp churn clear when session refs merge", () => {
+    const startedAt = setClock("2026-07-27T00:00:00Z");
+    const sessionId = "churn-clear-merge-session";
+    const sessionKey = "agent:main:churn-clear-merge";
+    const runId = "churn-clear-merge-run";
+    markDiagnosticEmbeddedRunStarted({ sessionId, runId });
+    markDiagnosticArgumentChurnObservation({ sessionId, runId, active: true });
+    markDiagnosticArgumentChurnObservation({ sessionKey, active: true });
+    markDiagnosticArgumentChurnObservation({ sessionKey, active: false });
+
+    vi.setSystemTime(startedAt + 60_000);
+    expectActivity(
+      { sessionId, sessionKey },
+      {
+        lastProgressAgeMs: 60_000,
+        lastProgressReason: "embedded_run:started",
+      },
+    );
   });
 
   it("keeps overlapping policy waits suspended until every call releases its token", () => {

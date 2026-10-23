@@ -1,8 +1,18 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import {
+  decodePluginCommandSchedule,
+  isPluginCommandScheduleCapPeer,
+  MAX_ACTIVE_PLUGIN_COMMAND_SCHEDULES_PER_PARENT,
+} from "../plugin-command-schedule.js";
+import { toPublicCronJob } from "../public-job.js";
 import { declarativeFields } from "../service/jobs-declarative.js";
-import { cloneCronJobForMutation, finalizeUpdatedJob } from "../service/jobs-mutation.js";
+import {
+  applyCronStreamSandboxTarget,
+  cloneCronJobForMutation,
+  finalizeUpdatedJob,
+} from "../service/jobs-mutation.js";
 import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js";
 import {
   reconcileCronChannelRequesterAuthority,
@@ -10,7 +20,6 @@ import {
   reconcileRuntimeAuthority,
 } from "../service/jobs-tool-policy.js";
 import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "../service/jobs.js";
-import { isSystemMonitorDeclaration } from "../system-owned-declaration.js";
 import type { CronStoredJob, CronStoreFile } from "../types.js";
 import type { CronJobMutation, CronJobMutationPlan } from "./job-mutations.types.js";
 import { createCronMutationLogger } from "./runtime-mutation.worker.js";
@@ -20,6 +29,22 @@ type CronJobMutationContext = Pick<
   CronSchedulerConfig,
   "defaultAgentId" | "cronConfig" | "configuredChannels"
 > & { nowMs: number };
+
+function commandDeclarationDefinition(job: CronStoredJob): unknown {
+  const {
+    id: _id,
+    createdAtMs: _createdAtMs,
+    updatedAtMs: _updatedAtMs,
+    state: _state,
+    // Derived from the envelope, which the caller compares separately; a candidate has none yet.
+    payloadSource: _payloadSource,
+    ...definition
+  } = toPublicCronJob(job);
+  // Compare the stored JSON contract, not omitted-versus-undefined JS properties.
+  // structuredClone preserves undefined fields and would change declaration equality.
+  // eslint-disable-next-line unicorn/prefer-structured-clone
+  return JSON.parse(JSON.stringify(definition));
+}
 
 /** Both preparation and commit use this owner; only committed results are published. */
 export function planCronJobMutation(
@@ -32,15 +57,6 @@ export function planCronJobMutation(
   const { nowMs: now, defaultAgentId, cronConfig, configuredChannels } = snapshot;
   if (mutation.kind === "remove") {
     const ids = new Set(mutation.ids);
-    for (const job of next.jobs) {
-      if (
-        ids.has(job.id) &&
-        isSystemMonitorDeclaration(job.declarationKey) &&
-        !mutation.systemOwned
-      ) {
-        throw new Error("system-owned monitor jobs cannot be removed by cron clients");
-      }
-    }
     next.jobs = next.jobs.filter((job) => !ids.has(job.id));
   } else {
     const options = mutation.options;
@@ -48,6 +64,13 @@ export function planCronJobMutation(
     let previousJob: CronStoredJob | undefined;
     let nextJob: CronStoredJob;
     if (mutation.kind === "add") {
+      if (Object.hasOwn(mutation.input, "pluginCommand")) {
+        throw new Error("plugin command schedules require private creation options");
+      }
+      const pluginCommand =
+        options.pluginCommand === undefined
+          ? undefined
+          : decodePluginCommandSchedule(options.pluginCommand);
       const key = normalizeOptionalString(mutation.input.declarationKey);
       const matches = key
         ? previous.jobs.filter(
@@ -60,6 +83,49 @@ export function planCronJobMutation(
         throw new Error(`cron declarationKey is ambiguous within caller scope: ${key}`);
       }
       previousJob = matches[0];
+      if (previousJob && (previousJob.pluginCommand !== undefined || pluginCommand !== undefined)) {
+        const existingCommandJob = previousJob;
+        // A declaration retry is never fresh authority or a fresh run budget.
+        const candidate = createJob(
+          { deps: { nowMs: () => existingCommandJob.createdAtMs, defaultAgentId, cronConfig } },
+          mutation.input,
+          { ...validation, scheduledToolPolicy: options.scheduledToolPolicy ?? undefined },
+        );
+        applyCronStreamSandboxTarget(candidate, options.streamSandbox);
+        if (
+          !isDeepStrictEqual(previousJob.pluginCommand, pluginCommand) ||
+          !isDeepStrictEqual(
+            commandDeclarationDefinition(previousJob),
+            commandDeclarationDefinition(candidate),
+          ) ||
+          Object.keys(mutation.input.state ?? {}).length > 0
+        ) {
+          throw new Error(
+            "plugin command declaration already exists and cannot be changed or rearmed",
+          );
+        }
+        plan.job = previousJob;
+        plan.created = false;
+        plan.updated = false;
+        return plan;
+      }
+      if (
+        pluginCommand &&
+        previous.jobs.filter((job) =>
+          isPluginCommandScheduleCapPeer(
+            job,
+            pluginCommand,
+            now,
+            options.pluginCommandSourceDigest,
+          ),
+        ).length >= MAX_ACTIVE_PLUGIN_COMMAND_SCHEDULES_PER_PARENT
+      ) {
+        // Retired schedules, those bound to a replaced plugin instance or other code, and
+        // non-restartable ones of an earlier Gateway process do not count: none can run again.
+        throw new Error(
+          `plugin command schedules are limited to ${MAX_ACTIVE_PLUGIN_COMMAND_SCHEDULES_PER_PARENT} active jobs per plugin and parent session`,
+        );
+      }
       if (previousJob) {
         nextJob = cloneCronJobForMutation(previousJob);
         applyDeclarativeJobSpec(nextJob, mutation.input, {
@@ -68,6 +134,7 @@ export function planCronJobMutation(
           enabledExplicit: options.enabledExplicit === true,
           nowMs: now,
         });
+        applyCronStreamSandboxTarget(nextJob, options.streamSandbox);
         finalizeUpdatedJob({
           job: previousJob,
           nextJob,
@@ -89,6 +156,21 @@ export function planCronJobMutation(
             scheduledToolPolicy: options.scheduledToolPolicy ?? undefined,
           },
         );
+        applyCronStreamSandboxTarget(nextJob, options.streamSandbox);
+        if (pluginCommand) {
+          nextJob.pluginCommand = pluginCommand;
+          nextJob.state.pluginCommandRuns = 0;
+          // Restart continuity: a later Gateway process can re-arm this schedule at its claim
+          // onto an instance that loaded exactly this code. Without captured source it ends with
+          // this process, as on hosts without continuity.
+          if (options.pluginCommandSourceDigest) {
+            nextJob.state.pluginCommandBinding = {
+              hostProcessId: pluginCommand.hostProcessId,
+              pluginIncarnation: pluginCommand.pluginIncarnation,
+              sourceDigest: options.pluginCommandSourceDigest,
+            };
+          }
+        }
         if (options.createdActor) {
           nextJob.createdActor = options.createdActor;
         }
@@ -104,24 +186,38 @@ export function planCronJobMutation(
       if (!previousJob) {
         throw new Error(`unknown cron job id: ${mutation.id}`);
       }
-      if (isSystemMonitorDeclaration(previousJob.declarationKey)) {
-        throw new Error("system-owned monitor jobs cannot be edited by cron clients");
+      if (
+        previousJob.pluginCommand !== undefined &&
+        (mutation.patch.enabled !== false || Object.keys(mutation.patch).length !== 1)
+      ) {
+        throw new Error("plugin command jobs can only be disabled or removed, not edited");
       }
       nextJob = cloneCronJobForMutation(previousJob);
       applyJobPatch(nextJob, mutation.patch, { ...validation, scheduleValidationNowMs: now });
+      applyCronStreamSandboxTarget(nextJob, options.streamSandbox);
       finalizeUpdatedJob({
         job: previousJob,
         nextJob,
         now,
         schedulingInputsRequested:
           mutation.patch.schedule !== undefined ||
+          options.streamSandbox !== undefined ||
           mutation.patch.enabled !== undefined ||
           "trigger" in mutation.patch ||
           "pacing" in mutation.patch,
         scheduleChanged: mutation.patch.schedule !== undefined,
         explicitTriggerState: mutation.patch.state,
+        streamRestartExhaustedRequested: mutation.patch.state?.streamRestartExhausted === true,
         isJobActive: () => previousJob?.state.runningAtMs !== undefined,
       });
+    }
+    if (previousJob?.pluginCommand !== undefined) {
+      // Disable preserves the original envelope, requester authority, and attempt count.
+      plan.job = nextJob;
+      plan.created = false;
+      plan.updated = true;
+      next.jobs = next.jobs.map((job) => (job.id === nextJob.id ? nextJob : job));
+      return plan;
     }
     // Declarative re-registration is not a fresh authorization of an existing account.
     if (options.inferenceBinding && (!previousJob || mutation.kind === "update")) {

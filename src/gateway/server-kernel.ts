@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
+import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { isNixMode, resolveIsConfigReadOnly } from "../config/paths.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
@@ -143,8 +144,13 @@ async function createGatewayKernelWithSdkHost(
   const bootId = suppliedBootId ?? randomUUID();
   // Join catalog publication and retained cancellation code before bootstrap owns resources.
   const [, { cancelPreparedModelRuntimeRefresh }] = await Promise.all([
-    prepareRemoteModelCatalogStartupSnapshot(),
-    import("../agents/prepared-model-runtime.js"),
+    measureGatewayBootstrapStep("gateway.catalog-startup-snapshot", () =>
+      prepareRemoteModelCatalogStartupSnapshot(),
+    ),
+    measureGatewayBootstrapStep(
+      "gateway.model-runtime-import",
+      () => import("../agents/prepared-model-runtime.js"),
+    ),
   ]);
   ensureOpenClawCliOnPath();
   const pluginMetadata = retainGatewayPluginMetadata(scheduler, async () => {

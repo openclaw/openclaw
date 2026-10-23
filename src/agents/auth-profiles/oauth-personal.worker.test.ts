@@ -14,6 +14,7 @@ import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createOAuthRefreshError } from "../../shared/oauth-refresh-outcome.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -25,10 +26,14 @@ import {
   prepareUserModelAccountAuthority,
 } from "../../state/user-model-account-operations.js";
 import {
+  clearUserProfileAuthLink,
   connectUserModelAccount,
+  readSelectedUserModelAccount,
+  setUserProfileAuthLink,
   updateUserModelAuthProfile,
   readUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
+import { captureUserProfileModelAccountLinksAuthority } from "../../state/user-profile-events.js";
 import { mergeCanonicalUserProfiles } from "../../state/user-profile-writes.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -43,11 +48,22 @@ import {
   mockOAuthProviderOperations,
   type NativeOAuthProviderFixture,
 } from "./oauth-native-provider.test-support.js";
+import { isOAuthRefreshFence, isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { withPersonalAuthProfileStore } from "./personal-store.js";
+import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
 import { inspectAuthProfileJsonCell } from "./sqlite-json.js";
 import type { OAuthCredential, ProfileUsageStats, UserModelAuthProfile } from "./types.js";
 import { reconcileWhamBlock, type WhamCooldownProbeResult } from "./usage-reduction.js";
+
+function nonattemptedRefresh() {
+  return createOAuthRefreshError("Synthetic provider dispatch did not start", {
+    version: 1,
+    phase: "before-dispatch",
+    outcome: "not-attempted",
+    recovery: { kind: "later", evidence: "dispatch-not-started" },
+  });
+}
 
 const authorityUnavailable = "Personal model account authority is unavailable";
 function expectUnavailable(read: () => unknown) {
@@ -635,96 +651,239 @@ it.for(["unacknowledged", "acknowledged"] as const)(
   },
 );
 
-it("commits a competing write while a busy host delays initial auth authorization enrollment", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { profileId } = fixture();
-    const databasePath = resolveOpenClawStateSqlitePath();
-    const context = captureOpenClawStateWorkerContext();
-    // Enrollment is a CAS against the persisted auth store; carry the exact current snapshot.
-    const expected = runOpenClawStateWriteTransaction(
-      ({ db }) => inspectAuthProfileJsonCell(db, "store", "shared-state"),
-      {},
-    );
-    const HOST_BUSY_MS = 800;
-    const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-    const busy = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-    // The competing writer runs on its own thread so it can write while the host main thread is busy.
-    const competitor = new Worker(
-      `
-      const { parentPort, workerData } = require("node:worker_threads");
-      const { DatabaseSync } = require("node:sqlite");
-      const db = new DatabaseSync(workerData.path);
-      db.exec("PRAGMA busy_timeout = " + workerData.busyTimeoutMs);
-      const gate = new Int32Array(workerData.gate);
-      Atomics.wait(gate, 0, 0);
-      const start = Date.now();
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        db.exec("CREATE TABLE IF NOT EXISTS busy_host_probe (id INTEGER PRIMARY KEY)");
-        db.exec("INSERT INTO busy_host_probe (id) VALUES (1)");
-        db.exec("COMMIT");
-        parentPort.postMessage({ ok: true, elapsedMs: Date.now() - start });
-      } catch (error) {
-        parentPort.postMessage({ ok: false, error: String(error), elapsedMs: Date.now() - start });
-      } finally {
-        db.close();
-      }
-    `,
-      {
-        eval: true,
-        workerData: { path: databasePath, busyTimeoutMs: 200, gate: gate.buffer },
-      },
-    );
-    const competing = new Promise<{ ok: boolean; error?: string; elapsedMs: number }>((done) => {
-      competitor.once("message", done);
+it.for(["canonical", "merged"] as const)(
+  "preserves an unchanged %s personal grant after a retryable failure and recovers",
+  async (identity, { owner, profileId, credential, replacement }) => {
+    if (identity === "merged") {
+      const target = ensureProfileForEmail("personal-retry-merged@example.test");
+      await mergeCanonicalUserProfiles(owner.id, target.id);
+    }
+    const refreshCredential = vi
+      .fn()
+      .mockRejectedValueOnce(nonattemptedRefresh())
+      .mockResolvedValueOnce(replacement);
+    const manager = managerWith({ refreshCredential });
+    await expect(resolve(manager, profileId, credential)).rejects.toThrow();
+    expect(readUserModelAuthProfile(profileId)?.credential).toEqual(credential);
+    expect(readUserModelAuthProfile(profileId)?.usageStats).toBeUndefined();
+    await expect(resolve(manager, profileId, credential)).resolves.toMatchObject({
+      apiKey: replacement.access,
     });
-    const trace: string[] = [];
-    let delayedOnce = false;
-    // The Gateway main thread is the host: block it for HOST_BUSY_MS while answering the first
-    // enrollment admission, and run the competing write inside that busy window.
-    probe.admission(operationAdmission, (request, grant, admit) => {
-      if (request.stage === "transaction" && !delayedOnce) {
-        delayedOnce = true;
-        Atomics.store(gate, 0, 1);
-        Atomics.notify(gate, 0);
-        Atomics.wait(busy, 0, 0, HOST_BUSY_MS);
-        trace.push(`initial enrollment admission answered after ${HOST_BUSY_MS}ms of host delay`);
+    expect(readUserModelAuthProfile(profileId)?.credential).toEqual(replacement);
+    expect(refreshCredential).toHaveBeenCalledTimes(2);
+  },
+);
+
+it.for(["disconnect", "reassignment", "same-account-reassignment"] as const)(
+  "rejects retired personal authority after transient %s",
+  async (change, { owner, profileId, credential, replacement }) => {
+    const current = captureUserProfileModelAccountLinksAuthority(
+      captureOpenClawStateWorkerContext().admission,
+      owner.id,
+    );
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const buildApiKey = vi.fn(async () => "should-not-publish");
+    const refreshCredential = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+      throw nonattemptedRefresh();
+    });
+    const manager = managerWith({ refreshCredential, buildApiKey });
+    const pending = resolve(manager, profileId, credential).catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      const reconnected = {
+        ...replacement,
+        accountId:
+          change === "same-account-reassignment" ? credential.accountId : "replacement-account",
+      };
+      if (change === "disconnect") {
+        clearUserProfileAuthLink({ profileId: owner.id, provider: credential.provider });
+      } else {
+        connectUserModelAccount({
+          ownerProfileId: owner.id,
+          credential: reconnected,
+          replacement: readSelectedUserModelAccount(owner.id, credential.provider),
+          assertCurrent() {},
+        });
       }
+      expect(current()).toBe(false);
+      release.resolve();
+      expect(await pending).toBeInstanceOf(Error);
+      expect(buildApiKey).not.toHaveBeenCalled();
+      expect(refreshCredential).toHaveBeenCalledTimes(1);
+      const stored = readUserModelAuthProfile(profileId)?.credential;
+      if (change === "disconnect") {
+        const oauth = stored?.type === "oauth" ? stored : undefined;
+        expect(isOAuthRefreshFence(oauth)).toBe(true);
+        expect(isPendingOAuthRefreshFence(oauth)).toBe(false);
+      } else {
+        expect(stored).toEqual(reconnected);
+      }
+    } finally {
+      release.resolve();
+      await pending;
+    }
+  },
+);
+
+it.for(["disconnect", "link-switch", "merge"] as const)(
+  "does not revive a merged owner's grant after transient %s",
+  async (change, { owner, profileId, credential, replacement }) => {
+    const target = ensureProfileForEmail("personal-refresh-merged@example.test");
+    const other = connectUserModelAccount({
+      ownerProfileId: target.id,
+      credential: { ...replacement, accountId: "other-existing-account" },
+      assertCurrent() {},
+    });
+    await mergeCanonicalUserProfiles(owner.id, target.id);
+    setUserProfileAuthLink({
+      profileId: target.id,
+      provider: credential.provider,
+      authProfileId: profileId,
+    });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const refreshCredential = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+      throw nonattemptedRefresh();
+    });
+    const buildApiKey = vi.fn(async () => "should-not-publish");
+    const manager = managerWith({ refreshCredential, buildApiKey });
+    const pending = resolve(manager, profileId, credential).catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      const fenced = readUserModelAuthProfile(profileId)?.credential;
+      expect(fenced?.type === "oauth" && isPendingOAuthRefreshFence(fenced)).toBe(true);
+      if (change === "disconnect") {
+        clearUserProfileAuthLink({ profileId: target.id, provider: credential.provider });
+      } else if (change === "link-switch") {
+        setUserProfileAuthLink({
+          profileId: target.id,
+          provider: credential.provider,
+          authProfileId: other.authProfileId,
+        });
+      } else {
+        const successor = ensureProfileForEmail("personal-refresh-successor@example.test");
+        await mergeCanonicalUserProfiles(target.id, successor.id);
+      }
+      // Changing only selection/ownership must not replace the old credential row.
+      expect(readUserModelAuthProfile(profileId)?.credential).toEqual(fenced);
+      release.resolve();
+      expect(await pending).toBeInstanceOf(Error);
+      const stored = readUserModelAuthProfile(profileId)?.credential;
+      const oauth = stored?.type === "oauth" ? stored : undefined;
+      expect(isOAuthRefreshFence(oauth)).toBe(true);
+      expect(isPendingOAuthRefreshFence(oauth)).toBe(false);
+      expect(buildApiKey).not.toHaveBeenCalled();
+      expect(refreshCredential).toHaveBeenCalledTimes(1);
+      expect(readUserModelAuthProfile(other.authProfileId)?.credential).toEqual({
+        ...replacement,
+        accountId: "other-existing-account",
+      });
+    } finally {
+      release.resolve();
+      await pending;
+    }
+  },
+);
+
+it("rechecks captured personal authority before persisting the refresh claim", async ({
+  owner,
+  profileId,
+  credential,
+}) => {
+  const captured = createDeferredCore();
+  const release = createDeferredCore();
+  const refreshCredential = vi.fn();
+  const manager = managerWith({ refreshCredential });
+  await withPersonalAuthProfileStore(profileId, async (store) => {
+    await store.read();
+    const capture = store.captureRefreshAuthority.bind(store);
+    vi.spyOn(store, "captureRefreshAuthority").mockImplementation(async () => {
+      const assertCurrent = await capture();
+      captured.resolve();
+      await release.promise;
+      return assertCurrent;
+    });
+    const pending = resolve(manager, profileId, credential, { personalStore: store }).catch(
+      (error: unknown) => error,
+    );
+    try {
+      await captured.promise;
+      clearUserProfileAuthLink({ profileId: owner.id, provider: credential.provider });
+      release.resolve();
+      expect(await pending).toMatchObject({
+        message: expect.stringContaining("selection changed during refresh"),
+      });
+      expect(readUserModelAuthProfile(profileId)?.credential).toEqual(credential);
+      expect(refreshCredential).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await pending;
+    }
+  });
+});
+
+it("does not persist a refresh claim when personal authority capture fails", async ({
+  profileId,
+  credential,
+}) => {
+  const refreshCredential = vi.fn();
+  const manager = managerWith({ refreshCredential });
+  const failure = new Error("synthetic refresh authority unavailable");
+  await withPersonalAuthProfileStore(profileId, async (owner) => {
+    await owner.read();
+    vi.spyOn(owner, "captureRefreshAuthority").mockImplementation(() => {
+      throw failure;
+    });
+    await expect(resolve(manager, profileId, credential, { personalStore: owner })).rejects.toThrow(
+      failure.message,
+    );
+    expect(readUserModelAuthProfile(profileId)?.credential).toEqual(credential);
+    expect(refreshCredential).not.toHaveBeenCalled();
+  });
+});
+
+it("leaves the writer free while the host decides auth authorization enrollment", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const profileId = "synthetic:enrollment";
+    const context = captureOpenClawStateWorkerContext();
+    const expected = runOpenClawStateWriteTransaction(({ db }) => {
+      writeAuthProfileJsonCell(db, "store", "shared-state", {
+        version: 1,
+        profiles: {
+          [profileId]: { type: "token", provider: "synthetic", token: "synthetic-token" },
+        },
+      });
+      return inspectAuthProfileJsonCell(db, "store", "shared-state");
+    }, {});
+    const databasePath = resolveOpenClawStateSqlitePath();
+    using contention = probe.writerLock(databasePath);
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      contention.observe(request.stage);
       admit(request, grant);
     });
-    try {
-      // Start the enrollment without awaiting so the host can block inside its admission.
-      const enrolling = workerStore.runOpenClawStateWorkerOperation(
-        context,
-        (scope) =>
-          scope.execute({
-            type: "authProfiles.enrollAuthorization",
-            input: { profileId, expected },
-          }),
-        {
-          assertCurrent: () => {},
-          createAdmission: createSqliteWorkerWriteAdmission(() => {}, [databasePath]),
-        },
-      );
-      const outcome = await competing;
-      trace.push(
-        `[${outcome.ok ? "ok" : "FAILED"}] competing write elapsed ${outcome.elapsedMs}ms` +
-          (outcome.error ? `: ${outcome.error}` : ` (host busy ${HOST_BUSY_MS}ms)`),
-      );
-      const enrolled = await enrolling;
-      const persisted = runOpenClawStateWriteTransaction(
+    const enrolled = await workerStore.runOpenClawStateWorkerOperation(
+      context,
+      (scope) =>
+        scope.execute({ type: "authProfiles.enrollAuthorization", input: { profileId, expected } }),
+      {
+        assertCurrent: () => {},
+        createAdmission: createSqliteWorkerWriteAdmission(() => {}, [databasePath]),
+      },
+    );
+    expect(contention.observed).toEqual(["transaction:free", "commit:held"]);
+    expect(enrolled.raw).toMatchObject({
+      authorizationLifetimes: { [profileId]: expect.any(String) },
+    });
+    expect(
+      runOpenClawStateWriteTransaction(
         ({ db }) => inspectAuthProfileJsonCell(db, "store", "shared-state"),
         {},
-      );
-      trace.push(
-        `authorization persisted after admission resumed: ${persisted.status === "readable"}`,
-      );
-      console.log(`[busy-host enrollment proof]\n${trace.join("\n")}`);
-      expect(outcome.ok).toBe(true);
-      expect(outcome.elapsedMs).toBeLessThan(HOST_BUSY_MS);
-      expect(persisted).toEqual({ status: "readable", raw: enrolled.raw });
-    } finally {
-      await competitor.terminate();
-    }
+      ),
+    ).toEqual({ status: "readable", raw: enrolled.raw });
   });
 });

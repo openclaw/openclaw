@@ -532,7 +532,7 @@ describe("personal publication authority and recovery", () => {
           runId: "later-run",
           owner: { kind: "local" },
         }),
-      ).rejects.toThrow("being published");
+      ).rejects.toThrow("workspace is busy");
       await expect(acquireWorktreeRunLease("worktree-1")).rejects.toThrow("in use");
       await expect(
         coordinator.requestPersonalForSessionV2(

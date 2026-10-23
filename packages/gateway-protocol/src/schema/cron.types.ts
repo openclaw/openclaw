@@ -25,7 +25,15 @@ export type CronJob = Static<typeof CronJobSchema>;
 /** Definition-free row returned by cron.list when compact is true. */
 export type CronCompactJob = Pick<
   CronJob,
-  "id" | "name" | "declarationKey" | "displayName" | "owner" | "agentId" | "enabled" | "updatedAtMs"
+  | "id"
+  | "name"
+  | "declarationKey"
+  | "displayName"
+  | "owner"
+  | "agentId"
+  | "enabled"
+  | "updatedAtMs"
+  | "streamExecutionHost"
 > &
   Pick<
     CronJob["state"],

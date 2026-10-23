@@ -6,9 +6,13 @@ import type {
 } from "openclaw/plugin-sdk/control-ui";
 import { createMemo, For, Show } from "solid-js";
 import { createSettingsComponents } from "./components.tsx";
-import type { MemoryOverviewStatus } from "./controller.ts";
 import { createTranslator } from "./i18n/index.ts";
 import "./overview.css";
+
+export type MemoryOverviewStatus =
+  | { kind: "idle" | "loading" }
+  | { kind: "ready"; payload: DoctorMemoryStatusPayload }
+  | { kind: "error"; message: string };
 
 type MemoryOverviewProps = {
   agentId: string | null;

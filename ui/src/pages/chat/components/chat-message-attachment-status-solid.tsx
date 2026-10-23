@@ -61,15 +61,12 @@ export function AssistantAttachmentStatusCard(
           <AttachmentFileIcon
             filename={props.label}
             mimeType={props.mimeType}
-            mode="large-placeholder"
+            mode="preview-with-favicon"
             unavailable={unavailable()}
           />
           <span class="chat-assistant-attachment-card__details">
             <span
-              class={[
-                "chat-assistant-attachment-card__title",
-                { "chat-assistant-attachment-card__title--unavailable": unavailable() },
-              ]}
+              class="chat-assistant-attachment-card__title"
               title={props.path ?? props.label}
               tabindex={props.path ? 0 : undefined}
             >
@@ -114,7 +111,10 @@ export function AssistantAttachmentStatusCard(
           <button
             class={[
               "chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled",
-              { "chat-assistant-attachment-card__retry": !props.onAllow && Boolean(props.onRetry) },
+              {
+                "chat-assistant-attachment-card__allow": Boolean(props.onAllow),
+                "chat-assistant-attachment-card__retry": !props.onAllow && Boolean(props.onRetry),
+              },
             ]}
             type="button"
             onClick={() => action()?.()}

@@ -8,7 +8,7 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
-import { hasSqliteWorkerOutcomeUnknown } from "./sqlite-worker-contract.js";
+import { hasSqliteWorkerOutcomeUnknown, isSqliteWorkerError } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { captureUpdateRunRedactionFacts, type UpdateRunLedgerOptions } from "./update-run-codec.js";
@@ -26,6 +26,7 @@ import type {
   UpdateRunStep,
 } from "./update-run-record.js";
 import { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
+import { isRequiredUpdateRunStep } from "./update-run-write.js";
 
 export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
   context?: OpenClawStateWorkerContext;
@@ -80,6 +81,16 @@ async function recordUpdateRunMutationAsync(
     if (hasSqliteWorkerOutcomeUnknown(error) && !hasCommandProcessCleanupError(error)) {
       throw new CommandProcessCleanupError({ cause: error });
     }
+    if (
+      !hasCommandProcessCleanupError(error) &&
+      isSqliteWorkerError(error, "overloaded") &&
+      command.type === "updateRuns.recordStep" &&
+      !isRequiredUpdateRunStep(command.input.step)
+    ) {
+      // Broker overload certifies non-dispatch; only advisory receipts may be dropped.
+      assertCurrent();
+      return { kind: "bookkeeping-skipped" as const };
+    }
     throw error;
   });
   captured.retainSettlement?.(completion.then(() => undefined));
@@ -93,7 +104,7 @@ async function recordUpdateRunMutationAsync(
   }
   if (reply.kind === "bookkeeping-skipped") {
     console.warn(
-      "[update] History database is busy or commit admission timed out; bookkeeping was not recorded. The update will continue.",
+      "[update] History database is busy or worker admission timed out; bookkeeping was not recorded. The update will continue.",
     );
     return undefined;
   }

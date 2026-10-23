@@ -23,7 +23,6 @@ import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.t
 import { type WorktreeAllocationGuard, withWorktreeAllocationLease } from "./allocation.js";
 import * as checkout from "./checkout-materialize.js";
 import { evictManagedWorktree } from "./eviction.js";
-import * as cleanupLimits from "./gc-limits.js";
 import { requireGit } from "./git.js";
 import * as registryReads from "./registry-read.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
@@ -344,12 +343,11 @@ describe("managed worktree cap eviction", () => {
     const first = service.create({ repoRoot, name: "first", baseRef: "HEAD", signal });
     const creations = [first];
     let planning = false;
-    const enforce = cleanupLimits.enforceWorktreeCleanupLimits;
-    vi.spyOn(cleanupLimits, "enforceWorktreeCleanupLimits").mockImplementation(async (params) => {
+    const readCleanupState = registryReads.readWorktreeCleanupState;
+    vi.spyOn(registryReads, "readWorktreeCleanupState").mockImplementation(async (...args) => {
+      const state = await readCleanupState(...args);
       planning = true;
-      return enforce(params).finally(() => {
-        planning = false;
-      });
+      return state;
     });
     const readRegistry = registryReads.readRegistryWorktrees;
     let publishedDuringPlanning = false;

@@ -1,6 +1,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
+import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 // Lmstudio tests cover stream plugin behavior.
 import { createRequireRecord, createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,7 +17,7 @@ const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => undefined),
 );
 const resolveLmstudioRuntimeApiKeyMock = vi.hoisted(() =>
-  vi.fn(async (_params?: unknown) => undefined),
+  vi.fn(async (_params?: unknown): Promise<string | undefined> => undefined),
 );
 
 vi.mock("./models.fetch.js", async (importOriginal) => ({
@@ -330,7 +331,6 @@ describe("lmstudio stream wrapper", () => {
       modelKey: "qwen3-8b-instruct",
       requestedContextLength: 131072,
       apiKey: "lmstudio-token",
-      ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
     });
     const [model] = requireMockCallArg(
       baseStream as unknown as { mock: { calls: unknown[][] } },
@@ -340,6 +340,15 @@ describe("lmstudio stream wrapper", () => {
       supportsUsageInStreaming: true,
       unsupportedToolSchemaKeywords: ["pattern"],
     });
+  });
+
+  it("resolves native preload credentials when runtime auth is a non-secret marker", async () => {
+    resolveLmstudioRuntimeApiKeyMock.mockResolvedValueOnce("synthetic-configured-key");
+    const wrapped = createWrappedLmstudioStream(buildDoneStreamFn());
+    await collectEvents(
+      runWrappedLmstudioStream(wrapped, {}, { apiKey: NON_ENV_SECRETREF_MARKER }),
+    );
+    expectEnsureLoadedFields({ apiKey: "synthetic-configured-key" });
   });
 
   it("streams with the canonical model key returned by preload", async () => {

@@ -68,11 +68,10 @@ type PairingHint = {
 };
 
 export function resolvePairingHint(
-  connected: boolean,
   lastError: string | null,
   lastErrorCode?: string | null,
 ): PairingHint | null {
-  if (connected || !lastError) {
+  if (!lastError) {
     return null;
   }
   const pairing = readConnectPairingRequiredMessage(lastError);
@@ -142,11 +141,10 @@ export function resolveAuthHintKind(params: {
 }
 
 export function shouldShowInsecureContextHint(
-  connected: boolean,
   lastError: string | null,
   lastErrorCode?: string | null,
 ): boolean {
-  if (connected || !lastError) {
+  if (!lastError) {
     return false;
   }
   if (lastErrorCode) {

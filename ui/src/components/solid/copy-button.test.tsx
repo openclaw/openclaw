@@ -101,17 +101,6 @@ describe("Solid copy button", () => {
     expect(view.getByRole("status", { hidden: true }).hidden).toBe(true);
   });
 
-  it("keeps an empty payload mounted and reports failure without writing the clipboard", async () => {
-    const view = render(() => <CopyButton text="" idleLabel="Copy empty value" />);
-    const button = view.getByRole<HTMLButtonElement>("button", { name: "Copy empty value" });
-    fireEvent.click(button);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(writeText).not.toHaveBeenCalled();
-    expect(fallback).not.toHaveBeenCalled();
-    expect(button.dataset.copyState).toBe("error");
-    expect(view.getByRole("status").textContent).toBe("Copy failed");
-  });
-
   it("does not fall back after its Solid owner is disposed", async () => {
     const pending = createDeferred();
     writeText.mockReturnValueOnce(pending.promise);

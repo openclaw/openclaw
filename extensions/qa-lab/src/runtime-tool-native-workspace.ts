@@ -10,7 +10,7 @@ import {
   type QaNativeWorkspaceBehavior,
 } from "./native-workspace-behavior.js";
 import { isWorkspaceBoundaryFailureToolOutput } from "./runtime-tool-evidence.js";
-import type { runAgentPrompt } from "./suite-runtime-agent-process.js";
+import { runAgentPrompt } from "./suite-runtime-agent-process.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 type NativeToolOutput = { hardFailure?: boolean; text: string };
@@ -27,7 +27,6 @@ type NativeWorkspaceFixtureParams = {
   required: boolean;
   happySessionKey: string;
   failureSessionKey: string;
-  runAgentPrompt: (...args: Parameters<typeof runAgentPrompt>) => Promise<unknown>;
   readEvidence: (sessionKey: string, toolName: string) => Promise<NativeToolEvidence>;
   failFixture: (details: string) => never;
 };
@@ -137,7 +136,7 @@ export async function runCodexNativeWorkspaceFixture(
     await fs.rm(path.resolve(params.env.gateway.workspaceDir, happyMutation.path), { force: true });
   }
 
-  await params.runAgentPrompt(params.env, {
+  await runAgentPrompt(params.env, {
     sessionKey: params.happySessionKey,
     message: nativePrompt(behavior, "happy"),
     timeoutMs: liveTurnTimeoutMs(params.env, 45_000),
@@ -164,7 +163,7 @@ export async function runCodexNativeWorkspaceFixture(
     await fs.writeFile(sentinelPath, sentinel.contents, { encoding: "utf8", flag: "wx" });
   }
   try {
-    await params.runAgentPrompt(params.env, {
+    await runAgentPrompt(params.env, {
       sessionKey: params.failureSessionKey,
       message: nativePrompt(behavior, "failure"),
       timeoutMs: liveTurnTimeoutMs(params.env, 45_000),

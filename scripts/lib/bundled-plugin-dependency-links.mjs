@@ -11,6 +11,13 @@ export function linkSourcePluginDependencies(pluginDir, distNodeModules) {
   if (!fs.existsSync(sourceModules)) {
     return;
   }
+  const packageJson = JSON.parse(fs.readFileSync(path.join(pluginDir, "package.json"), "utf8"));
+  const optional = new Set([
+    ...Object.keys(packageJson.optionalDependencies ?? {}),
+    ...Object.entries(packageJson.peerDependenciesMeta ?? {})
+      .filter(([, metadata]) => metadata.optional === true)
+      .map(([name]) => name),
+  ]);
   const packages = fs.readdirSync(sourceModules).flatMap((name) => {
     if (name.startsWith(".") && name !== ".bin") {
       return [];
@@ -26,7 +33,18 @@ export function linkSourcePluginDependencies(pluginDir, distNodeModules) {
   const checkoutRoot = fs.realpathSync(path.resolve(pluginDir, "../.."));
   for (const name of packages) {
     const target = path.join(distNodeModules, name);
-    const source = fs.realpathSync(path.join(sourceModules, name));
+    let source;
+    try {
+      source = fs.realpathSync(path.join(sourceModules, name));
+    } catch (error) {
+      if (optional.has(name) && error?.code === "ENOENT") {
+        console.warn(
+          `[bundled-plugin-dependency-links] ${path.basename(pluginDir)}: optional dependency ${name} is unavailable; continuing without its link`,
+        );
+        continue;
+      }
+      throw error;
+    }
     const canonical =
       name === "openclaw" && source === checkoutRoot && fs.existsSync(hostAlias)
         ? fs.realpathSync(hostAlias)

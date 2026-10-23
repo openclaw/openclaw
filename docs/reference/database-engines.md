@@ -9,7 +9,7 @@ doc-schema-version: 1
 ---
 
 OpenClaw uses SQLite by default. PostgreSQL is a supported alternative for the
-five configurable families on the qualified PostgreSQL 17 runtime. One Gateway
+five configurable families on qualified PostgreSQL 16–18 runtimes. One Gateway
 can keep those stores in PostgreSQL while other stores stay on SQLite.
 The adapter owns connection setup, schema admission, transaction behavior, and
 commit notifications; stores keep their existing data and operation contracts.
@@ -17,9 +17,9 @@ commit notifications; stores keep their existing data and operation contracts.
 For provisioning, first boot, migration, and recovery procedures, see the
 [PostgreSQL operator guide](/gateway/postgresql). It also describes the current
 [support matrix](/gateway/postgresql#support-matrix), including unqualified
-server versions, published-stable upgrades and native clients. Those specific
-gaps remain experimental; configured engine and search
-choices are supported.
+server versions and native clients. It also records the exact
+[published-stable upgrade scope](/gateway/postgresql#published-stable-upgrade-qualification).
+Configured engine and search choices are supported.
 
 Daemon runtime pins stay local on every engine, in
 `<state-root>/control/services.sqlite`. The daemon owner supplies typed runtime
@@ -39,8 +39,9 @@ through an older installed runtime.
 
 Use a PostgreSQL database and a role that can create schemas
 and tables. PostgreSQL 16 or newer and UTF8 server and client encoding are required;
-admission checks these once per physical store load. PostgreSQL 17 is qualified;
-other admitted majors remain experimental pending full conformance. No extensions
+admission checks these once per physical store load. PostgreSQL 16–18 are qualified;
+other admitted majors remain experimental pending full conformance. See the
+[server-major evidence](/gateway/postgresql#server-major-qualification). No extensions
 are installed by the engine. Put its connection DSN in a secret, then configure a SecretRef:
 
 ```json5
@@ -390,7 +391,9 @@ vector index is not a PostgreSQL JavaScript-scan fallback. An embedding-provider
 does not silently authorize keyword-only PostgreSQL admission.
 
 Memory admits its search definitions through the agent
-database owner. PostgreSQL rebuilds use connection-local temporary staging and
+database owner, including on the first turn after a port that omits rebuildable
+memory indexes. No manual memory-index rebuild is required before chatting.
+PostgreSQL rebuilds use connection-local temporary staging and
 publish canonical rows and their derived search projections in one writer
 transaction. SQLite retains its existing shadow-file publication. Memory search
 uses these same admitted projections. Forgetting removes derived text and vector
@@ -602,12 +605,21 @@ Writers use `READ COMMITTED` and a transaction-scoped advisory lock derived from
 the store identity. Every PostgreSQL write, including a single statement, uses
 the adapter's `runTransaction` so it retains that lock and publishes its write
 token. A single-statement read may use autocommit; multi-statement snapshot reads
-use `REPEATABLE READ READ ONLY`. Connections
-set `synchronous_commit=off` to match SQLite WAL with `synchronous=NORMAL`: a
-server or operating-system crash can lose recently acknowledged commits. Backups
-and recovery must account for that durability policy. The adapter sets generous
+use `REPEATABLE READ READ ONLY`. OpenClaw uses the server's `synchronous_commit`
+setting. PostgreSQL's default `on` makes acknowledged commits durable across
+PostgreSQL or operating-system crashes. For SQLite WAL `synchronous=NORMAL`-like
+throughput, operators can opt in with
+`ALTER ROLE <openclaw_role> SET synchronous_commit = off` or the equivalent
+`ALTER DATABASE` setting. This can lose recently acknowledged commits on a server
+or operating-system crash, without corruption. Ports and backups always commit
+durably. The adapter sets generous
 lock and statement timeouts once during connection setup; operations do not
 change timeout settings individually.
+
+PostgreSQL model-context navigation reads parse each selected transcript row once
+and keep intermediate projections as JSONB until the navigation and byte counts
+cross the database boundary. The read remains bounded by the context page, and
+PostgreSQL transcript writes do not precompute navigation envelopes.
 
 ## Anchors and backups
 
@@ -618,6 +630,13 @@ PostgreSQL schema metadata must match the anchor's store UUID and expected schem
 version. Admission checks run once per physical store per process load, and
 workers and handles reuse the admitted facts. Confirmed commits and uncertain
 commit outcomes invalidate cached store facts through the anchor's write token.
+
+When an agent worker is refused before opening its native writer, the host releases
+its prepared lease after native exit. The original refusal reaches its caller,
+and other logical borrowers can retry. This explicit refusal also preserves
+SQLite's clean-restart seal because no native writer opened. Unknown outcomes
+still invalidate that proof, and native and cleanup failures retain their
+existing retirement rules.
 
 PostgreSQL catalog admission captures column types, nullability, exact defaults,
 keys, CHECK expressions, index definitions (including partial predicates), and
@@ -772,9 +791,13 @@ PostgreSQL namespaces. Exact rollback restores the captured rows while
 preserving the current update-run history, as SQLite rollback does.
 SQLite-only installations keep their existing admission and inspection behavior.
 The installed driver owns these checks; a candidate cannot repair an older
-driver. Published-driver compatibility has been exercised on SQLite installations;
-a full latest-published-stable → current PostgreSQL upgrade remains experimental
-until package installation, service activation and rollback acceptance is recorded.
+driver. Published 2026.10.5 SQLite → current → PostgreSQL 17 port is qualified,
+including foreground Gateway operation, Doctor/status, agent/session/memory
+continuity and recovery to the matching stable SQLite backup. The stable package
+does not support PostgreSQL, so stable PostgreSQL → current is not applicable.
+Live turns were skipped without provider keys; service activation belongs to the
+separate signed-Mac/Parallels proof. See the
+[qualification cells and run IDs](/gateway/postgresql#published-stable-upgrade-qualification).
 See [Update admission](/cli/update#candidate-owned-admission).
 
 ## Limits and recovery
@@ -824,6 +847,15 @@ writes invalidate only their declared replica scopes; raw writes and schema
 changes invalidate the whole store. Empty commits leave replica revisions
 unchanged, so unrelated reads can reuse their cached snapshots.
 A PostgreSQL function that writes rows and is called through SELECT must be classified unscoped.
+
+Worker commit receipts carry only explicitly staged domain facts on both engines.
+A write without staged facts still commits and invalidates caches, but publishes
+no domain receipt. Native operation settlement is independent of those facts.
+
+Full transcript hydration reads PostgreSQL payloads in byte-budgeted pages within
+one read snapshot. Paging preserves all selected events and their sequence order;
+it does not impose a history cutoff. Individual oversized events retain bounded
+byte slicing.
 
 The engine boundary publishes Node.js `diagnostics_channel` events on
 `openclaw.database.statement` and `openclaw.database.request`. Subscriptions are

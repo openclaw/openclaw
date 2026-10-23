@@ -175,6 +175,9 @@ describe("command-path-policy", () => {
     expect(doctorPolicy.networkProxy(commandContext(["doctor"], ["--state-sqlite=compact"]))).toBe(
       "bypass",
     );
+    expect(doctorPolicy.networkProxy(commandContext(["doctor"], ["--client-credentials"]))).toBe(
+      "bypass",
+    );
     expectResolvedPolicy(["config schema"], {
       configGuard: "skip",
       ownsProtocolStdout: true,

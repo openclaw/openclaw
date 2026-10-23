@@ -398,7 +398,10 @@ suite.define(() => {
               ["tail", false],
               ["reading-typed", true],
               ["tail-typed", true],
+              ["older-history", false],
+              ["near-bottom", false],
             ] as const) {
+              const reading = !mode.startsWith("tail");
               const turn = provider.plan();
               await send(reader, a, "Reader starts the " + mode + " scenario");
               await expect.poll(provider.requests).toBe(turn.index);
@@ -406,13 +409,24 @@ suite.define(() => {
               await waitForDelta(a, mode + " paragraph 14.", sessionKey);
               await waitForChatScrollIdle(reader);
               await expect.poll(() => chatThreadDistanceFromBottom(reader)).toBeLessThanOrEqual(8);
-              if (mode.startsWith("reading")) {
-                await wheel(reader, -420);
+              if (reading) {
+                const delta =
+                  mode === "near-bottom"
+                    ? -80
+                    : mode === "older-history"
+                      ? -(await reader
+                          .locator('.chat-virtual-row[data-virtual-row-key^="agent-run:"]')
+                          .last()
+                          .evaluate((element) => element.getBoundingClientRect().height)) - 350
+                      : -420;
+                await wheel(reader, delta);
               }
               const before = await startScrollProbe(reader);
-              expect(mode.startsWith("reading") ? before.distance > 8 : before.distance <= 8).toBe(
-                true,
-              );
+              expect(reading ? before.distance > 8 : before.distance <= 8).toBe(true);
+              if (mode === "older-history") {
+                expect(before.anchorText).not.toContain(mode + " paragraph");
+              }
+              const readerSends = a.requests("chat.send").length;
               const finishWriterPresence = await watchExistingReply(writer, mode + " paragraph 1.");
               const remotePrompt = "Writer follow-up while Reader is at " + mode;
               const remote = await send(
@@ -438,7 +452,9 @@ suite.define(() => {
                 await waitForChatScrollIdle(reader);
                 const samples = await readScrollProbe(reader);
                 const latest = samples.at(-1)!;
-                if (mode.startsWith("reading")) {
+                expect(new Set(latest.keys).size, stage).toBe(latest.keys.length);
+                expect(a.requests("chat.send"), stage).toHaveLength(readerSends);
+                if (reading) {
                   expect
                     .soft(
                       Math.abs((latest.anchor ?? Infinity) - before.anchor!),
@@ -451,8 +467,11 @@ suite.define(() => {
                     .soft(latest.policy?.locked, mode + ": " + stage + " follow lock")
                     .toBe(true);
                 } else {
-                  expect
-                    .soft(latest.distance, mode + ": " + stage + " follows")
+                  // A geometry pause can precede the history publication triggered by persistence.
+                  await expect
+                    .poll(() => chatThreadDistanceFromBottom(reader), {
+                      message: mode + ": " + stage + " follows",
+                    })
                     .toBeLessThanOrEqual(8);
                 }
               };
@@ -479,7 +498,7 @@ suite.define(() => {
               const maxDrift = Math.max(
                 ...samples.map((sample) => Math.abs((sample.anchor ?? Infinity) - before.anchor!)),
               );
-              if (mode.startsWith("reading")) {
+              if (reading) {
                 expect
                   .soft(maxDrift, mode + ": every animation frame retains the reading anchor")
                   .toBeLessThanOrEqual(1);

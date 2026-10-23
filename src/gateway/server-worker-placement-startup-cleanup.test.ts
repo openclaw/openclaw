@@ -110,7 +110,7 @@ describe("worker placement startup cleanup ownership", () => {
     runtimeFactoryMocks.createDiskSpace.mockReturnValue(createIdleDiskSpace());
   });
 
-  it("pauses both reconciliation schedulers during a reversible suspension", async () => {
+  it("pauses both reconciliation schedulers during a reversible suspension", async ({ signal }) => {
     await seedReadyNodeDesktop("suspended-reconciliation");
     const time = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(time.clock);
@@ -119,6 +119,7 @@ describe("worker placement startup cleanup ownership", () => {
     const placements = createPlacements();
     const sidecar = await startRuntime(createRuntime({ placements, environments, scheduler }));
     await time.advanceBy(60_000);
+    await environments.reconcileOnce();
     inspect.mockClear();
     const suspended = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspended).not.toBeNull();
@@ -127,7 +128,14 @@ describe("worker placement startup cleanup ownership", () => {
       await environments.reconcileOnce();
       expect(inspect).not.toHaveBeenCalled();
       suspended!.rollback();
+      const resumed = createDeferredCore();
+      inspect.mockImplementationOnce(async () => {
+        resumed.resolve();
+        return { status: "active" };
+      });
       await time.advanceBy(60_000);
+      // Scheduled environment inspection is detached from the scheduler's tick.
+      await withinTest(resumed.promise, signal);
       expect(inspect).toHaveBeenCalled();
     } finally {
       suspended?.rollback();
@@ -496,7 +504,9 @@ describe("worker placement startup cleanup ownership", () => {
     },
   );
 
-  it("becomes ready before failed-placement lease adoption and drains its exact teardown", async () => {
+  it("cancels a stalled allocation lookup on shutdown and preserves its cleanup intent", async ({
+    signal,
+  }) => {
     const environmentId = "worker-startup-indeterminate";
     const operationId = "provision:startup-indeterminate";
     const releaseResolution = createDeferredCore();
@@ -545,12 +555,16 @@ describe("worker placement startup cleanup ownership", () => {
         leaseId: null,
         destroyRequestedAtMs: expect.any(Number),
       });
-
+      const intent = testState.store.get(environmentId);
       const stopped = vi.fn();
       const stopping = sidecar.stop().then(stopped);
-      await Promise.resolve();
-      expect(stopped).not.toHaveBeenCalled();
+      const pending = formatGatewayPendingCloseSteps();
+      await withinTest(stopping, signal);
+      expect(stopped).toHaveBeenCalledOnce();
       expect(destroy).not.toHaveBeenCalled();
+      expect(pending).toContain("environment=worker-startup-indeterminate");
+      expect(pending).toContain("provider=fake");
+      expect(pending).toContain("step=resolve-allocation");
 
       releaseResolution.resolve();
       await stopping;
@@ -558,18 +572,12 @@ describe("worker placement startup cleanup ownership", () => {
       expect(provision).not.toHaveBeenCalled();
       expect(testState.prepareInstallation).not.toHaveBeenCalled();
       expect(testState.bootstrapWorker).not.toHaveBeenCalled();
-      expect(destroy).toHaveBeenCalledExactlyOnceWith({
-        leaseId: "lease-startup-adopted",
-        profile: { region: "test" },
-      });
-      expect(testState.store.get(environmentId)).toMatchObject({
-        state: "destroyed",
-        leaseId: "lease-startup-adopted",
-      });
+      expect(destroy).not.toHaveBeenCalled();
+      expect(testState.store.get(environmentId)).toEqual(intent);
     } finally {
       releaseResolution.resolve();
       await starting.catch(() => undefined);
       await registeredSidecar?.stop();
     }
-  });
+  }, 10_000);
 });

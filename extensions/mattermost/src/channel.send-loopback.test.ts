@@ -142,6 +142,22 @@ describe("Mattermost send action loopback", () => {
     });
   });
 
+  it.each([
+    { label: "native", buffer: Buffer.from("report") },
+    { label: "serialized", buffer: { type: "Buffer", data: [114, 101, 112, 111, 114, 116] } },
+  ])("rejects $label binary attachments before posting surrounding text", async ({ buffer }) => {
+    await withMattermostServer(async (cfg, requests) => {
+      for (const field of ["buffer", "base64"]) {
+        for (const params of [{ [field]: buffer }, { attachments: [{ [field]: buffer }] }]) {
+          await expect(
+            sendPrepared(cfg, { message: "must not lose this attachment", ...params }),
+          ).rejects.toThrow("buffer/base64 payloads are not supported");
+        }
+      }
+      expect(requests).toEqual([]);
+    });
+  });
+
   it("infers a MIME extension for unnamed uploads", async () => {
     await withMattermostServer(async (cfg, requests) => {
       loadOutboundMediaFromUrl.mockReset();

@@ -24,6 +24,43 @@ function install(executable: string) {
   fs.chmodSync(executable, 0o755);
 }
 
+describe.each([
+  { name: "synchronous", probe: hasBinary },
+  {
+    name: "prepared",
+    probe: async (bin: string) => (await prepareBinaryAvailability([bin])).hasBinary(bin),
+  },
+])("$name binary file requirements", ({ probe }) => {
+  it("rejects directories and continues to an executable in a later PATH entry", async () => {
+    const root = tempDirs.make("openclaw-binary-file-");
+    const directoryBin = path.join(root, "first");
+    const executableBin = path.join(root, "second");
+    fs.mkdirSync(path.join(directoryBin, "fixture-tool"), { recursive: true });
+    fs.mkdirSync(executableBin);
+    vi.stubEnv("PATH", [directoryBin, executableBin].join(path.delimiter));
+    vi.stubEnv("PATHEXT", ".CMD");
+
+    expect(await probe("fixture-tool")).toBe(false);
+
+    const suffix = process.platform === "win32" ? ".CMD" : "";
+    const executable = path.join(executableBin, `fixture-tool${suffix}`);
+    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    expect(await probe("fixture-tool")).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("accepts symlinks to executable files", async () => {
+    const root = tempDirs.make("openclaw-binary-symlink-");
+    const binDir = path.join(root, "bin");
+    fs.mkdirSync(binDir);
+    const executable = path.join(root, "installed-tool");
+    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    fs.symlinkSync(executable, path.join(binDir, "fixture-tool"));
+    vi.stubEnv("PATH", binDir);
+
+    expect(await probe("fixture-tool")).toBe(true);
+  });
+});
+
 describe("config-eval helpers", () => {
   it("normalizes truthy values across primitive types", () => {
     for (const [value, expected] of [
@@ -80,8 +117,7 @@ describe("config-eval helpers", () => {
     const binDir = tempDirs.make("openclaw-binary-cache-");
     const missingDir = path.join(binDir, "missing");
     const executable = path.join(binDir, "tool");
-    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
-    fs.chmodSync(executable, 0o755);
+    install(executable);
     vi.stubEnv("PATH", [missingDir, binDir].join(path.delimiter));
 
     expect(hasBinary("tool")).toBe(true);
@@ -98,8 +134,7 @@ describe("config-eval helpers", () => {
     vi.stubEnv("PATH", toolsDir);
     vi.stubEnv("PATHEXT", ".EXE;.CMD");
     const cmdCandidate = path.join(toolsDir, "tool.CMD");
-    fs.writeFileSync(cmdCandidate, "#!/bin/sh\nexit 0\n");
-    fs.chmodSync(cmdCandidate, 0o755);
+    install(cmdCandidate);
 
     expect(hasBinary("tool")).toBe(true);
 
@@ -122,8 +157,7 @@ describe("config-eval helpers", () => {
       expect(hasBinary("fixture-tool")).toBe(false);
 
       const executable = path.join(binDir, `fixture-tool${suffix}`);
-      fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
-      fs.chmodSync(executable, 0o755);
+      install(executable);
 
       expect(hasBinary("fixture-tool")).toBe(true);
     },

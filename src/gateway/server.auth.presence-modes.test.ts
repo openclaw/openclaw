@@ -29,6 +29,8 @@ const webCapabilities = [
   "tool-events",
   "chat-only-assistant-text",
   "hello-health-on-demand",
+  "health-summary",
+  "hello-presence-self",
   "session-scoped-events",
   "presence-deltas",
   "session-row-deltas",
@@ -50,15 +52,12 @@ type Observation = {
   version: number;
   mode: "delta" | "reset" | "legacy";
   bytes: number;
-  rowsUpserted: number;
-  changed: Array<{ row: string; fields: string[] }>;
   rows: PresenceEntry[];
 };
 
 function observePresence(ws: WebSocket) {
   const observations: Observation[] = [];
   let entries = new Map<string, PresenceEntry>();
-  let previousRows = new Map<string, PresenceEntry>();
   let previousVersion: number | undefined;
   ws.on("message", (data) => {
     const serialized = rawDataToString(data);
@@ -99,28 +98,11 @@ function observePresence(ws: WebSocket) {
     }
     const rows =
       "order" in payload ? payload.order.map((key) => entries.get(key)!) : [...entries.values()];
-    const transmitted =
-      "upsert" in payload ? payload.upsert.map(({ key }) => entries.get(key)!) : rows;
-    const changed = transmitted.map((row) => {
-      const identity = row.connectionId ?? row.instanceId ?? "gateway";
-      const previous = previousRows.get(identity);
-      const fields = [...new Set([...Object.keys(previous ?? {}), ...Object.keys(row)])].filter(
-        (field) =>
-          JSON.stringify(previous?.[field as keyof PresenceEntry]) !==
-          JSON.stringify(row[field as keyof PresenceEntry]),
-      );
-      return { row: row.mode === "gateway" ? "gateway" : (row.instanceId ?? "unknown"), fields };
-    });
     previousVersion = frame.stateVersion.presence;
-    previousRows = new Map(
-      rows.map((row) => [row.connectionId ?? row.instanceId ?? "gateway", row]),
-    );
     observations.push({
       version: frame.stateVersion.presence,
       mode,
       bytes: Buffer.byteLength(serialized),
-      rowsUpserted: transmitted.length,
-      changed,
       rows,
     });
   });
@@ -228,18 +210,6 @@ test("keeps multi-client presence compact through heartbeat, activity, and watch
           ),
         );
       }
-      console.log(
-        "presence-mode-observations",
-        JSON.stringify(
-          rounds.map((round, publicationIndex) =>
-            round.map(({ rows: _rows, ...observation }, socket) => ({
-              publication: publicationIndex + 1,
-              socket,
-              ...observation,
-            })),
-          ),
-        ),
-      );
       for (const round of rounds) {
         for (const [index, observation] of round.entries()) {
           expect(observation.mode).toBe(clients[index]!.capable ? "delta" : "legacy");
@@ -249,16 +219,6 @@ test("keeps multi-client presence compact through heartbeat, activity, and watch
         }
       }
     } finally {
-      console.log(
-        "presence-frame-trace",
-        JSON.stringify(
-          clients.map(({ capable, observations }, socket) => ({
-            socket,
-            capable,
-            frames: observations.map(({ rows: _rows, ...frame }) => frame),
-          })),
-        ),
-      );
       clock.mockRestore();
       for (const { ws } of clients) {
         ws.close();

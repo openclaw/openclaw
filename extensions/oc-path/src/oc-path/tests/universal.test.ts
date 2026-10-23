@@ -179,7 +179,7 @@ describe("setOcPath", () => {
     const before = structuredClone(md);
     for (const value of [REDACTED_SENTINEL, `before${REDACTED_SENTINEL}after`]) {
       expect(() => edit(md, uri, value)).toThrow(
-        expect.objectContaining({ code: "OC_EMIT_SENTINEL", path: uri }),
+        `emit refused to write "${REDACTED_SENTINEL}" sentinel literal at ${uri}`,
       );
       expect(md).toEqual(before);
     }

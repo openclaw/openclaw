@@ -1,6 +1,7 @@
 // PR wrapper tests cover maintainer helper command delegation.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import {
   chmodSync,
   constants as fsConstants,
@@ -25,6 +26,7 @@ import {
 } from "../../scripts/pr-lib/gh-api-preflight.mjs";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   REVIEWED_HEAD,
@@ -40,6 +42,19 @@ const fixtureTemplates = new Map<string, ReturnType<typeof createMismatchedWrapp
 const outcomeOid = "a".repeat(40);
 const selectedHead = "b".repeat(40);
 const otherHead = "c".repeat(40);
+
+function runCommand(
+  command: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+  cwd = process.cwd(),
+) {
+  return spawnSync(command, args, { cwd, env, encoding: "utf8", stdio: "pipe" });
+}
+
+function writeExecutable(path: string, contents: string) {
+  writeFileSync(path, contents, { mode: 0o755 });
+}
 
 function readScript(path: string): string {
   return readFileSync(path, "utf8");
@@ -70,15 +85,12 @@ describe.each([
     `HTTP/2.0 ${status} Response\r\nX-RateLimit-Resource: ${resource}\r\nX-RateLimit-Remaining: 0\r\nAccess-Control-Expose-Headers: ETag, Retry-After, X-RateLimit-Remaining\r\n${headers}\r\n${body}`;
 
   if (resource === "graphql") {
-    it.each(["RATE_LIMITED"])(
-      "recognizes the original %s response with and without headers",
-      (type) => {
-        const body = errorBody(type);
-        for (const stdout of [body, response(body), Buffer.from(response(body))]) {
-          expect(classify({ status: 1, stdout })).toBe(true);
-        }
-      },
-    );
+    it("recognizes the original RATE_LIMITED response with and without headers", () => {
+      const body = errorBody();
+      for (const stdout of [body, response(body), Buffer.from(response(body))]) {
+        expect(classify({ status: 1, stdout })).toBe(true);
+      }
+    });
   }
   it.each([
     { stderr: Buffer.from("gh: API rate limit exceeded for fixture-user (HTTP 403)\n") },
@@ -116,13 +128,11 @@ describe.each([
   });
 
   if (resource === "core") {
-    it.each([
-      {
-        name: "access rejection with exhausted headers",
-        stdout: response(JSON.stringify({ message: "Resource not accessible by integration" })),
-      },
-    ])("does not infer core exhaustion from $name", ({ name: _name, ...failure }) => {
-      expect(classify({ status: 1, ...failure })).toBe(false);
+    it("does not infer core exhaustion from access rejection with exhausted headers", () => {
+      const stdout = response(
+        JSON.stringify({ message: "Resource not accessible by integration" }),
+      );
+      expect(classify({ status: 1, stdout })).toBe(false);
     });
   }
 });
@@ -148,16 +158,16 @@ function isolatedWrapperEnv(root: string) {
 
 function createWrapperGit(fixtureEnv: ReturnType<typeof isolatedWrapperEnv>) {
   return (cwd: string, args: string[]) => {
-    const result = spawnSync("git", args, {
-      cwd,
-      encoding: "utf8",
-      env: {
+    const result = runCommand(
+      "git",
+      args,
+      {
         ...fixtureEnv,
         // Template copies must not race detached object-store maintenance.
         GIT_CONFIG_PARAMETERS: "'maintenance.auto=false' 'gc.auto=0'",
       },
-      stdio: "pipe",
-    });
+      cwd,
+    );
     expect(result.status, `git ${args.join(" ")}\n${result.stderr}`).toBe(0);
     return result;
   };
@@ -201,20 +211,13 @@ function unanchoredWrapperFixture(prefix: string) {
     ["rg", 0],
   ] as const) {
     const executable = join(dir, "bin", command);
-    writeFileSync(executable, `#!/bin/sh\nexit ${code}\n`);
-    chmodSync(executable, 0o755);
+    writeExecutable(executable, `#!/bin/sh\nexit ${code}\n`);
   }
-  const git = (cwd: string, args: string[]) =>
-    spawnSync("git", args, { cwd, env, encoding: "utf8", stdio: "pipe" });
+  const git = (cwd: string, args: string[]) => runCommand("git", args, env, cwd);
   expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
   expect(git(repo, ["add", "."]).status).toBe(0);
   expect(git(repo, ["commit", "-m", "test: canonical wrapper"]).status).toBe(0);
-  const run = () =>
-    spawnSync(join(linked, "scripts/pr"), ["ls"], {
-      cwd: linked,
-      encoding: "utf8",
-      env,
-    });
+  const run = () => runCommand(join(linked, "scripts/pr"), ["ls"], env, linked);
   return { repo, linked, git, run };
 }
 
@@ -235,14 +238,12 @@ function createMismatchedWrapperTemplate({
   // This fixture exercises wrapper trust routing, not the host command inventory.
   for (const command of ["pnpm", "rg"]) {
     const commandPath = join(bin, command);
-    writeFileSync(commandPath, "#!/bin/sh\nexit 0\n");
-    chmodSync(commandPath, 0o755);
+    writeExecutable(commandPath, "#!/bin/sh\nexit 0\n");
   }
   // Deterministic gh stub: main-only subcommands fail fast on the base-branch
   // gate instead of reaching the network, proving which wrapper actually ran.
   const ghStub = join(bin, "gh");
-  writeFileSync(ghStub, baseBranchGhStub("not-main"));
-  chmodSync(ghStub, 0o755);
+  writeExecutable(ghStub, baseBranchGhStub("not-main"));
 
   const fixtureEnv = isolatedWrapperEnv(root);
   const git = createWrapperGit(fixtureEnv);
@@ -350,6 +351,9 @@ function makeMismatchedWrapperRepo({
     linked,
     localRevision,
     root,
+    gitText(args: string[], cwd = canonical) {
+      return git(cwd, args).stdout.trim();
+    },
     write(path: string, contents: string, cwd = canonical) {
       writeFileSync(join(cwd, path), contents);
     },
@@ -417,16 +421,15 @@ describe("scripts/pr wrappers", () => {
   return "\${PR_TEST_COMMAND_STATUS:-0}"
 }\n`,
     );
-    fixture.git(fixture.canonical, ["add", "scripts/pr-lib/review.sh"]);
-    fixture.git(fixture.canonical, ["commit", "-m", "test: observe admitted workflow"]);
-    fixture.git(fixture.canonical, ["push", "origin", "main"]);
-    const source = fixture.git(fixture.canonical, ["rev-parse", "HEAD"]).stdout.trim();
+    fixture.commit(["scripts/pr-lib/review.sh"], true);
+    const source = fixture.gitText(["rev-parse", "HEAD"]);
     const run = (status = "0", env: NodeJS.ProcessEnv = fixture.env) =>
-      spawnSync(join(fixture.linked, "scripts/pr"), ["review-guard", "123"], {
-        cwd: fixture.linked,
-        encoding: "utf8",
-        env: { ...env, PR_TEST_COMMAND_STATUS: status },
-      });
+      runCommand(
+        join(fixture.linked, "scripts/pr"),
+        ["review-guard", "123"],
+        { ...env, PR_TEST_COMMAND_STATUS: status },
+        fixture.linked,
+      );
     return { ...fixture, reviewPath, source, run };
   }
 
@@ -437,36 +440,30 @@ describe("scripts/pr wrappers", () => {
     expect(first.status, first.stderr).toBe(1);
     expect(first.stdout).toContain(`admitted workflow ${source}`);
     const ref = "refs/openclaw/pr-workflow-bindings/123";
-    const admitted = fixture.git(fixture.canonical, ["rev-parse", ref]).stdout.trim();
+    const admitted = fixture.gitText(["rev-parse", ref]);
     writeFileSync(
       reviewPath,
       `${readScript(reviewPath)}\nreview_guard() { echo 'new workflow'; }\n`,
     );
-    fixture.git(fixture.canonical, ["add", "scripts/pr-lib/review.sh"]);
-    fixture.git(fixture.canonical, ["commit", "-m", "test: advance workflow"]);
-    fixture.git(fixture.canonical, ["push", "origin", "main"]);
+    fixture.commit(["scripts/pr-lib/review.sh"], true);
 
     const resumed = fixture.run();
     expect(resumed.status, resumed.stderr).toBe(0);
     expect(resumed.stdout).toContain(`admitted workflow ${source}`);
     expect(resumed.stdout).not.toContain("new workflow");
-    expect(fixture.git(fixture.canonical, ["rev-parse", ref]).stdout.trim()).toBe(admitted);
-    expect(fixture.git(fixture.canonical, ["rev-parse", `${admitted}^`]).stdout.trim()).toBe(
-      source,
-    );
+    expect(fixture.gitText(["rev-parse", ref])).toBe(admitted);
+    expect(fixture.gitText(["rev-parse", `${admitted}^`])).toBe(source);
     expect(resumed.stderr).toContain(`retained PR #123 workflow ${source}`);
 
-    const successor = fixture
-      .git(fixture.canonical, [
-        "commit-tree",
-        `${admitted}^{tree}`,
-        "-p",
-        source,
-        "-m",
-        "successor",
-      ])
-      .stdout.trim();
-    writeFileSync(
+    const successor = fixture.gitText([
+      "commit-tree",
+      `${admitted}^{tree}`,
+      "-p",
+      source,
+      "-m",
+      "successor",
+    ]);
+    writeExecutable(
       join(fixture.bin, "node"),
       `#!/bin/sh
 "${process.execPath}" "$@"
@@ -476,13 +473,12 @@ case "$*" in
 esac
 exit "$status"
 `,
-      { mode: 0o755 },
     );
     const raced = fixture.run();
     expect(raced.status, raced.stderr).toBe(1);
     expect(raced.stderr).toContain("Workflow selection changed across handoff");
     expect(raced.stdout).not.toContain("admitted workflow");
-    expect(fixture.git(fixture.canonical, ["rev-parse", ref]).stdout.trim()).toBe(successor);
+    expect(fixture.gitText(["rev-parse", ref])).toBe(successor);
   });
 
   itPosix("keeps the captured revision when main advances during archive materialization", () => {
@@ -491,13 +487,11 @@ exit "$status"
       fixture.reviewPath,
       `${readScript(fixture.reviewPath)}\nreview_guard() { echo 'new workflow'; }\n`,
     );
-    fixture.git(fixture.canonical, ["add", "scripts/pr-lib/review.sh"]);
-    fixture.git(fixture.canonical, ["commit", "-m", "test: future workflow"]);
-    fixture.git(fixture.canonical, ["push", "origin", "main"]);
-    const advanced = fixture.git(fixture.canonical, ["rev-parse", "HEAD"]).stdout.trim();
+    fixture.commit(["scripts/pr-lib/review.sh"], true);
+    const advanced = fixture.gitText(["rev-parse", "HEAD"]);
     fixture.git(fixture.canonical, ["update-ref", "refs/remotes/origin/main", fixture.source]);
     const selectedGit = join(fixture.root, "selected-git");
-    writeFileSync(
+    writeExecutable(
       selectedGit,
       `#!/bin/sh
 "${resolveCommand("git")}" "$@"
@@ -507,15 +501,12 @@ case " $* " in
 esac
 exit "$status"
 `,
-      { mode: 0o755 },
     );
     const result = fixture.run("0", { ...fixture.env, OPENCLAW_PR_GIT: selectedGit });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain(`admitted workflow ${fixture.source}`);
     expect(result.stdout).not.toContain("new workflow");
-    expect(
-      fixture.git(fixture.canonical, ["rev-parse", "refs/remotes/origin/main"]).stdout.trim(),
-    ).toBe(advanced);
+    expect(fixture.gitText(["rev-parse", "refs/remotes/origin/main"])).toBe(advanced);
     const record = JSON.parse(
       fixture.git(fixture.canonical, [
         "show",
@@ -567,7 +558,7 @@ exit "$status"
   });
 
   itPosix("requires a separate operator confirmation for merge recovery", () => {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     const recovery = (...args: string[]) => [
       "123",
       outcomeOid,
@@ -900,18 +891,19 @@ exit "$status"
     const fixture = makeMismatchedWrapperRepo();
     // Stale worktree: created at the pushed main base, no local wrapper edits.
     const stale = join(fixture.root, "stale");
-    const baseline = fixture.git(fixture.canonical, ["rev-parse", "main"]).stdout.trim();
+    const baseline = fixture.gitText(["rev-parse", "main"]);
     fixture.git(fixture.canonical, ["worktree", "add", "-b", "stale-feature", stale, baseline]);
 
     // main's wrapper then advances and the canonical checkout tracks it.
     fixture.write("scripts/pr-lib/gates.sh", 'ci_dispatch() { echo "canonical v2 executed"; }\n');
     fixture.commit(["scripts/pr-lib/gates.sh"], true);
 
-    const result = spawnSync(join(stale, "scripts", "pr"), ["ci-dispatch", "123"], {
-      cwd: stale,
-      encoding: "utf8",
-      env: fixture.env,
-    });
+    const result = runCommand(
+      join(stale, "scripts", "pr"),
+      ["ci-dispatch", "123"],
+      fixture.env,
+      stale,
+    );
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     expect(result.stdout).toContain("canonical v2 executed");
     expect(result.stderr).toContain(anchorSubstitutionNotice(fixture.canonical));
@@ -951,15 +943,13 @@ exit "$status"
 
     const selected = join(fixture.root, "custom-git");
     const calls = join(fixture.root, "git-handoff-calls");
-    writeFileSync(
+    writeExecutable(
       selected,
       '#!/bin/sh\nprintf "%s %s\\n" "${PR_TEST_GIT_PHASE:-bootstrap}" "$*" >> "$PR_TEST_GIT_CALLS"\nexec "$PR_TEST_REAL_GIT" "$@"\n',
-      { mode: 0o755 },
     );
-    writeFileSync(
+    writeExecutable(
       join(fixture.bin, "git"),
       '#!/bin/sh\necho "unexpected PATH Git" >&2\nexit 99\n',
-      { mode: 0o755 },
     );
     const env = {
       ...fixture.env,
@@ -986,15 +976,32 @@ exit "$status"
     expect(matchingEntries(fixture.root, "openclaw-pr-git.")).toEqual(adapters);
   });
 
-  function materializeAnchor(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) {
-    const materialized = runWrapper(fixture, ["unknown-command"]);
-    expect(materialized.status, materialized.stderr).toBe(2);
+  function materializeAnchor(
+    fixture: ReturnType<typeof makeMismatchedWrapperRepo>,
+    env: NodeJS.ProcessEnv = fixture.env,
+  ) {
+    const node = join(fixture.bin, "node");
+    // Crash the creator at its supervisor exec, after extraction and dependency
+    // verification. This retains a real crash leftover without an orphan child.
+    writeExecutable(
+      node,
+      '#!/bin/sh\ncase "$1" in\n  */process-group-runner.mjs) kill -KILL "$$" ;;\nesac\nexec "$PR_TEST_REAL_NODE" "$@"\n',
+    );
+    let materialized;
+    try {
+      materialized = runWrapper(fixture, ["ci-dispatch", "123"], "linked", {
+        env: { ...env, PR_TEST_REAL_NODE: requireNodeTool("node") },
+      });
+    } finally {
+      rmSync(node);
+    }
+    expect(materialized.signal, materialized.stderr).toBe("SIGKILL");
     expect(materialized.stderr).toContain("running wrapper code materialized from");
     const anchors = matchingEntries(fixture.root, "openclaw-pr-anchor.");
     expect(anchors).toHaveLength(1);
     const anchor = join(fixture.root, anchors[0]!);
     expect(statSync(anchor).mode & 0o777).toBe(0o700);
-    return anchor;
+    return { anchor, result: materialized };
   }
 
   function advanceAnchorReviewDependency(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) {
@@ -1016,7 +1023,7 @@ exit "$status"
   function makeToolingRootFixture() {
     const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     const tooling = join(fixture.root, "tooling");
-    const origin = fixture.git(fixture.canonical, ["remote", "get-url", "origin"]).stdout.trim();
+    const origin = fixture.gitText(["remote", "get-url", "origin"]);
     fixture.git(fixture.root, ["clone", "--no-local", "--quiet", origin, tooling]);
     writeFileSync(join(tooling, ".git/info/exclude"), "node_modules/\n");
     linkPrWrapperDependencies(tooling);
@@ -1035,18 +1042,16 @@ exit "$status"
   }
 
   function advanceToolingMain(fixture: ReturnType<typeof makeToolingRootFixture>) {
-    const previousHead = fixture.git(fixture.tooling, ["rev-parse", "HEAD"]).stdout.trim();
-    const tree = fixture.git(fixture.tooling, ["rev-parse", "HEAD^{tree}"]).stdout.trim();
-    const advanced = fixture
-      .git(fixture.canonical, [
-        "commit-tree",
-        tree,
-        "-p",
-        previousHead,
-        "-m",
-        "test: advance tooling main",
-      ])
-      .stdout.trim();
+    const previousHead = fixture.gitText(["rev-parse", "HEAD"], fixture.tooling);
+    const tree = fixture.gitText(["rev-parse", "HEAD^{tree}"], fixture.tooling);
+    const advanced = fixture.gitText([
+      "commit-tree",
+      tree,
+      "-p",
+      previousHead,
+      "-m",
+      "test: advance tooling main",
+    ]);
     fixture.git(fixture.canonical, ["push", "origin", `${advanced}:refs/heads/main`]);
     return advanced;
   }
@@ -1057,21 +1062,21 @@ exit "$status"
   const itExchange = mvHelp?.includes("--exchange") && mvHelp.includes("--no-copy") ? it : it.skip;
   function recoveryFixture() {
     const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
-    const runtime = spawnSync(
+    const runtime = runCommand(
       requireNodeTool("node"),
       [
         "-p",
         "JSON.stringify({ node: process.version, platform: process.platform, arch: process.arch })",
       ],
-      { env: fixture.env, encoding: "utf8" },
+      fixture.env,
     );
     expect(runtime.status, runtime.stderr).toBe(0);
     parkCanonicalOffAnchor(fixture);
-    const anchor = materializeAnchor(fixture);
+    const { anchor } = materializeAnchor(fixture);
     fixture.git(fixture.canonical, ["checkout", "main"]);
     const modules = join(anchor, "node_modules");
     const donor = join(fixture.root, "isolated-tooling");
-    const origin = fixture.git(fixture.canonical, ["remote", "get-url", "origin"]).stdout.trim();
+    const origin = fixture.gitText(["remote", "get-url", "origin"]);
     fixture.git(fixture.root, ["clone", "--quiet", origin, donor]);
     writeFileSync(join(donor, ".git/info/exclude"), "node_modules/\n");
     const manifest = JSON.parse(readScript(join(donor, "package.json")));
@@ -1136,7 +1141,7 @@ exit "$status"
     const plan = {
       version: 1,
       pr: 123,
-      revision: fixture.git(donor, ["rev-parse", "HEAD"]).stdout.trim(),
+      revision: fixture.gitText(["rev-parse", "HEAD"], donor),
       runtime: JSON.parse(runtime.stdout),
       anchor: {
         path: anchor,
@@ -1170,10 +1175,7 @@ exit "$status"
       );
     };
     const validate = () =>
-      spawnSync(requireNodeTool("node"), [helper, donorModules, modules], {
-        env: fixture.env,
-        encoding: "utf8",
-      });
+      runCommand(requireNodeTool("node"), [helper, donorModules, modules], fixture.env);
     return {
       ...fixture,
       anchor,
@@ -1317,15 +1319,13 @@ exit "$status"
         "openclaw.pr.toolingRoot",
         join(fixture.root, "invalid-config-root"),
       ]);
-      const result = fixture.run({ OPENCLAW_PR_TOOLING_ROOT: fixture.tooling });
-      expect(result.status, result.stdout + result.stderr).toBe(2);
+      const { anchor, result } = materializeAnchor(fixture, {
+        ...fixture.env,
+        OPENCLAW_PR_TOOLING_ROOT: fixture.tooling,
+      });
       expect(result.stderr).toContain(`scripts/pr tooling root: ${fixture.tooling}`);
       expect(result.stderr).toContain("running wrapper code materialized from");
-      const anchor = readdirSync(fixture.root).find((name) =>
-        name.startsWith("openclaw-pr-anchor."),
-      );
-      expect(anchor).toBeDefined();
-      expect(realpathSync(join(fixture.root, anchor!, "node_modules/tsx"))).toBe(
+      expect(realpathSync(join(anchor, "node_modules/tsx"))).toBe(
         realpathSync(join(fixture.tooling, "node_modules/tsx")),
       );
       expect(fixture.git(fixture.canonical, ["rev-parse", "HEAD"]).stdout).toBe(canonicalHead);
@@ -1379,7 +1379,7 @@ if (${repairs}) {
       expect(result.stderr).toContain(
         repairs ? "Refreshed and verified" : "no further refresh was attempted",
       );
-      expect(fixture.git(fixture.tooling, ["rev-parse", "HEAD"]).stdout.trim()).toBe(advanced);
+      expect(fixture.gitText(["rev-parse", "HEAD"], fixture.tooling)).toBe(advanced);
       expect(realpathSync(join(fixture.canonical, "node_modules/tsx"))).toBe(fixture.stale);
     },
   );
@@ -1396,10 +1396,9 @@ if (${repairs}) {
       const hooks = join(fixture.root, "tooling-hooks");
       mkdirSync(hooks);
       fixture.git(fixture.tooling, ["config", "core.hooksPath", hooks]);
-      writeFileSync(
+      writeExecutable(
         join(hooks, "post-merge"),
         `#!/bin/sh\nset -e\n${condition === "dirty" ? "printf '\\n' >> package.json" : '"$OPENCLAW_PR_GIT" switch -c operator-work'}\n`,
-        { mode: 0o755 },
       );
       const installed = join(fixture.root, "installed");
       fixture.write("pnpm", `#!/bin/sh\ntouch '${installed}'\nexit 1\n`, fixture.bin);
@@ -1415,8 +1414,8 @@ if (${repairs}) {
         "Restore its frozen dependencies manually or set OPENCLAW_PR_TOOLING_ROOT",
       );
       expect(existsSync(installed)).toBe(false);
-      expect(fixture.git(fixture.tooling, ["branch", "--show-current"]).stdout.trim()).toBe(branch);
-      expect(fixture.git(fixture.tooling, ["rev-parse", "HEAD"]).stdout.trim()).toBe(advanced);
+      expect(fixture.gitText(["branch", "--show-current"], fixture.tooling)).toBe(branch);
+      expect(fixture.gitText(["rev-parse", "HEAD"], fixture.tooling)).toBe(advanced);
       expect(readScript(manifest)).toBe(manifestBefore + (condition === "dirty" ? "\n" : ""));
       expect(realpathSync(join(fixture.tooling, "node_modules/tsx"))).toBe(fixture.stale);
     },
@@ -1458,7 +1457,7 @@ if (${repairs}) {
 
   itPosix("does not refresh a tooling root when the materialization destination is invalid", () => {
     const fixture = makeToolingRootFixture();
-    writeFileSync(
+    writeExecutable(
       join(fixture.bin, "node"),
       `#!/bin/sh
 if [ "$1" = --input-type=module ] && [ "$2" = - ] && [ "\${5##*/}" = node_modules ]; then
@@ -1466,7 +1465,6 @@ if [ "$1" = --input-type=module ] && [ "$2" = - ] && [ "\${5##*/}" = node_module
 fi
 exec "$OPENCLAW_TEST_NODE" "$@"
 `,
-      { mode: 0o755 },
     );
     const installed = join(fixture.root, "installed");
     fixture.write("pnpm", `#!/bin/sh\ntouch '${installed}'\nexit 1\n`, fixture.bin);
@@ -1519,6 +1517,98 @@ echo "canonical wrapper executed";`,
     expect(result.stderr).not.toContain("Refusing to silently substitute");
     const anchors = matchingEntries(fixture.root, "openclaw-pr-anchor.");
     expect(anchors).toHaveLength(0);
+  });
+
+  itPosix.for([
+    { outcome: "success", args: ["ci-dispatch", "123"], exitCode: 0, interrupt: false },
+    { outcome: "failure", args: ["ci-dispatch", "123"], exitCode: 17, interrupt: false },
+    { outcome: "SIGTERM", args: ["ci-dispatch", "123"], exitCode: 143, interrupt: true },
+    { outcome: "unsupervised usage", args: ["unknown-command"], exitCode: 2, interrupt: false },
+  ])(
+    "retires the materialized anchor after $outcome",
+    async ({ args, exitCode, interrupt }, { signal }) => {
+      const fixture = makeMismatchedWrapperRepo({
+        toolingOnly: true,
+        dispatchBody: `mark_pr_operation_side_effects_started || return;
+node -e '
+const { renameSync, writeFileSync } = require("node:fs");
+if (process.env.PR_TEST_INTERRUPT === "1") process.stdin.resume();
+writeFileSync(process.env.PR_TEST_STARTED + ".pending", "operation started\\n");
+renameSync(process.env.PR_TEST_STARTED + ".pending", process.env.PR_TEST_STARTED);
+console.log("operation started");
+if (process.env.PR_TEST_INTERRUPT !== "1") process.exit(Number(process.env.PR_TEST_EXIT));
+';`,
+      });
+      parkCanonicalOffAnchor(fixture);
+      const started = join(fixture.root, "operation-started");
+      const env = {
+        ...fixture.env,
+        PR_TEST_STARTED: started,
+        PR_TEST_EXIT: String(exitCode),
+        PR_TEST_INTERRUPT: interrupt ? "1" : "0",
+      };
+      let result;
+      if (interrupt) {
+        const ready = createDeferred();
+        const child = spawn(join(fixture.linked, "scripts/pr"), args, {
+          cwd: fixture.linked,
+          env,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        const completed = once(child, "close");
+        let stdout = "";
+        let stderr = "";
+        child.stdout.setEncoding("utf8").on("data", (data) => {
+          stdout += data;
+          if (existsSync(started)) {
+            ready.resolve();
+          }
+        });
+        child.stderr.setEncoding("utf8").on("data", (data) => {
+          stderr += data;
+        });
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(ready.promise, completed, "operation did not start"),
+            signal,
+          );
+          expect(readScript(started)).toBe("operation started\n");
+          expect(child.kill("SIGTERM")).toBe(true);
+          const [status, childSignal] = await withinTest(completed, signal);
+          expect(childSignal).toBeNull();
+          result = { status, stdout, stderr };
+        } finally {
+          child.stdin.end();
+          if (child.exitCode === null && child.signalCode === null) {
+            child.kill("SIGTERM");
+            await completed;
+          }
+        }
+      } else {
+        result = runWrapper(fixture, args, "linked", { env });
+      }
+      expect(result.status, result.stdout + result.stderr).toBe(exitCode);
+      expect(result.stderr).toContain("running wrapper code materialized from");
+      if (args[0] === "ci-dispatch") {
+        expect(readScript(started)).toBe("operation started\n");
+      }
+      expect(matchingEntries(fixture.root, "openclaw-pr-anchor.")).toEqual([]);
+    },
+  );
+
+  itPosix("retires the materialized anchor when its wrapper exec fails", () => {
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    parkCanonicalOffAnchor(fixture);
+    writeExecutable(
+      join(fixture.bin, "tar"),
+      '#!/bin/sh\n"$PR_TEST_REAL_TAR" "$@" || exit\nchmod -x "$4/scripts/pr"\n',
+    );
+    const result = runWrapper(fixture, ["unknown-command"], "linked", {
+      env: { ...fixture.env, PR_TEST_REAL_TAR: resolveCommand("tar") },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(matchingEntries(fixture.root, "openclaw-pr-anchor.")).toEqual([]);
+    expect(result.stderr).toContain("Unable to execute the materialized scripts/pr wrapper.");
   });
 
   itPosix("materializes the anchor when tar stops before the producer's trailing padding", () => {
@@ -1711,10 +1801,10 @@ exit 99
         "scripts/lib/anchor-review-record.mjs",
         "throw new Error('unreviewed dependency');\n",
       );
-      const anchor = materializeAnchor(fixture);
+      const { anchor } = materializeAnchor(fixture);
       fixture.write("gh", "#!/bin/sh\necho forbidden-gh >&2\nexit 99\n", fixture.bin);
       writeReviewArtifacts(fixture.linked, validReview());
-      const result = spawnSync(
+      const result = runCommand(
         "bash",
         [
           "-c",
@@ -1730,11 +1820,8 @@ exit 99
           String(REVIEWED_PR),
           REVIEWED_HEAD,
         ],
-        {
-          cwd: fixture.linked,
-          encoding: "utf8",
-          env: fixture.env,
-        },
+        fixture.env,
+        fixture.linked,
       );
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
       expect(JSON.parse(result.stdout).pr).toEqual({
@@ -1749,15 +1836,10 @@ exit 99
     () => {
       const fixture = makeMismatchedWrapperRepo({ realModules: true });
       parkCanonicalOffAnchor(fixture);
-      const anchor = materializeAnchor(fixture);
+      const { anchor } = materializeAnchor(fixture);
       fixture.write("gh", "#!/bin/sh\necho forbidden-gh >&2\nexit 99\n", fixture.bin);
       const nodeExecPath = requireNodeTool("node");
-      const run = (args: string[]) =>
-        spawnSync(nodeExecPath, args, {
-          cwd: anchor,
-          encoding: "utf8",
-          env: fixture.env,
-        });
+      const run = (args: string[]) => runCommand(nodeExecPath, args, fixture.env, anchor);
       // These .mjs files launch children at import time. Execute the real shims
       // with invalid arguments so their .mts owners reject before any GitHub IO.
       for (const [entry, exitCode, message] of [
@@ -1771,18 +1853,15 @@ exit 99
       }
       // Import the actual adapter closure before it rejects missing arguments.
       // Real provisioning and allocation-lease renewal have separate flows.
-      const provision = spawnSync(
+      const provision = runCommand(
         nodeExecPath,
         [
           "--import",
           join(anchor, "scripts/tsx.mjs"),
           join(anchor, "scripts/pr-lib/worktree-provision.mts"),
         ],
-        {
-          cwd: fixture.linked,
-          encoding: "utf8",
-          env: { ...fixture.env, TSX_TSCONFIG_PATH: join(anchor, "tsconfig.json") },
-        },
+        { ...fixture.env, TSX_TSCONFIG_PATH: join(anchor, "tsconfig.json") },
+        fixture.linked,
       );
       expect.soft(provision.status, provision.stderr).toBe(1);
       expect.soft(provision.stderr).toContain("Usage: worktree-provision.mts");
@@ -1857,18 +1936,15 @@ exit 99
         fixture.linked,
       );
       fixture.commit(["src", "test/probe"], false, fixture.linked);
-      const base = fixture.git(fixture.linked, ["rev-parse", "HEAD"]).stdout.trim();
+      const base = fixture.gitText(["rev-parse", "HEAD"], fixture.linked);
       fixture.write("src/anchor-value.ts", "export const value = 2;\n", fixture.linked);
       fixture.commit(["src/anchor-value.ts"], false, fixture.linked);
-      const head = fixture.git(fixture.linked, ["rev-parse", "HEAD"]).stdout.trim();
-      const planned = spawnSync(
+      const head = fixture.gitText(["rev-parse", "HEAD"], fixture.linked);
+      const planned = runCommand(
         nodeExecPath,
         [join(anchor, "scripts/pr-lib/crabbox-gate-plan.mts"), "--base", base, "--head", head],
-        {
-          cwd: fixture.linked,
-          encoding: "utf8",
-          env: fixture.env,
-        },
+        fixture.env,
+        fixture.linked,
       );
       expect(planned.status, planned.stderr).toBe(0);
       expect(JSON.parse(planned.stdout)).toMatchObject({
@@ -2027,11 +2103,12 @@ node "$script_parent_dir/verify-pr-hosted-gates.mjs" --anchor-proof;`,
       ["pr-merge", ["run", "123"], ["merge-run", "123"]],
     ] as const)("%s delegates %j through the trusted sibling", (alias, args, mapped) => {
       const fixture = makeAliasFixture();
-      const result = spawnSync(join(fixture.linked, "scripts", alias), args, {
-        cwd: fixture.caller,
-        encoding: "utf8",
-        env: fixture.env,
-      });
+      const result = runCommand(
+        join(fixture.linked, "scripts", alias),
+        args,
+        fixture.env,
+        fixture.caller,
+      );
       expect(result.status, result.stderr).toBe(73);
       expect(result.stderr).toBe("");
       expect(result.stdout.split("\0")).toEqual([
@@ -2054,11 +2131,12 @@ node "$script_parent_dir/verify-pr-hosted-gates.mjs" --anchor-proof;`,
         const fixture = makeAliasFixture();
         fixture.git(fixture.linked, ["branch", "origin/main", "refs/remotes/origin/main"]);
         fixture.git(fixture.linked, ["update-ref", "-d", "refs/remotes/origin/main"]);
-        const result = spawnSync(join(fixture.linked, "scripts", alias), args, {
-          cwd: fixture.caller,
-          encoding: "utf8",
-          env: { ...fixture.env, OPENCLAW_PR_DEV_WRAPPER: "1" },
-        });
+        const result = runCommand(
+          join(fixture.linked, "scripts", alias),
+          args,
+          { ...fixture.env, OPENCLAW_PR_DEV_WRAPPER: "1" },
+          fixture.caller,
+        );
         expect(result.status, result.stderr).toBe(1);
         expect(result.stderr).toContain("Refusing to silently substitute");
         expect(result.stderr).toContain("classified landing; dev-wrapper opt-in is unavailable");
@@ -2077,6 +2155,7 @@ node "$script_parent_dir/verify-pr-hosted-gates.mjs" --anchor-proof;`,
       "scripts/watch-pr-ci.mts",
       "scripts/verify-pr-hosted-gates.mts",
       "scripts/lib/local-check-runtime.mts",
+      "scripts/tsx.mjs",
     ]) {
       writeFileSync(join(linked, component), "# dirty linked\n");
       const dirtyResult = run();
@@ -2086,14 +2165,6 @@ node "$script_parent_dir/verify-pr-hosted-gates.mjs" --anchor-proof;`,
       );
       expect(git(linked, ["restore", component]).status).toBe(0);
     }
-
-    writeFileSync(join(linked, "scripts", "tsx.mjs"), "// dirty preloader\n");
-    const dirtyPreloaderResult = run();
-    expect(dirtyPreloaderResult.status).toBe(1);
-    expect(dirtyPreloaderResult.stderr).toContain(
-      "scripts/pr wrapper files have uncommitted changes",
-    );
-    expect(git(linked, ["restore", "scripts/tsx.mjs"]).status).toBe(0);
 
     // A dirty canonical checkout no longer blocks a linked worktree whose
     // committed wrapper matches the origin/main trust anchor; without that
@@ -2236,15 +2307,14 @@ process.stdout.write(${JSON.stringify(body)});
 console.error("gh: synthetic-private-detail");
 process.exit(${scenario.code});
 `;
-    writeFileSync(
+    writeExecutable(
       pathGh,
       route === "default" ? fakeGh : "#!/bin/sh\necho UNEXPECTED_ROUTE >&2\nexit 99\n",
-      { mode: 0o755 },
     );
     if (route === "override") {
-      writeFileSync(gh, fakeGh, { mode: 0o755 });
+      writeExecutable(gh, fakeGh);
     }
-    const result = spawnSync(
+    const result = runCommand(
       "bash",
       [
         "-c",
@@ -2262,13 +2332,9 @@ process.exit(${scenario.code});
         ].join("\n"),
       ],
       {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...env,
-          OPENCLAW_GH_BIN: route === "override" ? gh : "",
-          GH_TOKEN: "synthetic-token",
-        },
+        ...env,
+        OPENCLAW_GH_BIN: route === "override" ? gh : "",
+        GH_TOKEN: "synthetic-token",
       },
     );
     expect(result.status, result.stderr).toBe(scenario.diagnostic ? 1 : 0);
@@ -2352,7 +2418,7 @@ if (args[0] === "browse") {
       writeFileSync(overrideGh, protectedGh);
       chmodSync(pathGh, 0o755);
       chmodSync(overrideGh, 0o755);
-      const result = spawnSync(
+      const result = runCommand(
         "bash",
         [
           "-c",
@@ -2366,18 +2432,14 @@ if (args[0] === "browse") {
           ].join("\n"),
         ],
         {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            HOME: dir,
-            GH_REPO: `${host}/fixture/repo`,
-            GH_HOST: host,
-            GH_TOKEN: "synthetic-writer-token",
-            OPENCLAW_GH_BIN: route === "override" ? overrideGh : "",
-            OPENCLAW_TEST_CALLS: calls,
-            OPENCLAW_TEST_ROOT: dir,
-            PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
-          },
+          HOME: dir,
+          GH_REPO: `${host}/fixture/repo`,
+          GH_HOST: host,
+          GH_TOKEN: "synthetic-writer-token",
+          OPENCLAW_GH_BIN: route === "override" ? overrideGh : "",
+          OPENCLAW_TEST_CALLS: calls,
+          OPENCLAW_TEST_ROOT: dir,
+          PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
         },
       );
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(assigned ? 0 : 1);

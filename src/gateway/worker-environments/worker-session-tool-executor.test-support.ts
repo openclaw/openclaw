@@ -11,7 +11,6 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { prepareCoreToolPolicy } from "../../agents/prepared-tool-surface.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
-import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { createAvailablePortalTools } from "../../agents/tools/portal-tool.js";
 import { createSessionsSendTool } from "../../agents/tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "../../agents/tools/sessions-spawn-tool.js";
@@ -380,6 +379,9 @@ async function createWorkerSessionToolTestFixture(
     resolveGatewayContext,
     placements,
     dispatchChild,
+    waitForInitialPlacement: async () => {
+      throw new Error("Unexpected initial placement wait");
+    },
     portals: {
       getService: () => undefined,
       carrier: { open: vi.fn() },
@@ -419,7 +421,7 @@ async function createWorkerSessionToolTestFixture(
       "prepareTools" | "skillWorkshop"
     > & {
       identity?: WorkerConnectionIdentity;
-      inheritedPublicationToolRef?: { current?: AnyAgentTool };
+      additionalInheritedToolNamesRef?: string[];
     } = {},
   ) {
     const workerIdentity = runtimeOptions.identity ?? identity;
@@ -442,7 +444,7 @@ async function createWorkerSessionToolTestFixture(
             identity: workerIdentity,
           })
         ).filter((tool) => placements.isWorkerTurnToolAuthorized(claim, tool.name)),
-        inheritedPublicationTool: runtimeOptions.inheritedPublicationToolRef?.current,
+        additionalInheritedToolNames: runtimeOptions.additionalInheritedToolNamesRef,
       }),
     });
     bindWorkerTurnCapabilities(placements, claim, { toolSurface: runtime });
@@ -503,6 +505,7 @@ async function createWorkerSessionToolTestFixture(
 
   return {
     root,
+    database,
     placements,
     identity,
     execute,

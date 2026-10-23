@@ -61,7 +61,6 @@ export async function startWebRtcTransport(
     dispatch: (event: unknown) => dispatchRealtimeEvent(peer, event),
     sent: (type?: string) =>
       sentRealtimeEvents(peer).filter((event) => !type || event.type === type),
-    events: () => onTalkEvent.mock.calls.map(([event]) => event),
   };
 }
 

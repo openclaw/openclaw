@@ -2,14 +2,17 @@ import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal, merge } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
-import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
+import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
+import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./chat-details.tsx";
+import "../../../styles/components.css";
 import baseStyles from "../../../styles/base.css?inline";
 import detailsStyles from "../../../styles/chat/details.css?inline";
+import layoutStyles from "../../../styles/chat/layout.css?inline";
 import progressStyles from "../../../styles/chat/progress-card.css?inline";
 
 const card: ProgressCard = {
@@ -36,7 +39,12 @@ function props(overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps {
     ...overrides,
   };
 }
-async function fixture(value = props(), width = 600, fullscreen = false) {
+async function fixture(
+  value = props(),
+  width = 600,
+  fullscreen = false,
+  nativePresentation?: ChatDetailsViewProps["nativePresentation"],
+) {
   const styles = document.createElement("style");
   styles.textContent = [baseStyles, progressStyles, detailsStyles].join("\n");
   document.head.append(styles);
@@ -66,6 +74,7 @@ async function fixture(value = props(), width = 600, fullscreen = false) {
     elements: { pane, frame, footer, header: fullscreen ? header : undefined },
     presentation: true,
     mobile: false,
+    nativePresentation,
     conversationVisible: !fullscreen,
     externalTrigger: fullscreen,
     setRef: (handle) => (details = handle),
@@ -118,10 +127,27 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
+  it("measures a closed desktop frame once during mounting", async () => {
+    const measurement = vi.spyOn(Element.prototype, "getBoundingClientRect");
+    try {
+      const { frame, panel } = await fixture(props(), 600, false, "desktop");
+      expect(panel.hidden).toBe(true);
+      expect(measurement.mock.contexts.filter((target) => target === frame)).toHaveLength(1);
+    } finally {
+      measurement.mockRestore();
+    }
+  });
+
   it("automatically docks within the available pane, preserves intent, and releases its column", async () => {
     await page.viewport(1700, 900);
     const { update, updateChat, frame, conversation, footer, trigger, panel } = await fixture(
-      props(),
+      props({
+        detailsWorkspace: {
+          root: "/workspace/details",
+          label: "details",
+          branch: "feature/docking",
+        },
+      }),
       1320,
     );
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
@@ -132,8 +158,8 @@ describe("chat Details presentation", () => {
     const session = panel.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
     expect(panel.getAttribute("role")).toBe("complementary");
     expect(panel.querySelector(".chat-details__toolbar")).toBeNull();
-    const groupStyle = getComputedStyle(panel.querySelector(".chat-details__group")!);
-    expect(groupStyle.borderTopWidth).toBe("1px");
+    const groupStyle = getComputedStyle(panel.querySelector(".chat-details-desktop-section")!);
+    expect(groupStyle.borderTopWidth).toBe("0px");
     expect(groupStyle.borderInlineStartWidth).toBe("0px");
     expect(groupStyle.borderBottomWidth).toBe("0px");
     expect(panel.matches(":popover-open")).toBe(false);
@@ -196,71 +222,77 @@ describe("chat Details presentation", () => {
     );
   });
 
-  it("nests section content under aligned headings without shifting navigation highlights", async () => {
-    const openFiles = vi.fn();
-    const { trigger, panel } = await fixture(
-      props({
-        onOpenWorkspace: openFiles,
-        selectedSession: {
-          key: card.sessionKey,
-          kind: "direct",
-          totalTokens: 64000,
-          totalTokensFresh: true,
-          contextTokens: 128000,
-          inputTokens: 1200,
-          outputTokens: 450,
-        },
-      }),
+  it("aligns the Environment diff below its branch label without shifting on hover or focus", async () => {
+    await page.viewport(1000, 800);
+    const openChanges = vi.fn();
+    const styles = document.createElement("style");
+    styles.textContent = [baseStyles, layoutStyles, detailsStyles].join("\n");
+    document.head.append(styles);
+    const panel = document.createElement("section");
+    panel.className = "chat-details";
+    panel.setAttribute("data-desktop", "");
+    panel.style.cssText = "position:relative;inset:auto;width:600px;max-width:none;height:400px";
+    document.body.append(panel);
+    mounted.push(panel, styles);
+    mountSolid(
+      () =>
+        createComponent(ChatDetailsDesktopBody, {
+          presented: true,
+          get children() {
+            return createComponent(ChatDetailsEnvironment, {
+              details: props({
+                detailsWorkspace: {
+                  root: "/workspace/details",
+                  label: null,
+                  branch: "feature/details",
+                },
+              }),
+              presented: true,
+              onOpenUncommitted: openChanges,
+              uncommitted: {
+                sessionKey: card.sessionKey,
+                branch: "feature/details",
+                baseRef: "HEAD",
+                files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
+                additions: 3,
+                deletions: 1,
+              },
+            });
+          },
+        }),
+      { container: panel },
     );
-    trigger.click();
     flush();
-    await expect.poll(() => panel.querySelector(".chat-details__environment")).not.toBeNull();
-    const environment = panel.querySelector(".chat-details__environment")!;
-    const navigation = environment.querySelector<HTMLButtonElement>(".chat-details__navigation")!;
-    const heading = environment.querySelector("summary")!;
-    const workspaceIcon = environment.querySelector(".chat-details__row > svg")!;
-    const leadingIcon = navigation.querySelector("svg")!;
-    const trailingIcon = navigation.querySelector("svg:last-child")!;
-    const context = panel.querySelector<HTMLDetailsElement>(".chat-details__context")!;
-    await toggle(context);
-    const contextHeading = context.querySelector("summary")!;
-    const budget = context.querySelector(".chat-details__context-budget")!;
-    const stats = context.querySelector(".chat-details__stats")!;
-    const progressHeading = panel.querySelector(".session-progress-card__summary")!;
-    const progressBody = panel.querySelector(".session-progress-card__body")!;
+    const heading = panel.querySelector(".chat-details-desktop-section__heading")!;
+    const navigation = panel.querySelector<HTMLButtonElement>(
+      ".chat-environment__branch-controls button.chat-pr__diff",
+    )!;
+    const branchLabel = panel.querySelector(".chat-environment__branch-name")!;
+    expect(navigation.getAttribute("aria-label")).toBe("Show session changes");
+    expect(navigation.textContent).toContain("+3");
+    expect(navigation.textContent).toContain("−1");
     for (const width of [600, 300]) {
-      const frame = panel.closest<HTMLElement>(".chat-main__conversation-frame")!;
-      frame.style.width = width + "px";
-      window.dispatchEvent(new Event("resize"));
+      panel.style.width = width + "px";
       const row = navigation.getBoundingClientRect();
-      expect(leadingIcon.getBoundingClientRect().left - row.left).toBeGreaterThanOrEqual(8);
-      expect(row.right - trailingIcon.getBoundingClientRect().right).toBeGreaterThanOrEqual(8);
-      expect(leadingIcon.getBoundingClientRect().left).toBe(
-        workspaceIcon.getBoundingClientRect().left,
+      const headingBounds = heading.getBoundingClientRect();
+      const branchBounds = branchLabel.getBoundingClientRect();
+      expect(Math.abs(row.left - branchBounds.left)).toBeLessThanOrEqual(1);
+      expect(row.top).toBeGreaterThanOrEqual(branchBounds.bottom);
+      expect(row.left).toBeGreaterThanOrEqual(headingBounds.left);
+      expect(row.right).toBeLessThanOrEqual(headingBounds.right);
+      expect(row.height).toBeGreaterThanOrEqual(
+        Number.parseFloat(getComputedStyle(navigation).lineHeight),
       );
-      const headingLeft =
-        heading.getBoundingClientRect().left +
-        Number.parseFloat(getComputedStyle(heading).paddingLeft);
-      expect(headingLeft - panel.getBoundingClientRect().left - panel.clientLeft).toBe(16);
-      expect(leadingIcon.getBoundingClientRect().left - headingLeft).toBe(8);
-      expect(contextHeading.getBoundingClientRect().left).toBe(headingLeft);
-      expect(progressHeading.getBoundingClientRect().left).toBe(headingLeft);
-      expect(budget.getBoundingClientRect().left - headingLeft).toBe(8);
-      expect(stats.getBoundingClientRect().left - headingLeft).toBe(8);
-      expect(
-        progressBody.getBoundingClientRect().left +
-          Number.parseFloat(getComputedStyle(progressBody).paddingLeft) -
-          headingLeft,
-      ).toBe(8);
-      expect(row.height).toBeGreaterThanOrEqual(36);
+      expect(navigation.scrollHeight).toBeLessThanOrEqual(navigation.clientHeight);
       expect(panel.scrollWidth).toBeLessThanOrEqual(panel.clientWidth);
     }
-    await page.getByRole("button", { name: "Show session files", exact: true }).hover();
-    const beforeFocus = navigation.getBoundingClientRect();
+    const beforeHover = navigation.getBoundingClientRect().toJSON();
+    await page.getByRole("button", { name: "Show session changes", exact: true }).hover();
+    expect(navigation.getBoundingClientRect().toJSON()).toEqual(beforeHover);
     navigation.focus();
-    expect(navigation.getBoundingClientRect().toJSON()).toEqual(beforeFocus.toJSON());
-    navigation.click();
-    expect(openFiles).toHaveBeenCalledOnce();
+    expect(navigation.getBoundingClientRect().toJSON()).toEqual(beforeHover);
+    await page.getByRole("button", { name: "Show session changes", exact: true }).click();
+    expect(openChanges).toHaveBeenCalledOnce();
   });
 
   it("starts closed, stays closed on revisions, and returns Escape focus to its labeled trigger", async () => {
@@ -337,7 +369,7 @@ describe("chat Details presentation", () => {
     expect(panel.getAttribute("role")).toBe("dialog");
     const bounds = panel.getBoundingClientRect();
     const paneBounds = pane.getBoundingClientRect();
-    expect(bounds.width).toBe(352);
+    expect(bounds.width).toBe(300);
     expect(bounds.height).toBeGreaterThan(40);
     expect(bounds.left).toBeGreaterThanOrEqual(paneBounds.left);
     expect(bounds.right).toBeLessThanOrEqual(paneBounds.right);
@@ -395,10 +427,14 @@ describe("chat Details presentation", () => {
     await session.updateComplete;
     flush();
     const sessionSection = session.querySelector<HTMLElement>(".chat-details-session")!;
-    const progressSection = progress.querySelector<HTMLDetailsElement>(".session-progress-card")!;
+    const progressSection = progress.querySelector<HTMLDetailsElement>(".task-progress-details")!;
     expect(sessionSection.querySelector(":scope > summary")).toBeNull();
     expect(progressSection.open).toBe(true);
-    expect(session.querySelector("[data-details-group]")).toBeNull();
+    expect(
+      session.querySelector(
+        '[data-details-group="pull-requests"], [data-details-group="automations"], [data-details-group="subagents"], [data-details-group="processes"]',
+      ),
+    ).toBeNull();
     await toggle(progressSection);
     expect(progressSection.open).toBe(false);
     expect(
@@ -474,7 +510,7 @@ describe("chat Details presentation", () => {
     menu.querySelector<HTMLButtonElement>("button")!.click();
     await expect.poll(() => menuSurface.dataset.phase).toBe("open");
     expect(menuSurface.matches(":popover-open")).toBe(true);
-    expect(progress.querySelector<HTMLDetailsElement>(".session-progress-card")!.open).toBe(true);
+    expect(progress.querySelector<HTMLDetailsElement>(".task-progress-details")!.open).toBe(true);
     const select = async (value: string) => {
       if (trigger.getAttribute("aria-expanded") !== "true") {
         trigger.click();
@@ -495,7 +531,7 @@ describe("chat Details presentation", () => {
     expect(clear).not.toHaveBeenCalled();
     await select("collapse");
     expect(collapse).toHaveBeenCalledWith(true);
-    expect(progress.querySelector<HTMLDetailsElement>(".session-progress-card")!.open).toBe(true);
+    expect(progress.querySelector<HTMLDetailsElement>(".task-progress-details")!.open).toBe(true);
     await select("settings");
     expect(settings).toHaveBeenCalledOnce();
     await select("dismiss");
@@ -513,44 +549,61 @@ describe("chat Details presentation", () => {
   });
 });
 
-it("keeps the change summary in the heading action when collapsed and omits empty Participants", async () => {
-  const request = vi.fn().mockResolvedValue({
-    files: Array.from({ length: 12 }, () => ({ path: "app.ts" })),
-    additions: 248,
-    deletions: 61,
-  });
-  // SAFETY: This fixture supplies the read-only connection surface used by Details.
-  const gateway = {
-    snapshot: { phase: "connected", client: { request }, hello: null },
-    connectionRevision: 1,
-    subscribe: () => () => {},
-    subscribeEvents: () => () => {},
-  } as unknown as ApplicationGateway;
+it("keeps Environment changes readable across disclosure toggles and omits empty Participants", async () => {
+  await page.viewport(1000, 800);
+  const openChanges = vi.fn();
+  const currentOpenChanges = vi.fn();
   const view = await fixture(
-    props({ onOpenSessionDiff: vi.fn(), pullRequestsGateway: gateway }),
+    props({
+      onOpenSessionDiff: openChanges,
+      environment: {
+        uncommitted: {
+          sessionKey: card.sessionKey,
+          files: [{ path: "app.ts", status: "modified", additions: 248, deletions: 61 }],
+          additions: 248,
+          deletions: 61,
+        },
+      },
+    }),
     360,
   );
   view.trigger.click();
-  const action = () => view.session.querySelector<HTMLButtonElement>(".chat-details__all-changes")!;
-  await vi.waitFor(() => expect(action().textContent).toContain("+248"));
-  const group = action().closest<HTMLElement>(".chat-details__group")!;
-  const disclosure = group.querySelector<HTMLDetailsElement>("details")!;
+  const action = () =>
+    view.panel.querySelector<HTMLButtonElement>(
+      '[data-details-group="environment"] .chat-environment__action',
+    )!;
+  await expect.poll(() => action()?.textContent).toContain("+248");
+  const disclosure = action().closest<HTMLDetailsElement>('[data-details-group="environment"]')!;
   const heading = disclosure.querySelector<HTMLElement>(":scope > summary")!;
   for (const width of [360, 300]) {
     view.frame.style.width = width + "px";
     const row = action().getBoundingClientRect();
     const caption = heading.getBoundingClientRect();
-    expect(row.left).toBeGreaterThan(caption.left);
+    expect(row.left).toBeGreaterThanOrEqual(caption.left);
     expect(row.right).toBeLessThanOrEqual(caption.right);
-    expect(row.bottom).toBeLessThanOrEqual(caption.bottom);
+    expect(row.top).toBeGreaterThanOrEqual(caption.bottom);
     expect(action().scrollWidth).toBeLessThanOrEqual(action().clientWidth);
   }
-  disclosure.open = false;
-  expect(action().getBoundingClientRect().height).toBeGreaterThan(0);
+  await page.getByRole("button", { name: /Changes/ }).click();
+  expect(openChanges).toHaveBeenCalledOnce();
+  view.updateChat({ onOpenSessionDiff: currentOpenChanges });
+  flush();
+  heading.click();
+  flush();
+  expect(heading.getAttribute("aria-expanded")).toBe("false");
+  expect(action().closest("[inert]")).not.toBeNull();
+  heading.click();
+  flush();
+  expect(heading.getAttribute("aria-expanded")).toBe("true");
+  expect(action().closest("[inert]")).toBeNull();
   expect(action().textContent).toContain("+248");
+  expect(action().textContent).toContain("−61");
+  await page.getByRole("button", { name: /Changes/ }).click();
+  expect(openChanges).toHaveBeenCalledOnce();
+  expect(currentOpenChanges).toHaveBeenCalledOnce();
   expect(view.session.querySelector(".chat-details__participants")).toBeNull();
-  const additions = view.session.querySelector<HTMLElement>(".chat-details__change-lines--add")!;
-  const deletions = view.session.querySelector<HTMLElement>(".chat-details__change-lines--del")!;
+  const additions = action().querySelector<HTMLElement>(".chat-environment__added")!;
+  const deletions = action().querySelector<HTMLElement>(".chat-environment__removed")!;
   expect(getComputedStyle(additions).fontVariantNumeric).toBe("tabular-nums");
   expect(getComputedStyle(additions).color).not.toBe(getComputedStyle(deletions).color);
 });

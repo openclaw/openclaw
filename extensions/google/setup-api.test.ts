@@ -10,12 +10,8 @@ describe("google setup entry", () => {
     const cliBackends: CliBackendPlugin[] = [];
 
     setupEntry.register({
-      registerProvider(provider: ProviderPlugin) {
-        providerIds.push(provider.id);
-      },
-      registerCliBackend(backend: CliBackendPlugin) {
-        cliBackends.push(backend);
-      },
+      registerProvider: (provider: ProviderPlugin) => providerIds.push(provider.id),
+      registerCliBackend: (backend: CliBackendPlugin) => cliBackends.push(backend),
     } as never);
 
     expect(providerIds).toEqual(["google-vertex"]);
@@ -83,6 +79,8 @@ describe("google gemini cli backend config", () => {
 
   it("enforces exact MCP server availability with a per-run argv override", () => {
     const backend = buildGoogleGeminiCliBackend();
+    const promptArgs = ["--prompt", "{prompt}"];
+    const positionalArgs = ["--", "--allowed-mcp-server-names", "positional-hostile"];
     const baseContext = {
       workspaceDir: "/tmp/openclaw-gemini-test",
       provider: "google-gemini-cli",
@@ -95,11 +93,8 @@ describe("google gemini cli backend config", () => {
         "--allowed-mcp-server-names",
         "hostile",
         "--allowed-mcp-server-names=also-hostile",
-        "--prompt",
-        "{prompt}",
-        "--",
-        "--allowed-mcp-server-names",
-        "positional-hostile",
+        ...promptArgs,
+        ...positionalArgs,
       ],
     };
 
@@ -108,13 +103,10 @@ describe("google gemini cli backend config", () => {
       toolAvailability: { native: [], openClaw: ["read"] },
     });
     expect(restrictedArgs).toEqual([
-      "--prompt",
-      "{prompt}",
+      ...promptArgs,
       "--allowed-mcp-server-names",
       "openclaw",
-      "--",
-      "--allowed-mcp-server-names",
-      "positional-hostile",
+      ...positionalArgs,
     ]);
 
     const emptyArgs = backend.resolveExecutionArgs?.({
@@ -125,50 +117,26 @@ describe("google gemini cli backend config", () => {
     expect(emptyArgs?.at(-4)).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
-    expect(emptyArgs?.slice(-3)).toEqual([
-      "--",
-      "--allowed-mcp-server-names",
-      "positional-hostile",
-    ]);
+    expect(emptyArgs?.slice(-3)).toEqual(positionalArgs);
   });
 
-  it("keeps legacy json output overrides on the json parser", () => {
-    const backend = buildGoogleGeminiCliBackend();
-    const normalized = backend.normalizeConfig?.({
-      ...backend.config,
-      args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
-      resumeArgs: [
-        "--skip-trust",
-        "--resume",
-        "{sessionId}",
-        "--output-format=json",
-        "--prompt",
-        "{prompt}",
-      ],
-    });
+  it.each([
+    ["--output-format", "json", "json", undefined],
+    ["-o", "stream-json", "jsonl", "gemini-stream-json"],
+  ] as const)(
+    "normalizes %s %s for initial and resumed output",
+    (flag, format, output, dialect) => {
+      const backend = buildGoogleGeminiCliBackend();
+      const promptArgs = ["--prompt", "{prompt}"];
+      const normalized = backend.normalizeConfig?.({
+        ...backend.config,
+        args: ["--skip-trust", flag, format, ...promptArgs],
+        resumeArgs: ["--skip-trust", "--resume", "{sessionId}", `${flag}=${format}`, ...promptArgs],
+      });
 
-    expect(normalized?.output).toBe("json");
-    expect(normalized?.resumeOutput).toBe("json");
-    expect(normalized?.jsonlDialect).toBeUndefined();
-  });
-
-  it("keeps short stream-json output overrides on the jsonl parser", () => {
-    const backend = buildGoogleGeminiCliBackend();
-    const normalized = backend.normalizeConfig?.({
-      ...backend.config,
-      args: ["--skip-trust", "-o", "stream-json", "--prompt", "{prompt}"],
-      resumeArgs: [
-        "--skip-trust",
-        "--resume",
-        "{sessionId}",
-        "-o=stream-json",
-        "--prompt",
-        "{prompt}",
-      ],
-    });
-
-    expect(normalized?.output).toBe("jsonl");
-    expect(normalized?.resumeOutput).toBe("jsonl");
-    expect(normalized?.jsonlDialect).toBe("gemini-stream-json");
-  });
+      expect(normalized?.output).toBe(output);
+      expect(normalized?.resumeOutput).toBe(output);
+      expect(normalized?.jsonlDialect).toBe(dialect);
+    },
+  );
 });

@@ -1,7 +1,9 @@
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { LlamaServerDiscoveryResult } from "./discovery.js";
+import type { LlamaServerDiscoveredModel } from "./models.js";
 
-export function modelConfig(overrides: Partial<ModelDefinitionConfig> = {}): ModelDefinitionConfig {
+export function modelConfig(
+  overrides: Partial<LlamaServerDiscoveredModel["config"]> = {},
+): LlamaServerDiscoveredModel["config"] {
   return {
     id: "qwen/model:Q4_K_M",
     name: "qwen/model:Q4_K_M",
@@ -16,7 +18,7 @@ export function modelConfig(overrides: Partial<ModelDefinitionConfig> = {}): Mod
 
 export function successfulDiscovery(
   origin = "http://localhost:8080",
-  overrides: Partial<ModelDefinitionConfig> = {},
+  overrides: Partial<LlamaServerDiscoveredModel["config"]> = {},
 ): Extract<LlamaServerDiscoveryResult, { kind: "success" }> {
   return {
     kind: "success" as const,

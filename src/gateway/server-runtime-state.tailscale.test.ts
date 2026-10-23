@@ -103,7 +103,7 @@ describe("managed Tailscale gateway ingress", () => {
   it("binds a distinct private listener and rejects the same headers on the ordinary listener", async () => {
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "serve",
-      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
+      getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 1 }),
     });
     openServers.push(runtime);
     await runtime.startListening();
@@ -147,7 +147,7 @@ describe("managed Tailscale gateway ingress", () => {
   it("accepts tailnet and public ingress on the dedicated Funnel listener", async () => {
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "funnel",
-      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
+      getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 1 }),
     });
     openServers.push(runtime);
     await runtime.startListening();
@@ -297,7 +297,7 @@ describe("managed Tailscale gateway ingress", () => {
     });
     const runtime = await createGatewayRuntimeStateForTest(registry, {
       tailscaleMode: "serve",
-      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
+      getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 1 }),
     });
     openServers.push(runtime);
     await runtime.startListening();

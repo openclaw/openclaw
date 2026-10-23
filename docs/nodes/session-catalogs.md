@@ -91,8 +91,9 @@ Import preserves the catalog's projected transcript text, not the original nativ
 files or raw provider records. Each import retains up to 50,000 transcript items
 or 64 MiB of projected history, whichever comes first, starting with the most
 recent history. Provider truncation and the existing per-item text limit still
-apply. If the history ceiling omits older items,
-the result has `complete: false` and the CLI warns that the copy is incomplete.
+apply. Pagination also stops on a repeated continuation cursor or after 50,000
+page requests. If these bounds omit older items, the result has `complete: false`
+and the CLI warns that the copy is incomplete.
 `importedItems` counts newly appended source items; `totalItems` counts source
 items read during this import, including items already preserved. Claude and
 Codex supply stable item IDs; for catalogs whose items lack IDs, re-import

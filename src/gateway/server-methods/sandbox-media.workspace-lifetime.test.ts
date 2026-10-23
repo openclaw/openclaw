@@ -63,21 +63,13 @@ it.for(["staged", "read-failed", "aborted", "retired"] as const)(
         "ordinary attachment bytes",
       );
       const { ctx, sessionCtx } = createSandboxMediaContexts(source);
-      const prepare = localWorkspace.prepareLocalSandboxWorkspace;
-      let owner: Awaited<ReturnType<typeof prepare>>;
-      vi.spyOn(localWorkspace, "prepareLocalSandboxWorkspace").mockImplementation(
-        async (params) => {
-          owner = await prepare(params);
-          return owner;
-        },
-      );
+      const prepare = vi.spyOn(localWorkspace, "prepareLocalSandboxWorkspace");
       const controller = new AbortController();
       const failure = new Error("attachment source read failed");
       const reading = createDeferred();
       const releaseRead = createDeferred();
-      const read = fsSafe.readLocalFileSafely;
-      vi.spyOn(fsSafe, "readLocalFileSafely").mockImplementation(async (params) => {
-        const result = await read(params);
+      const open = fsSafe.openLocalFileSafely;
+      vi.spyOn(fsSafe, "openLocalFileSafely").mockImplementation(async (params) => {
         if (params.filePath === source) {
           reading.resolve();
           await releaseRead.promise;
@@ -85,7 +77,7 @@ it.for(["staged", "read-failed", "aborted", "retired"] as const)(
             throw failure;
           }
         }
-        return result;
+        return open(params);
       });
       const pending = stageSandboxMedia({
         ctx,
@@ -102,6 +94,7 @@ it.for(["staged", "read-failed", "aborted", "retired"] as const)(
           awaitGateBeforeSettlement(reading.promise, pending, "source read not reached"),
           signal,
         );
+        const owner = await prepare.mock.results[0]?.value;
         expect(owner).toBeDefined();
         expect(() => owner!.assertCurrent()).not.toThrow();
         const projection = await readLocalWorkspaceProjection(worktree.id);

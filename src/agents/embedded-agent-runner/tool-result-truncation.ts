@@ -310,35 +310,6 @@ const COMPACT_RECOVERY_SUFFIX = (truncatedChars: number) =>
 const AGGREGATE_ELISION_MARKER =
   "[tool result elided: aggregate tool-result budget exceeded; rerun the command if the output is needed]";
 
-function logToolResultSessionTruncation(params: {
-  rewrittenEntries: number;
-  contextWindowTokens: number;
-  maxChars: number;
-  aggregateBudgetChars: number;
-  oversizedReplacementCount: number;
-  aggregateReplacementCount: number;
-  sessionKey?: string;
-  sessionId?: string;
-}): void {
-  const sessionLogKey = params.sessionKey ?? params.sessionId ?? "unknown";
-  const message =
-    `[tool-result-truncation] Truncated ${params.rewrittenEntries} tool result(s) in session ` +
-    `(contextWindow=${params.contextWindowTokens} maxChars=${params.maxChars} ` +
-    `aggregateBudgetChars=${params.aggregateBudgetChars} ` +
-    `oversized=${params.oversizedReplacementCount} aggregate=${params.aggregateReplacementCount}) ` +
-    `sessionKey=${sessionLogKey}`;
-  if (
-    params.aggregateReplacementCount <= 0 ||
-    toolResultWarningDedupe.sessionRecovery.check(sessionLogKey)
-  ) {
-    log.info(message);
-    return;
-  }
-  log.warn(
-    `${message}; aggregate tool-result pressure detected; consider /compact or /new if pressure persists`,
-  );
-}
-
 function resolveEffectiveMinKeepChars(
   maxChars: number,
   options: ToolResultTruncationOptions,
@@ -670,7 +641,6 @@ export function truncateOversizedToolResultsInMessages(
   truncatedCount: number;
   aggregateTruncatedCount: number;
   aggregatePressureEngaged: boolean;
-  aggregateBudgetChars: number;
 } {
   const { maxChars, aggregateBudgetChars } = resolveToolResultBudgets({
     contextWindowTokens,
@@ -713,7 +683,6 @@ export function truncateOversizedToolResultsInMessages(
     truncatedCount: plan.changedIndices.size,
     aggregateTruncatedCount: plan.aggregateReplacementCount,
     aggregatePressureEngaged: plan.aggregatePressureExceeded,
-    aggregateBudgetChars,
   };
 }
 
@@ -989,8 +958,6 @@ function buildToolResultReplacementPlan(params: {
       ? [{ index, source: message, message, textLength, aggregateTextLength: textLength }]
       : [];
   });
-  const toolResultCount = candidates.length;
-  const totalToolResultChars = candidates.reduce((sum, item) => sum + item.textLength, 0);
   const changedIndices = new Set<number>();
   let messages = params.messages;
   const replace = (
@@ -1109,8 +1076,6 @@ function buildToolResultReplacementPlan(params: {
     aggregatePressureExceeded,
     oversizedReducibleChars,
     aggregateReducibleChars,
-    toolResultCount,
-    totalToolResultChars,
   };
 }
 
@@ -1129,12 +1094,7 @@ export function estimateToolResultReductionPotential(params: {
   const maxReducibleChars = plan.oversizedReducibleChars + plan.aggregateReducibleChars;
 
   return {
-    maxChars,
-    aggregateBudgetChars,
-    toolResultCount: plan.toolResultCount,
-    totalToolResultChars: plan.totalToolResultChars,
     oversizedCount: plan.oversizedReplacementCount,
-    oversizedReducibleChars: plan.oversizedReducibleChars,
     aggregateReducibleChars: plan.aggregateReducibleChars,
     maxReducibleChars,
   };
@@ -1226,16 +1186,23 @@ export async function truncateOversizedToolResultsInSessionManager(params: {
       });
     }
 
-    logToolResultSessionTruncation({
-      rewrittenEntries: rewriteResult.rewrittenEntries,
-      contextWindowTokens,
-      maxChars,
-      aggregateBudgetChars,
-      oversizedReplacementCount: plan.oversizedReplacementCount,
-      aggregateReplacementCount: plan.aggregateReplacementCount,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-    });
+    const sessionLogKey = params.sessionKey ?? params.sessionId ?? "unknown";
+    const message =
+      `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
+      `(contextWindow=${contextWindowTokens} maxChars=${maxChars} ` +
+      `aggregateBudgetChars=${aggregateBudgetChars} ` +
+      `oversized=${plan.oversizedReplacementCount} aggregate=${plan.aggregateReplacementCount}) ` +
+      `sessionKey=${sessionLogKey}`;
+    if (
+      plan.aggregateReplacementCount <= 0 ||
+      toolResultWarningDedupe.sessionRecovery.check(sessionLogKey)
+    ) {
+      log.info(message);
+    } else {
+      log.warn(
+        `${message}; aggregate tool-result pressure detected; consider /compact or /new if pressure persists`,
+      );
+    }
 
     return {
       truncated: rewriteResult.changed,

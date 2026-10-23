@@ -6,6 +6,7 @@ import {
   reconnectMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -73,9 +74,7 @@ async function openPeople(
   const gateway = await installMockGateway(page, options);
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
   if (touch) {
-    const toggle = page
-      .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-      .first();
+    const toggle = navigationDrawerToggle(page);
     await toggle[touch]();
   }
   const online = page.locator(".sidebar-rail").getByRole("button", { name: "Users", exact: true });
@@ -226,7 +225,11 @@ suite.define(() => {
       await gateway.waitForRequest("connect");
       await emitPresence(gateway, [
         {
-          user: { id: "gateway-owner", identity: { type: "profile", id: "gateway-owner" } },
+          user: {
+            id: "gateway-owner",
+            identity: { type: "profile", id: "gateway-owner" },
+            name: "Synthetic operator",
+          },
           platform: "macOS 27.0.0",
           deviceFamily: "Mac",
           clientId: "openclaw-macos",
@@ -240,9 +243,9 @@ suite.define(() => {
       await owner.hover();
       const card = page.locator(".person-activity-hovercard");
       await card.waitFor({ state: "visible" });
-      await expectText(owner, "Shared owner");
-      await expectAttribute(card, "aria-label", "Activity for Shared owner");
-      expect(await card.locator("h2").textContent()).toBe("Shared owner");
+      await expectText(owner, "Synthetic operator · Shared owner");
+      await expectAttribute(card, "aria-label", "Activity for Synthetic operator · Shared owner");
+      expect(await card.locator("h2").textContent()).toBe("Synthetic operator · Shared owner");
       await expectText(
         card,
         "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
@@ -254,7 +257,7 @@ suite.define(() => {
       await expectAttribute(
         page.locator('.chat-pane__presence [data-viewer-id="gateway-owner"]'),
         "aria-label",
-        "Shared owner",
+        "Synthetic operator · Shared owner",
       );
     }));
 
@@ -448,7 +451,7 @@ suite.define(() => {
         await pollCount(card).toBe(0);
       },
     ));
-  it("keeps colliding people, watches, owner exclusion and open cards separate through updates", () =>
+  it("keeps colliding people, watches, owner presence and open cards separate through updates", () =>
     withPage({ colorScheme: "light", serviceWorkers: "block" }, async ({ page }) => {
       const actor = {
         type: "human" as const,
@@ -489,7 +492,15 @@ suite.define(() => {
       await expectCount(link(rawCard, /^Profile watch(?:\s|$)/), 0);
       await expectCount(link(rawCard, "View activity"), 0);
       const headerFaces = page.locator(".chat-pane__presence [data-viewer-id]");
-      await expect.poll(() => headerFaces.getAttribute("aria-label")).toBe(raw.name);
+      await expect
+        .poll(() =>
+          headerFaces.evaluateAll((faces) =>
+            faces
+              .map((face) => face.getAttribute("aria-label") ?? "")
+              .toSorted((a, b) => a.localeCompare(b)),
+          ),
+        )
+        .toEqual([profile.name, raw.name].toSorted((a, b) => a.localeCompare(b)));
       const rawLink = link(rawCard, /^Raw watch(?:\s|$)/);
       await rawLink.focus();
       await emitPresence(gateway, [

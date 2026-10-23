@@ -616,13 +616,10 @@ export async function checkUpdateStatus(params: {
   useDetachedDevUpstream?: boolean;
   gitSourceHint?: GitUpdateSourceHint | null;
   includeRegistry?: boolean;
-  registryChannel?: UpdateChannel;
   resolveRegistryChannel?: (status: UpdateInstallIdentity) => UpdateChannel;
 }): Promise<UpdateCheckResult> {
   params.signal?.throwIfAborted();
   const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
-  const resolveRegistryChannel = (status: UpdateInstallIdentity) =>
-    params.registryChannel ?? params.resolveRegistryChannel?.(status);
   const fetchRegistry = async (channel: UpdateChannel | undefined): Promise<RegistryStatus> => {
     const result = await resolveNpmChannelTag({
       channel: channel ?? "stable",
@@ -638,7 +635,7 @@ export async function checkUpdateStatus(params: {
   };
   const root = params.root ? path.resolve(params.root) : null;
   if (!root) {
-    const registryChannel = resolveRegistryChannel({ installKind: "unknown" });
+    const registryChannel = params.resolveRegistryChannel?.({ installKind: "unknown" });
     const registry = params.includeRegistry ? await fetchRegistry(registryChannel) : undefined;
     params.signal?.throwIfAborted();
     return {
@@ -703,7 +700,7 @@ export async function checkUpdateStatus(params: {
     if (params.signal?.aborted) {
       return undefined;
     }
-    const registryChannel = resolveRegistryChannel({ installKind, git });
+    const registryChannel = params.resolveRegistryChannel?.({ installKind, git });
     return params.includeRegistry
       ? registryChannel === "extended-stable" && isGit
         ? {

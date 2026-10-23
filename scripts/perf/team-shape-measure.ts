@@ -164,13 +164,14 @@ try {
       preload,
       `import { isMainThread } from 'node:worker_threads';
 import { channel } from 'node:diagnostics_channel';
+const sessionLists = channel('openclaw.session.list');
 if (isMainThread) {
   const { onTrustedInternalDiagnosticEvent, setDiagnosticsEnabledForProcess, waitForDiagnosticEventsDrained } =
     await import(${JSON.stringify(new URL("../../src/infra/diagnostic-events.ts", import.meta.url).href)});
   setDiagnosticsEnabledForProcess(true);
   let rows;
   let rowWork;
-  channel('openclaw.session.list').subscribe(event => {
+  sessionLists.subscribe(event => {
     if (rowWork && event.operation === 'sessions.list') rowWork.push({ selected: event.selectedRowCount, dirty: event.dirtyRowCount,
       materialized: event.materializedRowCount, reused: event.reusedRowCount });
   });

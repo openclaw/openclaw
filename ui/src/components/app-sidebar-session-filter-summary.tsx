@@ -108,41 +108,36 @@ export function countSidebarSessionFilters(host: SessionFilterHost) {
   return Number(host.sessionsStatusFilter !== "active");
 }
 
-function renderSidebarSessionFilter(
-  host: SessionFilterHost & Pick<SessionListHost, "sidebarMenus">,
-  className: string,
-) {
-  const count = createMemo(() => countSidebarSessionFilters(host));
-  return (
-    <button
-      type="button"
-      class={[className, "sidebar-session-sort", { "sidebar-session-sort--filtered": count() > 0 }]}
-      title={t("chat.sidebar.sortSessions")}
-      aria-label={t("chat.sidebar.sortSessions")}
-      aria-description={
-        count() > 0
-          ? t("chat.sidebar.activeFilterCount", {
-              count: String(count()),
-            })
-          : undefined
-      }
-      aria-haspopup="dialog"
-      aria-expanded={host.sidebarMenus.sessionSortMenuPosition !== null ? "true" : "false"}
-      onClick={(event: MouseEvent) => {
-        if (event.currentTarget instanceof HTMLElement) {
-          host.sidebarMenus.togglePositionedMenu("sessionSort", event.currentTarget);
-        }
-      }}
-    >
-      <Icon name="listFilter" />
-    </button>
-  );
-}
 export function renderSessionListToolbar(host: SessionListHost & { onToggleSidebar?: () => void }) {
+  const count = createMemo(() => countSidebarSessionFilters(host));
   return (
     <div class="sidebar-session-toolbar sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
       <SidebarOwnerPicker host={host} />
-      {renderSidebarSessionFilter(host, "sidebar-session-toolbar__button")}
+      <button
+        type="button"
+        class={[
+          "sidebar-session-toolbar__button sidebar-session-sort",
+          { "sidebar-session-sort--filtered": count() > 0 },
+        ]}
+        title={t("chat.sidebar.sortSessions")}
+        aria-label={t("chat.sidebar.sortSessions")}
+        aria-description={
+          count() > 0
+            ? t("chat.sidebar.activeFilterCount", {
+                count: String(count()),
+              })
+            : undefined
+        }
+        aria-haspopup="dialog"
+        aria-expanded={host.sidebarMenus.sessionSortMenuPosition !== null ? "true" : "false"}
+        onClick={(event: MouseEvent) => {
+          if (event.currentTarget instanceof HTMLElement) {
+            host.sidebarMenus.togglePositionedMenu("sessionSort", event.currentTarget);
+          }
+        }}
+      >
+        <Icon name="listFilter" />
+      </button>
       <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
     </div>
   );

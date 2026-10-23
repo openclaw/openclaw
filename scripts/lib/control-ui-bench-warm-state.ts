@@ -6,7 +6,11 @@ type SessionSnapshotStore = {
   flush(): Promise<void>;
 };
 
-type SidebarSnapshotModel = { navigationView: string; onlineUsers: unknown[] };
+type SidebarSnapshotModel = {
+  navigationView: string;
+  onlineUsers: unknown[];
+  roster?: { result: { sessions: Array<{ key: string }> } } | null;
+};
 
 type StoredTranscript = {
   sessionKey: string;
@@ -18,6 +22,7 @@ type StoredSidebar = { sessionKey: string; model: SidebarSnapshotModel };
 export async function persistColdLoadWarmState(input: {
   sessionKey: string;
   sidebarView: "sessions" | "online";
+  offRosterSession?: boolean;
 }) {
   const pane = document.querySelector(".chat-pane-cache__pane--active");
   const store: SessionSnapshotStore | undefined = pane
@@ -57,7 +62,13 @@ export async function persistColdLoadWarmState(input: {
         "Warm reload requires the selected transcript and sidebar view persisted in IndexedDB",
       );
     }
+    const rosterContainsSession =
+      sidebar.model.roster?.result.sessions.some((row) => row.key === input.sessionKey) ?? false;
+    if (input.offRosterSession && rosterContainsSession) {
+      throw new Error("Off-roster measurement found the selected session in the persisted roster");
+    }
     return {
+      rosterContainsSession,
       storage: {
         records: { snapshots, sidebarSnapshots: sidebars, snapshotMetadata: metadata },
         local: Object.entries(localStorage),
@@ -84,7 +95,6 @@ export async function restoreColdLoadWarmState(
   // Unload pagehide writers first; Playwright setStorageState would also clear the HTTP cache.
   await page.mainFrame().goto(resetUrl);
   await page.unroute(resetUrl);
-  await page.evaluate("globalThis.__name = (fn) => fn");
   await page.evaluate(
     async ({ storage: saved, url: deepLink }) => {
       const databases: Record<string, Record<string, unknown[]>> = {

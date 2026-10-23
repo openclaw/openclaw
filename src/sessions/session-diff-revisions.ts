@@ -62,18 +62,16 @@ export async function resolveSessionDiffEmptyTree(
 
 type BranchDiffMetadata = Pick<SessionsDiffResult, "aheadCount" | "commits" | "mergeBase">;
 
-function parseCommitRecord(line: string): NonNullable<SessionsDiffResult["mergeBase"]> | undefined {
-  const separator = line.indexOf("\0");
-  if (separator <= 0) {
-    return undefined;
-  }
-  return { sha: line.slice(0, separator), subject: line.slice(separator + 1) };
-}
-
 function parseCommitRecords(text: string): NonNullable<SessionsDiffResult["commits"]> {
   return text
     .split("\n")
-    .map(parseCommitRecord)
+    .map((line) => {
+      const separator = line.indexOf("\0");
+      if (separator <= 0) {
+        return undefined;
+      }
+      return { sha: line.slice(0, separator), subject: line.slice(separator + 1) };
+    })
     .filter(
       (record): record is NonNullable<SessionsDiffResult["mergeBase"]> => record !== undefined,
     );

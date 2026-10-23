@@ -21,10 +21,11 @@ import {
 } from "./runtime.js";
 import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import { createPluginRecord } from "./status.test-helpers.js";
+import { createToolLoadContext } from "./tools.test-support.js";
 
 describe("plugin retirement session-store ownership", () => {
-  it("retires in-memory resources without preparing persistent config", async () => {
-    await withOpenClawTestState({ label: "plugin-retirement-no-persistent-state" }, async () => {
+  it("retires in-memory resources without preparing persistent config", () =>
+    withOpenClawTestState({ label: "plugin-retirement-no-persistent-state" }, async () => {
       const registry = createEmptyPluginRegistry();
       const cleanup = vi.fn();
       registry.runtimeLifecycles.push({
@@ -40,13 +41,12 @@ describe("plugin retirement session-store ownership", () => {
       expect(result.failures).toEqual([]);
       expect(cleanup).toHaveBeenCalledOnce();
       expect(getRuntimeConfigSnapshot()).toBeNull();
-    });
-  });
+    }));
 
   it.each(["replace", "direct", "clear-command", "explicit", "registry-context"] as const)(
     "keeps the retiring configuration across admitted work (%s)",
-    async (mode) => {
-      await withOpenClawTestState({ label: "plugin-retirement-config" }, async (state) => {
+    (mode) =>
+      withOpenClawTestState({ label: "plugin-retirement-config" }, async (state) => {
         const oldPath = state.path("old-custom", "sessions.json");
         const newPath = state.path("new-custom", "sessions.json");
         const cfg: OpenClawConfig = {
@@ -73,15 +73,10 @@ describe("plugin retirement session-store ownership", () => {
         const record = createPluginRecord({ id: "fixture" });
         registry.plugins.push(record);
         if (mode === "registry-context") {
-          setPluginRuntimeLoadContext(registry, {
-            rawConfig: cfg,
-            config: cfg,
-            activationSourceConfig: cfg,
-            autoEnabledReasons: {},
-            workspaceDir: undefined,
-            env: process.env,
-            logger: { info() {}, warn() {}, error() {} },
-          });
+          setPluginRuntimeLoadContext(
+            registry,
+            createToolLoadContext(cfg, "", { workspaceDir: undefined }),
+          );
           clearRuntimeConfigSnapshot();
         }
         const instance = new PluginInstance(record.id, { record, registry });
@@ -130,15 +125,14 @@ describe("plugin retirement session-store ownership", () => {
           await Promise.allSettled([call, retirement]);
           await clearActivePluginRegistry();
         }
-      });
-    },
+      }),
   );
 });
 
 it.each(["registry", "cache"] as const)(
   "returns best-effort cleanup rows from the %s owner without reviving callbacks",
-  async (kind) => {
-    await withOpenClawTestState({ label: "plugin-cleanup-outcome" }, async () => {
+  (kind) =>
+    withOpenClawTestState({ label: "plugin-cleanup-outcome" }, async () => {
       const registry = createEmptyPluginRegistry();
       const record = createPluginRecord({ id: "cleanup-outcome" });
       registry.plugins.push(record);
@@ -181,6 +175,5 @@ it.each(["registry", "cache"] as const)(
       expect(replacement.run(() => "fresh")).toBe("fresh");
       await replacement.dispose();
       await retirePluginCache(cache);
-    });
-  },
+    }),
 );

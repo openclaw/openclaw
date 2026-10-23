@@ -1,4 +1,8 @@
 import {
+  MessageInjectionPolicyMismatchError,
+  MessageInjectionTargetUnavailableError,
+} from "../../auto-reply/reply/message-injection-authority.js";
+import {
   prepareReplyToolAuthority,
   type ReplyToolAuthorityNarrow,
 } from "../../auto-reply/reply/reply-tool-authority.js";
@@ -8,6 +12,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withSessionTranscriptQuestionAnswers } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import type {
+  EmbeddedRunToolAuthorityBinding,
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRequester,
 } from "../../sessions/session-controller.contracts.js";
@@ -29,6 +34,9 @@ import {
   withGatewayToolCallerIdentity,
 } from "../tools/gateway-caller-context.js";
 import {
+  bindReplyQueueInputAdapter,
+  type ReplyQueueInputAdapter,
+  bindReplyToolAuthorityCallerRead,
   createAgentQuestionAnswerAuthority,
   prepareReplyToolAuthorityCallerRead,
   registerAgentHarnessQuestionAnswerAuthority,
@@ -47,6 +55,8 @@ type ToolAuthorityAttempt = Pick<
   | "messageChannel"
   | "toolsAllow"
   | "disableTools"
+  | "forceRestartSafeTools"
+  | "forceCodeModeTools"
   | "runId"
   | "abortSignal"
   | "sessionTarget"
@@ -63,7 +73,8 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     | "sessionPersistence"
     | "trigger"
     | "bindWatchdogAttempt"
-  >,
+    | "executionSelection"
+  > & { queueInputAdapter?: ReplyQueueInputAdapter },
   attempt: Attempt,
   narrow: ReplyToolAuthorityNarrow | undefined,
   run: (
@@ -96,20 +107,10 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
 }
 
 async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends ToolAuthorityAttempt>(
-  internal: Pick<
-    EmbeddedRunAttemptInternalParams,
-    | "admittedRunContext"
-    | "replyOperation"
-    | "sessionPersistence"
-    | "trigger"
-    | "bindWatchdogAttempt"
-  >,
+  internal: Parameters<typeof withPreparedEmbeddedRunToolAuthority>[0],
   attempt: Attempt,
   narrow: ReplyToolAuthorityNarrow | undefined,
-  run: (
-    prepared: Attempt &
-      Pick<AgentHarnessAttemptParamsV2, "replyOperation" | "toolAuthorityFingerprint">,
-  ) => Promise<T>,
+  run: Parameters<typeof withPreparedEmbeddedRunToolAuthority<T, Attempt>>[3],
 ): Promise<T> {
   const admitted = internal.admittedRunContext;
   const instance = admitted.operationalRunInstance;
@@ -132,30 +133,38 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
       : undefined;
   const assertHostActive = attempt.hostCapabilities?.assertActive;
   const operatorAuthority = readAdmittedRunOperatorAuthority(admitted);
-  const input: ReplyToolAuthorityInput = {
-    originatingChannel: attempt.messageChannel,
-    toolsAllow: attempt.toolsAllow,
-    disableTools: attempt.disableTools,
-    operatorAuthority,
-    run: {
-      ...attempt,
-      model: attempt.modelId,
-      runtimePolicySessionKey: attempt.sandboxSessionKey,
-      traceAuthorized: false,
-      spawnedBy: attempt.spawnedBy ?? undefined,
-      senderId: attempt.senderId ?? undefined,
-      senderName: attempt.senderName ?? undefined,
-      senderUsername: attempt.senderUsername ?? undefined,
-      senderE164: attempt.senderE164 ?? undefined,
-      groupId: attempt.groupId ?? undefined,
-      groupChannel: attempt.groupChannel ?? undefined,
-      groupSpace: attempt.groupSpace ?? undefined,
-    },
-  };
   let live = true;
   // Preserve the complete admitted snapshot, but bind its hash and projection
   // only after hooks or native ownership have selected the actual model.
-  const direct = operation ? undefined : prepareReplyToolAuthority(input, narrow);
+  const direct = operation
+    ? undefined
+    : prepareReplyToolAuthority(
+        {
+          executionSelection: internal.executionSelection,
+          originatingChannel: attempt.messageChannel,
+          toolsAllow: attempt.toolsAllow,
+          disableTools: attempt.disableTools,
+          forceRestartSafeTools: attempt.forceRestartSafeTools,
+          forceCodeModeTools: attempt.forceCodeModeTools,
+          operatorAuthority,
+          run: {
+            ...attempt,
+            model: attempt.modelId,
+            elevatedLevel: attempt.bashElevated?.defaultLevel,
+            runtimePolicySessionKey: attempt.sandboxSessionKey,
+            traceAuthorized: false,
+            spawnedBy: attempt.spawnedBy ?? undefined,
+            senderId: attempt.senderId ?? undefined,
+            senderName: attempt.senderName ?? undefined,
+            senderUsername: attempt.senderUsername ?? undefined,
+            senderE164: attempt.senderE164 ?? undefined,
+            groupId: attempt.groupId ?? undefined,
+            groupChannel: attempt.groupChannel ?? undefined,
+            groupSpace: attempt.groupSpace ?? undefined,
+          },
+        },
+        narrow,
+      );
   let fingerprint: string | undefined;
   let releaseAttemptSnapshot: (() => void) | undefined;
   try {
@@ -209,7 +218,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   }
   const assertReplyActive = () => {
     assertActive();
-    input.operatorAuthority?.assertCurrent();
+    operatorAuthority?.assertCurrent();
     if (
       operation &&
       (operation.toolAuthorityRoute?.provider !== route.provider ||
@@ -242,7 +251,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
         const questionAuthority = sessionKey
           ? createAgentQuestionAnswerAuthority({
               sessionKey,
-              requesterProfileId: input.operatorAuthority?.profileId,
+              requesterProfileId: operatorAuthority?.profileId,
               fingerprint,
               prepareCaller: async (caller) =>
                 prepareReplyToolAuthorityCallerRead(
@@ -367,7 +376,44 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
             assertRegistered();
             return ownsOperation() ? projected : undefined;
           };
-          return {
+          // The published handle owns either the reply snapshot or this exact
+          // attempt snapshot. A lifecycle-only turn cannot lend its policy.
+          bindReplyToolAuthorityCallerRead(
+            projectAsync,
+            async (caller, expected, _requestedRoute, assertCaller) => {
+              const assertPreparedOwner = () => {
+                assertCaller();
+                assertRegistered();
+                if (!ownsOperation() || fingerprint !== expected) {
+                  throw new MessageInjectionTargetUnavailableError(
+                    "Embedded attempt authority changed during steering",
+                  );
+                }
+              };
+              assertPreparedOwner();
+              if (!operation && caller && "kind" in caller) {
+                const selected = direct?.requestedRoute;
+                if (
+                  selected &&
+                  (selected.provider !== caller.selectedRoute.provider ||
+                    selected.model !== caller.selectedRoute.model)
+                ) {
+                  throw new MessageInjectionPolicyMismatchError(
+                    "model-fallback-changed",
+                    "The selected model changed before steering",
+                  );
+                }
+              }
+              return prepareReplyToolAuthorityCallerRead(
+                operation?.projectToolAuthorityFingerprintAsync ?? direct?.projectAsync,
+                caller,
+                expected,
+                route,
+                assertPreparedOwner,
+              );
+            },
+          );
+          const binding: ReturnType<EmbeddedRunToolAuthorityBinding> = {
             watchdogAttempt,
             personalToolParticipants,
             operation: turn,
@@ -400,6 +446,10 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
             projectRequester: project,
             projectRequesterAsync: projectAsync,
           };
+          return bindReplyQueueInputAdapter(
+            binding,
+            internal.queueInputAdapter ?? "legacy-question-category",
+          );
         },
       },
       runPrepared,

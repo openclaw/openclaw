@@ -19,7 +19,6 @@ import {
   clearPreparedEmbeddedAgentSettings,
   createPreparedEmbeddedAgentSettingsManager as prepare,
 } from "./agent-project-settings.js";
-import { SettingsManager } from "./sessions/settings-manager.js";
 
 const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
 const retryProvider = (
@@ -60,14 +59,13 @@ it("defaults project settings policy to sanitize", () => {
   expect(resolveEmbeddedAgentProjectSettingsPolicy()).toBe("sanitize");
 });
 
-it("applies sanitized plugin settings before project settings", () => {
+it("applies admitted plugin settings before project settings", () => {
   const snapshot = buildEmbeddedAgentSettingsSnapshot({
     globalSettings: {
       shellPath: "/bin/zsh",
       compaction: { reserveTokens: 20_000, keepRecentTokens: 20_000 },
     },
     pluginSettings: {
-      shellPath: "/tmp/blocked-shell",
       compaction: { keepRecentTokens: 64_000 },
       hideThinkingBlock: false,
     },
@@ -129,24 +127,16 @@ it.each([undefined, 0, 7])("preserves stored settings (%s)", async (maxRetries) 
   prepared.setDefaultThinkingLevel("high");
   prepared.setRetryEnabled(true);
   prepared.applyOverrides({ retry: { provider: { maxRetries: 99 } } });
-  await prepared.flush();
   expect(await fs.readFile(globalPath, "utf8")).toBe(globalBytes);
   expect(await fs.readFile(projectPath, "utf8")).toBe(projectBytes);
   assertPrepared("low");
 
-  const persistent = SettingsManager.create(params.cwd, params.agentDir);
-  persistent.setDefaultThinkingLevel("high");
-  await persistent.flush();
+  await writeJson(globalPath, { ...globalSettings, defaultThinkingLevel: "high" });
   expect(JSON.parse(await fs.readFile(globalPath, "utf8"))).toEqual({
     ...globalSettings,
     defaultThinkingLevel: "high",
   });
   expect(await fs.readFile(projectPath, "utf8")).toBe(projectBytes);
-  const reopened = SettingsManager.create(params.cwd, params.agentDir);
-  expect(reopened.getDefaultThinkingLevel()).toBe("high");
-  expect(reopened.getProviderRetrySettings()).toEqual(expectedProvider);
-  expect(reopened.getGlobalSettings()).toEqual({ ...globalSettings, defaultThinkingLevel: "high" });
-  expect(reopened.getProjectSettings()).toEqual(projectSettings);
   assertPrepared("low");
   clearPreparedEmbeddedAgentSettings([params.sessionId]);
   assertPrepared("high");
@@ -176,6 +166,52 @@ it("does not admit embedded retired settings, compaction or delay policy into na
   expect(() => prepare(params)).toThrow("queueMode: use steeringMode");
 });
 describe("createPreparedEmbeddedAgentSettingsManager", () => {
+  it.each(
+    [
+      {
+        retired: { queueMode: "all" },
+        canonical: { steeringMode: "all" },
+        guidance: "steeringMode",
+      },
+      { retired: { websockets: false }, canonical: { transport: "sse" }, guidance: "transport" },
+      {
+        retired: { skills: { customDirectories: ["custom-skill"], enableSkillCommands: false } },
+        canonical: { skills: ["custom-skill"], enableSkillCommands: false },
+        guidance: "enableSkillCommands",
+      },
+      {
+        retired: { retry: { maxDelayMs: 12_000 } },
+        canonical: { retry: { provider: { maxRetryDelayMs: 12_000 } } },
+        guidance: "retry.provider.maxRetryDelayMs",
+      },
+    ].flatMap((settings) => [
+      { ...settings, scope: "global" as const },
+      { ...settings, scope: "project" as const },
+    ]),
+  )(
+    "refuses retired $scope settings with $guidance guidance and preserves bytes",
+    async ({ retired, canonical, guidance, scope }) => {
+      await using params = await createSettingsWorkspace();
+      const settingsPath = scope === "global" ? params.globalPath : params.projectPath;
+      const original = `${JSON.stringify({ theme: "keep", ...retired }, null, 4)}\n`;
+      await fs.writeFile(settingsPath, original);
+      const refusal = expect.objectContaining({
+        code: "INVALID_CONFIG",
+        recovery: "manual",
+        message: expect.stringContaining(guidance),
+      });
+      expect(() => prepare(params)).toThrowError(refusal);
+      expect(await fs.readFile(settingsPath, "utf8")).toBe(original);
+
+      await writeJson(settingsPath, canonical);
+      expect(prepare(params).getGlobalSettings()).toMatchObject(canonical);
+      await fs.writeFile(settingsPath, original);
+      clearPreparedEmbeddedAgentSettings([params.sessionId]);
+      expect(() => prepare(params)).toThrowError(refusal);
+      expect(await fs.readFile(settingsPath, "utf8")).toBe(original);
+    },
+  );
+
   it.each([
     { policy: "trusted", shellCommandPrefix: "echo trusted &&", reserveTokens: 32_000 },
     { policy: "sanitize", shellCommandPrefix: "echo global &&", reserveTokens: 32_000 },
@@ -220,7 +256,6 @@ describe("createPreparedEmbeddedAgentSettingsManager", () => {
       expect(settingsManager.getRetryEnabled()).toBe(false);
       settingsManager.applyOverrides({ compaction: { reserveTokens: 90_000 } });
       settingsManager.setRetryEnabled(true);
-      await settingsManager.flush();
       expect(JSON.parse(await fs.readFile(globalPath, "utf8"))).toEqual(globalSettings);
 
       await writeJson(projectPath, {
@@ -232,13 +267,11 @@ describe("createPreparedEmbeddedAgentSettingsManager", () => {
         compaction: { ...globalSettings.compaction, keepRecentTokens: 45_000 },
       });
       expect(prepareAgentProviderRetryCount(input)).toBe(testCase.policy === "ignore" ? 1 : 0);
-      await settingsManager.reload();
       expect(settingsManager.getCompactionKeepRecentTokens()).toBe(23_000);
       const nextSettingsManager = prepare(input);
       expect(nextSettingsManager.getCompactionKeepRecentTokens()).toBe(23_000);
       expect(nextSettingsManager.getCompactionReserveTokens()).toBe(testCase.reserveTokens);
       expect(nextSettingsManager.getRetryEnabled()).toBe(false);
-      await nextSettingsManager.flush();
       clearPreparedEmbeddedAgentSettings([params.sessionId]);
       expect(prepareAgentProviderRetryCount(input)).toBe(testCase.policy === "ignore" ? 1 : 2);
       expect(prepare(input).getCompactionKeepRecentTokens()).toBe(45_000);

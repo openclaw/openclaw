@@ -42,6 +42,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import * as reloadPlans from "./config-reload-plan.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import * as modelRuntimeReload from "./server-reload-model-runtime-scope.js";
@@ -86,7 +87,6 @@ function createReloadPlan(overrides?: Partial<GatewayReloadPlan>): GatewayReload
     reloadHooks: false,
     restartGmailWatcher: false,
     restartCron: false,
-    restartHeartbeat: false,
     reloadPlugins: false,
     restartChannels: new Set(),
     disposeMcpRuntimes: false,
@@ -205,7 +205,7 @@ function buildRestartChannelsPlan(...channels: ChannelName[]) {
 
 type SecretsReloadHarnessParams = {
   prepareRuntimeSecretsSnapshot: Parameters<typeof createTestRuntimeSecretsActivator>[0];
-  buildReloadPlan?: GatewayAuxHandlerParams["buildReloadPlan"];
+  buildReloadPlan?: (changedPaths: string[]) => GatewayReloadPlan;
   sharedGatewaySessionGenerationState?: GatewayAuxHandlerParams["sharedGatewaySessionGenerationState"];
   resolveSharedGatewaySessionGenerationForConfig?: GatewayAuxHandlerParams["resolveSharedGatewaySessionGenerationForConfig"];
   clients?: GatewayAuxHandlerParams["clients"];
@@ -219,13 +219,14 @@ type SecretsReloadHarnessParams = {
 };
 
 function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
+  const { buildReloadPlan = reloadPlans.buildGatewayReloadPlan } = params;
+  vi.spyOn(reloadPlans, "buildGatewayReloadPlan").mockImplementation(buildReloadPlan);
   const respond = params.respond ?? vi.fn();
   const gatewayAux = createGatewayAuxHandlers({
     scheduler: createTestGatewayScheduler(),
     log: {},
     getNativeApprovalRouteCoordinator: () => undefined,
     activateRuntimeSecrets: createTestRuntimeSecretsActivator(params.prepareRuntimeSecretsSnapshot),
-    buildReloadPlan: params.buildReloadPlan,
     sharedGatewaySessionGenerationState:
       params.sharedGatewaySessionGenerationState ??
       new SharedGatewaySessionGenerationState({
@@ -250,7 +251,6 @@ function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
 
   return {
     ...gatewayAux,
-    extraHandlers,
     respond,
     reload: () => invokeRpc({ handlers: extraHandlers, respond }, "secrets.reload"),
   };

@@ -11,6 +11,8 @@
  */
 import officialExternalProviderCatalog from "../../scripts/lib/official-external-provider-catalog.json" with { type: "json" };
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import { normalizeManifestProviderEndpoints } from "./manifest-capability-normalizers.js";
+import type { PluginManifestProviderEndpoint } from "./manifest-types.js";
 
 /**
  * Lists manifest-shaped catalog metadata blocks that declare provider endpoints.
@@ -20,9 +22,12 @@ import { MANIFEST_KEY } from "../compat/legacy-names.js";
  * reader filters unknown classes exactly as it does for installed manifests,
  * so they stay inert instead of complicating the mirror contract.
  */
-export function listOfficialExternalProviderEndpointManifests(): Record<string, unknown>[] {
+export function listOfficialExternalProviderEndpointManifests(): {
+  providerEndpoints: PluginManifestProviderEndpoint[];
+}[] {
   return officialExternalProviderCatalog.entries.flatMap((entry) => {
     const manifest = entry[MANIFEST_KEY];
-    return manifest.providerEndpoints ? [manifest] : [];
+    const providerEndpoints = normalizeManifestProviderEndpoints(manifest.providerEndpoints);
+    return providerEndpoints ? [{ ...manifest, providerEndpoints }] : [];
   });
 }

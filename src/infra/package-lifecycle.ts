@@ -22,7 +22,6 @@ const lifecycleLocks = createFileLockManager("openclaw.package-lifecycle");
 /** Ownership is uncertain: callers must preserve the package until its writers settle. */
 export class PackageLifecycleOwnershipError extends Error {
   readonly packageRoot: string;
-  readonly lockPath: string;
 
   constructor(packageRoot: string, reason: string, cause?: unknown) {
     const lockPath = path.join(packageRoot, PACKAGE_LIFECYCLE_LOCK_RELATIVE_PATH);
@@ -33,7 +32,6 @@ export class PackageLifecycleOwnershipError extends Error {
     );
     this.name = "PackageLifecycleOwnershipError";
     this.packageRoot = packageRoot;
-    this.lockPath = lockPath;
   }
 }
 
@@ -371,14 +369,14 @@ export async function completePendingPackageLifecycle(params: {
   packageRoot: string;
   runScript?: (script: PackageLifecycleScript) => void | Promise<void>;
   timeoutMs?: number;
-}): Promise<boolean> {
+}): Promise<void> {
   const packageRoot = path.resolve(params.packageRoot);
   const scriptTimeoutMs = params.timeoutMs ?? DEFAULT_PACKAGE_LIFECYCLE_SCRIPT_TIMEOUT_MS;
   const paths = resolveLifecyclePaths(packageRoot);
   // Bind before observing work, and retain that directory across every retry.
   const packageDirectory = await bindLifecycleRoot(packageRoot);
   if (!packageDirectory) {
-    return false;
+    return;
   }
   if (!(await isPackageLifecyclePending(paths))) {
     try {
@@ -388,7 +386,7 @@ export async function completePendingPackageLifecycle(params: {
     } catch (error) {
       if (hasErrorCode(error, "ENOENT")) {
         await assertLifecycleRoot(packageRoot, packageDirectory);
-        return false;
+        return;
       }
       throw new PackageLifecycleOwnershipError(packageRoot, "lock cannot be inspected", error);
     }
@@ -401,7 +399,7 @@ export async function completePendingPackageLifecycle(params: {
     observedPendingWork = await isPackageLifecyclePending(paths);
     if (!observedPendingWork) {
       await assertOwnership();
-      return false;
+      return;
     }
     const finalizeLegacyMarker = !(await pathExists(
       path.join(packageRoot, PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH),
@@ -425,34 +423,33 @@ export async function completePendingPackageLifecycle(params: {
     if (await isPackageLifecyclePending(paths)) {
       throw new Error("OpenClaw package postinstall did not complete its lifecycle marker");
     }
-    return true;
   };
-  let outcome: { completed: boolean } | { error: unknown };
+  let failure: { error: unknown } | undefined;
   try {
-    outcome = { completed: await completeWhileHeld() };
+    await completeWhileHeld();
   } catch (error) {
-    outcome = { error };
+    failure = { error };
   }
   try {
     // A failed script is safely removable only while this generation still owns it.
     await assertOwnership();
   } catch (error) {
-    outcome = { error };
+    failure = { error };
   }
   // A no-work caller must not recreate markers retired before its admission.
-  if ("error" in outcome && observedPendingWork) {
+  if (failure && observedPendingWork) {
     try {
       await ensurePendingMarker(paths, packageDirectory, lock);
     } catch (error) {
       if (error instanceof PackageLifecycleOwnershipError) {
-        outcome = { error };
+        failure = { error };
       } else {
         // A marker write failure does not make settled work uncertain while
         // this invocation still owns the same directory and lock generation.
         try {
           await assertOwnership();
         } catch (ownershipError) {
-          outcome = { error: ownershipError };
+          failure = { error: ownershipError };
         }
       }
     }
@@ -466,8 +463,7 @@ export async function completePendingPackageLifecycle(params: {
     // Uncertain release must preserve the stage even if the script itself failed.
     throw new PackageLifecycleOwnershipError(packageRoot, "lock release failed", error);
   }
-  if ("error" in outcome) {
-    throw outcome.error;
+  if (failure) {
+    throw failure.error;
   }
-  return outcome.completed;
 }

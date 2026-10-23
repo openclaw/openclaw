@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { setImmediate } from "node:timers/promises";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { WorkerSshIdentity } from "../../plugins/types.js";
-import { createWorkerSshRunner } from "./tunnel-ssh-runner.js";
+import { workerSshRunner } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
 import {
   PWD_COMMAND,
@@ -389,7 +389,7 @@ it("joins a replacement's initialization when prior-owner abort reenters Stop", 
 });
 it("keeps SSH tunnel failure stderr on a valid UTF-16 boundary", async () => {
   const retained = "b".repeat(4095);
-  const child = createWorkerSshRunner().start(
+  const child = workerSshRunner.start(
     [process.execPath, "-e", `process.stderr.write(${JSON.stringify(`a😀${retained}`)})`],
     { timeoutMs: 10_000, baseEnv: process.env },
   );

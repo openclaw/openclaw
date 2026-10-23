@@ -1,20 +1,23 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as responseLimitRuntime from "openclaw/plugin-sdk/response-limit-runtime";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { probeTelegram } from "./probe.js";
 
 const INITIAL_BODY = '{"ok":true,"result":{"id":123';
 
-describe("probeTelegram response body deadlines over real sockets", () => {
+describe("probeTelegram cancellation and body deadlines over real sockets", () => {
   let server: Server;
   let apiRoot: string;
-  let webhook = false;
+  let mode: "backoff" | "all" | "webhook" | "stall" | "trickle" | "webhook-body";
   let pendingResponse: ServerResponse;
   let socketClosed = createDeferred<void>();
-  const webhookClosed = createDeferred<void>();
+  let requestStarted = createDeferred<void>();
   let requestCount = 0;
+  let connectionCount = 0;
+  const liveSockets = new Set<Socket>();
 
   beforeAll(async () => {
     const proxyNames =
@@ -25,19 +28,34 @@ describe("probeTelegram response body deadlines over real sockets", () => {
 
     server = createServer((request, response) => {
       requestCount += 1;
+      if (mode === "backoff") {
+        response.socket?.destroy();
+        return;
+      }
+      if (mode === "all" || (mode === "webhook" && request.url?.endsWith("/getWebhookInfo"))) {
+        requestStarted.resolve();
+        return;
+      }
       response.writeHead(200, { "content-type": "application/json" });
-      if (webhook && request.url?.endsWith("/getMe")) {
+      if ((mode === "webhook" || mode === "webhook-body") && request.url?.endsWith("/getMe")) {
         response.end(
           '{"ok":true,"result":{"id":123,"is_bot":true,"first_name":"Test","username":"bot"}}',
         );
         return;
       }
-      const closed = webhook ? webhookClosed : socketClosed;
+      const closed = socketClosed;
       request.socket.once("close", () => closed.resolve());
       response.write(
-        webhook ? '{"ok":true,"result":{"url":"https://example.test/hook"' : INITIAL_BODY,
+        mode === "webhook-body"
+          ? '{"ok":true,"result":{"url":"https://example.test/hook"'
+          : INITIAL_BODY,
       );
       pendingResponse = response;
+    });
+    server.on("connection", (socket) => {
+      connectionCount += 1;
+      liveSockets.add(socket);
+      socket.once("close", () => liveSockets.delete(socket));
     });
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", resolve);
@@ -49,20 +67,81 @@ describe("probeTelegram response body deadlines over real sockets", () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();
-    server.closeAllConnections();
+    for (const socket of liveSockets) {
+      socket.destroy();
+    }
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
     });
   });
 
   let probeIndex = 0;
+  const beforeProbeEnds = <T>(milestone: Promise<T>, probe: Promise<unknown>) =>
+    Promise.race([
+      milestone,
+      probe.then(() => {
+        throw new Error("Probe completed before its socket/body milestone");
+      }),
+    ]);
+
+  it.each(["backoff", "all", "webhook"] as const)("aborts during %s", async (phase) => {
+    const controller = new AbortController();
+    const requestsBefore = requestCount;
+    const connectionsBefore = connectionCount;
+    const backoffStarted = createDeferred<{ sleep: Promise<void> }>();
+    requestStarted = createDeferred<void>();
+    const realSleepWithAbort = runtimeEnv.sleepWithAbort;
+    const sleepSpy =
+      phase === "backoff"
+        ? vi.spyOn(runtimeEnv, "sleepWithAbort").mockImplementation((...args) => {
+            // Register the real abort listener before signaling readiness.
+            const sleep = realSleepWithAbort(...args);
+            backoffStarted.resolve({ sleep });
+            return sleep;
+          })
+        : undefined;
+    mode = phase;
+    const startedAt = Date.now();
+    const probe = probeTelegram(`abort-${phase}-token`, 10_000, {
+      apiRoot,
+      includeWebhookInfo: phase === "webhook",
+      abortSignal: controller.signal,
+      network: { autoSelectFamily: false, dnsResultOrder: "verbatim" },
+    });
+    try {
+      if (phase === "backoff") {
+        const { sleep } = await beforeProbeEnds(backoffStarted.promise, probe);
+        controller.abort();
+        await expect(sleep).rejects.toMatchObject({
+          name: "AbortError",
+          cause: controller.signal.reason,
+        });
+      } else {
+        await requestStarted.promise;
+        controller.abort();
+      }
+      expect((await probe).ok).toBe(false);
+      expect(requestCount).toBe(requestsBefore + (phase === "webhook" ? 2 : 1));
+      if (phase !== "webhook") {
+        expect(connectionCount).toBe(connectionsBefore + 1);
+      }
+      if (phase !== "backoff") {
+        expect(Date.now() - startedAt).toBeLessThan(1_000);
+      }
+    } finally {
+      controller.abort();
+      sleepSpy?.mockRestore();
+      await probe;
+    }
+  });
 
   it.each([
     ["stall", expect.stringMatching(/response body stalled/i), 100],
     ["trickle", expect.stringMatching(/response body timed out/i), 200],
-  ] as const)("times out %s bodies", async (mode, error, elapsedMs) => {
+  ] as const)("times out %s bodies", async (bodyMode, error, elapsedMs) => {
     // Connection setup and socket scheduling must not consume the probe's budget.
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    mode = bodyMode;
     socketClosed = createDeferred<void>();
     const previousRequestCount = requestCount;
     let receivedBytes = 0;
@@ -104,28 +183,20 @@ describe("probeTelegram response body deadlines over real sockets", () => {
       },
     );
     const abort = new AbortController();
-    const probe = probeTelegram(`deadline-${mode}-${++probeIndex}`, 200, {
+    const probe = probeTelegram(`deadline-${bodyMode}-${++probeIndex}`, 200, {
       apiRoot,
       includeWebhookInfo: false,
       abortSignal: abort.signal,
     });
-    const beforeProbeEnds = async (milestone: Promise<unknown>) =>
-      await Promise.race([
-        milestone,
-        probe.then((result) => {
-          throw new Error(`Probe ended before the socket body milestone: ${result.error}`);
-        }),
-      ]);
-
     try {
-      await beforeProbeEnds(waitForConsumedBytes(INITIAL_BODY.length));
-      for (let index = 1; index <= (mode === "trickle" ? 4 : 0); index += 1) {
+      await beforeProbeEnds(waitForConsumedBytes(INITIAL_BODY.length), probe);
+      for (let index = 1; index <= (bodyMode === "trickle" ? 4 : 0); index += 1) {
         await vi.advanceTimersByTimeAsync(40);
         const consumed = waitForConsumedBytes(INITIAL_BODY.length + index);
         pendingResponse.write(" ");
-        await beforeProbeEnds(consumed);
+        await beforeProbeEnds(consumed, probe);
       }
-      await vi.advanceTimersByTimeAsync(mode === "trickle" ? 40 : 100);
+      await vi.advanceTimersByTimeAsync(bodyMode === "trickle" ? 40 : 100);
       const result = await probe;
       expect(result).toMatchObject({ ok: false, error, elapsedMs });
       expect(requestCount).toBe(previousRequestCount + 1);
@@ -139,7 +210,8 @@ describe("probeTelegram response body deadlines over real sockets", () => {
   });
 
   it("keeps webhook diagnostics best-effort and closes their stalled socket", async () => {
-    webhook = true;
+    mode = "webhook-body";
+    socketClosed = createDeferred<void>();
     const previousRequestCount = requestCount;
 
     const result = await probeTelegram(`deadline-webhook-${++probeIndex}`, 200, { apiRoot });
@@ -147,6 +219,6 @@ describe("probeTelegram response body deadlines over real sockets", () => {
     expect(result).toMatchObject({ ok: true, bot: { id: 123, username: "bot" } });
     expect(result.webhook).toBeUndefined();
     expect(requestCount).toBe(previousRequestCount + 2);
-    await webhookClosed.promise;
+    await socketClosed.promise;
   });
 });

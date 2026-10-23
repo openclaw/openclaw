@@ -29,7 +29,7 @@ import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   parseSageBatchResponse,
   parseSageResponse,
-  validateSageRequest,
+  validateSageImage,
   type SageImageProbe,
 } from "./sage-validation.js";
 import type {
@@ -195,13 +195,15 @@ export default definePluginEntry({
           if (!validateDecisionBatchV2(batch)) {
             return { status: "unavailable", reason: "unsupported-input" };
           }
+          if (batch.state.type === "list" && batch.state.items.length < 2) {
+            return { status: "unavailable", reason: "unsupported-input" };
+          }
           nativeContent = content(batch.state);
           questions = Object.entries(batch.questions).map(([id, q]) => question(id, q));
-          // Validate vendor-only combinations before media processing or a billable effect.
+          // Enforce vendor limits absent from the admitted Decision contract.
           for (const q of questions) {
             if (
-              (q.kind === "sort" && batch.state.type !== "list") ||
-              (q.kind === "scale" && (q.levels.length < 2 || q.levels.length > 26)) ||
+              (q.kind === "scale" && q.levels.length > 26) ||
               (q.kind === "choice" &&
                 q.options.length > (batch.state.type === "image" ? 20 : 120)) ||
               (q.kind === "tags" && q.tags.length > 120)
@@ -285,27 +287,29 @@ export default definePluginEntry({
             });
             context.signal?.throwIfAborted();
             remaining();
-            const validation = buildTimeoutAbortSignal({
-              signal: context.signal,
-              timeoutMs: remaining(),
-              operation: "Sage input validation",
-            });
-            const signal = validation.signal;
-            try {
-              // The normal media owner retains its read-only probe; cancellation must not
-              // leave this request waiting for it or allow a later HTTP effect.
-              await racePromiseWithAbortSignal(
-                () => validateSageRequest(request, probeImage),
-                signal,
-              );
-              signal?.throwIfAborted();
-            } catch {
-              context.signal?.throwIfAborted();
-              signal?.throwIfAborted();
-              remaining();
-              throw new SageRequestError();
-            } finally {
-              validation.cleanup();
+            if (typeof nativeContent !== "string" && nativeContent.kind === "image") {
+              const media = nativeContent.media;
+              const validation = buildTimeoutAbortSignal({
+                signal: context.signal,
+                timeoutMs: remaining(),
+                operation: "Sage input validation",
+              });
+              const signal = validation.signal;
+              try {
+                // The probe may await native media work; cancellation must prevent a later POST.
+                await racePromiseWithAbortSignal(
+                  () => validateSageImage(media, probeImage),
+                  signal,
+                );
+                signal?.throwIfAborted();
+              } catch {
+                context.signal?.throwIfAborted();
+                signal?.throwIfAborted();
+                remaining();
+                throw new SageRequestError();
+              } finally {
+                validation.cleanup();
+              }
             }
             context.signal?.throwIfAborted();
             remaining();

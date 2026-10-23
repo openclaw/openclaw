@@ -273,7 +273,7 @@ successful tools and clears it only after the matching action succeeds.
 The callback remains optional for source compatibility with older experimental
 harnesses. Optional does not mean ignorable for a harness that executes tools:
 without terminal reports, OpenClaw cannot preserve mutating-tool failure truth
-across later tool calls, including quiet heartbeat completion.
+across later tool calls, including intentionally silent automation completion.
 
 ## Settled tool finalization
 
@@ -299,6 +299,12 @@ auth/profile rotation, model fallback, context recovery, compaction
 continuation, or hook-requested revision paths. Finalization also skips plugin
 prompt mutation, `before_agent_run`, LLM input/output, terminal revision, and
 `agent_end` hooks. Core diagnostics still record the operation and its failure.
+
+When the settled turn stopped at the model's output token limit, the
+finalization prompt tells the model it was cut off and must say what was not
+finished. OpenClaw also adds a host notice under the recovered answer saying
+that the turn was cut off and some work may be unfinished, because a tool-free
+summary cannot show that the interrupted work completed.
 
 The callback returns `AgentHarnessSettledTurnFinalizationResult`, not an
 ordinary attempt result. Its public fields are limited to the completed

@@ -1,4 +1,4 @@
-import type { toolIcons } from "../../components/icons-tools.ts";
+import type { toolIconData } from "../../components/icon-data-tools.ts";
 
 export type PendingInputStatus =
   | "queued"
@@ -8,7 +8,7 @@ export type PendingInputStatus =
   | "interrupted";
 
 type SystemNoticeKind = {
-  icon: keyof typeof toolIcons;
+  icon: keyof typeof toolIconData;
   labelKey: string;
   // Fixed operator summary shown instead of the raw model prompt. Omit when the
   // producer emits variable, informative text (reasons, doctor hints) that must
@@ -35,6 +35,12 @@ const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
       interrupted: "chat.systemNotice.restartRecovery.interrupted",
       cancelled: "chat.systemNotice.restartRecovery.cancelled",
     },
+  },
+  // Older scheduled conversation turns lack the run metadata for an activity row.
+  cron: {
+    icon: "cpu",
+    labelKey: "chat.messages.forwardedAutomation",
+    collapsedBody: true,
   },
   cron_failure_repair: {
     icon: "cpu",

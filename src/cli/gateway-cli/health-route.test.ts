@@ -80,4 +80,18 @@ describe("runGatewayHealthJsonRoute", () => {
     expect(runtime.writeJson).toHaveBeenCalledWith(payload, 2);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
+
+  it("keeps a successful default route free of health config and error presentation", async () => {
+    const runtime = createNonExitingRuntimeEnv();
+    const rpc = { json: true, timeout: "10000" };
+    mocks.callGateway.mockResolvedValue({ ok: true });
+
+    await runGatewayHealthJsonRoute({ rpc }, runtime);
+
+    expect(mocks.callGateway.mock.calls[0]?.[1]).toBe(rpc);
+    expect(runtime.writeJson).toHaveBeenCalledWith({ ok: true }, 2);
+    expect(mocks.loadHealth).not.toHaveBeenCalled();
+    expect(mocks.readNonObservingHealthConfig).not.toHaveBeenCalled();
+    expect(mocks.loadCall).not.toHaveBeenCalled();
+  });
 });

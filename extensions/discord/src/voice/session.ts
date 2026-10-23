@@ -103,7 +103,6 @@ export type VoiceSessionEntry = {
   guildName?: string;
   channelId: string;
   channelName?: string;
-  sessionChannelId: string;
   voiceSessionKey: string;
   route: ReturnType<typeof resolveAgentRoute>;
   audio: import("./audio-transport.js").DiscordAudioTransport;

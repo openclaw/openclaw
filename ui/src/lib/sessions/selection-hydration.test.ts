@@ -10,6 +10,7 @@ import {
 } from "../../app/agent-selection.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionRequest } from "./hydration-family.test-support.ts";
 import { createSessionCapability } from "./index.ts";
 import {
   createGatewayHarness,
@@ -28,14 +29,9 @@ function row(key: string, updatedAt = 1, fields: Partial<GatewaySessionRow> = {}
 function listRequest(
   list: (params?: Record<string, unknown>) => SessionsListResult | Promise<SessionsListResult>,
 ) {
-  return vi.fn(async (method: string, params?: Record<string, unknown>) => {
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
-    }
-    if (method === "sessions.list") {
-      return list(params);
-    }
-    throw new Error(`Unexpected request: ${method}`);
+  return sessionRequest({
+    "sessions.subscribe": () => ({ subscribed: true }),
+    "sessions.list": list,
   });
 }
 
@@ -209,8 +205,8 @@ describe("session selection hydration", () => {
       lastMessagePreview: "Main preview",
       updatedAt: 10,
     };
-    const { lastMessagePreview: _preview, ...mainFields } = main;
-    const mainWithoutPreview = { ...mainFields, updatedAt: 20 };
+    const { lastMessagePreview: _preview, derivedTitle: _title, ...mainFields } = main;
+    const mainWithoutEnrichment = { ...mainFields, updatedAt: 20 };
     const incoming: GatewaySessionRow = {
       ...mainFields,
       agentId,
@@ -227,7 +223,7 @@ describe("session selection hydration", () => {
       }
       expect(params?.includeLastMessage).toBeUndefined();
       expect(params?.agentId).toBe(replacing ? agentId : "main");
-      return replacing ? replacement.promise : sessionsResult([mainWithoutPreview], 20);
+      return replacing ? replacement.promise : sessionsResult([mainWithoutEnrichment], 20);
     });
     const { gateway, selection, sessions, connect } = createSubscriptionHydrationHarness(request);
     let sameOwnerRefresh: ReturnType<typeof sessions.refreshReplacement> | undefined;
@@ -238,7 +234,10 @@ describe("session selection hydration", () => {
 
       // The normal chat query omits preview enrichment; replacements keep that query.
       await sessions.refresh({ agentId: "main", force: true });
-      expect(sessions.state.result?.sessions[0]?.lastMessagePreview).toBe(main.lastMessagePreview);
+      expect(sessions.state.result?.sessions[0]).toMatchObject({
+        derivedTitle: main.derivedTitle,
+        lastMessagePreview: main.lastMessagePreview,
+      });
       const heldMain = sessions.state.result;
       replacing = true;
       if (agentId === "main") {

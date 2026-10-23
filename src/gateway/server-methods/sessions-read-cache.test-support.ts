@@ -6,7 +6,7 @@ import {
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import { mergeSessionEntry } from "../../config/sessions/types.js";
+import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
 import { readUserProfileSnapshotSync } from "../../state/user-profile-list-item.test-support.js";
@@ -30,6 +30,18 @@ import { sessionReadHandlers } from "./sessions-read.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export { disposeSessionReadContexts, sessionReadHandlers };
+export function profileSessionEntry(
+  sessionId: string,
+  updatedAt: number,
+  profileId: string,
+): SessionEntry {
+  return {
+    sessionId,
+    updatedAt,
+    visibility: "shared",
+    createdActor: { type: "human", source: "profile", id: profileId },
+  };
+}
 const initializing = new WeakMap<GatewayRequestContext, Promise<void>>();
 afterEach(disposeSessionReadContexts);
 export function initializeSessionReadContext(context: GatewayRequestContext) {
@@ -106,12 +118,7 @@ export function identifiedClient(profileId: string): GatewayClient {
       role: "operator",
       scopes: ["operator.read", "operator.write"],
     },
-    authenticatedUserProfile: {
-      profileId,
-      displayName: profileId,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: { profileId, displayName: profileId, hasAvatar: false, updatedAt: 1 },
   };
   const refresh = () => {
     const identity = client.authenticatedUserProfile?.profileId ?? profileId;
@@ -164,10 +171,8 @@ export async function listSessions(params: {
   return responses[0]?.[1] as SessionsListResult;
 }
 
-export async function seedSessions(): Promise<OpenClawConfig> {
-  const config: OpenClawConfig = {
-    agents: { entries: { main: {}, work: {} } },
-  };
+export async function seedSessions(activityTimes = false): Promise<OpenClawConfig> {
+  const config: OpenClawConfig = { agents: { entries: { main: {}, work: {} } } };
   setRuntimeConfigSnapshot(config);
   for (const [agentId, name, updatedAt, owner, overrides] of [
     ["main", "active", 400, "owner@example.com", {}],
@@ -175,35 +180,24 @@ export async function seedSessions(): Promise<OpenClawConfig> {
     ["main", "archived", 200, "viewer@example.com", { archivedAt: 200 }],
     ["work", "active", 100, "viewer@example.com", {}],
   ] as const) {
-    replaceSessionEntrySync(
-      { agentId, sessionKey: `agent:${agentId}:${name}` },
-      mergeSessionEntry(undefined, {
-        sessionId: `${agentId}-${name}`,
-        updatedAt,
-        createdActor: { type: "human", source: "profile", id: owner },
-        visibility: "shared",
-        ...overrides,
-      }),
-    );
+    const scope = { agentId, sessionKey: `agent:${agentId}:${name}` };
+    const entry = mergeSessionEntry(undefined, {
+      ...profileSessionEntry(`${agentId}-${name}`, updatedAt, owner),
+      ...overrides,
+    });
+    // mergeSessionEntry stamps the current time; activity fixtures need historical main rows.
+    if (activityTimes && agentId === "main") {
+      entry.updatedAt = updatedAt;
+    }
+    replaceSessionEntrySync(scope, entry);
+    if (activityTimes && agentId === "main") {
+      expect(loadSessionEntry(scope)?.updatedAt).toBe(updatedAt);
+    }
   }
   return config;
 }
 
 export async function seedSessionsWithActivityTimes() {
   const clock = vi.spyOn(Date, "now").mockReturnValue(400);
-  const config = await seedSessions();
-  for (const [name, updatedAt] of [
-    ["active", 400],
-    ["draft", 300],
-    ["archived", 200],
-  ] as const) {
-    const scope = { agentId: "main", sessionKey: `agent:main:${name}` };
-    const entry = loadSessionEntry(scope);
-    if (!entry) {
-      throw new Error(`Missing seeded session ${scope.sessionKey}`);
-    }
-    replaceSessionEntrySync(scope, { ...entry, updatedAt });
-    expect(loadSessionEntry(scope)?.updatedAt).toBe(updatedAt);
-  }
-  return { clock, config };
+  return { clock, config: await seedSessions(true) };
 }

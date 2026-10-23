@@ -2,9 +2,12 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 import type { CompactionStatus, RunOutputUsage } from "./tool-stream-contract.ts";
+
+registerChatComposerEnglish();
 
 type WorkingProgress = {
   key: string;
@@ -292,6 +295,7 @@ export function resolveTurnRecap(
     agentId?: string | null;
     gatewayClient?: GatewayBrowserClient | null;
     indicator?: { runId?: string; request?: TurnRequest };
+    startingNewTurn?: boolean;
     activeRunId?: string | null;
     row?: Pick<GatewaySessionRow, "lastRunId" | "status" | "runtimeMs" | "endedAt">;
     usageByRun?: ReadonlyMap<string, RunOutputUsage>;
@@ -302,6 +306,7 @@ export function resolveTurnRecap(
     agentId = null,
     gatewayClient = null,
     indicator,
+    startingNewTurn,
     activeRunId,
     row,
     usageByRun,
@@ -316,13 +321,17 @@ export function resolveTurnRecap(
   }
   if (indicator || activeRunId) {
     const runId = indicator?.runId ?? activeRunId ?? null;
-    if (watch?.runId !== runId) {
-      // An answer can identify a resumed run after its working indicator has vanished.
-      const request = watch?.runId === null ? watch.request : null;
-      watch = { sessionKey, agentId, gatewayClient, runId, request, recap: null };
-    }
-    if (indicator) {
-      watch.request = indicator.request ?? null;
+    // A stale running row can outlive local completion. Anonymous activity
+    // hides the recap without revoking its observed run; a new input does.
+    if (runId || startingNewTurn || indicator?.request || !watch) {
+      if (watch?.runId !== runId) {
+        // An answer can identify a resumed run after its working indicator has vanished.
+        const request = watch?.runId === null ? watch.request : null;
+        watch = { sessionKey, agentId, gatewayClient, runId, request, recap: null };
+      }
+      if (indicator) {
+        watch.request = indicator.request ?? null;
+      }
     }
   }
   host.turnRecapWatch = watch;

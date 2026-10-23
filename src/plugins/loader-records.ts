@@ -1,3 +1,7 @@
+import {
+  formatDeferredPluginMigration,
+  type DeferredPluginMigration,
+} from "../infra/deferred-plugin-migrations.js";
 import { collectErrorGraphCandidates, extractErrorCode, readErrorCause } from "../infra/errors.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { VERSION } from "../version.js";
@@ -120,28 +124,37 @@ export function markPluginActivationDisabled(record: PluginRecord, reason?: stri
   record.activationReason = reason;
 }
 
-/** Records a boot-time payload quarantine without importing or activating the plugin. */
-export function recordPluginConfiguredUnavailable(params: {
-  registry: PluginRegistry;
-  record: PluginRecord;
-  seenIds: Map<string, PluginRecord["origin"]>;
-  degradedPlugin: DegradedPlugin;
-}): void {
-  const error = formatPluginVerificationDiagnostic(params.degradedPlugin.diagnostic);
+/** Records runtime admission refusal without importing or activating the plugin. */
+export function recordPluginConfiguredUnavailable(
+  params: {
+    registry: PluginRegistry;
+    record: PluginRecord;
+    seenIds: Map<string, PluginRecord["origin"]>;
+  } & (
+    | { degradedPlugin: DegradedPlugin }
+    | { pendingStateMigration: DeferredPluginMigration; env: NodeJS.ProcessEnv }
+  ),
+): string {
+  const pending = "pendingStateMigration" in params;
+  const error = pending
+    ? formatDeferredPluginMigration(params.pendingStateMigration, params.env)
+    : formatPluginVerificationDiagnostic(params.degradedPlugin.diagnostic);
+  const reason = pending ? "pending-state-migration" : params.degradedPlugin.diagnostic.reason;
   params.record.status = "error";
   params.record.error = error;
   params.record.failurePhase = "validation";
   params.record.activated = false;
-  params.record.activationReason = `configured-unavailable: ${params.degradedPlugin.diagnostic.reason}`;
+  params.record.activationReason = `configured-unavailable: ${reason}`;
   params.registry.plugins.push(params.record);
   params.seenIds.set(params.record.id, params.record.origin);
   params.registry.diagnostics.push({
     level: "error",
     pluginId: params.record.id,
     source: params.record.source,
-    code: "plugin-verification",
+    code: pending ? "plugin-state-migration" : "plugin-verification",
     message: error,
   });
+  return error;
 }
 
 /** Joins auto-enable reasons into the single registry field shown by status surfaces. */

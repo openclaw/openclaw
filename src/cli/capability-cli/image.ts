@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { Command } from "commander";
 import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
+import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import { collectOption } from "../program/helpers.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
@@ -61,7 +62,6 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
               : undefined;
           const {
             resolveCapabilityAgentOption,
-            parseOptionalPositiveInteger,
             parseOptionalTimeoutMs,
             requireProviderModelOverride,
             resolveLocalCapabilityAgent,

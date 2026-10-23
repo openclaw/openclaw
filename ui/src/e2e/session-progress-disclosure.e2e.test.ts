@@ -107,7 +107,7 @@ suite.define(() => {
       const sessionKey = "agent:main:main";
       const gateway = await installProgressGateway(page, sessionKey);
       const { card, open, show } = disclosure(page, "details");
-      const panel = page.locator(".chat-details:popover-open");
+      const panel = page.locator(".chat-details:visible");
       const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
       const sidebar = page.locator("openclaw-app-sidebar");
       const openSettings = async () => {
@@ -118,7 +118,7 @@ suite.define(() => {
           .click();
       };
       await page.goto(suite.server.baseUrl + "chat");
-      await card.waitFor({ state: "attached" });
+      await page.locator(".agent-chat__composer-combobox textarea").first().waitFor();
       expect(await panel.count()).toBe(0);
       expect(await page.locator('[data-progress-card-placement="composer"]').count()).toBe(0);
       await openChatDetails(page);
@@ -164,7 +164,7 @@ suite.define(() => {
       expect(await panel.count()).toBe(0);
       await show(false);
       await page.reload();
-      await card.waitFor({ state: "attached" });
+      await page.locator(".agent-chat__composer-combobox textarea").first().waitFor();
       expect(await panel.count()).toBe(0);
       await show(true);
       await card.locator("summary").click();
@@ -181,7 +181,7 @@ suite.define(() => {
       expect((await gateway.getSocketUrls()).at(-1)).toBe(replacementUrl);
       await page.goBack();
       await page.goBack();
-      await card.waitFor({ state: "attached" });
+      await page.locator(".agent-chat__composer-combobox textarea").first().waitFor();
       expect(await panel.count()).toBe(0);
       await show(true);
       await retainedCard!.dispose();
@@ -217,7 +217,7 @@ suite.define(() => {
         const paneKey = () =>
           pane.evaluate((element) => (element as HTMLElement & { sessionKey: string }).sessionKey);
         await page.goto(suite.server.baseUrl + "chat");
-        await card.waitFor({ state: "attached" });
+        await page.locator(".agent-chat__composer-combobox textarea").first().waitFor();
         // Short-key resolution closes the popover, so activate before opening it.
         await pane.locator(".agent-chat__composer-combobox textarea").click();
         await expect.poll(paneKey).toBe("agent:main:notes");
@@ -228,7 +228,7 @@ suite.define(() => {
         await openChatDetails(pane);
         const summary = card.locator("summary");
         await summary.waitFor({ state: "visible" });
-        expect(await pane.locator(".chat-details:popover-open").isVisible()).toBe(true);
+        expect(await pane.locator(".chat-details:visible").isVisible()).toBe(true);
         const initialOpen = await open();
         await summary.focus();
         expect(await summary.evaluate((element) => document.activeElement === element)).toBe(true);

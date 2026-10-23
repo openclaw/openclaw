@@ -58,14 +58,10 @@ function resolveRawMSTeamsAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): MSTeamsSetupAccountConfig {
-  const normalized = normalizeAccountId(accountId);
   const msteams = cfg.channels?.msteams ?? {};
-  if (normalized === DEFAULT_ACCOUNT_ID) {
-    const rawAccountKey = resolveMSTeamsAccountEntryKey(msteams.accounts, normalized);
-    return (rawAccountKey ? msteams.accounts?.[rawAccountKey] : undefined) ?? msteams;
-  }
-  const rawAccountKey = resolveMSTeamsAccountEntryKey(msteams.accounts, normalized);
-  return (rawAccountKey ? msteams.accounts?.[rawAccountKey] : undefined) ?? {};
+  const rawAccountKey = resolveMSTeamsAccountEntryKey(msteams.accounts, accountId);
+  const rawAccount = rawAccountKey ? msteams.accounts?.[rawAccountKey] : undefined;
+  return rawAccount ?? (accountId === DEFAULT_ACCOUNT_ID ? msteams : {});
 }
 
 function resolveCredentialsForSetup(cfg: OpenClawConfig, accountId: string) {
@@ -316,15 +312,8 @@ async function noteMSTeamsCredentialHelp(prompter: WizardPrompter): Promise<void
   );
 }
 
-export function createMSTeamsSetupWizardBase(): Pick<
-  ChannelSetupWizard,
-  | "channel"
-  | "resolveAccountIdForConfigure"
-  | "resolveShouldPromptAccountIds"
-  | "status"
-  | "credentials"
-  | "finalize"
-> {
+export function createMSTeamsSetupWizardBase() {
+  const credentials: ChannelSetupWizard["credentials"] = [];
   return {
     channel,
     resolveAccountIdForConfigure: ({ cfg, accountOverride, defaultAccountId }) =>
@@ -347,7 +336,7 @@ export function createMSTeamsSetupWizardBase(): Pick<
         );
       },
     }),
-    credentials: [],
+    credentials,
     finalize: async ({ cfg, accountId, prompter }) => {
       const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
       const resolved = resolveCredentialsForSetup(cfg, resolvedAccountId);
@@ -381,5 +370,5 @@ export function createMSTeamsSetupWizardBase(): Pick<
 
       return { cfg: next, accountId: resolvedAccountId };
     },
-  };
+  } satisfies ChannelSetupWizard;
 }

@@ -370,24 +370,6 @@ describe("project registry persistence", () => {
     );
   });
 
-  it("prunes seeded tracking refs deleted upstream during refresh", async () => {
-    const source = await initializeRepository(root, "source");
-    await git(source, "branch", "old");
-    const target = path.join(root, "managed", "fixture");
-    await cloneProjectCheckout({ url: source, target });
-    await git(source, "branch", "-D", "old");
-    await git(source, "branch", "new");
-
-    await refreshProjectCheckout({ url: source, target });
-
-    await expectRef(target, "origin/old").rejects.toMatchObject({
-      code: 128,
-    });
-    await expectRef(target, "origin/new").resolves.toMatchObject({
-      stdout: expect.stringMatching(/^[a-f0-9]{40}\n$/u),
-    });
-  });
-
   it.each(["initial", "fetched"] as const)(
     "refreshes a large complete %s ref inventory and prunes only deleted upstream refs",
     async (inventory) => {

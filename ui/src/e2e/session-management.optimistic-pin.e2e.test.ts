@@ -76,7 +76,9 @@ function withPins(run: (fixture: PinFixture) => Promise<void>, initial: string[]
     await run({
       page,
       gateway,
-      pin: page.locator(`.sidebar-rail [data-sidebar-entry="${pinRef}"]`),
+      pin: page.locator(
+        `[data-session-section="pinned"] .sidebar-recent-session[data-session-key="${candidateKey}"]`,
+      ),
       row: page.locator(
         `.sidebar-session-content .sidebar-recent-session[data-session-key="${candidateKey}"]`,
       ),
@@ -118,11 +120,13 @@ suite.define(() => {
         await gateway.closeLatest(1001, "verify personal pin persistence");
         await gateway.waitForRequest("users.prefs.get", { after: beforeRead });
         await expect.poll(() => storedPins(page)).toEqual([pinRef]);
-        await pin.getByRole("link", { name: "Pin me", exact: true }).waitFor();
+        await pin.getByText("Pin me", { exact: true }).waitFor();
         expect(await row.count()).toBe(1);
         await expectNoSharedPinWrites(gateway);
       } else {
         await gateway.deferNext("users.prefs.set");
+        // Pinning moves the row into Pinned, so reveal its actions again.
+        await row.hover();
         await row.getByRole("button", { name: "Unpin session", exact: true }).click();
         await expect.poll(() => pin.count()).toBe(0);
         await expect.poll(() => storedPins(page)).toEqual([]);

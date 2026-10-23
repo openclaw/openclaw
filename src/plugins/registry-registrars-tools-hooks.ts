@@ -14,13 +14,13 @@ import {
   normalizeAgentToolResultMiddlewareRuntimeIds,
   normalizeAgentToolResultMiddlewareRuntimes,
 } from "./agent-tool-result-middleware.js";
-import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
-import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import {
   resolveConversationAccessAllowed,
   resolvePromptInjectionAllowed,
 } from "./hook-policy-decisions.js";
 import { PLUGIN_HOOK_METADATA } from "./hook-types.js";
+import { recordPluginLoadDiagnostic } from "./load-diagnostics.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import {
   resolveTypedHookTimeoutMs,
@@ -33,6 +33,7 @@ import type {
 } from "./registry-types.js";
 import { normalizePluginToolContractNames, normalizePluginToolNames } from "./tool-contracts.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
+import { inspectOpenDictionaryToolSchemas } from "./tool-schema-diagnostics.js";
 import {
   isPluginHookAgentTrigger,
   isPluginHookName,
@@ -76,55 +77,6 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     reportRegistrationWarning,
   } = state;
   const declaredToolNames = new WeakMap<PluginRecord, ReadonlySet<string>>();
-
-  const registerCodexAppServerExtensionFactory = (
-    record: PluginRecord,
-    factory: Parameters<OpenClawPluginApi["registerCodexAppServerExtensionFactory"]>[0],
-  ) => {
-    if (record.origin !== "bundled") {
-      reportRegistrationError(
-        record,
-        "only bundled plugins can register Codex app-server extension factories",
-      );
-      return;
-    }
-    if (
-      !(record.contracts?.embeddedExtensionFactories ?? []).includes(
-        CODEX_APP_SERVER_EXTENSION_RUNTIME_ID,
-      )
-    ) {
-      reportRegistrationError(
-        record,
-        'plugin must declare contracts.embeddedExtensionFactories: ["codex-app-server"] to register Codex app-server extension factories',
-      );
-      return;
-    }
-    if (typeof factory !== "function") {
-      reportRegistrationError(record, "codex app-server extension factory must be a function");
-      return;
-    }
-    if (
-      registry.codexAppServerExtensionFactories.some(
-        (entry) => entry.pluginId === record.id && entry.rawFactory === factory,
-      )
-    ) {
-      return;
-    }
-    const safeFactory: CodexAppServerExtensionFactory = async (codex) => {
-      try {
-        await factory(codex);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        registryParams.logger.warn(
-          `[plugins] codex app-server extension factory failed for ${record.id}: ${detail}`,
-        );
-      }
-    };
-    registry.codexAppServerExtensionFactories.push({
-      ...createRegistration(record, { factory: safeFactory }),
-      rawFactory: factory,
-    });
-  };
 
   const registerAgentToolResultMiddleware = (
     record: PluginRecord,
@@ -261,10 +213,39 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
-    getPluginInstance(record)?.admitFactory(factory, "tool");
+    const warnedTools = new Set<string>();
+    const diagnose = (tools: AnyAgentTool[]) => {
+      for (const diagnostic of inspectOpenDictionaryToolSchemas(tools, warnedTools)) {
+        warnedTools.add(diagnostic.toolName);
+        const paths = diagnostic.violations.slice(0, 12);
+        const remaining = diagnostic.violations.length - paths.length;
+        const summary = paths.join(", ") + (remaining > 0 ? `, +${remaining} more` : "");
+        const warning: PluginDiagnostic = {
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `tool "${diagnostic.toolName}": open object without declared properties, patternProperties, or additionalProperties will be closed on strict-compat providers (${summary}). Use explicit additionalProperties: true or openRecord(description) for dictionaries.`,
+        };
+        state.pushDiagnostic(warning);
+        recordPluginLoadDiagnostic(warning);
+      }
+    };
+    if (typeof tool !== "function" && !versioned) {
+      // Static schemas are inspected eagerly, best-effort; their accessors stay intact
+      // so unreadable schemas still reach per-tool runtime quarantine.
+      diagnose([tool]);
+    }
+    const inspectedFactory: OpenClawPluginToolFactory = (ctx) => {
+      const result = factory(ctx);
+      if (result) {
+        diagnose(Array.isArray(result) ? result : [result]);
+      }
+      return result;
+    };
+    getPluginInstance(record)?.admitFactory(inspectedFactory, "tool");
     registry.tools.push({
       ...createRegistration(record, {
-        factory,
+        factory: inspectedFactory,
         ...(versioned ? { contextVersion: 2 as const } : {}),
         names: normalized,
         optional,
@@ -439,7 +420,6 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
   };
 
   return {
-    registerCodexAppServerExtensionFactory,
     registerAgentToolResultMiddleware,
     registerTool,
     registerHook,

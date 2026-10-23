@@ -7,12 +7,14 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { clearMcpOAuthCredentials } from "../agents/mcp-oauth.js";
+import * as pidAlive from "../shared/pid-alive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { withRestoredMocks } from "../test-utils/vitest-spies.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
@@ -586,22 +588,28 @@ function lockPayload(overrides: Record<string, unknown> = {}): string {
 }
 
 it("fails closed for live, young, and malformed owner evidence", () => {
-  for (const raw of [
-    lockPayload(),
-    lockPayload({ createdAt: "2026-07-16T00:01:30.000Z" }),
-    lockPayload({ createdAt: "invalid" }),
-    lockPayload({ starttime: "456" }),
-    "not json",
-  ]) {
-    expect(
-      isDefinitelyStaleLegacyMcpOAuthLock({
-        raw,
-        nowMs: Date.parse("2026-07-16T00:02:00.000Z"),
-        isPidDefinitelyDead: () => false,
-        getProcessStartTime: () => 456,
-      }),
-    ).toBe(false);
-  }
+  return withRestoredMocks(
+    [
+      vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false),
+      vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(456),
+    ],
+    () => {
+      for (const raw of [
+        lockPayload(),
+        lockPayload({ createdAt: "2026-07-16T00:01:30.000Z" }),
+        lockPayload({ createdAt: "invalid" }),
+        lockPayload({ starttime: "456" }),
+        "not json",
+      ]) {
+        expect(
+          isDefinitelyStaleLegacyMcpOAuthLock({
+            raw,
+            nowMs: Date.parse("2026-07-16T00:02:00.000Z"),
+          }),
+        ).toBe(false);
+      }
+    },
+  );
 });
 
 it("reports a stale sidecar without unlinking a replacement-prone path", async () => {

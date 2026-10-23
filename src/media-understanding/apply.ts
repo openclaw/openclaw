@@ -24,7 +24,6 @@ import { resolveConcurrency } from "./resolve.js";
 import { createScopedMediaAttachmentCache } from "./runner.attachments.js";
 import { buildProviderRegistry, normalizeMediaAttachments, runCapability } from "./runner.js";
 import type {
-  MediaAttachment,
   MediaUnderstandingCapability,
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -80,46 +79,6 @@ function enableLocalPathSelfServe(
       }
     }
   }
-}
-
-function renderMediaAttachmentMarkers(params: {
-  attachments: MediaAttachment[];
-  decisions: MediaUnderstandingDecision[];
-  outputs: MediaUnderstandingOutput[];
-  deliveredImageIndexes?: ReadonlySet<number>;
-}): AttachmentContextBlock[] {
-  const handledIndexes = new Set(params.outputs.map((output) => output.attachmentIndex));
-  const decisions = new Map(params.decisions.map((decision) => [decision.capability, decision]));
-  return params.attachments.flatMap((attachment) => {
-    const capability = resolveAttachmentKind(attachment);
-    if (capability !== "image" && capability !== "audio" && capability !== "video") {
-      return [];
-    }
-    // The ACP caller resolved these exact indexes into native turn attachments;
-    // a marker would falsely claim non-delivery. Unresolved images keep theirs.
-    if (capability === "image" && params.deliveredImageIndexes?.has(attachment.index)) {
-      return [];
-    }
-    const decision = decisions.get(capability);
-    if (!decision || handledIndexes.has(attachment.index)) {
-      return [];
-    }
-    const disposition = decision.attachmentDispositions?.[attachment.index];
-    // Vision-capable model → the reply runtime hydrates images natively; an
-    // absence-of-processing marker would contradict what the model sees.
-    // Recorded per-attachment failures stay visible — they are authoritative
-    // regardless of native delivery. Partial/failed native hydration remains
-    // unexplainable at this frozen-prompt stage (#122101).
-    if (
-      capability === "image" &&
-      decision.nativeVisionActive !== false &&
-      disposition?.kind !== "failed"
-    ) {
-      return [];
-    }
-    const text = disposition ? renderMediaAttachmentDisposition(capability, disposition) : null;
-    return text ? [{ text, consumesMarkerBudget: true }] : [];
-  });
 }
 
 export async function applyMediaUnderstanding(params: {
@@ -309,11 +268,47 @@ export async function applyMediaUnderstanding(params: {
           });
     // Only processed capabilities have decisions, so audio-only runs cannot
     // add markers for image/video inputs still owned by the native harness.
-    const mediaMarkers = renderMediaAttachmentMarkers({
-      attachments,
-      decisions,
-      outputs,
-      deliveredImageIndexes: params.deliveredImageIndexes,
+    const processedCapabilities = new Set(decisions.map((decision) => decision.capability));
+    const markerDecisions = ctx.MediaUnderstandingDecisions ?? [];
+    const deliveredImageIndexes = params.deliveredImageIndexes;
+    const handledIndexes = new Set(outputs.map((output) => output.attachmentIndex));
+    const mediaMarkers: AttachmentContextBlock[] = attachments.flatMap((attachment) => {
+      const capability = resolveAttachmentKind(attachment);
+      if (
+        (capability !== "image" && capability !== "audio" && capability !== "video") ||
+        !processedCapabilities.has(capability)
+      ) {
+        return [];
+      }
+      // The ACP caller resolved these exact indexes into native turn attachments;
+      // a marker would falsely claim non-delivery. Unresolved images keep theirs.
+      if (capability === "image" && deliveredImageIndexes?.has(attachment.index)) {
+        return [];
+      }
+      // A later pass can consume preflight selection without recording new dispositions.
+      const decision = markerDecisions.findLast(
+        (candidate) =>
+          candidate.capability === capability &&
+          candidate.attachmentDispositions?.[attachment.index] !== undefined,
+      );
+      if (!decision || handledIndexes.has(attachment.index)) {
+        return [];
+      }
+      const disposition = decision.attachmentDispositions?.[attachment.index];
+      // Vision-capable model → the reply runtime hydrates images natively; an
+      // absence-of-processing marker would contradict what the model sees.
+      // Recorded per-attachment failures stay visible — they are authoritative
+      // regardless of native delivery. Partial/failed native hydration remains
+      // unexplainable at this frozen-prompt stage (#122101).
+      if (
+        capability === "image" &&
+        decision.nativeVisionActive !== false &&
+        disposition?.kind !== "failed"
+      ) {
+        return [];
+      }
+      const text = disposition ? renderMediaAttachmentDisposition(capability, disposition) : null;
+      return text ? [{ text, consumesMarkerBudget: true }] : [];
     });
     const contextBlocks = applyAttachmentMarkerBudget([...fileContext.blocks, ...mediaMarkers]);
     if (outputs.length > 0 || contextBlocks.length > 0) {

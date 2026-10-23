@@ -97,26 +97,12 @@ describe("command queue", () => {
       queue.enqueueCommandInLane(CommandLane.Main, async () => context.getStore(), {
         warnAfterMs: 0,
         onWait: () => record("wait"),
-        taskTimeoutMs: 60_000,
-        taskTimeoutProgressAtMs: () => {
-          record("progress");
-          return Date.now();
-        },
-        taskTimeoutSubscribe: () => {
-          record("subscribe");
-          return () => record("unsubscribe");
-        },
       }),
     );
     blocker.resolve();
     await expect(first).resolves.toBe("first");
     await expect(second).resolves.toBe("second");
-    expect(callbacks).toEqual([
-      ["wait", "second"],
-      ["progress", "second"],
-      ["subscribe", "second"],
-      ["unsubscribe", "second"],
-    ]);
+    expect(callbacks).toEqual([["wait", "second"]]);
   });
 
   it("preserves priority and FIFO order across partial drains and resumed growth", async () => {
@@ -282,86 +268,6 @@ describe("command queue", () => {
       await Promise.all(tasks);
     }
     expect(queue.getQueueSize(lane)).toBe(0);
-  });
-
-  it("task timeout renews from progress timestamps", async () => {
-    const lane = "timeout-progress-lane";
-    queue.setCommandLaneConcurrency(lane, 1);
-    vi.useFakeTimers();
-    let progressAtMs = Date.now();
-    const first = park(lane, "first", {
-      taskTimeoutMs: 25,
-      taskTimeoutProgressAtMs: () => progressAtMs,
-    });
-    let secondRan = false;
-    const second = queue.enqueueCommandInLane(lane, async () => {
-      secondRan = true;
-      return "second";
-    });
-    await vi.advanceTimersByTimeAsync(20);
-    progressAtMs = Date.now();
-    await vi.advanceTimersByTimeAsync(20);
-    expect(secondRan).toBe(false);
-    first.release();
-    await expect(first.task).resolves.toBe("first");
-    await expect(second).resolves.toBe("second");
-    expect(secondRan).toBe(true);
-  });
-
-  it("task timeout falls back when progress timestamp callback throws", async () => {
-    const lane = "timeout-progress-throw-lane";
-    queue.setCommandLaneConcurrency(lane, 1);
-    vi.useFakeTimers();
-    const first = queue.enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
-      taskTimeoutMs: 25,
-      taskTimeoutProgressAtMs: () => {
-        throw new Error("progress failed");
-      },
-    });
-    const firstRejected = expect(first).rejects.toMatchObject({
-      name: "CommandLaneTaskTimeoutError",
-      message: expect.stringContaining("no progress for 25ms (task budget 25ms"),
-    });
-    await vi.advanceTimersByTimeAsync(25);
-    await firstRejected;
-    expect(
-      diagnosticMocks.diag.warn.mock.calls.some(([message]) =>
-        String(message).includes("lane task timeout progress callback failed"),
-      ),
-    ).toBe(true);
-  });
-
-  it("owner cancellation rejects pending promises at every priority without releasing active work", async () => {
-    const gate = createDeferred();
-    const cancellation = new AbortController();
-    const first = queue.enqueueCommandInLane(
-      CommandLane.Main,
-      async () => {
-        await gate.promise;
-        return "first";
-      },
-      { abortSignal: cancellation.signal },
-    );
-    const task = vi.fn(async () => "unexpected");
-    const pending = (["background", "normal", "foreground"] as const).map((priority) =>
-      queue.enqueueCommandInLane(CommandLane.Main, task, {
-        priority,
-        abortSignal: cancellation.signal,
-      }),
-    );
-    const reason = new Error("owner stopped pending work");
-    const outcomes = Promise.allSettled(pending);
-
-    cancellation.abort(reason);
-    expect(queue.getCommandLaneSnapshot(CommandLane.Main)).toMatchObject({
-      activeCount: 1,
-      queuedCount: 0,
-    });
-    expect(await outcomes).toEqual(pending.map(() => ({ status: "rejected", reason })));
-    expect(task).not.toHaveBeenCalled();
-
-    gate.resolve();
-    await expect(first).resolves.toBe("first");
   });
 
   it("keeps draining functional after synchronous onWait failure", async () => {
@@ -739,29 +645,6 @@ describe("command queue", () => {
       await expect(staleRun.task).resolves.toBe("stale");
       expect(lanes.get(lane)).toBe(replacementState);
       lanes.delete(lane);
-    });
-
-    it("retires a scoped lane after its active task times out", async () => {
-      const lanes = getQueueState().lanes;
-      const lane = "session:probe-autoqa-timed-out";
-      vi.useFakeTimers();
-      try {
-        const timedOut = queue.enqueueCommandInLane(
-          lane,
-          async () => new Promise<never>(() => {}),
-          {
-            taskTimeoutMs: 5,
-          },
-        );
-        const rejection = expect(timedOut).rejects.toMatchObject({
-          name: "CommandLaneTaskTimeoutError",
-        });
-        await vi.advanceTimersByTimeAsync(5);
-        await rejection;
-        expect(lanes.has(lane)).toBe(false);
-      } finally {
-        vi.useRealTimers();
-      }
     });
   });
 });

@@ -26,20 +26,20 @@ export type StuckSessionRecoveryRequest = {
   sessionFile?: string;
   ageMs: number;
   queueDepth?: number;
+  /** Recorded controller decision for SDK recovery callbacks, never independent authority. */
   allowActiveAbort?: boolean;
-  /** Revalidate semantic no-progress evidence after deferred recovery dispatch. */
+  /** Legacy diagnostic threshold metadata retained by the logging-core SDK callback contract. */
   repeatedRequestNoProgressAbortMs?: number;
   expectedState?: DiagnosticSessionState;
   stateGeneration?: number;
   /**
-   * Built-in no-forward-progress age after
-   * which an "active" run with queued work is treated as a leaked/dead handle and
-   * reclaimed. Honors an operator-raised threshold; falls back to a safe floor.
+   * Legacy observation threshold retained for SDK callback compatibility.
+   * The captured controller alone decides whether its work can be recovered.
    */
   staleActiveProgressAbortMs?: number;
   /**
-   * Resolved compaction safety timeout. Ownerless lane recovery waits at least
-   * this long plus settle grace so queued compaction cannot be double-run.
+   * Resolved compaction timeout metadata retained for SDK callbacks.
+   * It never grants ownerless recovery or changes the controller deadline.
    */
   compactionSafetyTimeoutMs?: number;
 };

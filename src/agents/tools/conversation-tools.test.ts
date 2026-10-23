@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,11 +11,7 @@ import {
   GATEWAY_OWNER_ONLY_CORE_TOOLS,
 } from "../../security/dangerous-tools.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
-import {
-  createConversationsListTool,
-  createConversationsSendTool,
-  createConversationsTurnTool,
-} from "./conversation-tools.js";
+import { createHostedConversationTools } from "./conversation-tools.js";
 import * as gateway from "./in-process-gateway.js";
 
 const conversation = {
@@ -32,6 +29,18 @@ const sent = {
   channel: "reef",
   messageId: "reef-outbound-1",
 };
+
+function conversationTool(
+  kind: "list" | "send" | "turn",
+  options: Parameters<typeof createHostedConversationTools>[0] = {},
+) {
+  return expectDefined(
+    createHostedConversationTools(options, "main", {}).find(
+      (tool) => tool.name === `conversations_${kind}`,
+    ),
+    "conversation tool",
+  );
+}
 
 function mockGateway() {
   return vi.spyOn(gateway, "callAgentToolGatewayRequest").mockImplementation(async ({ method }) => {
@@ -60,9 +69,9 @@ describe("conversation tools", () => {
   afterEach(() => vi.restoreAllMocks());
   it("declares exact Gateway output contracts and promotes only bounded complete hints", async () => {
     mockGateway();
-    const list = createConversationsListTool({ agentId: "main" });
-    const send = createConversationsSendTool({ agentId: "main" });
-    const turn = createConversationsTurnTool({ agentId: "main" });
+    const list = conversationTool("list");
+    const send = conversationTool("send");
+    const turn = conversationTool("turn");
     for (const [tool, schema, params] of [
       [list, ConversationListResultSchema, {}],
       [send, ConversationSendResultSchema, message],
@@ -85,7 +94,7 @@ describe("conversation tools", () => {
 
   it("lists opaque external addresses independently from sessions", async () => {
     const callGateway = mockGateway();
-    const result = await createConversationsListTool({ agentId: "main" }).execute("list", {
+    const result = await conversationTool("list").execute("list", {
       channel: "reef",
       query: "@peer-agent",
     });
@@ -98,9 +107,8 @@ describe("conversation tools", () => {
 
   it("routes sends through the Gateway with a stable operation id", async () => {
     const callGateway = mockGateway();
-    const tool = createConversationsSendTool({
-      agentId: "main",
-      agentSessionId: "operator-session",
+    const tool = conversationTool("send", {
+      sessionId: "operator-session",
       agentSessionKey: "agent:main:telegram:direct:operator",
       config: {},
     });
@@ -145,13 +153,10 @@ describe("conversation tools", () => {
       queueId: "queue-suppressed",
     });
 
-    const result = await createConversationsSendTool({ agentId: "main", config: {} }).execute(
-      "suppressed-call",
-      {
-        conversationRef: conversation.conversationRef,
-        message: "suppressed hello",
-      },
-    );
+    const result = await conversationTool("send", { config: {} }).execute("suppressed-call", {
+      conversationRef: conversation.conversationRef,
+      message: "suppressed hello",
+    });
 
     expect(result.details).toEqual({
       status: "suppressed",
@@ -164,7 +169,7 @@ describe("conversation tools", () => {
   it("keeps a transient Gateway send failure retryable under the stable tool call id", async () => {
     const callGateway = mockGateway();
     callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
-    const tool = createConversationsSendTool({ agentId: "main", config: {} });
+    const tool = conversationTool("send", { config: {} });
     const args = {
       conversationRef: conversation.conversationRef,
       message: "retry me",
@@ -181,9 +186,8 @@ describe("conversation tools", () => {
 
   it("uses a stable operation id for correlated turns and cancels on abort", async () => {
     const callGateway = mockGateway();
-    const tool = createConversationsTurnTool({
-      agentId: "main",
-      agentSessionId: "operator-session",
+    const tool = conversationTool("turn", {
+      sessionId: "operator-session",
       agentSessionKey: "agent:main:telegram:direct:operator",
       config: {},
     });
@@ -206,17 +210,13 @@ describe("conversation tools", () => {
   it("validates references and owner access before Gateway delivery", async () => {
     const callGateway = mockGateway();
     await expect(
-      createConversationsSendTool({ agentId: "main", config: {} }).execute("send", {
+      conversationTool("send", { config: {} }).execute("send", {
         conversationRef: "not-a-conversation",
         message: "hello",
       }),
     ).rejects.toThrow("Invalid conversationRef");
-    for (const createTool of [
-      createConversationsListTool,
-      createConversationsSendTool,
-      createConversationsTurnTool,
-    ]) {
-      const tool = createTool({ agentId: "main", senderIsOwner: false, config: {} });
+    for (const kind of ["list", "send", "turn"] as const) {
+      const tool = conversationTool(kind, { senderIsOwner: false, config: {} });
       await expect(tool.execute("blocked", message)).rejects.toThrow("require owner access");
     }
     expect(callGateway).not.toHaveBeenCalled();

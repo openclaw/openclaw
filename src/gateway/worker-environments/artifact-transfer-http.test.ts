@@ -144,7 +144,8 @@ describe("artifact transfer response settlement", () => {
     now = 1_000;
     authorized = true;
     owner = new AbortController();
-    service = createWorkerBootstrapArtifactTransferService({ now: () => now });
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    service = createWorkerBootstrapArtifactTransferService();
     services.push(service);
     await prepareArtifact(contents);
   });
@@ -358,10 +359,8 @@ describe("artifact transfer interruption observations", () => {
       authorized: true,
     };
     const owner = new AbortController();
-    const service = createArtifactTransferService({
-      now: () => state.now,
-      generateToken: () => "X".repeat(43),
-    });
+    vi.spyOn(Date, "now").mockImplementation(() => state.now);
+    const service = createArtifactTransferService();
     services.push(service);
     const progress = vi.fn<(bytes: number) => void>();
     const interrupted = vi.fn<(bytes: number, reason: string) => void>();
