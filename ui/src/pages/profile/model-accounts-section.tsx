@@ -1,9 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createDeferred, createMemo, Errored, For, isPending, Loading, Show } from "solid-js";
-import type {
-  UserModelAccount,
-  UserProfileAuthLink,
-} from "../../../../packages/gateway-protocol/src/index.ts";
+import type { UserModelAccount } from "../../../../packages/gateway-protocol/src/index.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Picker } from "../../components/select-picker.ts";
@@ -19,22 +16,26 @@ import {
 import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import type { ModelAccountsActions } from "./model-accounts-actions.ts";
 import type { ModelAccountsState } from "./model-accounts-state.ts";
 
 registerEnglishCatalog(registerModelAccountsEnglish);
 
-type StateProps = { readState: () => ModelAccountsState };
+type StateProps = { readState: () => ModelAccountsState; actions: ModelAccountsActions };
 
 function gatewayEndpoint(gatewayUrl: string): string {
   const url = URL.parse(gatewayUrl);
   return url ? `${url.origin}${url.pathname}` : t("profilePage.modelAccounts.gatewayUnavailable");
 }
 
-function AccountRow(props: {
-  readState: () => ModelAccountsState;
-  pending: boolean;
-  row: { kind: "linked"; link: UserProfileAuthLink } | { kind: "saved"; account: UserModelAccount };
-}) {
+function AccountRow(
+  props: StateProps & {
+    pending: boolean;
+    row:
+      | { kind: "linked"; link: { provider: string; authProfileId: string } }
+      | { kind: "saved"; account: UserModelAccount };
+  },
+) {
   const state = () => props.readState();
   const linked = () => props.row.kind === "linked";
   const reference = () => (props.row.kind === "linked" ? props.row.link : props.row.account);
@@ -96,12 +97,12 @@ function AccountRow(props: {
                 ? `${action()}: ${provider()} · ${account()?.label ?? reference().authProfileId}`
                 : `${action()}: ${provider()} · ${label()} (${reference().authProfileId})`
             }
-            disabled={props.pending || state().busy}
-            onClick={() =>
-              linked()
-                ? state().updateAccount("unlink", reference().provider)
-                : state().updateAccount("select", reference().authProfileId)
-            }
+            disabled={props.pending || props.actions.saving() || state().busy}
+            onClick={() => {
+              void (linked()
+                ? props.actions.updateAccount("unlink", reference().provider)
+                : props.actions.updateAccount("select", reference().authProfileId));
+            }}
           >
             {action()}
           </button>
@@ -160,7 +161,7 @@ function SignInChoice(props: StateProps & { pending: boolean; cancel: JSX.Elemen
           type="button"
           class="btn btn--sm primary profile-auth-connect-start"
           disabled={props.pending || state().busy || !choice()?.method}
-          onClick={() => state().startConnect()}
+          onClick={() => void props.actions.startConnect()}
         >
           {t("profilePage.modelAccounts.connectAction")}
         </button>
@@ -189,7 +190,7 @@ function SignIn(props: StateProps) {
   const state = () => props.readState();
   const choice = () => state().signIn;
   const provider = () => choice()?.providers.find((entry) => entry.id === choice()?.provider);
-  const flow = () => state().connectFlow;
+  const flow = () => props.actions.flow();
   const catalogReceipt = createMemo(() => state().catalogReceipt);
   const catalogRead = createDeferred(() =>
     catalogReceipt().result.then((error) => {
@@ -219,7 +220,13 @@ function SignIn(props: StateProps) {
       type="button"
       class="btn btn--sm profile-auth-connect-cancel"
       disabled={state().cancelBusy}
-      onClick={() => (flow() ? state().connectStatus("cancel") : state().closeSignIn())}
+      onClick={() => {
+        if (flow()) {
+          void props.actions.cancel();
+        } else {
+          state().closeSignIn();
+        }
+      }}
     >
       {t("profilePage.modelAccounts.cancelAction")}
     </button>
@@ -241,15 +248,28 @@ function SignIn(props: StateProps) {
             fallback={
               <Errored
                 fallback={() => (
-                  <SignInChoice readState={props.readState} pending={false} cancel={cancel()} />
+                  <SignInChoice
+                    readState={props.readState}
+                    actions={props.actions}
+                    pending={false}
+                    cancel={cancel()}
+                  />
                 )}
               >
                 <Loading
-                  fallback={<SignInChoice readState={props.readState} pending cancel={cancel()} />}
+                  fallback={
+                    <SignInChoice
+                      readState={props.readState}
+                      actions={props.actions}
+                      pending
+                      cancel={cancel()}
+                    />
+                  }
                 >
                   {readCatalog()}
                   <SignInChoice
                     readState={props.readState}
+                    actions={props.actions}
                     pending={isPending(catalogRead)}
                     cancel={cancel()}
                   />
@@ -275,7 +295,7 @@ function SignIn(props: StateProps) {
                     inputId="profile-account-auth-answer"
                     leadingAction={cancel()}
                     onValueChange={(value) => state().setStepValue(step().id, value)}
-                    onAnswer={(value) => state().answerStep(step().id, value)}
+                    onAnswer={(value) => void props.actions.answerStep(step().id, value)}
                   />
                 )}
               </Show>
@@ -283,9 +303,10 @@ function SignIn(props: StateProps) {
                 fallback={(_error, reset) => (
                   <StatusCheck
                     readState={props.readState}
+                    actions={props.actions}
                     pending={false}
                     onCheck={() => {
-                      state().connectStatus("status");
+                      void state().connectStatus("status");
                       reset();
                     }}
                   />
@@ -295,16 +316,18 @@ function SignIn(props: StateProps) {
                   fallback={
                     <StatusCheck
                       readState={props.readState}
+                      actions={props.actions}
                       pending
-                      onCheck={() => state().connectStatus("status")}
+                      onCheck={() => void state().connectStatus("status")}
                     />
                   }
                 >
                   {readStatus()}
                   <StatusCheck
                     readState={props.readState}
+                    actions={props.actions}
                     pending={isPending(statusRead)}
-                    onCheck={() => state().connectStatus("status")}
+                    onCheck={() => void state().connectStatus("status")}
                   />
                 </Loading>
               </Errored>
@@ -321,13 +344,14 @@ export function ModelAccountInventory(props: StateProps & { pending: boolean }) 
   return (
     <>
       <Show
-        when={state().links.length}
+        when={props.actions.links().length}
         fallback={<SettingsEmpty message={t("profilePage.modelAccounts.empty")} />}
       >
-        <For each={state().links} keyed={(link) => link.authProfileId}>
+        <For each={props.actions.links()} keyed={(link) => link.authProfileId}>
           {(link) => (
             <AccountRow
               readState={props.readState}
+              actions={props.actions}
               pending={props.pending}
               row={{ kind: "linked", link: link() }}
             />
@@ -335,12 +359,16 @@ export function ModelAccountInventory(props: StateProps & { pending: boolean }) 
         </For>
       </Show>
       <For
-        each={state().accounts.filter((account) => !account.selected)}
+        each={state().accounts.filter(
+          (account) =>
+            !props.actions.links().some((link) => link.authProfileId === account.authProfileId),
+        )}
         keyed={(account) => account.authProfileId}
       >
         {(account) => (
           <AccountRow
             readState={props.readState}
+            actions={props.actions}
             pending={props.pending}
             row={{ kind: "saved", account: account() }}
           />
@@ -353,7 +381,7 @@ export function ModelAccountInventory(props: StateProps & { pending: boolean }) 
             <button
               type="button"
               class="btn btn--sm profile-auth-accounts-more"
-              disabled={props.pending || state().busy}
+              disabled={props.pending || props.actions.saving() || state().busy}
               onClick={() => void state().loadAccounts(state().nextCursor)}
             >
               {t("profilePage.modelAccounts.loadMore")}
@@ -369,7 +397,7 @@ function ModelAccountActions(props: StateProps) {
   const state = () => props.readState();
   return (
     <>
-      <SignIn readState={props.readState} />
+      <SignIn readState={props.readState} actions={props.actions} />
       <Show when={state().target?.canAdmin}>
         <SettingsRow
           title={t("profilePage.modelAccounts.inputLabel")}
@@ -380,7 +408,7 @@ function ModelAccountActions(props: StateProps) {
               class="model-accounts-form"
               onSubmit={(event) => {
                 event.preventDefault();
-                state().updateAccount("link", state().linkDraft.trim());
+                void props.actions.updateAccount("link", state().linkDraft.trim());
               }}
             >
               <input
@@ -389,7 +417,7 @@ function ModelAccountActions(props: StateProps) {
                 aria-label={t("profilePage.modelAccounts.inputLabel")}
                 value={state().linkDraft}
                 placeholder={t("profilePage.modelAccounts.inputPlaceholder")}
-                disabled={state().busy}
+                disabled={props.actions.saving() || state().busy}
                 onInput={(event) => state().setLinkDraft(event.currentTarget.value)}
               />
               <button
@@ -452,7 +480,7 @@ export function ModelAccountsSection(props: StateProps & { inventory: JSX.Elemen
             <button
               type="button"
               class="btn btn--sm primary profile-auth-add-account"
-              disabled={state().busy}
+              disabled={props.actions.saving() || state().busy}
               onClick={() => state().openSignIn()}
             >
               {t("profilePage.modelAccounts.addAccount")}
@@ -512,7 +540,7 @@ export function ModelAccountsSection(props: StateProps & { inventory: JSX.Elemen
         }
       >
         {props.inventory}
-        <ModelAccountActions readState={props.readState} />
+        <ModelAccountActions readState={props.readState} actions={props.actions} />
       </Show>
     </SettingsSection>
   );

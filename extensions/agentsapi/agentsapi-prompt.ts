@@ -197,6 +197,7 @@ export async function buildAgentsApiTurnInput(
           currentMessagingTarget: params.currentMessagingTarget,
         },
         requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+        messageToolFinalByDefault: params.messageToolFinalByDefault,
       }),
       params.permissionChange?.notice,
       await prepareWatchedSessionsHarnessContext({

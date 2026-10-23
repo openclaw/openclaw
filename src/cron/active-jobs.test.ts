@@ -27,6 +27,7 @@ import {
   resetCronActiveJobs,
 } from "./active-jobs.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "./scheduled-occurrence.test-support.js";
 
 const admissions: ReturnType<typeof prepareAgentRunAdmission>[] = [];
 function prepareAdmission(
@@ -80,6 +81,7 @@ describe("cron message action authority", () => {
         sessionKey: "cron:long-message-read",
       };
       const owner = prepareCronRunAdmission({
+        scheduledExecution: TEST_SCHEDULED_EXECUTION,
         deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
         cfg: { agents: { defaults: { timeoutSeconds: 40 } } },
         ...identity,
@@ -191,6 +193,8 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
       "active owner",
       "closed admission",
       "aborted run",
+      "closed after validation",
+      "aborted after validation",
       "expired caller",
       "replaced marker",
       "replaced admission",
@@ -243,13 +247,23 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
       const cancel = vi.fn();
       currentMarker.cancellation = { kind: "bound", cancel };
 
-      if (scenario === "active owner" || scenario === "copied guard") {
+      if (
+        scenario === "active owner" ||
+        scenario === "copied guard" ||
+        scenario === "closed after validation" ||
+        scenario === "aborted after validation"
+      ) {
         expect(commitGuard).not.toThrow();
       } else {
         expect(commitGuard).toThrow();
       }
       expect(cancel).not.toHaveBeenCalled();
       expect(currentMarker.jobRemoved).toBeUndefined();
+      if (scenario === "closed after validation") {
+        admission.close();
+      } else if (scenario === "aborted after validation") {
+        controller.abort();
+      }
       const removalGuard = scenario === "copied guard" ? () => commitGuard() : commitGuard;
       const removalModule =
         moduleBoundary === "same module"

@@ -177,6 +177,28 @@ describe("feishu bitable create app cleanup", () => {
     expect(client.bitable.appTableRecord.delete).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps creation identifiers and zero counts when record discovery fails after field cleanup", async () => {
+    const { client, createApp } = createBitableClient([]);
+    vi.mocked(client.bitable.appTableField.list).mockResolvedValueOnce({
+      code: 0,
+      data: { items: [{ field_id: "fld_name", field_name: "Name", type: 1, is_primary: true }] },
+    });
+    vi.mocked(client.bitable.appTableRecord.list).mockRejectedValueOnce(
+      new Error("records unavailable"),
+    );
+
+    const result = await createApp();
+
+    expect(client.bitable.appTableField.update).toHaveBeenCalledOnce();
+    expect(client.bitable.app.create).toHaveBeenCalledOnce();
+    expect(result.details).toMatchObject({
+      app_token: "app_token",
+      table_id: "tbl_main",
+      cleaned_placeholder_rows: 0,
+      cleaned_default_fields: 0,
+    });
+  });
+
   it("keeps creation identifiers without recommending unavailable metadata lookup after table-list failure", async () => {
     const { client, createApp } = createBitableClient([]);
     vi.mocked(client.bitable.appTable.list).mockRejectedValueOnce(

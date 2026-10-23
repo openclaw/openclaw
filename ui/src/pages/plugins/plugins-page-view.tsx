@@ -33,6 +33,7 @@ import {
   pluginHostControlsSchema,
 } from "./settings-model.ts";
 import {
+  PluginRetryError,
   renderPluginSettingsDetail as PluginSettingsDetail,
   renderPluginSettingsInventory as PluginSettingsInventory,
   type PluginSettingsTab,
@@ -128,6 +129,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     connected: page().gateway.connected,
     loading: page().loading,
     result: page().state.result,
+    presentedEnabled: props.page.presentedEnabled,
     error: page().state.error,
     busy: page().state.busy,
     messages: page().state.messages,
@@ -269,7 +271,11 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       {page().surface === "discovery" && !page().state.catalogDetail && (
         <PluginsHubHeader
           active="plugins"
-          onSelect={(tab: PluginsHubTab) => page().selectHubTab(tab)}
+          onSelect={(tab: PluginsHubTab) => {
+            if (tab !== "plugins" || page().surface !== "discovery") {
+              page().context.navigate(tab);
+            }
+          }}
           secondaryAction={{
             label: t("pluginsPage.pluginSettings"),
             icon: <Icon name="settings" />,
@@ -361,22 +367,13 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         ) : (
           <Errored
             fallback={(error, reset) => (
-              <div
-                class="callout danger plugins-settings-error oc-banner oc-banner-error"
-                role="alert"
-              >
-                <span>{formatUiError(error())}</span>
-                <button
-                  type="button"
-                  class="btn btn--sm oc-action oc-action-secondary"
-                  onClick={() => {
-                    void page().refreshCatalog();
-                    reset();
-                  }}
-                >
-                  {t("pluginsPage.tryAgain")}
-                </button>
-              </div>
+              <PluginRetryError
+                error={formatUiError(error())}
+                onRetry={() => {
+                  void page().refreshCatalog();
+                  reset();
+                }}
+              />
             )}
           >
             <Show when={hasInventory()} fallback={<Inventory loading={page().loading} />}>
@@ -412,7 +409,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
               mutationBlockedReason={page().accessBlockedReason(
                 page().state.result?.mutationAllowed,
               )}
-              busy={Object.values(page().state.busy).some(Boolean)}
+              busy={page().mutationSaving() || Object.values(page().state.busy).some(Boolean)}
               onCancel={() => page().consent.close()}
               onConfirm={() => page().consent.confirm()}
               onRetry={() => void page().consent.inspect()}

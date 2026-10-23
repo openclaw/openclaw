@@ -5,6 +5,7 @@ import type {
   DevicesPageDataState,
   InventoryRemovalRequest,
 } from "../../lib/nodes/page-operations.ts";
+import type { DevicePolicyRead } from "./devices-policy-reads.ts";
 
 export type DevicesRouteData = {
   // Client identity alone cannot distinguish provider replacement or reconnect epochs.
@@ -18,6 +19,8 @@ export type DevicesProps = Omit<
   "client" | "requestGeneration" | "nodesLoading" | "nodesQueuedRefresh" | "devicesQueuedRefresh"
 > & {
   loading: boolean;
+  configRead: DevicePolicyRead;
+  execApprovalsRead: DevicePolicyRead;
   inventoryRead: () => void;
   inventoryScope: object;
   inventorySaving?: boolean;

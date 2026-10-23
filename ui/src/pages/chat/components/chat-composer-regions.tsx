@@ -1,7 +1,8 @@
-import { createMemo, lazy, Loading, Show, untrack } from "solid-js";
+import { createMemo, lazy, Show, untrack } from "solid-js";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
-import { isChatRunWorking } from "./chat-composer-state.ts";
+import { isChatRunWorking } from "../chat-run-working.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 const ChatQueue = lazy(() => import("./chat-composer-queue.tsx"), {
   export: "renderChatQueueSolid",
@@ -24,7 +25,7 @@ export function ComposerQueue(view: { composer: ChatComposerProps; showAbortable
         view.composer.queuedEdit?.source
       }
     >
-      <Loading>
+      <ChatLazyBoundary>
         <ChatQueue
           queue={view.composer.queue}
           displayQueue={view.composer.displayQueue}
@@ -38,7 +39,7 @@ export function ComposerQueue(view: { composer: ChatComposerProps; showAbortable
           queuedEdit={view.composer.queuedEdit}
           onQueueRemove={view.composer.onQueueRemove}
         />
-      </Loading>
+      </ChatLazyBoundary>
     </Show>
   );
 }
@@ -68,7 +69,7 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
       }
     >
       <div class="agent-chat__progress-float" hidden={!view.shown}>
-        <Loading>
+        <ChatLazyBoundary>
           <SessionProgressCard
             card={view.composer.progressCard}
             placement="composer"
@@ -94,7 +95,7 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
             }
             onClearSaved={view.composer.onClearSavedProgressCard}
           />
-        </Loading>
+        </ChatLazyBoundary>
       </div>
     </Show>
   );

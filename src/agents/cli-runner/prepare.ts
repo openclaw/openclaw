@@ -64,7 +64,10 @@ import {
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
 } from "../bootstrap-budget.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
+import {
+  makeBootstrapWarn as makeBootstrapWarnImpl,
+  resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
+} from "../bootstrap-files.js";
 import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "../bootstrap-routing.js";
 import {
   CLI_AUTH_EPOCH_VERSION,
@@ -111,7 +114,6 @@ import {
   isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
 } from "../workspace.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
-import { resolveCliBootstrapContextForRun } from "./bootstrap-context.js";
 import { canTransportSystemPrompt, resolveCliBootstrapPromptHash } from "./bootstrap-transport.js";
 import {
   applyClaudeManagedMcpTimeout,
@@ -664,10 +666,9 @@ async function prepareCliRunContextWithinReadFence(
   );
   const { bootstrapFiles, contextFiles: resolvedContextFiles } = skipsTurnPreparation
     ? { bootstrapFiles: [], contextFiles: [] }
-    : await resolveCliBootstrapContextForRun({
-        bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,
-        workspaceDir,
-        sessionLabel,
+    : await resolveBootstrapContextForRunImpl({
+        workspaceDir: params.bootstrapWorkspaceDir ?? canonicalWorkspace,
+        executionWorkspaceDir: workspaceDir,
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
@@ -676,7 +677,11 @@ async function prepareCliRunContextWithinReadFence(
         agentId: sessionAgentId,
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
-        warn: (message) => cliBackendLog.warn(message),
+        warn: makeBootstrapWarnImpl({
+          sessionLabel,
+          workspaceDir: params.bootstrapWorkspaceDir ?? canonicalWorkspace,
+          warn: (message) => cliBackendLog.warn(message),
+        }),
       });
   // Ring-zero OpenClaw runs replace the bundle MCP surface entirely: no
   // loopback server, no plugin/user servers. A selectable backend also removes
@@ -1731,7 +1736,6 @@ async function prepareCliRunContextWithinReadFence(
         lease: params.contextEngineLogicalTurnLease,
         host: contextEngineHostSupport,
         recorder: params.userTurnTranscriptRecorder,
-        isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
         sessionTarget: params.sessionTarget,
       });
       resolvedContextEngine = effective.engine;

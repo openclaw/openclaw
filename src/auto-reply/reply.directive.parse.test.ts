@@ -62,6 +62,21 @@ describe("directive parsing", () => {
   ] as const)("parses precedence, clears, and prose: %s", (body, expected) => {
     expect(parse(body)).toMatchObject(expected);
   });
+  it.each([
+    ["/fast ultrafast", "ultrafast", ""],
+    ["/fast ultra", "ultra", ""],
+    ["/fast ULTRA please hurry", "ULTRA", "please hurry"],
+  ])("parses %s as the canonical ultrafast mode", (body, rawFastMode, cleaned) => {
+    expect(parse(body)).toMatchObject({
+      hasFastDirective: true,
+      fastMode: "ultrafast",
+      rawFastMode,
+      cleaned,
+    });
+  });
+  it("keeps an unknown fast mode unresolved", () => {
+    expect(parse("/fast ultr")).toMatchObject({ hasFastDirective: true, fastMode: undefined });
+  });
   it("preserves prose after a thinking directive", () => {
     const result = parse("/think about my deployment plan");
     expect(result.rawThinkLevel).toBeUndefined();

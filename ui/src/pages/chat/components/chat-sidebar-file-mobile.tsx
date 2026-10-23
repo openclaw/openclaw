@@ -47,14 +47,13 @@ function MobileFileButton(props: {
   onClick: () => void;
   disabled?: boolean;
   tooltip?: boolean;
-  class?: string;
   ref?: (element: HTMLButtonElement) => void;
 }) {
   return (
     <openclaw-tooltip prop:content={props.tooltip === false ? "" : props.label}>
       <button
         type="button"
-        class={["sidebar-file-mobile__button", props.class]}
+        class="sidebar-file-mobile__button"
         aria-label={props.label}
         disabled={props.disabled}
         ref={(element) => props.ref?.(element)}

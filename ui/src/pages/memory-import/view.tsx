@@ -31,6 +31,14 @@ type MemoryCollection = {
   items: MemoryMigrationItem[];
 };
 
+function renderReadError(error: () => unknown) {
+  return (
+    <div class="callout danger" role="alert">
+      {formatUiError(error())}
+    </div>
+  );
+}
+
 function detailString(item: MemoryMigrationItem, key: string): string | undefined {
   const value = item.details?.[key];
   return typeof value === "string" && value.trim() ? value : undefined;
@@ -538,13 +546,7 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
               {props.view.backfillError}
             </div>
           </Show>
-          <Errored
-            fallback={(error) => (
-              <div class="callout danger" role="alert">
-                {formatUiError(error())}
-              </div>
-            )}
-          >
+          <Errored fallback={renderReadError}>
             <Loading on={props.view.readScope}>
               <Show when={props.view.readPreview()}>
                 {(result) => (
@@ -660,13 +662,7 @@ export function MemoryImport(props: MemoryImportViewProps) {
               {props.applyError}
             </div>
           </Show>
-          <Errored
-            fallback={(error) => (
-              <div class="callout danger" role="alert">
-                {formatUiError(error())}
-              </div>
-            )}
-          >
+          <Errored fallback={renderReadError}>
             <Loading
               on={[props.readScope, props.loading && !props.plan]}
               fallback={

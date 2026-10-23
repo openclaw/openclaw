@@ -7,9 +7,11 @@ import {
   pauseVirtualClock,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { closeChatDetails, openChatDetailsPeople } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { replaceGatewayClient } from "./new-session-page.test-support.ts";
+import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 import {
   collaborativeSessionsList,
   draftSessionsList,
@@ -204,13 +206,14 @@ suite.define(() => {
     expect(collaborative?.titleLeft).toBeCloseTo(single?.titleLeft ?? 0, 5);
   });
 
-  it("aligns a single owner's inline titles and keeps their status on the trailing edge", async () => {
+  it.each([1200, 390])("keeps inline-owner activity last at %ipx", async (width) => {
     const patrick = sessionPerson("profile-patrick", "Patrick");
     const mira = sessionPerson("profile-mira", "Mira");
     const states: Array<[string, Record<string, unknown>]> = [
       ["idle", {}],
       ["unread", { unread: true }],
       ["running", { hasActiveRun: true, status: "running", activeRunIds: ["run-1"] }],
+      ["parent", { hasActiveRun: true, status: "running", childSessions: ["agent:main:child"] }],
     ];
     const rows = states.map(([id, state], index) =>
       Object.assign(
@@ -226,6 +229,15 @@ suite.define(() => {
       ),
     );
     rows.push({
+      key: "agent:main:child",
+      kind: "direct",
+      label: "Inline child session",
+      createdActor: patrick,
+      owner: { actor: patrick },
+      spawnedBy: "agent:main:parent",
+      updatedAt: 2,
+    });
+    rows.push({
       key: "agent:main:mira",
       kind: "direct",
       label: "Mira session",
@@ -233,14 +245,26 @@ suite.define(() => {
       owner: { actor: mira },
       updatedAt: 1,
     });
-    const { page } = await openSession(ownerRoster(rows, [patrick, mira]), {
-      sessionKey: "agent:main:mira",
-      presenceUsers: [{ self: true, id: "profile-patrick", name: "Patrick" }],
-    });
+    const { page } = await openSession(
+      ownerRoster(rows, [patrick, mira]),
+      {
+        sessionKey: "agent:main:mira",
+        presenceUsers: [{ self: true, id: "profile-patrick", name: "Patrick" }],
+      },
+      { width },
+    );
+    if (width === 390) {
+      await navigationDrawerToggle(page).click();
+    }
     await page.getByText("Inline idle session", { exact: true }).waitFor();
     await chooseSidebarMenuOption(page, "Group by", "Person");
     await closeSidebarMenu(page);
     await chooseOwner(page, "owner:profile-patrick");
+    // The picker helper's Escape also dismisses the mobile drawer.
+    if (width === 390) {
+      await navigationDrawerToggle(page).click();
+      await waitForMobileSidebarDrawerOpen(page);
+    }
     const group = page.locator(".sidebar-recent-sessions__group--inline-owner");
     const row = (id: string) => group.locator(`[data-session-key="agent:main:${id}"]`);
     await row("running").locator(".session-glyph__ring").waitFor();
@@ -253,10 +277,11 @@ suite.define(() => {
         const box = (selector: string) => element.querySelector(selector)?.getBoundingClientRect();
         return {
           top: element.getBoundingClientRect().top,
+          right: element.getBoundingClientRect().right,
           text: box(".sidebar-recent-session__text"),
           indicator: box(".sidebar-session-indicator:not(:empty)"),
           actions: box(".session-row-actions"),
-          archive: box("[data-sidebar-session-archive]"),
+          toggle: box("[data-child-session-toggle]"),
         };
       });
     const header = await page
@@ -274,18 +299,43 @@ suite.define(() => {
       expect(status.indicator?.left).toBeGreaterThanOrEqual(status.text?.right ?? Infinity);
     }
 
-    // Hover actions overlay the trailing edge; the status must stay visible beside them.
+    // Hover actions must appear before the fixed trailing status, not push it left.
     await row("running").hover();
     await expectBrowser(row("running").locator(".session-row-actions button").first()).toHaveCSS(
       "opacity",
       "1",
     );
     const hovered = await rowGeometry("running");
-    expect(hovered.indicator?.right).toBeLessThanOrEqual(hovered.actions?.left ?? -Infinity);
-    // At rest, trailing status sits in the archive action's column.
-    const centerX = (rect?: { left: number; right: number }) =>
-      rect ? (rect.left + rect.right) / 2 : Number.NaN;
-    expect(centerX(unread.indicator)).toBeCloseTo(centerX(hovered.archive), 1);
+    expect(hovered.indicator?.left).toBeGreaterThanOrEqual(hovered.actions?.right ?? Infinity);
+    expect(hovered.right - (hovered.indicator?.right ?? 0)).toBeCloseTo(
+      running.right - (running.indicator?.right ?? 0),
+      5,
+    );
+    await page.mouse.move(1100, 700);
+    await row("running").locator("a").focus();
+    const focused = await rowGeometry("running");
+    expect(focused.indicator?.left).toBeGreaterThanOrEqual(focused.actions?.right ?? Infinity);
+    expect(focused.right - (focused.indicator?.right ?? 0)).toBeCloseTo(
+      running.right - (running.indicator?.right ?? 0),
+      5,
+    );
+    await page.locator("#sidebar-session-owner-title").focus();
+    await page.mouse.move(width - 10, 700);
+    await expectBrowser(page.locator(".session-progress-hovercard")).toBeHidden();
+    await row("parent").hover();
+    const parent = await rowGeometry("parent");
+    expect(parent.toggle).toBeDefined();
+    expect(parent.indicator?.left).toBeGreaterThanOrEqual(parent.toggle?.right ?? Infinity);
+    expect(parent.right - (parent.indicator?.right ?? 0)).toBeCloseTo(
+      running.right - (running.indicator?.right ?? 0),
+      5,
+    );
+    const toggle = row("parent").locator("[data-child-session-toggle]");
+    await toggle.click();
+    await expectBrowser(group.locator('[data-session-key="agent:main:child"]')).toContainText(
+      "Inline child session",
+    );
+    await expectBrowser(toggle).toHaveAttribute("aria-expanded", "true");
   });
 
   it("derives People controls and owner filtering from current session owners", async () => {

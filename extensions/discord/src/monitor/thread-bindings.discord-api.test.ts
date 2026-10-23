@@ -4,6 +4,7 @@ import * as discordRest from "../internal/rest.js";
 import * as discordSend from "../send.js";
 import { createDiscordSendReceipt } from "../send.receipt.js";
 import {
+  createWebhookForChannel,
   maybeSendBindingMessage,
   resolveChannelIdForBinding,
 } from "./thread-bindings.discord-api.js";
@@ -42,6 +43,7 @@ function fixture() {
   });
   return {
     get: vi.spyOn(rest, "get"),
+    post: vi.spyOn(rest, "post"),
     bot: vi.spyOn(discordSend, "sendMessageDiscord").mockResolvedValue(sent),
     webhook: vi.spyOn(discordSend, "sendWebhookMessageDiscord").mockResolvedValue(sent),
   };
@@ -52,6 +54,43 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+it.each([
+  [
+    { id: "wh1", token: "token1" },
+    { webhookId: "wh1", webhookToken: "token1" },
+  ],
+  [
+    { id: " wh1 ", token: " token1 " },
+    { webhookId: "wh1", webhookToken: "token1" },
+  ],
+  [null, {}],
+  [[], {}],
+  [{ id: "wh1" }, {}],
+  [{ id: 1, token: "token1" }, {}],
+])("creates binding webhooks from the Discord response %j", async (response, expected) => {
+  mocks.post.mockResolvedValueOnce(response);
+  expect(await createWebhookForChannel({ cfg, accountId: "default", channelId: "c1" })).toEqual(
+    expected,
+  );
+  expect(mocks.post).toHaveBeenCalledExactlyOnceWith("/channels/c1/webhooks", {
+    body: { name: "OpenClaw Agents" },
+  });
+});
+
+it("blocks revoked webhook creation before posting", async () => {
+  expect(
+    await createWebhookForChannel({
+      cfg,
+      accountId: "default",
+      channelId: "c1",
+      assertCreateAllowed: () => {
+        throw new Error("Command owner was revoked");
+      },
+    }),
+  ).toEqual({});
+  expect(mocks.post).not.toHaveBeenCalled();
 });
 
 it("strips the channel prefix before requesting its route", async () => {

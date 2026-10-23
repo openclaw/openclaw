@@ -36,7 +36,7 @@ import { unmountModelSetupPage } from "./test-helpers/solid-page.test-support.ts
 
 describe("ModelSetupPage first-run inference", () => {
   useFirstRunFixtures("durable-device-private-key-for-testing", true);
-  it.each(["current", "reconnect"])(
+  it.each(["current", "reconnect", "rejected"])(
     "finishes native Use only while its page is current (%s)",
     async (owner) => {
       const entered = createDeferred();
@@ -46,6 +46,9 @@ describe("ModelSetupPage first-run inference", () => {
         async () => {
           entered.resolve();
           await release.promise;
+          if (owner === "rejected") {
+            throw new Error("The model choice could not be saved.");
+          }
         },
       );
       const agents = createAgentCapability(context.gateway);
@@ -79,8 +82,15 @@ describe("ModelSetupPage first-run inference", () => {
         await waitForElement(page, option);
         page.querySelector<HTMLElement>(option)!.click();
         await page.updateComplete;
-        pageButton(page, "[data-native-model-setup] button.primary")!.click();
+        const save = pageButton(page, "[data-native-model-setup] button.primary")!;
+        save.click();
         await entered.promise;
+        await waitForFast(() => {
+          expect(save.disabled).toBe(true);
+          expect(save.textContent).toContain("Saving");
+        });
+        save.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        expect(request.mock.calls.filter(([method]) => method === "agents.update")).toHaveLength(1);
         expect(request).toHaveBeenCalledWith("agents.update", {
           agentId: "main",
           model: "acp-opencode/fixture-model",
@@ -96,6 +106,11 @@ describe("ModelSetupPage first-run inference", () => {
           publishGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
           publishGatewaySnapshot({ ...snapshot, hello: { ...snapshot.hello } });
           await page.updateComplete;
+          await waitForFast(() => {
+            expect(
+              pageButton(page, "[data-native-model-setup] button.primary")?.textContent,
+            ).not.toContain("Saving");
+          });
         }
         release.resolve();
         await vi.mocked(context.runtimeConfig.runExternalMutation).mock.results[0]!.value;
@@ -103,6 +118,15 @@ describe("ModelSetupPage first-run inference", () => {
           await waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("chat"));
           expect(refresh).toHaveBeenCalledOnce();
           expect(agents.state.agentsList?.agents[0]?.model).toBe("acp-opencode/fixture-model");
+        } else if (owner === "rejected") {
+          await waitForText(page, "The model choice could not be saved.");
+          expect(save.disabled).toBe(false);
+          expect(save.textContent).not.toContain("Saving");
+          expect(refresh).not.toHaveBeenCalled();
+          expect(context.navigate).not.toHaveBeenCalled();
+          expect(
+            pageButton(page, "[data-native-model-setup] .picker-select__trigger")?.textContent,
+          ).toContain("Fixture model");
         } else {
           await Promise.resolve();
           expect(refresh).not.toHaveBeenCalled();
@@ -294,6 +318,7 @@ describe("ModelSetupPage first-run inference", () => {
   );
 
   it("does not continue a stale first-run activation after leaving the onboarding route", async () => {
+    const warnings = vi.spyOn(console, "warn");
     const { context, client, request } = createFirstRunContext();
     const activation = createDeferred<WizardNextResult>();
     mockRequests(request, {
@@ -325,9 +350,11 @@ describe("ModelSetupPage first-run inference", () => {
       "openclaw.setup.detect",
     ]);
     expect(context.navigate).not.toHaveBeenCalled();
+    expect(warnings.mock.calls.flat().join("\n")).not.toContain("[STRICT_READ_UNTRACKED]");
   });
 
   it("redetects before activating when a first-run visit replaces ordinary settings", async () => {
+    const warnings = vi.spyOn(console, "warn");
     const { context, client, request } = createFirstRunContext();
     mockRequests(request, {
       "openclaw.setup.detect": () => ({
@@ -370,6 +397,7 @@ describe("ModelSetupPage first-run inference", () => {
       ]);
     });
     await waitForOnboarding(context);
+    expect(warnings.mock.calls.flat().join("\n")).not.toContain("[STRICT_READ_UNTRACKED]");
   });
 });
 

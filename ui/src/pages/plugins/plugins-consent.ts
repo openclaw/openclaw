@@ -48,6 +48,13 @@ type PluginMutationOptions = {
   preserveMessageWhilePending?: boolean;
 };
 
+export type PluginMutationPresentation = {
+  scope: GatewayConnectionScope;
+  rowKey: string;
+  action: Exclude<PluginMutationAction, "install">;
+  result: Promise<void>;
+};
+
 type PluginsConsentOptions = {
   gateway: GatewayPageBinding;
   getContext: () => ApplicationContext;
@@ -61,6 +68,7 @@ type PluginsConsentOptions = {
   closeDetails: () => void;
   applyMutationResult: (result: PluginMutationResult) => void;
   refreshCatalogAfterMutation: (client: GatewayBrowserClient) => Promise<void>;
+  presentMutation: (mutation: PluginMutationPresentation) => Promise<void>;
   onChange: () => void;
 };
 
@@ -201,25 +209,32 @@ export function createPluginsConsent(host: PluginsConsentOptions) {
     if (!options.preserveMessageWhilePending) {
       host.setMessage(rowKey, null);
     }
-    try {
-      const mutation = await runPluginConfigMutation(
-        host.getContext().runtimeConfig,
-        scope.client,
-        mutate,
-        { canDispatch: () => isCurrent() && canDispatch() },
-      );
-      if (isCurrent()) {
-        await onSuccess(mutation.value, mutation.refreshError, scope.client, isLatest);
+    const result = (async () => {
+      try {
+        const mutation = await runPluginConfigMutation(
+          host.getContext().runtimeConfig,
+          scope.client,
+          mutate,
+          { canDispatch: () => isCurrent() && canDispatch() },
+        );
+        if (isCurrent()) {
+          await onSuccess(mutation.value, mutation.refreshError, scope.client, isLatest);
+        }
+      } catch (error) {
+        if (isCurrent()) {
+          await onError(error, scope, isCurrent);
+        }
+      } finally {
+        if (mutationTokens.get(rowKey) === mutationToken) {
+          mutationTokens.delete(rowKey);
+          host.setBusy(rowKey, null);
+        }
       }
-    } catch (error) {
-      if (isCurrent()) {
-        await onError(error, scope, isCurrent);
-      }
-    } finally {
-      if (mutationTokens.get(rowKey) === mutationToken) {
-        mutationTokens.delete(rowKey);
-        host.setBusy(rowKey, null);
-      }
+    })();
+    if (options.action === "install") {
+      await result;
+    } else {
+      await host.presentMutation({ scope, rowKey, action: options.action, result });
     }
   }
 

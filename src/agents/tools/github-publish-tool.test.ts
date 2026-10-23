@@ -245,9 +245,14 @@ it.each([
 });
 
 // Unbound sandboxed conversations yield first; github-publish-tool.handoff.test.ts owns that path.
-it.each(["managed-worktree"] as const)(
-  "dispatches preparation with its current %s sandbox before owner qualification",
-  async (workspaceSource) => {
+it.each([
+  {},
+  { conflictsResolved: false },
+  { conflictsResolved: true, expectedHeadCommit: "a".repeat(40) },
+])(
+  "dispatches preparation with its current sandbox and acknowledgement %j before owner qualification",
+  async (acknowledgement) => {
+    const workspaceSource = "managed-worktree";
     const sandbox = publicationSandbox({ workspaceSource });
     const callGateway = vi
       .mocked(callInProcessGatewayTool)
@@ -260,6 +265,7 @@ it.each(["managed-worktree"] as const)(
     const input = {
       action: "prepare_pr",
       pullRequestUrl: "https://github.com/example/repository/pull/1",
+      ...acknowledgement,
     };
     expect(Value.Check(tool.parameters, input)).toBe(workspaceSource === "managed-worktree");
     await withGatewayToolCallerIdentity(caller, () => tool.execute("prepare", input));

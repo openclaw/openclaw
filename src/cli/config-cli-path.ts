@@ -460,25 +460,6 @@ function isProtectedMapReplacementPath(path: PathSegment[]): boolean {
   );
 }
 
-function formatRemovedEntries(entries: string[]): string {
-  const visible = entries.slice(0, 6);
-  const suffix =
-    entries.length > visible.length ? `, ... ${entries.length - visible.length} more` : "";
-  return `${visible.join(", ")}${suffix}`;
-}
-
-function replacementAdvice(
-  command: ConfigMutationCommand,
-  pathLabel: string,
-  mergeSubject: string,
-): string {
-  // `config patch` has no --merge/--replace; --replace-path is its way out of the guard.
-  if (command === "patch") {
-    return `Use ${replacePathArgument(pathLabel)} to replace intentionally.`;
-  }
-  return `Use --merge to merge ${mergeSubject} or --replace to replace intentionally.`;
-}
-
 export function assertNonDestructiveReplacement(params: {
   root: Record<string, unknown>;
   path: PathSegment[];
@@ -515,8 +496,17 @@ export function assertNonDestructiveReplacement(params: {
     return;
   }
   if (removed.length > 0) {
+    const visible = removed.slice(0, 6);
+    const suffix =
+      removed.length > visible.length ? `, ... ${removed.length - visible.length} more` : "";
+    const removedEntries = `${visible.join(", ")}${suffix}`;
+    // `config patch` has no --merge/--replace; --replace-path is its way out of the guard.
+    const advice =
+      params.command === "patch"
+        ? `Use ${replacePathArgument(pathLabel)} to replace intentionally.`
+        : `Use --merge to merge ${mergeHint} or --replace to replace intentionally.`;
     throw new Error(
-      `Refusing to replace ${pathLabel}; it would remove existing entries: ${formatRemovedEntries(removed)}. ${replacementAdvice(params.command, pathLabel, mergeHint)}`,
+      `Refusing to replace ${pathLabel}; it would remove existing entries: ${removedEntries}. ${advice}`,
     );
   }
 }

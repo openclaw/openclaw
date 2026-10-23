@@ -11,6 +11,7 @@ import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/can
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { createTestSessionCapability } from "../../../lib/sessions/session-capability.test-support.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import * as toast from "../../../lib/toast.ts";
 import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext } from "../../../test-helpers/app-sidebar.ts";
 import {
@@ -24,6 +25,7 @@ import { SidebarPanel } from "./chat-sidebar-content.tsx";
 import { ToolPreview } from "./widget-card-view.tsx";
 import { ToolPreview as DeferredToolPreview } from "./widget-card.ts";
 import * as widgetExport from "./widget-export.ts";
+import { WidgetPinButton } from "./widget-pin-button.tsx";
 
 const canvasPreview = {
   kind: "canvas",
@@ -505,7 +507,9 @@ describe("widget-card", () => {
       }),
       { boardProvider: provider },
     );
-    expect(canvas.querySelector("openclaw-canvas-widget-view")).not.toBeNull();
+    await waitForSolid(() =>
+      expect(canvas.querySelector("openclaw-canvas-widget-view")).not.toBeNull(),
+    );
     pinButton(canvas)?.click();
     await vi.waitFor(() => {
       expect(pinWidget).toHaveBeenCalledWith({
@@ -553,6 +557,9 @@ describe("widget-card", () => {
         title: "Could not pin to dashboard. Try again.",
       }),
     );
+    mountWidget({ ...preview, title: "Retained failure" }, { boardProvider: provider }, host);
+    expect(pinButton(host)).toBe(button);
+    expect(button.title).toBe("Could not pin to dashboard. Try again.");
     button.click();
     await waitForSolid(() =>
       expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinning…" }),
@@ -560,7 +567,7 @@ describe("widget-card", () => {
     expect(pinWidget).toHaveBeenLastCalledWith({
       docId: "cv_pin_feedback",
       name: "canvas-cv_pin_feedback",
-      title: "Updated release status",
+      title: "Retained failure",
     });
     snapshot.set({ widgets: [{ name: "canvas-cv_pin_feedback" }] });
     retry.resolve();
@@ -572,6 +579,68 @@ describe("widget-card", () => {
       expect(button).toMatchObject({ disabled: false, ariaLabel: "Pin to dashboard" }),
     );
     expect(button.hasAttribute("data-pinned")).toBe(false);
+  });
+
+  it("announces a connected pin failure once across title updates", async () => {
+    const showToast = vi.spyOn(toast, "showToast").mockImplementation(() => true);
+    onTestFinished(() => showToast.mockRestore());
+    const completion = Promise.withResolvers<void>();
+    const { provider } = boardProvider({ pinWidget: () => completion.promise });
+    let setTitle!: (title: string) => void;
+    const root = mountSolid(() => {
+      const [title, updateTitle] = createSignal("Synthetic chart");
+      setTitle = updateTitle;
+      return (
+        <WidgetPinButton
+          target={{ board: provider, name: "chart", viewId: "chart", mcpApp: false }}
+          title={title()}
+        />
+      );
+    });
+    onTestFinished(root.unmount);
+    const button = pinButton(root.container)!;
+    button.click();
+    completion.reject(new Error("Synthetic pin failure"));
+    await waitForSolid(() => expect(button.title).toBe("Could not pin to dashboard. Try again."));
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      message: "Could not pin to dashboard. Try again.",
+    });
+    setTitle("Updated chart");
+    flush();
+    expect(pinButton(root.container)).toBe(button);
+    expect(button.title).toBe("Could not pin to dashboard. Try again.");
+    expect(showToast).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps pin failure feedback on the focused button without replaying its toast", async () => {
+    const pending = Promise.withResolvers<void>();
+    const { provider, snapshot } = boardProvider({ pinWidget: vi.fn(() => pending.promise) });
+    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+    onTestFinished(() => showToast.mockRestore());
+    const host = connectedHost();
+    const root = mountSolid(
+      () => (
+        <WidgetPinButton
+          target={{ board: provider, name: "widget", viewId: "view", mcpApp: false }}
+        />
+      ),
+      { container: host },
+    );
+    onTestFinished(root.unmount);
+    const button = pinButton(host)!;
+    button.focus();
+    button.click();
+    pending.reject(new Error("Synthetic pin failure"));
+    await waitForSolid(() => expect(button.title).toBe("Could not pin to dashboard. Try again."));
+    expect(pinButton(host)).toBe(button);
+    expect(document.activeElement).toBe(button);
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({ message: button.title });
+
+    snapshot.set({ widgets: [{ name: "widget" }] });
+    await waitForSolid(() => expect(button.title).toBe("Pinned"));
+    snapshot.set({ widgets: [] });
+    await waitForSolid(() => expect(button.title).toBe("Pin to dashboard"));
+    expect(showToast).toHaveBeenCalledTimes(1);
   });
 
   it("replaces a pin target while its previous board write is still pending", async () => {
@@ -742,21 +811,29 @@ describe("widget-card", () => {
     ["strict", "scripts", false],
     ["trusted", undefined, true],
     ["trusted", "strict", false],
-  ] as const)("applies %s policy to preview sandbox %s", (embedSandboxMode, sandbox, scripted) => {
-    const { provider, snapshot } = boardProvider();
-    snapshot.value = { widgets: [{ name: "canvas-cv_clock" }] };
-    const host = mountWidget(
-      { ...preview, sandbox },
-      { embedSandboxMode, boardProvider: provider },
-    );
-    const managedView = host.querySelector("openclaw-canvas-widget-view");
-    expect(managedView !== null).toBe(sandbox !== "strict");
-    expect(pinButton(host) !== null).toBe(scripted);
-    if (managedView) {
-      expect(managedView.allowScripts).toBe(scripted);
-      expect(host.querySelector("iframe")).toBeNull();
-    } else {
-      expect(host.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
-    }
-  });
+  ] as const)(
+    "applies %s policy to preview sandbox %s",
+    async (embedSandboxMode, sandbox, scripted) => {
+      const { provider, snapshot } = boardProvider();
+      snapshot.value = { widgets: [{ name: "canvas-cv_clock" }] };
+      const host = mountWidget(
+        { ...preview, sandbox },
+        { embedSandboxMode, boardProvider: provider },
+      );
+      await waitForSolid(() =>
+        expect(host.querySelector("openclaw-canvas-widget-view") !== null).toBe(
+          sandbox !== "strict",
+        ),
+      );
+      const managedView = host.querySelector("openclaw-canvas-widget-view");
+      expect(managedView !== null).toBe(sandbox !== "strict");
+      expect(pinButton(host) !== null).toBe(scripted);
+      if (managedView) {
+        expect(managedView.allowScripts).toBe(scripted);
+        expect(host.querySelector("iframe")).toBeNull();
+      } else {
+        expect(host.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
+      }
+    },
+  );
 });

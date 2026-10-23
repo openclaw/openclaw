@@ -63,6 +63,8 @@ export function resolveCronFallbacksOverride(params: {
   agentId: string;
   useSubagentFallbacks?: boolean;
   inheritDefaultFallbacksForAgentStringModel?: boolean;
+  /** Stored provenance when the run uses the session's model selection. */
+  sessionModelOverrideSource?: "auto" | "user";
 }): string[] | undefined {
   const payload = params.job.payload.kind === "agentTurn" ? params.job.payload : undefined;
   const payloadFallbacks = Array.isArray(payload?.fallbacks) ? payload.fallbacks : undefined;
@@ -70,6 +72,15 @@ export function resolveCronFallbacksOverride(params: {
     typeof payload?.model === "string" && payload.model.trim().length > 0;
   if (payloadFallbacks !== undefined) {
     return payloadFallbacks;
+  }
+  if (params.sessionModelOverrideSource === "user" && !hasCronPayloadModelOverride) {
+    // A user-selected session model is exact; automatic selections keep the configured chain.
+    return resolveEffectiveModelFallbacks({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      hasSessionModelOverride: true,
+      modelOverrideSource: "user",
+    });
   }
   if (params.useSubagentFallbacks === true && !hasCronPayloadModelOverride) {
     // A payload model override owns its full candidate chain; otherwise the
@@ -105,6 +116,7 @@ export function resolveCronPreflightCandidates(params: {
   model: string;
   useSubagentFallbacks?: boolean;
   inheritDefaultFallbacksForAgentStringModel?: boolean;
+  sessionModelOverrideSource?: "auto" | "user";
 }): ModelCandidate[] {
   const fallbacksOverride = resolveCronFallbacksOverride(params);
   return resolveModelCandidateChain({

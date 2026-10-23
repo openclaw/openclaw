@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { isLocalOllamaBaseUrl } from "./src/discovery-shared.js";
 import { createOllamaEmbeddingProvider } from "./src/embedding-provider.js";
 import { createOllamaStreamFn } from "./src/stream.runtime.js";
-import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
+import { createOllamaWebSearchProvider } from "./web-search-provider.js";
 
 const LIVE = process.env.OPENCLAW_LIVE_TEST === "1" && process.env.OPENCLAW_LIVE_OLLAMA === "1";
 const OLLAMA_BASE_URL =

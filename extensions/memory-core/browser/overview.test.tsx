@@ -3,6 +3,7 @@
 import { render } from "@solidjs/web";
 import type {
   ControlUiComponentHandle,
+  ControlUiSettingsContext,
   ControlUiSettingsComponents,
   DoctorMemoryStatusPayload,
 } from "openclaw/plugin-sdk/control-ui";
@@ -11,12 +12,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   containerForTest,
   contextForTest,
+  deferred,
   disposers,
   disposeTestViews,
   expectText,
   findButton,
   mountSettingsView,
   snapshot,
+  type MutableSnapshot,
   waitForSolid,
 } from "./memory.test-support.ts";
 afterEach(disposeTestViews);
@@ -66,9 +69,8 @@ function createTestComponents(): ControlUiSettingsComponents {
   };
 }
 
-import type { MemoryOverviewStatus } from "./controller.ts";
 import { settingsViews } from "./index.tsx";
-import { createMemoryOverview } from "./overview.tsx";
+import { createMemoryOverview, type MemoryOverviewStatus } from "./overview.tsx";
 
 type MemoryOverviewProps = Parameters<ReturnType<typeof createMemoryOverview>>[0];
 const overviewContext = (props = snapshot()) =>
@@ -282,4 +284,141 @@ it("clears a roster error in the mounted plugin without issuing a Doctor request
   update({ agentsError: null, agentsLoading: false });
   await waitForSolid(() => expect(container.textContent).not.toContain("roster failed"));
   expect(request).not.toHaveBeenCalled();
+});
+
+describe("Memory overview request presentation", () => {
+  function fixture(props = snapshot()) {
+    const abort = new AbortController();
+    const pending: ReturnType<typeof deferred<DoctorMemoryStatusPayload>>[] = [];
+    const request = vi.fn((_method: string, _params?: unknown) => {
+      const read = deferred<DoctorMemoryStatusPayload>();
+      pending.push(read);
+      return read.promise;
+    });
+    const context = contextForTest(props, {
+      signal: abort.signal,
+      components: createTestComponents(),
+      // SAFETY: This view only reads doctor.memory.status; each deferred has that response type.
+      request: request as ControlUiSettingsContext["request"],
+    });
+    const container = containerForTest();
+    const handle = settingsViews[0]!.mount(container, context);
+    disposers.push(() => handle.dispose());
+    flush();
+    let current = props;
+    return {
+      abort,
+      container,
+      context,
+      pending,
+      request,
+      dispose: handle.dispose,
+      update(patch: Partial<MutableSnapshot>) {
+        current = { ...current, ...patch };
+        handle.update(current);
+        flush();
+      },
+    };
+  }
+  const payload = (id: string): DoctorMemoryStatusPayload => ({
+    agentId: id,
+    embedding: { ok: false, checked: false },
+    embeddingRuntime: { state: "ready", engine: "llama.cpp", buildInfo: id },
+  });
+  async function settle(f: ReturnType<typeof fixture>, index: number, id: string) {
+    f.pending[index]!.resolve(payload(id));
+    await waitForSolid(() => expect(f.container.textContent).toContain(id));
+  }
+
+  it("deduplicates ordinary reads and retains cards while an explicit embedding test runs", async () => {
+    const f = fixture();
+    f.update({ locale: "en" });
+    expect(f.request).toHaveBeenCalledTimes(1);
+    expect(f.request).toHaveBeenLastCalledWith("doctor.memory.status", { agentId: "main" });
+    await settle(f, 0, "accepted-engine");
+    const button = findButton(f.container, /^Test$/)!;
+    button.click();
+    await waitForSolid(() => expect(button.disabled).toBe(true));
+    expect(f.container.textContent).toContain("accepted-engine");
+    expect(findButton(f.container, /Testing/)).toBe(button);
+    expect(f.request).toHaveBeenLastCalledWith("doctor.memory.status", {
+      agentId: "main",
+      probe: true,
+    });
+    await settle(f, 1, "probed-engine");
+    expect(findButton(f.container, /^Test$/)?.disabled).toBe(false);
+  });
+
+  it("shows read failures and replaces the error with loading during retry", async () => {
+    const f = fixture();
+    f.pending[0]!.reject(new Error("Doctor temporarily unavailable"));
+    await waitForSolid(() =>
+      expect(f.container.textContent).toContain("Doctor temporarily unavailable"),
+    );
+    findButton(f.container, /^Retry$/)?.click();
+    await waitForSolid(() =>
+      expectText(f.container, ["Waking memory"], ["Doctor temporarily unavailable"]),
+    );
+    await settle(f, 1, "retried-engine");
+  });
+
+  it.each<[string, Partial<MutableSnapshot>]>([
+    ["agent", { agentId: "writer" }],
+    ["engine", { engine: { kind: "pinned", id: "custom-memory", availability: "unknown" } }],
+    ["epoch", { connectionEpoch: 2 }],
+    ["route", { routeIntent: "overview?agent=writer" }],
+  ])("retires a held probe when %s authority changes", async (_kind, patch) => {
+    const f = fixture();
+    await settle(f, 0, "accepted-engine");
+    findButton(f.container, /^Test$/)?.click();
+    f.update(patch);
+    expect(f.request).toHaveBeenCalledTimes(3);
+    f.pending[1]!.resolve(payload("retired-engine"));
+    await f.pending[1]!.promise;
+    await waitForSolid(() =>
+      expectText(f.container, ["Waking memory"], ["retired-engine", "accepted-engine", "Testing"]),
+    );
+    await settle(f, 2, "fresh-engine");
+  });
+
+  it.each<[string, Partial<MutableSnapshot>]>([
+    ["off", { engine: { kind: "off", id: null, availability: "unknown" } }],
+    ["offline", { connected: false }],
+    ["no-agent", { agentId: null }],
+  ])("retires pending reads when %s without another Doctor request", async (kind, patch) => {
+    const f = fixture();
+    f.update(patch);
+    f.pending[0]!.resolve(payload("retired-engine"));
+    await f.pending[0]!.promise;
+    flush();
+    expect(f.request).toHaveBeenCalledTimes(1);
+    expectText(
+      f.container,
+      [
+        kind === "off"
+          ? "Memory is hibernating"
+          : kind === "offline"
+            ? "gateway is offline"
+            : "Waking memory",
+      ],
+      ["retired-engine", "Testing"],
+    );
+  });
+
+  it("retains disabled-engine reads and makes disposed controls harmless", async () => {
+    const disabled = fixture(
+      snapshot({ engine: { ...snapshot().engine, availability: "disabled" } }),
+    );
+    expect(disabled.request).toHaveBeenCalledTimes(1);
+    disabled.dispose();
+    const f = fixture();
+    expect(f.request).toHaveBeenCalledTimes(1);
+    const refresh = findButton(f.container, /^Refresh status$/)!;
+    f.abort.abort();
+    f.dispose();
+    f.pending[0]!.reject(new Error("retired failure"));
+    await f.pending[0]!.promise.catch(() => undefined);
+    refresh.click();
+    expect(f.request).toHaveBeenCalledTimes(1);
+  });
 });

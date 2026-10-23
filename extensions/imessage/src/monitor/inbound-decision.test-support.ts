@@ -26,7 +26,6 @@ export function createInboundDecisionParams(overrides: Overrides = {}): InboundD
     storeAllowFrom: [],
     historyLimit: 0,
     groupHistories: new Map(),
-    isKnownFromMeMessageId: () => false,
     ...rest,
     message,
     messageText,

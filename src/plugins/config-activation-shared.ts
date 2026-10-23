@@ -22,36 +22,6 @@ export type PluginActivationConfigSourceLike = {
   rootConfig?: OpenClawConfig;
 };
 
-function resolveExplicitPluginSelectionShared(params: {
-  id: string;
-  origin: string;
-  config: NormalizedPluginsConfig;
-  rootConfig?: OpenClawConfig;
-  /** Manifest-owned channel ids; the plugin id alone cannot resolve `channels.<id>` for every owner. */
-  channelIds?: readonly string[];
-}): string | undefined {
-  const policyId = normalizePluginPolicyId(params.id);
-  if (params.config.entries[policyId]?.enabled === true) {
-    return "enabled in config";
-  }
-  if (
-    params.origin === "bundled" &&
-    resolveChannelConfigEnablement(params.rootConfig, params.id, params.channelIds) === true
-  ) {
-    return "channel enabled in config";
-  }
-  if (params.config.slots.memory === params.id) {
-    return "selected memory slot";
-  }
-  if (params.config.slots.contextEngine === params.id) {
-    return "selected context engine slot";
-  }
-  if (params.origin !== "bundled" && params.config.allow.includes(policyId)) {
-    return "selected in allowlist";
-  }
-  return undefined;
-}
-
 export function resolvePluginActivationStateShared(params: {
   id: string;
   origin: string;
@@ -68,13 +38,26 @@ export function resolvePluginActivationStateShared(params: {
     plugins: params.config,
     rootConfig: params.rootConfig,
   };
-  const explicitReason = resolveExplicitPluginSelectionShared({
-    id: params.id,
-    origin: params.origin,
-    config: activationSource.plugins,
-    rootConfig: activationSource.rootConfig,
-    channelIds: params.channelIds,
-  });
+  const explicitPolicyId = normalizePluginPolicyId(params.id);
+  let explicitReason: string | undefined;
+  if (activationSource.plugins.entries[explicitPolicyId]?.enabled === true) {
+    explicitReason = "enabled in config";
+  } else if (
+    params.origin === "bundled" &&
+    resolveChannelConfigEnablement(activationSource.rootConfig, params.id, params.channelIds) ===
+      true
+  ) {
+    explicitReason = "channel enabled in config";
+  } else if (activationSource.plugins.slots.memory === params.id) {
+    explicitReason = "selected memory slot";
+  } else if (activationSource.plugins.slots.contextEngine === params.id) {
+    explicitReason = "selected context engine slot";
+  } else if (
+    params.origin !== "bundled" &&
+    activationSource.plugins.allow.includes(explicitPolicyId)
+  ) {
+    explicitReason = "selected in allowlist";
+  }
 
   // Keep result construction shared; policy precedence stays in the ordered branches below.
   const decision = (

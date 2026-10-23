@@ -18,6 +18,7 @@ import {
   waitForElement,
   pageButton,
 } from "./model-setup-first-run.test-support.ts";
+import { createModelSetupSaving } from "./model-setup-saving.ts";
 import { createNativeModelSetup } from "./native-model-setup.tsx";
 import { createPage, mountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
@@ -131,6 +132,8 @@ describe("Model setup refresh continuity", () => {
 
   it("admits native catalog refresh before its asynchronous read is observed", () => {
     const { context, client, request } = createFirstRunContext();
+    const unsubscribe = vi.fn();
+    vi.spyOn(context.gateway, "subscribeEvents").mockReturnValue(unsubscribe);
     request.mockResolvedValue({ models: [] });
     const { owner, dispose } = createRoot((disposeRoot) => ({
       owner: createNativeModelSetup({
@@ -139,6 +142,7 @@ describe("Model setup refresh continuity", () => {
         canUseSetup: (candidate) => candidate === client,
         blocked: () => false,
         onSelected: () => {},
+        onChange: () => {},
       }),
       dispose: disposeRoot,
     }));
@@ -150,7 +154,30 @@ describe("Model setup refresh continuity", () => {
     } finally {
       dispose();
     }
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
+
+  it.each([false, true])(
+    "settles a retired save before first settle (owned: %s)",
+    async (owned) => {
+      const {
+        saving,
+        completion: ownedCompletion,
+        dispose,
+      } = createRoot((disposeRoot) => {
+        const presentation = createModelSetupSaving(() => null);
+        return {
+          saving: presentation,
+          completion: owned ? presentation.present(Promise.resolve(), () => false) : undefined,
+          dispose: disposeRoot,
+        };
+      });
+      const completion = ownedCompletion ?? saving.present(Promise.resolve(), () => false);
+      saving.retire();
+      dispose();
+      await completion;
+    },
+  );
 
   it("admits one native refresh on open and keeps cached choices through failure and retry", async () => {
     const { context, client, request } = createFirstRunContext();

@@ -201,7 +201,7 @@ suite.define(() => {
         await ui.button(rowFor(archived.key), "Pin session").waitFor({ state: "attached" });
         expect(
           await page
-            .locator(`.sidebar-rail [data-sidebar-entry="session:${archived.key}"]`)
+            .locator(`[data-session-section="pinned"] [data-session-key="${archived.key}"]`)
             .count(),
         ).toBe(0);
       }),

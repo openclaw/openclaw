@@ -1,6 +1,7 @@
 import { createMemo, Errored, For, isPending, Loading, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
+import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import type { PlaceBrowserOptions } from "./place-browser.ts";
@@ -77,7 +78,11 @@ export function PlaceBrowser(props: {
           value={props.params.browser.draft}
           onInput={(event) => props.params.browser.setDraft(event.currentTarget.value)}
           ref={(node) => props.pathRef?.(node)}
+          onCompositionEnd={recordCompositionEnd}
           onKeyDown={(event) => {
+            if (isComposingKeyboardEvent(event)) {
+              return;
+            }
             switch (event.key) {
               case "ArrowDown":
               case "ArrowUp":

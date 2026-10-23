@@ -20,6 +20,7 @@ import {
   createPendingUsageRouteData,
   focusDocument,
   refreshButton,
+  showRecentSessions,
   queryUsagePage,
   selectUsageSession,
   settleUsagePage,
@@ -44,6 +45,70 @@ function detailCalls<T extends readonly unknown[]>(request: { mock: { calls: T[]
 }
 
 describe("UsagePage detail requests", () => {
+  it("retains accepted details while refreshes wait, fail, and retry", async () => {
+    const snapshot = cacheSnapshot("fresh");
+    const session = {
+      key: "agent:main:retained-details",
+      label: "Retained details",
+      agentId: "main",
+      usage: snapshot.result.totals,
+      contextWeight: contextWeight("accepted"),
+    };
+    const result = { ...snapshot.result, sessions: [session] };
+    const pending = {
+      context: deferred<unknown>(),
+      timeline: deferred<unknown>(),
+      logs: deferred<unknown>(),
+    };
+    let hold = false;
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "sessions.usage") {
+        return hold && params?.key ? pending.context.promise : result;
+      }
+      if (method === "sessions.usage.timeseries") {
+        return hold ? pending.timeline.promise : { points: usagePoints(Date.now(), 2, 0.1) };
+      }
+      if (method === "sessions.usage.logs") {
+        return hold
+          ? pending.logs.promise
+          : {
+              logs: [{ timestamp: 1, role: "user", content: "Accepted conversation" }],
+            };
+      }
+      return { providers: [] };
+    });
+    const { page } = await loadUsagePage(request);
+    selectUsageSession(page);
+    await waitForFast(() => expect(page.textContent).toContain("Accepted conversation"));
+    const chart = page.querySelector(".timeseries-svg");
+    const log = page.querySelector(".session-log-content");
+    expect(chart).not.toBeNull();
+
+    hold = true;
+    refreshButton(page).click();
+    await waitForFast(() => expect(usageCalls(request, "sessions.usage.logs")).toHaveLength(2));
+    await page.updateComplete;
+    expect(page.querySelector(".timeseries-svg")).toBe(chart);
+    expect(page.querySelector(".session-log-content")).toBe(log);
+    expect(page.textContent).toContain("accepted");
+
+    for (const read of Object.values(pending)) {
+      read.reject(new Error("Refresh unavailable"));
+    }
+    await waitForFast(() => {
+      for (const kind of ["timeline", "conversation", "context"]) {
+        expect(textOf(page, `.usage-detail-error--${kind}`)).toContain("Refresh unavailable");
+      }
+    });
+    expect(page.querySelector(".timeseries-svg")).toBe(chart);
+    expect(page.querySelector(".session-log-content")).toBe(log);
+
+    hold = false;
+    refreshButton(page).click();
+    await waitForFast(() => expect(page.querySelector(".usage-detail-error")).toBeNull());
+    expect(page.textContent).toContain("Accepted conversation");
+  });
+
   it("keeps selected comparisons across pages and refreshes them with their overview", async () => {
     const snapshot = cacheSnapshot("fresh");
     let revision = snapshot.result.updatedAt;
@@ -67,6 +132,7 @@ describe("UsagePage detail requests", () => {
         : { providers: [], points: [], logs: [] },
     );
     const { page } = await loadUsagePage(request);
+    await showRecentSessions(page);
     const settle = () => settleUsagePage(page);
     const changePage = async (label: string) => {
       usageButton(page, label, ".data-table-pagination button").click();
@@ -349,7 +415,7 @@ describe("UsagePage detail requests", () => {
         "agent:main:second",
       ]);
     second.reject(new Error("Selected timeline unavailable"));
-    await waitForFast(() => expect(page.read().detail.timeSeriesLoading).toBe(false));
+    await page.read().detail.timeSeriesRead;
     first.reject(new Error("Retired timeline unavailable"));
     await first.promise.catch(() => {});
     expect(usageCalls(request, "sessions.usage.timeseries")).toHaveLength(2);

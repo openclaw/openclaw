@@ -39,7 +39,7 @@ export function installScriptedRunnerMocks(
     }));
   }
   if (options.modelsConfig) {
-    const ensure = async () => ({ wrote: false });
+    const ensure = async () => ({});
     // mock-isolation: synthetic routes must not regenerate shared provider configuration.
     vi.doMock("./models-config.js", () => ({
       ensureOpenClawModelsJson: options.modelsConfig === "mock" ? vi.fn(ensure) : ensure,

@@ -57,8 +57,10 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
   const props: UsageProps = {
     data: {
       loading: false,
+      read: null,
       exporting: false,
       error: null,
+      partialNotice: null,
       sessions: [],
       creatorOptions: [],
       totals: null,
@@ -94,18 +96,18 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
     detail: {
       context: {
         weight: undefined,
-        loading: false,
+        read: null,
         status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       },
       timeSeriesMode: "cumulative",
       timeSeriesBreakdownMode: "total",
       timeSeries: null,
-      timeSeriesLoading: false,
+      timeSeriesRead: null,
       timeSeriesStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       timeSeriesCursorStart: null,
       timeSeriesCursorEnd: null,
       sessionLogs: null,
-      sessionLogsLoading: false,
+      sessionLogsRead: null,
       sessionLogsStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       sessionLogsExpanded: false,
       logFilters: { roles: [], tools: [], hasTools: false, query: "" },

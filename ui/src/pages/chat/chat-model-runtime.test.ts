@@ -289,8 +289,9 @@ describe("chat model runtime choices", () => {
       "codex",
     );
     container.querySelector<HTMLElement>(".chat-controls__effort-picker summary")!.click();
-    flush();
-    expect(container.querySelector('[data-chat-thinking-option="high"]')).not.toBeNull();
+    await waitForSolid(() =>
+      expect(container.querySelector('[data-chat-thinking-option="high"]')).not.toBeNull(),
+    );
     expect(container.querySelector('[data-chat-thinking-option="medium"]')).toBeNull();
   });
 

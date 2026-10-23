@@ -326,22 +326,36 @@ describe("new-session composer keyboard submission", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["Enter", false, false, false, false],
-    ["Ctrl+Enter in Enter mode", false, true, false, false],
-    ["Meta+Enter in Enter mode", false, false, true, false],
-    ["Ctrl+Enter in modifier mode", true, true, false, false],
-    ["Meta+Enter in modifier mode", true, false, true, false],
-    ["Meta+Shift+Enter in Enter mode", false, false, true, true],
-    ["Ctrl+Shift+Enter in modifier mode", true, true, false, true],
-  ] as const)("submits once with %s", (_label, requiresModifier, ctrlKey, metaKey, background) => {
-    const onSubmit = vi.fn();
-    const onBackgroundSubmit = vi.fn();
-    const { composer } = renderComposer({ onSubmit, onBackgroundSubmit, requiresModifier });
-    const event = enter(getComposerTextarea(composer), { ctrlKey, metaKey, shiftKey: background });
-    expect(event.defaultPrevented).toBe(true);
-    expect(background ? onBackgroundSubmit : onSubmit).toHaveBeenCalledOnce();
-    expect(background ? onSubmit : onBackgroundSubmit).not.toHaveBeenCalled();
+  describe.each([false, true])("submission keys on mobile=%s", (mobile) => {
+    beforeEach(() => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(mobile ? "Android" : "Windows");
+    });
+    it.each([
+      ["Enter", false, false, false, false],
+      ["Ctrl+Enter in Enter mode", false, true, false, false],
+      ["Meta+Enter in Enter mode", false, false, true, false],
+      ["Ctrl+Enter in modifier mode", true, true, false, false],
+      ["Meta+Enter in modifier mode", true, false, true, false],
+      ["Meta+Shift+Enter in Enter mode", false, false, true, true],
+      ["Ctrl+Shift+Enter in modifier mode", true, true, false, true],
+    ] as const)("handles %s", (_label, requiresModifier, ctrlKey, metaKey, background) => {
+      const onSubmit = vi.fn();
+      const onBackgroundSubmit = vi.fn();
+      const { composer } = renderComposer({ onSubmit, onBackgroundSubmit, requiresModifier });
+      const event = enter(getComposerTextarea(composer), {
+        ctrlKey,
+        metaKey,
+        shiftKey: background,
+      });
+      expect(event.defaultPrevented).toBe(!mobile);
+      expect(background ? onBackgroundSubmit : onSubmit).toHaveBeenCalledTimes(mobile ? 0 : 1);
+      expect(background ? onSubmit : onBackgroundSubmit).not.toHaveBeenCalled();
+      if (mobile) {
+        composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit")!.click();
+        expect(onSubmit).toHaveBeenCalledOnce();
+        expect(onBackgroundSubmit).not.toHaveBeenCalled();
+      }
+    });
   });
 
   it("keeps an IME confirmation Enter from starting a session", () => {

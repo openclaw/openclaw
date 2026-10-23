@@ -178,6 +178,7 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
+  getCronStorePath?: () => string;
 }) {
   const includeSensitive = opts?.includeSensitive === true;
   const audience: HealthAudience = includeSensitive ? "admin" : "public";
@@ -203,6 +204,7 @@ export async function refreshGatewayHealthSnapshot(opts?: {
       audience,
       probe: strength === "probe",
       runtimeSnapshot,
+      cronStorePath: opts?.getCronStorePath?.(),
       ...(configReloadHotReloadStatus ? { configReloadHotReloadStatus } : {}),
       ...(opts?.getSessionRowProjection
         ? { sessionRowProjection: opts.getSessionRowProjection() }

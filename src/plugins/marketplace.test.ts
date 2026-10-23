@@ -766,24 +766,31 @@ describe("marketplace archive downloads", () => {
     ["interrupted", "archive stream failed"],
   ] as const)("cancels and cleans up an %s archive stream", async (kind, error) => {
     const beforeTempDirs = await listMarketplaceDownloadTempDirs();
-    const { response, reader, arrayBuffer } = fakeResponse();
-    reader.read.mockResolvedValueOnce({
-      done: false,
-      value:
-        kind === "oversized"
-          ? new Uint8Array(256 * 1024 * 1024 + 1)
-          : Buffer.from("partial archive"),
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          kind === "oversized"
+            ? new Uint8Array(256 * 1024 * 1024 + 1)
+            : Buffer.from("partial archive"),
+        );
+      },
+      pull(controller) {
+        if (kind === "interrupted") {
+          controller.error(new Error(error));
+        }
+      },
+      cancel,
     });
-    if (kind === "interrupted") {
-      reader.read.mockRejectedValueOnce(new Error(error));
-    }
-    respond(response, "https://cdn.example.com/releases/frontend-design.tgz");
+    const response = new Response(body);
+    const arrayBuffer = vi.spyOn(response, "arrayBuffer");
+    const release = respond(response, "https://cdn.example.com/releases/frontend-design.tgz");
     expectDownloadFailure(await install(), error);
     expect(arrayBuffer).not.toHaveBeenCalled();
-    expect(reader.cancel).toHaveBeenCalledTimes(1);
-    expect(reader.releaseLock).toHaveBeenCalledTimes(1);
-    if (kind === "interrupted") {
-      expect(reader.read).toHaveBeenCalledTimes(2);
+    expect(body.locked).toBe(false);
+    expect(release).toHaveBeenCalledTimes(1);
+    if (kind === "oversized") {
+      expect(cancel).toHaveBeenCalledTimes(1);
     }
     expect(await listMarketplaceDownloadTempDirs()).toEqual(beforeTempDirs);
   });

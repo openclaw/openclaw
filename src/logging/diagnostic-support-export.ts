@@ -57,10 +57,6 @@ type DiagnosticSupportExportOptions = {
   readHealthSnapshot?: SupportSnapshotReader;
 };
 
-export type WriteDiagnosticSupportExportResult = Awaited<
-  ReturnType<typeof writeDiagnosticSupportExport>
->;
-
 type ConfigShape = {
   path: string;
   exists: boolean;

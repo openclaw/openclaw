@@ -388,6 +388,7 @@ it("requires current runtime access before showing Ultrafast", () => {
       fastModeTarget: { ...input.fastModeTarget, agentRuntime: runtime(id, "session") },
     });
   expect(normalizeChatFastModeInput("ultrafast")).toBe("ultrafast");
+  expect(normalizeChatFastModeInput("ultra")).toBe("ultrafast");
   expect(selectRuntime("openclaw", [entry])).toMatchObject({
     ultrafastSupported: true,
     currentOverride: "ultrafast",

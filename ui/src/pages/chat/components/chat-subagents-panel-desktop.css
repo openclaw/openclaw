@@ -137,7 +137,7 @@
   border-radius: 50%;
   background: var(--bg);
   box-shadow: 0 0 0 2px var(--bg);
-  animation: subagents-desktop-spin 1.5s linear infinite;
+  animation: btn-spinner-spin 1.5s linear infinite;
 }
 
 .subagents-desktop__identity {
@@ -274,12 +274,6 @@
 
   .subagents-desktop__row .subagents-desktop__stop:disabled {
     opacity: 0.45;
-  }
-}
-
-@keyframes subagents-desktop-spin {
-  to {
-    transform: rotate(360deg);
   }
 }
 

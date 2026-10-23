@@ -65,6 +65,12 @@ former location. Writes through an already-open file descriptor remain
 recoverable there. A file recreated after completed migration is retained and
 reported; it does not overwrite the operator-owned job.
 
+If existing scratch differs from `HEARTBEAT.md` and was not imported from that
+file, Doctor preserves the scratch and original file, prints a notice, and
+completes the conversion. Explicitly unset scratch stays unset. The automation
+uses its existing scratch; review the retained file before copying any wanted
+instructions into the job. Repeating Doctor keeps both originals and succeeds.
+
 Doctor prints this one-time note when migration completes:
 
 > Migrated heartbeats now use standard Automations delivery. Heartbeat-specific duplicate suppression and no-route skipping were removed: repeated updates can be delivered, and a missing route no longer skips the run before execution. Delivery failures follow ordinary automation handling. Review the migrated jobs' delivery settings if you relied on either behavior.

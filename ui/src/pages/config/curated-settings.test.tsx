@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { getQueriesForElement } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import {
@@ -134,6 +135,52 @@ it("locks every global dreaming control when config mutation is unavailable", ()
   ).toBe(true);
 });
 
+it("preserves uncommitted numeric and text drafts across unrelated config refreshes", () => {
+  const onPatch = vi.fn();
+  const [config, setConfig] = createSignal(
+    dreamingConfig({
+      frequency: "0 3 * * *",
+      phases: { light: { lookbackDays: 7 } },
+    }),
+  );
+  const view = mountSolid(() => (
+    <CuratedSettingsPanel
+      {...panelDefaults}
+      config={config()}
+      onPatch={(_, path, value) => onPatch(path, value)}
+    />
+  ));
+  flush();
+  const frequency = numberInput(view.container, "Dreaming frequency");
+  const lookback = numberInput(view.container, "Lookback days");
+  frequency.value = "0 4 * * *";
+  lookback.value = "14";
+  setConfig(
+    dreamingConfig({
+      frequency: "0 3 * * *",
+      verboseLogging: true,
+      phases: { light: { lookbackDays: 7 } },
+    }),
+  );
+  flush();
+  expect(numberInput(view.container, "Dreaming frequency")).toBe(frequency);
+  expect(frequency.value).toBe("0 4 * * *");
+  expect(lookback.value).toBe("14");
+  expect(onPatch).not.toHaveBeenCalled();
+  frequency.dispatchEvent(new Event("change", { bubbles: true }));
+  lookback.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(onPatch).toHaveBeenNthCalledWith(1, ["frequency"], "0 4 * * *");
+  expect(onPatch).toHaveBeenNthCalledWith(2, ["phases", "light", "lookbackDays"], 14);
+  setConfig(
+    dreamingConfig({
+      frequency: "0 5 * * *",
+      phases: { light: { lookbackDays: 21 } },
+    }),
+  );
+  flush();
+  expect(frequency.value).toBe("0 5 * * *");
+  expect(lookback.value).toBe("21");
+});
 it("rejects invalid numbers, accepts valid edits, and clears emptied values", () => {
   const onPatch = vi.fn();
   const container = renderInto({ enabled: true, phases: { light: { lookbackDays: 7 } } }, onPatch);

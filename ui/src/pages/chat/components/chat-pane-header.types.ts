@@ -18,7 +18,7 @@ import type {
 import type { ChatSessionVersionsMobileProps } from "./chat-session-versions-mobile.tsx";
 import type { ContinueInTerminalDialogProps } from "./continue-in-terminal-dialog.tsx";
 
-export type ChatPaneParentSession = {
+type ChatPaneParentSession = {
   key: string;
   title: string;
 };
@@ -63,7 +63,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   runningSubagentCount?: number;
   dashboardWidgetMenu?: Parameters<typeof ChatDashboardMenu>[0]["widgetMenu"];
   setDashboardControls?: (action: Element | undefined) => void;
-  panelActionDestinations?: { main: boolean; side: boolean; dashboard: boolean };
+  panelActionDestinations?: { main: boolean; side: boolean };
   /** The surrounding desktop frame supplies the Panels toggle. */
   externalPanelsToggle?: boolean;
   detailsControl?: ChatDetailsViewProps;

@@ -18,6 +18,14 @@
   font-variant-numeric: lining-nums tabular-nums;
 }
 
+.chat-details-mobile-root__title {
+  margin: 0 12px;
+  overflow-wrap: anywhere;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
 .chat-details-mobile-root__section {
   min-width: 0;
 }

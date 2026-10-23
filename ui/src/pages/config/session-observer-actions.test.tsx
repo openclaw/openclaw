@@ -146,7 +146,7 @@ describe("Session Observer actions", () => {
     },
   );
 
-  it("clears the previous failure when a later toggle succeeds", async () => {
+  it("clears the previous failure while a later toggle is pending", async () => {
     const page = await setup();
     const retried = createDeferred<unknown>();
     try {
@@ -160,7 +160,10 @@ describe("Session Observer actions", () => {
 
       page.request.mockImplementationOnce(() => retried.promise);
       page.observerToggle().click();
-      await waitForSolid(() => expect(page.outlet.textContent).toContain("Saving…"));
+      await waitForSolid(() => {
+        expect(page.outlet.textContent).toContain("Saving…");
+        expect(page.outlet.textContent).not.toContain("Synthetic observer save failed");
+      });
       retried.resolve({
         config: { ...page.config, gateway: { controlUi: { sessionObserver: false } } },
         hash: "retried",

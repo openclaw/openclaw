@@ -36,6 +36,7 @@ import {
   personalSidebarOwnerProjection,
   personalSidebarOwnerFilterId,
   projectUnpinnedSessionRows,
+  sidebarVisibleRowsInOrder,
 } from "./app-sidebar-personal-navigation.ts";
 import { sidebarPresenceScope } from "./app-sidebar-presence.ts";
 import {
@@ -496,7 +497,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   protected visibleSessionRowsInOrder(): SidebarRecentSession[] {
     const rows = this.selectedAgentSessionRows(this.getSessionNavigationState());
     const { visibleRows } = this.zonedVisibleSections(rows);
-    return this.sessionProjection.visibleRowsInOrder(this.reconciledSidebarZone(rows), visibleRows);
+    return sidebarVisibleRowsInOrder(this.reconciledSidebarZone(rows), visibleRows, this);
   }
 
   protected visibleSessionTreeInOrder(): SidebarRecentSession[] {
@@ -680,14 +681,8 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   private selectedAgentSessionResult(agentId = this.expandedAgentId()): SessionsListResult | null {
-    if (this.rosterSessionSource) {
-      return this.rosterSessionSource.result;
-    }
-    const selected = normalizeAgentId(agentId);
-    return this.sessionData.sessionsAgentId === null ||
-      selected === normalizeAgentId(this.sessionData.sessionsAgentId)
-      ? this.sessionData.sessionsResult
-      : (this.sessionData.sessionResultsByAgent[selected] ?? null);
+    const roster = this.rosterSessionSource;
+    return roster ? roster.result : this.sessionData.resultForAgent(agentId);
   }
 
   selectedAgentMainSessionKey(agentId?: string): string {

@@ -1,7 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
 import {
@@ -17,6 +18,7 @@ import {
 } from "./packages.test-support.js";
 
 const { integrity } = pluginPackage;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const skillIntegrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
 const skillPackage = {
   kind: "skill",
@@ -301,7 +303,8 @@ describe("installClawPackages", () => {
 
   it("installs plugins through the shared surface with the selected ClawHub source", async () => {
     probePlugin.mockClear();
-    const workerEnv = { OPENCLAW_STATE_DIR: "/tmp/openclaw-claws" };
+    const stateDir = tempDirs.make("openclaw-claws-");
+    const workerEnv = { OPENCLAW_STATE_DIR: stateDir };
     const installPlugin = vi.fn().mockResolvedValue(undefined);
     const preflightPlugin = vi.fn().mockResolvedValue({ ok: true, action: "install" });
 
@@ -330,12 +333,12 @@ describe("installClawPackages", () => {
         invalidateRuntimeCache: false,
         clawManaged: true,
         env: {
-          OPENCLAW_STATE_DIR: "/tmp/openclaw-claws",
+          OPENCLAW_STATE_DIR: stateDir,
           OPENCLAW_CLAWHUB_URL: "http://127.0.0.1:3323",
         },
       }),
     );
-    expect(workerEnv).toEqual({ OPENCLAW_STATE_DIR: "/tmp/openclaw-claws" });
+    expect(workerEnv).toEqual({ OPENCLAW_STATE_DIR: stateDir });
     expect(result).toMatchObject([
       {
         integrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

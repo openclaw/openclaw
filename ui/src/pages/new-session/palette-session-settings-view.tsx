@@ -1,16 +1,4 @@
-import {
-  action,
-  affects,
-  createMemo,
-  createOptimistic,
-  createSignal,
-  For,
-  latest,
-  Loading,
-  onCleanup,
-  onSettled,
-  refresh,
-} from "solid-js";
+import { createMemo, createSignal, For, latest, Loading, onCleanup, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
@@ -20,6 +8,7 @@ import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.t
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { resolvePaletteSessionSettings, type SettingsOptions } from "./palette-session-settings.ts";
+import { createPresentationAction } from "./submission-action.ts";
 import { repositoryIssueText } from "./submit-gates.ts";
 import { AgentSelect, RequiredSessionPlacement } from "./target-controls-view.tsx";
 
@@ -152,53 +141,15 @@ export function PaletteSessionSettingsView(properties: {
       (current + (event.key === "ArrowDown" ? 1 : -1) + controls.length) % controls.length
     ]?.focus();
   });
-  const lifetime = createMemo(
-    () => {
-      open();
-      return {
-        owner: properties.options.preferences,
-        retired: properties.options.preferences.presentationLifetime,
-      };
-    },
-    {
-      equals: (previous, next) =>
-        previous.owner === next.owner && previous.retired === next.retired,
-    },
-  );
-  const presentation = createMemo(() => {
-    const scope = lifetime();
-    const [saving, setSaving] = createOptimistic(false);
-    return { ...scope, saving, setSaving };
-  });
   const failed = createMemo(() => properties.options.preferences.failed);
-  const isCurrent = (pendingView: ReturnType<typeof presentation>) =>
-    properties.options.preferences === pendingView.owner &&
-    pendingView.owner.presentationLifetime === pendingView.retired;
-  const present = action(function* (
-    pendingView: ReturnType<typeof presentation>,
-    pending: Promise<void> | undefined,
-  ) {
-    if (isCurrent(pendingView)) {
-      pendingView.setSaving(true);
-      affects(failed);
-    }
-    yield Promise.race([pending, pendingView.retired]);
-    if (isCurrent(pendingView)) {
-      yield refresh(failed);
-    }
-  });
-  const save = async (operation: () => Promise<void> | undefined) => {
-    const pendingView = presentation();
-    const pending = operation();
-    // Publish the synchronous owner intent before its temporary saving presentation.
-    await Promise.resolve();
-    void present(pendingView, pending).catch(() => {
-      if (isCurrent(pendingView)) {
-        pendingView.owner.reportFailure();
-      }
-    });
-    return pending;
-  };
+  const { saving, submit } = createPresentationAction(
+    () => properties.options.preferences,
+    (owner) => owner.presentationLifetime,
+    open,
+    failed,
+    (owner) => owner.reportFailure(),
+  );
+  const save = async (operation: () => Promise<void> | undefined) => submit(operation);
   const retry = nativeListener(
     "click",
     () => void save(() => properties.options.preferences.retry()),
@@ -479,10 +430,7 @@ export function PaletteSessionSettingsView(properties: {
       <div class="palette-session-settings__content" ref={keydown}>
         {places() ? <SettingsPlaces /> : <SettingsSummary />}
         {!places() || latest(failed) ? (
-          <div
-            class="palette-session-settings__footer"
-            aria-busy={presentation().saving() ? "true" : "false"}
-          >
+          <div class="palette-session-settings__footer" aria-busy={saving() ? "true" : "false"}>
             {!places() ? (
               <label
                 class="palette-session-settings__remember"

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
-import { normalizeCronFormState, validateCronForm } from "./index.ts";
+import { normalizeCronFormState, validateCronForm } from "./form.ts";
 
 describe("cron form validation", () => {
   it.each([

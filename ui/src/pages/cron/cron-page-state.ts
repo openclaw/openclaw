@@ -7,22 +7,24 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { watchAgentScope, watchSelectedAgent } from "../../lib/agents/index.ts";
 import {
+  hasCronFormErrors,
+  normalizeCronFormState,
+  validateCronForm,
+} from "../../lib/cron/form.ts";
+import {
   addCronJob,
   cancelCronEdit,
   createInitialCronState,
-  hasCronFormErrors,
   invalidateCronMutation,
   invalidateCronRefresh,
   loadCronJobsPage,
   loadCronStatus,
-  normalizeCronFormState,
   removeCronJob,
   runCronJob,
   startCronClone,
   startCronEdit,
   toggleCronJob,
   updateCronJobsFilter,
-  validateCronForm,
 } from "../../lib/cron/index.ts";
 import { loadCronRuns, loadCronRunsForJob, updateCronRunsFilter } from "../../lib/cron/runs.ts";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
@@ -310,6 +312,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     routeSearch = search;
     runTranscript.close();
     cron.cronError = null;
+    cron.cronNotice = null;
     const routeData = resolveCronRouteData(search);
     if (JSON.stringify(cron.cronSessionFilter) !== JSON.stringify(routeData.session)) {
       resetGatewayState(context().gateway.snapshot);
@@ -658,7 +661,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     reads: presentation.reads,
     canManageCron,
     cronModelSuggestions: presentation.modelSuggestions,
-    modelSuggestionsError: presentation.modelError,
     listTab,
     detailTab,
     actions,

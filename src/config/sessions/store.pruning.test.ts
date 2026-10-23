@@ -71,8 +71,8 @@ describe("pruneStaleEntries", () => {
 });
 
 it.each([
-  ["suspended", "quota_exhausted", 30_000, 1, false],
-  ["active", "circuit_open", 61_000, 31_000, true],
+  ["suspended", "quota_exhausted", 30 * 60 * 1000, 1, false],
+  ["active", "circuit_open", 61 * 60 * 1000, 31 * 60 * 1000, true],
 ] as const)("transitions a %s quota suspension (%s)", (state, reason, age, resumeAge, cleared) => {
   const now = Date.now();
   const quotaSuspension = {
@@ -85,14 +85,12 @@ it.each([
     failedModel: "claude-opus-4-6",
   };
   const expected = {
-    patch: { quotaSuspension: cleared ? undefined : { ...quotaSuspension, state: "resuming" } },
-    cleared,
+    quotaSuspension: cleared ? undefined : { ...quotaSuspension, state: "resuming" },
   };
   expect(
     resolveQuotaSuspensionEntryMaintenance({
       entry: { ...makeEntry(now), quotaSuspension },
       now,
-      ttlMs: 30_000,
     }),
   ).toEqual(expected);
 });
@@ -356,7 +354,7 @@ describe("resolveMaintenanceConfigFromInput", () => {
       await saveSessionStore(storePath, store, { skipMaintenance: true });
 
       const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: 0 });
-      const result = await enforceSessionDiskBudget({
+      await enforceSessionDiskBudget({
         store,
         storePath,
         maintenance,
@@ -364,7 +362,6 @@ describe("resolveMaintenanceConfigFromInput", () => {
       });
 
       expect(maintenance).toMatchObject(disabledBudget);
-      expect(result).toBeNull();
       await fs.access(transcriptPath);
     });
   });
@@ -480,14 +477,13 @@ describe("recent session preservation", () => {
         [externalKey]: makeEntry(now - 9 * DAY_MS, "external"),
       };
 
-      const result = await enforceSessionDiskBudget({
+      await enforceSessionDiskBudget({
         store,
         storePath: path.join(dir, "sessions.json"),
         maintenance: { highWaterBytes: 1, maxDiskBytes: 1, preserveRecentMs },
         warnOnly: false,
       });
 
-      expect(result?.removedEntries).toBe(1);
       expect(store).toHaveProperty(recentKey);
       expect(store).toHaveProperty(externalKey);
       expect(store).not.toHaveProperty(staleKey);

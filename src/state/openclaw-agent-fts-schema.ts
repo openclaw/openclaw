@@ -2,7 +2,4 @@ import { getSqliteMemorySearchFtsSchemas } from "../infra/database-engine/sqlite
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
 /** Static agent DDL and the memory owner's lazily installed FTS definitions. */
-export const OPENCLAW_AGENT_FTS_SCHEMAS = [
-  OPENCLAW_AGENT_SCHEMA_SQL,
-  ...getSqliteMemorySearchFtsSchemas(),
-];
+export const AGENT_FTS_SCHEMAS = [OPENCLAW_AGENT_SCHEMA_SQL, ...getSqliteMemorySearchFtsSchemas()];

@@ -8,8 +8,8 @@ import {
 const HEX_COLOR_RE = /#(?:[\da-f]{8}|[\da-f]{6}|[\da-f]{4}|[\da-f]{3})(?![\da-f])/gi;
 
 export function installMarkdownHexColors(parser: MarkdownIt): void {
-  // Existing link owners run first: URLs, files, and issue references keep their meaning.
-  parser.core.ruler.push("hex-colors", (state) => {
+  // Link owners run first; preserve reference metadata before text tokens are joined.
+  parser.core.ruler.before("text_join", "hex-colors", (state) => {
     if (state.env.mode !== "message") {
       return;
     }
@@ -20,7 +20,12 @@ export function installMarkdownHexColors(parser: MarkdownIt): void {
         if (token.type === "link_open" || token.type === "link_close") {
           linkDepth += token.nesting;
         }
-        if (token.type !== "text" || linkDepth !== 0 || !token.content.includes("#")) {
+        if (
+          token.type !== "text" ||
+          token.meta?.githubItemReference ||
+          linkDepth !== 0 ||
+          !token.content.includes("#")
+        ) {
           continue;
         }
         index = replaceMarkdownTextMatches(state, children, index, HEX_COLOR_RE, (match) => {

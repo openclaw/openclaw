@@ -22,9 +22,9 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           return readSessionGroupCatalogSnapshot(db);
         });
       expect(read()).toEqual({ groups: [], defaults: [], sectionOrder: [] });
-      await putSessionGroups({ cfg: {}, names: [], sectionOrder: ["work"], env });
+      await putSessionGroups({ cfg: {}, names: [], sectionOrder: ["work"] });
       expect(read()).toEqual({ groups: [], defaults: [], sectionOrder: ["work"] });
-      await putSessionGroups({ cfg: {}, names: ["Zulu", "Alpha"], env });
+      await putSessionGroups({ cfg: {}, names: ["Zulu", "Alpha"] });
       await updateSessionGroupDefaults("Alpha", { cwd: "/synthetic/repo", worktree: true }, env);
       expect(read()).toEqual({
         groups: [

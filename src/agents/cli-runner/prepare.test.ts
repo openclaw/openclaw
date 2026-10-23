@@ -97,6 +97,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../auth-profiles/store-runtime.js";
+import { resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
@@ -2055,8 +2056,8 @@ describe("prepareCliRunContext", () => {
     });
   });
 
-  it("reuses normal/heartbeat/normal CLI bindings for a subagent", async () => {
-    const trigger = "heartbeat";
+  it("reuses normal/event/normal CLI bindings for a subagent", async () => {
+    const trigger = "event";
     const sessionKey = "agent:main:subagent:child";
     const cliSessionBindingFacts = { extraSystemPromptStatic: "" };
     const first = await fixture.prepare({ sessionKey, cliSessionBindingFacts });
@@ -2087,6 +2088,50 @@ describe("prepareCliRunContext", () => {
     expect(background.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
     expect(normal.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
   });
+
+  it.each([false, true])(
+    "keeps agent bootstrap and layers only execution AGENTS (explicit root: %s)",
+    async (explicitRoot) => {
+      setCliRunnerPrepareTestDeps({ resolveBootstrapContextForRun });
+      const { dir } = fixture.session;
+      const executionDir = path.join(dir, "execution");
+      const bootstrapDir = explicitRoot ? path.join(dir, "bootstrap-override") : dir;
+      fs.mkdirSync(executionDir);
+      fs.mkdirSync(bootstrapDir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "AGENTS.md"), "UNSELECTED-WORKSPACE");
+      for (const [name, content] of Object.entries({
+        "AGENTS.md": "CANONICAL-AGENT-RULE",
+        "SOUL.md": "CANONICAL-SOUL-MARKER",
+        "USER.md": "CANONICAL-USER-MARKER",
+        "MEMORY.md": "CANONICAL-MEMORY-MARKER",
+      })) {
+        fs.writeFileSync(path.join(bootstrapDir, name), content);
+      }
+      fs.writeFileSync(path.join(executionDir, "AGENTS.md"), "EXECUTION-PROJECT-RULE");
+      fs.writeFileSync(path.join(executionDir, "USER.md"), "EXECUTION-USER-MUST-NOT-OVERRIDE");
+      fs.writeFileSync(path.join(executionDir, "MEMORY.md"), "EXECUTION-MEMORY-MUST-NOT-OVERRIDE");
+
+      const context = await fixture.prepare({
+        config: { agents: { defaults: { workspace: dir }, entries: { main: {} } } },
+        sessionKey: "agent:main:main",
+        workspaceDir: executionDir,
+        cwd: executionDir,
+        ...(explicitRoot ? { bootstrapWorkspaceDir: bootstrapDir } : {}),
+      });
+
+      expect(context.cwd).toBe(executionDir);
+      expect(context.systemPrompt).toContain("CANONICAL-AGENT-RULE");
+      expect(context.systemPrompt).toContain("CANONICAL-SOUL-MARKER");
+      expect(context.systemPrompt).toContain("CANONICAL-USER-MARKER");
+      expect(context.systemPrompt).toContain("CANONICAL-MEMORY-MARKER");
+      expect(context.systemPrompt.indexOf("EXECUTION-PROJECT-RULE")).toBeGreaterThan(
+        context.systemPrompt.indexOf("CANONICAL-MEMORY-MARKER"),
+      );
+      expect(context.systemPrompt).not.toContain("EXECUTION-USER-MUST-NOT-OVERRIDE");
+      expect(context.systemPrompt).not.toContain("EXECUTION-MEMORY-MUST-NOT-OVERRIDE");
+      expect(context.systemPrompt).not.toContain("UNSELECTED-WORKSPACE");
+    },
+  );
 
   it("uses canonical repository skills for a managed worktree", async () => {
     const { dir } = fixture.session;

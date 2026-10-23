@@ -350,6 +350,7 @@ describe("renderAgents", () => {
               cronScopedNextWakeAtMs: null,
               cronLoading: cronState.cronLoading,
               cronError: cronState.cronError,
+              cronNotice: cronState.cronNotice,
             },
           }),
         },
@@ -914,32 +915,37 @@ describe("renderAgentFiles", () => {
 });
 
 describe("renderAgents toolbar", () => {
-  it("keeps standalone agent creation available with no agents", () => {
-    const container = document.createElement("div");
-    const onCreateAgent = vi.fn();
-    renderView(
-      {
-        selectedAgentId: "alpha",
-        onCreateAgent,
-        readData: () => ({
-          ...createProps().readData(),
-          agentsList: {
-            defaultId: "alpha",
-            mainKey: "main",
-            scope: "per-sender",
-            agents: [],
-          },
-        }),
-      },
-      container,
-    );
+  it.each([false, true])(
+    "keeps standalone creation with no selectable agents (system: %s)",
+    (system) => {
+      const container = document.createElement("div");
+      const onCreateAgent = vi.fn();
+      renderView(
+        {
+          selectedAgentId: "alpha",
+          onCreateAgent,
+          readData: () => ({
+            ...createProps().readData(),
+            agentsList: {
+              defaultId: "alpha",
+              mainKey: "main",
+              scope: "per-sender",
+              agents: system ? [{ id: "alpha", kind: "system" }] : [],
+            },
+          }),
+        },
+        container,
+      );
 
-    expect(container.querySelector("openclaw-agent-select")).toBeNull();
-    const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
-    expect(createButton?.textContent?.trim()).toBe(t("custodian.newAgent"));
-    createButton?.click();
-    expect(onCreateAgent).toHaveBeenCalledOnce();
-  });
+      expect(container.querySelector("openclaw-agent-select")).toBeNull();
+      expect(container.querySelector("#agent-panel")).toBeNull();
+      expect(container.textContent).toContain(t("agents.selectSubtitle"));
+      const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
+      expect(createButton?.textContent?.trim()).toBe(t("custodian.newAgent"));
+      createButton?.click();
+      expect(onCreateAgent).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps unavailable creation visible and disabled with a recovery reason", () => {
     const container = document.createElement("div");

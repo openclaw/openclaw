@@ -224,6 +224,31 @@ describe("xAI web search auth lifecycle", () => {
 });
 
 describe("xai web search config resolution", () => {
+  it("validates query and count without forwarding count to native web search", async () => {
+    const mockFetch = installXaiWebSearchFetch();
+    const tool = requireXaiWebSearchTool({
+      config: xaiPluginConfig({ webSearch: { apiKey: "xai-validation-key" } }),
+      searchConfig: { cacheTtlMinutes: 0, maxResults: 3 },
+    });
+    await expect(tool.execute({ count: 11 })).rejects.toThrow("query required");
+    for (const count of [0, 1.5, 11]) {
+      await expect(tool.execute({ query: "invalid count", count })).rejects.toThrow(
+        "count must be an integer from 1 to 10.",
+      );
+    }
+    expect(mockFetch).not.toHaveBeenCalled();
+    for (const count of [1, 10]) {
+      const query = `valid unused count ${count}`;
+      await tool.execute({ query, count });
+      const body = firstFetchBody(mockFetch);
+      expect(body.input).toEqual([{ role: "user", content: query }]);
+      expect(body.tools).toEqual([{ type: "web_search" }]);
+      expect(body).not.toHaveProperty("count");
+      expect(body).not.toHaveProperty("maxResults");
+      mockFetch.mockClear();
+    }
+  });
+
   it("treats unresolved non-env SecretRefs as missing credentials instead of using env fallback", async () => {
     await withEnvAsync({ XAI_API_KEY: "ambient-xai-test-key" }, async () => {
       const result = await search("OpenClaw", {

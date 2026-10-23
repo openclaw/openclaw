@@ -82,12 +82,7 @@ type ModelSelectedContext = {
 };
 
 /** Typing indicator class for channel-owned UX policy. */
-export type TypingPolicy =
-  | "auto"
-  | "user_message"
-  | "system_event"
-  | "internal_webchat"
-  | "heartbeat";
+export type TypingPolicy = "auto" | "user_message" | "system_event" | "internal_webchat";
 
 /** Per-turn policy for source-message reply threading. */
 export type ReplyThreadingPolicy = {
@@ -254,15 +249,10 @@ export type GetReplyOptions = {
   onTypingController?: (typing: TypingController) => void;
   /** If false, send only the initial typing signal without periodic keepalive refreshes. */
   typingKeepalive?: boolean;
-  isHeartbeat?: boolean;
-  /** Wording only; heartbeat visibility/suppression semantics stay on isHeartbeat. */
-  useHeartbeatFailureCopy?: boolean;
-  /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
+  /** Policy-level typing control for run classes (user/system/internal). */
   typingPolicy?: TypingPolicy;
   /** Force-disable typing indicators for this run (system/internal/cross-channel routes). */
   suppressTyping?: boolean;
-  /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
-  heartbeatModelOverride?: string;
   /** One-shot thinking level override for this run; does not persist to the session. */
   thinkingLevelOverride?: string;
   /** One-shot fast-mode override for this run; does not persist to the session. */

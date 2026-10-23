@@ -258,3 +258,26 @@ describe("chat composer suggestion accessibility", () => {
     textarea.value = "$queued";
   });
 });
+
+it.each(["A mobile draft", "/res"])("leaves mobile Return for editing %s", async (draft) => {
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
+  replaceSlashCommands([
+    { key: "reset", name: "reset", description: "Reset the session.", executeLocal: true },
+  ]);
+  const onSend = vi.fn();
+  const { container } = createReactiveDraftHarness({ onSend });
+  inputDraftAtEnd(container, draft);
+  if (draft.startsWith("/")) {
+    await waitForSolid(() => expect(container.querySelector(".slash-menu-item")).not.toBeNull());
+  }
+  const textarea = getComposerTextarea(container)!;
+  for (const modifiers of [{}, { ctrlKey: true }, { metaKey: true }]) {
+    const event = keydownComposer(container, "Enter", modifiers);
+    expect(event.defaultPrevented).toBe(false);
+    expect(textarea.value).toBe(draft);
+    expect(onSend).not.toHaveBeenCalled();
+  }
+});

@@ -375,8 +375,13 @@ export async function preflightUpdateCommandSchemas(params: {
         installedContexts,
       );
       if (opts.dryRun && updateInstallKind === "package") {
+        const engineOnly =
+          !params.packageAlreadyCurrent &&
+          Boolean(params.packageRuntimeTarget?.nodeEngine) &&
+          canResolveRegistryVersionForPackageTarget(params.packageInstallSpec ?? "");
         const runtime = await resolvePackageRuntimePreflight({
           ...params,
+          engineOnly,
           target: params.packageRuntimeTarget,
           nodeRunner: params.managedServiceNodeRunner,
           timeoutMs: updateStepTimeoutMs,
@@ -387,7 +392,7 @@ export async function preflightUpdateCommandSchemas(params: {
         if (!runtime.ok) {
           preflightNotes.push(`Would refuse update: ${runtime.error}`);
           preflightFailures.push({
-            reason: "node-runtime-preflight",
+            reason: engineOnly ? "preflight-node-runtime-incompatible" : "node-runtime-preflight",
             message: runtime.error,
             failureFacts: runtime.failureFacts,
             recoverySteps: runtime.recoverySteps,

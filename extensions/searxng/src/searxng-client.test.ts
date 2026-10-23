@@ -18,7 +18,9 @@ function searchConfig(endpoint: unknown, categories?: string, language?: string)
 }
 
 function search(params: Partial<Parameters<typeof runSearxngSearch>[0]> = {}) {
-  return runSearxngSearch({ config: searchConfig(baseUrl), query, cacheTtlMinutes: 0, ...params });
+  params.config ??= searchConfig(baseUrl);
+  params.config.tools = { web: { search: { cacheTtlMinutes: 0 } } };
+  return runSearxngSearch({ query, ...params });
 }
 
 function mockFetch(...bodies: (Response | unknown[])[]) {

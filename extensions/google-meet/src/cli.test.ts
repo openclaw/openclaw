@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { GoogleMeetRuntime } from "./runtime.js";
 import * as cli from "./test-support/cli-harness.js";
 import { MEET_URL, meetSession } from "./test-support/fixtures.test-helpers.js";
@@ -22,6 +22,8 @@ const health = {
 
 const { run, output, json } = cli.useCli();
 
+afterEach(() => vi.unstubAllEnvs());
+
 it.each([false, true])("prints local doctor output (json=%s)", async (asJson) => {
   const status = vi.fn<GoogleMeetRuntime["status"]>().mockResolvedValue({ found: false });
   await run(["doctor", "meet_missing", ...(asJson ? ["--json"] : [])], { runtime: { status } });
@@ -43,6 +45,63 @@ it("preserves the original gateway doctor error without output", async () => {
   ).rejects.toBe(error);
   expect(output()).toBe("");
 });
+
+it.each([
+  { command: "resolve-space", explicit: true, json: false },
+  { command: "resolve-space", explicit: false, json: true },
+  { command: "preflight", explicit: true, json: true },
+  { command: "preflight", explicit: false, json: false },
+])(
+  "resolves $command (explicit=$explicit, json=$json)",
+  async ({ command, explicit, json: asJson }) => {
+    const meeting = explicit ? "spaces/explicit" : "spaces/configured";
+    const space = { name: meeting, meetingCode: "abc-defg-hij" };
+    const fetchMock = vi.fn(async () => cli.jsonResponse(space));
+    vi.stubGlobal("fetch", fetchMock);
+    await run(
+      [
+        command,
+        ...(explicit ? ["--meeting", "  spaces/explicit  "] : []),
+        ...(asJson ? ["--json"] : []),
+      ],
+      {
+        config: {
+          defaults: { meeting: "spaces/configured" },
+          oauth: { accessToken: "fixture-token", expiresAt: Date.now() + 3_600_000 },
+        },
+      },
+    );
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      `https://meet.googleapis.com/v2/${meeting}`,
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer fixture-token" }),
+      }),
+    );
+    if (asJson) {
+      expect(json()).toMatchObject(
+        command === "resolve-space" ? space : { input: meeting, resolvedSpaceName: meeting },
+      );
+    } else {
+      expect(output()).toContain(`input: ${meeting}\n`);
+      expect(output()).toContain("meeting code: abc-defg-hij\n");
+      expect(output()).toContain("token source: cached-access-token\n");
+    }
+  },
+);
+
+it.each(["resolve-space", "preflight"])(
+  "rejects missing %s meeting before OAuth",
+  async (command) => {
+    vi.stubEnv("OPENCLAW_GOOGLE_MEET_DEFAULT_MEETING", "");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(run([command])).rejects.toThrow(
+      "Meeting input is required. Pass a URL/meeting code or configure defaults.meeting.",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(output()).toBe("");
+  },
+);
 
 it.each([
   {

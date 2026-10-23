@@ -114,6 +114,10 @@ readiness does not wait for replay.
 Before replaying queued inter-session updates, the Gateway resumes any interrupted
 main turn through its existing recovery owner, preserving the predecessor's order.
 The updates remain queued when that owner defers recovery.
+If the crash-loop breaker pauses the predecessor, startup replay waits for the
+existing boot owner to clear quarantine, then resumes the predecessor and saved
+inputs in order. Shutdown or another restart cancels that wait without replaying
+or discarding the saved inputs.
 
 Per-input replay diagnostics record the input kind, outcome, wait reason, attempt
 count, and elapsed milliseconds without message content or session/input IDs.
@@ -524,6 +528,12 @@ cannot resume reconciliation or hold the shutdown guard. Interrupted maintenance
 retains the lease and provisioning identity for a later sweep; it does not request
 worker destruction. Provider mutations already in progress still settle before
 their owners close.
+Read-only allocation lookups made by reconciliation also release their wait on shutdown, without
+publishing a late lookup result or changing the saved cleanup intent. Reconciliation
+waiting for an environment lock releases its observer on cancellation; any admitted
+mutation keeps its settlement owner. Placement sweeps stop waiting for optional
+environment observations as soon as service shutdown begins, allowing transport
+cleanup to proceed while the environment service drains accepted work.
 Optional session-evidence reads and disk probes are canceled. Node retention stops
 new preparation and cancels supported requests; an in-progress shared bundle
 build remains joined. An accepted retirement, workspace recovery, reclaim, or
@@ -541,6 +551,10 @@ does not wait for the process shutdown deadline. Admitted recovery effects still
 settle before their owners close. After cancellation, reconciliation skips fresh
 placement scans and retention writes; the next boot resumes from durable state.
 Pending diagnostics distinguish attachment reconciliation, environment reconciliation,
+environment-lock and inventory waits, installation and credential preparation, and
+provider calls (including inspection, allocation lookup, provisioning, teardown, and
+SSH identity resolution). Environment and provider identifiers accompany these waits.
+They also distinguish
 retention writes, candidate reads, and session recovery. For an attached worker, shutdown stops the exact
 remote environment before draining its workspace queue: a foreground command
 can hold that queue until the stop cancels it. Remote stop, drain, and active-turn
@@ -1132,6 +1146,11 @@ then use **Resume in new session** without losing the interrupted transcript.
 
 Definitive revocation of the original operator's authority remains terminal for
 that input: recovery records one visible interruption instead of retrying it.
+The same applies when a retained requester profile has no matching operator
+recovery source, or the requester source no longer belongs to the interrupted
+turn. A profile ID alone cannot restore execution authority. A current matching
+source still resumes under the original operator's permissions, regardless of
+who created the session.
 When no other recovery or delivery custody remains, send a new authenticated
 message to continue; `sessions.recover` does not revive that retired input.
 
@@ -1580,6 +1599,11 @@ Use the session transcript and recorded delivery outcome to verify completion.
   Run the turn through the gateway or reset it there with `/new` or `/reset`.
 
 ## Automatic peer results
+
+Saved `sessions_send` inputs retain their original operator scopes during recovery.
+Session-only write access can resume updates to authorized sessions without broader
+Gateway write access. If current permissions block delivery, the recovery notice
+explains that restriction and asks the user to resend; the input remains saved.
 
 Automatic results returned by `sessions_send` use the same communication owner
 and pending-input recovery as peer requests. An accepted request also authorizes

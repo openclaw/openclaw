@@ -310,7 +310,6 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect.soft(afterTurnParams).toMatchObject({
       ...session,
       prePromptMessageCount: 101,
-      isHeartbeat: false,
       tokenBudget: undefined,
       runtimeContext: undefined,
     });

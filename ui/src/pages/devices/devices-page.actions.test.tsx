@@ -46,8 +46,11 @@ describe("DevicesPage policy saves", () => {
           execApprovalsDirty: true,
         },
       );
-      const save = button(page.container, t("common.save"));
-      await waitForSolid(() => expect(save.disabled).toBe(false));
+      const save = await waitForSolid(() => {
+        const control = button(page.container, t("common.save"));
+        expect(control.disabled).toBe(false);
+        return control;
+      });
       save.click();
       await waitForSolid(() => {
         expect(save.textContent).toContain(t("common.saving"));
@@ -95,8 +98,11 @@ describe("DevicesPage policy saves", () => {
       },
       execApprovalsDirty: true,
     });
-    const save = button(page.container, t("common.save"));
-    await waitForSolid(() => expect(save.disabled).toBe(false));
+    const save = await waitForSolid(() => {
+      const control = button(page.container, t("common.save"));
+      expect(control.disabled).toBe(false);
+      return control;
+    });
     save.click();
     await waitForSolid(() => expect(page.container.textContent).toContain(t("common.saving")));
     const replacement = clientFor();

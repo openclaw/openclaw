@@ -1,8 +1,14 @@
+import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, expect, it, vi } from "vitest";
 
+type TestRuntime = {
+  stop(): Promise<void>;
+  preflight(): Promise<{ ready: boolean }>;
+};
+
 const mocks = vi.hoisted(() => ({
-  activateRuntime: vi.fn(async () => {
+  activateRuntime: vi.fn<() => Promise<TestRuntime>>(async () => {
     throw new Error("read-only inspection activated the runtime");
   }),
   staticStatus: vi.fn(async () => ({ activation: "inactive" })),
@@ -39,16 +45,26 @@ vi.mock("./src/config.js", async (importOriginal) => {
 import plugin from "./index.js";
 
 function registerPlugin(enabled?: boolean) {
+  const services: OpenClawPluginService[] = [];
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const serviceContext = { config: {}, stateDir: "/synthetic-facetime-state", logger };
   const gatewayMethods = new Map<string, (options: unknown) => Promise<void>>();
   let toolFactory: (() => { execute(id: string, input: unknown): Promise<unknown> }) | undefined;
   plugin.register!(
     createTestPluginApi({
       rootDir: "/plugin",
       pluginConfig: { enabled, ownerHandles: ["owner@example.com"] },
+      logger,
       runtime: { system: { runCommandWithTimeout: vi.fn() } } as never,
       registerGatewayMethod: (name, handler) =>
         void gatewayMethods.set(name, handler as (options: unknown) => Promise<void>),
       registerTool: (factory) => (toolFactory = factory as unknown as typeof toolFactory),
+      registerService: (service) => {
+        if (service.apiVersion === 2) {
+          throw new Error("expected FaceTime's version 1 service contract");
+        }
+        services.push(service);
+      },
     }),
   );
   const request = async (name: string) => {
@@ -56,7 +72,7 @@ function registerPlugin(enabled?: boolean) {
     await gatewayMethods.get(`facetime.${name}`)!({ respond });
     return respond;
   };
-  return { request, toolFactory };
+  return { request, toolFactory, service: services[0], serviceContext };
 }
 
 beforeEach(() => {
@@ -88,10 +104,13 @@ it("reports native installation remediation without attempting runtime activatio
 });
 
 it("retains a runtime whose carrier shutdown fails before uninstall", async () => {
-  const stop = vi.fn(async () => {
-    throw new Error("carrier shutdown unresolved");
-  });
-  mocks.activateRuntime.mockResolvedValueOnce({ stop } as never);
+  const stop = vi
+    .fn<() => Promise<void>>()
+    .mockRejectedValueOnce(new Error("carrier shutdown unresolved"))
+    .mockRejectedValueOnce(new Error("carrier shutdown unresolved"))
+    .mockResolvedValue(undefined);
+  const runtime = { stop, preflight: vi.fn(async () => ({ ready: true })) };
+  mocks.activateRuntime.mockResolvedValueOnce(runtime);
   const { request } = registerPlugin(true);
   await request("preflight");
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -100,6 +119,44 @@ it("retains a runtime whose carrier shutdown fails before uninstall", async () =
   expect(stop).toHaveBeenCalledTimes(2);
   expect(mocks.activateRuntime).toHaveBeenCalledTimes(1);
   expect(mocks.uninstallDriver).not.toHaveBeenCalled();
+  expect(await request("uninstall")).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({ ok: true }),
+  );
+  expect(stop).toHaveBeenCalledTimes(3);
+  expect(mocks.uninstallDriver).toHaveBeenCalledTimes(1);
+  mocks.activateRuntime.mockResolvedValueOnce(runtime);
+  expect(await request("preflight")).toHaveBeenCalledWith(true, { ready: true });
+  expect(mocks.activateRuntime).toHaveBeenCalledTimes(2);
+});
+
+it("recovers after stopping a service whose pending runtime construction rejects", async () => {
+  const pending = Promise.withResolvers<TestRuntime>();
+  const entered = Promise.withResolvers<void>();
+  mocks.activateRuntime.mockImplementationOnce(() => {
+    entered.resolve();
+    return pending.promise;
+  });
+  const { request, service, serviceContext } = registerPlugin(true);
+  if (!service?.stop) {
+    throw new Error("expected registered FaceTime service with shutdown");
+  }
+  const starting = service.start(serviceContext);
+  await entered.promise;
+  const error = new Error("startup failed");
+  const stopped = expect(service.stop(serviceContext)).rejects.toBe(error);
+  pending.reject(error);
+  await stopped;
+  await starting;
+  expect(serviceContext.logger.warn).toHaveBeenCalledWith(
+    "[facetime] startup skipped: startup failed",
+  );
+  expect(mocks.uninstallDriver).not.toHaveBeenCalled();
+  const runtime = { stop: vi.fn(async () => {}), preflight: vi.fn(async () => ({ ready: true })) };
+  mocks.activateRuntime.mockResolvedValueOnce(runtime);
+  expect(await request("preflight")).toHaveBeenCalledWith(true, { ready: true });
+  expect(mocks.activateRuntime).toHaveBeenCalledTimes(2);
+  expect(runtime.stop).not.toHaveBeenCalled();
 });
 
 it("blocks runtime activation until native uninstall finishes", async () => {

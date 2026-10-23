@@ -131,7 +131,10 @@ it("keeps sharing busy through refresh and retires it for a same-key successor",
   const view = accessFixture(source);
   view.getByRole("button", { name: /Shared/ }).click();
   await waitForSolid(() =>
-    expect(view.getByRole("button", { name: /Shared/ }).hasAttribute("disabled")).toBe(true),
+    expect(
+      view.getByRole("button", { name: /Shared/ }).hasAttribute("disabled"),
+      "sharing is busy after the visibility change starts",
+    ).toBe(true),
   );
   // A delayed header render may check hydration while the write is pending.
   pane.syncSelectedSessionSharing(previous);
@@ -140,7 +143,10 @@ it("keeps sharing busy through refresh and retires it for a same-key successor",
   response.resolve({});
   await refreshStarted.promise;
   flush();
-  expect(view.getByRole("button", { name: /Shared/ }).hasAttribute("disabled")).toBe(true);
+  expect(
+    view.getByRole("button", { name: /Shared/ }).hasAttribute("disabled"),
+    "sharing stays busy while its refresh is pending",
+  ).toBe(true);
   expect(view.applied).not.toHaveBeenCalled();
   holdRefresh = false;
   rows[0] = replacement;
@@ -151,7 +157,12 @@ it("keeps sharing busy through refresh and retires it for a same-key successor",
     reason: "update",
     session: replacement,
   });
-  await waitForSolid(() => expect(source.operationSignal?.aborted).toBe(true));
+  await waitForSolid(() =>
+    expect(
+      source.operationSignal?.aborted,
+      "the successor retires the original sharing scope",
+    ).toBe(true),
+  );
   pane.syncSelectedSessionSharing(replacement);
   await waitForSolid(() =>
     expect(pane.prepareSessionSharing(replacement)?.state?.loading).toBe(false),
@@ -196,6 +207,30 @@ it("returns from Session access only after a confirmed native success", async ()
       expect(view.applied).not.toHaveBeenCalled();
     }
   }
+});
+
+it("retains access controls through a rejected command and a held retry", async () => {
+  const retry = createDeferred<ChatSessionSharingOutcome>();
+  const change = vi
+    .fn<PreparedChatSessionSharing["onVisibilityChange"]>()
+    .mockRejectedValueOnce(new Error("Visibility command failed"))
+    .mockReturnValueOnce(retry.promise);
+  const view = accessFixture(prepared({ onVisibilityChange: change }));
+  const draft = view.getByRole("button", { name: /Draft/ });
+  draft.click();
+  await waitForSolid(() =>
+    expect(view.queryByRole("alert")?.textContent).toContain("Visibility command failed"),
+  );
+  expect(view.getByRole("button", { name: /Draft/ })).toBe(draft);
+  expect(view.applied).not.toHaveBeenCalled();
+  draft.click();
+  await waitForSolid(() => {
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(draft.hasAttribute("disabled")).toBe(true);
+  });
+  retry.resolve({ status: "success" });
+  await waitForSolid(() => expect(view.applied).toHaveBeenCalledOnce());
+  expect(view.getByRole("button", { name: /Draft/ })).toBe(draft);
 });
 
 it.each(["destination", "session"] as const)(

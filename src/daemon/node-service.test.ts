@@ -10,6 +10,17 @@ import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import { resolveNodeService } from "./node-service.js";
 import { withDaemonRuntimePinMigration } from "./runtime-pin-state.js";
+import * as systemd from "./systemd.js";
+
+vi.mock("./systemd.js", async (original) => ({
+  ...(await original<typeof import("./systemd.js")>()),
+  stageSystemdService: vi.fn(async () => {}),
+  installSystemdService: vi.fn(async () => {}),
+  uninstallSystemdService: vi.fn(async () => {}),
+  startSystemdService: vi.fn(async () => {}),
+  stopSystemdService: vi.fn(async () => {}),
+  restartSystemdService: vi.fn(async () => ({ outcome: "completed" as const })),
+}));
 
 vi.mock("./launchd-system.js", async (original) => ({
   ...(await original<typeof import("./launchd-system.js")>()),
@@ -29,6 +40,63 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
+  vi.clearAllMocks();
+});
+
+it("preserves a legacy Gateway definition at a profile's node service name", async () => {
+  const home = dirs.make("openclaw-node-collision-");
+  await withEnvAsync(
+    createPathResolutionEnv(home, { OPENCLAW_STATE_DIR: path.join(home, "state") }),
+    async () => {
+      await withDaemonRuntimePinMigration(process.env, () => undefined);
+      await withMockedPlatform("linux", async () => {
+        const unit = path.join(home, ".config/systemd/user/openclaw-node-work.service");
+        await fs.mkdir(path.dirname(unit), { recursive: true });
+        const definition =
+          '[Service]\nExecStart=/usr/bin/node /opt/openclaw/openclaw.mjs gateway run\nEnvironment="OPENCLAW_PROFILE=node-work" "OPENCLAW_SERVICE_KIND=gateway"\n';
+        await fs.writeFile(unit, definition);
+        const service = resolveNodeService();
+        const args = {
+          env: { ...process.env, OPENCLAW_PROFILE: "work" },
+          stdout: new PassThrough(),
+          programArguments: ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "node", "run"],
+        };
+        const effects = [
+          systemd.stageSystemdService,
+          systemd.installSystemdService,
+          systemd.uninstallSystemdService,
+          systemd.startSystemdService,
+          systemd.stopSystemdService,
+          systemd.restartSystemdService,
+        ];
+        for (const marker of [' "OPENCLAW_SERVICE_KIND=gateway"', ""]) {
+          await fs.writeFile(unit, definition.replace(' "OPENCLAW_SERVICE_KIND=gateway"', marker));
+          for (const action of [
+            "stage",
+            "install",
+            "uninstall",
+            "start",
+            "stop",
+            "restart",
+          ] as const) {
+            await expect(service[action](args)).rejects.toThrow("not an OpenClaw node service");
+          }
+          await expect(fs.readFile(unit, "utf8")).resolves.toBe(
+            definition.replace(' "OPENCLAW_SERVICE_KIND=gateway"', marker),
+          );
+        }
+        for (const effect of effects) {
+          expect(effect).not.toHaveBeenCalled();
+        }
+        await fs.writeFile(
+          unit,
+          definition.replace("OPENCLAW_SERVICE_KIND=gateway", "OPENCLAW_SERVICE_KIND=node"),
+        );
+        await service.stop(args);
+        expect(systemd.stopSystemdService).toHaveBeenCalledOnce();
+      });
+    },
+  );
 });
 
 it("stages and reads separate node definitions for two profiles beside the default", async () => {

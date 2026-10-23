@@ -1,43 +1,4 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
-
-function workspaceMigration(
-  load: () => Promise<
-    (params: {
-      cfg: OpenClawConfig;
-      shouldRepair: boolean;
-      env?: NodeJS.ProcessEnv;
-    }) => Promise<unknown>
-  >,
-): (ctx: DoctorHealthFlowContext) => Promise<void> {
-  return async (ctx) => {
-    const migrate = await load();
-    await migrate({ cfg: ctx.cfg, shouldRepair: ctx.prompter.shouldRepair, env: ctx.env });
-  };
-}
-
-export const runHeartbeatCadenceMigrationHealth = workspaceMigration(async () => {
-  const { maybeMigrateHeartbeatCadenceToCron } =
-    await import("../commands/doctor-heartbeat-cadence-migration.js");
-  return maybeMigrateHeartbeatCadenceToCron;
-});
-
-export const runHeartbeatScratchMigrationHealth = workspaceMigration(async () => {
-  const { maybeMigrateHeartbeatFilesToScratch } =
-    await import("../commands/doctor-heartbeat-scratch-migration.js");
-  return maybeMigrateHeartbeatFilesToScratch;
-});
-
-export const runToolsMdMigrationHealth = workspaceMigration(async () => {
-  const { maybeMigrateToolsMd } = await import("../commands/doctor-tools-md-migration.js");
-  return maybeMigrateToolsMd;
-});
-
-export const runHeartbeatTaskMigrationHealth = workspaceMigration(async () => {
-  const { maybeMigrateHeartbeatTasksToCron } =
-    await import("../commands/doctor-heartbeat-task-migration.js");
-  return maybeMigrateHeartbeatTasksToCron;
-});
 
 export async function runMemorySearchHealthContribution(
   ctx: DoctorHealthFlowContext,

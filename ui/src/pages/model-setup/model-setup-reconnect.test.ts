@@ -230,6 +230,11 @@ describe("ModelSetupPage detection ownership", () => {
     setGatewayPhase("reconnecting");
     setGatewayPhase("connected");
     await waitForText(page, "Enter the selected provider key");
+    await vi.waitFor(() => {
+      expect(page.querySelector<HTMLInputElement>("#model-setup-wizard-text-input")?.disabled).toBe(
+        false,
+      );
+    });
     expect(oldWizardSignal?.aborted).toBe(true);
     expect(callsFor(request, "openclaw.setup.auth.start")).toHaveLength(1);
     expect(callsFor(request, "wizard.cancel")).toHaveLength(0);

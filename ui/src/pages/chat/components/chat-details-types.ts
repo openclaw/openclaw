@@ -9,6 +9,7 @@ import type { GitHubPublicationView } from "../../../lib/sessions/github-publica
 import type { ChatSessionProgressProps } from "./chat-composer-types.ts";
 import type { ChatOutputsDesktopProps } from "./chat-outputs.tsx";
 import type { ChatPanePlacementProps } from "./chat-pane-placement.tsx";
+import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
 type ChatDetailsWorkspace = { root: string | null; label: string | null; branch?: string };
@@ -39,6 +40,7 @@ export type ChatDetailsEnvironmentProps = {
 };
 
 export type ChatDetailsEnvironmentDesktopProps = ChatDetailsEnvironmentProps & {
+  work?: ChatPullRequestsProps;
   /** Forward the native header's placement facts/actions; mobile has its own destination. */
   placement?: ChatPanePlacementProps;
 };
@@ -69,10 +71,6 @@ type ChatDetailsEnvironmentData = Pick<
 
 /** Published assistant-artifact/dashboard facts and real destination/icon operations. */
 export type ChatDetailsOutputs = ChatOutputsDesktopProps;
-export type ChatDetailsOutputsIcons = Pick<
-  ChatDetailsOutputs,
-  "renderArtifactIcon" | "renderViewAllIcon"
->;
 
 // Both the composing view and Details consume this contract; child components
 // must not import their parent renderer to recover accepted pane facts.

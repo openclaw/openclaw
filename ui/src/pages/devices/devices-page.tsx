@@ -44,9 +44,10 @@ import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
-import { createDevicesDialogs, showDeviceRotationOutcome } from "./devices-dialogs.ts";
+import { createDevicesDialogs } from "./devices-dialogs.ts";
 import { createInventoryPresentation } from "./devices-inventory-presentation.ts";
 import { createDevicePolicyActions } from "./devices-policy-actions.ts";
+import { createDevicePolicyReads } from "./devices-policy-reads.ts";
 import {
   createDeviceInventoryRead,
   type InventoryReadReceipt,
@@ -102,6 +103,9 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     gatewayUrl: () => context.gateway.connection.gatewayUrl,
     runPageTask,
     runInventoryTask,
+    rotateDevice: (params) =>
+      inventoryActions.run(() => runPageTask((pageState) => rotateDeviceToken(pageState, params)))
+        .result,
     setDevicesError: (message) => {
       dataState.devicesError = message;
       publishData();
@@ -180,6 +184,13 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     onSnapshot: handleGatewaySnapshot,
     ensureInitialData,
   });
+  const policyReads = createDevicePolicyReads({
+    state: pageData.read,
+    config: () => configProjection.read().state,
+    hasConfig: () => bindingConfig(configRead().state) !== null,
+    gateway: gatewayBinding,
+    target: () => `${execApprovalsTarget}:${execApprovalsTargetNodeId ?? ""}`,
+  });
   const approvalsSnapshot = createMemo(() => pageData.read().execApprovalsSnapshot);
   const configRead = createMemo(() => configProjection.read());
   const policyActions = createDevicePolicyActions({
@@ -230,6 +241,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     const stopConfig = configProjection.subscribe(syncConfigCustody);
     const stopRoute = context.router.subscribe(() => {
       inventoryActions.retire();
+      dataState.devicesDeciding = [];
+      publishData();
       const route = context.router.getState();
       if ((route.pendingMatches[0] ?? route.matches[0])?.routeId !== "devices") {
         policyActions.retire();
@@ -348,6 +361,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   }
 
   function invalidateRequests() {
+    dataState.devicesDeciding = [];
     policyActions.retire();
     inventoryActions.retire();
     dataState.requestGeneration = gatewayBinding.epoch;
@@ -487,7 +501,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       void context.runtimeConfig.refresh();
     }
     if (canAdmin && !pageState.execApprovalsSnapshot && !pageState.execApprovalsLoading) {
-      void runPageTask((current) => loadExecApprovals(current, resolveExecApprovalsTarget()));
+      refreshExecApprovals();
     }
   }
 
@@ -558,34 +572,6 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     setDesktopEnvironments([]);
   }
 
-  // Always show the replacement or rotation outcome, outside the identity-scoped confirmation:
-  // aborting a shown secret would destroy the only copy the Gateway can hand out.
-  async function reportRotationOutcome(
-    device: { id: string; name: string },
-    role: string,
-    scopes?: string[],
-  ) {
-    if (!canManagePairing) {
-      return;
-    }
-    const { result } = inventoryActions.run(() =>
-      runPageTask((pageState) =>
-        rotateDeviceToken(pageState, {
-          deviceId: device.id,
-          gatewayUrl: context.gateway.connection.gatewayUrl,
-          role,
-          scopes,
-        }),
-      ),
-    );
-    // The sole secret outcome outlives the page presentation and must still be shown.
-    const outcome = await result;
-    if (!outcome) {
-      return;
-    }
-    await showDeviceRotationOutcome(device.name, role, outcome);
-  }
-
   // Confirm before discarding a target's dirty draft. Cancellation retains the target, form,
   // scope, and dirty flag; rendering restores the selector to that retained target.
   async function changeExecApprovalsTarget(kind: "gateway" | "node", nodeId: string | null) {
@@ -613,12 +599,33 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       : { kind: "gateway" };
   }
 
+  function refreshExecApprovals() {
+    if (!canAdmin || dataState.execApprovalsLoading) {
+      return;
+    }
+    const state = dataState;
+    const result = runPageTask((current) =>
+      loadExecApprovals(current, resolveExecApprovalsTarget()),
+    );
+    policyReads.observeApprovals(state, result);
+  }
+
+  function bindingConfig(config: ReturnType<typeof configRead>["state"]) {
+    return canRead
+      ? (currentConfigObject(config) ??
+          (configGateway === gatewayBinding.gateway && configClient === gatewayBinding.client
+            ? config.configForm
+            : null))
+      : null;
+  }
+
   function viewProps(): DevicesProps {
     const devices = pageData.read();
     const config = configRead().state;
     const gatewaySnapshot = gatewayBinding.snapshot ?? context.gateway.snapshot;
-    const gatewayVersion = gatewaySnapshot.hello?.server?.version?.trim() || null;
     return {
+      configRead: policyReads.config,
+      execApprovalsRead: policyReads.approvals,
       loading: devices.nodesLoading,
       inventoryRead,
       inventoryScope: inventoryScope(),
@@ -631,7 +638,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       connected: gatewayBinding.connected,
       nodes: devices.nodes,
       presence: presence(),
-      gatewayVersion,
+      gatewayVersion: gatewaySnapshot.hello?.server?.version?.trim() || null,
       basePath: context.basePath,
       gatewaySystemInfo: gatewaySystemInfo(),
       desktopEnvironments: desktopEnvironments(),
@@ -639,15 +646,11 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       devicesLoading: devices.devicesLoading,
       devicesError: devices.devicesError,
       devicesList: devices.devicesList,
+      devicesDeciding: devices.devicesDeciding,
       canPairDevice: canAdmin,
       canManagePairing,
       canAdmin,
-      configForm: canRead
-        ? (currentConfigObject(config) ??
-          (configGateway === gatewayBinding.gateway && configClient === gatewayBinding.client
-            ? config.configForm
-            : null))
-        : null,
+      configForm: bindingConfig(config),
       configLoading: config.configLoading,
       configSaving: config.configSaving,
       configDirty: config.configFormDirty,
@@ -667,13 +670,13 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       },
       onDeviceApprove: (requestId) => {
         if (canManagePairing) {
-          void runInventoryTask((pageState) => approveDevicePairing(pageState, requestId));
+          void runPageTask((pageState) => approveDevicePairing(pageState, requestId));
         }
       },
       onDeviceReject: (requestId) => void dialogs.confirmPairingReject("device", requestId),
       onNodeApprove: (requestId) => {
         if (canManagePairing) {
-          void runInventoryTask((pageState) => approveNodePairingRequest(pageState, requestId));
+          void runPageTask((pageState) => approveNodePairingRequest(pageState, requestId));
         }
       },
       onNodeReject: (requestId) => void dialogs.confirmPairingReject("node", requestId),
@@ -683,12 +686,12 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
           void dialogs.confirmInventoryRemoval({ kind: "stale", entries });
         }
       },
-      onDeviceRotate: (device, role, scopes) => void reportRotationOutcome(device, role, scopes),
+      onDeviceRotate: (device, role, scopes) =>
+        void dialogs.reportRotationOutcome(device, role, scopes),
       onDeviceRevoke: (deviceId, role) => void dialogs.confirmTokenRevoke(deviceId, role),
       onDeviceRename: (device) => void dialogs.editAlias(device),
       onLoadConfig: () => void context.runtimeConfig.discardDraft({ reloadOnly: true }),
-      onLoadExecApprovals: () =>
-        runAdminTask((pageState) => loadExecApprovals(pageState, resolveExecApprovalsTarget())),
+      onLoadExecApprovals: refreshExecApprovals,
       onBindDefault: (nodeId) => policyActions.bindNode(nodeId),
       onBindAgent: (agentId, nodeId) => policyActions.bindNode(nodeId, agentId),
       onSaveBindings: () => void policyActions.save("bindings"),

@@ -884,17 +884,6 @@ openclaw-pending-session-create {
   outline-offset: 2px;
 }
 
-.chat-scroll-to-bottom svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  flex-shrink: 0;
-}
-
 .context-usage {
   position: relative;
   display: inline-flex;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { pluginCommandSchedule } from "../cron/plugin-command-schedule.test-support.js";
 import { PLUGIN_COMMAND_SCHEDULE_MESSAGE } from "../cron/plugin-command-schedule.types.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../cron/scheduled-occurrence.test-support.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { registerPluginCommandInRegistry } from "../plugins/command-registration.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
@@ -56,7 +57,12 @@ describe("scheduled plugin command reservation", () => {
     expect(readPluginCommandScheduledJob(job)).toBeUndefined();
     await expect(
       runPluginCommandScheduledTurn({
-        request: { job, message: "ordinary prompt", deliveryAttemptFence: null },
+        request: {
+          occurrence: TEST_SCHEDULED_OCCURRENCE,
+          job,
+          message: "ordinary prompt",
+          deliveryAttemptFence: null,
+        },
         cfg: {},
         agentId: "main",
       }),
@@ -68,7 +74,12 @@ describe("scheduled plugin command reservation", () => {
     delete job.pluginCommand;
     await expect(
       runPluginCommandScheduledTurn({
-        request: { job, message: PLUGIN_COMMAND_SCHEDULE_MESSAGE, deliveryAttemptFence: null },
+        request: {
+          occurrence: TEST_SCHEDULED_OCCURRENCE,
+          job,
+          message: PLUGIN_COMMAND_SCHEDULE_MESSAGE,
+          deliveryAttemptFence: null,
+        },
         cfg: {},
         agentId: "main",
       }),
@@ -168,7 +179,12 @@ describe("scheduled plugin command reservation", () => {
       // The refusal must come from the job binding, not the missing live occurrence below.
       await expect(
         runPluginCommandScheduledTurn({
-          request: { job, message: PLUGIN_COMMAND_SCHEDULE_MESSAGE, deliveryAttemptFence: null },
+          request: {
+            occurrence: TEST_SCHEDULED_OCCURRENCE,
+            job,
+            message: PLUGIN_COMMAND_SCHEDULE_MESSAGE,
+            deliveryAttemptFence: null,
+          },
           cfg: {},
           agentId: "main",
         }),
@@ -184,7 +200,12 @@ describe("scheduled plugin command reservation", () => {
     const job = scheduledJob();
     await expect(
       runPluginCommandScheduledTurn({
-        request: { job, message: PLUGIN_COMMAND_SCHEDULE_MESSAGE, deliveryAttemptFence: null },
+        request: {
+          occurrence: TEST_SCHEDULED_OCCURRENCE,
+          job,
+          message: PLUGIN_COMMAND_SCHEDULE_MESSAGE,
+          deliveryAttemptFence: null,
+        },
         cfg: {},
         agentId: "main",
       }),
@@ -272,6 +293,27 @@ describe("scheduled plugin command loaded-owner checks", () => {
     const { registry, schedule, plugin } = registeredSchedule();
     registry.plugins = [{ ...plugin }];
     expect(() => assertPluginCommandScheduleRegistry(registry, schedule)).toThrow(
+      "original loaded plugin",
+    );
+  });
+
+  it("requires a re-armed instance to still run the code the schedule accepted", () => {
+    const { registry, schedule, instance } = registeredSchedule();
+    instance.sourceDigest = "accepted-digest";
+    const binding = {
+      pluginIncarnation: schedule.pluginIncarnation,
+      sourceDigest: "accepted-digest",
+    };
+    expect(() => assertPluginCommandScheduleRegistry(registry, schedule, binding)).not.toThrow();
+    expect(() =>
+      assertPluginCommandScheduleRegistry(registry, schedule, {
+        ...binding,
+        sourceDigest: "other-digest",
+      }),
+    ).toThrow("original loaded plugin");
+    // An instance without captured source can never serve a restartable binding.
+    instance.sourceDigest = undefined;
+    expect(() => assertPluginCommandScheduleRegistry(registry, schedule, binding)).toThrow(
       "original loaded plugin",
     );
   });

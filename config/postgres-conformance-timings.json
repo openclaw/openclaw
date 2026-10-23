@@ -560,10 +560,6 @@
       "group": "infra",
       "seconds": 14.842
     },
-    "src/infra/postgres-sync/transaction.test.ts": {
-      "group": "infra",
-      "seconds": 1.254
-    },
     "src/infra/postgres-sync/transcript-hydration.postgres.test.ts": {
       "group": "infra",
       "seconds": 4.069

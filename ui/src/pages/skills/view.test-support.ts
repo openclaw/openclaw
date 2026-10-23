@@ -51,6 +51,7 @@ export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
     skillsAgentRevision: 0,
     skillsLoading: value("loading", false),
     skillsReport: value("report", createReport()),
+    skillsRead: value("skillsRead", null),
     skillsError: value("error", null),
     skillsFilter: value("filter", ""),
     skillsStatusFilter: value("statusFilter", "all"),
@@ -67,14 +68,19 @@ export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
     clawhubDetailError: value("clawhubDetailError", null),
     clawhubInstallMessage: value("clawhubInstallMessage", null),
     clawhubVerdicts: value("clawhubVerdicts", {}),
-    clawhubVerdictsLoading: value("clawhubVerdictsLoading", false),
+    clawhubVerdictsRead: value("clawhubVerdictsRead", null),
     clawhubVerdictsError: value("clawhubVerdictsError", null),
     skillCardContents: value("skillCardContents", {}),
     skillCardContentKeys: {},
-    skillCardLoadingKey: value("skillCardLoadingKey", null),
+    skillCardReads: value("skillCardReads", {}),
     skillCardErrors: value("skillCardErrors", {}),
   };
   return {
+    readClawHubVerdicts: () => state.clawhubVerdicts,
+    get mutationSkills() {
+      return state.skillsReport?.skills ?? [];
+    },
+    saving: false,
     readClawHubDetail: () => {
       if (state.clawhubDetailError) {
         throw new Error(state.clawhubDetailError);

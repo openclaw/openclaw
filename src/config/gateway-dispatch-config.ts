@@ -91,8 +91,7 @@ export async function readGatewayDispatchConfigWithShellEnvFallback(
   const enabled =
     shouldEnableShellEnvFallback(env) || firstRead.config.env?.shellEnv?.enabled === true;
   if (enabled && !shouldDeferShellEnvFallback(env)) {
-    const { applied } = loadShellEnvFallback({
-      enabled: true,
+    const applied = loadShellEnvFallback({
       env,
       expectedKeys: [...GATEWAY_DISPATCH_SHELL_ENV_EXPECTED_KEYS],
       timeoutMs: firstRead.config.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(env),

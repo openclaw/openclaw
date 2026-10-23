@@ -31,12 +31,6 @@ import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identit
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import "../../styles/chat/person-reference.css";
 
-type PersonReferenceProps = {
-  host: HTMLElement;
-  profileId?: string;
-  label?: string;
-};
-
 type ActivePersonCard = {
   host: HTMLElement;
   close: () => void;
@@ -47,7 +41,8 @@ const active = new WeakMap<Document, ActivePersonCard>();
 let nextCardId = 0;
 
 /** Explicit transcript selections only. The directory remains Gateway-owned, not a UI name index. */
-function PersonReferenceContent(props: PersonReferenceProps) {
+function PersonReferenceContent(props: PersonReferenceProperties, host: HTMLElement) {
+  host.style.display = "contents";
   const context = useOptionalApplication();
   const profileId = () => props.profileId ?? "";
   const label = () => props.label ?? "";
@@ -69,8 +64,8 @@ function PersonReferenceContent(props: PersonReferenceProps) {
   );
 
   function close() {
-    if (active.get(props.host.ownerDocument)?.close === close) {
-      active.delete(props.host.ownerDocument);
+    if (active.get(host.ownerDocument)?.close === close) {
+      active.delete(host.ownerDocument);
     }
     activity?.dispose();
     activity = undefined;
@@ -86,7 +81,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
   }
 
   function outside(event: Event) {
-    if (!event.composedPath().some((target) => target === props.host || target === portal.card)) {
+    if (!event.composedPath().some((target) => target === host || target === portal.card)) {
       close();
     }
   }
@@ -130,7 +125,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       return;
     }
     active.get(trigger.ownerDocument)?.close();
-    active.set(trigger.ownerDocument, { host: props.host, close, refresh: renderCard });
+    active.set(trigger.ownerDocument, { host, close, refresh: renderCard });
     const card = createPortaledHovercard(
       "openclaw-person-reference-" + ++nextCardId,
       "session-progress-hovercard person-activity-hovercard",
@@ -230,7 +225,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
                     openSession: (row, agentId, options) => {
                       const face = resolveSessionPreferredFace(row);
                       close();
-                      runSessionNavigationIntent(props.host, {
+                      runSessionNavigationIntent(host, {
                         agentId,
                         face,
                         sessionKey: row.key,
@@ -359,30 +354,23 @@ function PersonReferenceContent(props: PersonReferenceProps) {
 
 type PersonReferenceProperties = { profileId: string; label: string };
 type PersonReferenceElement = SolidBridgeElement<PersonReferenceProperties>;
-defineSolidBridge<PersonReferenceProperties>(
-  "openclaw-person-reference",
-  (props, host) => {
-    host.style.display = "contents";
-    return <PersonReferenceContent {...props} host={host} />;
+defineSolidBridge<PersonReferenceProperties>("openclaw-person-reference", PersonReferenceContent, {
+  properties: {
+    profileId: { default: "", attribute: "profile-id" },
+    label: { default: "" },
   },
-  {
-    properties: {
-      profileId: { default: "", attribute: "profile-id" },
-      label: { default: "" },
-    },
-    propertyChanged(host, key) {
-      const current = active.get(host.ownerDocument);
-      if (current?.host !== host) {
-        return;
-      }
-      if (key === "profileId") {
-        current.close();
-      } else if (key === "label") {
-        current.refresh();
-      }
-    },
+  propertyChanged(host, key) {
+    const current = active.get(host.ownerDocument);
+    if (current?.host !== host) {
+      return;
+    }
+    if (key === "profileId") {
+      current.close();
+    } else if (key === "label") {
+      current.refresh();
+    }
   },
-);
+});
 
 declare global {
   interface HTMLElementTagNameMap {

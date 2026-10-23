@@ -1,6 +1,7 @@
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { BootRecord } from "../../app/boot-record.ts";
+import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import type { BootRoster } from "./session-boot-roster.ts";
 import type { createSessionDeletions } from "./session-deletions.ts";
 import type { createSessionGitHubPublication } from "./session-github-publication.ts";
@@ -19,6 +20,11 @@ import type {
 } from "./session-types.ts";
 
 export type * from "./session-types.ts";
+
+export type SessionCacheOptions = {
+  bootRecord?: BootRecord | null;
+  connectionBootstrap?: ConnectionBootstrapCoordinator;
+};
 
 export function createSessionState(
   bootRecord?: Pick<BootRecord, "groups" | "sectionOrder"> | null,
@@ -83,6 +89,7 @@ export type SessionCapability = Pick<
     };
     /** Advances only when a canonical sessions.list result is published. */
     readonly canonicalListRevision: number;
+    readonly canonicalListReady: boolean;
     /** Initial routing hints only; cached agent discovery never grants live authority. */
     readonly cachedRoutingDefaults?: {
       readonly mainKey: string;

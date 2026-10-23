@@ -1999,7 +1999,7 @@ describe("chat composer render invalidation", () => {
     expect(getComposerTextarea(container)).toBe(textarea);
     expect(chatThread.buildCachedChatItems).not.toHaveBeenCalled();
 
-    textarea.value = "مرحبا";
+    textarea.value = "1. مرحبا";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
 
     expect(getComposerTextarea(container)).toBe(textarea);
@@ -3773,6 +3773,7 @@ describe("chat model controls", () => {
       undefined,
     );
 
+    await waitForSolid(() => expect(getThinkingSlider(container)).toBeInstanceOf(HTMLInputElement));
     const slider = getThinkingSlider(container);
     expect(slider).toBeInstanceOf(HTMLInputElement);
     if (slider) {
@@ -4055,7 +4056,7 @@ describe("chat model controls", () => {
       }));
       const container = await renderModelControls(state);
       expect(getChatThinkingValue(getThinkingSelect(container))).toBe("");
-      expect(getThinkingReasoningValueLabel(container)).toBe("Adaptive");
+      await waitForSolid(() => expect(getThinkingReasoningValueLabel(container)).toBe("Adaptive"));
       if (!omitSessionFromList) {
         expect(getThinkingSliderValues(container)).not.toContain("adaptive");
         const slider = getThinkingSlider(container);
@@ -4094,6 +4095,10 @@ describe("chat model controls", () => {
             },
           ]);
       const container = await renderModelControls(state);
+      getThinkingSlider(container);
+      await waitForSolid(() =>
+        expect(container.querySelector('[data-chat-thinking-option="adaptive"]')).not.toBeNull(),
+      );
       expect(getThinkingSlider(container)).toBeNull();
       const only = container.querySelector<HTMLButtonElement>(
         '[data-chat-thinking-option="adaptive"]',

@@ -771,6 +771,35 @@ describe("app launch catalog", () => {
       expect(element.querySelector('[role="alert"]')).toBeNull();
     },
   );
+  it("keeps onboarding failures beside the catalog and clears them for a replacement target", async () => {
+    const onboarding = createDeferred<unknown>();
+    const discovery = { servers: [], onboarding: [{ pluginId: "parts", title: "Parts plugin" }] };
+    const request = vi.fn((method: string) =>
+      method === "mcp.app.onboard" ? onboarding.promise : Promise.resolve(discovery),
+    );
+    const { context } = discoveryContext(request);
+    const mounted = mountCatalog(context, { sessionKey: "agent:main:one" });
+    const { element } = mounted;
+    const button = await waitForSolid(() => {
+      const control = [...element.querySelectorAll<HTMLButtonElement>("button")].find((candidate) =>
+        candidate.textContent?.includes("Parts plugin"),
+      );
+      expect(control).toBeDefined();
+      return control!;
+    });
+    const entries = element.querySelector(".mcp-app-catalog__entries");
+    button.click();
+    await waitForSolid(() => expect(button.disabled).toBe(true));
+    onboarding.reject(new Error("Onboarding unavailable"));
+    await waitForSolid(() => {
+      expect(element.querySelector('[role="alert"]')?.textContent).toBe("Onboarding unavailable");
+      expect(button.disabled).toBe(false);
+    });
+    expect(element.querySelector(".mcp-app-catalog__entries")).toBe(entries);
+    mounted.update({ sessionKey: "agent:main:two" });
+    await waitForSolid(() => expect(element.querySelector('[role="alert"]')).toBeNull());
+    expect(element.querySelector(".mcp-app-catalog__entries")).toBe(entries);
+  });
   it.each(["file"] as const)(
     "hides unsupported %s controls after empty discovery",
     async (surface) => {
@@ -834,7 +863,7 @@ describe("app launch catalog", () => {
     expect(element.textContent).not.toContain("Library");
     expect(request).toHaveBeenCalledTimes(2);
   });
-  it("launches the selected thread app through its conversation owner without sending a prompt", async () => {
+  it("reports an unavailable host, then launches the thread app through its owner without a prompt", async () => {
     const read = createDeferred<McpAppDiscoverResult>();
     const request = vi.fn(() => read.promise);
     const client = { request };
@@ -862,7 +891,6 @@ describe("app launch catalog", () => {
     element.querySelector<HTMLButtonElement>("button")!.click();
     flush();
     const launch = vi.fn((event: Event) => event.preventDefault());
-    element.addEventListener(MCP_APP_OPEN_EVENT, launch);
     const button = await waitForSolid(() => {
       const candidate = [...element.querySelectorAll<HTMLButtonElement>("button")].find((control) =>
         control.textContent?.includes("Parts tray"),
@@ -871,6 +899,14 @@ describe("app launch catalog", () => {
       return candidate!;
     });
     button.click();
+    await waitForSolid(() =>
+      expect(element.querySelector('[role="alert"]')?.textContent).toBe(
+        t("mcpApp.errors.mountUnavailable"),
+      ),
+    );
+    element.addEventListener(MCP_APP_OPEN_EVENT, launch);
+    button.click();
+    await waitForSolid(() => expect(element.querySelector('[role="alert"]')).toBeNull());
     expect((launch.mock.calls[0]![0] as CustomEvent<McpAppOpenDetail>).detail).toMatchObject({
       sessionKey: "agent:main:one",
       agentId: "main",

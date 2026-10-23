@@ -140,29 +140,38 @@ it.each(["rejected", "unknown"] as const)("makes a %s queued delivery terminal",
   expect(await send("terminal", "platform-late")).toEqual(terminal);
 });
 
-it("preserves routed session bindings and terminal delivery evidence during maintenance", async () => {
-  const { scope, conversationRef, begin, get, send } = await conversationStore();
-  await begin("preserved", { sourceSessionKey: sessionKey });
-  await send("preserved", "platform-preserved");
-
-  await applySessionEntryLifecycleMutation({
-    ...scope,
-    maintenanceOverride: { mode: "enforce", pruneAfterMs: 1 },
-  });
-
-  expect(await readConversation(scope, conversationRef)).toMatchObject({
-    conversationRef,
-    channel: "reef",
-    sessionId: "reef-session",
-  });
-  expect(loadSessionEntry({ ...scope, sessionKey })?.archivedAt).toBeUndefined();
-  expect(await get("preserved")).toMatchObject({
-    channel: "reef",
-    conversationRef,
-    platformMessageId: "platform-preserved",
-    status: "sent",
-  });
-});
+it.each(["maintenance", "guarded deletion"] as const)(
+  "retains source-bound delivery evidence during %s",
+  async (cleanup) => {
+    const { scope, conversationRef, begin, get, send } = await conversationStore();
+    await begin("preserved", { sourceSessionKey: sessionKey });
+    await send("preserved", "platform-preserved");
+    if (cleanup === "maintenance") {
+      await applySessionEntryLifecycleMutation({
+        ...scope,
+        maintenanceOverride: { mode: "enforce", pruneAfterMs: 1 },
+      });
+      expect(loadSessionEntry({ ...scope, sessionKey })?.archivedAt).toBeUndefined();
+    } else {
+      await deleteSessionEntryLifecycle({
+        ...scope,
+        archiveTranscript: false,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      });
+      expect(loadSessionEntry({ ...scope, sessionKey })).toBeUndefined();
+    }
+    const conversation = await readConversation(scope, conversationRef);
+    expect(conversation).toMatchObject({ conversationRef, channel: "reef" });
+    expect(conversation?.sessionId).toBe(cleanup === "maintenance" ? "reef-session" : undefined);
+    expect(await get("preserved")).toMatchObject({
+      channel: "reef",
+      conversationRef,
+      platformMessageId: "platform-preserved",
+      sourceSessionKey: sessionKey,
+      status: "sent",
+    });
+  },
+);
 
 it("removes only source-bound delivery evidence and its progress cache when fully deleted", async () => {
   const { scope, conversationRef, begin, get, send } = await conversationStore();
@@ -203,31 +212,6 @@ it("removes only source-bound delivery evidence and its progress cache when full
       .get("unrelated", "deleted"),
   ).toEqual({ value_json: "keep" });
   expect(await readConversation(scope, conversationRef)).toMatchObject({ conversationRef });
-});
-
-it("retains source-bound delivery evidence for guarded lifecycle cleanup", async () => {
-  const { scope, conversationRef, begin, get, send } = await conversationStore();
-  await begin("migrated", { sourceSessionKey: sessionKey });
-  await send("migrated", "platform-migrated");
-
-  await deleteSessionEntryLifecycle({
-    ...scope,
-    archiveTranscript: false,
-    target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-  });
-
-  expect(await readConversation(scope, conversationRef)).toMatchObject({
-    conversationRef,
-    channel: "reef",
-  });
-  expect((await readConversation(scope, conversationRef))?.sessionId).toBeUndefined();
-  expect(loadSessionEntry({ ...scope, sessionKey })).toBeUndefined();
-  expect(await get("migrated")).toMatchObject({
-    conversationRef,
-    platformMessageId: "platform-migrated",
-    sourceSessionKey: sessionKey,
-    status: "sent",
-  });
 });
 
 it("rejects a reservation whose caller loses authority while queued", async () => {

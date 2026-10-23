@@ -4,13 +4,14 @@ import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { presentResult as inspectionFixture } from "../../e2e/activity-run-inspector.test-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { RunInspectorResult, RunInspectorState } from "./run-inspector-model.ts";
 import { renderRunInspector } from "./run-inspector-view.tsx";
 
 const hmacRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
 const missingEvidence = ["identity.context"];
 const presentResult = inspectionFixture("run-1", "execution-1");
+type InspectionRead = Parameters<typeof renderRunInspector>[0]["request"];
 
 const unavailableResult = (
   state: "unknown" | "unsupported",
@@ -36,12 +37,16 @@ const ready = (
 function renderState(
   state: RunInspectorState | (() => RunInspectorState),
   onLoadMoreExecutions = vi.fn(),
+  request?: () => InspectionRead,
 ) {
   const { container } = mountSolid(() =>
     renderRunInspector({
       basePath: "/operator",
       get state() {
         return typeof state === "function" ? state() : state;
+      },
+      get request() {
+        return request?.();
       },
       selector: { kind: "run" as const, id: "run-1" },
       selectorId: null,
@@ -121,7 +126,7 @@ it("renders unsupported identity evidence without inferring expiry", () => {
   ).toContain("Identity evidence unsupported");
 });
 
-it("links an ambiguous run candidate to exact execution inspection", () => {
+it("links an ambiguous run candidate to exact execution inspection", async () => {
   const result: RunInspectorResult = {
     ...unavailableResult("unknown", "execution_selection_required"),
     run: { runId: "ambiguous-run", status: "known" },
@@ -136,21 +141,24 @@ it("links an ambiguous run candidate to exact execution inspection", () => {
     nextExecutionCursor: "opaque-cursor",
   };
 
-  const onLoadMoreExecutions = vi.fn();
-  const container = renderState(ready(result), onLoadMoreExecutions);
+  const completion = Promise.withResolvers<void>();
+  const [request, setRequest] = createSignal<InspectionRead>();
+  const onLoadMoreExecutions = vi.fn(() => setRequest({ kind: "executions", completion }));
+  const container = renderState(ready(result), onLoadMoreExecutions, request);
   const link = container.querySelector<HTMLAnchorElement>('a[href*="execution="]');
   expect(link?.textContent).toContain("execution:a/b");
   expect(link?.getAttribute("href")).toBe(
     "/operator/activity?view=run&execution=execution%3Aa%2Fb",
   );
   container.querySelector("button")?.click();
+  flush();
   expect(onLoadMoreExecutions).toHaveBeenCalledOnce();
-
-  const loading = renderState(ready(result, "loading"));
-  expect(loading.querySelector("button")).toMatchObject({
+  expect(container.querySelector("button")).toMatchObject({
     disabled: true,
     textContent: "Loading executions…",
   });
+  completion.resolve();
+  await waitForSolid(() => expect(container.querySelector("button")?.disabled).toBe(false));
 
   const failed = renderState(ready(result, "error"));
   expect(failed.querySelector('[role="alert"]')?.textContent).toContain(

@@ -5,7 +5,7 @@ import type {
   PortalSummary,
   UiPortalPresentation,
 } from "@openclaw/gateway-protocol";
-import { onCleanup } from "solid-js";
+import { onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
@@ -25,6 +25,7 @@ export type PortalsPresentation = {
 type PortalProbeState = {
   key: string;
   status: "probing" | "ingress-required" | "new-tab-required" | PortalReachability;
+  result: Promise<void>;
 };
 
 export function createPortals(
@@ -64,6 +65,7 @@ export function createPortals(
     closingPortalId: string | null;
     portalProbeState: PortalProbeState | null;
     pendingEnvironment: EnvironmentSummary | null;
+    environmentRead: { result: Promise<void> };
     environmentFailure: { environmentId: string; message: string } | null;
     connected: boolean;
     pendingEnvironmentId: string | null;
@@ -82,6 +84,7 @@ export function createPortals(
     closingPortalId: null,
     portalProbeState: null,
     pendingEnvironment: null,
+    environmentRead: { result: Promise.resolve() },
     environmentFailure: null,
     get connected() {
       return context.gateway.snapshot.phase === "connected";
@@ -149,9 +152,11 @@ export function createPortals(
     lifecycle.dispose();
     resetGatewayState();
   });
-  if (state.connected) {
-    void loadPresentation();
-  }
+  onSettled(() => {
+    if (state.connected) {
+      void loadPresentation();
+    }
+  });
   function pollEnvironment(enabled: boolean) {
     if (!enabled) {
       clearInterval(environmentTimer);
@@ -245,8 +250,15 @@ export function createPortals(
     ) {
       return;
     }
+    const completion = Promise.withResolvers<void>();
+    const read = {
+      result: Promise.race([completion.promise, presentationLifetime.promise]),
+    };
+    state.environmentRead = read;
     const isCurrent = () =>
-      lifecycle.isCurrent(scope) && state.pendingEnvironmentId === environmentId;
+      lifecycle.isCurrent(scope) &&
+      state.pendingEnvironmentId === environmentId &&
+      state.environmentRead === read;
     environmentLoading = true;
     state.environmentFailure = null;
     notify();
@@ -271,12 +283,14 @@ export function createPortals(
       if (isCurrent()) {
         environmentLoading = false;
       }
+      completion.resolve();
       notify();
     }
   }
 
   function resetPendingEnvironment() {
     environmentLoading = false;
+    state.environmentRead = { result: Promise.resolve() };
     state.pendingEnvironment = null;
     state.environmentFailure = null;
     pollEnvironment(false);
@@ -300,6 +314,7 @@ export function createPortals(
     listLifetime.resolve();
     listLifetime = Promise.withResolvers<void>();
     state.listRead = { result: Promise.resolve() };
+    state.environmentRead = { result: Promise.resolve() };
     presentationRequest = null;
     environmentLoading = false;
     pollEnvironment(false);
@@ -349,7 +364,7 @@ export function createPortals(
       isLoopbackHostname(portalAddress.hostname) &&
       !isLoopbackHostname(new URL(context.gateway.connection.gatewayUrl).hostname)
     ) {
-      state.portalProbeState = { key, status: "ingress-required" };
+      state.portalProbeState = { key, status: "ingress-required", result: Promise.resolve() };
       notify();
       return;
     }
@@ -360,13 +375,13 @@ export function createPortals(
       (controlUiAddress.protocol !== portalAddress.protocol ||
         controlUiAddress.hostname !== portalAddress.hostname)
     ) {
-      state.portalProbeState = { key, status: "new-tab-required" };
+      state.portalProbeState = { key, status: "new-tab-required", result: Promise.resolve() };
       notify();
       return;
     }
     const cached = force ? undefined : portalProbeCache.get(key);
     if (cached !== undefined) {
-      state.portalProbeState = { key, status: cached };
+      state.portalProbeState = { key, status: cached, result: Promise.resolve() };
       notify();
       return;
     }
@@ -375,14 +390,21 @@ export function createPortals(
     if (!scope) {
       return;
     }
-    state.portalProbeState = { key, status: "probing" };
+    const completion = Promise.withResolvers<void>();
+    const probe: PortalProbeState = {
+      key,
+      status: "probing",
+      result: Promise.race([completion.promise, listLifetime.promise]),
+    };
+    state.portalProbeState = probe;
     notify();
     void probePortalReachable(url).then((reachability) => {
-      if (lifecycle.isCurrent(scope) && state.portalProbeState?.key === key) {
+      if (lifecycle.isCurrent(scope) && state.portalProbeState === probe) {
         portalProbeCache.set(key, reachability);
-        state.portalProbeState = { key, status: reachability };
+        probe.status = reachability;
         notify();
       }
+      completion.resolve();
     });
   }
 

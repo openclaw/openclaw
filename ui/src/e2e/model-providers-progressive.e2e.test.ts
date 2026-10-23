@@ -156,13 +156,17 @@ suite.define(() => {
           await gateway.setMethodResponse("models.list", partial);
           await gateway.emitGatewayEvent("chat.metadata.changed", {});
         }
-        const warning = settings.locator('.model-providers__catalog-progress[role="alert"]');
-        await expectText(warning, "More models could not be discovered.");
+        // Provider details explain the gap; catalog feedback keeps discovery retryable.
         await expect
           .poll(() =>
             settings.locator('[data-provider-id="broken"] .model-providers__head').textContent(),
           )
           .toContain("Models unavailable");
+        const catalogWarning = settings.locator('.model-providers__catalog-progress[role="alert"]');
+        await catalogWarning.waitFor({ state: "visible" });
+        expect(
+          await catalogWarning.getByRole("button", { name: "Retry", exact: true }).isVisible(),
+        ).toBe(true);
         expect(
           await settings
             .locator('[data-provider-id="healthy"] .model-providers__head')
@@ -207,18 +211,15 @@ suite.define(() => {
         await gateway.setMethodResponse("models.list", recovered);
         await gateway.deferNext("models.list", { refresh: true });
         const refreshes = (await gateway.getRequests("models.list", { refresh: true })).length;
-        await warning.getByRole("button", { name: "Retry", exact: true }).click();
-        await gateway.waitForRequest("models.list", {
-          after: refreshes,
-          match: { refresh: true },
-        });
+        // Provider access refresh retries discovery for the failing provider.
+        await settings.getByRole("button", { name: "Refresh", exact: true }).click();
+        await gateway.waitForRequest("models.list", { after: refreshes, match: { refresh: true } });
         await trigger.click();
         await gateway.resolveDeferred("models.list", recovered);
         await picker
           .locator('[role="option"][data-value="healthy/recovered"]')
           .waitFor({ state: "visible" });
         expect(await trigger.getAttribute("aria-expanded")).toBe("true");
-        await expectCount(warning, 0);
         expect(
           await settings
             .locator('[data-provider-id="broken"] .model-providers__head')
@@ -422,7 +423,7 @@ suite.define(() => {
             : {}),
           defaultAgentId: "main",
           models: [older],
-          heldMethods: ["models.list", "models.authStatus", "usage.status", "sessions.usage"],
+          heldMethods: ["models.list", "models.authStatus", "usage.status"],
           methodResponses: {
             "config.get": {
               config: defaultsConfig("fixture/prepared"),
@@ -499,7 +500,7 @@ suite.define(() => {
   );
 
   it.each(["cold", "prewarmed", "cached"] as const)(
-    "renders provider controls before usage and cost settle (%s module)",
+    "renders provider controls before provider usage settles (%s module)",
     async (moduleState) => {
       await withPage(
         async ({ page }) => {
@@ -509,11 +510,7 @@ suite.define(() => {
             heldMethods:
               moduleState === "cached"
                 ? []
-                : [
-                    "usage.status",
-                    "sessions.usage",
-                    ...(moduleState === "cold" ? ["models.authStatus"] : []),
-                  ],
+                : ["usage.status", ...(moduleState === "cold" ? ["models.authStatus"] : [])],
             methodResponses: {
               "config.get": {
                 config: defaultsConfig("openai/gpt-5.5"),
@@ -562,11 +559,13 @@ suite.define(() => {
             await waitForControlUiRoute(page, { routeId: "appearance" });
             await page.locator('a[href="/settings/model-providers"]').first().click();
             await waitForControlUiRoute(page, { routeId: "model-providers" });
-            await expectText(page.locator('[data-provider-id="openai"]'), "$1.25");
+            await expectText(
+              page.locator('[data-provider-id="openai"] .provider-row__plan'),
+              "Pro",
+            );
             await page.locator('a[href="/settings/appearance"]').first().click();
             await waitForControlUiRoute(page, { routeId: "appearance" });
             await gateway.deferNext("usage.status");
-            await gateway.deferNext("sessions.usage");
           }
           if (moduleState !== "cold") {
             if (moduleState === "prewarmed") {
@@ -601,29 +600,24 @@ suite.define(() => {
           await page.locator("openclaw-model-providers-page").waitFor();
           if (moduleState === "cached") {
             await expectText(page.locator('[data-provider-id="openai"]'), "Credentials configured");
-            await expectText(page.locator('[data-provider-id="openai"]'), "Loading");
           }
           expect(await gateway.getRequests("usage.status")).toHaveLength(previousLoads);
-          expect(await gateway.getRequests("sessions.usage")).toHaveLength(previousLoads);
+          expect(await gateway.getRequests("sessions.usage")).toHaveLength(0);
           await gateway.resolveDeferred("models.authStatus");
           await waitForControlUiRoute(page, { routeId: "model-providers" });
           await gateway.waitForRequest("usage.status");
-          await gateway.waitForRequest("sessions.usage");
           const provider = page.locator('[data-provider-id="openai"]');
           await provider.waitFor();
           await expectText(provider, "Credentials configured");
-          await expectText(provider, "Loading");
+          expect(await provider.locator(".provider-row__plan").count()).toBe(0);
           expect(await gateway.getRequests("usage.status")).toHaveLength(previousLoads + 1);
-          expect(await gateway.getRequests("sessions.usage")).toHaveLength(previousLoads + 1);
+          expect(await gateway.getRequests("sessions.usage")).toHaveLength(0);
 
           await gateway.resolveDeferred("usage.status");
-          await expectText(provider, "Pro");
+          await expectText(provider.locator(".provider-row__plan"), "Pro");
           expect(await provider.textContent()).not.toContain("$1.25");
-
-          await gateway.resolveDeferred("sessions.usage");
-          await expectText(provider, "$1.25");
           expect(await gateway.getRequests("usage.status")).toHaveLength(previousLoads + 1);
-          expect(await gateway.getRequests("sessions.usage")).toHaveLength(previousLoads + 1);
+          expect(await gateway.getRequests("sessions.usage")).toHaveLength(0);
           expect(await page.locator('[data-provider-id="unknown-provider"]').count()).toBe(0);
         },
         {

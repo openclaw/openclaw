@@ -146,7 +146,7 @@ export type ScheduledAdmissionFacts = Readonly<{
   requesterCheck?: Readonly<{ owner: boolean }>;
 }>;
 
-type ScheduledParentUnavailableReason = "removed" | "archived" | "reset" | "worktree-missing";
+type ScheduledParentUnavailableReason = "removed" | "archived" | "worktree-missing";
 
 export type ScheduledExecutionContextResult =
   | Readonly<{ status: "ready"; facts: ScheduledExecutionFacts }>
@@ -199,9 +199,10 @@ function profileIdOf(actor: SessionCreatedActor | undefined) {
   return actor?.type === "human" && actor.source === "profile" ? actor.id : undefined;
 }
 
-function resolvePrincipal(
+/** The occurrence's principal; occurrence admission and the builder share this resolution. */
+export function resolveScheduledPrincipal(
   job: BuilderJob,
-  facts: ScheduledAdmissionFacts,
+  facts: Pick<ScheduledAdmissionFacts, "trigger" | "ingress" | "agentId">,
 ): ScheduledPrincipal | { error: string } {
   if (facts.trigger === "event") {
     return facts.ingress
@@ -251,10 +252,10 @@ function resolvePrincipal(
   };
 }
 
-function classifyParent(
+export function classifyScheduledParent(
   parent: ScheduledParentRef,
   row: ScheduledParentRowFacts | undefined,
-): ScheduledParentUnavailableReason | "current" | "unread" {
+): ScheduledParentUnavailableReason | "reset" | "current" | "unread" {
   if (!row) {
     return "unread";
   }
@@ -309,7 +310,8 @@ function resolveAuthority(
 }
 
 function resolvePlacement(job: BuilderJob, principal: ScheduledPrincipal): ScheduledPlacement {
-  if (resolveCronSessionTargetSessionKey(job.sessionTarget)) {
+  // `main` runs as a scheduled turn inside the agent's main session, like `session:<key>`.
+  if (job.sessionTarget === "main" || resolveCronSessionTargetSessionKey(job.sessionTarget)) {
     return "in-session";
   }
   return principal.kind === "parent" ? "child" : "detached";
@@ -352,23 +354,27 @@ export function buildScheduledExecutionContext(
   job: BuilderJob,
   facts: ScheduledAdmissionFacts,
 ): ScheduledExecutionContextResult {
-  if (job.sessionTarget === "main") {
-    return { status: "fail", error: "main-session jobs run inside the main session's own turn" };
+  const resolved = resolveScheduledPrincipal(job, facts);
+  if ("error" in resolved) {
+    return { status: "fail", error: resolved.error };
   }
-  const principal = resolvePrincipal(job, facts);
-  if ("error" in principal) {
-    return { status: "fail", error: principal.error };
+  const state =
+    resolved.kind === "parent"
+      ? classifyScheduledParent(resolved.parent, facts.parentRow)
+      : "current";
+  if (state === "unread") {
+    return { status: "fail", error: "parent session facts are required for a parent-linked job" };
   }
+  if (resolved.kind === "parent" && state !== "current" && state !== "reset") {
+    return { status: "pause", reason: state, parentSessionKey: resolved.parent.sessionKey };
+  }
+  // A reset keeps the automation running, but nothing carries into the new
+  // incarnation: this occurrence takes the legacy decisions until rebound.
+  const principal: ScheduledPrincipal =
+    resolved.kind === "parent" && state === "reset"
+      ? { kind: "unbound-parent", parentSessionKey: resolved.parent.sessionKey }
+      : resolved;
   const parentRow = principal.kind === "parent" ? facts.parentRow : undefined;
-  if (principal.kind === "parent") {
-    const state = classifyParent(principal.parent, parentRow);
-    if (state === "unread") {
-      return { status: "fail", error: "parent session facts are required for a parent-linked job" };
-    }
-    if (state !== "current") {
-      return { status: "pause", reason: state, parentSessionKey: principal.parent.sessionKey };
-    }
-  }
   const liveRow = parentRow && !parentRow.missing ? parentRow : undefined;
   if (liveRow?.worktree && !liveRow.worktree.exists && principal.kind === "parent") {
     return {

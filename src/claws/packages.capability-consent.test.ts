@@ -5,7 +5,6 @@ import {
   computeDeclaredSurfaceHash,
 } from "../plugins/capability-summary.js";
 import type { installManagedPlugin } from "../plugins/management-mutations.js";
-import type { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import {
   installClawPackages,
   testPluginPackage as pkg,
@@ -23,10 +22,9 @@ const probePlugin = vi.fn(
 const baseDeps = {
   probePlugin,
   inspectPluginCapabilities: () => emptyPluginCapabilityEvidence,
-  preflightPlugin: vi.fn(async (params: Parameters<typeof preflightPluginInstall>[0]) => ({
+  preflightPlugin: vi.fn(async () => ({
     ok: true as const,
     action: "install" as const,
-    request: { rawSpec: params.rawSpec, installKind: "plugin" as const },
   })),
   acquirePackageLease: vi.fn(async () => testPackageLease()),
 };

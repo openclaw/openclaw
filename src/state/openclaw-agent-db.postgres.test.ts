@@ -632,7 +632,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     ).toBe(true);
     expect(payloads.map((row) => JSON.parse(row.event_json))).toEqual(hydrated.snapshot.events);
     let store = openContextEngineTurnOutboxWorkerStore({ agentId: "actor", path: database.path });
-    const filter = { engineId: "postgres-fixture", isHeartbeat: false };
+    const filter = { engineId: "postgres-fixture" };
     const enqueue = (boundary: TranscriptTurnBoundary) =>
       store.enqueueIntent({ ...filter, admission: boundary.admission });
     const publish = async (boundary: TranscriptTurnBoundary) => {

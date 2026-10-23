@@ -452,18 +452,19 @@ USER node
 RUN COREPACK_ENABLE_NETWORK=0 PNPM_CONFIG_OFFLINE=true pnpm --version
 
 # Start gateway server with default config.
-# Binds to loopback (127.0.0.1) by default for security.
-#
-# IMPORTANT: With Docker bridge networking (-p 18789:18789), loopback bind
-# makes the gateway unreachable from the host. Either:
-#   - Use --network host, OR
-#   - Override --bind to "lan" (0.0.0.0) and set auth credentials
+# In a detected container, an unset gateway.bind defaults to auto (0.0.0.0)
+# so port forwarding and container-network ingress can reach it; Tailscale
+# Serve/Funnel instead forces loopback. Non-loopback startup still requires
+# configured authentication. The image defines no host port publication;
+# actual reachability depends on the runtime and network
+# topology. Peers on the same container network and hosts with a route to its
+# address can reach the listener. Set gateway.bind to loopback explicitly for a
+# loopback-only listener; host networking changes what that interface represents.
 #
 # Built-in probe endpoints for container health checks:
 #   - GET /healthz (liveness), GET /startupz (startup/traffic admission),
 #     and GET /readyz (channel-aware readiness)
 #   - aliases: /health, /startup, and /ready
-# For external access from host/ingress, override bind to "lan" and set auth.
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD ["node", "dist/docker-healthcheck.js"]
 ENTRYPOINT ["tini", "-s", "--", "node", "/app/docker-entrypoint.mjs"]

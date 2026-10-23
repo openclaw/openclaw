@@ -44,7 +44,7 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
   let backgroundRefresh: Promise<void> | null = null;
   let backgroundRefreshQueued = false;
   let dayLifetime = Promise.withResolvers<void>();
-  const frameLoads = new Set<number>();
+  const frameLoads = new Map<number, Promise<string | undefined>>();
   let notify = () => {};
   const projection = projectMutableSource(state, (source) => source);
   notify = projection.publish;
@@ -189,42 +189,54 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
       return projection.read();
     },
     load,
-    async loadFrame(frameId: number) {
+    loadFrame(frameId: number): Promise<string | undefined> {
       const current = client;
-      if (
-        !current ||
-        state.framePreviews.has(frameId) ||
-        frameLoads.has(frameId) ||
-        state.framePreviewFailed.has(frameId)
-      ) {
-        return;
+      if (!current || state.framePreviewFailed.has(frameId)) {
+        return Promise.resolve(undefined);
       }
-      frameLoads.add(frameId);
-      try {
-        const payload = await current.request<{ base64: string; format: string }>("logbook.frame", {
-          frameId,
-        });
-        if (client !== current) {
-          return;
-        }
-        if (state.framePreviews.size >= FRAME_PREVIEW_CACHE_LIMIT) {
-          const oldest = state.framePreviews.keys().next().value;
-          if (oldest !== undefined) {
-            state.framePreviews.delete(oldest);
+      const preview = state.framePreviews.get(frameId);
+      if (preview !== undefined) {
+        return Promise.resolve(preview);
+      }
+      const pending = frameLoads.get(frameId);
+      if (pending) {
+        return pending;
+      }
+      const result = (async () => {
+        try {
+          const payload = await current.request<{ base64: string; format: string }>(
+            "logbook.frame",
+            {
+              frameId,
+            },
+          );
+          if (client !== current) {
+            return undefined;
+          }
+          if (state.framePreviews.size >= FRAME_PREVIEW_CACHE_LIMIT) {
+            const oldest = state.framePreviews.keys().next().value;
+            if (oldest !== undefined) {
+              state.framePreviews.delete(oldest);
+            }
+          }
+          const src = `data:image/${payload.format};base64,${payload.base64}`;
+          state.framePreviews.set(frameId, src);
+          return src;
+        } catch {
+          // Missing or pruned frames must not re-fetch on every render.
+          if (client === current) {
+            state.framePreviewFailed.add(frameId);
+          }
+          return undefined;
+        } finally {
+          if (client === current) {
+            frameLoads.delete(frameId);
+            notify();
           }
         }
-        state.framePreviews.set(frameId, `data:image/${payload.format};base64,${payload.base64}`);
-      } catch {
-        // Missing or pruned frames must not re-fetch on every render.
-        if (client === current) {
-          state.framePreviewFailed.add(frameId);
-        }
-      } finally {
-        if (client === current) {
-          frameLoads.delete(frameId);
-          notify();
-        }
-      }
+      })();
+      frameLoads.set(frameId, result);
+      return result;
     },
     setCapturePaused(paused: boolean) {
       return runAction("actionPending", async (current, isCurrent) => {

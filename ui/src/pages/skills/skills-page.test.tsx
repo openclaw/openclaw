@@ -1,118 +1,17 @@
-import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
-import { createSignal, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment jsdom
+import type { SkillsLibraryListResult, SkillsLibraryReceipt } from "@openclaw/gateway-protocol";
+import { flush } from "solid-js";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
-import type { ApplicationContext } from "../../app/context.ts";
-import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import type { ClawHubSkillDetail } from "../../lib/skills/index.ts";
-import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-// @vitest-environment jsdom
-import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { SkillsPage, type SkillsRouteData } from "./skills-page.tsx";
+import { mountSkills, personalLibrary, remoteSkill } from "./skills-page.test-support.tsx";
+import { libraryEntry } from "./skills.test-support.ts";
 import { createSkill } from "./view.test-support.ts";
-
-const personalLibrary = {
-  entries: [],
-  profileId: "alice",
-  multipleProfiles: true,
-  defaultTarget: "personal",
-  canManageWorkspace: true,
-  defaultSelectionLimit: 64,
-} satisfies SkillsLibraryListResult;
-
-const remoteSkill = {
-  score: 1,
-  slug: "calendar",
-  registry: "https://clawhub.ai",
-  installRef: "@alice/calendar",
-  displayName: "Calendar",
-};
-
-function mountSkills(
-  request: (method: string, params?: unknown) => Promise<unknown>,
-  surface: "discovery" | "settings" = "discovery",
-) {
-  const client = { request } as unknown as GatewayBrowserClient;
-  const connection = createApplicationGateway({
-    client,
-    phase: "connected",
-    offlineStable: false,
-    hello: gatewayHelloForMethods(["skills.install", "skills.update"]),
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  });
-  const agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "global" as const,
-    agents: [{ id: "main" }, { id: "research" }],
-  };
-  const agents = {
-    state: { agentsList, agentsLoading: false, agentsError: null },
-    ensureList: vi.fn(async () => agentsList),
-    subscribe: () => () => undefined,
-  } as unknown as ApplicationContext["agents"];
-  const context = {
-    basePath: "",
-    gateway: connection.gateway,
-    agents,
-    agentSelection: createAgentSelectionCapability(connection.gateway, agents),
-    settingsAgentSelection: createAgentSelectionCapability(
-      connection.gateway,
-      agents,
-      undefined,
-      undefined,
-      { requireConfiguredAgent: true },
-    ),
-    navigate: vi.fn(),
-  } as unknown as ApplicationContext;
-  const selection =
-    surface === "settings" ? context.settingsAgentSelection : context.agentSelection;
-  const initialRouteData: SkillsRouteData = {
-    gateway: connection.gateway,
-    gatewaySnapshot: connection.gateway.snapshot,
-    agents,
-    selectedAgentId: "main",
-    selectionIntentRevision: selection.intentRevision,
-    report: { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills: [] },
-    error: null,
-  };
-  const [routeData, setRouteData] = createSignal(initialRouteData, { ownedWrite: true });
-  const [currentSurface, setCurrentSurface] = createSignal(surface);
-  const mounted = mountSolid(() => (
-    <ApplicationProvider value={context}>
-      <SkillsPage routeData={routeData()} surface={currentSurface()} />
-    </ApplicationProvider>
-  ));
-  flush();
-  const page = mounted.container.querySelector<HTMLElement>("openclaw-skills-page")!;
-  return {
-    page,
-    unmount: mounted.unmount,
-    connection,
-    agents,
-    context,
-    changeSurface(this: void, next: "discovery" | "settings") {
-      setCurrentSurface(next);
-      flush();
-    },
-    publishRouteData(this: void, patch: Partial<SkillsRouteData>) {
-      setRouteData({ ...initialRouteData, ...patch });
-      flush();
-    },
-    refreshRouteData: () => {
-      setRouteData({ ...initialRouteData });
-      flush();
-    },
-  };
-}
 
 afterEach(() => {
   cleanupSolid();
@@ -121,6 +20,168 @@ afterEach(() => {
 });
 
 describe("Skills discovery lifecycle", () => {
+  it("keeps Discovery library status in sync with a held editor toggle", async () => {
+    onTestFinished(installDialogPolyfill());
+    const entry = libraryEntry();
+    const mutation = deferred<SkillsLibraryReceipt>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.library.list") {
+        return { ...personalLibrary, entries: [entry] };
+      }
+      if (method === "skills.library.read") {
+        return { entry, content: "# Existing skill", files: [], revisions: [] };
+      }
+      if (method === "skills.library.mutate") {
+        return mutation.promise;
+      }
+      if (method === "skills.search") {
+        return { results: [] };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const { page } = mountSkills(request);
+    const selector = `[data-skill-id="library:${entry.skillId}"]`;
+    await waitForFast(() => expect(page.querySelector(selector)).not.toBeNull());
+    const card = page.querySelector(selector)!;
+    const status = () => card.querySelector(".settings-status")!.getAttribute("aria-label");
+    expect(status()).toContain("Enabled");
+    card.querySelector<HTMLButtonElement>(".skill-discovery-card__open")!.click();
+    const { dialog } = await getRenderedModalDialog(page);
+    const button = (label: string) =>
+      [...dialog.querySelectorAll<HTMLButtonElement>("button")].find(
+        (candidate) => candidate.textContent?.trim() === label,
+      )!;
+    button("Disable").click();
+    try {
+      await waitForFast(() => expect(button("Enable").disabled).toBe(true));
+      expect(status()).toContain("Disabled");
+      expect(page.querySelector(selector)).toBe(card);
+    } finally {
+      mutation.reject(new Error("Synthetic rejected library update"));
+    }
+    await waitForFast(() => {
+      expect(button("Disable").disabled).toBe(false);
+      expect(status()).toContain("Enabled");
+      expect(dialog.textContent).toContain("Synthetic rejected library update");
+    });
+    expect(page.querySelector(selector)).toBe(card);
+  });
+
+  it("releases a held library save before retained surface navigation", async () => {
+    onTestFinished(installDialogPolyfill());
+    const pending = deferred<unknown>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.library.save") {
+        return pending.promise;
+      }
+      if (method === "skills.library.list") {
+        return personalLibrary;
+      }
+      return method === "skills.search" ? { results: [] } : { skills: [] };
+    });
+    const mounted = mountSkills(request, "settings");
+    const create = () =>
+      [...mounted.page.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "Create skill",
+      )!;
+    await waitForFast(() => expect(create()?.disabled).toBe(false));
+    create().click();
+    flush();
+    const content = mounted.page.querySelector<HTMLTextAreaElement>(
+      'textarea[name="library-content"]',
+    )!;
+    content.value = "# Retained draft";
+    content.dispatchEvent(new Event("input", { bubbles: true }));
+    const slug = mounted.page.querySelector<HTMLInputElement>('input[name="library-slug"]')!;
+    slug.value = "retained-draft";
+    slug.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    [...mounted.page.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Save skill")!
+      .click();
+    await waitForFast(() => expect(content.readOnly).toBe(true));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    await mounted.router.navigate("skills", mounted.context);
+    mounted.changeSurface("discovery");
+    await waitForFast(() =>
+      expect(mounted.page.querySelector('input[name="skills-search"]')).not.toBeNull(),
+    );
+    const retained = mounted.page.querySelector<HTMLTextAreaElement>(
+      'textarea[name="library-content"]',
+    )!;
+    expect(retained.value).toBe("# Retained draft");
+
+    pending.reject(new Error("Synthetic retained-owner save rejection"));
+    await waitForFast(() => {
+      expect(retained.readOnly).toBe(false);
+      expect(mounted.page.textContent).toContain("Synthetic retained-owner save rejection");
+    });
+    expect(mounted.page.querySelector('textarea[name="library-content"]')).toBe(retained);
+    expect(retained.value).toBe("# Retained draft");
+  });
+
+  it("keeps installed selection responsive while verdict enrichment refreshes", async () => {
+    const report = {
+      workspaceDir: "/workspace",
+      managedSkillsDir: "/managed",
+      skills: [
+        createSkill({
+          skillKey: "linked",
+          name: "Linked Skill",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "linked",
+            installedVersion: "1.0.0",
+            installedAt: 1,
+            originPath: "/workspace/.clawhub/origin.json",
+            lockPath: "/workspace/.clawhub/lock.json",
+          },
+        }),
+        createSkill(),
+      ],
+    };
+    const pending = deferred<{ items: [] }>();
+    let verdictRequests = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.library.list") {
+        return personalLibrary;
+      }
+      if (method === "skills.status") {
+        return report;
+      }
+      if (method === "skills.securityVerdicts") {
+        return ++verdictRequests === 1 ? { items: [] } : pending.promise;
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const { page, publishRouteData } = mountSkills(request, "settings");
+    publishRouteData({ report });
+    await waitForFast(() => expect(page.querySelector('input[value="workspace"]')).not.toBeNull());
+    page.querySelector<HTMLInputElement>('input[value="workspace"]')!.click();
+    await waitForFast(() => expect(page.textContent).toContain("Unavailable"));
+    page.querySelector<HTMLButtonElement>('[aria-label="Open Linked Skill details"]')!.click();
+    await waitForFast(() =>
+      expect(page.querySelector(".exec-approval-title")?.textContent).toBe("Linked Skill"),
+    );
+    const dialog = page.querySelector(".skill-reader-dialog");
+    [...page.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Refresh")!
+      .click();
+    await waitForFast(() => expect(verdictRequests).toBe(2));
+    await waitForFast(() => expect(dialog?.textContent).toContain("Refreshing"));
+    page.querySelector<HTMLButtonElement>('[aria-label="Open Repo Skill details"]')!.click();
+    await waitForFast(() =>
+      expect(page.querySelector(".exec-approval-title")?.textContent).toBe("Repo Skill"),
+    );
+    expect(page.querySelector(".skill-reader-dialog")).toBe(dialog);
+    pending.resolve({ items: [] });
+  });
+
   it("keeps detail chrome usable while one admitted read is pending", async () => {
     const warnings = vi.spyOn(console, "warn");
     const pending = deferred<ClawHubSkillDetail>();
@@ -272,9 +333,11 @@ describe("Skills discovery lifecycle", () => {
   );
 
   it("retains a library draft across reconnect and retires it on client replacement", async () => {
+    onTestFinished(installDialogPolyfill());
+    const pending = deferred<unknown>();
     const request = vi.fn(async (method: string) => {
       if (method === "skills.library.save") {
-        throw new Error("Synthetic save rejection");
+        return pending.promise;
       }
       return method === "skills.library.list"
         ? {
@@ -348,24 +411,39 @@ describe("Skills discovery lifecycle", () => {
         files: [],
       }),
     );
+    await waitForFast(() => expect(content.readOnly).toBe(true));
     connection.publish({ ...snapshot, client: { request } as unknown as GatewayBrowserClient });
     flush();
-    expect(page.querySelector('textarea[name="library-content"]')).toBeNull();
+    await waitForFast(() =>
+      expect(page.querySelector('textarea[name="library-content"]')).toBeNull(),
+    );
     await waitForFast(() => expect(page.textContent).toContain("retained-library-skill"));
     [...page.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent?.trim() === "Create skill")!
       .click();
     flush();
-    expect(page.querySelector('textarea[name="library-content"]')).not.toBeNull();
+    const successor = page.querySelector<HTMLTextAreaElement>('textarea[name="library-content"]')!;
+    expect(successor).not.toBeNull();
+    expect(successor.readOnly).toBe(false);
+    successor.value = "# Successor draft";
+    successor.dispatchEvent(new Event("input", { bubbles: true }));
+    pending.reject(new Error("Synthetic retired save rejection"));
+    await waitForFast(() => {
+      expect(page.querySelector('textarea[name="library-content"]')).toBe(successor);
+      expect(successor.value).toBe("# Successor draft");
+      expect(page.textContent).not.toContain("Synthetic retired save rejection");
+    });
     connection.publish({
       ...connection.gateway.snapshot,
       hello: gatewayHelloForMethods([], ["operator.read"]),
     });
     flush();
-    expect(page.querySelector('textarea[name="library-content"]')).toBeNull();
+    await waitForFast(() =>
+      expect(page.querySelector('textarea[name="library-content"]')).toBeNull(),
+    );
     connection.publish({ ...connection.gateway.snapshot, hello: gatewayHelloForMethods([], []) });
     flush();
-    expect(page.textContent).not.toContain("retained-library-skill");
+    await waitForFast(() => expect(page.textContent).not.toContain("retained-library-skill"));
   });
 
   it("shows a settings heading with its four actions in one row below it", async () => {
