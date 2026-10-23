@@ -8,7 +8,7 @@ import {
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
 import { canRetryGatewayStatus } from "../../../components/gateway-status.ts";
-import { StandalonePersonLink } from "../../../components/person-activity-link-solid.tsx";
+import { PersonAvatarLink } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
@@ -359,7 +359,8 @@ function ChatPaneHeaderChrome(
             {(indicator) => <ChatSessionPublicIndicator {...indicator()} />}
           </Show>
           {props.mergedChrome || props.detailsControl || hasSharingControl() ? undefined : (
-            <StandalonePersonLink
+            <PersonAvatarLink
+              standalone
               link={
                 props.showOwnerChip
                   ? personActivityLink(
@@ -378,7 +379,7 @@ function ChatPaneHeaderChrome(
                 props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
                 props.ownerViewing,
               )}
-            </StandalonePersonLink>
+            </PersonAvatarLink>
           )}
           {!props.mergedChrome &&
           !props.detailsControl &&

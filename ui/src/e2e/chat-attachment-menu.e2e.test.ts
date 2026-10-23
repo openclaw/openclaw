@@ -42,6 +42,17 @@ function withChat(
       if (options.geometry) {
         await capturePickerGeometry(page);
       }
+      if (options.cameraPermission) {
+        await page.addInitScript(() => {
+          const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+          navigator.mediaDevices.getUserMedia = (constraints) => {
+            document.documentElement.dataset.cameraActivation = String(
+              navigator.userActivation.isActive,
+            );
+            return getUserMedia(constraints);
+          };
+        });
+      }
       if (options.preview) {
         await page.addInitScript((kind) => {
           if (kind === "permission-denied" || kind === "record-denial") {
@@ -202,9 +213,24 @@ suite.define(() => {
 
   it.each(["chat", "new"])("captures a camera photo without opening a picker in %s", (route) =>
     withChat({ route, cameraPermission: true }, async (page, fileChoosers) => {
+      const camera = page.locator("openclaw-chat-camera-capture");
+      const cameraHost = await camera.evaluateHandle((element) => element);
+      expect(
+        await camera.evaluate((element) => ({
+          defined: customElements.get(element.localName) !== undefined,
+          display: getComputedStyle(element).display,
+        })),
+      ).toEqual({ defined: false, display: "contents" });
       await page.getByRole("button", { name: "Add attachment", exact: true }).click();
       await page.getByRole("menuitem", { name: "Take photo", exact: true }).click();
-      const camera = page.locator("openclaw-chat-camera-capture");
+      expect(
+        await cameraHost.evaluate(
+          (element) =>
+            element.isConnected &&
+            element === document.querySelector("openclaw-chat-camera-capture"),
+        ),
+      ).toBe(true);
+      expect(await page.locator("html").getAttribute("data-camera-activation")).toBe("true");
       const capture = cameraButton(page, "Capture");
       await expect.poll(() => capture.isEnabled()).toBe(true);
       const video = camera.locator("video");
@@ -229,6 +255,7 @@ suite.define(() => {
       expect(fileChoosers()).toBe(0);
       expect(await page.getByRole("dialog", { name: "Take photo", exact: true }).count()).toBe(0);
       await streamHandle.dispose();
+      await cameraHost.dispose();
     }),
   );
 

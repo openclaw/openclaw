@@ -170,11 +170,14 @@ export function assertControlUiE2eOwnership(
   expect(localSelected.slice(2).flat().toSorted()).toEqual(uiE2eSerialTestFiles);
   expect(localSelected[1]).toEqual([
     "ui/src/e2e/board-fixture.e2e.test.ts",
+    "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
     "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
     "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
     "ui/src/e2e/service-worker-update.e2e.test.ts",
   ]);
-  expect(localSelected[3]).toEqual(uiE2ePrivateServerTestFiles);
+  expect(localSelected[3]).toEqual(
+    uiE2ePrivateServerTestFiles.filter((file) => uiE2eSerialTestFiles.includes(file)),
+  );
   // Keep packaged asset proof on the production bundle and source proof on its own server.
   expect(localSelected[0]).toContain("ui/src/e2e/memory-overview-plugin.e2e.test.ts");
   expect(localSelected[3]).toContain("ui/src/e2e/memory-overview-source.e2e.test.ts");
@@ -192,7 +195,7 @@ export function assertControlUiE2eOwnership(
     projectsOf(prebuilt)
       .map((project) => ({ name: project.test.name, files: selectedFiles(project.test) }))
       .filter((project) => project.files.length > 0),
-  ).toEqual([{ name: "ui-e2e-serial-standalone", files: [packagedWorkboard] }]);
+  ).toEqual([{ name: "ui-e2e-real-gateway-standalone", files: [packagedWorkboard] }]);
   expect(
     createUiRealGatewayTestShards(createUiTestShardGroups({ uiE2eFiles: [packagedWorkboard] }).e2e)
       .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns))

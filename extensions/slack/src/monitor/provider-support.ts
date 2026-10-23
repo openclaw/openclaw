@@ -195,7 +195,7 @@ export function trackSlackAuthFailure(
   throw failure instanceof Error ? failure : new Error(formatSlackError(failure));
 }
 
-export function publishSlackBlockedStatus(
+function publishSlackBlockedStatus(
   setStatus: ((next: Record<string, unknown>) => void) | undefined,
   error: unknown,
 ) {

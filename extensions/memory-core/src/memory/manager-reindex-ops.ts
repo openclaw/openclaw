@@ -19,7 +19,6 @@ import {
 } from "./manager-postgres-reindex.js";
 import {
   MEMORY_INDEX_PROVENANCE_VERSION,
-  resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
@@ -194,11 +193,7 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
             ? this.syncProviderGeneration.providerKey
             : this.providerKey!,
           sources: resolveConfiguredSourcesForMeta(this.sources),
-          scopeHash: resolveConfiguredScopeHash({
-            workspaceDir: this.workspaceDir,
-            extraPaths: this.settings.extraPaths,
-            multimodal: this.settings.multimodal,
-          }),
+          scopeHash: this.resolveConfiguredMemoryScopeHash(),
           chunkTokens: this.settings.chunking.tokens,
           chunkOverlap: this.settings.chunking.overlap,
           chunkingVersion: MEMORY_CHUNKING_VERSION,

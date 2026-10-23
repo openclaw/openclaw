@@ -198,18 +198,15 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
   });
 }
 
-function resolveExternalRunFailureDetail(message: string): string | undefined {
+function formatForwardedExternalRunFailureText(message: string): string {
   const sanitized = message
     .trim()
     .replace(/^⚠️\s*/u, "")
     .replace(/\s+/gu, " ");
-  return sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
-    ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
-    : sanitized || undefined;
-}
-
-function formatForwardedExternalRunFailureText(message: string): string {
-  const detail = resolveExternalRunFailureDetail(message);
+  const detail =
+    sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
+      ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
+      : sanitized || undefined;
   return detail
     ? `⚠️ Agent failed before reply: ${detail}${/[.!?]$/u.test(detail) ? "" : "."} Please try again, or use /new to start a fresh session.`
     : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;

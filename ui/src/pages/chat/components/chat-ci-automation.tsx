@@ -123,7 +123,8 @@ export function ChatCiAutomationView(props: ChatCiAutomationProps) {
                             : entry[1],
                         )}
                         checked={props.options[entry[0]]}
-                        disabled={props.disabled || props.pending[entry[0]] !== undefined}
+                        disabled={props.disabled}
+                        saving={props.pending[entry[0]] !== undefined}
                         onChange={(enabled) => props.onChange(entry[0], enabled)}
                       />
                     </label>

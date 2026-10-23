@@ -581,11 +581,10 @@ export async function agentCommand(
 
 export async function agentCommandFromSystem(
   opts: AgentCommandOpts,
-  admission: { boundary: string },
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  const ingress = executionIdentity.systemIngress(admission.boundary);
+  const ingress = executionIdentity.systemIngress("gateway.boot");
   return await agentCommandWithAdmissionIngress(opts, ingress, runtime, deps);
 }
 

@@ -21,6 +21,7 @@ type EnglishCatalog = TranslationMap & {
   skillStatus: TranslationMap;
   labsPage: TranslationMap & { swarm: TranslationMap };
   agentChip: TranslationMap;
+  agentsHome: TranslationMap;
   logbook: TranslationMap;
   gatewayLogs: TranslationMap;
   standingGrants: TranslationMap;
@@ -363,7 +364,9 @@ const startupEnglish = {
     surface: {},
   },
   capacityMeter: {},
-  agentsHome: {},
+  agentsHome: {
+    loadFailed: "Could not load agents. Try again.",
+  },
   outputs: {
     dashboard: "Dashboard",
   },

@@ -27,12 +27,12 @@ description: "Review, triage, repair, or land OpenClaw issues and pull requests 
 
 ## Inspect the actual item
 
-- Start `git status -sb`; preserve unrelated work. Local `gitcrawl` → bare PATH `gh`, narrow live JSON. Stale/missing archive → `gh`, no broad sync. PR source: `gh pr view/diff` + checkout, not web search.
+- Start `git status -sb`; preserve unrelated work. Local `gitcrawl` → PATH `ghx`, narrow live JSON. Stale/missing archive → `ghx`, no broad sync. PR source: `ghx pr view/diff` + checkout, not web search.
 
 ```bash
-gh pr view <pr> --repo openclaw/openclaw \
+ghx pr view <pr> --repo openclaw/openclaw \
   --json number,title,state,body,author,assignees,baseRefName,headRefName,headRefOid,files,comments,reviews
-gh issue view <issue> --repo openclaw/openclaw \
+ghx issue view <issue> --repo openclaw/openclaw \
   --json number,title,state,body,author,assignees,comments
 ```
 
@@ -61,7 +61,7 @@ gh issue view <issue> --repo openclaw/openclaw \
 - Reopen review for substantive changes/unresolved concerns, not patch-identical rebase/mechanical head change. Address real human/bot findings; explain rejections. Bot scores/Rank-up lists create no separate obligations. ClawSweeper advisory; never wait for comment to land.
 - Current PR template: plain problem/impact; inventories in diff/details. Keep risks, migrations, actions, proof, gaps, credit current; explain material tradeoffs. No invented internal-only user benefit or universal LOC/provenance/alternate-fix essays.
 - `CHANGELOG.md` release-owned; release-note context in PR/commit. Agent transcripts only on explicit request.
-- Public mutation: verify author/committer + writer; shell-sensitive body files. Authorized scope only; update existing comment/body, no duplicates.
+- Public mutation: verify author/committer + writer. Use `ghx` with real `--body-file <path>` payloads, never stdin (`--body-file -`, `--input -`, or `/dev/stdin`); the proxy does not forward stdin. Read changed bodies back with `ghx --no-cache` and verify exact nonempty bytes. Authorized scope only; update existing comment/body, no duplicates.
 - Publication/merge: read [landing](references/landing.md) (media, exact-head CI, native workflow).
 - Verify remote merge/closure + source. Report problem, owning change, proof/gaps, credit, linked final state in prose; worthwhile follow-ups only.
 

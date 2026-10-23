@@ -3,7 +3,7 @@ import { pathForRoute } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerCronEnglish } from "../../../i18n/locales/en-cron.ts";
-import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   SessionAutomationRead,
@@ -101,12 +101,9 @@ export function SessionAutomationMobileList(props: SessionAutomationMobileListPr
                 <a
                   class="session-automation-mobile__list-row"
                   href={`${pathForRoute("cron", props.basePath)}?${new URLSearchParams({ job: job().id })}`}
-                  onClick={(event) => {
-                    if (shouldHandleNavigationClick(event)) {
-                      event.preventDefault();
-                      props.onOpenAutomation(job().id);
-                    }
-                  }}
+                  onClick={(event) =>
+                    handleNavigationClick(event, () => props.onOpenAutomation(job().id))
+                  }
                 >
                   <span class="session-automation-mobile__list-icon">
                     <Icon name="clock" />

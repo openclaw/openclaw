@@ -42,7 +42,6 @@ export function getGatewayRecoveryRuntime(): GatewayRecoveryRuntime | undefined 
 
 /** Dispatches detached Gateway lifecycle work through the active instance principal. */
 export async function dispatchGatewayLifecycleMethod<T = unknown>(
-  method: "agent",
   params: Record<string, unknown>,
   options: GatewayLifecycleAgentDispatchOptions = {},
 ): Promise<T> {
@@ -53,7 +52,7 @@ export async function dispatchGatewayLifecycleMethod<T = unknown>(
     ? resolveGatewayContext()?.recoveryRuntime
     : getGatewayRecoveryRuntime();
   if (!runtime) {
-    throw lifecycleUnavailable(method);
+    throw lifecycleUnavailable("agent");
   }
   return await runtime.dispatchAgent<T>(agentParams, timeoutMs, dispatchOptions);
 }

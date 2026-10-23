@@ -3,7 +3,7 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
-  getActiveTranscriptKysely,
+  selectActiveTranscriptEventRows,
   parseActiveTranscriptMessageRow,
   readSnapshotEventRows,
   type CurrentTranscriptProjection,
@@ -71,14 +71,7 @@ export function withRecentSessionTranscriptActiveEventsInSnapshot<T>(
   read: (visit: (visitor: (event: TranscriptEvent) => void) => void) => T,
 ): T {
   const limit = resolveIntegerOption(maxEvents, 0, { min: 0 });
-  const db = getActiveTranscriptKysely(projection.database);
-  const query = db
-    .selectFrom("session_transcript_active_events as active")
-    .innerJoin("transcript_events as event", (join) =>
-      join
-        .onRef("event.session_id", "=", "active.session_id")
-        .onRef("event.seq", "=", "active.event_seq"),
-    )
+  const query = selectActiveTranscriptEventRows(projection.database)
     .select(transcriptEventJsonSql(projection.database.db, "event").as("event_json"))
     .where("active.session_id", "=", projection.resolved.sessionId)
     .where("active.context_eligible", "=", 1)

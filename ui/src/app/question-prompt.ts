@@ -31,8 +31,6 @@ export type QuestionDraft = {
   freeText: string;
 };
 
-type QuestionPromptStatus = QuestionRecord["status"] | "unavailable";
-
 export type QuestionPrompt = Pick<
   QuestionRecord,
   "id" | "questions" | "createdAtMs" | "expiresAtMs"
@@ -40,7 +38,7 @@ export type QuestionPrompt = Pick<
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  status: QuestionPromptStatus;
+  status: QuestionRecord["status"] | "unavailable";
   answers?: QuestionAnswers;
   submittedAnswers?: QuestionAnswers;
   answeredElsewhere: boolean;

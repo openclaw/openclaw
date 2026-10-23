@@ -11,11 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import { profileCatalogPath } from "../state/user-profile-identity.read.js";
-import {
-  captureResidentUserProfileAccess,
-  readResidentUserProfileRevision,
-} from "../state/user-profile-list.js";
+import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 
@@ -102,25 +98,19 @@ export function resolveOperatorRoleSelection(
 export function resolveOperatorRolePolicyForProfile(
   profileId: string | undefined,
   cfg: OpenClawConfig,
-  assignment?: { role: string | null },
 ): GatewayOperatorRoleDefinition | undefined {
   // The owner attributes the shared-secret system actor; roles govern identified people only.
   if (!cfg.gateway?.roles || profileId === GATEWAY_OWNER_PROFILE_ID) {
     return undefined;
   }
-  const profile =
-    profileId && !assignment
-      ? captureResidentUserProfileAccess(profileId).assertCurrent()
-      : undefined;
+  const profile = profileId
+    ? captureResidentUserProfileAccess(profileId).assertCurrent()
+    : undefined;
   return resolveOperatorRolePolicyForAssignment(
     profileId,
-    assignment ? assignment.role : (profile?.role ?? null),
+    profile?.role ?? null,
     cfg,
-    profile
-      ? (profile.githubLogin ?? null)
-      : profileId && cfg.gateway.roles.assignments?.byGithubLogin
-        ? (readResidentUserProfileRevision(profileId, profileCatalogPath({}))?.githubLogin ?? null)
-        : null,
+    profile?.githubLogin ?? null,
   );
 }
 
@@ -306,4 +296,13 @@ export function authorizeGatewaySessionCreation(
     ErrorCodes.FORBIDDEN,
     `Your operator role cannot create sessions for agent "${params.agentId}"; choose an allowed agent or ask a gateway administrator to update your role.`,
   );
+}
+
+/** Agents the caller's named operator role allows, or undefined when the role does not restrict agents. */
+export function resolveOperatorRoleAgents(
+  client: GatewayClient | null,
+  cfg: OpenClawConfig,
+): readonly string[] | undefined {
+  const role = resolveOperatorRolePolicy(client, cfg);
+  return role && role.agents !== "*" ? role.agents : undefined;
 }

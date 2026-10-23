@@ -36,17 +36,6 @@ type NativeControlAuth = {
   } | null;
 };
 
-type NativeGatewayClientOptions = Pick<
-  GatewayBrowserClientOptions,
-  | "clientName"
-  | "mode"
-  | "platform"
-  | "deviceFamily"
-  | "instanceId"
-  | "scopes"
-  | "nativeConnectAuth"
->;
-
 declare global {
   interface Window {
     __OPENCLAW_NATIVE_CONTROL_AUTH__?: NativeControlAuth;
@@ -88,7 +77,16 @@ export function resolveApplicationStartupSettings(
   let pendingGatewayToken: string | null = null;
   let pendingBootstrapToken: string | null = null;
   let pendingBootstrapProfile: ControlUiBootstrapProfileHint | null = null;
-  let nativeClient: NativeGatewayClientOptions | null = null;
+  let nativeClient: Pick<
+    GatewayBrowserClientOptions,
+    | "clientName"
+    | "mode"
+    | "platform"
+    | "deviceFamily"
+    | "instanceId"
+    | "scopes"
+    | "nativeConnectAuth"
+  > | null = null;
 
   const updateSettings = (patch: Partial<UiSettings>) => {
     const entries = Object.entries(patch) as Array<

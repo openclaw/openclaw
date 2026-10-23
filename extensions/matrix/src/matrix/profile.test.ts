@@ -25,7 +25,7 @@ const avatarMedia = {
 describe("matrix profile sync", () => {
   it("skips when no desired profile values are provided", async () => {
     const client = createClientStub();
-    expect(await syncProfile({ client })).toMatchObject({ ...noUpdates, skipped: true });
+    expect(await syncProfile({ client })).toMatchObject(noUpdates);
     expect(client.setDisplayName).not.toHaveBeenCalled();
     expect(client.setAvatarUrl).not.toHaveBeenCalled();
   });
@@ -34,7 +34,6 @@ describe("matrix profile sync", () => {
     const client = createClientStub(oldProfile);
     expect(await syncProfile({ client, displayName: "New Name" })).toMatchObject({
       ...noUpdates,
-      skipped: false,
       displayNameUpdated: true,
     });
     expect(client.setDisplayName).toHaveBeenCalledWith("New Name");

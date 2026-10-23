@@ -22,11 +22,6 @@ type DaemonHintKind =
   | "wsl-systemd"
   | "generic";
 
-type DaemonHintItem = {
-  kind: DaemonHintKind;
-  text: string;
-};
-
 type DaemonActionResponse = {
   ok: boolean;
   action: DaemonAction;
@@ -34,7 +29,10 @@ type DaemonActionResponse = {
   message?: string;
   error?: string;
   hints?: string[];
-  hintItems?: DaemonHintItem[];
+  hintItems?: {
+    kind: DaemonHintKind;
+    text: string;
+  }[];
   warnings?: string[];
   definitionBackup?: GatewayServiceDefinitionBackupReceipt;
   service?: ReturnType<typeof buildDaemonServiceSnapshot>;
@@ -71,8 +69,6 @@ export function buildDaemonServiceSnapshot(service: GatewayService, loaded: bool
   };
 }
 
-type DaemonEmit = (payload: Omit<DaemonActionResponse, "action">) => void;
-
 export function createDaemonActionContext(params: {
   action: DaemonAction;
   json: boolean;
@@ -100,7 +96,7 @@ export function createDaemonActionContext(params: {
     defaultRuntime.writeJson({ ...payloadWithContext, ...(rebind ? { rebind } : {}) });
   };
   // Message-bearing successes opt into text; emit remains JSON-only.
-  const emitMessage: DaemonEmit = (payload) => {
+  const emitMessage: (payload: Omit<DaemonActionResponse, "action">) => void = (payload) => {
     emit(payload);
     if (!params.json && payload.message) {
       defaultRuntime.log(payload.message);

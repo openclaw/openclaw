@@ -169,14 +169,6 @@ function parseXaiOAuthTokenResponse(
   };
 }
 
-function formatXaiOAuthError(params: { context: string; status: number; body: unknown }): string {
-  const body = asOptionalRecord(params.body);
-  const error = readStringValue(body?.error);
-  const description = readStringValue(body?.error_description);
-  const prefix = `${params.context} failed (${params.status})`;
-  return error ? `${prefix}: ${error}${description ? ` (${description})` : ""}` : prefix;
-}
-
 // RFC 6749 final codes that the shared refresh-reason reader does not classify.
 const XAI_FINAL_OAUTH_ERRORS = new Set(["invalid_request", "access_denied"]);
 
@@ -477,7 +469,8 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
           });
         }
 
-        const error = readStringValue(asOptionalRecord(body)?.error);
+        const errorBody = asOptionalRecord(body);
+        const error = readStringValue(errorBody?.error);
         if (error === "authorization_pending" || error === "slow_down") {
           if (error === "slow_down") {
             pollIntervalMs += XAI_DEVICE_CODE_SLOW_DOWN_INCREMENT_MS;
@@ -495,12 +488,10 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
           throw new Error("xAI device code expired. Re-run the login.");
         }
 
+        const description = readStringValue(errorBody?.error_description);
+        const prefix = `xAI device token exchange failed (${tokenResponse.status})`;
         throw new Error(
-          formatXaiOAuthError({
-            context: "xAI device token exchange",
-            status: tokenResponse.status,
-            body,
-          }),
+          error ? `${prefix}: ${error}${description ? ` (${description})` : ""}` : prefix,
         );
       }
 

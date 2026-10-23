@@ -102,6 +102,14 @@ that were never installed.
 These preparation changes require the installed updater to contain the fix;
 staging a newer candidate cannot change an older updater's initial install.
 
+Native pnpm package swaps preserve platform-filtered optional dependencies as
+absent. On Windows, a dangling link declared in its owner's
+`optionalDependencies` is removed from the staged copy instead of failing
+activation; missing required dependencies and other filesystem errors still
+fail. This requires the installed updater to contain the repair. A failed swap
+before any installation or service mutation records the previous Gateway
+observation without restart verification, including with `--no-restart`.
+
 Source candidates bound the native declaration compiler with the shared Go runtime
 policy used by local checks. Node's heap limit does not cover that compiler.
 Explicit `GOMEMLIMIT`, `GOGC`, and `GOMAXPROCS` tuning remains in effect.

@@ -1111,11 +1111,24 @@ is running; the new CLI cannot fix the old CLI's pre-update inspection.
 #### Node runtime for package-manager updates
 
 Package-manager updates normally keep using the Node binary recorded in the
-managed service. If that Node cannot run the target release, but the current
-CLI Node can and the service is proven to belong to the package being updated,
-a restart-enabled update uses the current Node for finalization and rewrites
-the service metadata to that runtime. `--no-restart` cannot repair service
-metadata, so the same runtime mismatch stops before package mutation.
+managed service. If that Node cannot run the target release, the update refuses
+before staging the package or migrating state, even when the current CLI Node
+is compatible and restart is enabled. The diagnostic names the service Node
+path, its version, the required range, and the recovery steps. Changing the
+shell's Node alone does not change an absolute Node path in the service unit.
+
+For an installation already updated with an unsupported service Node, run
+`openclaw doctor --fix` under a supported Node. Doctor can refresh the runtime
+of a verified owned service, keeping a backup and preserving native settings
+and unrelated systemd drop-ins. This includes a drop-in whose
+`EnvironmentFile=-%t/...` supplies unrelated environment variables. A drop-in
+that overrides the launcher or PATH must be repaired by its owner; Doctor
+leaves it unchanged and identifies the unit to inspect with `systemctl --user cat`.
+
+Explicit saved runtime pins remain operator choices. To replace an unsupported
+pin, run `openclaw gateway install --force --runtime node --runtime-path /path/to/supported/node`
+from the intended installation and profile. Preserve operator overrides; the
+installer cannot repair a conflicting drop-in by rewriting the base unit.
 
 #### macOS LaunchAgent verification
 

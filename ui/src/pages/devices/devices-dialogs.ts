@@ -21,12 +21,6 @@ import {
 
 registerDevicesEnglish();
 
-type DeviceAliasTarget = {
-  id: string;
-  name: string;
-  operatorLabel?: string;
-};
-
 type InventoryRemovalPrompt =
   | { kind: "entry"; entry: InventoryRemovalRequest }
   | { kind: "stale"; entries: InventoryRemovalRequest[] };
@@ -53,7 +47,11 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
   }
 
   // Alias edits and destructive confirmations share one identity-scoped slot.
-  async function editAlias(device: DeviceAliasTarget): Promise<void> {
+  async function editAlias(device: {
+    id: string;
+    name: string;
+    operatorLabel?: string;
+  }): Promise<void> {
     if (!host.canManagePairing() || pending) {
       return;
     }

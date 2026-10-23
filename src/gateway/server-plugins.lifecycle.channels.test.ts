@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import {
@@ -183,6 +184,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     const started = await startPluginGateway({ hotReloadRecovery });
     server = started.server;
     await server.startupSettled;
+    await waitForGatewayStartup(started.port);
     socket = await connectWebchatClient({ port: started.port, scopes: ["operator.admin"] });
     const connected = socket;
     type Probe = {
@@ -351,6 +353,7 @@ it.each([false, true])(
     server = started.server;
     const port = started.port;
     await server.startupSettled;
+    await waitForGatewayStartup(port);
     await maintenance.settled;
     const probe = async (accountId: string) => {
       const response = await fetch(`http://127.0.0.1:${port}/reload-webhook/${accountId}`, {

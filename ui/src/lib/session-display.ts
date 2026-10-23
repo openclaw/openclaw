@@ -152,17 +152,6 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   return checkout ?? node;
 }
 
-type SessionKeyInfo = {
-  /** Typed-session identity; display branching keys off this, not label text. */
-  kind?: "subagent" | "automation";
-  /** Catalog-backed prefix for typed sessions. Empty for others. */
-  prefix: string;
-  /** Human-readable fallback when no label / displayName is available. */
-  fallbackName: string;
-  /** Raw account segment; only a fallback, Gateway rows carry the real one. */
-  accountId?: string;
-};
-
 type SessionDisplayRow = {
   label?: string;
   displayName?: string;
@@ -189,7 +178,16 @@ export function formatSessionChannelLabel(channel: string): string {
   return CHANNEL_LABELS.get(channel) ?? channel.charAt(0).toUpperCase() + channel.slice(1);
 }
 
-function parseSessionKey(key: string): SessionKeyInfo {
+function parseSessionKey(key: string): {
+  /** Typed-session identity; display branching keys off this, not label text. */
+  kind?: "subagent" | "automation";
+  /** Catalog-backed prefix for typed sessions. Empty for others. */
+  prefix: string;
+  /** Human-readable fallback when no label / displayName is available. */
+  fallbackName: string;
+  /** Raw account segment; only a fallback, Gateway rows carry the real one. */
+  accountId?: string;
+} {
   const normalized = normalizeLowercaseStringOrEmpty(key);
 
   if (key === "main" || /^agent:[^:]+:main$/u.test(key)) {

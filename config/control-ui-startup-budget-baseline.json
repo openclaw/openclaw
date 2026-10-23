@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 292311,
-  "reason": "Defer optional feature copy: matched 054f11c8 build 295391 to 292311 B gzip; 7 startup JS and 1 CSS request unchanged.",
+  "startupJsGzipBytes": 282364,
+  "reason": "Defer optional feature copy: matched afdaf5fb libdeflate11 build 285393 to 282364 B gzip; 7 startup JS and 1 CSS request unchanged.",
   "updatedAt": "2026-10-23"
 }

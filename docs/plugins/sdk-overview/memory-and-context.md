@@ -268,8 +268,17 @@ type MemoryAudience =
   `conversation` audience for the durable root session.
 - A spawned child inherits its root audience only after the host validates each
   recorded parent key, session ID, and lifecycle revision.
-- Missing, malformed, cross-agent, cyclic, or stale lineage produces no
-  audience. Unknown or missing durable chat type also produces no audience.
+- A child spawned into another agent receives `owner-private` audience for its
+  own agent only when the spawn that crossed agents was owner-attributed and the
+  root is the owner's direct chat. Conversation audience never crosses agents;
+  that lineage produces no audience.
+- Operator-created root sessions record a `direct` chat type at creation, so
+  sessions started later by `sessions_send`, cron, or the `agent` method resolve
+  an audience. The turn's owner status still selects `owner-private` or
+  `conversation`.
+- Missing, malformed, cyclic, or stale lineage produces no audience. Unknown or
+  missing durable chat type also produces no audience. The Gateway logs every
+  denial as `memory_audience_denied` with the session key and reason.
 
 Audience is separate from sandbox policy. A provider can deny sandboxed callers
 even when they have a valid audience. Operator authority is also separate and

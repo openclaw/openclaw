@@ -116,9 +116,11 @@ test.each(["rejection", "successful reconnect", "node-role removal"])(
         finalizeNodePairingCleanupClaim(expectDefined(cleanupClaim, "cleanup claim")),
       ).resolves.toEqual([{ requestId: request.requestId, nodeId: "node-1" }]);
     } else {
-      await expect(
-        removePairedDeviceRole({ deviceId: "node-1", role: "node", baseDir }),
-      ).resolves.toEqual({ deviceId: "node-1", role: "node", removedDevice: false });
+      await expect(removePairedDeviceRole({ deviceId: "node-1", baseDir })).resolves.toEqual({
+        deviceId: "node-1",
+        role: "node",
+        removedDevice: false,
+      });
     }
     expect(await reopen()).toBe(true);
     const device = await getPairedDevice("node-1", baseDir);

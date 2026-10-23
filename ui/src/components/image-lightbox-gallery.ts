@@ -249,7 +249,10 @@ export function trapLightboxTabFocus(event: KeyboardEvent, focusables: Iterable<
   }
   const actions = [...focusables]
     .filter(
-      (action) => action.isConnected && !(action instanceof HTMLButtonElement && action.disabled),
+      (action) =>
+        action.isConnected &&
+        action.tabIndex >= 0 &&
+        !(action instanceof HTMLButtonElement && action.disabled),
     )
     .toSorted((left, right) =>
       left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,

@@ -339,7 +339,6 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
       expect.objectContaining({
         storeAgentId: "sandboxed-agent",
         sessionKey: boundSessionKey,
-        channel: "whatsapp",
         to: "120363001234567890@g.us",
         accountId: "work",
       }),

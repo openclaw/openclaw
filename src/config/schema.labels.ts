@@ -9,7 +9,6 @@ import { GITHUB_TOOL_FIELD_LABELS } from "./schema.labels.github.js";
 import { MESSAGE_FIELD_LABELS } from "./schema.labels.messages.js";
 import { MODEL_FIELD_LABELS } from "./schema.labels.models.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
-import { UI_FIELD_LABELS } from "./schema.labels.ui.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
@@ -466,7 +465,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "mcp.servers.*.codex.agents": "Codex MCP Agents",
   "mcp.servers.*.codex.defaultToolsApprovalMode": "Codex MCP Tool Approval",
   "mcp.servers.*.codex.default_tools_approval_mode": "Codex MCP Tool Approval",
-  ...UI_FIELD_LABELS,
+  ui: "UI",
+  "ui.seamColor": "Accent Color",
+  "ui.prefs.accent": "User Accent Color",
+  "ui.prefs.locale": "Interface language",
   tui: "Terminal UI",
   "tui.footer": "Terminal UI Footer",
   "tools.exec.timeoutSeconds": "Exec Timeout (Seconds)",

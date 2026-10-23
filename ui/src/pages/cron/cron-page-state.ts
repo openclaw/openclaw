@@ -657,6 +657,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     inventories: { agents, channels, runtimeConfig },
     cron: projection.read,
     saving: presentation.saving,
+    toggleSavingJobId: presentation.toggleSavingJobId,
     getActionRetired: () => presentation.retired,
     reads: presentation.reads,
     canManageCron,

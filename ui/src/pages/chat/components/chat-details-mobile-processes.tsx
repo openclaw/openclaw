@@ -1,4 +1,5 @@
 import { For, Show, createMemo } from "solid-js";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerProcessesEnglish } from "../../../i18n/locales/en-processes.ts";
 import { registerSessionOrganizationEnglish } from "../../../i18n/locales/en-session-organization.ts";
@@ -7,6 +8,7 @@ import type { ProcessesPanelData } from "../processes-panel-data.ts";
 import { ChatDetailsProcessRow } from "./chat-details-process-row.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 registerEnglishCatalog(registerProcessesEnglish);
 registerEnglishCatalog(registerSessionOrganizationEnglish);

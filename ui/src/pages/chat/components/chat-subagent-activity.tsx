@@ -4,6 +4,7 @@ import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { ThemeBrandIcon } from "../../../components/theme-brand-icon.tsx";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -11,6 +12,7 @@ import "./chat-subagent-activity.css";
 import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 export type SubagentActivityProps = {
   rows: readonly ChatSubagentActivity[];

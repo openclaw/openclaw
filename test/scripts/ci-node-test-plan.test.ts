@@ -345,14 +345,14 @@ describe("Control UI release-only inventories", () => {
 
   it("balances qualified real-Gateway work around the serial and desktop proof", () => {
     const desktop = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
-    const serial = "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts";
+    const serial = "ui/src/e2e/mcp-app-conformance.e2e.test.ts";
     const parallel = [
       "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
       "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
     ];
-    const fileSeconds: Record<string, number> = { [desktop]: 20, [serial]: 40 };
+    const fileSeconds: Record<string, number> = { [desktop]: 80, [serial]: 80 };
     for (const file of parallel) {
       fileSeconds[file] = 100;
     }
@@ -379,9 +379,63 @@ describe("Control UI release-only inventories", () => {
       const files = shard.groups[0]!.includePatterns;
       // Whole 100s files occupy two workers; an odd final file still costs 100s.
       const parallelWaves = Math.ceil(files.filter((file) => parallel.includes(file)).length / 2);
-      return (shard.run_desktop ? 20 : 0) + (files.includes(serial) ? 40 : 0) + parallelWaves * 100;
+      return (
+        Math.max(shard.run_desktop ? 80 : 0, files.includes(serial) ? 80 : 0) + parallelWaves * 100
+      );
     });
-    expect(Math.max(...work)).toBeLessThanOrEqual(160);
+    expect(Math.max(...work)).toBeLessThanOrEqual(180);
+  });
+
+  it.each([
+    { name: "disabled proofs", env: {}, active: false },
+    { name: "disabled peer flag", env: { OPENCLAW_PEER_RESTART_LIVE: "0" }, active: false },
+    { name: "enabled peer", env: { OPENCLAW_PEER_RESTART_LIVE: "1" }, active: true },
+    { name: "empty steering variant", env: { OPENCLAW_STEER_CUSTODY_PROOF: "" }, active: false },
+    { name: "enabled steering", env: { OPENCLAW_STEER_CUSTODY_PROOF: "fixed" }, active: true },
+    {
+      name: "invalid nonempty steering variant",
+      env: { OPENCLAW_STEER_CUSTODY_PROOF: "invalid" },
+      active: true,
+    },
+    { name: "disabled DeepSeek flag", env: { OPENCLAW_DEEPSEEK_UI_LIVE: "0" }, active: false },
+    {
+      name: "enabled DeepSeek without preflight credentials",
+      env: { OPENCLAW_DEEPSEEK_UI_LIVE: "1" },
+      active: true,
+    },
+  ])("prices $name without removing selected opt-in files", ({ env, active }) => {
+    const optInFiles = [
+      "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
+      "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
+    ];
+    const parallel = [
+      "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
+      "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+    ];
+    const timings = vi.spyOn(testTimings, "readUiE2eFileTimings").mockReturnValue({
+      // Disabled proofs must ignore even a retained timing from an opted-in run.
+      fileSeconds: Object.fromEntries([
+        ...optInFiles.map((file) => [file, 60]),
+        ...parallel.map((file) => [file, 20]),
+      ]),
+      perFileOverheadSeconds: 1,
+    });
+    onTestFinished(() => timings.mockRestore());
+    const selected = [...optInFiles, ...parallel];
+    const shards = createUiRealGatewayTestShards(
+      [{ configs: [configPath("ui-e2e")], shard_name: "ui", includePatterns: selected }],
+      env,
+    );
+    expectSameEntries(
+      shards.flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns)),
+      selected,
+    );
+    const first = shards[0]!.groups[0]!.includePatterns;
+    expect(first).toEqual([...optInFiles, ...(active ? [] : parallel.slice(2))].toSorted());
+    expect(shards.every((shard) => !shard.run_desktop)).toBe(true);
   });
 
   it("retains PR-exempt entries while omitting release-only UI matrices", () => {

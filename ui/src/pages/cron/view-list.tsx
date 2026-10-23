@@ -271,12 +271,15 @@ function JobsTable(
   const canManage = createMemo(() => props.canManage);
   const busy = createMemo(() => props.busy);
   const connected = createMemo(() => props.connected);
+  // Filter text and readiness updates must not rescan the retained inventory.
+  const ownerJobs = createMemo(() => props.jobs);
+  const readRows = createMemo(() => props.reads?.rows);
   const initialPending = () => props.loading && !props.hasLoaded;
   const tableBusy = () =>
     (props.reads ? isPending(props.reads.jobs) : props.loading) || props.jobsLoadingMore;
   const jobs = createProjection(
     () =>
-      (props.reads ? props.reads.rows() : props.jobs).toSorted(
+      (readRows()?.() ?? ownerJobs()).toSorted(
         (left, right) =>
           Number(isCronJobActiveFailure(right)) - Number(isCronJobActiveFailure(left)),
       ),
@@ -310,15 +313,16 @@ function JobsTable(
           {(job) => (
             <JobRow
               job={job()}
-              jobs={props.jobs}
+              jobs={ownerJobs()}
               canManage={canManage()}
               busy={busy()}
+              toggleSavingJobId={props.toggleSavingJobId}
               connected={connected()}
-              onRun={props.onRun}
-              onToggle={props.onToggle}
-              onClone={props.onClone}
-              onRemove={props.onRemove}
-              onSelectJob={props.onSelectJob}
+              onRun={(currentJob, mode) => props.onRun(currentJob, mode)}
+              onToggle={(currentJob, enabled) => props.onToggle(currentJob, enabled)}
+              onClone={(currentJob) => props.onClone(currentJob)}
+              onRemove={(currentJob) => props.onRemove(currentJob)}
+              onSelectJob={(currentJob) => props.onSelectJob(currentJob)}
             />
           )}
         </For>

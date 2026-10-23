@@ -126,8 +126,12 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
     });
   };
   const previewMarker = createMemo(() => {
-    const marker = props.markers.find((candidate) => candidate.id === props.previewId);
-    const live = props.liveMarkers?.find((candidate) => candidate.id === props.previewId);
+    const id = props.previewId;
+    if (!id) {
+      return undefined;
+    }
+    const marker = props.markers.find((candidate) => candidate.id === id);
+    const live = props.liveMarkers?.find((candidate) => candidate.id === id);
     return marker && live ? { ...marker, message: live.message } : marker;
   });
   const previewMessage = createMemo(() => {

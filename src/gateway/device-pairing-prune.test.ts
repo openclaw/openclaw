@@ -265,9 +265,11 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     const baseDir = await makeStateDir();
     await pairSilentDevice(baseDir, "cli-stale", ["operator", "node"]);
     await registerApns(baseDir, "cli-stale");
-    await expect(
-      removePairedDeviceRole({ deviceId: "cli-stale", role: "node", baseDir }),
-    ).resolves.toEqual({ deviceId: "cli-stale", role: "node", removedDevice: false });
+    await expect(removePairedDeviceRole({ deviceId: "cli-stale", baseDir })).resolves.toEqual({
+      deviceId: "cli-stale",
+      role: "node",
+      removedDevice: false,
+    });
     await expect(loadApnsRegistration("cli-stale", baseDir)).resolves.toMatchObject({
       nodeId: "cli-stale",
     });
