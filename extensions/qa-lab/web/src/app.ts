@@ -63,10 +63,6 @@ function summarizeCaptureCoverageFromEvents(
     apis: countCaptureDimension(events, (event) => event.api),
     models: countCaptureDimension(events, (event) => event.model),
     hosts: countCaptureDimension(events, (event) => event.host),
-    localPeers: countCaptureDimension(events, (event) => {
-      const host = event.host?.trim();
-      return host && /^(127\.0\.0\.1|localhost)(:\d+)?$/i.test(host) ? host : undefined;
-    }),
   };
 }
 
