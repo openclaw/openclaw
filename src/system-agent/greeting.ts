@@ -484,33 +484,25 @@ async function resolveSystemAgentGreetingText(
 /** Persist the config-audit cursor only after the host has delivered the greeting. */
 export async function acknowledgeSystemAgentGreetingDelivery(params: {
   auditSequence: number;
-  cacheStore?: SystemAgentGreetingCacheStore;
-  openCache?: () => SystemAgentGreetingCacheStore;
-  now?: () => number;
+  cacheStore: SystemAgentGreetingCacheStore;
 }): Promise<void> {
   if (!Number.isSafeInteger(params.auditSequence) || params.auditSequence < 0) {
     return;
   }
   try {
-    const cacheStore =
-      params.cacheStore ?? params.openCache?.() ?? createSystemAgentGreetingCache();
-    await mutateGreetingState(
-      cacheStore,
-      (current) => {
-        const lastSeenAuditSequence = Math.max(
-          current?.lastSeenAuditSequence ?? 0,
-          params.auditSequence,
-        );
-        if (current?.lastSeenAuditSequence === lastSeenAuditSequence) {
-          return current;
-        }
-        return {
-          ...current,
-          lastSeenAuditSequence,
-        };
-      },
-      (params.now ?? Date.now)(),
-    );
+    await mutateGreetingState(params.cacheStore, (current) => {
+      const lastSeenAuditSequence = Math.max(
+        current?.lastSeenAuditSequence ?? 0,
+        params.auditSequence,
+      );
+      if (current?.lastSeenAuditSequence === lastSeenAuditSequence) {
+        return current;
+      }
+      return {
+        ...current,
+        lastSeenAuditSequence,
+      };
+    });
   } catch {
     // Delivery wins even when diagnostic acknowledgement cannot be persisted.
   }
