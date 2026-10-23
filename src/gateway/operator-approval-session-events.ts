@@ -5,7 +5,6 @@ import type {
   SessionApprovalReplay,
 } from "../../packages/gateway-protocol/src/index.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveApprovalSourceStreamKey } from "./approval-session-audience.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import type {
@@ -61,7 +60,6 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   sessionMessageSubscribers: Pick<SessionMessageSubscriberRegistry, "getApprovals">;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   controlUiBasePath?: string;
-  databaseOptions?: OpenClawStateDatabaseOptions;
   reconcileTerminal?: (record: OperatorApprovalRecord) => boolean | Promise<boolean>;
   getLiveManager?: (
     kind: OperatorApprovalRecord["kind"],
@@ -179,7 +177,6 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       reviewerDeviceId,
       limit: MAX_SESSION_APPROVAL_REPLAY + 1,
       nowMs: snapshotAtMs,
-      databaseOptions: params.databaseOptions,
     };
     const readRevision = scope.revision;
     const prepared = await prepareOperatorApprovalReplay(input);

@@ -117,7 +117,7 @@ const registerApns = (baseDir: string, nodeId: string) =>
     environment: "sandbox",
   });
 const prune = async (context: ReturnType<typeof createPruneContext>, deviceId = "cli-anchor") => {
-  using clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
+  using _ = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
   return await pruneSupersededSilentPairingsAfterApproval({
     deviceId,
     context,

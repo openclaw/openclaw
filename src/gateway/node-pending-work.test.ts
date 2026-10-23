@@ -77,7 +77,7 @@ describe("node pending work", () => {
       pairingGeneration: "generation-1",
     });
 
-    using clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 2_000);
+    using _ = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 2_000);
     drainNodePendingWork("node-retired-generation", {
       pairingGeneration: "generation-2",
     });
