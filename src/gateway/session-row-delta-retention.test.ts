@@ -129,11 +129,12 @@ it("resends an unchanged ancestor after its socket row baseline is evicted", asy
   const { owner, diff, close } = await fixture();
   const parent = row("agent:main:parent", { snapshotAt: 1 });
   const prepared = [prepareSessionAncestor(parent)];
+  const recoveryRevision = "00000000-0000-4000-8000-000000000001";
   try {
-    const first = owner.prepare(prepared, "parent-revision", true);
+    const first = owner.prepare(prepared, undefined, true);
     owner.prepareRows(first.ancestorSessions, diff).delivered();
     first.delivered();
-    expect(owner.prepare(prepared, "next", true).ancestorSessionRefs).toHaveLength(1);
+    expect(owner.prepare(prepared, undefined, true).ancestorSessionRefs).toHaveLength(1);
     owner
       .prepareRows(
         Array.from({ length: SESSION_ROW_DELTA_MAX_ENTRIES }, (_, index) =>
@@ -142,12 +143,12 @@ it("resends an unchanged ancestor after its socket row baseline is evicted", asy
         diff,
       )
       .delivered();
-    const recovered = owner.prepare(prepared, "recovered", true);
-    expect(recovered.ancestorSessions).toEqual([{ ...parent, ancestorRevision: "recovered" }]);
+    const recovered = owner.prepare(prepared, recoveryRevision, true);
+    expect(recovered.ancestorSessions).toEqual([{ ...parent, ancestorRevision: recoveryRevision }]);
     expect(recovered.ancestorSessionRefs).toBeUndefined();
     owner.prepareRows(recovered.ancestorSessions, diff).delivered();
     recovered.delivered();
-    expect(owner.prepare(prepared, "next", true).ancestorSessionRefs).toHaveLength(1);
+    expect(owner.prepare(prepared, undefined, true).ancestorSessionRefs).toHaveLength(1);
   } finally {
     await close();
   }
