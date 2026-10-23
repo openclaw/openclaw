@@ -1,10 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { openaiMediaUnderstandingProvider } from "../../../extensions/openai/media-understanding-provider.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import type { PdfAnalysisRequest } from "../../media-understanding/types.js";
+import type {
+  MediaUnderstandingProvider,
+  PdfAnalysisRequest,
+} from "../../media-understanding/types.js";
 import * as pdfExtract from "../../media/pdf-extract.js";
 import { attachProviderAuthAuthority } from "../../plugins/provider-auth-authority.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import * as modelAuth from "../model-auth.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
@@ -20,6 +23,13 @@ const complete = vi.fn();
 const fetchMock = vi.fn<typeof fetch>();
 const { stubPdfToolInfra } = createPdfToolInfraStub(complete);
 const model = "openai/gpt-4.1-mini";
+let openaiMediaUnderstandingProvider: MediaUnderstandingProvider;
+
+beforeAll(async () => {
+  ({ openaiMediaUnderstandingProvider } = await loadBundledPluginFacade<{
+    openaiMediaUnderstandingProvider: MediaUnderstandingProvider;
+  }>({ pluginId: "openai", artifactBasename: "api.js" }));
+});
 
 beforeEach(() => {
   resetPdfToolAuthEnv();
