@@ -3474,6 +3474,9 @@ before and after churn. `--heap-profile profile.json` saves allocation attributi
 Both modes report per-operation timing sample counts and observed GC totals and
 maximum pause, excluding GC triggered by stopping the allocation sampler. These
 owner measurements do not include Gateway transport or event-loop delay.
+For concurrent comparisons, pass the same future Unix millisecond timestamp with
+`--start-at` to both processes. They wait after warmup and explicit GC; a missed
+start deadline fails the run. The report records the actual measured start time.
 
 For long RPC allocation windows, use `--warmup-operations` to warm fewer requests
 than the measured `--operations` count. For example, `--scenario sessions.list

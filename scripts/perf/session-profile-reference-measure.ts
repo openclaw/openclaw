@@ -6,6 +6,7 @@ import { Session, type HeapProfiler } from "node:inspector/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance, PerformanceObserver } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../src/config/sessions.js";
@@ -18,6 +19,7 @@ const { values } = parseArgs({
     golden: { type: "string" },
     ordinary: { type: "boolean", default: false },
     "heap-profile": { type: "string" },
+    "start-at": { type: "string" },
   },
 });
 const iterations = parseStrictIntegerOption({
@@ -25,6 +27,12 @@ const iterations = parseStrictIntegerOption({
   label: "--iterations",
   min: 27,
   fallback: 108,
+});
+const startAt = parseStrictIntegerOption({
+  raw: values["start-at"],
+  label: "--start-at",
+  min: 1,
+  fallback: 0,
 });
 const stateDir = await mkdtemp(path.join(tmpdir(), "session-profile-reference-"));
 process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -220,6 +228,11 @@ try {
   }
   inspector.connect();
   await inspector.post("HeapProfiler.collectGarbage");
+  if (startAt) {
+    const waitMs = startAt - Date.now();
+    assert.ok(waitMs > 0, "--start-at must leave enough time for preparation and warmup");
+    await delay(waitMs);
+  }
   await inspector.post("HeapProfiler.startSampling", {
     samplingInterval: 32_768,
     includeObjectsCollectedByMajorGC: true,
@@ -230,6 +243,7 @@ try {
   const gcDurations: number[] = [];
   let measuredUntil = Infinity;
   const measuredSince = performance.now();
+  const startedAtEpochMs = Date.now();
   const observer = new PerformanceObserver((list) => {
     for (const entry of list.getEntries()) {
       if (entry.startTime >= measuredSince && entry.startTime < measuredUntil) {
@@ -288,6 +302,7 @@ try {
     participantsPerSession: 3,
     warmupOperations,
     operations: iterations,
+    startedAtEpochMs,
     updates,
     durationMs: {
       samples: durations.length,
