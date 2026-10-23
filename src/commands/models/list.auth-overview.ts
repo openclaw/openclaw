@@ -9,7 +9,6 @@ import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import { isNonSecretApiKeyMarker, isOAuthApiKeyMarker } from "../../agents/model-auth-markers.js";
 import { resolveProviderConfigSecretInput } from "../../agents/model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "../../agents/model-auth-runtime-config.js";
@@ -25,6 +24,7 @@ import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-valu
 import type { ProviderAuthEvidence } from "../../secrets/provider-env-vars.js";
 import { maskApiKey } from "../../security/secret-mask.js";
 import { shortenHomePath } from "../../utils.js";
+import { listUnavailableAuthProfiles } from "./auth-unavailability.js";
 import type { ProviderAuthOverview } from "./list.types.js";
 
 /**
@@ -56,19 +56,18 @@ export function resolveProviderAuthOverview(params: {
   authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
 }): ProviderAuthOverview {
   const { provider, cfg, store } = params;
-  const now = Date.now();
   const profiles = listProfilesForProvider(store, provider);
+  const unavailableByProfile = new Map(
+    listUnavailableAuthProfiles(store).map((profile) => [profile.profileId, profile]),
+  );
   const withUnusableSuffix = (base: string, profileId: string) => {
-    const unusableUntil = resolveProfileUnusableUntilForDisplay(store, profileId);
-    if (!unusableUntil || now >= unusableUntil) {
+    const unavailable = unavailableByProfile.get(profileId);
+    if (!unavailable) {
       return base;
     }
-    const stats = store.usageStats?.[profileId];
-    const kind =
-      typeof stats?.disabledUntil === "number" && now < stats.disabledUntil
-        ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
-        : "cooldown";
-    const remaining = formatRemainingShort(unusableUntil - now);
+    const reason = unavailable.reason ? `:${unavailable.reason}` : "";
+    const kind = unavailable.kind === "cooldown" ? "cooldown" : `${unavailable.kind}${reason}`;
+    const remaining = formatRemainingShort(unavailable.remainingMs);
     return `${base} [${kind} ${remaining}]`;
   };
   const labels = profiles.map((profileId) => {
