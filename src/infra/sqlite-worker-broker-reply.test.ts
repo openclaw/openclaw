@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
+import { classifyGatewayStorageFailure } from "./sqlite-error-diagnostics.js";
 import { receiveSqliteWorkerReply } from "./sqlite-worker-broker-reply.js";
 import type { Actor, Job } from "./sqlite-worker-broker.types.js";
 import type { SqliteWorkerCloseReceipt } from "./sqlite-worker-contract.js";
@@ -209,6 +210,7 @@ it.each(["ordinary", "uncertain-aggregate"])(
     if (kind === "uncertain-aggregate") {
       expect(failure).toBeInstanceOf(AggregateError);
       expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+      expect(classifyGatewayStorageFailure(failure)).toBe("session_actor_reconciliation");
       expect(isSqliteWorkerError(failure, "outcome-unknown")).toBe(false);
       expect(failure).toMatchObject({ cause: { code: "EIO" } });
     } else {

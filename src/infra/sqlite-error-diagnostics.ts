@@ -7,7 +7,11 @@ import {
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { POSTGRES_QUERY_CANCELED_ERROR_NAME } from "./postgres-sync/protocol.js";
-import { hasSqliteWorkerOutcomeUnknown, isSqliteWorkerError } from "./sqlite-worker-error.js";
+import {
+  hasSqliteWorkerErrorCode,
+  hasSqliteWorkerOutcomeUnknown,
+  isSqliteWorkerError,
+} from "./sqlite-worker-error.js";
 
 const STORAGE_ERRORS = [
   ["SQLITE_BUSY", "database is locked", 5],
@@ -58,7 +62,7 @@ export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFai
   // Secondary cleanup diagnostics must not replace its user-facing outcome.
   for (let current = error; current instanceof Error && !seen.has(current);) {
     seen.add(current);
-    outcomeUnknown ||= isSqliteWorkerError(current, "outcome-unknown");
+    outcomeUnknown ||= hasSqliteWorkerErrorCode(current, "outcome-unknown");
     if (isSqliteWorkerError(current, "unavailable")) {
       unavailable = "unavailable";
     }
