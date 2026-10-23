@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { showToast } from "../lib/toast.ts";
-import "../lib/toast-host.ts";
+import "../lib/toast-host.tsx";
 import {
   afterModalHidden,
   getRenderedModalDialog,
@@ -11,7 +11,7 @@ import {
 } from "../test-helpers/modal-dialog.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import "./modal-dialog.ts";
+import "./modal-dialog.tsx";
 
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;

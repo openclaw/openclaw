@@ -15,7 +15,6 @@
  * @module @openclaw/oc-path/universal
  */
 
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isMap, isSeq, type Node } from "yaml";
 import type { MdAst } from "./ast.js";
 import { OcPathEditError } from "./edit-error.js";
@@ -483,11 +482,11 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): OcAst {
     if (info.marker !== "+") {
       throw new OcPathEditError("not-writable", "md section insertion uses bare `+`");
     }
-    const section = expectDefined(p.section, "Markdown section insertion has a section");
-    const blockIdx = ast.blocks.findIndex((b) => b.slug === section.toLowerCase());
-    if (blockIdx === -1) {
+    const match = resolveMdOcPath(ast, p);
+    if (match?.kind !== "block") {
       throw new OcPathEditError("unresolved");
     }
+    const blockIdx = ast.blocks.indexOf(match.node);
     const kv = parseMdItemKeyValue(value);
     const itemLine = `- ${value}`;
     const nextBlock = ast.blocks[blockIdx + 1];

@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { FaceTimeCallRegistry } from "../src/call-lifecycle.js";
-import type { ActiveFaceTimeCall } from "../src/runtime-state.js";
+import { FaceTimeCallRegistry } from "../src/runtime-state.js";
 import { buildFaceTimeRuntimeStatus } from "../src/runtime-status.js";
 import type { FaceTimeRuntime } from "../src/runtime.js";
 import { createFaceTimeCallTool, resolveFaceTimeToolApproval } from "../src/tool.js";
@@ -9,7 +8,7 @@ function createTool() {
   const runtime = {
     status: async () =>
       buildFaceTimeRuntimeStatus({
-        calls: new FaceTimeCallRegistry<ActiveFaceTimeCall>(),
+        calls: new FaceTimeCallRegistry(),
         helperConnected: true,
         helperTargets: [
           {

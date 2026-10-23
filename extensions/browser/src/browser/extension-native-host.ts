@@ -12,7 +12,6 @@ import {
   type BrowserNativeBootstrapResponse,
   type BrowserNativeRelayEnsureStatus,
   decodeBrowserNativeFrame,
-  encodeBrowserNativeResponse,
   readBrowserNativeFrame,
 } from "./extension-native-protocol.js";
 const EXTENSION_ORIGIN_PATTERN = /^chrome-extension:\/\/[a-p]{32}\/$/;
@@ -106,7 +105,6 @@ export async function runBrowserNativeHost(params: {
   callerOrigin: string;
   expectedOrigins: string[];
   input: AsyncIterable<Buffer>;
-  write: (frame: Buffer) => void;
   buildPairing: (boundProfile?: string) => Promise<{ pairingString: string; topology: string }>;
   /** Ensure the standalone extension relay daemon is running (ensure_relay op). */
   ensureRelay: (port: number) => Promise<BrowserNativeRelayEnsureStatus>;
@@ -139,7 +137,6 @@ export async function runBrowserNativeHost(params: {
               ? "origin_forbidden"
               : "manifest_invalid",
         };
-        params.write(encodeBrowserNativeResponse(response));
         return response;
       }
       try {
@@ -174,6 +171,5 @@ export async function runBrowserNativeHost(params: {
   } catch {
     response = { v: 1, ok: false, code: "invalid_frame" };
   }
-  params.write(encodeBrowserNativeResponse(response));
   return response;
 }

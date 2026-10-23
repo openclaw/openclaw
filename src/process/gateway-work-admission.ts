@@ -3,6 +3,7 @@ import { setMaxListeners } from "node:events";
 import type { GatewaySuspension } from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runWithAsyncStore } from "../shared/async-store.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -59,7 +60,11 @@ const reloadWaitingRoots = new AsyncLocalStorage<ReadonlySet<GatewayRootWorkAdmi
 export function runWithGatewayReloadWaitingRoot<T>(run: () => T): T {
   const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
   return current
-    ? reloadWaitingRoots.run(new Set([...(reloadWaitingRoots.getStore() ?? []), current]), run)
+    ? runWithAsyncStore(
+        reloadWaitingRoots,
+        new Set([...(reloadWaitingRoots.getStore() ?? []), current]),
+        run,
+      )
     : run();
 }
 
@@ -144,7 +149,7 @@ function createGatewayRootWorkAdmission(
     ownsRoot: true,
     release,
     run: async <T>(run: () => Promise<T>) =>
-      await GATEWAY_WORK_ADMISSION_STATE.currentRootWork.run(admission, () =>
+      await runWithAsyncStore(GATEWAY_WORK_ADMISSION_STATE.currentRootWork, admission, () =>
         detachedWork ? runWithDetachedAsyncWork(admission, run) : run(),
       ),
   };
@@ -617,7 +622,7 @@ function createGatewayRootWorkAdmissionContinuationScope(
       // this callback; keep the root live until that entire callback finishes.
       const releaseRun = enter();
       try {
-        return await GATEWAY_WORK_ADMISSION_STATE.currentRootWork.run(current, run);
+        return await runWithAsyncStore(GATEWAY_WORK_ADMISSION_STATE.currentRootWork, current, run);
       } finally {
         releaseRun();
       }
@@ -625,7 +630,7 @@ function createGatewayRootWorkAdmissionContinuationScope(
     runSync: <T>(run: () => T) => {
       const releaseRun = enter();
       try {
-        return GATEWAY_WORK_ADMISSION_STATE.currentRootWork.run(current, run);
+        return runWithAsyncStore(GATEWAY_WORK_ADMISSION_STATE.currentRootWork, current, run);
       } finally {
         releaseRun();
       }

@@ -213,7 +213,9 @@
      the surface's own floor is taller than the editor plus these insets. */
   --chat-composer-editor-inset-inline: 14px;
   --chat-composer-editor-inset-block: 6px;
-  --chat-attachment-hit-slop: calc(var(--chat-composer-editor-inset-block) * 2);
+  /* Attachment controls keep their clearance when the compact editor loses its inset. */
+  --chat-attachment-inset-block: 6px;
+  --chat-attachment-hit-slop: calc(var(--chat-attachment-inset-block) * 2);
   /* The editor is a reading and writing surface, not a compact form field, so it
      owns a 16px base instead of the shared control token, whose 14px base only
      reaches 16px through an iOS zoom floor — text that size by accident does not
@@ -343,6 +345,14 @@
 @media (forced-colors: active), (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
   .agent-chat__input {
     background: var(--chat-composer-surface);
+  }
+}
+
+@media (forced-colors: active) {
+  /* Forced colors drop the box shadows and border shift that mark focus above. */
+  .agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
   }
 }
 
@@ -661,6 +671,12 @@
   position: relative;
 }
 
+/* Icon-only triggers center the glyph, not the generic flex-growing text label. */
+.agent-chat__input-btn--attach > .oc-menu-item__label,
+.chat-talk-input-picker__trigger > .oc-menu-item__label {
+  display: contents;
+}
+
 .agent-chat__input-btn--has-overrides::after {
   position: absolute;
   top: 3px;
@@ -883,6 +899,10 @@
 .chat-send-btn--stop svg {
   width: 18px;
   height: 18px;
+}
+
+.chat-send-btn--stop rect {
+  rx: 3px;
 }
 
 .chat-send-btn--stop:hover:not(:disabled) {
@@ -1188,7 +1208,7 @@
     --chat-composer-send-size: var(--chat-mobile-row-plus-target-size);
   }
 
-  .agent-chat__input--mobile-toolbar svg {
+  :where(.agent-chat__input--mobile-toolbar) svg {
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
     stroke-width: var(--chat-mobile-row-icon-stroke);
@@ -1301,10 +1321,6 @@
 @container chat-conversation (max-height: 320px) {
   .chat-footer {
     --chat-footer-max-height: 100cqh;
-  }
-
-  .chat-footer::before {
-    display: none;
   }
 
   .agent-chat__input {

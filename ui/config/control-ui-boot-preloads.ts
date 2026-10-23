@@ -37,7 +37,11 @@ export function collectControlUiBootAssets(
     const entries = chunk.facadeModuleId ? [chunk.facadeModuleId] : Object.keys(chunk.modules);
     // Forgetting local sign-in or rejecting cached admission must show the real
     // gate offline, not fail while downloading its optional component.
-    if (entries.some((id) => controlUiBootManifestKey(id) === "ui/src/components/login-gate.ts")) {
+    if (
+      entries.some(
+        (id) => controlUiBootManifestKey(id) === "ui/src/components/login-gate-solid.tsx",
+      )
+    ) {
       collect(chunk.fileName, login);
     }
     for (const route of ["chat", "new"] as const) {

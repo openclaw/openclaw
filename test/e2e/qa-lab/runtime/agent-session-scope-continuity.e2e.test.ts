@@ -1,7 +1,9 @@
 import { createServer } from "node:http";
+import { text as readBody } from "node:stream/consumers";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { respondJson } from "../../../helpers/gateway-integration-fixtures.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   connectOperator,
@@ -60,23 +62,14 @@ async function startDeterministicProvider() {
   const server = createServer((request, response) => {
     void (async () => {
       if (request.method === "GET" && request.url === "/v1/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
-            data: [{ id: "gpt-5.6-luna", object: "model" }],
-          }),
-        );
+        respondJson(response, { data: [{ id: "gpt-5.6-luna", object: "model" }] });
         return;
       }
       if (request.method !== "POST" || request.url !== "/v1/responses") {
         response.writeHead(404).end();
         return;
       }
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      const body = JSON.parse(await readBody(request)) as Record<string, unknown>;
       requests.push(body);
       const reply = replies[requests.length - 1];
       if (!reply) {
@@ -127,31 +120,25 @@ function providerMarkerTurns(request: Record<string, unknown>): CanonicalTurn[] 
   return markerTurns(Array.isArray(request.input) ? request.input : []);
 }
 
-async function runAgentTurn(params: {
-  client: GatewayClient;
-  sessionKey: string;
-  userText: string;
-  runId: string;
-}): Promise<void> {
-  const accepted = await params.client.request<AgentResult>("agent", {
-    sessionKey: params.sessionKey,
-    message: params.userText,
+async function runAgentTurn(
+  client: GatewayClient,
+  sessionKey: string,
+  message: string,
+  runId: string,
+): Promise<void> {
+  const accepted = await client.request<AgentResult>("agent", {
+    sessionKey,
+    message,
     deliver: false,
-    idempotencyKey: params.runId,
+    idempotencyKey: runId,
   });
-  expect(accepted).toMatchObject({
-    status: "accepted",
-    runId: params.runId,
-  });
-  const terminal = await params.client.request<AgentResult>(
+  expect(accepted).toMatchObject({ status: "accepted", runId });
+  const terminal = await client.request<AgentResult>(
     "agent.wait",
-    { runId: params.runId, timeoutMs: 30_000 },
+    { runId, timeoutMs: 30_000 },
     { timeoutMs: 35_000 },
   );
-  expect(terminal).toMatchObject({
-    status: "ok",
-    runId: params.runId,
-  });
+  expect(terminal).toMatchObject({ status: "ok", runId });
 }
 
 async function readSession(client: GatewayClient, sessionKey: string): Promise<SessionRow> {
@@ -188,20 +175,10 @@ describe("agent session scope continuity", () => {
       const client = await connectOperator(gateway, "Session scope continuity client");
       cleanups.push(() => client.stopAndWait({ timeoutMs: 1_000 }));
 
-      await runAgentTurn({
-        client,
-        sessionKey: SESSION_A_KEY,
-        userText: SESSION_A_USER_1,
-        runId: "qa-session-scope-a-turn-1",
-      });
+      await runAgentTurn(client, SESSION_A_KEY, SESSION_A_USER_1, "qa-session-scope-a-turn-1");
       const sessionAAfterTurn1 = await readSession(client, SESSION_A_KEY);
 
-      await runAgentTurn({
-        client,
-        sessionKey: SESSION_A_KEY,
-        userText: SESSION_A_USER_2,
-        runId: "qa-session-scope-a-turn-2",
-      });
+      await runAgentTurn(client, SESSION_A_KEY, SESSION_A_USER_2, "qa-session-scope-a-turn-2");
       const sessionAAfterTurn2 = await readSession(client, SESSION_A_KEY);
       expect(sessionAAfterTurn2.sessionId).toBe(sessionAAfterTurn1.sessionId);
 
@@ -219,12 +196,7 @@ describe("agent session scope continuity", () => {
         { role: "user", marker: SESSION_A_USER_2 },
       ]);
 
-      await runAgentTurn({
-        client,
-        sessionKey: SESSION_B_KEY,
-        userText: SESSION_B_USER_1,
-        runId: "qa-session-scope-b-turn-1",
-      });
+      await runAgentTurn(client, SESSION_B_KEY, SESSION_B_USER_1, "qa-session-scope-b-turn-1");
       const sessionB = await readSession(client, SESSION_B_KEY);
       expect(sessionB.sessionId).not.toBe(sessionAAfterTurn1.sessionId);
 

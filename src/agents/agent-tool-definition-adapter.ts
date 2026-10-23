@@ -75,24 +75,6 @@ function describeToolExecutionError(err: unknown): {
   return { message: String(err) };
 }
 
-function normalizeToolExecutionResult(params: {
-  toolName: string;
-  result: unknown;
-}): AgentToolResult<unknown> {
-  const { toolName, result } = params;
-  if (result && typeof result === "object") {
-    const record = result as Record<string, unknown>;
-    if (Array.isArray(record.content)) {
-      return result as AgentToolResult<unknown>;
-    }
-    logDebug(`tools: ${toolName} returned non-standard result (missing content[]); coercing`);
-    return payloadTextResult(
-      ("details" in record ? record.details : record) ?? { status: "ok", tool: toolName },
-    );
-  }
-  return payloadTextResult(result ?? { status: "ok", tool: toolName });
-}
-
 function buildToolExecutionErrorResult(params: {
   toolName: string;
   message: string;
@@ -113,10 +95,19 @@ async function executeAdaptedToolOperation(params: {
   run: () => Promise<unknown>;
 }): Promise<AgentToolResult<unknown>> {
   try {
-    return normalizeToolExecutionResult({
-      toolName: params.normalizedToolName,
-      result: await params.run(),
-    });
+    const toolName = params.normalizedToolName;
+    const result = await params.run();
+    if (result && typeof result === "object") {
+      const record = result as Record<string, unknown>;
+      if (Array.isArray(record.content)) {
+        return result as AgentToolResult<unknown>;
+      }
+      logDebug(`tools: ${toolName} returned non-standard result (missing content[]); coercing`);
+      return payloadTextResult(
+        ("details" in record ? record.details : record) ?? { status: "ok", tool: toolName },
+      );
+    }
+    return payloadTextResult(result ?? { status: "ok", tool: toolName });
   } catch (err) {
     if (params.signal?.aborted) {
       throw err;
@@ -439,6 +430,9 @@ export function toClientToolDefinitions(
           }
         } catch (err) {
           recorder?.discard?.(toolCallId, func.name);
+          if (signal?.aborted) {
+            throw err;
+          }
           if (err instanceof ToolInputError) {
             return buildToolExecutionErrorResult({
               toolName: func.name,

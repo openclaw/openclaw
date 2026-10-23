@@ -173,11 +173,12 @@ module.exports = { id, register(api) {
         );
         expect(check).toBeDefined();
         const caller = createMcpProofPluginRegistry();
+        const resolveRequester = vi.fn(() => {
+          throw new Error("Doctor has no authenticated requester");
+        });
         caller.apiFor("requester-owner").registerMcpServerConnectionResolver({
           serverName: "requester",
-          resolve: () => {
-            throw new Error("Doctor has no authenticated requester");
-          },
+          resolve: resolveRequester,
         });
         const detectorFailure = new Error("fixture detector failed after tool inspection");
         const rejectColdRead = vi.fn(() => {
@@ -221,6 +222,7 @@ module.exports = { id, register(api) {
             severity: "info",
             path: "mcp.servers.requester",
             requirement: "authenticated requester context",
+            fixHint: "Verify this server from an authenticated agent turn.",
           });
           expect(findings.filter((finding) => finding.target === toolName)).toEqual(
             (withoutPluginTools || (collision && providerConfigured) ? [] : ["alpha", "beta"]).map(
@@ -247,6 +249,7 @@ module.exports = { id, register(api) {
           }
         }
         expect(rejectColdRead).not.toHaveBeenCalled();
+        expect(resolveRequester).not.toHaveBeenCalled();
         expect(fs.existsSync(unexpectedProbe)).toBe(false);
         const observed = fs
           .readFileSync(events, "utf8")

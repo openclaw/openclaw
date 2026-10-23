@@ -73,7 +73,7 @@ export function menuRenderInputs(
       );
     }
   } else if (view === "skills") {
-    inputs.push(menu.basePath, menu.skillsLoading, menu.skillsError, menu.mutationBlockedReason);
+    inputs.push(menu.basePath, menu.skillsRead, menu.mutationBlockedReason);
     for (const skill of menu.skills ?? []) {
       inputs.push(skill.key, skill.name, skill.enabled, skill.missingDeps, skill.blocked);
     }

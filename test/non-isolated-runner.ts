@@ -23,6 +23,7 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../src/process/gateway-work-admission.js";
+import { resetSessionControllerStorageForTest } from "../src/sessions/session-controller-storage-reset.test-support.js";
 import { readGlobalSingleton } from "../src/shared/global-singleton.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../src/state/openclaw-agent-db-resources.js";
 import { cleanupSolid } from "../ui/src/test-helpers/solid-cleanup.ts";
@@ -293,7 +294,6 @@ type EmbeddedRunsTestApi = {
 
 type SessionControllerTestApi = {
   drainSessionControllerOwnersForTest?: () => Promise<void>;
-  resetSessionControllerForTest?: () => void;
 };
 
 type DiagnosticEventsStateForTest = {
@@ -335,10 +335,7 @@ async function resetOpenClawGlobalRunState(): Promise<void> {
     cleanupActions.push(resetActiveEmbeddedRuns);
   }
 
-  const resetSessionControllerForTest = sessionController?.resetSessionControllerForTest;
-  if (resetSessionControllerForTest) {
-    cleanupActions.push(resetSessionControllerForTest);
-  }
+  cleanupActions.push(resetSessionControllerStorageForTest);
 
   const drainActions = [
     embeddedRuns?.drainActiveEmbeddedRuns,

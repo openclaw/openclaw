@@ -27,6 +27,12 @@ export const DEFAULT_QUEUE_DEBOUNCE_MS = 500;
 export const DEFAULT_QUEUE_CAP = 20;
 export const DEFAULT_QUEUE_DROP: QueueDropPolicy = "summarize";
 
+// Retries and compacted sources retain their input and its original dispatch scope.
+export const followupSourceRunners = new WeakMap<
+  NonNullable<FollowupRun["controllerInput"]>,
+  (run: FollowupRun) => Promise<void>
+>();
+
 export function* followupQueueSources(
   queue: Pick<SessionControllerMailbox, "items" | "summarySources" | "summaryElisions">,
 ): Generator<FollowupRun> {

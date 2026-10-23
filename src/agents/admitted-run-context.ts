@@ -203,10 +203,11 @@ export function bindOperatorModelExecution(
     return undefined;
   }
   const selected = model ? { ...model } : undefined;
+  const assertModelAllowed = createOperatorModelSelectionAssertion(authority, selected);
   const mapError = (error: unknown) => mapAuthorizationError?.(error) ?? error;
   let releaseAuthority: (() => void) | undefined;
   try {
-    assertOperatorModelAllowed(authority, selected);
+    assertModelAllowed();
     releaseAuthority = authority.retain?.();
   } catch (error) {
     throw mapError(error);
@@ -219,7 +220,7 @@ export function bindOperatorModelExecution(
     }
     revoked.signal.throwIfAborted();
     try {
-      assertOperatorModelAllowed(authority, selected);
+      assertModelAllowed();
     } catch (error) {
       const failure = mapError(error);
       revoked.abort(failure);
@@ -411,7 +412,7 @@ export function getAdmittedRunSource(
 export function resolveAdmittedRunActiveAssertion(
   context: AdmittedRunContext,
   signal?: AbortSignal,
-): SessionSourceAssertion | undefined {
+): ReturnType<typeof captureAdmittedRunActiveAssertion> {
   const authority = getAdmittedRunDelegatedAuthority(context);
   return authority ? captureAdmittedRunActiveAssertion(context, authority, signal) : undefined;
 }

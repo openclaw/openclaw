@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import nodePath from "node:path";
-import { note as showDoctorNote } from "../../packages/terminal-core/src/note.js";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { shouldSkipLegacyUpdateDoctorConfigWrite } from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
@@ -54,6 +54,7 @@ export async function runWriteConfigHealth(
     return false;
   }
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
+  const { copyConfigResolutionFactsThroughRewrite } = await import("../config/resolution-facts.js");
   const { ConfigMutationConflictError, readConfigFileSnapshot, transformConfigFile } =
     await import("../config/config.js");
   const { collectChangedConfigPaths } = await import("../config/include-write-boundary.js");
@@ -97,9 +98,8 @@ export async function runWriteConfigHealth(
     const renamedCron = await maybeRepairProviderRenameCronJobs({
       renames: providerRenames,
       env: ctx.env,
-      shouldRepair: true,
     });
-    noteDoctorRepairResult(renamedCron, showDoctorNote);
+    noteDoctorRepairResult(renamedCron);
     const renamedSessions = await maybeRepairCodexSessionRoutes({
       cfg: ctx.cfg,
       providerRenames,
@@ -107,13 +107,14 @@ export async function runWriteConfigHealth(
       env: ctx.env,
       shouldRepair: true,
     });
-    noteDoctorRepairResult(renamedSessions, showDoctorNote);
+    noteDoctorRepairResult(renamedSessions);
     if (renamedCron.warnings.length > 0 || renamedSessions.warnings.length > 0) {
       throw new Error(
         "Provider references could not be fully repaired. Config was preserved; rerun openclaw doctor --fix.",
       );
     }
     const migration = applyProviderRenames(ctx.cfg, providerRenames);
+    copyConfigResolutionFactsThroughRewrite(ctx.cfg, migration.config);
     ctx.cfg = migration.config;
     if (migration.changes.length > 0) {
       ctx.configResult.pendingChangePanels = [
@@ -160,10 +161,12 @@ export async function runWriteConfigHealth(
       ctx.configResult.skipWizardMetadataForIncludeWrite !== true &&
       !resolveUpdateRehearsalRoot(ctx.env ?? process.env)
     ) {
-      ctx.cfg = applyWizardMetadata(ctx.cfg, {
+      const config = applyWizardMetadata(ctx.cfg, {
         command: "doctor",
         mode: resolveDoctorMode(ctx.cfg),
       });
+      copyConfigResolutionFactsThroughRewrite(ctx.cfg, config);
+      ctx.cfg = config;
     }
     const legacyParentVersionOverride =
       resolveLegacyParentVersionOverride(ctx).lastTouchedVersionOverride;
@@ -420,7 +423,6 @@ export async function runWriteConfigHealth(
         keys: [],
       });
       if (error instanceof ConfigMutationConflictError) {
-        const { note } = await import("../../packages/terminal-core/src/note.js");
         note(
           [
             "The config changed after Doctor prepared these repairs.",
@@ -447,7 +449,6 @@ export async function runWriteConfigHealth(
         // The candidate mixed an include-owned repair with root-owned changes; the
         // writer keeps every file intact and names the include boundary, plus its
         // file when the root file authors the directive, to repair first.
-        const { note } = await import("../../packages/terminal-core/src/note.js");
         const targets = error.includeTargets ?? [];
         const includedFile =
           targets.length === 0
@@ -464,7 +465,6 @@ export async function runWriteConfigHealth(
         return false;
       }
       if (isConfigValidationFailedError(error)) {
-        const { note } = await import("../../packages/terminal-core/src/note.js");
         const { formatConfigIssueLines } = await import("../config/issue-format.js");
         const issueLines = formatConfigIssueLines(error.issues, "-", { normalizeRoot: true });
         note(
@@ -482,7 +482,6 @@ export async function runWriteConfigHealth(
       if (!isCronOwnerWriteRefusalError(error)) {
         throw error;
       }
-      const { note } = await import("../../packages/terminal-core/src/note.js");
       note(
         [
           error.message,
@@ -504,7 +503,6 @@ export async function runWriteConfigHealth(
     // true statements about disk state, so print them exactly once.
     const pendingChangePanels = ctx.configResult.pendingChangePanels;
     if (pendingChangePanels?.length) {
-      const { note } = await import("../../packages/terminal-core/src/note.js");
       for (const panel of pendingChangePanels) {
         note(panel, "Doctor changes");
         for (const message of panel.split("\n")) {
@@ -541,7 +539,6 @@ export async function runWriteConfigHealth(
   }
   const billingWarnings = ctx.configResult.modelBillingRouteWarnings;
   if (billingWarnings?.length) {
-    const { note } = await import("../../packages/terminal-core/src/note.js");
     const log = createSubsystemLogger("doctor");
     note(billingWarnings.join("\n"), "Billing route changes");
     for (const warning of billingWarnings) {
@@ -557,9 +554,8 @@ export async function runWriteConfigHealth(
   if (ctx.configResult.retiredPhoneControlStateCleanupPending === true) {
     const { finalizeRetiredPhoneControlCleanup } =
       await import("../commands/doctor-retired-phone-control.js");
-    const { note } = await import("../../packages/terminal-core/src/note.js");
     const cleanup = await finalizeRetiredPhoneControlCleanup({ env: ctx.env ?? process.env });
-    noteDoctorRepairResult(cleanup, note);
+    noteDoctorRepairResult(cleanup);
   }
   if (
     (!ctx.prompter.shouldRepair &&
@@ -588,8 +584,7 @@ export async function runWriteConfigHealth(
       : {}),
   });
   ctx.postConfigWriteRepairsCommitted = true;
-  const { note } = await import("../../packages/terminal-core/src/note.js");
-  noteDoctorRepairResult(result, note);
+  noteDoctorRepairResult(result);
   return true;
 }
 

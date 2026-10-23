@@ -164,6 +164,7 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
 
 /** Invalidate discovery facts without retiring callbacks owned by this operation. */
 export function invalidatePluginCacheMetadata(cache: PluginCache): void {
+  cache.inspectionNativeEsmPolicy = undefined;
   cache.sourceAdmissions?.invalidate();
   cache.metadata = createPluginMetadataCache();
   cache.sdk.native.parents.clear();
@@ -495,10 +496,13 @@ function mergeRootFacts<T>(target: Map<string, T>, source: Map<string, T>): void
 
 /** Bind aliases only after a checked file establishes their shared package boundary. */
 export function bindPluginCacheRoot(rootDir: string, canonicalRoot: string): PluginRootCacheRecord {
+  const root = getPluginCacheRoot(rootDir);
+  if (root.rootDir === canonicalRoot) {
+    return root;
+  }
   const cache = getPluginCache();
   const lexical = path.resolve(rootDir);
   const canonical = path.resolve(canonicalRoot);
-  const root = getPluginCacheRoot(lexical);
   root.rootDir = canonical;
   const existing = cache.roots.get(canonical);
   if (existing && existing !== root) {

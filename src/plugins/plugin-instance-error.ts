@@ -1,13 +1,14 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
+/** A failed dependency link never constitutes a prepared plugin capture. */
+export class PluginDependencyLinkError extends Error {
+  override name = "PluginDependencyLinkError";
+}
+
 /** A retired instance cannot admit a fresh invocation. */
 export class PluginInstanceUnavailableError extends Error {
-  constructor(pluginId?: string) {
-    super(
-      pluginId
-        ? `Plugin ${pluginId} was reloaded or disabled; use its current tools.`
-        : "Plugin tools changed during automation setup; use the current plugin runtime.",
-    );
+  constructor(pluginId: string) {
+    super(`Plugin ${pluginId} was reloaded or disabled; use its current tools.`);
     this.name = "PluginInstanceUnavailableError";
   }
 }

@@ -52,13 +52,16 @@ function threadView(props: ChatThreadProps, transcript = createTestTranscript())
 const inlineReply = ".chat-reply-attribution--inline button";
 const replyName = ".chat-reply-attribution__name";
 const replyTarget = "chat-bubble--reply-target";
+function expectEntryText(container: HTMLElement, id: string, text: string) {
+  expect(requireElement(container, `[data-entry-id="${id}"]`).textContent).toContain(text);
+}
 function replyAccess(
   read: () => unknown = () => undefined,
 ): NonNullable<ChatThreadProps["replyMessageAccess"]> {
   return { revision: 0, navigationId: null, read, open: vi.fn() };
 }
 function replyProps(messages: ChatThreadProps["messages"], changes: Partial<ChatThreadProps> = {}) {
-  return { ...threadProps("replies", "agent:main:main", messages), ...changes };
+  return threadProps("replies", "agent:main:main", messages, changes);
 }
 
 beforeEach(installTranscriptDomMocks);
@@ -240,33 +243,22 @@ it.each([true, false])(
   "keeps answers and independent automation deliveries visible (foreground run identity: %s)",
   (keyed) => {
     const runId = "approval-question-run";
+    const run = keyed ? { runId } : {};
+    const prompt = keyed ? { idempotencyKey: `${runId}:user` } : {};
     const props = threadProps("pane-automation-replies", "agent:main:dashboard:approval", [
+      turn("question", "user", "How was that approved?", prompt, 1_000),
       {
-        role: "user",
-        content: "How was that approved?",
-        timestamp: 1_000,
-        __openclaw: { id: "question", ...(keyed ? { idempotencyKey: `${runId}:user` } : {}) },
-      },
-      {
-        role: "assistant",
+        ...turn("commentary", "assistant", "Checking the saved approval.", run, 2_000),
         phase: "commentary",
-        content: "Checking the saved approval.",
-        timestamp: 2_000,
-        __openclaw: { id: "commentary", ...(keyed ? { runId } : {}) },
       },
       {
-        role: "assistant",
-        content: "An operator approved it. It keeps running until stopped.",
+        ...turn("answer", "assistant", "An operator approved it.", run, 3_000),
         stopReason: "stop",
-        timestamp: 3_000,
-        __openclaw: { id: "answer", ...(keyed ? { runId } : {}) },
       },
     ]);
     const { container, rerender } = threadView(props);
     rerender(true);
-    expect(requireElement(container, '[data-entry-id="answer"]').textContent).toContain(
-      "An operator approved it.",
-    );
+    expectEntryText(container, "answer", "An operator approved it.");
     expect(container.querySelector('[data-entry-id="commentary"]')).toBeNull();
     for (const index of [1, 2]) {
       props.messages = [
@@ -284,21 +276,15 @@ it.each([true, false])(
         },
       ];
       rerender();
-      expect(requireElement(container, '[data-entry-id="answer"]').textContent).toContain(
-        "An operator approved it.",
-      );
+      expectEntryText(container, "answer", "An operator approved it.");
       for (let alert = 1; alert <= index; alert++) {
-        expect(requireElement(container, `[data-entry-id="alert-${alert}"]`).textContent).toContain(
-          `New application error ${alert}.`,
-        );
+        expectEntryText(container, `alert-${alert}`, `New application error ${alert}.`);
       }
       expect(container.querySelector('[data-entry-id="commentary"]')).toBeNull();
     }
     props.messages = structuredClone(props.messages);
     rerender();
-    expect(requireElement(container, '[data-entry-id="answer"]').textContent).toContain(
-      "An operator approved it.",
-    );
+    expectEntryText(container, "answer", "An operator approved it.");
     props.runId = "next-foreground-run";
     props.runActive = true;
     props.runWorking = true;
@@ -347,7 +333,6 @@ const answer = (metadata: object = {}) => ({
 });
 const linkedAnswer = answer({ runId: "run-a" });
 const olderPrompt = turn("p3", "user", "Unrelated", alice);
-const unkeyedPrompt = turn("p2", "user", "hey hey", alice);
 const duplicatePrompt = turn("p1", "user", "Earlier", { ...alice, idempotencyKey: "run-a:user" });
 const mirroredAnswer = answer({ mirrorOrigin: "discord", idempotencyKey: "run-a" });
 const searchedSpeakers = [
@@ -388,7 +373,7 @@ it.each<ReplyContext>([
   ["1:1 current prompt", [prompt, linkedAnswer], []],
   ["1:1 older prompt", [prompt, olderPrompt, linkedAnswer], ["Alice"]],
   ["legacy reply", [prompt, unrelated, answer()], []],
-  ["unkeyed prompt", [unkeyedPrompt, unrelated, linkedAnswer], []],
+  ["unkeyed prompt", [turn("p2", "user", "hey hey", alice), unrelated, linkedAnswer], []],
   ["another run", [keyedPrompt("run-b"), unrelated, linkedAnswer], []],
   ["ambiguous owners", [duplicatePrompt, prompt, unrelated, linkedAnswer], []],
   ["channel mirror", [prompt, unrelated, mirroredAnswer], []],

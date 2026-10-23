@@ -153,6 +153,11 @@ export function makeTerminalInput(input: TerminalInputOverrides = {}): TerminalI
       ...base,
       ...overrides,
       ...overrides.prepared,
+      payloadsForVisibleCompletion:
+        overrides.prepared?.payloadsForVisibleCompletion ??
+        overrides.payloadsForVisibleCompletion ??
+        overrides.payloadsWithToolMedia ??
+        [],
       finalAssistantVisibleText:
         overrides.prepared?.finalAssistantVisibleText ?? overrides.finalAssistantVisibleText ?? "",
     },

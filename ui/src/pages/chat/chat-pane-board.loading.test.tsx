@@ -18,7 +18,7 @@ import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import { openSlot } from "./sidebar-layout.ts";
-import "../../components/board/board-view.ts";
+import "../../components/board/board-view.tsx";
 
 type BoardTestPane = HTMLElement & {
   context: ApplicationContext;
@@ -82,6 +82,54 @@ function createGatewayBoardPane(sessionKey: string) {
 }
 
 describe("chat pane board loading states", () => {
+  it("hydrates a full cached transcript while its board waits for connect dispatch", async () => {
+    vi.stubGlobal("indexedDB", new IDBFactory());
+    const sessionKey = "agent:main:dispatch-cached-board";
+    const { pane, request, snapshot, cleanup } = createGatewayBoardPane(sessionKey);
+    const dispatch = createDeferred();
+    const transcript = createDeferred();
+    request.mockReturnValue(createDeferred<BoardSnapshot>().promise);
+    pane.state.settings = {
+      ...pane.state.settings,
+      gatewayUrl: pane.context.gateway.connection.gatewayUrl,
+    };
+    Object.assign(pane.state.client!, {
+      recoveryScope: "admitted-account",
+      recoveryScopeReady: true,
+      initialConnectSent: dispatch.promise,
+    });
+    pane.context.gateway.snapshot.phase = "connecting";
+    Reflect.set(pane, "sessionKey", sessionKey);
+    const store = new SessionSnapshotStore(pane.state.chatMessagesBySession);
+    pane.sessionSnapshotStore = store;
+    const messages = [{ role: "assistant", content: "Retained conversation" }];
+    store.write(resolveChatSnapshotKey(pane.state, { sessionKey }), {
+      messages,
+      sessionId: "retained-session",
+      pagination: { hasMore: false },
+      board: { snapshot, receivedAtMs: Date.now() },
+    });
+    try {
+      await store.flush();
+      const provider = pane.resolveBoardProvider();
+      pane.hydrateStoredChatSnapshot(pane.state, sessionKey);
+      const hydration = chatHistoryRequests(pane.state).initialSnapshotHydration!;
+      hydration.complete = transcript.resolve;
+      await transcript.promise;
+      expect(pane.state.chatMessages).toEqual(messages);
+      expect(provider.hasLoadedSnapshot).toBe(false);
+      dispatch.resolve();
+      await hydration.promise;
+      expect(provider.hasLoadedSnapshot).toBe(true);
+      expect(provider.snapshot$.value).toEqual(snapshot);
+    } finally {
+      dispatch.resolve();
+      cleanup();
+      await clearStoredChatSnapshots();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("hydrates the transcript without mounting an invalid persisted board", async () => {
     vi.stubGlobal("indexedDB", new IDBFactory());
     const sessionKey = "agent:main:invalid-cached-board";

@@ -14,7 +14,6 @@ import { AsyncWorkScopeClosedError } from "../../shared/async-work-scope.js";
 import { PluginInventoryRetiredError } from "../plugin-instance-error.js";
 import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
-import type { RuntimeLogger } from "./types-core.js";
 
 const hoisted = vi.hoisted(() => ({
   acquireSimpleCompletionModelForAgent:
@@ -23,12 +22,23 @@ const hoisted = vi.hoisted(() => ({
     >(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
+  logger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
 }));
 
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
   acquireSimpleCompletionModelForAgent: hoisted.acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel: hoisted.completeWithPreparedSimpleCompletionModel,
   resolveSimpleCompletionSelectionForAgent: hoisted.resolveSimpleCompletionSelectionForAgent,
+}));
+
+vi.mock(import("./runtime-logging.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  writeRuntimeLog: (_logger, level, message, meta) => hoisted.logger[level](message, meta),
 }));
 
 const cfg = {
@@ -73,15 +83,6 @@ function createPreparedModel(
       source: "test",
       mode: "api-key",
     },
-  };
-}
-
-function createLogger(): RuntimeLogger {
-  return {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
   };
 }
 
@@ -166,6 +167,7 @@ describe("runtime.llm.complete", () => {
     hoisted.acquireSimpleCompletionModelForAgent.mockReset();
     hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
+    Object.values(hoisted.logger).forEach((method) => method.mockClear());
     primeCompletionMocks();
   });
 
@@ -482,10 +484,9 @@ describe("runtime.llm.complete", () => {
   });
 
   it("uses runtime-scoped config and the host preparation/dispatch path", async () => {
-    const logger = createLogger();
+    const logger = hoisted.logger;
     const llm = createRuntimeLlm({
       getConfig: () => cfg,
-      logger,
       authority: {
         caller: { kind: "host", id: "runtime-test" },
         allowComplete: true,
@@ -560,10 +561,9 @@ describe("runtime.llm.complete", () => {
   });
 
   it("uses scoped plugin identity and ignores caller-shaped spoofing input", async () => {
-    const logger = createLogger();
+    const logger = hoisted.logger;
     const llm = createRuntimeLlm({
       getConfig: () => cfg,
-      logger,
       authority: {
         caller: { kind: "host", id: "ignored-host" },
         allowComplete: true,
@@ -716,10 +716,9 @@ describe("runtime.llm.complete", () => {
   );
 
   it("denies completions when runtime authority disables the capability", async () => {
-    const logger = createLogger();
+    const logger = hoisted.logger;
     const llm = createRuntimeLlm({
       getConfig: () => cfg,
-      logger,
       authority: {
         allowComplete: false,
         denyReason: "not trusted",

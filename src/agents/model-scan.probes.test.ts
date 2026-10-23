@@ -13,6 +13,28 @@ vi.mock("@openclaw/ai/providers", () => ({ registerBuiltInApiProviders: vi.fn() 
 const fetchImpl = withFetchPreconnect(async () =>
   Response.json({ data: [{ id: "example/vision:free", modality: "text+image" }] }),
 );
+const scan = () => scanOpenRouterModels({ apiKey: "synthetic-test-key" });
+const latencyMs = expect.any(Number);
+const probeOptions = {
+  apiKey: "synthetic-test-key",
+  temperature: 0,
+  signal: expect.any(AbortSignal),
+};
+function probeCall(model: unknown, content: unknown, options: object, tools?: object[]) {
+  return [
+    model,
+    {
+      messages: [{ role: "user", content, timestamp: expect.any(Number) }],
+      ...(tools ? { tools } : {}),
+    },
+    { ...probeOptions, ...options },
+  ];
+}
+const ping = {
+  name: "ping",
+  description: "Return OK.",
+  parameters: { type: "object", properties: {} },
+};
 
 describe("OpenRouter model probes", () => {
   beforeEach(() => {
@@ -25,78 +47,44 @@ describe("OpenRouter model probes", () => {
     complete.mockResolvedValueOnce({ content: [{ type: "toolCall" }] });
     complete.mockResolvedValueOnce({ content: [{ type: "text", text: "OK" }] });
 
-    const [result] = await scanOpenRouterModels({ apiKey: "synthetic-test-key" });
+    const [result] = await scan();
 
-    expect(result?.tool).toEqual({ ok: true, latencyMs: expect.any(Number) });
-    expect(result?.image).toEqual({ ok: true, latencyMs: expect.any(Number) });
-    expect(complete).toHaveBeenCalledTimes(2);
-    const [toolModel, toolContext, toolOptions] = expectDefined(
-      complete.mock.calls[0],
-      "tool probe call",
-    );
-    const [imageModel, imageContext, imageOptions] = expectDefined(
-      complete.mock.calls[1],
-      "image probe call",
-    );
-    expect(imageModel).toEqual(toolModel);
-    expect(toolContext).toEqual({
-      messages: [
-        {
-          role: "user",
-          content: "Call the ping tool with {} and nothing else.",
-          timestamp: expect.any(Number),
-        },
-      ],
-      tools: [
-        { name: "ping", description: "Return OK.", parameters: { type: "object", properties: {} } },
-      ],
-    });
-    expect(imageContext).toEqual({
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "Reply with OK." },
-            {
-              type: "image",
-              data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=",
-              mimeType: "image/png",
-            },
-          ],
-          timestamp: expect.any(Number),
-        },
-      ],
-    });
-    expect(toolOptions).toEqual({
-      apiKey: "synthetic-test-key",
-      maxTokens: 256,
-      temperature: 0,
-      toolChoice: "required",
-      signal: expect.any(AbortSignal),
-    });
-    expect(imageOptions).toEqual({
-      apiKey: "synthetic-test-key",
-      maxTokens: 16,
-      temperature: 0,
-      signal: expect.any(AbortSignal),
-    });
+    expect([result?.tool, result?.image]).toEqual([
+      { ok: true, latencyMs },
+      { ok: true, latencyMs },
+    ]);
+    const [model] = expectDefined(complete.mock.calls[0], "tool probe call");
+    expect(complete.mock.calls).toEqual([
+      probeCall(
+        model,
+        "Call the ping tool with {} and nothing else.",
+        { maxTokens: 256, toolChoice: "required" },
+        [ping],
+      ),
+      probeCall(
+        model,
+        [
+          { type: "text", text: "Reply with OK." },
+          {
+            type: "image",
+            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=",
+            mimeType: "image/png",
+          },
+        ],
+        { maxTokens: 16 },
+      ),
+    ]);
   });
 
   it("continues to image probing after a missing tool call and reports image errors", async () => {
     complete.mockResolvedValueOnce({ content: [{ type: "text", text: "OK" }] });
     complete.mockRejectedValueOnce(new Error("image rejected"));
 
-    const [result] = await scanOpenRouterModels({ apiKey: "synthetic-test-key" });
+    const [result] = await scan();
 
-    expect(result?.tool).toEqual({
-      ok: false,
-      latencyMs: expect.any(Number),
-      error: "No tool call returned",
-    });
-    expect(result?.image).toEqual({
-      ok: false,
-      latencyMs: expect.any(Number),
-      error: "image rejected",
-    });
+    expect([result?.tool, result?.image]).toEqual([
+      { ok: false, latencyMs, error: "No tool call returned" },
+      { ok: false, latencyMs, error: "image rejected" },
+    ]);
   });
 });

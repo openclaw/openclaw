@@ -236,7 +236,6 @@ export async function finishGatewayStartup(params: {
         deps,
         sessionDeliveryRecoveryMaxEnqueuedAt,
         sessionRecoveryReady: postAttachHandles.subagentRecoverySettled,
-        cronEnabled: runtimeState.cronState.cronEnabled,
         log,
         resolveGatewayContext: resolvePluginGatewayContext,
       });
@@ -498,7 +497,6 @@ export async function finishGatewayStartup(params: {
     getState: kernel.getReloadState,
     setState: (nextState) => {
       kernel.setReloadHookState(nextState);
-      kernel.setHeartbeatRunner(nextState.heartbeatRunner);
       const previousCronState = kernel.swapCronState(nextState.cronState);
       if (previousCronState !== nextState.cronState) {
         cronStartState.handled = true;

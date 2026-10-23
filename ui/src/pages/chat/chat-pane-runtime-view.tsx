@@ -7,7 +7,6 @@ import {
 } from "../../app/link-reader-routing.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
 import { isChatControlCommand } from "../../lib/chat/commands.ts";
-import { projectsForGateway } from "../../lib/projects.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
@@ -52,6 +51,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     runtime.boardPresentation,
     runtime.pendingPanelToggles,
     runtime.workspaceConflicts,
+    runtime.mobilePresentation,
   ]) {
     projectChatFields(owner);
   }
@@ -59,6 +59,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     ...chatPanePropertyKeys,
     "paneWidth",
     "desktopFocus",
+    "dashboardControls",
     "replyNavigationSessionKey",
     "replyNavigationId",
   ]);
@@ -136,7 +137,14 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       runtime.start();
     }
     const context = runtime.context;
+    // The pane retains mobile presentation while its optional host is absent.
+    onSettled(() => runtime.observeMobileViewport());
     const parentSession = projectOwner(runtime.parentSession, (owner) => owner.read(), Object.is);
+    const transcriptPosition = projectOwner(
+      runtime.transcript,
+      (owner) => owner.isPositionSettled,
+      Object.is,
+    );
     const repository = createMemo(() => {
       const target = runtime.repository.target;
       return target
@@ -166,7 +174,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       (source) => source.read().attachments,
       Object.is,
     );
-    const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
     const queuedEdit =
       state &&
       projectSource(state, {
@@ -232,7 +239,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       runtime.questionPromptState,
       state && chatGoalOperations(state),
       runtime.activeSessionResources,
-      runtime.transcript,
       runtime.sessionCompanionThreads,
       nativeGatewaysCapability(),
       lazySidebarElements,
@@ -248,9 +254,9 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         publication()?.read();
         repository()?.read();
         parentSession.read();
+        transcriptPosition.read();
         progress.read();
         realtime()?.read();
-        projects.read();
         theme.preferences.read();
         controlCommand.read();
         attachments.read();

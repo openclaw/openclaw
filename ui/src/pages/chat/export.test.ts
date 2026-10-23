@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { buildChatMarkdown, exportChatMarkdown } from "./export.ts";
 
 afterEach(() => {
@@ -6,158 +6,113 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("exportChatMarkdown", () => {
-  it.each([
-    { name: "empty transcript", messages: [] },
-    {
-      name: "tool-only transcript",
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            { type: "toolCall", id: "call-1", name: "read", arguments: { path: "notes.txt" } },
-          ],
-        },
-      ],
-    },
-    {
-      name: "image-only transcript",
-      messages: [{ role: "assistant", content: [{ type: "image", data: "synthetic-image" }] }],
-    },
-    {
-      name: "commentary-only transcript",
-      messages: [{ role: "assistant", phase: "commentary", content: "Checking the notes." }],
-    },
-    { name: "whitespace-only tool result", messages: [{ role: "toolResult", content: " \n\t" }] },
-  ])("reports $name without exportable text without creating a download", ({ messages }) => {
-    const createObjectURL = vi.spyOn(URL, "createObjectURL");
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click");
+const toolCall = {
+  role: "assistant",
+  content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "notes.txt" } }],
+};
+const textBlock = (text: string, type = "output_text") => [{ type, text }];
+function msg(role: string, content: unknown, extra: Record<string, unknown> = {}) {
+  return { role, content, ...extra };
+}
+const header = "# Chat with OpenClaw\n\n";
+const transcript = (messages: unknown[]) => buildChatMarkdown(messages, "OpenClaw");
 
-    expect(buildChatMarkdown(messages, "OpenClaw")).toBeNull();
-    expect(exportChatMarkdown(messages, "OpenClaw")).toBe("empty");
-    expect(createObjectURL).not.toHaveBeenCalled();
-    expect(click).not.toHaveBeenCalled();
-  });
+it.each([
+  ["empty", []],
+  ["tool-only", [toolCall]],
+  ["image-only", [msg("assistant", [{ type: "image", data: "synthetic-image" }])]],
+  ["commentary", [msg("assistant", "Checking notes", { phase: "commentary" })]],
+  ["whitespace", [msg("toolResult", " \n\t")]],
+] satisfies [string, unknown[]][])("does not download %s", (_name, messages) => {
+  const createObjectURL = vi.spyOn(URL, "createObjectURL");
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click");
 
-  it("downloads one readable Markdown file for a populated transcript", async () => {
-    vi.useFakeTimers();
-    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:chat-export");
-    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  expect(transcript(messages)).toBeNull();
+  expect(exportChatMarkdown(messages, "OpenClaw")).toBe("empty");
+  expect(createObjectURL).not.toHaveBeenCalled();
+  expect(click).not.toHaveBeenCalled();
+});
 
-    expect(
-      exportChatMarkdown(
-        [
-          { role: "user", content: "What can you export?", timestamp: 1_000 },
-          { role: "assistant", content: "A readable conversation.", timestamp: 2_000 },
-        ],
-        "OpenClaw",
-      ),
-    ).toBe("downloaded");
+it("downloads one readable Markdown file for a populated transcript", async () => {
+  vi.useFakeTimers();
+  const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:chat-export");
+  const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
 
-    expect(createObjectURL).toHaveBeenCalledOnce();
-    expect(click).toHaveBeenCalledOnce();
-    expect(revokeObjectURL).not.toHaveBeenCalled();
-    await vi.runOnlyPendingTimersAsync();
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:chat-export");
-    expect((createObjectURL.mock.calls[0]![0] as Blob).type).toBe("text/markdown");
-    const markdown = await (createObjectURL.mock.calls[0]![0] as Blob).text();
-    expect(markdown).toContain("# Chat with OpenClaw");
-    expect(markdown).toContain("## Message");
-    expect(markdown).toContain("What can you export?");
-    expect(markdown).toContain("## OpenClaw");
-    expect(markdown).toContain("A readable conversation.");
-  });
-
-  it("uses transcript speaker normalization and preserves prepared literal control text", () => {
-    const markdown = buildChatMarkdown(
+  expect(
+    exportChatMarkdown(
       [
-        {
-          role: "USER",
-          senderLabel: "Kai (123e4567-e89b-12d3-a456-426614174000)",
-          content: "Please check the build.",
-        },
-        {
-          role: "ASSISTANT",
-          __openclaw: { senderName: "Build assistant" },
-          content: [{ type: "output_text", text: "The build passed." }],
-          timestamp: 1_000,
-        },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "call-1",
-              name: "exec",
-              arguments: { command: "synthetic-check" },
-            },
-          ],
-          timestamp: 2_000,
-        },
-        { role: "tool_result", toolCallId: "call-1", content: "  exit 0\n" },
-        { role: "assistant", content: "NO_REPLY" },
+        msg("user", "What can you export?", { timestamp: 1_000 }),
+        msg("assistant", "A readable conversation.", { timestamp: 2_000 }),
       ],
       "OpenClaw",
-    );
+    ),
+  ).toBe("downloaded");
 
-    expect(markdown).toBe(
-      "# Chat with OpenClaw\n\n" +
-        "## Kai\n\nPlease check the build.\n\n" +
-        "## Build assistant (1970-01-01T00:00:01.000Z)\n\nThe build passed.\n\n" +
-        "## Tool\n\n  exit 0\n\n\n" +
-        "## OpenClaw\n\nNO_REPLY\n",
-    );
-  });
+  expect(createObjectURL).toHaveBeenCalledOnce();
+  expect(click).toHaveBeenCalledOnce();
+  expect(revokeObjectURL).not.toHaveBeenCalled();
+  await vi.runOnlyPendingTimersAsync();
+  expect(revokeObjectURL).toHaveBeenCalledWith("blob:chat-export");
+  const blob = createObjectURL.mock.calls[0]![0] as Blob;
+  expect(blob).toMatchObject({ type: "text/markdown" });
+  const markdown = await blob.text();
+  expect(markdown).toContain("# Chat with OpenClaw");
+  expect(markdown).toContain("## Message");
+  expect(markdown).toContain("What can you export?");
+  expect(markdown).toContain("## OpenClaw");
+  expect(markdown).toContain("A readable conversation.");
+});
 
-  it.each([
-    {
-      name: "empty string tool envelope",
-      message: { role: "assistant", toolCallId: "", content: "Visible body" },
-      speaker: "Tool",
-    },
-    {
-      name: "tool content inside a user message",
-      message: {
-        role: "user",
-        content: [null, { type: "text", text: "Visible body" }, { type: "tool_result" }],
-      },
-      speaker: "Tool",
-    },
-    {
-      name: "non-string tool envelope",
-      message: { role: "assistant", toolCallId: 0, content: "Visible body" },
-      speaker: "OpenClaw",
-    },
-  ])("keeps canonical speaker classification for $name", ({ message, speaker }) => {
-    expect(buildChatMarkdown([message], "OpenClaw")).toBe(
-      `# Chat with OpenClaw\n\n## ${speaker}\n\nVisible body\n`,
-    );
-  });
+it("uses transcript speaker normalization and preserves prepared literal control text", () => {
+  const markdown = transcript([
+    msg("USER", "Please check the build.", {
+      senderLabel: "Kai (123e4567-e89b-12d3-a456-426614174000)",
+    }),
+    msg("ASSISTANT", textBlock("The build passed."), {
+      __openclaw: { senderName: "Build assistant" },
+      timestamp: 1_000,
+    }),
+    { ...toolCall, timestamp: 2_000 },
+    msg("tool_result", "  exit 0\n", { toolCallId: "call-1" }),
+    msg("assistant", "NO_REPLY"),
+  ]);
 
-  it.each(["string", "blocks", "text"])(
-    "preserves imported %s content and explicit attribution independently of display normalization",
-    (shape) => {
-      const body = "    indented code\n\nMEDIA:https://example.invalid/report.pdf";
-      const framed =
-        '<<<EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>\nSource: External\n---\n' +
-        body +
-        '\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>';
-      const message = {
-        role: "assistant",
-        senderLabel: "Imported assistant (123e4567-e89b-12d3-a456-426614174000)",
-        __openclaw: { idempotencyKey: "fixture-catalog:thread:message", senderName: "Other name" },
-        timestamp: "1000",
-        ...(shape === "text"
-          ? { text: framed }
-          : { content: shape === "blocks" ? [{ type: "output_text", text: framed }] : framed }),
-      };
-      const original = structuredClone(message);
-
-      expect(buildChatMarkdown([message], "OpenClaw")).toBe(
-        `# Chat with OpenClaw\n\n## Imported assistant\n\n${body}\n`,
-      );
-      expect(message).toEqual(original);
-    },
+  expect(markdown).toBe(
+    header +
+      "## Kai\n\nPlease check the build.\n\n" +
+      "## Build assistant (1970-01-01T00:00:01.000Z)\n\nThe build passed.\n\n" +
+      "## Tool\n\n  exit 0\n\n\n" +
+      "## OpenClaw\n\nNO_REPLY\n",
   );
+});
+
+it.each([
+  ["empty envelope", msg("assistant", "Body", { toolCallId: "" }), "Tool"],
+  [
+    "tool in user",
+    msg("user", [null, ...textBlock("Body", "text"), { type: "tool_result" }]),
+    "Tool",
+  ],
+] as const)("classifies %s", (_name, message, speaker) => {
+  expect(transcript([message])).toBe(`${header}## ${speaker}\n\nBody\n`);
+});
+
+it("preserves imported content and attribution", () => {
+  const body = "    indented code\n\nMEDIA:https://example.invalid/report.pdf";
+  const framed =
+    '<<<EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>\nSource: External\n---\n' +
+    body +
+    '\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>';
+  const message = {
+    role: "assistant",
+    senderLabel: "Imported assistant (123e4567-e89b-12d3-a456-426614174000)",
+    __openclaw: { idempotencyKey: "fixture-catalog:thread:message", senderName: "Other name" },
+    timestamp: "1000",
+    content: framed,
+  };
+  const original = structuredClone(message);
+
+  expect(transcript([message])).toBe(`${header}## Imported assistant\n\n${body}\n`);
+  expect(message).toEqual(original);
 });

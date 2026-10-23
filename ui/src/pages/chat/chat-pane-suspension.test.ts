@@ -10,7 +10,7 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
-import { loadChatComposerState } from "./composer-persistence.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
 
 let visibility: DocumentVisibilityState;
 const panes: TestChatPane[] = [];

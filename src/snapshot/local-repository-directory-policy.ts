@@ -20,6 +20,7 @@ const MACOS_REPLACEMENT_ACL_PERMISSIONS = new Set([
   "writesecurity",
 ]);
 const WINDOWS_SYNCHRONIZE_RIGHT = 0x100000;
+const WINDOWS_DELETE_SELF_RIGHT = 0x010000;
 // Delete child/self, write DACL/owner, maximum allowed, and generic all.
 const WINDOWS_STAGING_REPLACEMENT_RIGHTS_MASK =
   0x000040 | 0x010000 | 0x040000 | 0x080000 | 0x02000000 | 0x10000000;
@@ -57,6 +58,11 @@ const WINDOWS_KNOWN_FILE_RIGHTS_MASK = WINDOWS_FILE_RIGHTS.reduce(
   (mask, [right]) => mask | right,
   0,
 );
+// Older fs-safe helpers omit this fact; only an explicit native observation
+// may exempt DELETE-self. Remove the extension when the dependency pin exposes it.
+type WindowsStagingSecurity = Extract<OwnerAndDaclResult, { status: "supported" }> & {
+  isVolumeRoot?: boolean;
+};
 let macosTrustedAclPrincipalsPromise: Promise<ReadonlySet<string>> | undefined;
 
 export function assertDirectory(
@@ -327,7 +333,7 @@ async function assertTrustedWindowsStagingPath(rootPath: string): Promise<void> 
 function assertTrustedWindowsAcl(
   pathname: string,
   requirePrivate: boolean,
-  security: Extract<OwnerAndDaclResult, { status: "supported" }>,
+  security: WindowsStagingSecurity,
 ): void {
   const pathRole = requirePrivate ? "repository root" : "ancestor";
   const currentUserSid = security.currentUserSid.toUpperCase();
@@ -343,9 +349,14 @@ function assertTrustedWindowsAcl(
   if (allowedEntries.length === 0) {
     throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${pathname}`);
   }
-  const unsafeMask = requirePrivate
+  let unsafeMask = requirePrivate
     ? ~WINDOWS_SYNCHRONIZE_RIGHT
     : WINDOWS_STAGING_REPLACEMENT_RIGHTS_MASK | ~WINDOWS_KNOWN_FILE_RIGHTS_MASK;
+  if (!requirePrivate && security.isVolumeRoot === true) {
+    // A volume root cannot be deleted or renamed through DELETE-self. Child
+    // deletion, security changes and unknown rights remain unsafe here.
+    unsafeMask &= ~WINDOWS_DELETE_SELF_RIGHT;
+  }
   const unsafeEntry = allowedEntries.find((entry) => {
     const sid = entry.sid.toUpperCase();
     // Ancestor inherit-only grants are evaluated on the private root and its children.

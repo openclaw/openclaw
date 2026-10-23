@@ -47,7 +47,6 @@ import {
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
 import {
-  assertMemorySessionNotForgotten,
   retainIndexedSessionChunks,
   type PreparedMemoryIndexEntry,
 } from "./manager-session-delta.js";
@@ -56,7 +55,7 @@ import type {
   MemoryIndexWorkItem,
   MemorySemanticProviderGeneration,
   MemorySyncProviderGeneration,
-} from "./manager-sync-ops.js";
+} from "./manager-sync-base.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
 import { runEmbeddingOperationWithTimeout } from "./paused-deadline.js";
@@ -514,14 +513,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       };
       const activeItems = [...items];
       const replacements = activeItems.map((item) => this.sourceReplacement(item, generation));
-      if (database !== sourceDatabase) {
-        // The published index owns forget authority, including for shadow rebuilds.
-        for (const replacement of replacements) {
-          if (replacement.source === "sessions") {
-            await assertMemorySessionNotForgotten(sourceDatabase, replacement, assertCurrent);
-          }
-        }
-      }
       const prepare = async (): Promise<boolean> => {
         for (let index = activeItems.length - 1; index >= 0; index--) {
           const {

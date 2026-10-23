@@ -4,7 +4,7 @@ import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts
 import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { Kbd } from "../../../components/solid/kbd.tsx";
-import "../../../components/openclaw-mascot.ts";
+import "../../../components/openclaw-mascot.tsx";
 import { registerCommandPaletteEnglish } from "../../../i18n/locales/en-command-palette.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { i18nRevision, t } from "../../../lib/reactive/i18n.ts";

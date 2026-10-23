@@ -107,7 +107,6 @@ const settings: QueueSettings = { mode: "followup", debounceMs: 0 };
 
 async function createStalledRun(
   options: {
-    isHeartbeat?: boolean;
     operatorAuthority?: AdmittedRunOperatorAuthority;
     queuedFollowupReplyDisposition?: FollowupRun["queuedFollowupReplyDisposition"];
     originatingChannel?: string;
@@ -143,7 +142,7 @@ async function createStalledRun(
   followupRun.userTurnTranscriptRecorder = recorder;
   const admitted = await admitReplyTurn({
     ...transcriptTarget,
-    kind: options.isHeartbeat ? "heartbeat" : "visible",
+    kind: "visible",
     resetTriggered: false,
   });
   if (admitted.status !== "owned") {
@@ -167,7 +166,6 @@ async function createStalledRun(
     replyOperation: operation,
     opts: {
       [REPLY_OPERATION_RUN_STATE]: runState,
-      ...(options.isHeartbeat ? { isHeartbeat: true } : {}),
     },
     typing: createMockTypingController(),
     sessionCtx: {
@@ -202,6 +200,24 @@ async function settleStalledOwner(stalled: StalledRun) {
   await stalled.run;
   stalled.operation.complete();
   await stalled.operation.ownerSettlement;
+}
+
+async function expectTranscriptOnlyRecovery(
+  stalled: StalledRun,
+  recovery: FollowupRun | undefined,
+) {
+  expect(recovery).toMatchObject({
+    stalledTurnRecovery: true,
+    run: { suppressNextUserMessagePersistence: true, sessionKey: queueKey },
+  });
+  for (const key of ["transcriptPrompt", "images", "abortSignal"] as const) {
+    expect(recovery?.[key], key).toBeUndefined();
+  }
+  expect(stalled.recorder.hasPersisted()).toBe(true);
+  expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([
+    expect.objectContaining({ content: "what is good at the hotel restaurant?" }),
+  ]);
+  expect(getFollowupQueueDepth(queueKey)).toBe(0);
 }
 
 function createQueuedRequest(
@@ -266,19 +282,8 @@ describe("runReplyAgent stalled turn continuation", () => {
     await settleStalledOwner(stalled);
     await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
     const recovery = drainedRuns.mock.calls[0]?.[0];
-    expect(recovery?.stalledTurnRecovery).toBe(true);
     expect(recovery?.prompt).toContain("previous turn stopped making progress");
-    // Replay safety: the inbound request is not re-sent or re-persisted.
-    expect(recovery?.run.suppressNextUserMessagePersistence).toBe(true);
-    expect(recovery?.transcriptPrompt).toBeUndefined();
-    expect(recovery?.images).toBeUndefined();
-    expect(recovery?.abortSignal).toBeUndefined();
-    expect(recovery?.run.sessionKey).toBe(queueKey);
-    expect(stalled.recorder.hasPersisted()).toBe(true);
-    expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([
-      expect.objectContaining({ content: "what is good at the hotel restaurant?" }),
-    ]);
-    expect(getFollowupQueueDepth(queueKey)).toBe(0);
+    await expectTranscriptOnlyRecovery(stalled, recovery);
   });
 
   it.each(["followup", "collect"] as const)(
@@ -347,16 +352,7 @@ describe("runReplyAgent stalled turn continuation", () => {
       originatingTo: "12345",
       run: { senderId: "traveler" },
     });
-    expect(recovery?.run.suppressNextUserMessagePersistence).toBe(true);
-    expect(recovery?.transcriptPrompt).toBeUndefined();
-    expect(recovery?.images).toBeUndefined();
-    expect(recovery?.abortSignal).toBeUndefined();
-    expect(recovery?.run.sessionKey).toBe(queueKey);
-    expect(stalled.recorder.hasPersisted()).toBe(true);
-    expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([
-      expect.objectContaining({ content: "what is good at the hotel restaurant?" }),
-    ]);
-    expect(getFollowupQueueDepth(queueKey)).toBe(0);
+    await expectTranscriptOnlyRecovery(stalled, recovery);
     expect(next).toBe(queued);
     expect(last).toBe(sameSenderLater);
   });
@@ -548,15 +544,5 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(getFollowupQueueDepth(queueKey)).toBe(0);
     await settleStalledOwner(stalled);
     expect(drainedRuns).not.toHaveBeenCalled();
-  });
-
-  it("does not arm a continuation for heartbeat turns", async () => {
-    const stalled = await createStalledRun({ isHeartbeat: true });
-    await stallBeforeOutput(stalled);
-
-    expect(stalled.runState.continueStalledTurn).toBeUndefined();
-
-    await settleStalledOwner(stalled);
-    expect(getFollowupQueueDepth(queueKey)).toBe(0);
   });
 });

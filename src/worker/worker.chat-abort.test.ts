@@ -199,12 +199,10 @@ it.each([
     });
     let stdout = "";
     let cancelWorker: (() => void) | undefined;
-    let cancelRequestedAt: number | undefined;
     let command: Promise<void> | undefined;
     try {
       const worker = await workers.launch({ descriptor, signal });
       cancelWorker = () => {
-        cancelRequestedAt = performance.now();
         if (fence === "after durable ACK") {
           // Let the Gateway's inference cancellation arrive before local cancellation.
           deliverCancellation = () => worker.cancel();
@@ -221,37 +219,20 @@ it.each([
       });
       // Register the rejection handler before waiting for worker lifecycle events.
       void command.catch(() => undefined);
-      const waitFor = async (gate: PromiseLike<void>, boundary: string) => {
-        try {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              gate,
-              command!,
-              `worker command completed before ${boundary}`,
-            ),
-            signal,
-          );
-        } catch (error) {
-          throw new Error(
-            `Worker abort fixture stopped before ${boundary}: ${JSON.stringify({
-              cancelElapsedMs:
-                cancelRequestedAt === undefined
-                  ? null
-                  : Math.round(performance.now() - cancelRequestedAt),
-              previewReached: previewGate?.claimed ?? false,
-              finishingReached: finishingGate.claimed,
-              transcriptRequests: harness.requestParams("worker.transcript.commit").length,
-            })}`,
-            { cause: error },
-          );
-        }
-      };
+      const waitFor = (gate: PromiseLike<void>, boundary: string) =>
+        withinTest(
+          awaitGateBeforeSettlement(gate, command!, `worker command completed before ${boundary}`),
+          signal,
+        );
       await waitFor(liveStarted.promise, "live start");
       await waitFor(
         previewGate?.entered.promise ?? providerStarted.promise,
         "cancellation boundary",
       );
-      expect(getAgentRunContext(RUN_ID)?.sessionId).toBe(SESSION_ID);
+      expect(getAgentRunContext(RUN_ID)).toMatchObject({
+        sessionId: SESSION_ID,
+        isControlUiVisible: true,
+      });
       const respond = await invokeChatAbortHandler({
         handler: coreGatewayHandlers["chat.abort"]!,
         context,

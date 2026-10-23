@@ -404,7 +404,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/updates.tsx",
+      "path": "ui/src/pages/config/updates-recorded-attempt.tsx",
       "text": "openclaw triage"
     },
     {

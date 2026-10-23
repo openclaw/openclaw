@@ -13,27 +13,11 @@ import {
 const telegramModelsTestPlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
     id: "telegram",
-    label: "Telegram",
-    docsPath: "/channels/telegram",
-    capabilities: {
-      chatTypes: ["direct", "group", "channel", "thread"],
-      reactions: true,
-      threads: true,
-      media: true,
-      polls: true,
-      nativeCommands: true,
-      blockStreaming: true,
-    },
   }),
   commands: {
     buildModelsProviderChannelData: ({ providers }) => ({
       telegram: {
-        buttons: providers.map((provider) => [
-          {
-            text: provider.id,
-            callback_data: `models:${provider.id}`,
-          },
-        ]),
+        buttons: providers.map(({ id }) => [{ text: id, callback_data: `models:${id}` }]),
       },
     }),
   },
@@ -42,11 +26,6 @@ const telegramModelsTestPlugin: ChannelPlugin = {
 const menuOnlyModelsTestPlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
     id: "menuonly",
-    label: "Menu Only",
-    capabilities: {
-      chatTypes: ["direct"],
-      nativeCommands: true,
-    },
   }),
   commands: {
     buildModelsMenuChannelData: ({ providers }) => ({
@@ -58,46 +37,26 @@ const menuOnlyModelsTestPlugin: ChannelPlugin = {
   },
 };
 
-const textSurfaceModelsTestPlugins = (["discord", "whatsapp"] as const).map((id) => ({
-  pluginId: id,
-  plugin: createChannelTestPluginBase({ id }),
-  source: "test",
-}));
+const cliBackends = [
+  { pluginId: "anthropic", id: "claude-cli", command: "claude" },
+  { pluginId: "google", id: "google-gemini-cli", command: "gemini" },
+];
 
 export function createModelsTestRegistry() {
   const registry = createTestRegistry([
-    ...textSurfaceModelsTestPlugins,
-    {
-      pluginId: "telegram",
-      plugin: telegramModelsTestPlugin,
+    ...(["discord", "whatsapp"] as const).map((id) => ({
+      pluginId: id,
+      plugin: createChannelTestPluginBase({ id }),
       source: "test",
-    },
-    {
-      pluginId: "menuonly",
-      plugin: menuOnlyModelsTestPlugin,
-      source: "test",
-    },
+    })),
+    { pluginId: "telegram", plugin: telegramModelsTestPlugin, source: "test" },
+    { pluginId: "menuonly", plugin: menuOnlyModelsTestPlugin, source: "test" },
   ]);
-  registry.cliBackends = [
-    {
-      pluginId: "anthropic",
-      backend: {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        config: { command: "claude" },
-      },
-      source: "test",
-    },
-    {
-      pluginId: "google",
-      backend: {
-        id: "google-gemini-cli",
-        modelProvider: "google",
-        config: { command: "gemini" },
-      },
-      source: "test",
-    },
-  ];
+  registry.cliBackends = cliBackends.map(({ pluginId, id, command }) => ({
+    pluginId,
+    backend: { id, modelProvider: pluginId, config: { command } },
+    source: "test",
+  }));
   return registry;
 }
 
@@ -110,22 +69,14 @@ export function setFastModelsCliBackendDeps(): void {
       autoEnableProbes: [],
       diagnostics: [],
     }),
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        pluginId: "claude-cli",
-        modelProvider: "anthropic",
-        config: { command: "claude" },
+    resolveRuntimeCliBackends: () =>
+      cliBackends.map(({ pluginId, id, command }) => ({
+        id,
+        pluginId: id,
+        modelProvider: pluginId,
+        config: { command },
         bundleMcp: false,
-      },
-      {
-        id: "google-gemini-cli",
-        pluginId: "google-gemini-cli",
-        modelProvider: "google",
-        config: { command: "gemini" },
-        bundleMcp: false,
-      },
-    ],
+      })),
   });
 }
 

@@ -4,12 +4,12 @@ import {
   createProjection,
   createSignal,
   merge,
-  onCleanup,
   onSettled,
   untrack,
 } from "solid-js";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { isChatRunWorking } from "../chat-run-working.ts";
 import { ComposerDictationOwner } from "../composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import {
@@ -20,11 +20,11 @@ import { createGoalComposer } from "./chat-composer-goal-mode.tsx";
 import { createComposerPrediction } from "./chat-composer-prediction.ts";
 import { createComposerQuestionPanel } from "./chat-composer-question.tsx";
 import type { ComposerQuestions } from "./chat-composer-questions.ts";
-import { composerDraftKey, getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
+import { composerDraftKey, getChatComposerState } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.tsx";
 
-export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
+export { resetChatComposerState } from "./chat-composer-state.ts";
 
 export function ChatComposer(props: ChatComposerProps & { questions: ComposerQuestions }) {
   // A pane owns this component's lifetime; a different pane mounts a different composer.
@@ -67,7 +67,7 @@ export function ChatComposer(props: ChatComposerProps & { questions: ComposerQue
   }
   const voice = { dictation: state.dictation, picker: microphonePicker };
   // Dictation admission invalidates edits and dismisses errors before the next input event.
-  onCleanup(
+  onSettled(() =>
     voice.dictation.subscribe(() => {
       if (voice.dictation.locksComposer) {
         state.editRevision += 1;
@@ -114,6 +114,7 @@ export function ChatComposer(props: ChatComposerProps & { questions: ComposerQue
     composition,
     () => props.getTranscriptElement,
   );
+  const streaming = createMemo(() => currentProps.stream !== null);
   const context = createMemo(() => {
     draftState();
     dictation.read();
@@ -125,6 +126,7 @@ export function ChatComposer(props: ChatComposerProps & { questions: ComposerQue
       voice,
       prediction,
       questionPanel(),
+      streaming(),
     );
   });
   createEffect(
@@ -146,8 +148,38 @@ export function ChatComposer(props: ChatComposerProps & { questions: ComposerQue
       prediction.sync(predictions);
     },
   );
+  onSettled(() => {
+    const register = currentProps.registerHumanMentionAccess;
+    if (!register) {
+      return undefined;
+    }
+    let active = true;
+    const access = state.mentionMenu.externalAccess(() => {
+      if (!active) {
+        return undefined;
+      }
+      const current = context();
+      return {
+        directory: current.mentionDirectory,
+        host:
+          current.mentionDirectory &&
+          current.showComposer &&
+          !state.composerComposing &&
+          !state.dictation?.locksComposer &&
+          state.composerTextarea?.isConnected
+            ? current.mentionMenuHost
+            : undefined,
+      };
+    });
+    const release = register(access);
+    return () => {
+      active = false;
+      release();
+    };
+  });
   onSettled(() =>
     listen(document, "visibilitychange", () => prediction.sync(readPredictionSource())),
   );
+
   return renderChatComposerView(context, currentProps, state);
 }

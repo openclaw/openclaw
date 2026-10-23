@@ -7,23 +7,15 @@ import {
   retireSessionSqliteRecovery,
   type RecoveryCleanupProgress,
 } from "./doctor-session-sqlite-retirement.js";
-import {
-  importLegacyStore,
-  readMigrationManifest,
-  useDoctorSessionSqliteTestFixture,
-} from "./doctor-session-sqlite.test-support.js";
+import { importManifest, messageEvent } from "./doctor-session-sqlite.fixtures.test-support.js";
+import { useDoctorSessionSqliteTestFixture } from "./doctor-session-sqlite.test-support.js";
 
 const { createLegacyStore, createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
 
 function transcript(content: string) {
   return [
     JSON.stringify({ type: "session", id: "session-1", version: 3 }),
-    JSON.stringify({
-      type: "message",
-      id: "message-1",
-      parentId: null,
-      message: { role: "user", content },
-    }),
+    JSON.stringify(messageEvent("message-1", "user", content)),
   ];
 }
 
@@ -63,12 +55,12 @@ it("hashes each original three times and reports progress while retiring a large
       progress.push(event);
     },
   });
-  expect(result.status).toBe("complete");
-  expect(result.totals.removedFiles).toBe(2);
-  expect(result.totals.removedBytes).toBe(preview.totals.candidateBytes);
+  expect(result).toMatchObject({
+    status: "complete",
+    totals: { removedFiles: 2, removedBytes: preview.totals.candidateBytes },
+  });
   for (const read of reads.values()) {
-    expect(read.passes).toBe(3);
-    expect(read.bytes).toBe(3 * read.size);
+    expect(read).toMatchObject({ passes: 3, bytes: 3 * read.size });
   }
   expect(progress).toEqual(
     ["verifying", "claiming"].flatMap((phase) =>
@@ -88,11 +80,10 @@ it("rehashes an original edited in place with restored mtime after initial verif
   const store = createLegacyStore({ transcriptLines: transcript("original content") });
   const timestamp = new Date("2026-01-01T00:00:00.000Z");
   fs.utimesSync(store.transcriptPath, timestamp, timestamp);
-  const imported = await importLegacyStore(store);
+  const { imported, target } = await importManifest(store);
   expect(imported.targets[0]?.issues).toEqual([]);
   closeOpenClawAgentDatabasesForTest();
-  const moves = readMigrationManifest(imported.migrationRun?.manifestPath).targets[0]!
-    .completedMoves;
+  const moves = target.completedMoves;
   const original = moves.find((move) => move.kind === "transcript")!;
   const before = fs.statSync(original.archivePath, { bigint: true });
   const bytes = fs.readFileSync(original.archivePath);
@@ -105,10 +96,11 @@ it("rehashes an original edited in place with restored mtime after initial verif
       confirm: async () => {
         fs.writeFileSync(original.archivePath, bytes);
         fs.utimesSync(original.archivePath, timestamp, timestamp);
-        const after = fs.statSync(original.archivePath, { bigint: true });
-        expect(after.ino).toBe(before.ino);
-        expect(after.size).toBe(before.size);
-        expect(after.mtimeNs).toBe(before.mtimeNs);
+        expect(fs.statSync(original.archivePath, { bigint: true })).toMatchObject({
+          ino: before.ino,
+          size: before.size,
+          mtimeNs: before.mtimeNs,
+        });
         return true;
       },
     }),

@@ -68,19 +68,17 @@ function buildBridgeFromPersistedBundledRecord(
 /** List install bridges inferred from the persisted plugin index before current discovery runs. */
 export async function listPersistedBundledPluginLocationBridges(options: {
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
 }): Promise<readonly ExternalizedBundledPluginBridge[]> {
   // This intentionally reads the pre-update registry. The current build may no
   // longer contain the bundled plugin, so normal discovery cannot recover its
   // package install hint.
-  const index = await readPersistedInstalledPluginIndex(options);
+  const index = await readPersistedInstalledPluginIndex();
   if (!index) {
     return [];
   }
   const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
     index,
     workspaceDir: options.workspaceDir,
-    env: options.env,
     includeDisabled: true,
   });
   const manifestByPluginId = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));

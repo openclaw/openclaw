@@ -87,7 +87,7 @@ async function setup() {
     ]),
     auth: { role: "operator", scopes: ["operator.admin"], recoveryScope: "offline-owner" },
   };
-  client.opts.onHello?.(hello);
+  client.testOptions.onHello?.(hello);
   await store.gateway.loadSelfProfile();
   const sessions = createTestSessionCapability(store.gateway);
   assert(store.gateway.snapshot.client);
@@ -148,8 +148,8 @@ async function setup() {
     draw,
     writes,
     disconnect: () =>
-      client.opts.onClose?.({ code: 1006, reason: "network lost", willRetry: true }),
-    reconnect: () => client.opts.onHello?.(hello),
+      client.testOptions.onClose?.({ code: 1006, reason: "network lost", willRetry: true }),
+    reconnect: () => client.testOptions.onHello?.(hello),
   };
 }
 
@@ -158,25 +158,25 @@ it.each(["identity change", "retirement", "stop"] as const)(
   async (retirement) => {
     const h = await setup();
     h.draw();
-    expect.soft(h.header.querySelector('button[title="Rename session"]')).not.toBeNull();
+    expect.soft(h.header.querySelector("button.chat-pane__session-title-button")).not.toBeNull();
     expect.soft(h.messages.querySelectorAll(".chat-reaction-action")).toHaveLength(1);
     h.disconnect();
     expect(h.gateway.snapshot.phase).toBe("reconnecting");
     expect(h.gateway.snapshot.hello).not.toBeNull();
     expect(h.sessions.state.result).toBeNull();
     h.draw();
-    expect.soft(h.header.querySelector('button[title="Rename session"]')).not.toBeNull();
+    expect.soft(h.header.querySelector("button.chat-pane__session-title-button")).not.toBeNull();
     expect.soft(h.messages.querySelectorAll(".chat-reaction-action")).toHaveLength(1);
     if (retirement === "identity change") {
       h.gateway.connect({ token: "synthetic-other-identity" });
     } else if (retirement === "retirement") {
-      Object.assign(h.current(), { offlineRecoveryRetired: true });
+      Object.defineProperty(h.current(), "offlineRecoveryRetired", { value: true });
       h.disconnect();
     } else {
       h.gateway.stop();
     }
     h.draw();
-    expect(h.header.querySelector('button[title="Rename session"]')).toBeNull();
+    expect(h.header.querySelector("button.chat-pane__session-title-button")).toBeNull();
     expect(h.messages.querySelectorAll(".chat-reaction-action")).toHaveLength(0);
   },
 );
@@ -236,7 +236,7 @@ it.each(["descriptor", "startup"] as const)(
     expect(h.sessions.presentation.result).toBe(retained);
     h.draw();
     expect(h.header.textContent).toContain("Original title");
-    expect(h.header.querySelector('button[title="Rename session"]')).not.toBeNull();
+    expect(h.header.querySelector("button.chat-pane__session-title-button")).not.toBeNull();
     expect(h.messages.querySelectorAll(".chat-reaction-action")).toHaveLength(1);
 
     pendingList.resolve(canonical);
@@ -246,7 +246,7 @@ it.each(["descriptor", "startup"] as const)(
     h.draw();
     expect(h.header.textContent).toContain("Reconnected title");
     expect(selectedChatSessionRow(h.state)?.archived).toBe(true);
-    expect(h.header.querySelector('button[title="Rename session"]')).not.toBeNull();
+    expect(h.header.querySelector("button.chat-pane__session-title-button")).not.toBeNull();
     expect(h.messages.querySelectorAll(".chat-reaction-action")).toHaveLength(0);
   },
 );
@@ -255,7 +255,9 @@ it("queues a header rename and rendered reaction through the shared outbox", asy
   const h = await setup();
   h.disconnect();
   h.draw();
-  const rename = h.header.querySelector<HTMLButtonElement>('button[title="Rename session"]');
+  const rename = h.header.querySelector<HTMLButtonElement>(
+    "button.chat-pane__session-title-button",
+  );
   assert(rename);
   rename.click();
   h.draw();

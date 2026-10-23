@@ -2,10 +2,25 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
+import { inspectChildWaitState } from "@openclaw/proc-safe/reaper";
 import { installKillGroupSeccompFilter } from "@openclaw/proc-safe/test-support";
 import { acquireLinuxChildSubreaper } from "./linux-child-subreaper.js";
 import { assertProcessGroupControl } from "./service-child-group-ownership.js";
 import { createServiceChildRelayAdapter } from "./service-child-relay-host.js";
+
+function waitForAdoptedChildExit(pid: number) {
+  return new Promise<void>((resolve) => {
+    const observe = () => {
+      // SIGCHLD can still be queued for another child, including the exited root.
+      if (inspectChildWaitState(pid).kind === "running") {
+        return;
+      }
+      process.off("SIGCHLD", observe);
+      resolve();
+    };
+    process.on("SIGCHLD", observe);
+  });
+}
 
 // A focused kernel contract, not an emulation of a sandbox service or provider.
 // The full stock mandatory filter is exercised separately in isolated acceptance.
@@ -73,8 +88,8 @@ receipts.push({
   owner: "linux-subreaper",
 });
 
-// The root exits first, leaving its child to the dedicated owner. SIGCHLD is
-// the kernel's exit notification, so the drain observes a waitable real-time exit.
+// The root exits first, leaving its child to the dedicated owner. Wait for this
+// child's native exit state before asserting that the drain proves extinction.
 const realtimeOwner = acquireLinuxChildSubreaper();
 const realtimeRoot = spawn(
   process.execPath,
@@ -104,7 +119,7 @@ const realtimePid = await new Promise<number>((resolve) => {
 });
 assert.ok(Number.isSafeInteger(realtimePid) && realtimePid > 0);
 assert.deepEqual(await realtimeRootExit, [0, null]);
-const realtimeExited = once(process, "SIGCHLD");
+const realtimeExited = waitForAdoptedChildExit(realtimePid);
 // Signal listeners are unref'd; the fixture's parent keeps this stdin pipe open.
 process.stdin.resume();
 try {
@@ -158,7 +173,7 @@ try {
   assert.ok(Number.isSafeInteger(orphanPid) && orphanPid > 0);
   const orphanStatus = readFileSync(`/proc/${orphanPid}/status`, "utf8");
   assert.equal(Number(orphanStatus.match(/^PPid:\s+(\d+)/m)?.[1]), process.pid);
-  const orphanExited = once(process, "SIGCHLD");
+  const orphanExited = waitForAdoptedChildExit(orphanPid);
   process.kill(orphanPid, "SIGTERM");
   await orphanExited;
   assert.equal(activeRoot.exitCode, null);

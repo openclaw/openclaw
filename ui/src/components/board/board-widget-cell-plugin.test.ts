@@ -8,8 +8,8 @@ import { CORE_BOARD_WIDGET_ELEMENTS } from "../../lib/board/widgets/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
-import "./board-widget-cell.ts";
+import type { BoardWidgetCellCallbacks } from "./board-widget-cell-options.ts";
+import "./board-widget-cell.solid.tsx";
 
 const disposers: Array<() => void> = [];
 function mount(element: HTMLElement): void {

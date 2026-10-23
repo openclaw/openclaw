@@ -137,13 +137,16 @@ openclaw update status --json
 openclaw update status --timeout 10
 ```
 
-| Flag                  | Default | Description                         |
-| --------------------- | ------- | ----------------------------------- |
-| `--json`              | `false` | Print machine-readable status JSON. |
-| `--timeout <seconds>` | `300`   | Timeout for checks.                 |
+| Flag                  | Default | Description                                              |
+| --------------------- | ------- | -------------------------------------------------------- |
+| `--json`              | `false` | Print machine-readable status JSON.                      |
+| `--timeout <seconds>` | Unset   | Cap each update check within the shared 30-second limit. |
 
-Explicit timeouts replace the default. Local installation discovery keeps its
-own inspection budget.
+Longer timeouts extend the overall limit; shorter values only cap each update
+check and do not shorten local history inspection. The Gateway channel-warning
+read defaults to 5 seconds and uses the explicit timeout when supplied, within
+the remaining overall limit. Local installation discovery keeps its own
+inspection budget.
 
 For extended-stable package installs, status performs the same public selector
 and exact-package verification as foreground update. It can report

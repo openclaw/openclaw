@@ -127,7 +127,6 @@ export function exercise(backend: Pick<ReturnType<typeof createSqliteWorkerBacke
   call("getPeriodDocument", { period: "day", key: "2026-08-20" });
   call("latestSourceWarnings", undefined);
   call("latestPeople", undefined);
-  call("getDayReports", { sinceMs: report().period.sinceMs, untilMs: report().period.untilMs });
   call("listPersonDays", {
     login: "ALICE",
     options: { since: "2026-08-20", until: "2026-08-21", limit: 1 },

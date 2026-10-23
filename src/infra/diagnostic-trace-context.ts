@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { runWithAsyncStore } from "../shared/async-store.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const TRACEPARENT_VERSION = "00";
@@ -198,7 +199,8 @@ export function runWithDiagnosticTraceContext<T>(
   trace: DiagnosticTraceContext | undefined,
   callback: () => T,
 ): T {
-  return traceScopeState.storage.run(
+  return runWithAsyncStore(
+    traceScopeState.storage,
     trace === undefined ? undefined : freezeDiagnosticTraceContext(trace),
     callback,
   );

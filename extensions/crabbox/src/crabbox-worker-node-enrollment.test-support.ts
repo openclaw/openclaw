@@ -12,37 +12,30 @@ import type {
   CrabboxWorkerNodeRuntimePreparation,
 } from "./crabbox-worker-node-enrollment.js";
 
-export type DesktopFixture = {
-  enabled: boolean;
-  setup?: string;
-  display?: string;
-  dbus?: string;
-  runtimeDir?: string;
-};
+export type DesktopFixture = { enabled: boolean } & Partial<
+  Record<"setup" | "display" | "dbus" | "runtimeDir", string>
+>;
 
-export function createWorkerArchiveFixture(): CrabboxWorkerNodeRuntimePreparation["workerBundle"] {
-  return {
+export const createWorkerArchiveFixture =
+  (): CrabboxWorkerNodeRuntimePreparation["workerBundle"] => ({
     url: "https://gateway.example.test/__openclaw__/worker-bootstrap/artifacts/worker",
     token: "synthetic-worker-archive-token",
     sha256: "b".repeat(64),
     bytes: 100,
     packageRelativePath: `worker-artifacts/${"b".repeat(64)}.tgz`,
-  };
-}
+  });
 
-export function createNodeBootstrapFixture(
+export const createNodeBootstrapFixture = (
   overrides: Partial<CrabboxWorkerNodeEnrollment["nodeBootstrap"]> = {},
-): CrabboxWorkerNodeEnrollment["nodeBootstrap"] {
-  return {
-    url: "https://gateway.example.test/__openclaw__/node-bootstrap/v1/artifact",
-    token: "synthetic-bootstrap-token",
-    sha256: "a".repeat(64),
-    bytes: 100,
-    openclawVersion: "2026.8.1",
-    enabledPluginIds: ["demo"],
-    ...overrides,
-  };
-}
+): CrabboxWorkerNodeEnrollment["nodeBootstrap"] => ({
+  url: "https://gateway.example.test/__openclaw__/node-bootstrap/v1/artifact",
+  token: "synthetic-bootstrap-token",
+  sha256: "a".repeat(64),
+  bytes: 100,
+  openclawVersion: "2026.8.1",
+  enabledPluginIds: ["demo"],
+  ...overrides,
+});
 
 export async function readLaunch(
   stateDir: string,

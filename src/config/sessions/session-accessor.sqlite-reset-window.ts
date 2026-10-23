@@ -374,12 +374,15 @@ function findLatestResetMessageWindow(
           )
           .select([
             "active.message_position",
-            /* kysely-allow-raw: preserve JS-readable overdepth rows for existing tool-pairing validation. */
-            sql<string>`CASE WHEN ${jsonValid(projection.database.db, transcriptEventNavigationSql(projection.database.db, "event"))}
-              THEN ${transcriptEventModelNavigationSql(projection.database.db, "event")}
-              ELSE ${transcriptEventNavigationSql(projection.database.db, "event")} END`.as(
-              "event_json",
-            ),
+            // Compaction keeps the entire tail and needs no tool-pairing metadata.
+            (includesBoundary
+              ? transcriptEventResetNavigationSql(projection.database.db, "event")
+              : // Preserve JS-readable overdepth rows for reset tool-pairing validation.
+                /* kysely-allow-raw: guarded model-navigation projection. */
+                sql<string>`CASE WHEN ${jsonValid(projection.database.db, transcriptEventNavigationSql(projection.database.db, "event"))}
+                  THEN ${transcriptEventModelNavigationSql(projection.database.db, "event")}
+                  ELSE ${transcriptEventNavigationSql(projection.database.db, "event")} END`
+            ).as("event_json"),
             /* kysely-allow-raw: raw-byte accounting stays independent of the transient projection. */
             sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
           ])

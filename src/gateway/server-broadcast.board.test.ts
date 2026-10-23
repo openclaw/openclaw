@@ -28,7 +28,7 @@ import {
 } from "./server-chat-state.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createBoardHandlers } from "./server-methods/board.js";
-import { createProgressCardHandlers } from "./server-methods/progress-card.js";
+import { progressCardHandlers } from "./server-methods/progress-card.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
@@ -174,7 +174,7 @@ describe("board and progress event session ownership", () => {
           connection.clients.add(client);
         }
         const { broadcast, broadcastToConnIds } = connection;
-        const handlers = { ...createProgressCardHandlers(), ...createBoardHandlers(boardStore) };
+        const handlers = { ...progressCardHandlers, ...createBoardHandlers(boardStore) };
         const context = {
           broadcast,
           broadcastToConnIds,

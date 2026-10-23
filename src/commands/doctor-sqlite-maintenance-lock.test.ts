@@ -9,6 +9,7 @@ import {
   readGatewayLockProcessNamespace,
   type LockPayload,
 } from "../infra/gateway-lock-payload.js";
+import * as gatewayLockProcessModule from "../infra/gateway-lock-process.js";
 import {
   acquireGatewayLock,
   GatewayLockError,
@@ -49,6 +50,9 @@ async function createLockFixture() {
     VITEST: "1",
   };
   const acquireLock = gatewayLockModule.acquireGatewayLock;
+  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessCmdline").mockImplementation(() => [
+    "openclaw-gateway",
+  ]);
   vi.spyOn(gatewayLockModule, "acquireGatewayLock").mockImplementation((options) =>
     acquireLock(
       options?.role === "sqlite-maintenance"
@@ -57,7 +61,6 @@ async function createLockFixture() {
             lockDir,
             platform: "darwin",
             pollIntervalMs: 2,
-            readProcessCmdline: () => ["openclaw-gateway"],
             timeoutMs: 15,
           }
         : options,
@@ -290,10 +293,15 @@ describe("doctor SQLite maintenance lock", () => {
     });
     await maintenanceStarted.promise;
 
+    vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessCmdline").mockImplementation(() => [
+      "openclaw",
+      "doctor",
+      "--session-sqlite",
+      "compact",
+    ]);
     await expect(
       fixture.gateway({
         pollIntervalMs: 2,
-        readProcessCmdline: () => ["openclaw", "doctor", "--session-sqlite", "compact"],
         timeoutMs: 15,
       }),
     ).rejects.toBeInstanceOf(GatewayLockError);

@@ -260,6 +260,47 @@ repair-specific backups still apply. If a capture fails, the next
 start tries again. A new image, a recreated container, or a container whose
 `/tmp` does not persist across restarts captures again.
 
+### Read-only container root
+
+A read-only container root still needs writable runtime storage. For example,
+with `HOME=/state` and `OPENCLAW_STATE_DIR=/state`, provide these mounts:
+
+| Path                                                                   | Purpose                                                                                                  | Storage                             |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `/state`                                                               | SQLite databases and sidecars, credentials, and state ownership locks under `/state/tmp/openclaw-<uid>/` | Persistent writable volume          |
+| Configured workspace directories, such as `/workspace`                 | Agent files and workspace migrations                                                                     | Persistent writable volume          |
+| `/state/.cache` or the absolute directory selected by `XDG_CACHE_HOME` | Private SQLite snapshot staging                                                                          | Writable volume or tmpfs            |
+| `/tmp`                                                                 | Runtime temporary files and the container activation marker                                              | Writable tmpfs                      |
+| `/state.update-captures`                                               | Retained pre-repair state captures                                                                       | Separate persistent writable volume |
+
+Set ownership so the container's UID/GID can create files and directories in each
+writable location. Database files and their parent directories must be writable;
+mounting only the database file writable is insufficient for SQLite sidecars.
+Configured plugin storage or other file outputs may need additional mounts.
+See [Gateway lock](/gateway/gateway-lock#state-and-config-locks) for the lock paths.
+`TMPDIR` does not relocate state ownership locks.
+
+The capture path is a sibling of the resolved state directory, not a child. A
+writable `/state` therefore does not make `/state.update-captures` writable. If
+that sibling is unavailable, standalone Doctor reports that the original state
+capture was unavailable and continues. This warning does not identify the cause
+of a later fatal filesystem error. Keep the capture volume private: it contains
+raw pre-repair state and credentials, and is excluded from normal backups and
+support exports.
+
+For a read-only config bind such as `/run/config/openclaw.json`, set
+`OPENCLAW_CONFIG_PATH=/run/config/openclaw.json` and
+`OPENCLAW_CONFIG_READONLY=1` in both the Gateway and CLI container environments.
+Doctor can still repair writable state, but config repairs must be applied in
+your external deployment source. Invalid or legacy config that blocks startup
+must be migrated there before restarting. See
+[Externally managed config](/cli/config#externally-managed-config).
+
+If startup reports `EROFS`, inspect the path and operation in the error and check
+that its mount is writable. Changing file modes cannot make a read-only mount
+writable. Do not delete state or lock files to repair a mount error, and do not
+disable native filesystem checks.
+
 On older Linux hosts such as Synology DSM, an unavailable `openat2` syscall can
 make older images report that another Gateway owns even an empty state volume.
 Current images use the guarded filesystem fallback; keep native filesystem

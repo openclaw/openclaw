@@ -200,6 +200,101 @@ describe("candidate-owned publish consumer chain", () => {
     }
   });
 
+  it.each(["newer main P", "diverged main P"])(
+    "admits a changelog descendant through a %s only on main lineage",
+    async (scenario) => {
+      const root = candidatePublicationFixture({ protectedTag: false });
+      const newerP = "c".repeat(40);
+      const candidateSha = "d".repeat(40);
+      const workflowRef = "release-ci/" + candidateSha.slice(0, 12) + "-456";
+      const inputs = structuredClone(root.plan.qualificationInputs);
+      inputs.ref = candidateSha;
+      inputs.expected_sha = candidateSha;
+      assert(inputs.trusted_workflow_json);
+      const envelope = JSON.parse(inputs.trusted_workflow_json);
+      envelope.trustedWorkflow = {
+        ref: workflowRef,
+        fullRef: "refs/heads/" + workflowRef,
+        sha: candidateSha,
+      };
+      inputs.trusted_workflow_json = JSON.stringify(envelope);
+      const current = admissionFixture(false, {
+        inputs,
+        candidateSha,
+        transportRef: workflowRef,
+        candidateVersion: "2026.8.28-beta.1",
+        policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
+        workflowSource: readFileSync(".github/workflows/full-release-validation.yml", "utf8"),
+        publisherSha: newerP,
+      });
+      envelope.qualificationAdmission = current.descriptor;
+      inputs.trusted_workflow_json = JSON.stringify(envelope);
+      const client = {
+        ...root.client,
+        compareCommits: () => ({
+          status: "ahead",
+          merge_base_commit: { sha: root.q },
+          files: [
+            { filename: "CHANGELOG/2026.8.28.md", status: "modified" },
+            { filename: "CHANGELOG/records/2026.8.28.md", status: "modified" },
+          ],
+        }),
+        compareCommitLineage: (base: string, head: string) => {
+          if (base !== root.p || head !== newerP) {
+            throw new Error("Unexpected lineage comparison");
+          }
+          return scenario === "newer main P"
+            ? { status: "ahead", merge_base_commit: { sha: root.p } }
+            : { status: "diverged", merge_base_commit: { sha: "a".repeat(40) } };
+        },
+        verifyQualificationAdmission: (
+          request: Parameters<typeof root.client.verifyQualificationAdmission>[0],
+        ) =>
+          request.workflowRef === workflowRef
+            ? verifyQualificationAdmission({
+                ...request,
+                runGh: current.runGh,
+                downloadArchive: current.archive,
+              })
+            : root.client.verifyQualificationAdmission(request),
+      };
+      const result = validateReleaseRunEvidence(
+        {
+          repository: root.repository,
+          runId: root.runId,
+          trustedWorkflowRef: "main",
+          trustedWorkflowFullRef: "refs/heads/main",
+          trustedWorkflowSha: newerP,
+          verifierSourceSha: newerP,
+          verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
+          reuseRequest: {
+            targetSha: candidateSha,
+            releaseProfile: root.manifest.releaseProfile,
+            runReleaseSoak: root.manifest.runReleaseSoak,
+            validationInputs: root.manifest.validationInputs,
+          },
+          qualificationReuse: {
+            candidateSha,
+            qualificationSha: candidateSha,
+            workflowRef,
+            descriptor: current.descriptor,
+            inputs,
+          },
+        },
+        client,
+      );
+      if (scenario === "newer main P") {
+        await expect(result).resolves.toMatchObject({
+          valid: true,
+          directRoot: true,
+          root: { runId: root.runId, workflowRefProof: "candidate-owned-admission-v1" },
+        });
+      } else {
+        await expect(result).rejects.toThrow("exact admitted C/Q/P");
+      }
+    },
+  );
+
   it.each(["main-qualification", "diagnostic"] as const)(
     "never promotes authenticated %s evidence to publication",
     async (purpose) => {

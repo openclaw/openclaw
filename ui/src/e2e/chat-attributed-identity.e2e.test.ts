@@ -144,8 +144,8 @@ suite.define(() => {
               const rect = element.getBoundingClientRect();
               return { left: rect.left, right: rect.right };
             });
-            expect(bounds.left).toBeGreaterThanOrEqual(44 + 20);
-            expect(bounds.right).toBeLessThanOrEqual(932 - 20);
+            expect(bounds.left).toBeGreaterThanOrEqual(44 + 16);
+            expect(bounds.right).toBeLessThanOrEqual(932 - 16);
             expect(bounds.left - 44).toBeCloseTo(932 - bounds.right, 0);
           }
         }
@@ -205,8 +205,8 @@ suite.define(() => {
             }, direction);
             await expectColumn(page.locator(".agent-chat__composer-shell"));
             const frame = await transcript.boundingBox();
-            expect(frame!.x).toBeGreaterThanOrEqual(safeAreaLeft + 20);
-            expect(frame!.x + frame!.width).toBeLessThanOrEqual(width - 20);
+            expect(frame!.x).toBeGreaterThanOrEqual(safeAreaLeft + 16);
+            expect(frame!.x + frame!.width).toBeLessThanOrEqual(width - 16);
             expect(frame!.x - safeAreaLeft).toBeCloseTo(width - frame!.x - frame!.width, 0);
             await expectColumn(page.locator(".chat-group.assistant > .chat-group-messages"));
             await expect(page.locator(".chat-group .chat-avatar:visible")).toHaveCount(0);
@@ -414,6 +414,14 @@ suite.define(() => {
         await expect(longNamePeerGroup).not.toHaveClass(/\bchat-group--meta-revealed\b/u);
       }
 
+      // Leave the mobile editor before measuring metadata-only interactions.
+      // Otherwise focus transfer also collapses the composer and changes the scroll range.
+      await page.locator(".chat-thread").focus();
+      await expect(page.locator(".agent-chat__composer-shell")).toHaveAttribute(
+        "data-composer-editing",
+        "false",
+      );
+      await waitForChatScrollIdle(page);
       for (const group of [
         userGroups.first(),
         peerGroup,

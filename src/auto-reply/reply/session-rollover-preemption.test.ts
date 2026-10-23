@@ -5,7 +5,6 @@ import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { disposeAllSessionMcpRuntimes } from "../../agents/agent-bundle-mcp-manager-api.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
@@ -71,7 +70,7 @@ function resetSession(storePath: string, sessionKey: string, from: string) {
       Provider: "telegram",
       Surface: "telegram",
     },
-    cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
+    cfg: { session: { store: storePath, reset: { mode: "idle", idleMinutes: 999 } } },
   });
 }
 
@@ -91,14 +90,15 @@ it("preempts a running turn and cancels two queued follow-ups before /new resets
   );
   await runStarted.promise;
   for (const prompt of ["first waiting follow-up", "second waiting follow-up"]) {
-    const queued = createQueueTestRun({ prompt });
-    queued.run = {
-      ...queued.run,
-      sessionKey,
-      sessionId,
-      agentId: "main",
-      config: { session: { store: storePath } } as OpenClawConfig,
-    };
+    const queued = createQueueTestRun(
+      { prompt },
+      {
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        config: { session: { store: storePath } },
+      },
+    );
     expect(
       enqueueFollowupRun(
         sessionKey,

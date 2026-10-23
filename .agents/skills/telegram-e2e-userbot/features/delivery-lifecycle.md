@@ -26,7 +26,7 @@ Preconditions:
 
   ```bash
   mkdir -p "$TELEGRAM_E2E_PROOF_DIR/delivery-lifecycle"
-  E2E_TELEGRAM_PROVIDER_API=openai-completions \
+  E2E_TELEGRAM_PROVIDER_API=openai-responses \
   E2E_TELEGRAM_CONFIG_PATCH='{"streaming":{"mode":"progress","progress":{"commentary":true}}}' \
   node "$TELEGRAM_E2E_SKILL_DIR/scripts/run-mock-sut-user-e2e.mjs" \
     --dm --timeout-ms 30000 \
@@ -49,7 +49,7 @@ Preconditions:
 
 ## Gotchas
 
-- The recipe pins the `openai-completions` fixture because it is the shape that yields a separate preamble and final answer.
+- The recipe pins `openai-responses` because its fixture explicitly marks the preamble as commentary. The completions fixture emits unphased assistant text: it proves tool progress and finalization, not commentary. Do not infer commentary from text merely preceding a tool call.
 - A fast one-turn response correctly creates no draft. Use the named fixture, not arbitrary text.
 - `updateMessageEdited` is metadata; content revisions arrive as `edit`.
 - TDLib may replay old updates. Judge only events after this recipe's sent message.

@@ -13,6 +13,37 @@ export function registerManagedCampaignFailureTests(
   ) => Promise<ManagedServiceManagerBoundaryResult>,
   itUnix: ReturnType<typeof import("vitest").it.runIf>,
 ): void {
+  itUnix.each(["healthy", "failed", undefined] as const)(
+    "preserves the updater's recorded recovery in preflight triage (service=%s)",
+    async (service) => {
+      const { commands, parentSignal, state } = await runManagedServiceManagerBoundary("systemd", {
+        controlDisconnect: "transferred",
+        validationResult: "child-result",
+        helperExitCode: 7,
+        updaterResult: {
+          status: "error",
+          mode: "git",
+          reason: "preflight-node-runtime-incompatible",
+          recovery: { serviceRestartSafe: true, version: "1.0.0", service },
+        },
+      });
+      expect(commands).toEqual([]);
+      expect(parentSignal).toBeNull();
+      expect(state.parked).toBeUndefined();
+      expect(state.restored).toBeUndefined();
+      expect(state.triageCalls).toBe(1);
+      expect(state.triageInput).toMatchObject({
+        error: expect.stringContaining(
+          service === "healthy"
+            ? "Service recovery succeeded."
+            : service === "failed"
+              ? "Service recovery failed."
+              : "Service recovery outcome was not recorded",
+        ),
+      });
+    },
+  );
+
   itUnix.each([
     { updaterNotification: undefined, structuredFacts: false },
     { updaterNotification: "consumed-before-exit", structuredFacts: true },

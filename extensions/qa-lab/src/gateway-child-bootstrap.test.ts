@@ -145,6 +145,18 @@ async function bounded<T>(promise: Promise<T>, ms = 5_000): Promise<T> {
 const dirs = createTempDirHarness();
 const cleanups: Array<() => Promise<void>> = [];
 const realKill = process.kill.bind(process);
+const stoppedResult = { process: "confirmed-stopped", errors: [] };
+async function signalAndRead(
+  child: Parameters<QaGatewayChildLifecycle["register"]>[0],
+  signal: "SIGUSR1",
+) {
+  await bounded(
+    new Promise<void>((resolve) => {
+      child.stderr!.once("data", () => resolve());
+      child.kill(signal);
+    }),
+  );
+}
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN", undefined);
   vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", undefined);
@@ -273,6 +285,21 @@ async function fixture(phase: string, mode: string) {
     owner,
     track,
     command,
+    runCli: (
+      lifetime: QaGatewayChildLifecycle,
+      args: string[],
+      options: Partial<Parameters<typeof runQaGatewayCliCommand>[0]> = {},
+    ) =>
+      track(
+        runQaGatewayCliCommand({
+          ...command,
+          lifetime,
+          args,
+          cwd: root,
+          env: { HOME: root },
+          ...options,
+        }),
+      ),
     start: () =>
       owner.start({
         repoRoot: process.cwd(),
@@ -353,18 +380,9 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
       "message",
     ]);
     expect(messages.map(({ command, event }) => `${command}:${event}`)).toEqual([
-      "mock-auth:start",
-      "mock-auth:exit",
-      "mock-auth:settled",
-      "mock-auth:start",
-      "mock-auth:exit",
-      "mock-auth:settled",
-      "repair-help:start",
-      "repair-help:exit",
-      "repair-help:settled",
-      "repair:start",
-      "repair:exit",
-      "repair:settled",
+      ...["mock-auth", "mock-auth", "repair-help", "repair"].flatMap((command) =>
+        ["start", "exit", "settled"].map((event) => `${command}:${event}`),
+      ),
       "gateway:spawn",
     ]);
     expect(JSON.stringify(messages)).not.toMatch(
@@ -462,10 +480,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     const f = await fixture(phase, mode);
     const starting = f.track(f.start());
     const [ready] = await f.ready();
-    await expect(bounded(f.owner.stop())).resolves.toEqual({
-      process: "confirmed-stopped",
-      errors: [],
-    });
+    await expect(bounded(f.owner.stop())).resolves.toEqual(stoppedResult);
     expect(await bounded(starting)).toBeInstanceOf(Error);
     f.assertStopped();
     expect(f.records().some((entry) => entry.kind === "gateway")).toBe(false);
@@ -480,10 +495,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     await f.ready(2);
     expect(gateway.pid).toBe(pid);
     expect(isQaPosixProcessGroupAlive(pid!)).toBe(true);
-    await expect(bounded(f.owner.stop())).resolves.toEqual({
-      process: "confirmed-stopped",
-      errors: [],
-    });
+    await expect(bounded(f.owner.stop())).resolves.toEqual(stoppedResult);
     for (const command of commands) {
       expect(await bounded(command)).toBeInstanceOf(Error);
     }
@@ -505,16 +517,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
         drainObserved.resolve();
         await releaseDrain.promise;
       });
-      const command = f.track(
-        runQaGatewayCliCommand({
-          ...f.command,
-          lifetime,
-          args: ["probe"],
-          bootstrapPhase: "repair-help",
-          cwd: f.root,
-          env: { HOME: f.root },
-        }),
-      );
+      const command = f.runCli(lifetime, ["probe"], { bootstrapPhase: "repair-help" });
       cleanups.push(async () => {
         await lifetime.stop();
       });
@@ -532,7 +535,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
       expect(messages[2]).toMatchObject({ processStopped: true, pipesClosed: true });
       expect(Number(messages[2]!.elapsedMs)).toBeGreaterThanOrEqual(Number(messages[1]!.elapsedMs));
       f.assertStopped();
-      await expect(lifetime.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
+      await expect(lifetime.stop()).resolves.toEqual(stoppedResult);
     },
   );
 
@@ -547,16 +550,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let settled = false;
     const command = f
-      .track(
-        runQaGatewayCliCommand({
-          ...f.command,
-          lifetime,
-          args: ["update", "repair", "--json"],
-          bootstrapPhase: "repair",
-          cwd: f.root,
-          env: { HOME: f.root },
-        }),
-      )
+      .runCli(lifetime, ["update", "repair", "--json"], { bootstrapPhase: "repair" })
       .then((value) => {
         settled = true;
         return value;
@@ -566,12 +560,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     for (let phase = 1; phase <= 4; phase++) {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(settled).toBe(false);
-      await bounded(
-        new Promise<void>((resolve) => {
-          child.stderr!.once("data", () => resolve());
-          child.kill("SIGUSR1");
-        }),
-      );
+      await signalAndRead(child, "SIGUSR1");
       await vi.waitFor(() =>
         expect(f.records().filter((entry) => entry.kind === "progress")).toHaveLength(phase),
       );
@@ -592,23 +581,10 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     });
     const registration = vi.spyOn(lifetime, "register");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const command = f.track(
-      runQaGatewayCliCommand({
-        ...f.command,
-        lifetime,
-        args: ["update", "repair"],
-        cwd: f.root,
-        env: { HOME: f.root },
-      }),
-    );
+    const command = f.runCli(lifetime, ["update", "repair"]);
     await f.ready();
     const child = registration.mock.calls[0]![0];
-    await bounded(
-      new Promise<void>((resolve) => {
-        child.stderr!.once("data", () => resolve());
-        child.kill("SIGUSR1");
-      }),
-    );
+    await signalAndRead(child, "SIGUSR1");
     await vi.waitFor(() =>
       expect(f.records().filter((entry) => entry.kind === "progress")).toHaveLength(1),
     );
@@ -629,17 +605,11 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
       if (failure === "timeout") {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       }
-      const command = f.track(
-        runQaGatewayCliCommand({
-          ...f.command,
-          lifetime,
-          args: ["probe", "unlabeled-argv-secret"],
-          bootstrapPhase: "mock-auth",
-          cwd: f.root,
-          env: { HOME: f.root, QA_SYNTHETIC_SECRET: "unlabeled-env-secret" },
-          stdin: failure === "stdin" ? "unlabeled-stdin-secret" : undefined,
-        }),
-      );
+      const command = f.runCli(lifetime, ["probe", "unlabeled-argv-secret"], {
+        bootstrapPhase: "mock-auth",
+        env: { HOME: f.root, QA_SYNTHETIC_SECRET: "unlabeled-env-secret" },
+        stdin: failure === "stdin" ? "unlabeled-stdin-secret" : undefined,
+      });
       cleanups.push(async () => {
         await lifetime.stop();
       });
@@ -721,9 +691,9 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
       expect(diagnostic).not.toMatch(/synthetic-[\w-]+-secret|unlabeled-[\w-]+-secret/u);
       f.assertStopped();
       if (stopping) {
-        expect(await bounded(stopping)).toEqual({ process: "confirmed-stopped", errors: [] });
+        expect(await bounded(stopping)).toEqual(stoppedResult);
       }
-      await expect(lifetime.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
+      await expect(lifetime.stop()).resolves.toEqual(stoppedResult);
     },
   );
 
@@ -754,10 +724,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     expect(existsSync(ready!.tempRoot!)).toBe(true);
     expect(f.records().some((entry) => entry.kind === "gateway")).toBe(false);
     signalFault.mockRestore();
-    await expect(bounded(f.owner.stop())).resolves.toEqual({
-      process: "confirmed-stopped",
-      errors: [],
-    });
+    await expect(bounded(f.owner.stop())).resolves.toEqual(stoppedResult);
     f.assertStopped();
     expect(existsSync(ready!.tempRoot!)).toBe(false);
   });

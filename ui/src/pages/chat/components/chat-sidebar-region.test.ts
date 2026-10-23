@@ -11,12 +11,15 @@ import {
 } from "../../../plugins/control-ui-runtime.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
-import { createInitializationContext } from "../chat-pane.test-support.ts";
+import { createMountedPanes } from "../chat-pane-mounted.test-support.ts";
+import { createInitializationContext, getPaneTestRuntime } from "../chat-pane.test-support.ts";
 import { createPageState } from "../chat-state-page.ts";
 import { createChatProps } from "../chat-view.test-helpers.ts";
 import {
   activatePanel,
   openSlot,
+  openSidebarNewTab,
+  closeSidebarNewTab,
   closeSlot,
   promoteSidebarPanel,
   setSidebarOpen,
@@ -69,6 +72,7 @@ async function createRegion(
   region.callbacks = {
     activatePanel: vi.fn(),
     togglePanelExpanded: vi.fn(),
+    setDock: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
     reorderPanel: vi.fn(),
@@ -308,37 +312,83 @@ describe("chat sidebar region", () => {
     expect(measure).not.toHaveBeenCalled();
   });
 
-  it("claims native Close for the focused side tab and preserves its neighbor", async () => {
-    const region = await createRegion(
-      openSlot(openSlot({ columns: [] }, "workspace"), "companion"),
-    );
-    region.panelDefinitions = region.panelDefinitions.map((definition) =>
-      Object.assign({}, definition, {
-        content:
-          definition.slot === "companion"
-            ? element('<textarea aria-label="Side chat"></textarea>')
-            : null,
-      }),
-    );
-    region.callbacks!.closeSlot = (slot) => {
-      region.layout = closeSlot(region.layout, slot);
+  it.each([false, true])(
+    "claims native Close for the focused side tab and preserves its neighbor (mobile=%s)",
+    async (mobile) => {
+      const region = await createRegion(
+        openSlot(openSlot({ columns: [] }, "workspace"), "companion"),
+      );
+      region.panelDefinitions = region.panelDefinitions.map((definition) =>
+        Object.assign({}, definition, {
+          content:
+            definition.slot === "companion"
+              ? element('<textarea aria-label="Side chat"></textarea>')
+              : null,
+        }),
+      );
+      const mobilePane = mobile ? createMountedPanes([]).pane : undefined;
+      const mobileHost = () => mobilePane!.render().layout!.region.mobileHost!;
+      if (mobilePane) {
+        getPaneTestRuntime(mobilePane).mergedChrome = true;
+        mobileHost().navigate({ area: "panels" });
+        region.mobileHost = mobileHost();
+        region.presentation = "mobile";
+      }
+      region.callbacks!.closeSlot = (slot) => {
+        region.layout = closeSlot(region.layout, slot);
+      };
+      await region.updateComplete;
+      root(region).querySelector("textarea")!.focus();
+
+      const command = new CustomEvent("openclaw:native-close-focused-panel", { cancelable: true });
+      window.dispatchEvent(command);
+      expect(command.defaultPrevented).toBe(true);
+      await region.updateComplete;
+      expect(region.layout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["workspace"]);
+      expect(region.layout.open).toBe(true);
+      if (mobile) {
+        expect(mobileHost().open).toBe(true);
+      }
+
+      const nextCommand = new CustomEvent("openclaw:native-close-focused-panel", {
+        cancelable: true,
+      });
+      window.dispatchEvent(nextCommand);
+      expect(nextCommand.defaultPrevented).toBe(true);
+      expect(region.layout.open).toBe(false);
+      if (mobile) {
+        await waitForSolid(() => expect(mobileHost().open).toBe(false));
+      }
+    },
+  );
+
+  it("dismisses an empty mobile launcher after its own close navigation", async () => {
+    const region = await createRegion(openSidebarNewTab({ columns: [] }));
+    const { pane } = createMountedPanes([]);
+    getPaneTestRuntime(pane).mergedChrome = true;
+    const mobileHost = () => pane.render().layout!.region.mobileHost!;
+    mobileHost().navigate({ area: "panels" });
+    region.mobileHost = mobileHost();
+    region.presentation = "mobile";
+    region.callbacks!.newTab = {
+      open: vi.fn(),
+      openPanel: vi.fn(),
+      finishCloseAll: vi.fn(() => true),
+      close: () => {
+        region.layout = closeSidebarNewTab(region.layout);
+        mobileHost().navigate({ area: "panels" });
+        region.mobileHost = mobileHost();
+      },
     };
     await region.updateComplete;
-    root(region).querySelector("textarea")!.focus();
-
+    root(region)
+      .querySelector('[data-region-header="side"]')!
+      .dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
     const command = new CustomEvent("openclaw:native-close-focused-panel", { cancelable: true });
     window.dispatchEvent(command);
     expect(command.defaultPrevented).toBe(true);
-    await region.updateComplete;
-    expect(region.layout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["workspace"]);
-    expect(region.layout.open).toBe(true);
-
-    const nextCommand = new CustomEvent("openclaw:native-close-focused-panel", {
-      cancelable: true,
-    });
-    window.dispatchEvent(nextCommand);
-    expect(nextCommand.defaultPrevented).toBe(true);
-    expect(region.layout.open).toBe(false);
+    await waitForSolid(() => expect(mobileHost().open).toBe(false));
+    expect(region.layout.newTab).toBeUndefined();
   });
 
   it("yields native Close after pointer focus moves from Side chat to main or outside", async () => {

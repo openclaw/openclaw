@@ -40,8 +40,8 @@ import {
 import type { ClawAddPlan } from "./types.js";
 
 export class ClawGatewayPlanChangedError extends Error {
-  constructor(message = "The Claw changed since review. Preview it again.") {
-    super(message);
+  constructor() {
+    super("The Claw changed since review. Preview it again.");
     this.name = "ClawGatewayPlanChangedError";
   }
 }
@@ -82,7 +82,10 @@ export async function applyClawAddForGateway(
     reloadPlugins?: PluginInstallBatchReload;
     configWriteOptions?: StatelessClawAddOptions["configWriteOptions"];
     waitForAgentRuntime?: () => Promise<void>;
-    cronGateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable"> &
+    cronGateway?: Pick<
+      ClawCronGateway,
+      "add" | "list" | "waitUntilAgentAvailable" | "writeScratch" | "enable"
+    > &
       Partial<Pick<ClawCronGateway, "get" | "remove">>;
     rollbackNewAgent?: (
       agentId: string,

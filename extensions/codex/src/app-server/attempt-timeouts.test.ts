@@ -2,7 +2,6 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   isCodexAppServerStartupError,
-  resolveCodexGatewayTimeoutWithGraceMs,
   resolveCodexStartupTimeoutMs,
   withCodexStartupTimeout,
 } from "./attempt-timeouts.js";
@@ -28,15 +27,6 @@ it.each([
   [120_000, 120_000],
 ])("bounds turn budget %s by request timeouts", (timeoutMs, expected) => {
   expect(resolveCodexStartupTimeoutMs({ timeoutMs, requestTimeoutMs: 60_000 })).toBe(expected);
-});
-
-it.each<[number, number | undefined, number]>([
-  [120_000, undefined, 130_000],
-  [120_000, 500, 120_500],
-  [Number.MAX_SAFE_INTEGER, undefined, MAX_TIMER_TIMEOUT_MS],
-  [MAX_TIMER_TIMEOUT_MS - 100, 500, MAX_TIMER_TIMEOUT_MS],
-])("caps gateway timeout=%s grace=%s", (timeoutMs, grace, expected) => {
-  expect(resolveCodexGatewayTimeoutWithGraceMs(timeoutMs, grace)).toBe(expected);
 });
 
 it.each([false, true])(

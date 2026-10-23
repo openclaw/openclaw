@@ -1,13 +1,14 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyLocalSetupWorkspaceConfig } from "../commands/onboard-config.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { executeSystemAgentOperation as executeOperation } from "./operations.js";
-import type { SystemAgentOverview } from "./overview.js";
+import { createSystemAgentOverviewFixture } from "./overview.fixture.test-support.js";
 import type { SystemAgentSetupApplyResult } from "./setup-apply.js";
 import { applySystemAgentSetup } from "./setup-apply.js";
 import { verifySetupInferenceConfig } from "./setup-inference.js";
@@ -64,20 +65,12 @@ const mockConfig = vi.hoisted(() => {
     const copy = structuredClone(config);
     bind(copy);
     return {
-      path: "/tmp/openclaw.json",
+      ...createSnapshot({ sourceConfig: copy, hash }),
       exists,
       valid: exists,
-      hash,
       raw: exists ? `${JSON.stringify(copy)}\n` : null,
-      parsed: copy,
-      sourceConfig: copy,
       sourceConfigBeforeMigrations: copy,
-      resolved: copy,
-      runtimeConfig: copy,
-      config: copy,
       issues: exists ? [] : [{ path: "", message: "missing config" }],
-      warnings: [],
-      legacyIssues: [],
     };
   };
   const read = vi.fn(async () => snapshot());
@@ -153,7 +146,7 @@ let restoreBackend: () => void;
 let runtime: ReturnType<typeof createSystemAgentTestRuntime>["runtime"];
 let lines: string[];
 type ApplySetup = typeof applySystemAgentSetup;
-let applySetup: ReturnType<typeof vi.fn<ApplySetup>>;
+const applySetup = vi.mocked(applySystemAgentSetup);
 type Verify = typeof verifySetupInferenceConfig;
 type Options = NonNullable<Parameters<typeof executeOperation>[2]>;
 function run(operation: Parameters<typeof executeOperation>[0], options: Options = {}) {
@@ -189,26 +182,8 @@ const verified = () => ({ ok: true as const, modelRef: model, latencyMs: 5 });
 const withModel = (primary = model): OpenClawConfig => ({
   agents: { defaults: { model: { primary } }, entries: { main: {} } },
 });
-function overview(defaultModel: string | undefined = model): SystemAgentOverview {
-  const command = { command: "unused", found: false, error: "not found" };
-  return {
-    defaultAgentId: "main",
-    defaultModel,
-    agents: [],
-    config: { path: configPath, exists: true, valid: true, issues: [], hash: null },
-    tools: {
-      codex: command,
-      claude: command,
-      gemini: command,
-      apiKeys: { openai: true, anthropic: false },
-    },
-    gateway: { url: "ws://127.0.0.1:18789", source: "local loopback", reachable: false },
-    references: {
-      docsUrl: "https://docs.openclaw.ai",
-      sourceUrl: "https://github.com/openclaw/openclaw",
-    },
-  };
-}
+const overview = (defaultModel: string | undefined = model) =>
+  createSystemAgentOverviewFixture({ defaultModel });
 function setupResult(
   overrides: Partial<SystemAgentSetupApplyResult> = {},
 ): SystemAgentSetupApplyResult {
@@ -327,13 +302,10 @@ afterAll(() => {
   restoreBackend();
 });
 beforeEach(() => {
-  vi.mocked(applySystemAgentSetup)
-    .mockReset()
-    .mockImplementation((...args) => applySetup(...args));
+  applySetup.mockReset().mockImplementation(async () => setupResult());
   vi.mocked(verifySetupInferenceConfig)
     .mockReset()
     .mockImplementation(async () => verified());
-  applySetup = vi.fn<ApplySetup>(async () => setupResult());
   mockConfig.reset();
   mockConfig.set(withModel());
   localOnboarding.states.clear();

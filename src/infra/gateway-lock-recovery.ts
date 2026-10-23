@@ -100,14 +100,9 @@ export async function recoverGatewayLock(options: {
   for (const { observed } of inspection.files) {
     if (
       observed?.holder &&
-      (await resolveGatewayOwnerStatus(
-        observed.holder.pid,
-        observed.holder,
-        process.platform,
-        undefined,
-        undefined,
-        { lockPath: observed.path },
-      )) === "alive"
+      (await resolveGatewayOwnerStatus(observed.holder.pid, observed.holder, process.platform, {
+        lockPath: observed.path,
+      })) === "alive"
     ) {
       throw new Error(
         `Gateway holder ${observed.holder.pid} is still live; stop it before recovering its lock.`,

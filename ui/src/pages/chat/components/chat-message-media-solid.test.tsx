@@ -39,9 +39,14 @@ const commentResponse = (text: string) =>
     `Selected text:\n${text}\n\nSource session: agent:main:fixture\nDOM text UTF-16 range: [0, ${text.length})`,
   );
 
-it.each(["replacement", "removal"] as const)(
-  "reveals comments independently and cancels stale reads on %s",
-  async (retirement) => {
+it.each([
+  { retirement: "replacement", inline: false },
+  { retirement: "removal", inline: false },
+  { retirement: "replacement", inline: true },
+  { retirement: "removal", inline: true },
+])(
+  "reveals comments independently and cancels stale reads on $retirement (inline: $inline)",
+  async ({ retirement, inline }) => {
     const first = createDeferred<Response>();
     const second = createDeferred<Response>();
     const fetchMock = vi
@@ -53,8 +58,10 @@ it.each(["replacement", "removal"] as const)(
       attachment("document", name, `https://example.test/${name}.txt`),
     );
     const [comments, setComments] = createSignal(initialComments);
+    const [presentation, setPresentation] = createSignal({ inline });
     const view = mountSolid(() => (
       <SentCommentAttachments
+        inline={presentation().inline}
         comments={comments()}
         options={{}}
         resolve={(item) => ({
@@ -64,12 +71,21 @@ it.each(["replacement", "removal"] as const)(
         })}
       />
     ));
-    expect(fetchMock).not.toHaveBeenCalled();
-    view.getByRole("button").click();
+    if (!inline) {
+      expect(fetchMock).not.toHaveBeenCalled();
+      view.getByRole("button").click();
+    }
     await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     second.resolve(commentResponse("second source"));
     await waitForSolid(() => expect(document.body.textContent).toContain("second source"));
     expect(document.body.textContent).toContain("Loading");
+    if (inline) {
+      expect(view.container.querySelector("blockquote button")?.textContent).toBe("second source");
+    }
+    const selection = view.container.querySelector("blockquote button");
+    setPresentation({ inline });
+    flush();
+    expect(view.container.querySelector("blockquote button")).toBe(selection);
     const pendingSignal = fetchMock.mock.calls[0]![1]!.signal!;
     setComments(initialComments.slice());
     flush();

@@ -35,6 +35,7 @@ import {
   beginAgentCommandSessionEffect,
   repairAgentCommandSessionTranscript,
 } from "./agent-command-session-effect.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import { runAcpAgentCommand } from "./command/acp-execution.js";
 import { persistAgentSession } from "./command/attempt-execution.shared.js";
 import { finishAgentCommandCleanup } from "./command/cleanup.js";
@@ -223,7 +224,6 @@ async function agentCommandInternalOwned(
       sessionStateActor.actorType === "human" &&
       !isSubagentLane &&
       !opts.internalEvents?.length &&
-      opts.bootstrapContextRunKind !== "heartbeat" &&
       opts.bootstrapContextRunKind !== "cron"
     ) {
       releaseForeground = await beginForegroundSessionMaintenance(sessionKey ?? sessionId);
@@ -415,7 +415,8 @@ async function agentCommandInternalOwned(
             watchSkills,
             isSubagentLaneTurn: isSubagentLane,
             suppressVisibleSessionEffects,
-            verboseDefault: agentCfg?.verboseDefault as VerboseLevel | undefined,
+            verboseDefault: (resolveAgentConfig(cfg, sessionAgentId)?.verboseDefault ??
+              agentCfg?.verboseDefault) as VerboseLevel | undefined,
             sessionStateActor,
             ...(manifestMetadataSnapshot
               ? { pluginMetadataSnapshot: manifestMetadataSnapshot }
@@ -501,7 +502,6 @@ async function agentCommandInternalOwned(
         preserveUserFacingSessionModelState,
         currentRunDeliveryContext,
         sessionOwnership: { runOwnedSessionId, sessionReboundDuringRun },
-        trackInternalModelRunTarget,
         onSessionOwnershipChanged: (ownership, committedCompactionSessionId) => {
           runOwnedSessionId = ownership.runOwnedSessionId;
           sessionReboundDuringRun = ownership.sessionReboundDuringRun;

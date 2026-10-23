@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
 import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { createDocumentVisibility, createMediaQuery } from "../lib/reactive/platform.ts";
@@ -128,9 +128,9 @@ defineSolidBridge<Props>(
       syncPlayback();
       return () => {
         themeObserver.disconnect();
+        stopAnimation();
       };
     });
-    onCleanup(stopAnimation);
     return (
       <>
         {branding.read().brandIcon === "claw" ? (

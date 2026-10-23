@@ -16,6 +16,7 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
+  isSidebarNewTabActive,
   openSlot,
   sidebarActivePanel,
   sidebarMainPanel,
@@ -354,7 +355,7 @@ export class ChatPaneActiveResources {
     }
     const next = openSlot(layout, slot);
     // Add to the same dock without stealing an already-visible selection or expanding chat.
-    if (layout.open && sidebarActivePanel(layout)) {
+    if (layout.open && (sidebarActivePanel(layout) || isSidebarNewTabActive(layout))) {
       next.columns[0]!.activePanelId = layout.columns[0]!.activePanelId;
     }
     if (

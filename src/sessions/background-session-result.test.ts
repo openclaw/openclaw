@@ -67,17 +67,7 @@ async function createTarget() {
       config,
       ...overrides,
     });
-  return {
-    config,
-    generation,
-    scope,
-    commit,
-    replace,
-    admit,
-    sessionId,
-    sessionKey,
-    storePath,
-  };
+  return { config, generation, scope, commit, replace, admit, ...scope };
 }
 
 it("waits for active source work, commits provenance, and deduplicates retry", async () => {

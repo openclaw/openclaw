@@ -37,35 +37,18 @@ function withAgents(
 
 it("resolves explicit aliases in the selected agent scope", () => {
   const cfg = withAgents(
-    {
-      model: "openai/global-model",
-      models: {
-        "openai/global-model": { alias: "fast" },
-      },
-    },
-    {
-      worker: {
-        models: {
-          "anthropic/worker-model": { alias: "fast" },
-        },
-      },
-    },
+    { model: "openai/global-model", models: { "openai/global-model": { alias: "fast" } } },
+    { worker: { models: { "anthropic/worker-model": { alias: "fast" } } } },
   );
 
-  expect(
-    resolveSelection({
-      cfg,
-      agentId: "worker",
-      modelRef: "fast",
-    }),
-  ).toMatchObject({ provider: "anthropic", modelId: "worker-model" });
-  expect(
-    resolveSelection({
-      cfg,
-      agentId: "main",
-      modelRef: "fast",
-    }),
-  ).toMatchObject({ provider: "openai", modelId: "global-model" });
+  expect(resolveSelection({ cfg, agentId: "worker", modelRef: "fast" })).toMatchObject({
+    provider: "anthropic",
+    modelId: "worker-model",
+  });
+  expect(resolveSelection({ cfg, agentId: "main", modelRef: "fast" })).toMatchObject({
+    provider: "openai",
+    modelId: "global-model",
+  });
 });
 
 it.each([
@@ -100,10 +83,7 @@ it.each([true, "required"] as const)(
   "uses the default utility model for utility mode %s",
   (useUtilityModel) => {
     const cfg = withAgents(utilityDefaults);
-    const utilitySelection = select(cfg, {
-      agentId: "main",
-      useUtilityModel,
-    });
+    const utilitySelection = select(cfg, { agentId: "main", useUtilityModel });
     const normalSelection = select(cfg);
 
     expect(utilitySelection).toMatchObject({ provider: "openai", modelId: "gpt-5.4-mini" });
@@ -111,38 +91,25 @@ it.each([true, "required"] as const)(
   },
 );
 
-it("prefers the per-agent utility model and keeps explicit operation overrides highest", () => {
+it.each([
+  [undefined, "google", "gemini-3.1-flash-lite"],
+  ["openrouter/mistralai/mistral-small", "openrouter", "mistralai/mistral-small"],
+])("prefers per-agent utility routing with override %s", (modelRef, provider, modelId) => {
   const cfg = withAgents(utilityDefaults, {
     ops: { utilityModel: "google/gemini-3.1-flash-lite-preview" },
   });
-
-  const agentSelection = select(cfg, {
-    agentId: "ops",
-    useUtilityModel: true,
-  });
-  const explicitSelection = select(cfg, {
-    agentId: "ops",
-    modelRef: "openrouter/mistralai/mistral-small",
-    useUtilityModel: true,
-  });
-
-  expect(agentSelection).toMatchObject({
-    provider: "google",
-    modelId: "gemini-3.1-flash-lite",
-  });
-  expect(explicitSelection).toMatchObject({
-    provider: "openrouter",
-    modelId: "mistralai/mistral-small",
+  expect(select(cfg, { agentId: "ops", modelRef, useUtilityModel: true })).toMatchObject({
+    provider,
+    modelId,
   });
 });
 
 it("treats an empty utility model as disabled and uses the primary", () => {
   const cfg = withAgents({ ...utilityDefaults, utilityModel: "" });
-  const selection = select(cfg, {
-    agentId: "main",
-    useUtilityModel: true,
+  expect(select(cfg, { agentId: "main", useUtilityModel: true })).toMatchObject({
+    provider: "anthropic",
+    modelId: "claude-opus-4-6",
   });
-  expect(selection).toMatchObject({ provider: "anthropic", modelId: "claude-opus-4-6" });
 });
 
 it.each([
@@ -155,19 +122,11 @@ it.each([
   async ({ utilityModel, modelRef }) => {
     const cfg = withAgents({ model: "fixture/primary", utilityModel }, { main: {} });
     const params = { cfg, agentId: "main", modelRef, useUtilityModel: "required" as const };
-    expect(
-      resolveSelection({
-        ...params,
-        manifestPlugins: [],
-      }),
-    ).toBeNull();
+    expect(resolveSelection({ ...params, manifestPlugins: [] })).toBeNull();
 
     const modelResolver = vi.fn<SimpleCompletionModelResolver>();
     await expect(
-      acquireSimpleCompletionModelForAgent({
-        ...params,
-        modelResolver,
-      }),
+      acquireSimpleCompletionModelForAgent({ ...params, modelResolver }),
     ).resolves.toEqual({ error: "No model configured for agent main." });
     expect(modelResolver).not.toHaveBeenCalled();
   },
@@ -188,9 +147,7 @@ it("allows an explicit utility operation model when required utility routing is 
 it("resolves alias refs before parsing provider/model", () => {
   const cfg = withAgents({
     model: "fast@work",
-    models: {
-      "openrouter/anthropic/claude-sonnet-4-6": { alias: "fast" },
-    },
+    models: { "openrouter/anthropic/claude-sonnet-4-6": { alias: "fast" } },
   });
 
   expect(select(cfg)).toMatchObject({

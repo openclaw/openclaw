@@ -49,7 +49,6 @@ type DiscordReactionRoutingParams = {
   guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
 };
 
-type DiscordReactionMode = "off" | "own" | "all" | "allowlist";
 type DiscordFetchedReactionMessage = { author?: User | null } | null;
 
 export class DiscordReactionListener {
@@ -96,151 +95,14 @@ async function runDiscordReactionHandler(params: {
         isPolicyCurrent: policy.isCurrent,
       }
     : params.handlerParams;
-  await handleDiscordReactionEvent({
+  const eventParams = {
     ...handlerParams,
     data: params.data,
     client: params.client,
     action: params.action,
-  });
-}
-
-type DiscordReactionIngressAuthorizationParams = Omit<
-  DiscordReactionRoutingParams,
-  "botUserId" | "guildEntries"
-> & {
-  cfg: OpenClawConfig;
-  user: User;
-  memberRoleIds: string[];
-  isDirectMessage: boolean;
-  isGroupDm: boolean;
-  isGuildMessage: boolean;
-  channelId: string;
-  channelName?: string;
-  channelSlug: string;
-  guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null;
-  channelConfig?: import("./allow-list.js").DiscordChannelConfigResolved | null;
-};
-
-async function authorizeDiscordReactionIngress(
-  params: DiscordReactionIngressAuthorizationParams,
-): Promise<{ allowed: true } | { allowed: false; reason: string }> {
-  if (params.isPolicyCurrent?.() === false) {
-    return { allowed: false, reason: "policy-changed" };
-  }
-  if (params.isDirectMessage && !params.dmEnabled) {
-    return { allowed: false, reason: "dm-disabled" };
-  }
-  if (params.isGroupDm && !params.groupDmEnabled) {
-    return { allowed: false, reason: "group-dm-disabled" };
-  }
-  if (params.isDirectMessage) {
-    const access = await resolveDiscordDmCommandAccess({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      dmPolicy: params.dmPolicy,
-      configuredAllowFrom: params.allowFrom,
-      sender: {
-        id: params.user.id,
-        name: params.user.username,
-        tag: formatDiscordUserTag(params.user),
-      },
-      allowNameMatching: params.allowNameMatching,
-      eventKind: "reaction",
-    });
-    if (params.isPolicyCurrent?.() === false) {
-      return { allowed: false, reason: "policy-changed" };
-    }
-    if (access.senderAccess.decision !== "allow") {
-      return { allowed: false, reason: access.senderAccess.reasonCode };
-    }
-  }
-  if (
-    params.isGroupDm &&
-    !resolveGroupDmAllow({
-      channels: params.groupDmChannels,
-      channelId: params.channelId,
-      channelName: params.channelName,
-      channelSlug: params.channelSlug,
-    })
-  ) {
-    return { allowed: false, reason: "group-dm-not-allowlisted" };
-  }
-  if (!params.isGuildMessage) {
-    return { allowed: true };
-  }
-  const channelAllowlistConfigured = hasConfiguredDiscordChannels(params.guildInfo?.channels);
-  const channelAllowed = params.channelConfig?.allowed !== false;
-  if (
-    !isDiscordGroupAllowedByPolicy({
-      groupPolicy: params.groupPolicy,
-      guildAllowlisted: Boolean(params.guildInfo),
-      channelAllowlistConfigured,
-      channelAllowed,
-    })
-  ) {
-    return { allowed: false, reason: "guild-policy" };
-  }
-  if (params.channelConfig?.allowed === false) {
-    return { allowed: false, reason: "guild-channel-denied" };
-  }
-  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
-    channelConfig: params.channelConfig,
-    guildInfo: params.guildInfo,
-    memberRoleIds: params.memberRoleIds,
-    sender: {
-      id: params.user.id,
-      name: params.user.username,
-      tag: formatDiscordUserTag(params.user),
-    },
-    allowNameMatching: params.allowNameMatching,
-  });
-  if (hasAccessRestrictions && !memberAllowed) {
-    return { allowed: false, reason: "guild-member-denied" };
-  }
-  return { allowed: true };
-}
-
-function shouldSkipGuildReactionBeforeChannelFetch(params: {
-  reactionMode: DiscordReactionMode;
-  guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null;
-  groupPolicy: DiscordReactionRoutingParams["groupPolicy"];
-  memberRoleIds: string[];
-  user: User;
-  botUserId?: string;
-  allowNameMatching: boolean;
-}) {
-  if (params.reactionMode === "off" || params.groupPolicy === "disabled") {
-    return true;
-  }
-  if (params.reactionMode !== "allowlist") {
-    return false;
-  }
-  if (hasConfiguredDiscordChannels(params.guildInfo?.channels)) {
-    return false;
-  }
-  return !shouldEmitDiscordReactionNotification({
-    mode: params.reactionMode,
-    botId: params.botUserId,
-    userId: params.user.id,
-    userName: params.user.username,
-    userTag: formatDiscordUserTag(params.user),
-    guildInfo: params.guildInfo,
-    memberRoleIds: params.memberRoleIds,
-    allowNameMatching: params.allowNameMatching,
-  });
-}
-
-async function handleDiscordReactionEvent(
-  params: {
-    data: DiscordReactionEvent;
-    client: Client;
-    action: "added" | "removed";
-    cfg: OpenClawConfig;
-    logger: DiscordListenerLogger;
-  } & DiscordReactionRoutingParams,
-) {
+  };
   try {
-    const { data, client, action, botUserId, guildEntries } = params;
+    const { data, client, action, botUserId, guildEntries } = eventParams;
     if (!("user" in data)) {
       return;
     }
@@ -265,18 +127,28 @@ async function handleDiscordReactionEvent(
     }
     const memberRoleIds = Array.isArray(data.rawMember?.roles) ? data.rawMember.roles.slice() : [];
     const reactionMode = guildInfo?.reactionNotifications ?? "own";
-    if (
-      isGuildMessage &&
-      shouldSkipGuildReactionBeforeChannelFetch({
-        reactionMode,
+    const shouldSkipGuildReactionBeforeChannelFetch = () => {
+      if (reactionMode === "off" || eventParams.groupPolicy === "disabled") {
+        return true;
+      }
+      if (reactionMode !== "allowlist") {
+        return false;
+      }
+      if (hasConfiguredDiscordChannels(guildInfo?.channels)) {
+        return false;
+      }
+      return !shouldEmitDiscordReactionNotification({
+        mode: reactionMode,
+        botId: botUserId,
+        userId: user.id,
+        userName: user.username,
+        userTag: formatDiscordUserTag(user),
         guildInfo,
-        groupPolicy: params.groupPolicy,
         memberRoleIds,
-        user,
-        botUserId,
-        allowNameMatching: params.allowNameMatching,
-      })
-    ) {
+        allowNameMatching: eventParams.allowNameMatching,
+      });
+    };
+    if (isGuildMessage && shouldSkipGuildReactionBeforeChannelFetch()) {
       return;
     }
 
@@ -295,20 +167,86 @@ async function handleDiscordReactionEvent(
     const isDirectMessage = channelType === ChannelType.DM;
     const isGroupDm = channelType === ChannelType.GroupDM;
     const isThreadChannel = channelContext.isThreadChannel;
-    const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
-      ...params,
-      user,
-      memberRoleIds,
-      isDirectMessage,
-      isGroupDm,
-      isGuildMessage,
-      channelId: data.channel_id,
-      channelName,
-      channelSlug,
-      guildInfo,
+    const authorizeDiscordReactionIngress = async (
+      resolvedConfig?: import("./allow-list.js").DiscordChannelConfigResolved | null,
+    ): Promise<{ allowed: true } | { allowed: false; reason: string }> => {
+      if (eventParams.isPolicyCurrent?.() === false) {
+        return { allowed: false, reason: "policy-changed" };
+      }
+      if (isDirectMessage && !eventParams.dmEnabled) {
+        return { allowed: false, reason: "dm-disabled" };
+      }
+      if (isGroupDm && !eventParams.groupDmEnabled) {
+        return { allowed: false, reason: "group-dm-disabled" };
+      }
+      if (isDirectMessage) {
+        const access = await resolveDiscordDmCommandAccess({
+          cfg: eventParams.cfg,
+          accountId: eventParams.accountId,
+          dmPolicy: eventParams.dmPolicy,
+          configuredAllowFrom: eventParams.allowFrom,
+          sender: {
+            id: user.id,
+            name: user.username,
+            tag: formatDiscordUserTag(user),
+          },
+          allowNameMatching: eventParams.allowNameMatching,
+          eventKind: "reaction",
+        });
+        if (eventParams.isPolicyCurrent?.() === false) {
+          return { allowed: false, reason: "policy-changed" };
+        }
+        if (access.senderAccess.decision !== "allow") {
+          return { allowed: false, reason: access.senderAccess.reasonCode };
+        }
+      }
+      if (
+        isGroupDm &&
+        !resolveGroupDmAllow({
+          channels: eventParams.groupDmChannels,
+          channelId: data.channel_id,
+          channelName,
+          channelSlug,
+        })
+      ) {
+        return { allowed: false, reason: "group-dm-not-allowlisted" };
+      }
+      if (!isGuildMessage) {
+        return { allowed: true };
+      }
+      const channelAllowlistConfigured = hasConfiguredDiscordChannels(guildInfo?.channels);
+      const channelAllowed = resolvedConfig?.allowed !== false;
+      if (
+        !isDiscordGroupAllowedByPolicy({
+          groupPolicy: eventParams.groupPolicy,
+          guildAllowlisted: Boolean(guildInfo),
+          channelAllowlistConfigured,
+          channelAllowed,
+        })
+      ) {
+        return { allowed: false, reason: "guild-policy" };
+      }
+      if (resolvedConfig?.allowed === false) {
+        return { allowed: false, reason: "guild-channel-denied" };
+      }
+      const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
+        channelConfig: resolvedConfig,
+        guildInfo,
+        memberRoleIds,
+        sender: {
+          id: user.id,
+          name: user.username,
+          tag: formatDiscordUserTag(user),
+        },
+        allowNameMatching: eventParams.allowNameMatching,
+      });
+      if (hasAccessRestrictions && !memberAllowed) {
+        return { allowed: false, reason: "guild-member-denied" };
+      }
+      return { allowed: true };
     };
     if (!isGuildMessage) {
-      const ingressAccess = await authorizeDiscordReactionIngress(reactionIngressBase);
+      const ingressAccess = await authorizeDiscordReactionIngress();
       if (!ingressAccess.allowed) {
         logVerbose(`discord reaction blocked sender=${user.id} (reason=${ingressAccess.reason})`);
         return;
@@ -336,10 +274,7 @@ async function handleDiscordReactionEvent(
       scope: isThreadChannel ? "thread" : "channel",
     });
     if (isGuildMessage || isThreadChannel) {
-      const access = await authorizeDiscordReactionIngress({
-        ...reactionIngressBase,
-        channelConfig,
-      });
+      const access = await authorizeDiscordReactionIngress(channelConfig);
       if (!access.allowed) {
         return;
       }
@@ -358,7 +293,7 @@ async function handleDiscordReactionEvent(
         channelConfig,
         guildInfo,
         memberRoleIds,
-        allowNameMatching: params.allowNameMatching,
+        allowNameMatching: eventParams.allowNameMatching,
       })
     ) {
       return;
@@ -382,9 +317,9 @@ async function handleDiscordReactionEvent(
     const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
     const contextKey = `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}${data.burst ? ":burst" : ""}`;
     const route = resolveAgentRoute({
-      cfg: params.cfg,
+      cfg: eventParams.cfg,
       channel: "discord",
-      accountId: params.accountId,
+      accountId: eventParams.accountId,
       guildId: data.guild_id ?? undefined,
       memberRoleIds,
       peer: {
@@ -395,6 +330,6 @@ async function handleDiscordReactionEvent(
     });
     enqueueRoutedSystemEvent(text, route, { contextKey });
   } catch (err) {
-    params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
+    eventParams.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
   }
 }

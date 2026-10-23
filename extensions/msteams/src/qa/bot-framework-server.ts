@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { buffer } from "node:stream/consumers";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeJsonWithoutCharset as sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 
@@ -21,11 +22,7 @@ type ServerOptions = {
 const AMBIGUOUS_GATEWAY_TIMEOUT_MARKER = "QA-MSTEAMS-AMBIGUOUS-504";
 
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  const body = Buffer.concat(chunks).toString("utf8");
+  const body = (await buffer(request)).toString("utf8");
   return body ? (JSON.parse(body) as Record<string, unknown>) : {};
 }
 

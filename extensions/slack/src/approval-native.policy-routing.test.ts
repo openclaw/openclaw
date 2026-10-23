@@ -1,8 +1,8 @@
 import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { slackApprovalCapability as capability } from "./approval-native.js";
-import { registerSlackInstallationState } from "./installation-identity-state.js";
+import { buildPluginRequest, useSlackInstallations } from "./approval-native.test-support.js";
 
 type SlackConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>;
 type SlackPolicy = NonNullable<NonNullable<OpenClawConfig["approvals"]>["plugin"]>["slack"];
@@ -15,18 +15,10 @@ const reviewerDelivery = {
   supportsApproverDmSurface: true,
   notifyOriginWhenDmOnly: true,
 };
-const installations: Array<ReturnType<typeof registerSlackInstallationState>> = [];
-
-afterEach(() => {
-  for (const installation of installations.splice(0)) {
-    installation.release();
-  }
-});
+const register = useSlackInstallations();
 
 function install(accountId = "default", teamId = "T11111111") {
-  const installation = registerSlackInstallationState(accountId, "workspace", teamId);
-  installations.push(installation);
-  return installation;
+  return register(accountId, "workspace", teamId);
 }
 
 function config(policy: SlackPolicy, slack: Partial<SlackConfig> = {}): OpenClawConfig {
@@ -37,19 +29,12 @@ function config(policy: SlackPolicy, slack: Partial<SlackConfig> = {}): OpenClaw
 }
 
 function pending(overrides: Partial<PluginApprovalRequest["request"]> = {}): PluginApprovalRequest {
-  return {
-    id: "plugin:req-1",
-    request: {
-      title: "Plugin approval",
-      description: "Allow access",
-      turnSourceChannel: "slack",
-      turnSourceTo: "team:T11111111:channel:C11111111",
-      policySubject: { pluginKey: "diffs", tool: "view" },
-      ...overrides,
-    },
-    createdAtMs: 0,
-    expiresAtMs: 1000,
-  };
+  return buildPluginRequest({
+    turnSourceChannel: "slack",
+    turnSourceTo: "team:T11111111:channel:C11111111",
+    policySubject: { pluginKey: "diffs", tool: "view" },
+    ...overrides,
+  });
 }
 
 function route(cfg: OpenClawConfig, request = pending(), accountId = "default") {
@@ -214,8 +199,7 @@ describe("Slack plugin reviewer account custody", () => {
     });
     const unavailable = { route: false, delivery: false, targets: [], authorized: false };
     expect(await state()).toEqual(unavailable);
-    const degraded = registerSlackInstallationState("default", "degraded");
-    installations.push(degraded);
+    const degraded = register("default", "degraded");
     expect(await state()).toEqual(unavailable);
     degraded.release();
     const installation = install();
