@@ -117,6 +117,7 @@ export function canReuseMarkdownOwnership(
   if (
     /[`~\t|]| {4}/u.test(boundaryContext) ||
     (/-{3,}/u.test(boundaryContext) && !/-{3,}/u.test(previousBoundary)) ||
+    completesBlankLine(previousText, appended) ||
     completesTableAlignment ||
     completesShortTableAlignment ||
     invalidatesGfmTableDelimiter(previousText, appended)
@@ -178,6 +179,18 @@ export function canReuseMarkdownOwnership(
     return true;
   });
   return !unresolvedCandidate;
+}
+
+function completesBlankLine(previousText: string, appended: string): boolean {
+  if (!/[\r\n]/u.test(appended)) {
+    return false;
+  }
+  const lastLineStart =
+    Math.max(previousText.lastIndexOf("\n"), previousText.lastIndexOf("\r")) + 1;
+  if (/^[ \t]*$/u.test(previousText.slice(lastLineStart))) {
+    return true;
+  }
+  return /(?:\r\n|\r|\n)[ \t]*(?:\r\n|\r|\n)/u.test(appended);
 }
 
 function invalidatesGfmTableDelimiter(previousText: string, appended: string) {

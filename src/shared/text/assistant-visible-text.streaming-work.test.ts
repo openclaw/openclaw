@@ -8,6 +8,26 @@ import { canReuseMarkdownOwnership, findCodeOwnership } from "./code-regions.js"
 import { createTextProjection } from "./text-projection.js";
 
 const markdownOwnershipWork = vi.hoisted(() => ({ scannedCharacters: 0 }));
+const plainToolCallWork = vi.hoisted(() => ({ projectedCharacters: 0 }));
+
+function projectedCharacters() {
+  return plainToolCallWork.projectedCharacters;
+}
+
+vi.mock("../../../packages/tool-call-repair/src/index.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../packages/tool-call-repair/src/index.js")>();
+  return {
+    ...actual,
+    projectPlainTextToolCallBlocks(
+      text: Parameters<typeof actual.projectPlainTextToolCallBlocks>[0],
+      options?: Parameters<typeof actual.projectPlainTextToolCallBlocks>[1],
+    ) {
+      plainToolCallWork.projectedCharacters += text.length;
+      return actual.projectPlainTextToolCallBlocks(text, options);
+    },
+  };
+});
 
 vi.mock("./code-regions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./code-regions.js")>();
@@ -147,6 +167,21 @@ it("bounds Markdown ownership work for open tool calls and cited answers", () =>
   }
   expect(completedCallStream.text).toBe("");
 });
+
+it("settles a completed plain tool call before streaming the following paragraph", () => {
+  const paragraph = "Answer paragraph with ordinary prose and no tool markers.\n\n";
+  const source = "[tool:read] {}\n\n" + paragraph.repeat(512) + "Done.";
+  const expected = sanitizeAssistantVisibleStreamText(source, "final_answer");
+  const stream = createAssistantVisibleStreamText("final_answer");
+  plainToolCallWork.projectedCharacters = 0;
+
+  for (let offset = 0; offset < source.length; offset += 4) {
+    stream.append(source.slice(offset, offset + 4));
+  }
+
+  expect(stream.text).toBe(expected);
+  expect(projectedCharacters()).toBeLessThan(source.length * 16);
+}, 20_000);
 
 it("refreshes ownership when streamed link and container syntax changes Markdown ownership", () => {
   const scenarios: Array<[string, string]> = [
@@ -327,6 +362,15 @@ it("checks repeated blockquote prefixes without exponential backtracking", () =>
   const ownership = findCodeOwnership(previousText);
 
   expect(canReuseMarkdownOwnership(previousText, `${previousText}!`, ownership)).toBe(true);
+});
+
+it("invalidates cached ownership when a blank line settles the retained block", () => {
+  const previousText = "[tool:read] {}\n";
+  const nextText = `${previousText}\nParagraph one.`;
+  const ownership = findCodeOwnership(previousText);
+
+  expect(ownership.retainStart).toBe(0);
+  expect(canReuseMarkdownOwnership(previousText, nextText, ownership)).toBe(false);
 });
 
 it("keeps an unfinished reference title pending after a trailing escape", () => {
