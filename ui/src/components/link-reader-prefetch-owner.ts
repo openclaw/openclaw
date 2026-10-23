@@ -175,7 +175,20 @@ export class LinkReaderPrefetchOwner {
         this.schedulePrefetch();
       });
       this.observer = observer;
-      this.mutations = new MutationObserver(() => this.scheduleScan());
+      this.mutations = new MutationObserver((records) => {
+        // Text-only streaming edits cannot change link membership or hrefs.
+        if (
+          records.some(
+            (record) =>
+              record.type === "attributes" ||
+              [...record.addedNodes, ...record.removedNodes].some(
+                (node) => node.nodeType === Node.ELEMENT_NODE,
+              ),
+          )
+        ) {
+          this.scheduleScan();
+        }
+      });
       this.mutations.observe(root, {
         childList: true,
         subtree: true,

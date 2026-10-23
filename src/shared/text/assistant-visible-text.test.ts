@@ -10,6 +10,7 @@ import {
   stripToolCallXmlTags,
   type AssistantVisibleTextSanitizerProfile,
 } from "./assistant-visible-text.js";
+import * as codeRegions from "./code-regions.js";
 import { createTextProjection, type TextFilter } from "./text-projection.js";
 
 function expectXml(input: string, expected = input) {
@@ -256,6 +257,21 @@ describe("sanitizeAssistantVisibleText", () => {
 describe("assistantTraceTextFilter streamed projection", () => {
   const prose = "An ordinary explanation continues with a function call and a tool call.\n";
   const code = 'const value = { label: "example", nested: { count: 42 } };\n';
+  it("skips line projection when batch text has no trace head", () => {
+    const source = (prose + "```ts\n" + code + "```\n").repeat(64);
+    const project = vi.spyOn(codeRegions, "stripLinesOutsideCode");
+    try {
+      expect(assistantTraceTextFilter.transform(source)).toBe(source);
+      expect(project).not.toHaveBeenCalled();
+      expect(assistantTraceTextFilter.transform(source + "\nTOOL_CALL\t= hidden\nDone.")).toBe(
+        source + "\nDone.",
+      );
+      expect(project).toHaveBeenCalled();
+    } finally {
+      project.mockRestore();
+    }
+  });
+
   it.each([
     ["a real trace head", "", prose, "", true],
     ["a citation paragraph", "See [1] and use `foo`.\n\n", prose, "", true],
