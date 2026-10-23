@@ -18,6 +18,7 @@ import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   prepareUpdateServiceResult,
   UpdateCommandPendingRecoveryFailure,
+  UpdateCommandFailure,
 } from "./update-command-result.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
@@ -181,7 +182,11 @@ export async function completePostUpdateMaintenance(
   }
   defaultRuntime.error(retirement.error);
   if (context.activationVerified) {
-    throw new Error(retirement.error);
+    throw new UpdateCommandFailure(
+      { ...result, status: "error", reason: "wrapper-retirement-failed" },
+      1,
+      retirement.error,
+    );
   }
   await markControlPlaneUpdateRestartSentinelFailureBestEffort({
     ...context.sentinel,

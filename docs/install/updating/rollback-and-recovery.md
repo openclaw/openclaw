@@ -264,8 +264,9 @@ rejected version into a successful update.
 
 Recovery reports distinguish restored package files from a healthy Gateway.
 Once the updater verifies that the target Gateway is serving, later optional
-maintenance failures, such as removing an old CLI wrapper, remain warnings and
-do not trigger rollback or turn the update into a failure. Data-at-risk failures
+recognized maintenance failures, such as a late restart-health report or removing
+an old CLI wrapper, remain warnings and do not trigger rollback or turn the update
+into a failure. Authority refusals, data-at-risk failures, and unclassified errors
 still block successful completion. This does not rewrite an earlier failed
 attempt when a later status check finds the Gateway healthy.
 

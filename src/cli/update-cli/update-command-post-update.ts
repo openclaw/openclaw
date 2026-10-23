@@ -35,6 +35,7 @@ import {
   withUpdateStateRead,
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
+import { GatewayRestartHealthError } from "./update-command-service-command.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
@@ -567,8 +568,8 @@ async function finishSettledUpdate(
         if (restarted !== "failed" && restarted !== "restart-health-failed") {
           return restarted === "ok";
         }
-        if (activationVerified) {
-          throw new Error(`Gateway restart finalization reported ${verificationFailure}.`);
+        if (activationVerified && restarted === "restart-health-failed") {
+          throw new GatewayRestartHealthError(`Restart finalization: ${verificationFailure}.`);
         }
         const failure: UpdateRunResult = {
           ...resultWithPostUpdate,
@@ -700,7 +701,11 @@ async function finishSettledUpdate(
           cause: error,
         });
       }
-      if (error instanceof UpdateCommandFailure || hasCommandProcessCleanupError(error)) {
+      if (
+        (error instanceof UpdateCommandFailure &&
+          (!activationVerified || error.result.reason !== "wrapper-retirement-failed")) ||
+        hasCommandProcessCleanupError(error)
+      ) {
         // Unsettled commands may still change files. Keep intent/material for fenced reconciliation.
         throw error;
       }

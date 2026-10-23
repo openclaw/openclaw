@@ -19,6 +19,7 @@ import {
 } from "./update-command-mutable-signals.js";
 import { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
 import { isUpdateStateReadContention, UpdateCommandFailure } from "./update-command-result.js";
+import { GatewayRestartHealthError } from "./update-command-service-command.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import type { UpdateCommandTerminalRecord } from "./update-command-terminal-record.js";
 import {
@@ -239,10 +240,17 @@ export function createPostUpdateExceptionResult(
   const refusal = classifyDoctorMaintenanceRefusal(error);
   if (
     activationVerified &&
-    refusal.kind !== "data-at-risk" &&
+    collectNestedErrorCandidates(error).every(
+      (cause) =>
+        cause instanceof GatewayRestartHealthError ||
+        (cause instanceof UpdateCommandFailure &&
+          cause.result.reason === "wrapper-retirement-failed" &&
+          cause.result.recovery?.serviceRestartSafe !== false),
+    ) &&
+    error instanceof Error &&
     !(params.result.recovery?.serviceRestartSafe === false && params.result.recovery.dataAtRisk)
   ) {
-    // A verified target stays successful when later optional work fails.
+    // Only known maintenance failures qualify; health does not grant authority.
     const warning = `Gateway activation verified; post-update maintenance needs attention: ${message}`;
     return {
       message: warning,

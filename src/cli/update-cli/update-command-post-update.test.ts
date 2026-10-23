@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
-import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import {
   createUpdateRun,
@@ -28,6 +27,7 @@ import {
   mockVerifiedGatewayRun,
   programArguments,
   registerForegroundFinalizationTests,
+  registerVerifiedActivationFailureTests,
   registerManagedInstallEnvironmentTest,
   recordVerifiedGatewayRun,
   successfulPluginUpdate,
@@ -346,52 +346,7 @@ describe("successful update finalization ordering", () => {
     expectBefore(mocks.restartService, mocks.checkCompletionStatus);
   });
 
-  it.each(["exception", "reported-failure", "data-at-risk"] as const)(
-    "preserves verified activation after a later error unless data is at risk (%s)",
-    async (outcome) => {
-      const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-verified-target-") };
-      const run = createUpdateRun({ trigger: "cli" }, { env });
-      const rollback = vi.spyOn(rollbackModule, "rollbackFailedUpdate");
-      mocks.restartService.mockImplementationOnce(async ({ onVerified }) => {
-        onVerified?.(Date.now());
-        if (outcome === "data-at-risk") {
-          throw new DoctorMaintenanceRefusalError("Incomplete migration", {
-            kind: "data-at-risk",
-            reason: "incomplete-migration",
-          });
-        }
-        if (outcome === "reported-failure") {
-          return "restart-health-failed";
-        }
-        throw new Error("post-activation receipt unavailable");
-      });
-      const finishing = finishSuccessfulPackageSwitch({
-        run: { runId: run.runId, env },
-        restartEnvironment: process.env,
-      });
-      if (outcome === "data-at-risk") {
-        await expect(finishing).rejects.toMatchObject({
-          result: { status: "error", recovery: { dataAtRisk: "incomplete-migration" } },
-        });
-        expect(getUpdateRun(run.runId, { env })?.status).toBe("failed");
-      } else {
-        await expect(finishing).resolves.toBeUndefined();
-        expect(rollback).not.toHaveBeenCalled();
-        expect(getUpdateRun(run.runId, { env })?.status).toBe("succeeded");
-        const result = mocks.printResult.mock.lastCall?.[0];
-        expect(result.status).toBe("ok");
-        expect(
-          result.steps.find((step: { name: string }) => step.name === "post-update maintenance")
-            ?.advisory,
-        ).toMatchObject({
-          kind: "recoverable-maintenance",
-          message: expect.stringContaining(
-            outcome === "exception" ? "post-activation receipt unavailable" : "restart-unhealthy",
-          ),
-        });
-      }
-    },
-  );
+  registerVerifiedActivationFailureTests({ tempDirs, mocks });
 
   it("restarts when completion cache refresh reports failure", async () => {
     const root = tempDirs.make("openclaw-completion-failure-");
