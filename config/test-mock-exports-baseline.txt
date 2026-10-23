@@ -7107,7 +7107,6 @@
 ["test/scripts/test-projects-build-admission.test.ts","../../src/infra/control-ui-assets.ts","4542098d6b53be6cb36ec687d6a21cb20da2150286769f23d1de09b34bf1c8fd",1]
 ["test/scripts/tsgo-performance.test.ts","../../scripts/lib/managed-child-process.mts","d55ca4243ee5ed07528d667754c9ed2fe7b4dbe495f1aa53963dd9cc2ddddea2",1]
 ["test/scripts/update-clawtributors.test.ts","../../scripts/lib/plain-gh.mjs","995c931bf4fbce1754966076c7af74f0571b8c949e297105a2848623cab899ad",1]
-["test/scripts/vitest-e2e-sharding.test.ts","../../scripts/lib/ci-test-timings.mts","5b9526624816e927df1b2dd489d2d22073b76efcf2d48dc4e699a94275184ba8",1]
 ["test/scripts/vitest-prebuilt-ai.test.ts","../../scripts/lib/managed-child-process.mts","0b972a545a39aae9f01056c0242b4b4ec6ce834cd1a030f74ea7c646eee3ad20",1]
 ["test/scripts/watch-node.test-support.ts","../../scripts/lib/sleep.mjs","cec3a2ddc1a8fc0cc16616b384a4c5ee65eaa23aa28d7182c2e570cce1032fb2",1]
 ["test/scripts/watch-node.test-support.ts","../../scripts/watch-node-observation.mts","8298189a129e9445dc83002d8c0b5a12bcdd13225ff73282b6f76b0656aa3eac",1]
