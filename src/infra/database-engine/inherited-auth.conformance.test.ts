@@ -64,8 +64,8 @@ function currentMainSnapshot() {
 }
 
 async function closeDatabases() {
+  withEngineStoreAdmission(() => closeOpenClawAgentDatabasesForTest());
   await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
 }
 
