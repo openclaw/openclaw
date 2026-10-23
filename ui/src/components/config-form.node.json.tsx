@@ -40,6 +40,7 @@ export function JsonTextarea(props: { params: ConfigNodeRenderParams }): JSX.Ele
           sensitiveState={sensitiveState()}
           disabled={props.params.disabled}
           isRequired={props.params.isRequired}
+          showRequiredCue={false}
           onToggleSensitivePath={props.params.onToggleSensitivePath}
           onPatch={props.params.onPatch}
         />

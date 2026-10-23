@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +14,6 @@ import {
   type AgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
-import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -24,30 +22,18 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runSessionRegistryMaintenance } from "./session-registry-maintenance.js";
 import * as cronStore from "./store.js";
-import { makeCronReceiptJob } from "./store/run-receipt-store.test-support.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 let state: OpenClawTestState;
-
-function writeAgentDeletion(agentId: string, cleanupCompleted: boolean): void {
-  const deletion = beginAgentDeletionJournal({
-    agentId,
-    operationId: randomUUID(),
-    agentDir: state.agentDir(agentId),
-    workspaceDir: state.path(`workspace-${agentId}`),
-    sessionsDir: state.sessionsDir(agentId),
-    deleteFiles: false,
-  });
-  if (cleanupCompleted) {
-    runOpenClawStateWriteTransaction((database) =>
-      completeAgentDeletionJournalInDatabase(database, deletion.agentId, deletion.operationId),
-    );
-  }
+const maintain = (apply = true, cronStorePath = state.statePath("cron/jobs.json")) =>
+  runSessionRegistryMaintenance({ apply, cronStorePath });
+async function configure(config: OpenClawConfig) {
+  await state.writeConfig(config);
+  setRuntimeConfigSnapshot(config);
 }
 
 async function writeStaleCronSession(
@@ -91,30 +77,11 @@ describe("runSessionRegistryMaintenance", () => {
         new Error("cron store load unavailable"),
       );
 
-      const summary = await runSessionRegistryMaintenance({
-        apply: true,
-        cronStorePath: state.statePath("cron/jobs.json"),
-      });
+      const summary = await maintain();
 
       expect(summary.skippedReason).toContain("cron store unreadable");
       expect(summary.pruned).toBe(0);
       expect(loadSessionEntry(stale)).toBeDefined();
-    }),
-  );
-
-  it(
-    "preserves running jobs in the selected cron partition",
-    withMaintenanceState(async () => {
-      const scope = await writeStaleCronSession("main");
-      const cronStorePath = state.statePath("custom-cron/jobs.json");
-      const job = makeCronReceiptJob("done-job", "main");
-      job.state.runningAtMs = Date.now();
-      await cronStore.saveCronStore(cronStorePath, { version: 1, jobs: [job] });
-
-      const summary = await runSessionRegistryMaintenance({ apply: true, cronStorePath });
-
-      expect(summary).toMatchObject({ runningCronJobs: 1, pruned: 0 });
-      expect(loadSessionEntry(scope)).toBeDefined();
     }),
   );
 
@@ -123,15 +90,22 @@ describe("runSessionRegistryMaintenance", () => {
     "agent-database-inspection-failed",
     "agent-database-ownership-mismatch",
   ] as const)(
-    "maintains healthy stores and their retention deadlines while another agent has %s",
+    "defers registry pruning while another agent has %s",
     withMaintenanceState(async (code: AgentDatabaseAdmissionRefusal["code"]) => {
-      const config: OpenClawConfig = {
+      const now = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      await configure({
         agents: { ownership: "explicit", entries: { slow: {}, healthy: {} } },
-      };
-      await state.writeConfig(config);
-      setRuntimeConfigSnapshot(config);
+      });
       const slow = await writeStaleCronSession("slow");
       const healthy = await writeStaleCronSession("healthy");
+      const child = { storePath: slow.storePath, sessionKey: "agent:slow:dashboard:child" };
+      const childEntry = {
+        sessionId: "cross-agent-child",
+        updatedAt: now,
+        spawnedBy: healthy.sessionKey,
+      };
+      await replaceSessionEntry(child, childEntry);
       const inspection = createAgentDatabaseInspectionRefusal({
         agentId: "slow",
         paths: [resolveSqliteTargetFromSessionStorePath(slow.storePath).path],
@@ -143,14 +117,13 @@ describe("runSessionRegistryMaintenance", () => {
           ? { ...inspection, code, embeddedOwnerId: "other-owner" }
           : inspection;
       recordAgentDatabaseAdmissions([refusal]);
-      const params = { apply: true, cronStorePath: state.statePath("cron/jobs.json") };
-
-      const waiting = await runSessionRegistryMaintenance(params);
+      const waiting = await maintain();
 
       expect(waiting).toMatchObject({
-        pruned: 1,
+        pruned: 0,
         skippedStores: 1,
-        nextSweepAtMs: null,
+        nextSweepAtMs: now + 60_000,
+        skippedReason: "session child inventory incomplete",
         stores: expect.arrayContaining([
           {
             agentId: "slow",
@@ -158,15 +131,6 @@ describe("runSessionRegistryMaintenance", () => {
             skippedReason: code,
           },
         ]),
-      });
-      expect(loadSessionEntry(healthy)).toBeUndefined();
-      const updatedAt = Date.now();
-      await replaceSessionEntry(healthy, { sessionId: "healthy-recent-run", updatedAt });
-      const retained = await runSessionRegistryMaintenance(params);
-      expect(retained).toMatchObject({
-        pruned: 0,
-        skippedStores: 1,
-        nextSweepAtMs: updatedAt + 7 * DAY_MS + 1,
       });
       expect(loadSessionEntry(healthy)).toBeDefined();
       if (code !== "agent-database-inspection-pending") {
@@ -176,10 +140,15 @@ describe("runSessionRegistryMaintenance", () => {
         expect(loadSessionEntry(slow)).toBeDefined();
       });
 
-      const resumed = await runSessionRegistryMaintenance(params);
+      const resumed = await maintain();
 
       expect(resumed).toMatchObject({ pruned: 1, skippedStores: 0 });
       expect(loadSessionEntry(slow)).toBeUndefined();
+      expect(loadSessionEntry(healthy)).toBeDefined();
+      await replaceSessionEntry(child, { ...childEntry, archivedAt: now });
+
+      expect(await maintain()).toMatchObject({ pruned: 1, skippedStores: 0 });
+      expect(loadSessionEntry(healthy)).toBeUndefined();
     }),
   );
 
@@ -190,12 +159,10 @@ describe("runSessionRegistryMaintenance", () => {
         kind === "per-agent"
           ? undefined
           : state.statePath(kind === "fixed selector" ? "shared.json" : "shared.sqlite");
-      const config: OpenClawConfig = {
+      await configure({
         agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
         ...(store ? { session: { store } } : {}),
-      };
-      await state.writeConfig(config);
-      setRuntimeConfigSnapshot(config);
+      });
       const scopes = [];
       for (const agentId of ["main", "beta"]) {
         scopes.push({ agentId, ...(await writeStaleCronSession(agentId, store)) });
@@ -205,10 +172,7 @@ describe("runSessionRegistryMaintenance", () => {
         // Preview isolates discovery from the lifecycle writer's live commit guards.
         const observation = observeHostDataSql();
         try {
-          const preview = await runSessionRegistryMaintenance({
-            apply: false,
-            cronStorePath: state.statePath("cron/jobs.json"),
-          });
+          const preview = await maintain(false);
           expect(preview.pruned).toBe(2);
           expect(
             observation.queries.filter((sql) =>
@@ -219,11 +183,7 @@ describe("runSessionRegistryMaintenance", () => {
           observation.restore();
         }
       }
-      const summary = await runSessionRegistryMaintenance({
-        apply: true,
-        cronStorePath: state.statePath("cron/jobs.json"),
-      });
-
+      const summary = await maintain();
       expect(summary.pruned).toBe(2);
       expect(summary.skippedReason).toBeUndefined();
       for (const scope of scopes) {
@@ -232,41 +192,8 @@ describe("runSessionRegistryMaintenance", () => {
     }),
   );
 
-  it.each([
-    { apply: false, cleanupCompleted: false },
-    { apply: true, cleanupCompleted: false },
-    { apply: false, cleanupCompleted: true },
-    { apply: true, cleanupCompleted: true },
-  ])(
-    "skips agent deletions while maintaining healthy stores (apply=$apply, cleanupCompleted=$cleanupCompleted)",
-    withMaintenanceState(
-      async ({ apply, cleanupCompleted }: { apply: boolean; cleanupCompleted: boolean }) => {
-        const main = await writeStaleCronSession("main");
-        const retired = await writeStaleCronSession("retired");
-        writeAgentDeletion("retired", cleanupCompleted);
-        await closeOpenClawAgentDatabasesAsync(state.stateDir);
-
-        const summary = await runSessionRegistryMaintenance({
-          apply,
-          cronStorePath: state.statePath("cron/jobs.json"),
-        });
-
-        expect(summary).toMatchObject({ pruned: 1, skippedStores: 1 });
-        expect(summary.stores).toContainEqual(
-          expect.objectContaining({ agentId: "main", pruned: 1 }),
-        );
-        expect(summary.stores).toContainEqual({
-          agentId: "retired",
-          storePath: retired.storePath,
-          skippedReason: cleanupCompleted ? "agent-deletion-complete" : "agent-deletion-pending",
-        });
-        expect(loadSessionEntry(main) !== undefined).toBe(!apply);
-      },
-    ),
-  );
-
   it.each(["missing", "reconstructed"])(
-    "preserves stores held by %s deletion history while continuing eligible retention",
+    "defers registry pruning while stores are held by %s deletion history",
     withMaintenanceState(async (history: string) => {
       const main = await writeStaleCronSession("main");
       const retained = await writeStaleCronSession("retained");
@@ -280,14 +207,12 @@ describe("runSessionRegistryMaintenance", () => {
       });
       const bytes = await fs.readFile(databasePath);
 
-      const summary = await runSessionRegistryMaintenance({
-        apply: true,
-        cronStorePath: state.statePath("cron/jobs.json"),
-      });
+      const summary = await maintain();
 
       expect(summary).toMatchObject({
-        pruned: history === "missing" ? 0 : 1,
+        pruned: 0,
         skippedStores: history === "missing" ? 2 : 1,
+        skippedReason: "session child inventory incomplete",
       });
       expect(summary.stores).toContainEqual({
         agentId: "retained",
@@ -299,7 +224,7 @@ describe("runSessionRegistryMaintenance", () => {
       expect(held).toMatchObject({ warning: expect.stringContaining("openclaw doctor --fix") });
       expect(await fs.readFile(databasePath)).toEqual(bytes);
       expect(loadSessionEntry(retained)).toBeDefined();
-      expect(loadSessionEntry(main) !== undefined).toBe(history === "missing");
+      expect(loadSessionEntry(main)).toBeDefined();
     }),
   );
 
@@ -314,12 +239,7 @@ describe("runSessionRegistryMaintenance", () => {
       }
       await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
       await fs.writeFile(sqlitePath, "not a sqlite database");
-      await expect(
-        runSessionRegistryMaintenance({
-          apply: false,
-          cronStorePath: state.statePath("cron/jobs.json"),
-        }),
-      ).rejects.toThrow();
+      await expect(maintain(false)).rejects.toThrow();
     }),
   );
 });

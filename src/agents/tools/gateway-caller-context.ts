@@ -25,6 +25,7 @@ import {
 } from "../../plugins/runtime/gateway-context-binding.js";
 import type { ReplyTurnParticipants } from "../../sessions/session-controller.contracts.js";
 import type { SessionControllerWatchdogAttempt } from "../../sessions/session-controller.watchdog.js";
+import { runWithAsyncStore } from "../../shared/async-store.js";
 import {
   captureAdmittedRunActiveAssertion,
   getAdmittedRunDelegatedAuthority,
@@ -38,7 +39,11 @@ import {
   captureActiveEmbeddedRunPersonalToolParticipants,
   type EmbeddedRunToolAuthorityBinding,
 } from "../embedded-agent-runner/run-state.js";
-import { captureRequesterOrigin, type RequesterOrigin } from "../requester-origin.js";
+import {
+  captureRequesterOrigin,
+  requesterCreatorProfileId,
+  type RequesterOrigin,
+} from "../requester-origin.js";
 import { readToolStringParam, type AnyAgentTool } from "./common.js";
 import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
 
@@ -86,6 +91,8 @@ type GatewayToolCallerIdentity = {
   workerTurnClaim?: WorkerSessionTurnClaim;
   /** Prepared caller sandbox for the explicit current-workspace base refresh; never RPC data. */
   workspaceBaseRefreshSandbox?: import("../sandbox/types.js").SandboxContext;
+  /** Host handoff selects the exact settled conversation; never accepted from RPC input. */
+  workspacePrAdoptionSessionId?: string;
   /** Current tool's filesystem owner for inspected PR evidence; never serialized in RPC data. */
   workspaceEvidenceSandbox?: import("../sandbox/types.js").SandboxContext;
   /** Closure-bound Gateway capability; revalidates both owners at child admission. */
@@ -286,7 +293,8 @@ export async function withGatewayPersonalToolUser<T>(
     }
     return await run();
   }
-  return await gatewayToolCallerStorage.run(
+  return await runWithAsyncStore(
+    gatewayToolCallerStorage,
     {
       ...caller,
       personalToolUser: user,
@@ -311,9 +319,16 @@ export function resolveGatewayToolOperatorSelection(options?: {
     const operatorAuthority = selectedParticipant?.operatorAuthority ?? caller?.operatorAuthority;
     selection = Object.freeze({
       operatorAuthority,
-      requesterOrigin: selectedParticipant
-        ? selectedParticipant.requesterOrigin
-        : caller?.requesterOrigin,
+      requesterOrigin: selectedParticipant?.requesterOrigin
+        ? captureRequesterOrigin({
+            requesterOrigin: {
+              ...selectedParticipant.requesterOrigin,
+              delegatedCreatorProfileId: requesterCreatorProfileId(caller?.requesterOrigin) ?? null,
+            },
+          })
+        : selectedParticipant
+          ? undefined
+          : caller?.requesterOrigin,
       assertCurrent: composeSessionSourceAssertion([
         participant?.assertCurrent,
         operatorAuthority?.assertCurrent,
@@ -345,7 +360,8 @@ export function withGatewayToolOperatorContinuation<T>(
   }
   const { operatorAuthority, requesterOrigin } = selection;
   operatorAuthority?.assertCurrent();
-  return gatewayToolCallerStorage.run(
+  return runWithAsyncStore(
+    gatewayToolCallerStorage,
     {
       ...caller,
       personalToolParticipants: undefined,
@@ -365,7 +381,6 @@ export function resolveGatewayPersonalToolParticipant(
   runtimeIdentity?: AgentRuntimeIdentity,
   options?: {
     requireSingleParticipant?: boolean;
-    allowTurnOwner?: () => boolean;
     allowMissingRegistry?: boolean;
   },
 ) {
@@ -373,7 +388,6 @@ export function resolveGatewayPersonalToolParticipant(
   if (caller?.personalToolParticipants) {
     return caller.personalToolParticipants.resolve(
       options?.requireSingleParticipant ? undefined : caller.personalToolUser,
-      options,
     );
   }
   if (caller?.personalToolUser !== undefined) {
@@ -384,7 +398,7 @@ export function resolveGatewayPersonalToolParticipant(
     if (!registered) {
       return undefined;
     }
-    const participant = registered.participants?.resolve(undefined, options);
+    const participant = registered.participants?.resolve();
     return (
       participant && {
         ...participant,
@@ -465,7 +479,7 @@ export async function prepareGatewayToolCallerAssertion(): Promise<{
     if (!active) {
       throw new Error("agent tool caller admission is no longer active");
     }
-    receiptAdmissionStorage.run(predicates, () => assertion?.());
+    runWithAsyncStore(receiptAdmissionStorage, predicates, () => assertion?.());
   };
   assertCurrent();
   return {
@@ -559,7 +573,8 @@ export async function withGatewayToolCallerIdentity<T>(
   const approvalSignals = [
     ...new Set([...(inheritedOwner?.approvalSignals ?? []), ...(identity.approvalSignals ?? [])]),
   ];
-  return await gatewayToolCallerStorage.run(
+  return await runWithAsyncStore(
+    gatewayToolCallerStorage,
     {
       agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
       sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
@@ -583,6 +598,7 @@ export async function withGatewayToolCallerIdentity<T>(
             )
           : (identity.sessionEventToolsAllow ?? inheritedOwner?.sessionEventToolsAllow),
       workspaceBaseRefreshSandbox: inheritedValue("workspaceBaseRefreshSandbox"),
+      workspacePrAdoptionSessionId: inheritedValue("workspacePrAdoptionSessionId"),
       workspaceEvidenceSandbox: inheritedValue("workspaceEvidenceSandbox"),
       personalToolParticipants: inheritedValue("personalToolParticipants"),
       personalToolUser: inheritedValue("personalToolUser"),

@@ -48,15 +48,22 @@ function mountMenu() {
 it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as const)(
   "keeps the trigger and respects %s focus while menu content loads",
   async (mode) => {
+    const entered = createDeferred();
+    const imported = createDeferred();
     const ready = createDeferred();
     onTestFinished(() => ready.resolve());
     let loads = 0;
     vi.doMock("./chat-composer-plus-menu-content.tsx", async () => {
       loads++;
+      entered.resolve();
       await ready.promise;
-      return vi.importActual<typeof import("./chat-composer-plus-menu-content.tsx")>(
-        "./chat-composer-plus-menu-content.tsx",
-      );
+      try {
+        return await vi.importActual<typeof import("./chat-composer-plus-menu-content.tsx")>(
+          "./chat-composer-plus-menu-content.tsx",
+        );
+      } finally {
+        imported.resolve();
+      }
     });
     const view = mountMenu();
     view.trigger.focus();
@@ -71,6 +78,8 @@ it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as con
         }),
       );
     }
+    // Cold module work precedes Solid's DOM settlement window.
+    await entered.promise;
     await waitForSolid(() => {
       expect(view.panel.matches(":popover-open")).toBe(true);
       expect(loads).toBe(1);
@@ -104,6 +113,7 @@ it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as con
       }
     }
     ready.resolve();
+    await imported.promise;
     await waitForSolid(() =>
       expect(
         view.getByRole("menuitemcheckbox", { name: "Updated toggle", hidden: true }),
@@ -125,6 +135,16 @@ it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as con
             : view.getByRole("menuitem", { name: "Take photo", hidden: true }),
         ),
       );
+      if (mode === "keyboard") {
+        document.activeElement!.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true }),
+        );
+        await waitForSolid(() =>
+          expect(document.activeElement).toBe(
+            view.getByRole("menuitemcheckbox", { name: "Updated toggle", hidden: true }),
+          ),
+        );
+      }
       view.getByRole("menuitemcheckbox", { name: "Updated toggle", hidden: true }).click();
       expect(latestChange).toHaveBeenCalledExactlyOnceWith(false);
       expect(view.onChange).not.toHaveBeenCalled();

@@ -36,42 +36,73 @@ describe("AppSidebar agent menu scope", () => {
         ?.click();
       await sidebar.updateComplete;
       const menu = sidebar.querySelector(".sidebar-agent-menu");
-      expect(menu?.querySelector(".sidebar-agent-menu__filter")).toBeNull();
+      expect(menu?.querySelector("[role=searchbox]")).toBeNull();
       expect(menu?.querySelector('[data-value="scope:all"]')).toBeNull();
       expect(menu?.querySelectorAll('[data-value^="agent:"]')).toHaveLength(count);
       expect(
         [...(menu?.querySelectorAll(':scope > [role^="menuitem"]') ?? [])].map((element) =>
           element.getAttribute("data-value"),
         ),
-      ).toEqual([
-        "command:new-agent",
-        "command:agents-directory",
-        ...(count ? ["command:capabilities"] : []),
-        "command:agent-settings",
-      ]);
+      ).toEqual(["command:new-agent"]);
     },
   );
 
-  it.each(
-    (["chip", "roster"] as const).flatMap((mode) => [
+  it("keeps duplicate bot names without exposing internal IDs", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      createSessions("bot-one", ["agent:bot-one:main"]),
+      "panel",
       {
-        mode,
-        value: "agents-directory",
-        label: "See all agents",
-        route: "agents-home",
-        options: undefined,
+        defaultId: "bot-one",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [
+          { id: "bot-one", name: "New Bot" },
+          { id: "bot-two", name: "New Bot" },
+        ],
       },
-      {
-        mode,
-        value: "agent-settings",
-        label: "research settings",
-        route: "agents",
-        options: { pathname: "/settings/agents/research" },
-      },
-    ]),
-  )(
-    "opens $label without changing the agent, scope, or $mode mode",
-    async ({ mode, value, label, route, options }) => {
+    );
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
+    await sidebar.updateComplete;
+    const rows = [...sidebar.querySelectorAll('[data-value^="agent:"]')];
+    expect(rows.map((row) => row.textContent?.trim())).toEqual(["New Bot", "New Bot"]);
+    expect(rows.every((row) => !row.querySelector(".agent-select__option-description"))).toBe(true);
+  });
+
+  it.each(["chip", "roster"] as const)(
+    "opens sessions across agents from %s mode even after selecting a page scope",
+    async (mode) => {
+      const { sidebar, context } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        createSessions("main", ["agent:main:main"]),
+        "panel",
+        TWO_AGENTS,
+      );
+      const onNavigate = vi.fn();
+      sidebar.onNavigate = onNavigate;
+      patchSettings({ sidebarAgentsMode: mode });
+      context.agentSelection.setScope("research");
+      await sidebar.updateComplete;
+      sidebar
+        .querySelector<HTMLButtonElement>(
+          ".sidebar-agent-card__main, .sidebar-workspace-header__main",
+        )
+        ?.click();
+      await sidebar.updateComplete;
+      sidebar.querySelector<HTMLElement>('.sidebar-agent-menu [data-value="scope:all"]')?.click();
+      await sidebar.updateComplete;
+      expect(onNavigate).toHaveBeenCalledExactlyOnceWith("sessions");
+      expect(context.agentSelection.state).toEqual({ selectedId: "main", scopeId: null });
+      expect(sidebar.sidebarAgentsMode).toBe("roster");
+      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+    },
+  );
+
+  it.each(["chip", "roster"] as const)(
+    "opens each agent's settings without selecting it in %s mode",
+    async (mode) => {
       const { sidebar, context } = await mountSidebar(
         createGateway({} as GatewayBrowserClient),
         createSessions("main", ["agent:main:main"]),
@@ -82,7 +113,7 @@ describe("AppSidebar agent menu scope", () => {
       sidebar.connected = true;
       sidebar.onNavigate = onNavigate;
       sidebar.activeRouteId = "skills";
-      context.agentSelection.set("research");
+      context.agentSelection.set("main");
       context.agentSelection.setScope(null);
       sidebar.sidebarAgentsMode = mode;
       await sidebar.updateComplete;
@@ -92,17 +123,19 @@ describe("AppSidebar agent menu scope", () => {
         )
         ?.click();
       await sidebar.updateComplete;
-      const item = sidebar.querySelector<HTMLElement>(
-        '.sidebar-agent-menu [data-value="command:' + value + '"]',
+      const gear = sidebar.querySelector<HTMLButtonElement>(
+        '[data-value="agent:research"] .sidebar-agent-menu__settings',
       );
-      expect(item?.textContent?.trim()).toBe(label);
-      expect(item?.hasAttribute("aria-checked")).toBe(false);
-      item?.click();
+      expect(gear?.getAttribute("aria-label")).toBe("research settings");
+      expect(gear?.hasAttribute("title")).toBe(false);
+      gear?.click();
       await sidebar.updateComplete;
-      expect(onNavigate).toHaveBeenCalledExactlyOnceWith(route, options);
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-      expect(context.agentSelection.state).toEqual({ selectedId: "research", scopeId: null });
+      expect(onNavigate).toHaveBeenCalledExactlyOnceWith("agents", {
+        pathname: "/settings/agents/research",
+      });
+      expect(context.agentSelection.state).toEqual({ selectedId: "main", scopeId: null });
       expect(sidebar.sidebarAgentsMode).toBe(mode);
+      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
     },
   );
 
@@ -171,12 +204,7 @@ describe("AppSidebar agent menu scope", () => {
         [...menu.querySelectorAll('[data-value^="command:"]')].map((item) =>
           item.getAttribute("data-value"),
         ),
-      ).toEqual([
-        "command:new-agent",
-        "command:agents-directory",
-        "command:capabilities",
-        "command:agent-settings",
-      ]);
+      ).toEqual(["command:new-agent"]);
       menu
         .querySelector<HTMLElement>(
           mode === "chip" ? '[data-value="scope:all"]' : '[data-value="agent:research"]',

@@ -9,7 +9,7 @@ import { loadSettings } from "../app/settings.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { SessionBackground } from "./session-background.tsx";
+import { SessionBackground } from "./session-background-host.tsx";
 
 afterEach(() => {
   resetProfileAppearancePrefs();

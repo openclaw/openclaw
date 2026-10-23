@@ -108,6 +108,26 @@ it("reports baseline growth as an advisory in GitHub Actions even when listed", 
   expect(fs.readFileSync(path.join(root, "summary.md"), "utf8")).toContain("src/b.ts");
 });
 
+it("blocks a moved suppression and its stale entry in GitHub Actions", () => {
+  const root = makeRepo(["src/page.ts"]);
+  git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  fs.rmSync(path.join(root, "src/page.ts"));
+  write(root, "src/page-state.ts", "export const state = 1;\n" + suppression);
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.stubEnv("GITHUB_ACTIONS", "true");
+
+  expect(main(root)).toBe(1);
+  expect(error).toHaveBeenCalledWith(
+    expect.stringMatching(/New max-lines suppressions are forbidden.*\n {2}src\/page-state\.ts$/u),
+  );
+
+  write(root, "src/page-state.ts", "export const state = 1;\n");
+  expect(main(root)).toBe(1);
+  expect(error).toHaveBeenLastCalledWith(
+    "Remove stale max-lines baseline entries (or run with --prune):\n  src/page.ts",
+  );
+});
+
 it("transfers grandfathered debt across a verified rename", () => {
   const root = makeRepo(["src/a.ts"], {
     "src/a.ts": "export const a = 1;\n/* oxlint-disable max-lines -- TODO: split. */\n",

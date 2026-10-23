@@ -195,6 +195,9 @@ main model can read the screenshot directly.
   `cdpUrl`.
 - Remote and `attachOnly` CDP reachability, WebSocket handshakes, and local
   managed-Chrome startup use built-in deadlines.
+- If the managed Chromium child exits before CDP discovery completes, startup
+  reports that child's exit status and bounded stderr rather than waiting out
+  the remaining discovery deadline.
 - Repeated managed Chrome launch/readiness failures are circuit-broken per
   profile. After several consecutive failures, OpenClaw pauses new launch
   attempts briefly instead of spawning Chromium on every browser tool call. Fix

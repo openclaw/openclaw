@@ -1,5 +1,6 @@
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { applyProcessEnvKeys } from "../../infra/process-env.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import {
   createPluginCache,
@@ -33,13 +34,7 @@ import type {
 } from "./discovery-worker-contract.js";
 
 function applyEnvironment(environment: SkillsDiscoveryEnvironment) {
-  for (const [key, value] of Object.entries(environment)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
+  applyProcessEnvKeys(Object.keys(environment), environment);
   pinConfigDir();
 }
 

@@ -109,13 +109,7 @@ async function runPoolTask<Task extends WikiPagePoolTask>(
   if (result.select === "refused") {
     throw new FsSafeError(result.code, result.message);
   }
-  // A scan task reads at least one segment before it can yield, so each one makes progress.
-  const stalled =
-    "readPages" in result &&
-    task.select !== "list" &&
-    task.relativePaths.length > 0 &&
-    result.readPages <= 0;
-  if (result.select !== task.select || stalled) {
+  if (result.select !== task.select) {
     throw new Error("Invalid memory wiki page read worker result");
   }
   // SAFETY: The discriminant check above pairs the reply with the submitted task.
@@ -185,8 +179,7 @@ export async function readMemoryWikiPages<Task extends WikiPageScanTask>(
     offset += read.readPages;
   } while (offset < relativePaths.length);
   // Resolve over the whole listing, then read the matched page on the calling thread
-  // like any other single-page read. The page is read twice, so it must still match: a
-  // page whose id changed in between resolves to nothing, like one that disappeared.
+  // like any other single-page read, using the current contents at the selected path.
   const match = resolveQueryableWikiPageByLookup(keys, task.lookup);
   const { page } = match
     ? await readWikiPagesTask(
@@ -194,9 +187,8 @@ export async function readMemoryWikiPages<Task extends WikiPageScanTask>(
         signal,
       )
     : { page: null };
-  const current = page && resolveQueryableWikiPageByLookup([page], task.lookup);
   // SAFETY: The only other scan task is a lookup, so the reply is its variant.
-  return { select: "lookup", page: current ?? null } as Selection;
+  return { select: "lookup", page } as Selection;
 }
 
 /** Plugin stop releases the workers; a read after the close settles recreates the pool. */

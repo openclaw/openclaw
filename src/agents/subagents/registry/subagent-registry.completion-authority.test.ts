@@ -50,7 +50,11 @@ import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
-import { registerCompletedFollowupAuthorityTests } from "./subagent-registry.completed-followup-authority.test-support.js";
+import {
+  operatorFixture,
+  retainedOperatorFixture,
+  registerCompletedFollowupAuthorityTests,
+} from "./subagent-registry.completed-followup-authority.test-support.js";
 import {
   adoptSubagentRunForRequesterTurn,
   registerSubagentRun,
@@ -136,32 +140,6 @@ function registration(
     expectsCompletionMessage: true,
     ...overrides,
   };
-}
-
-function operatorFixture(profileName: string, attachAccess = true) {
-  const context = createContext();
-  const resolveGatewayContext = () => context;
-  context.resolveGatewayContext = resolveGatewayContext;
-  const client = createOperatorClient({ profileName, scopes: ["operator.write"] });
-  const revoked = new AbortController();
-  const sourceAuthority = {
-    signal: revoked.signal,
-    assertCurrent: () => revoked.signal.throwIfAborted(),
-  };
-  if (attachAccess) {
-    client.internal = { operatorAccessAuthority: sourceAuthority };
-  }
-  return { context, resolveGatewayContext, client, revoked, sourceAuthority };
-}
-
-async function retainedOperatorFixture(profileName: string) {
-  const fixture = operatorFixture(profileName, false);
-  const source = expectDefined(
-    await operatorCapture.captureGatewayOperatorRunAuthority(fixture),
-    "operator registration source",
-  );
-  fixture.client.internal = { operatorRunAuthority: source.authority };
-  return { ...fixture, source };
 }
 
 beforeEach(() => {

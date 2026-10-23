@@ -5,6 +5,7 @@ import type {
   EmbeddingInput,
   EmbeddingProviderCallOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   loadSqliteVecExtension,
@@ -547,6 +548,20 @@ export function countMemoryIndexFtsMatches(databasePath: string, marker: string)
   } finally {
     observer.close();
   }
+}
+
+export function holdMemoryTestOperation<T>(value: () => T) {
+  const entered = createDeferred<void>();
+  const gate = createDeferred<void>();
+  return {
+    entered: entered.promise,
+    release: () => gate.resolve(),
+    run: async () => {
+      entered.resolve();
+      await gate.promise;
+      return value();
+    },
+  };
 }
 
 export function readPublishedSessionIndex(

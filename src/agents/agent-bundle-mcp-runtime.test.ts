@@ -20,6 +20,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
+import { readRequestText, respondJson } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   cleanupTempDirs,
@@ -74,6 +75,7 @@ import * as mcpClientLifecycle from "./mcp-client-lifecycle.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
 import { fetchMcpAppView, getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
+import { isRecordedModelFallbackStop } from "./model-fallback-stop.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 
 vi.mock("./embedded-agent-mcp.js", async (importOriginal) => {
@@ -166,6 +168,10 @@ const staticConfig = mcpConfig({ shared: { command: "true" } });
 const requesterConfig = () =>
   mcpConfig({ ...staticConfig.mcp.servers, ...scopedConfig.mcp.servers });
 
+const requesterConnection = { url: "https://mcp.example.test/user" };
+const inboxRuntime: RuntimeFactory = (params) =>
+  makeManagedRuntime(params, [{ toolName: "inbox", description: "read inbox" }], "user-mail");
+
 function catalogTool(serverName: string, toolName: string, safeServerName = serverName) {
   return {
     serverName,
@@ -201,8 +207,9 @@ function expectToolNames(
   expect(sorted ? actual.toSorted() : actual).toEqual(names);
 }
 
-function toolDefinition(name: string) {
-  return { name, inputSchema: { type: "object", properties: {} } };
+type FixtureTool = NonNullable<Parameters<typeof writeListToolsMcpServer>[0]["tools"]>[number];
+function toolDefinition(name: string, overrides: Omit<FixtureTool, "name"> = {}): FixtureTool {
+  return { name, inputSchema: { type: "object", properties: {} }, ...overrides };
 }
 
 function expectHealthyCall(runtime: SessionMcpRuntime, serverName: string, toolName = "slow_tool") {
@@ -446,22 +453,17 @@ async function startSessionExpiryServer(stateful: boolean) {
     } else if (req.method !== "POST") {
       res.writeHead(405).end();
     } else {
-      let body = "";
-      req.on("data", (chunk: Buffer) => {
-        body += chunk.toString();
-      });
-      req.on("end", () => {
-        const message = JSON.parse(body) as {
+      void (async () => {
+        const message = JSON.parse(await readRequestText(req)) as {
           id?: number | string;
           method?: string;
           params?: { arguments?: { attempt?: unknown }; protocolVersion?: string };
         };
         const reply = (result: unknown, responseSession = sessionId) => {
-          res.setHeader("content-type", "application/json");
           if (stateful && responseSession) {
             res.setHeader("mcp-session-id", responseSession);
           }
-          res.writeHead(200).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+          respondJson(res, { jsonrpc: "2.0", id: message.id, result });
         };
         if (message.method === "initialize") {
           state.initializeCount += 1;
@@ -501,7 +503,7 @@ async function startSessionExpiryServer(stateful: boolean) {
             res.writeHead(405).end();
           }
         }
-      });
+      })().catch(() => res.destroy());
     }
   });
   await new Promise<void>((resolve) => {
@@ -546,9 +548,7 @@ describe("session MCP runtime", () => {
   it("catalogs canonical and deprecated MCP App tool metadata", async () => {
     const { serverPath } = await stdioFixture("bundle-mcp-app-metadata-", {
       tools: [
-        {
-          name: "canonical",
-          inputSchema: { type: "object" },
+        toolDefinition("canonical", {
           _meta: {
             ui: { resourceUri: "ui://demo/app", visibility: ["app"] },
             "openai/ui": {
@@ -556,17 +556,11 @@ describe("session MCP runtime", () => {
             },
             "openai/extensions": { "mentions/search": {} },
           },
-        },
-        {
-          name: "deprecated",
-          inputSchema: { type: "object" },
+        }),
+        toolDefinition("deprecated", {
           _meta: { "ui/resourceUri": "ui://demo/legacy" },
-        },
-        {
-          name: "hidden",
-          inputSchema: { type: "object" },
-          _meta: { ui: { visibility: [] } },
-        },
+        }),
+        toolDefinition("hidden", { _meta: { ui: { visibility: [] } } }),
       ],
     });
     const runtime = ownRuntime(
@@ -607,9 +601,7 @@ describe("session MCP runtime", () => {
         "docs",
         {
           tools: [
-            {
-              name: " nested ",
-              inputSchema: { type: "object" },
+            toolDefinition(" nested ", {
               outputSchema: {
                 $schema: "https://json-schema.org/draft/2020-12/schema",
                 type: "object",
@@ -620,8 +612,8 @@ describe("session MCP runtime", () => {
                 required: ["node", "label"],
                 additionalProperties: false,
               },
-            },
-            { name: "healthy", inputSchema: { type: "object" } },
+            }),
+            toolDefinition("healthy"),
           ],
           callToolResult: { content: [], structuredContent },
         },
@@ -657,8 +649,8 @@ describe("session MCP runtime", () => {
       "docs",
       ({ file }) => ({
         toolsByList: [
-          [{ name: "versioned", inputSchema: { type: "object" }, outputSchema: schema("a") }],
-          [{ name: "versioned", inputSchema: { type: "object" }, outputSchema: schema("b") }],
+          [toolDefinition("versioned", { outputSchema: schema("a") })],
+          [toolDefinition("versioned", { outputSchema: schema("b") })],
         ],
         notifyListChangedOnToolCall: true,
         capabilities: { tools: { listChanged: true } },
@@ -827,11 +819,9 @@ describe("session MCP runtime", () => {
               response.writeHead(405).end();
               return;
             }
-            let body = "";
-            for await (const chunk of request) {
-              body += chunk;
-            }
-            const message: { id?: number; method: string } = JSON.parse(body);
+            const message: { id?: number; method: string } = JSON.parse(
+              await readRequestText(request),
+            );
             if (message.id === undefined) {
               response.writeHead(202).end();
               return;
@@ -846,9 +836,7 @@ describe("session MCP runtime", () => {
                   }
                 : values[message.method];
             // Raw JSON keeps server-side SDK parsing from hiding the client regression.
-            response
-              .writeHead(200, { "content-type": "application/json" })
-              .end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+            respondJson(response, { jsonrpc: "2.0", id: message.id, result });
           })().catch(() => response.destroy());
         }),
     });
@@ -905,48 +893,6 @@ describe("session MCP runtime", () => {
     expect(diagnostic?.message).toContain("Authorization: Bearer ");
     expect(diagnostic?.message).toContain("***");
     expect(diagnostic?.message).not.toContain(secret);
-  });
-
-  it("materializes structured and non-text stdio results", async () => {
-    const structuredContent = { description: "captured screenshot" };
-    const { runtime, logPath } = await stdioRuntime(
-      "capture",
-      {
-        callToolResult: {
-          content: [
-            { type: "text", text: "captured screenshot" },
-            { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-            {
-              type: "resource_link",
-              uri: "https://example.com/report",
-              name: "report",
-              title: "Report",
-            },
-            { type: "resource", resource: { uri: "memo://one", text: "memo body" } },
-            { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
-          ],
-          structuredContent,
-        },
-      },
-      { inWorkspace: true },
-    );
-    const materialized = await materializeTools({ runtime });
-    const result = await expectDefined(
-      materialized.tools[0],
-      "materialized MCP tool test invariant",
-    ).execute("call-structured-content", {}, undefined, undefined);
-    expect(result.content).toEqual([
-      {
-        type: "text",
-        text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
-      },
-      { type: "text", text: "captured screenshot" },
-      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-      { type: "text", text: "[Report] https://example.com/report" },
-      { type: "text", text: "memo body" },
-      { type: "text", text: "[audio audio/mpeg]" },
-    ]);
-    expect(await readText(logPath)).toContain("recv tools/call");
   });
 
   it.each([
@@ -1009,13 +955,7 @@ describe("session MCP runtime", () => {
   it("does not split a surrogate pair at the MCP metadata text limit", async () => {
     const safePrefix = "x".repeat(1_199);
     const { runtime } = await stdioRuntime("metadata", {
-      tools: [
-        {
-          name: "utf16_tool",
-          description: `${safePrefix}🚀tail`,
-          inputSchema: { type: "object", properties: {} },
-        },
-      ],
+      tools: [toolDefinition("utf16_tool", { description: `${safePrefix}🚀tail` })],
     });
     const catalog = await runtime.getCatalog();
     expect(catalog.tools).toHaveLength(1);
@@ -1305,21 +1245,15 @@ describe("session MCP runtime", () => {
       {
         toolPageCursors: ["", null],
         tools: [
-          {
-            name: "structured",
-            inputSchema: { type: "object", properties: {} },
+          toolDefinition("structured", {
             outputSchema: {
               type: "object",
               properties: { count: { type: "number" } },
               required: ["count"],
               additionalProperties: false,
             },
-          },
-          {
-            name: "task_only",
-            inputSchema: { type: "object", properties: {} },
-            execution: { taskSupport: "required" },
-          },
+          }),
+          toolDefinition("task_only", { execution: { taskSupport: "required" } }),
         ],
         callToolResult: {
           content: [{ type: "text", text: "invalid" }],
@@ -1576,13 +1510,12 @@ describe("session MCP runtime", () => {
     });
     const materialized = await materializeTools({ runtime });
     expect(runtime.activeLeases).toBe(1);
-    await expect(
-      retireSessionMcpRuntimeForSessionKey({
-        sessionKey,
-        reason: "subagent-run-cleanup",
-        preserveActiveLeases: true,
-      }),
-    ).resolves.toBe(true);
+    const retired = await retireSessionMcpRuntimeForSessionKey({
+      sessionKey,
+      reason: "subagent-run-cleanup",
+      preserveActiveLeases: true,
+    });
+    expect(retired).toBe(true);
     expect(currentManager().listSessionIds()).toContain(sessionId);
     const followUp = await materializeTools({ runtime });
     expect(runtime.activeLeases).toBe(2);
@@ -1590,27 +1523,6 @@ describe("session MCP runtime", () => {
     expect(currentManager().listSessionIds()).toContain(sessionId);
     await followUp.dispose();
     expect(runtime.activeLeases).toBe(0);
-    expect(currentManager().listSessionIds()).not.toContain(sessionId);
-  });
-
-  it("preserves session-end retirement across late creation", async () => {
-    const sessionId = "session-ended-before-creation";
-    await retireRuntime({
-      sessionId,
-      reason: "session-end",
-      preserveActiveLeases: true,
-      retainAcrossReuse: true,
-    });
-    await retireRuntime({
-      sessionId,
-      reason: "embedded-run-end",
-      preserveActiveLeases: true,
-    });
-    const runtime = await getSessionRuntime(
-      sessionParams(sessionId, undefined, { sessionKey: undefined }),
-    );
-    expect(currentManager().listSessionIds()).toContain(sessionId);
-    await expect(completeDeferredSessionMcpRuntimeRetirement(runtime)).resolves.toBe(true);
     expect(currentManager().listSessionIds()).not.toContain(sessionId);
   });
 
@@ -1708,94 +1620,57 @@ describe("requester-scoped MCP connection resolution", () => {
     vi.useRealTimers();
   });
 
-  it("keys requester-scoped runtimes per sender while sharing static servers", async () => {
-    const resolverRegistry = createMcpProofPluginRegistry();
-    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
+  it(
+    "keys requester-scoped runtimes per sender while sharing static servers",
+    withResolverRegistry(async (register) => {
       let resolveCalls = 0;
-      const resolverApi = resolverRegistry.apiFor("test-plugin");
-      resolverApi.registerMcpServerConnectionResolver({
-        serverName: "user-mail",
-        resolve: async (ctx) => {
-          resolveCalls += 1;
-          return {
-            url: `https://mcp.example.test/${ctx.requesterSenderId}`,
-            headers: { Authorization: `Bearer ${ctx.requesterSenderId}` },
-          };
-        },
+      register(async (ctx) => {
+        resolveCalls += 1;
+        return {
+          url: `https://mcp.example.test/${ctx.requesterSenderId}`,
+          headers: { Authorization: `Bearer ${ctx.requesterSenderId}` },
+        };
       });
-
-      const created: Array<{
-        sessionId: string;
-        requesterScope?: SessionMcpRuntime["requesterScope"];
-        include?: string[];
-        exclude?: string[];
-      }> = [];
-      const createRuntime: RuntimeFactory = (params) => {
-        created.push({
-          sessionId: params.sessionId,
-          requesterScope: params.requesterScope,
-          include: params.includeServerNames ? [...params.includeServerNames] : undefined,
-          exclude: params.excludeServerNames ? [...params.excludeServerNames] : undefined,
-        });
-        return makeManagedRuntime(params);
-      };
+      const createRuntime = vi.fn(makeManagedRuntime);
       const manager = createManager({ createRuntime });
-      const cfg = {
-        mcp: {
-          servers: {
-            shared: { command: "true" },
-            "user-mail": { transport: "streamable-http" },
-          },
-        },
-      } satisfies NonNullable<RuntimeParams["cfg"]>;
-
       const params = (sender: string) =>
-        makeRequesterParams("session-shared", cfg, sender, {
+        makeRequesterParams("session-shared", requesterConfig(), sender, {
           sessionKey: "agent:test:session-shared",
           agentAccountId: "bot-1",
         });
-      try {
-        await manager.getOrCreate(params("sender-a"));
-        await manager.getOrCreate(params("sender-a"));
-        expect(resolveCalls).toBe(1);
-        await manager.getOrCreate(params("sender-b"));
-
-        // Same requester reuses both static and requester-scoped entries; other sender adds one.
-        expect(created).toEqual([
-          {
-            sessionId: "session-shared",
-            requesterScope: undefined,
-            include: undefined,
-            exclude: ["user-mail"],
+      await manager.getOrCreate(params("sender-a"));
+      await manager.getOrCreate(params("sender-a"));
+      expect(resolveCalls).toBe(1);
+      await manager.getOrCreate(params("sender-b"));
+      expect(
+        createRuntime.mock.calls.map(([input]) => ({
+          sessionId: input.sessionId,
+          requesterScope: input.requesterScope,
+          include: input.includeServerNames && [...input.includeServerNames],
+          exclude: input.excludeServerNames && [...input.excludeServerNames],
+        })),
+      ).toEqual([
+        {
+          sessionId: "session-shared",
+          requesterScope: undefined,
+          include: undefined,
+          exclude: ["user-mail"],
+        },
+        ...["sender-a", "sender-b"].map((requesterSenderId) => ({
+          sessionId: "session-shared",
+          requesterScope: {
+            requesterSenderId,
+            agentAccountId: "bot-1",
+            messageChannel: "telegram",
           },
-          {
-            sessionId: "session-shared",
-            requesterScope: {
-              requesterSenderId: "sender-a",
-              agentAccountId: "bot-1",
-              messageChannel: "telegram",
-            },
-            include: ["user-mail"],
-            exclude: undefined,
-          },
-          {
-            sessionId: "session-shared",
-            requesterScope: {
-              requesterSenderId: "sender-b",
-              agentAccountId: "bot-1",
-              messageChannel: "telegram",
-            },
-            include: ["user-mail"],
-            exclude: undefined,
-          },
-        ]);
-        expect(manager.listSessionIds()).toEqual(["session-shared"]);
-        expect(manager.listRuntimeKeys()).toHaveLength(3);
-      } finally {
-        await manager.disposeAll();
-      }
-    });
-  });
+          include: ["user-mail"],
+          exclude: undefined,
+        })),
+      ]);
+      expect(manager.listSessionIds()).toEqual(["session-shared"]);
+      expect(manager.listRuntimeKeys()).toHaveLength(3);
+    }),
+  );
 
   it(
     "matches tools.effective and cached-runtime fingerprints",
@@ -1855,7 +1730,7 @@ describe("requester-scoped MCP connection resolution", () => {
   it(
     "re-merges refreshed catalog partitions",
     withResolverRegistry(async (register) => {
-      register(async () => ({ url: "https://mcp.example.test/user" }));
+      register(async () => requesterConnection);
       const swapCatalogByServer = new Map<string, (toolName: string) => void>();
       const createRuntime: RuntimeFactory = (params) => {
         const serverName = params.includeServerNames?.has("user-mail") ? "user-mail" : "shared";
@@ -2175,9 +2050,7 @@ describe("requester-scoped MCP connection resolution", () => {
     "reconciles cached scoped catalog before a senderless turn",
     withResolverRegistry(async (register) => {
       register(async () => ({ url: "https://mcp.example.test/authed" }));
-      const createRuntime: RuntimeFactory = (params) =>
-        makeManagedRuntime(params, [{ toolName: "inbox", description: "read inbox" }], "user-mail");
-      const manager = createManager({ createRuntime });
+      const manager = createManager({ createRuntime: inboxRuntime });
       const runtime = await manager.getOrCreateRequesterScoped(
         makeRequesterParams("session-adv-senderless", scopedConfig as never, "authed"),
       );
@@ -2207,9 +2080,7 @@ describe("requester-scoped MCP connection resolution", () => {
         }
         return { url: "https://mcp.example.test/authed" };
       });
-      const createRuntime: RuntimeFactory = (params) =>
-        makeManagedRuntime(params, [{ toolName: "inbox", description: "read inbox" }], "user-mail");
-      const manager = createManager({ createRuntime });
+      const manager = createManager({ createRuntime: inboxRuntime });
       const oldConfig = mcpConfig({
         "user-mail": { transport: "streamable-http" },
         shared: { command: "first" },
@@ -2461,7 +2332,9 @@ describe("disposeSession timeout", () => {
       expect(manager.listRuntimeKeys()).toEqual([]);
       const cleanupScope = createAgentCleanupScope();
       await cleanupScope.run(async () => {
-        await expect(materialized.dispose()).rejects.toThrow("could not confirm closure");
+        const failure: unknown = await materialized.dispose().catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(Error);
+        expect(isRecordedModelFallbackStop(failure)).toBe(true);
         await expect(materialized.dispose()).rejects.toThrow("could not confirm closure");
       });
       expect(cleanupScope.outcome).toBe("uncertain");

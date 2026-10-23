@@ -1,5 +1,6 @@
 import path from "node:path";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
@@ -11,6 +12,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
+import { resolveBundledPluginReloadSource } from "./plugin-bundled-reload.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { createPluginGenerationNativeRoots } from "./plugin-generation-native-roots.js";
 import { GenerationCodec } from "./plugin-generation-worker-codec.js";
@@ -35,7 +37,12 @@ export type PreparedPluginGenerationArtifact = {
   artifact: PluginGenerationArtifact;
   attachModuleSource(callback: (filename: string) => string): void;
 };
-type PreparationParameters = { rootDir: string; source: string; standalone?: boolean };
+type PreparationParameters = {
+  rootDir: string;
+  source: string;
+  standalone?: boolean;
+  bundledReload?: boolean;
+};
 type PreparationOwner = { closing: boolean; clients: Set<() => Promise<void>> };
 const preparationOwners = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginPreparationOwners"),
@@ -51,12 +58,7 @@ function preparationOwnerFor(source: RetainedNativeWorkerSource): PreparationOwn
     source.retain(owner, async () => {
       retained.closing = true;
       const outcomes = await Promise.allSettled([...retained.clients].map((close) => close()));
-      const errors = outcomes.flatMap((outcome) =>
-        outcome.status === "rejected" ? [outcome.reason] : [],
-      );
-      if (errors.length) {
-        throw new AggregateError(errors, "Plugin preparation workers failed to close");
-      }
+      throwSettledAggregate(outcomes, "Plugin preparation workers failed to close");
     });
   }
   if (owner.closing) {
@@ -209,6 +211,7 @@ export async function preparePluginGenerationArtifact(
           // Capture cost scales with package size and filesystem latency. Its owner
           // controls retirement; an arbitrary deadline can reject healthy plugins.
           ...(command.operation === "capture" ? {} : { timeoutMs: 120_000 }),
+          progressSignal: waitSignal,
           transferList: (value) =>
             value.operation === "capture" && value.callbackPort ? [value.callbackPort] : [],
         },
@@ -249,6 +252,8 @@ export async function preparePluginGenerationArtifact(
         | { status: "rejected"; error: unknown };
     }): T => {
       for (;;) {
+        // A reply arriving during service must invalidate the subsequent wait.
+        const observed = Atomics.load(waitSignal, 0);
         operation.service();
         // SAFETY: This private port receives only the matching worker callback protocol.
         const message = receiveMessageOnPort(port1)?.message as
@@ -264,7 +269,7 @@ export async function preparePluginGenerationArtifact(
         if (outcome.status === "rejected") {
           throw outcome.error;
         }
-        Atomics.wait(waitSignal, 0, 0, 2);
+        Atomics.wait(waitSignal, 0, observed, 2);
       }
     };
     try {
@@ -272,7 +277,7 @@ export async function preparePluginGenerationArtifact(
         { ...command, nativeLoads: [...pendingNativeLoads] },
         // Recovery and custody copies have the same owner-controlled lifetime as
         // initial capture. Keep ordinary synchronous methods bounded.
-        sourceCapture ? {} : { timeoutMs: 30_000 },
+        { progressSignal: waitSignal, ...(sourceCapture ? {} : { timeoutMs: 30_000 }) },
       );
       pendingNativeLoads.clear();
       return accept(join(task));
@@ -295,11 +300,22 @@ export async function preparePluginGenerationArtifact(
     }
   }
   try {
+    const bundledReloadSource = params.bundledReload
+      ? resolveBundledPluginReloadSource(params.rootDir)
+      : undefined;
     const artifact = await request({
       operation: "capture",
       captureId: 1,
-      rootDir: params.rootDir,
-      entryFile: params.standalone ? params.source : undefined,
+      progressSignal: waitSignal,
+      rootDir: bundledReloadSource?.hostRoot ?? params.rootDir,
+      entryFile: bundledReloadSource
+        ? bundledReloadSource.ownedPaths.map((relative) =>
+            path.join(bundledReloadSource.hostRoot, relative),
+          )
+        : params.standalone
+          ? params.source
+          : undefined,
+      bundledReloadSource,
       storage,
       installRoots,
       readOnly,

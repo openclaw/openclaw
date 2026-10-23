@@ -36,14 +36,14 @@ import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { reportPlacementTransition } from "../worker-environments/placement-record.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { sessionReader } from "./sessions-keyed-read.test-support.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
   listSessions,
   requestContext,
-  sessionReadHandlers,
 } from "./sessions-read-cache.test-support.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const targetKey = "agent:main:controller";
 const targetScope = { agentId: "main", sessionKey: targetKey };
@@ -92,18 +92,7 @@ async function describeSession(
   key = targetKey,
 ) {
   await initializeSessionReadContext(context);
-  const responses: Parameters<RespondFn>[] = [];
-  await sessionReadHandlers["sessions.describe"]!({
-    req: { type: "req", id: "describe-projection", method: "sessions.describe", params: { key } },
-    params: { key },
-    context,
-    client,
-    isWebchatConnect: () => false,
-    respond: (...response) => responses.push(response),
-  });
-  expect(responses).toHaveLength(1);
-  expect(responses[0]?.[0]).toBe(true);
-  return responses[0]?.[1];
+  return sessionReader(context, client, key)();
 }
 
 async function withFixture(

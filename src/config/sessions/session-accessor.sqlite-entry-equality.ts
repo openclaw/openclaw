@@ -1,10 +1,10 @@
 import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
 import type { SessionEntryWindowFacts } from "./session-entry-window.types.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type SqliteLifecycleTargetSnapshot = Array<{
-  entry: SessionEntry;
+  entry: InternalSessionEntry;
   sessionKey: string;
   window?: SessionEntryWindowFacts;
   sideTables?: { memberIdsJson: string; hasBoard: boolean };

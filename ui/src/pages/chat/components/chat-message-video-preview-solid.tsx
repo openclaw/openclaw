@@ -1,10 +1,13 @@
 import type { JSX } from "@solidjs/web";
 import { Show, createSignal, onSettled, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { requestVideoPoster } from "../../../lib/media/video-poster.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 export type VideoPreviewProps = {
   key: string;

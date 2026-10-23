@@ -94,6 +94,7 @@ import { agentDatabaseModuleIdentityEntrypoints } from "../../src/state/openclaw
 import { agentWorkerStoreFixtureEntrypoint } from "../../src/state/openclaw-agent-worker-store.runtime.test-support.ts";
 import {
   agentDatabaseHeldRuntimeEntrypoint,
+  stateLeasePostgresRuntimeEntrypoint,
   stateLeaseProcessExitRuntimeEntrypoint,
   stateLeaseRetentionRuntimeEntrypoint,
 } from "../../src/state/openclaw-state-lease-runtime.test-support.ts";
@@ -390,6 +391,7 @@ export const vitestWorkerBuildEntries = {
     updatePreflightTeamReportsEntrypoint,
     workboardSqliteBackendEntrypoint,
     ...Object.values(agentDatabaseModuleIdentityEntrypoints),
+    stateLeasePostgresRuntimeEntrypoint,
     stateLeaseProcessExitRuntimeEntrypoint,
     stateLeaseRetentionRuntimeEntrypoint,
     agentDatabaseHeldRuntimeEntrypoint,

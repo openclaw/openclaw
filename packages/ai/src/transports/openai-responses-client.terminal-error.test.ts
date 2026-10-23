@@ -135,7 +135,7 @@ it("aborts whitespace argument churn and recovers through the same-model retry o
 
   const { events, result } = await collect(await run());
   expect(result).toMatchObject({ stopReason: "error", errorCode: "degenerate_output" });
-  expect(emittedDeltas).toBe(32);
+  expect(emittedDeltas).toBe(4);
   expect(closed).toBe(true);
   expect(sseState.signal).toMatchObject({
     aborted: true,

@@ -7,7 +7,7 @@ import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayProbeSurfaceAuth } from "../../gateway/auth-surface-resolution.js";
 import { isLoopbackHost } from "../../gateway/net.js";
 import type { GatewayProbeCapability, GatewayProbeResult } from "../../gateway/probe.js";
-import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
+import { pickBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
 
 const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
@@ -99,14 +99,6 @@ export function resolveTargets(
   return targets;
 }
 
-function isLoopbackProbeTarget(target: Pick<GatewayStatusTarget, "kind" | "url">): boolean {
-  if (target.kind === "localLoopback") {
-    return true;
-  }
-  const url = URL.parse(target.url);
-  return url !== null && isLoopbackHost(url.hostname);
-}
-
 export function resolveProbeBudgetMs(
   overallMs: number,
   target: Pick<GatewayStatusTarget, "kind" | "active" | "url">,
@@ -120,7 +112,8 @@ export function resolveProbeBudgetMs(
   if (target.kind === "localLoopback") {
     return Math.min(800, overallMs);
   }
-  if (!isLoopbackProbeTarget(target)) {
+  const url = URL.parse(target.url);
+  if (url === null || !isLoopbackHost(url.hostname)) {
     return Math.min(1500, overallMs);
   }
   return overallMs;
@@ -218,7 +211,7 @@ export function extractConfigSummary(snapshotUnknown: unknown) {
 }
 
 export function buildNetworkHints(cfg: OpenClawConfig, localPortOverride?: number) {
-  const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
+  const tailnetIPv4 = pickBestEffortPrimaryTailnetIPv4();
   const port = localPortOverride ?? resolveGatewayPort(cfg);
   const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   return {
@@ -282,19 +275,15 @@ export function summarizeGatewayProbeCapability(
   );
 }
 
-function renderProbeCapabilityLine(probe: GatewayProbeResult, rich: boolean) {
+export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
   const display = gatewayProbeCapabilities.find(
     ({ capability }) => capability === probe.auth.capability,
   );
-  return colorize(
+  const capability = colorize(
     rich,
     theme[display?.color ?? "muted"],
     `Capability: ${display?.label ?? "unknown"}`,
   );
-}
-
-export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
-  const capability = renderProbeCapabilityLine(probe, rich);
   const detail = !probe.ok && probe.error ? ` - ${probe.error}` : "";
   if (probe.ok || (probe.gatewayReached && probe.connectLatencyMs != null)) {
     const latency =

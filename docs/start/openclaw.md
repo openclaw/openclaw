@@ -14,7 +14,7 @@ A connected agent is a capable one: depending on your tool policy it can run com
 
 - Always set `channels.whatsapp.allowFrom` (never run open-to-the-world on your personal Mac).
 - Use a dedicated WhatsApp number for the assistant.
-- Heartbeats default to every 30 minutes. Set `agents.defaults.heartbeat.every: "0m"` to disable recurring polling while you evaluate the setup. Targeted event-driven follow-ups can still run, so keep tool policy and sandboxing conservative until you trust the setup.
+- Review the jobs in `openclaw automations list --all`. Setup creates an ordinary proactive-check job once for the ambient owner; disable it with `openclaw automations disable <job-id>` while you evaluate the setup. Immediate event-driven follow-ups can still run, so keep tool policy and sandboxing conservative until you trust the setup.
 
 ## Prerequisites
 
@@ -112,7 +112,7 @@ OpenClaw defaults to a good assistant setup, but you'll usually want to tune:
 
 - persona/instructions in [`SOUL.md`](/concepts/soul)
 - thinking defaults (if desired)
-- heartbeats (once you trust it)
+- proactive automation jobs (once you trust it)
 
 Example:
 
@@ -124,8 +124,6 @@ Example:
       workspace: "~/.openclaw/workspace",
       thinkingDefault: "high",
       timeoutSeconds: 1800,
-      // Start with 0; enable later.
-      heartbeat: { every: "0m" },
     },
     entries: {
       main: {
@@ -163,27 +161,44 @@ Example:
 - `/new` or `/reset` starts a fresh session for that chat (configurable via `session.resetTriggers`). If sent alone, OpenClaw acknowledges the reset without invoking the model.
 - `/compact [instructions]` compacts the session context and reports the remaining context budget.
 
-## Heartbeats (proactive mode)
+<a id="heartbeats-proactive-mode" />
 
-By default, OpenClaw runs a heartbeat every 30 minutes — or every hour when Anthropic OAuth/token auth is configured (including Claude CLI reuse). See [Heartbeat](/gateway/heartbeat) for the full defaults. The prompt is:
-`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.`
-Set `agents.defaults.heartbeat.every: "0m"` to disable recurring cadence. Targeted event-driven wakes, such as background exec completion follow-ups, remain available and do not create a recurring schedule. Heartbeat checklists live in the monitor's cron scratch (see [Heartbeat](/gateway/heartbeat)); `openclaw doctor --fix` migrates a legacy workspace `HEARTBEAT.md` into it.
+## Proactive automations
 
-- If the monitor scratch exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls.
-- If no scratch exists, the heartbeat still runs and the model decides what to do.
-- If the agent replies with `NO_REPLY`, OpenClaw suppresses outbound delivery for that heartbeat. Legacy `HEARTBEAT_OK` replies remain supported with a fixed 300-character acknowledgment budget.
-- By default, heartbeat delivery to DM-style `user:<id>` targets is allowed. Set `agents.defaults.heartbeat.directPolicy: "block"` to suppress direct-target delivery while keeping heartbeat runs active.
-- Heartbeats run full agent turns - shorter intervals burn more tokens.
+Proactive checks are ordinary editable [Automations](/automation/cron-jobs).
+Explicit setup provisions a default check once for the ambient owner, normally
+every 30 minutes. When that agent uses Anthropic OAuth/token authentication,
+including Claude CLI reuse, the provider's setup default is one hour. Later
+provider changes do not rewrite an existing job's schedule.
 
-```json5
-{
-  agents: {
-    defaults: {
-      heartbeat: { every: "30m" },
-    },
-  },
-}
+The default check uses the owner's main conversation, gives foreground work
+priority, and delivers to a positively identified owner DM. Its instructions
+ask it to follow its scratch checklist and relevant context, avoid repeating old
+tasks, and return `NO_REPLY` when nothing needs attention. Edit its schedule,
+prompt, active hours, or delivery on the **Automations** page or through the CLI:
+
+```bash
+openclaw automations list --all
+openclaw automations show <job-id>
+openclaw automations edit <job-id> --every 30m
+openclaw automations scratch <job-id> --set "Check only for newly blocked work."
+openclaw automations disable <job-id>
 ```
+
+The default job sets `skipIfScratchEmpty`: explicitly empty scratch (blank lines,
+comments, headings, fence markers, or empty checklist stubs) skips a run. Missing
+scratch still runs. Use `--direct-policy block` to block DM delivery, or
+`--no-deliver` to disable runner fallback delivery. These policies are stored on
+the job, not under agent heartbeat configuration.
+
+Run `openclaw doctor --fix` to migrate supported July 2026 and later heartbeat
+configuration and checklists. After migration, edit or remove the job itself;
+restarts, config reloads, and later Doctor runs do not recreate a deleted job.
+See [Heartbeat migration](/gateway/heartbeat).
+
+Checks run full agent turns, so shorter intervals use more tokens. Immediate
+events such as background exec completion use normal session execution and do
+not depend on a periodic job being enabled.
 
 ## Media in and out
 

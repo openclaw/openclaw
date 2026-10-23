@@ -95,7 +95,7 @@ describe("canvas.document.view", () => {
     context.getMcpAppSandboxPort = () => undefined;
     vi.mocked(context.ensureSandboxHostPort!).mockReturnValue(sandbox.promise);
     const pending = invoke();
-    expect(readDocument).toHaveBeenCalledWith("cv_widget", { maxBytes: 10 * 1024 * 1024 });
+    expect(readDocument).toHaveBeenCalledWith("cv_widget");
     expect(context.ensureSandboxHostPort).toHaveBeenCalledOnce();
     sandbox.resolve(18790);
     document.resolve({ html: "<p>Widget</p>", cspSandbox: "scripts" });

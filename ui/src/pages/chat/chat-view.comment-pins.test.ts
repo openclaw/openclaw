@@ -4,6 +4,7 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { createChatViewFrame } from "./chat-view-frame.ts";
 import { createChatProps, renderChatPropsInto } from "./chat-view.test-helpers.ts";
+import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 
 afterEach(() => {
@@ -75,7 +76,11 @@ it("resolves saved sources from the transcript registry instead of unrelated mat
   unrelated.textContent = "Different source";
   container.querySelector(".chat-thread")!.prepend(unrelated);
 
-  const frame = createChatViewFrame(props, () => container);
+  const frame = createChatViewFrame(
+    props,
+    () => container,
+    createAsyncQuestionPresentation(getTranscriptState(props.paneId), props),
+  );
   const range = frame.resolveCommentSource(source);
   expect(range?.toString()).toBe("Selected passage");
   expect(bubble.contains(range!.startContainer)).toBe(true);

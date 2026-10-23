@@ -293,7 +293,7 @@ async function updateCommandInternal(
         },
         before: { version: currentVersion ?? VERSION },
       },
-      { env: run.env },
+      run,
     );
     if (
       opts.channel &&
@@ -319,7 +319,7 @@ async function updateCommandInternal(
     }
 
     if (opts.dryRun) {
-      finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, { env: run.env });
+      finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, run);
       return await previewUpdateCommand({
         target,
         prepared,

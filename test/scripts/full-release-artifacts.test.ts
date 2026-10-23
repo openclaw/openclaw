@@ -450,7 +450,7 @@ function publicationReuseFixture(changedReceipt = false) {
     schema: "openclaw.release-validation-evidence/v4",
     valid: true,
     directRoot: true,
-    conclusions: { allRequiredSucceeded: true },
+    current: { conclusion: "success" },
     root: { runId: "51", targetSha: TOOLING_SHA },
     manifest: {
       workflowName: "Full Release Validation",
@@ -637,6 +637,45 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
         .every(([, command]) => command === "api"),
     ).toBe(true);
   });
+
+  it.each(["npm", "docker"])(
+    "adopts a newer %s producer attempt without replacing its original dispatch",
+    (stage) => {
+      const test = fixture();
+      const dispatchId = `full-release-validation-51-1-artifacts-${stage}`;
+      const request = { ...artifactRequest(), stage, dispatchId };
+      test.artifact(
+        `${dispatchId}-dispatch`,
+        "dispatch.json",
+        {
+          request,
+          runId: "81",
+          runAttempt: "1",
+        },
+        true,
+      );
+      test.api(
+        "actions/runs/81",
+        workflowRun({
+          run_attempt: 2,
+          status: "completed",
+          conclusion: "success",
+          display_title: `Full Release Artifacts ${dispatchId}`,
+        }),
+      );
+      const result = test.run("resolve", {
+        GITHUB_RUN_ATTEMPT: "2",
+        ARTIFACT_STAGE: stage,
+        ARTIFACT_DISPATCH_ID: dispatchId,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.outputs).toMatchObject({
+        run_id: "81",
+        run_attempt: "2",
+        dispatch_id: dispatchId,
+      });
+    },
+  );
 
   it.each([
     "contents retry",

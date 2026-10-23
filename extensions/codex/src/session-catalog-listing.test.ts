@@ -7,13 +7,7 @@ import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 import * as fixture from "./session-catalog.test-helpers.js";
 
 const defaultPluginConfig = { supervision: { enabled: true } };
-type FactoryOptions = Parameters<typeof fixture.createCodexSessionCatalogControlFactory>[0];
-const createFactory = (options: Partial<FactoryOptions> = {}) =>
-  fixture.createCodexSessionCatalogControlFactory({
-    getPluginConfig: () => defaultPluginConfig,
-    getRuntimeConfig: () => fixture.config,
-    ...options,
-  });
+const createFactory = fixture.createCodexSessionCatalogControlFactory;
 type ListOptions = Parameters<typeof fixture.listCodexSessionCatalog>[0];
 const listCatalog = ({
   runtime = fixture.createRuntime().runtime,
@@ -24,18 +18,12 @@ function registeredProvider(
   control: Parameters<typeof fixture.registerCodexSessionCatalog>[0]["control"],
   runtimeConfig = fixture.config,
 ) {
-  const { api, getProvider } = fixture.createGatewayApi(
-    fixture.createRuntime().runtime,
-    runtimeConfig,
-  );
-  fixture.registerCodexSessionCatalog({
-    api,
-    bindingStore: fixture.createCodexTestBindingStore(),
+  return fixture.createCatalogTestProvider({
+    startupConfig: runtimeConfig,
     control,
     getPluginConfig: () => defaultPluginConfig,
     getRuntimeConfig: () => runtimeConfig,
   });
-  return getProvider()!;
 }
 type ManagedThreads = NonNullable<
   ReturnType<typeof fixture.createCodexTestBindingStore>["managedThreads"]
@@ -112,14 +100,6 @@ async function homeFixture(label: string) {
   };
 }
 
-it("keeps the underlying paired-node list failure", () => {
-  expect(fixture.catalogError("NODE_LIST_FAILED", new Error("paired store is unreadable"))).toEqual(
-    {
-      code: "NODE_LIST_FAILED",
-      message: "Paired nodes could not be listed: paired store is unreadable",
-    },
-  );
-});
 it("waits for the registered provider's first page and then serves its resident host", async () => {
   const pending = createDeferred<{ data: ReturnType<typeof fixture.idleThread>[] }>();
   const started = createDeferred<void>();
@@ -246,8 +226,7 @@ it("lists non-archived interactive threads without probing transcript previews",
       }),
     ],
   });
-  expect(fixture.commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
-  expect(fixture.commandRpcMocks.codexControlRequest).toHaveBeenCalledWith(
+  expect(fixture.commandRpcMocks.codexControlRequest).toHaveBeenCalledExactlyOnceWith(
     pluginConfig,
     "thread/list",
     {
@@ -262,7 +241,6 @@ it("lists non-archived interactive threads without probing transcript previews",
       config: fixture.config,
       authProfileId: null,
       startOptions: expect.objectContaining({ transport: "stdio", homeScope: "user" }),
-      timeoutMs: expect.any(Number),
     }),
   );
   expect(JSON.stringify(await control.listPage({ searchTerm: "mAtCh" }))).not.toContain("private");

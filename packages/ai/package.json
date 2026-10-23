@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/ai",
-  "version": "2026.10.5",
+  "version": "2026.10.6",
   "description": "Reusable model provider adapters and streaming runtime from OpenClaw",
   "keywords": [
     "ai",
@@ -128,8 +128,8 @@
     "@opentelemetry/semantic-conventions": "1.43.0",
     "openai": "7.32.0",
     "partial-json": "0.1.7",
-    "typebox": "1.3.36",
-    "zod": "4.6.6",
+    "typebox": "1.3.37",
+    "zod": "4.6.7",
     "zod-to-json-schema": "3.25.2"
   },
   "peerDependencies": {

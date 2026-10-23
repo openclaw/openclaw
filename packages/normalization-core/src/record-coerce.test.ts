@@ -4,10 +4,41 @@ import {
   asNullableRecord,
   asOptionalRecord,
   filterStringRecord,
+  isStringArray,
   isStringRecord,
+  omitUndefinedFields,
 } from "./record-coerce.js";
 
 describe("record-coerce", () => {
+  const sparse: string[] = [];
+  sparse.length = 2;
+  it.each([
+    { value: [], expected: true },
+    { value: ["", "  ", "same", "same"], expected: true },
+    { value: sparse, expected: true },
+    { value: ["ok", 2], expected: false },
+    { value: ["ok", undefined], expected: false },
+    { value: null, expected: false },
+    { value: { 0: "ok" }, expected: false },
+    { value: "ok", expected: false },
+  ])("accepts only all-string arrays without normalizing entries %#", ({ value, expected }) => {
+    expect(isStringArray(value)).toBe(expected);
+  });
+
+  it("removes only undefined projection fields in place without traversing nested records", () => {
+    const nested = { untouched: undefined };
+    const fields = { missing: undefined, empty: "", zero: 0, disabled: false, nil: null, nested };
+    expect(omitUndefinedFields(fields)).toBe(fields);
+    expect(fields).toStrictEqual({
+      empty: "",
+      zero: 0,
+      disabled: false,
+      nil: null,
+      nested: { untouched: undefined },
+    });
+    expect(fields.nested).toBe(nested);
+  });
+
   it("keeps record coercion behavior for optional and nullable variants", () => {
     expect(asOptionalRecord({ ok: true })).toEqual({ ok: true });
     expect(asOptionalRecord(null)).toBeUndefined();

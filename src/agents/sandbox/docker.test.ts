@@ -119,6 +119,7 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
 }));
 
 let docker: typeof import("./docker.js");
+let containerImage: typeof import("./container-image.js");
 
 beforeAll(async () => {
   vi.resetModules();
@@ -127,6 +128,7 @@ beforeAll(async () => {
     spawnCommand: spawnDockerProcess,
   }));
   docker = await import("./docker.js");
+  containerImage = await import("./container-image.js");
 });
 
 beforeEach(() => {
@@ -304,7 +306,7 @@ it.each([
   async (engine, image, stderr, error) => {
     spawnState.imageExists = false;
     spawnState.inspectError = stderr;
-    const result = docker.ensureContainerImage(
+    const result = containerImage.ensureContainerImage(
       engine === "docker" ? docker.DOCKER_SANDBOX_ENGINE : docker.PODMAN_SANDBOX_ENGINE,
       image,
     );

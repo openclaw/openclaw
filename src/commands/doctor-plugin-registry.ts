@@ -9,8 +9,11 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { writeJsonTarget } from "../infra/json-file.js";
 import { tryReadJsonObjectSync as readJsonObject } from "../infra/json-files.js";
+import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import type { BundledPluginSource } from "../plugins/bundled-sources.js";
+import { listRecoveredManagedNpmInstallCandidates } from "../plugins/installed-plugin-index-record-reader.js";
 import {
+  type InstalledPluginIndexRecordStoreOptions,
   clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
@@ -25,26 +28,22 @@ import {
   type InstalledPluginIndex,
   type LoadInstalledPluginIndexParams,
 } from "../plugins/installed-plugin-index.js";
-import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
+import {
+  hasRetainedManagedNpmInstallMarker,
+  markRetainedManagedNpmInstall,
+} from "../plugins/managed-npm-retention.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { isExternallyDistributedPlugin } from "../plugins/official-external-plugin-catalog.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import type { OpenClawPeerLinkAuditIssue } from "../plugins/plugin-peer-link.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry-refresh.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import {
   listStaleLocalBundledPluginInstallRecords,
   type StaleLocalBundledPluginInstallRecord,
 } from "../plugins/stale-local-bundled-plugin-install-records.js";
 import { normalizeOptionalTrimmedStringRecord } from "../shared/collection-input.js";
 import { shortenHomePath } from "../utils.js";
-import {
-  listStaleManagedNpmInstallGenerations,
-  maybeRepairStaleManagedNpmInstallGenerations,
-  PLUGIN_REGISTRY_CHECK_ID,
-  staleManagedNpmInstallGenerationToHealthFinding,
-  staleManagedNpmInstallGenerationToRepairEffect,
-  type StaleManagedNpmInstallGenerationIssue,
-} from "./doctor-plugin-generations.js";
 import {
   resolveDoctorPluginNpmRoots,
   listPluginOpenClawHostLinkIssues,
@@ -56,6 +55,113 @@ import {
   migrateOfficialPluginInstallProvenance,
   preflightPluginRegistryDoctorMigration,
 } from "./doctor/shared/plugin-registry-migration.js";
+
+const PLUGIN_REGISTRY_CHECK_ID = "core/doctor/plugin-registry";
+
+type StaleManagedNpmInstallGenerationIssue = {
+  kind: "stale-managed-npm-install-generation";
+  packageDir: string;
+  pluginId: string;
+  version?: string;
+};
+
+type PluginGenerationDoctorParams = InstalledPluginIndexRecordStoreOptions & {
+  prompter: Pick<DoctorPrompter, "shouldRepair">;
+};
+
+function normalizeManagedInstallPath(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  return process.platform === "win32" ? normalizeWindowsPathForComparison(resolved) : resolved;
+}
+
+async function listStaleManagedNpmInstallGenerations(
+  params: InstalledPluginIndexRecordStoreOptions,
+): Promise<StaleManagedNpmInstallGenerationIssue[]> {
+  // The reader keeps a persisted active path authoritative and supplies its
+  // deterministic recovery choice when that authority is absent or dangling.
+  const activeRecords = await loadInstalledPluginIndexInstallRecords(params);
+  const candidates = listRecoveredManagedNpmInstallCandidates(params);
+  const candidatesByPluginId = groupRecords(candidates, (candidate) => candidate.pluginId);
+
+  const stale: StaleManagedNpmInstallGenerationIssue[] = [];
+  for (const [pluginId, pluginCandidates] of candidatesByPluginId) {
+    const activeRecord = activeRecords[pluginId];
+    if (activeRecord?.source !== "npm" || !activeRecord.installPath) {
+      continue;
+    }
+    const activePath = normalizeManagedInstallPath(activeRecord.installPath);
+    const active = pluginCandidates.find(
+      (candidate) =>
+        candidate.installRecord.installPath &&
+        normalizeManagedInstallPath(candidate.installRecord.installPath) === activePath,
+    );
+    if (!active) {
+      continue;
+    }
+    for (const candidate of pluginCandidates) {
+      const packageDir = candidate.installRecord.installPath;
+      if (!packageDir || normalizeManagedInstallPath(packageDir) === activePath) {
+        continue;
+      }
+      stale.push({
+        kind: "stale-managed-npm-install-generation",
+        pluginId,
+        packageDir,
+        ...(candidate.installRecord.resolvedVersion
+          ? { version: candidate.installRecord.resolvedVersion }
+          : {}),
+      });
+    }
+  }
+  return stale.toSorted((left, right) => left.packageDir.localeCompare(right.packageDir));
+}
+
+/** Marks non-authoritative managed npm trees for safe cleanup after gateway shutdown. */
+async function maybeRepairStaleManagedNpmInstallGenerations(
+  params: PluginGenerationDoctorParams,
+): Promise<void> {
+  const stale = await listStaleManagedNpmInstallGenerations(params);
+  if (stale.length === 0) {
+    return;
+  }
+  const formatGeneration = (generation: StaleManagedNpmInstallGenerationIssue) =>
+    `- ${generation.pluginId}: ${shortenHomePath(generation.packageDir)}${generation.version ? ` (${generation.version})` : ""}`;
+  if (!params.prompter.shouldRepair) {
+    note(
+      [
+        "Managed npm plugin installs have stale non-authoritative generations:",
+        ...stale.map(formatGeneration),
+        `Repair with ${formatCliCommand("openclaw doctor --fix")} to retire stale generations after the gateway restarts.`,
+      ].join("\n"),
+      "Plugin registry",
+    );
+    return;
+  }
+
+  const retired: StaleManagedNpmInstallGenerationIssue[] = [];
+  for (const generation of stale) {
+    if (
+      await markRetainedManagedNpmInstall({
+        packageDir: generation.packageDir,
+        pluginId: generation.pluginId,
+        reason: "doctor-repaired-stale-managed-npm-generation",
+      })
+    ) {
+      retired.push(generation);
+    }
+  }
+  if (retired.length === 0) {
+    return;
+  }
+  clearLoadInstalledPluginIndexInstallRecordsCache();
+  note(
+    [
+      "Retired stale managed npm plugin generation(s); they will be pruned after the gateway restarts:",
+      ...retired.map(formatGeneration),
+    ].join("\n"),
+    "Plugin registry",
+  );
+}
 
 type PluginRegistryDoctorRepairParams = Omit<LoadInstalledPluginIndexParams, "config"> &
   InstalledPluginIndexStoreOptions & {
@@ -448,7 +554,17 @@ export function pluginRegistryIssueToHealthFinding(
         "Restore access to the package files, then run `openclaw doctor` again.",
       );
     default:
-      return staleManagedNpmInstallGenerationToHealthFinding(issue);
+      return {
+        checkId: PLUGIN_REGISTRY_CHECK_ID,
+        severity: "warning",
+        category: "recommended",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
+        message: `Managed npm plugin ${issue.pluginId}${issue.version ? `@${issue.version}` : ""} is a stale non-authoritative generation.`,
+        path: issue.packageDir,
+        target: issue.pluginId,
+        fixHint:
+          "Run `openclaw doctor --fix` to retire the stale generation for pruning after the gateway restarts.",
+      };
   }
 }
 
@@ -484,7 +600,12 @@ export function pluginRegistryIssueToRepairEffect(
         issue.packageDir,
       );
     default:
-      return staleManagedNpmInstallGenerationToRepairEffect(issue);
+      return {
+        kind: "package",
+        action: "would-retire-stale-managed-npm-install-generation",
+        target: issue.packageDir,
+        dryRunSafe: false,
+      };
   }
 }
 

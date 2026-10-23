@@ -777,7 +777,7 @@ openclaw-pending-session-create {
   text-transform: uppercase;
 }
 
-.chat-history-boundary__action:not(:disabled):hover {
+.chat-history-boundary__action:not([aria-disabled="true"]):hover {
   color: var(--text);
 }
 
@@ -793,6 +793,11 @@ openclaw-pending-session-create {
   }
 }
 
+.chat {
+  --chat-scroll-to-bottom-size: 36px;
+  --chat-scroll-to-bottom-gap: 12px;
+}
+
 /* The zero-height anchor keeps the affordance out of the flex flow so showing
    it never shrinks the transcript or moves the composer. */
 .chat-scroll-to-bottom-wrap {
@@ -805,13 +810,13 @@ openclaw-pending-session-create {
 
 .chat-scroll-to-bottom {
   position: absolute;
-  bottom: 12px;
+  bottom: calc(var(--chat-scroll-to-bottom-gap) + var(--chat-scroll-to-bottom-clearance, 0px));
   left: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: var(--chat-scroll-to-bottom-size);
+  height: var(--chat-scroll-to-bottom-size);
   padding: 0;
   line-height: 1;
   color: var(--text);
@@ -877,17 +882,6 @@ openclaw-pending-session-create {
 .chat-scroll-to-bottom:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--text) 28%, transparent);
   outline-offset: 2px;
-}
-
-.chat-scroll-to-bottom svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  flex-shrink: 0;
 }
 
 .context-usage {
@@ -974,16 +968,6 @@ openclaw-pending-session-create {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-}
-
-.context-usage__title,
-.context-usage__section-label {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 1.2;
-  text-transform: uppercase;
 }
 
 .context-usage__context-value {
@@ -2082,13 +2066,6 @@ openclaw-chat-video-player {
   color: var(--danger);
 }
 
-.chat-swarm__task-name {
-  overflow: hidden;
-  color: var(--text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .chat-swarm__task-duration {
   font-variant-numeric: tabular-nums;
 }
@@ -2802,6 +2779,10 @@ openclaw-chat-ci-details {
   margin: 0 10px 10px;
 }
 
+.shell:not(.shell--mobile-nav) .chat-session-rail__composer.agent-chat__input {
+  margin-bottom: 20px;
+}
+
 /* One control in this row, so it keeps only the inset that stops the send from
    touching the frame. The shared bottom margin is sized for a row of chips. */
 .chat-session-rail__composer.agent-chat__input .agent-chat__composer-footer {
@@ -2913,6 +2894,21 @@ openclaw-chat-ci-details {
 
 .agent-chat__disabled-banner--compact .callout__content {
   min-width: 0;
+}
+
+/* Keep the desktop Subagents Stop appearance at the notice's button size. */
+.agent-chat__disabled-banner .agent-chat__disabled-banner-stop.btn {
+  border-color: transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  color: var(--danger);
+}
+
+.agent-chat__disabled-banner-stop.btn svg {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+  stroke: none;
 }
 
 .agent-chat__disabled-banner-icon--eye {
@@ -3148,7 +3144,8 @@ openclaw-chat-ci-details {
     height: var(--chat-mobile-row-icon-size);
   }
 
-  .agent-chat__input--chat .chat-send-btn--stop {
+  /* Stop keeps its smaller target regardless of lazy composer stylesheet order. */
+  .agent-chat__input--chat .chat-send-btn.chat-send-btn--stop {
     width: var(--chat-mobile-row-target-size);
     min-width: var(--chat-mobile-row-target-size);
     height: var(--chat-mobile-row-target-size);
@@ -3320,16 +3317,14 @@ openclaw-chat-ci-details {
 
 .chat-pane__chat-toggle,
 .chat-pane__layout-trigger,
-.chat-pane__sharing-trigger,
-button.chat-pane__subagents-running {
+.chat-pane__sharing-trigger {
   padding: 5px 8px;
   line-height: 1;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-pane__chat-toggle,
-  .chat-pane__layout-trigger,
-  button.chat-pane__subagents-running {
+  .chat-pane__layout-trigger {
     min-height: 44px;
   }
 

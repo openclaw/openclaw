@@ -25,6 +25,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
+import * as observerModel from "./session-observer-model.js";
 import type { SessionObserverDeps } from "./session-observer-model.js";
 import * as observerWork from "./session-observer-work.js";
 import { createSessionObserver } from "./session-observer.js";
@@ -112,14 +113,26 @@ function observerFixture(
     session: { store: useDefaultStore ? undefined : database.path },
     agents: { defaults: { utilityModel: "" } },
   };
+  const prepareModel = async () => preparedModel();
+  const completeModel = async () =>
+    modelMessage({ headline: "Completed observation", health: "done" });
+  const prepareSpy = vi
+    .spyOn(observerModel, "defaultPrepareModel")
+    .mockImplementation(prepareModel);
+  const completeSpy = vi
+    .spyOn(observerModel, "defaultCompleteModel")
+    .mockImplementation(completeModel);
   const observer = createSessionObserver({
     getConfig: () => cfg,
     subscribers,
     broadcastToConnIds: broadcast,
     ...(persistDigests ? {} : { persistDigest: persisted }),
-    prepareModel: async () => preparedModel(),
-    completeModel: async () => modelMessage({ headline: "Completed observation", health: "done" }),
   });
+  // Restore native exports; only this observer retains the rearmed spies.
+  prepareSpy.mockRestore();
+  prepareSpy.mockImplementation(prepareModel);
+  completeSpy.mockRestore();
+  completeSpy.mockImplementation(completeModel);
   observer.setConnectionVisibility("viewer", true);
   return {
     observer,

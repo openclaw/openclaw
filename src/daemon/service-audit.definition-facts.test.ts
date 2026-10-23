@@ -198,6 +198,68 @@ it.each(["other-source", "unreadable-drop-in"])(
   },
 );
 
+it.each(["base", "drop-in"])("recognizes standard systemd directives in %s", async (location) => {
+  const custom = [
+    "[Unit]",
+    "OnFailure=recovery.service",
+    "StartLimitBurst=10",
+    "StartLimitIntervalSec=120",
+    "[Service]",
+    "CPUWeight=1000",
+    "KillMode=control-group",
+    "ManagedOOMPreference=avoid",
+    "TimeoutStartSec=60",
+    "ExecStartPre=/usr/bin/true",
+    "RestartSteps=5",
+    "RestartMaxDelaySec=60",
+    "ProtectSystem=strict",
+    "MemoryMax=1G",
+    "[Install]",
+    "Alias=custom.service",
+    "Also=helper.service",
+  ].join("\n");
+  const fixture = await systemdFixture(
+    (unit) => (location === "base" ? `${unit}\n${custom}\n` : unit),
+    location === "drop-in" ? `${custom}\n` : undefined,
+  );
+  const result = await auditGatewayServiceConfig(fixture);
+  const sourcePath =
+    location === "base" ? fixture.sourcePath : `${fixture.sourcePath}.d/operator.conf`;
+  expect(result.definitionDrift).toContainEqual(
+    expect.objectContaining({
+      kind: "unknown-edit",
+      key: "Service.CPUWeight",
+      sourcePath,
+      message: expect.stringContaining("not changed"),
+    }),
+  );
+  expect(JSON.stringify(result.definitionDrift)).not.toContain("unrecognized");
+
+  await fs.appendFile(sourcePath, "\n[Service]\nRestartStpes=5\nOnFailure=wrong-section.service\n");
+  const unknown = (await auditGatewayServiceConfig(fixture)).definitionDrift?.filter((fact) =>
+    fact.message.includes("unrecognized"),
+  );
+  expect(unknown?.map((fact) => fact.key)).toEqual(["Service.RestartStpes", "Service.OnFailure"]);
+});
+
+it.each(["base", "drop-in"])("preserves ignored systemd metadata in %s", async (location) => {
+  const metadata =
+    "[Unit]\nX-Fleet=managed\n[X-Fleet]\nOwner=operations\nRestartSec=20\nKillMode=process\n";
+  const fixture = await systemdFixture(
+    (unit) => (location === "base" ? `${unit}\n${metadata}` : unit),
+    location === "drop-in" ? metadata : undefined,
+  );
+  const result = await auditGatewayServiceConfig(fixture);
+  expect(result.issues).toEqual([]);
+  expect(result.definitionDrift).toHaveLength(4);
+  for (const fact of result.definitionDrift ?? []) {
+    expect(fact).toMatchObject({
+      kind: "unknown-edit",
+      message: expect.stringContaining("not changed"),
+    });
+  }
+});
+
 it.each([
   { seconds: undefined, kind: "outdated" },
   { seconds: 20, kind: "outdated" },

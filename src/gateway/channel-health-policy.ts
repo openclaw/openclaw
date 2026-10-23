@@ -7,23 +7,21 @@ import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/type
 
 type ChannelHealthSnapshot = Omit<ChannelAccountSnapshot, "accountId">;
 
-type ChannelHealthEvaluationReason =
-  | "healthy"
-  | "unmanaged"
-  | "not-running"
-  | "terminal-disconnect"
-  | "blocked"
-  | "busy"
-  | "stuck"
-  | "startup-connect-grace"
-  | "reconnect-grace"
-  | "disconnected"
-  | "stale-socket"
-  | "ingress-unavailable";
-
 export type ChannelHealthEvaluation = {
   healthy: boolean;
-  reason: ChannelHealthEvaluationReason;
+  reason:
+    | "healthy"
+    | "unmanaged"
+    | "not-running"
+    | "terminal-disconnect"
+    | "blocked"
+    | "busy"
+    | "stuck"
+    | "startup-connect-grace"
+    | "reconnect-grace"
+    | "disconnected"
+    | "stale-socket"
+    | "ingress-unavailable";
 };
 
 export type ChannelHealthPolicy = {
@@ -43,14 +41,6 @@ export function resolveChannelHealthState(
     ? evaluation.reason
     : snapshot.healthState;
 }
-
-type ChannelRestartReason =
-  | "gave-up"
-  | "stopped"
-  | "stale-socket"
-  | "stuck"
-  | "disconnected"
-  | "ingress-unavailable";
 
 function resolveObservedChannelTimestamp(value: unknown, now: number): number | null {
   return typeof value === "number" &&
@@ -185,7 +175,7 @@ export function evaluateChannelHealth(
 export function resolveChannelRestartReason(
   snapshot: ChannelHealthSnapshot,
   evaluation: ChannelHealthEvaluation,
-): ChannelRestartReason {
+): "gave-up" | "stopped" | "stale-socket" | "stuck" | "disconnected" | "ingress-unavailable" {
   // Restart reasons are intentionally coarse: downstream logs/UI need stable
   // categories, while detailed channel state stays in the health snapshot.
   if (

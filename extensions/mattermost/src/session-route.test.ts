@@ -26,13 +26,13 @@ describe("mattermost session route", () => {
     expect(resolveRoute(`channel:${id}`).recipientSessionExact).toBe(false);
   });
 
-  it("keeps explicit replyToId ahead of recovered currentSessionKey thread", () => {
-    const route = resolveRoute("mattermost:channel:chan123", {
-      replyToId: "explicit-root",
-      currentSessionKey: "agent:main:mattermost:channel:chan123:thread:root-post",
-    });
-
-    expect(route).toMatchObject({
+  it("keeps explicit replyToId ahead of the recovered thread", () => {
+    expect(
+      resolveRoute("mattermost:channel:chan123", {
+        replyToId: "explicit-root",
+        currentSessionKey: "agent:main:mattermost:channel:chan123:thread:root-post",
+      }),
+    ).toMatchObject({
       sessionKey: "agent:main:mattermost:channel:chan123:thread:explicit-root",
       threadId: "explicit-root",
     });
@@ -75,50 +75,32 @@ describe("mattermost session route", () => {
     },
   );
 
-  it("keeps a public channel as channel when an unrelated group session key exists", () => {
+  it.each([
+    ["unrelated peer", "agent:main:mattermost:group:other:thread:root-post", undefined],
+    ["directory override", "agent:main:mattermost:group:pub999:thread:stale-root", "channel"],
+    [
+      "embedded route",
+      "agent:main:other:group:peer:mattermost:group:pub999:thread:root-post",
+      undefined,
+    ],
+  ] as const)("keeps public routing for %s", (_name, currentSessionKey, kind) => {
     const route = resolveRoute("mattermost:channel:pub999", {
-      // A group session key for a DIFFERENT peer must not leak onto this channel.
-      currentSessionKey: "agent:main:mattermost:group:priv123:thread:root-post",
+      currentSessionKey,
+      ...(kind
+        ? { resolvedTarget: { to: "channel:pub999", kind, source: "directory" as const } }
+        : {}),
     });
-
+    expect(route.peer).toEqual({ kind: "channel", id: "pub999" });
     expect(route).toMatchObject({
-      peer: { kind: "channel" },
       chatType: "channel",
       baseSessionKey: "agent:main:mattermost:channel:pub999",
     });
-  });
-
-  it("lets an authoritative public channel override a stale same-peer group session", () => {
-    const route = resolveRoute("mattermost:channel:pub999", {
-      resolvedTarget: {
-        to: "channel:pub999",
-        kind: "channel",
-        source: "directory",
-      },
-      currentSessionKey: "agent:main:mattermost:group:pub999:thread:stale-root",
-    });
-
-    expect(route.peer).toEqual({ kind: "channel", id: "pub999" });
-    expect(route.baseSessionKey).toBe("agent:main:mattermost:channel:pub999");
     expect(route.sessionKey).not.toContain("mattermost:group:pub999");
-  });
-
-  it("ignores a non-canonical session key containing an embedded Mattermost route", () => {
-    const route = resolveRoute("mattermost:channel:priv123", {
-      currentSessionKey: "agent:main:other:group:peer:mattermost:group:priv123:thread:root-post",
-    });
-
-    expect(route.peer.kind).toBe("channel");
   });
 
   it("returns null when the target is empty after normalization", () => {
     expect(
-      resolveMattermostOutboundSessionRoute({
-        cfg: {},
-        agentId: "main",
-        accountId: "acct-1",
-        target: "mattermost:",
-      }),
+      resolveMattermostOutboundSessionRoute({ cfg: {}, agentId: "main", target: "mattermost:" }),
     ).toBeNull();
   });
 });

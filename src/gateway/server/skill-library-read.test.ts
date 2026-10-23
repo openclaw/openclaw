@@ -13,6 +13,7 @@ import {
   type SkillsLibraryReceipt,
   type SkillLibrarySelection,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { waitForGatewayStartup } from "../../../test/helpers/gateway-startup.js";
 import {
   acquireGatewayTestWebSocket,
   closeGatewayTestWebSocket,
@@ -359,6 +360,7 @@ describe("Gateway pinned manual library read", () => {
               startGatewayServer(port, { bind: "loopback", controlUiEnabled: false }),
             );
             await gateway.startupSettled;
+            await waitForGatewayStartup(port);
             const alice = await connectProfile(
               port,
               "alice@example.test",

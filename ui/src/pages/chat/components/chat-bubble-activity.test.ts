@@ -100,7 +100,10 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
   expect(status!.open).toBe(true);
   expect(status!.querySelector(".chat-working-indicator")).not.toBeNull();
   button!.click();
-  await waitForSolid(() => expect(find(".chat-activity-group.is-open")).not.toBeNull());
+  await waitForSolid(() => {
+    expect(find(".chat-activity-group.is-open")).not.toBeNull();
+    expect(find(".chat-activity-group__body .chat-tool-msg-summary:enabled")).not.toBeNull();
+  });
   const tool = container.querySelector<HTMLButtonElement>(
     ".chat-activity-group__body .chat-tool-msg-summary",
   );

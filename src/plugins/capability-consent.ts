@@ -5,6 +5,7 @@ import type {
   PluginAcceptedDeclaredSurface,
   PluginInstallRecord,
 } from "../config/types.plugins.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { resolveUserPath } from "../utils.js";
 import {
   inspectPluginCapabilityArtifact,
@@ -112,12 +113,7 @@ function throwManagedPluginCapabilityConsentRequired(
 ): never {
   pendingPluginCapabilityReviews.delete(review.pluginId);
   pendingPluginCapabilityReviews.set(review.pluginId, review);
-  if (pendingPluginCapabilityReviews.size > 32) {
-    const oldest = pendingPluginCapabilityReviews.keys().next().value;
-    if (oldest !== undefined) {
-      pendingPluginCapabilityReviews.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(pendingPluginCapabilityReviews, 32);
   throw new ManagedPluginLifecycleError(
     `Plugin "${review.pluginId}" requires capability consent. ${recovery}`,
     {

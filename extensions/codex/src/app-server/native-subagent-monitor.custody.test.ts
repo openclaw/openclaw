@@ -10,6 +10,7 @@ import {
   releaseCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
+import { createNativeSubagentCompletionCustodyFixture as createCustody } from "./native-subagent-custody.test-support.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import {
   closeAgentNotification,
@@ -50,45 +51,6 @@ function spawnNotification(
   };
 }
 
-function createCustody() {
-  const holds: AgentHarnessCompletionCustody[] = [];
-  const executions = new Set<AgentHarnessCompletionCustody>();
-  const released = createDeferred<void>();
-  const retain = (settled = false): AgentHarnessCompletionCustody => {
-    const lifetime = new AbortController();
-    const hold: AgentHarnessCompletionCustody = {
-      signal: lifetime.signal,
-      isCurrent: () => !lifetime.signal.aborted,
-      retain() {
-        lifetime.signal.throwIfAborted();
-        return retain(!executions.has(hold));
-      },
-      settleExecution: () => {
-        executions.delete(hold);
-      },
-      release() {
-        executions.delete(hold);
-        lifetime.abort();
-        if (holds.every((entry) => entry.signal.aborted)) {
-          released.resolve();
-        }
-      },
-    };
-    holds.push(hold);
-    if (!settled) {
-      executions.add(hold);
-    }
-    return hold;
-  };
-  return {
-    root: retain(),
-    holds,
-    executions,
-    released: released.promise,
-    live: () => holds.filter((hold) => !hold.signal.aborted),
-  };
-}
-
 afterEach(() => vi.useRealTimers());
 
 describe("native assignment completion custody", () => {
@@ -109,7 +71,6 @@ describe("native assignment completion custody", () => {
       const claimChildThread = vi.fn(async () => undefined);
       const claimDirectChild = vi.fn(() => vi.fn());
       const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
-        recoveryPollDelaysMs: [],
         claimChildThread,
       });
       let current = true;
@@ -232,9 +193,7 @@ describe("native assignment completion custody", () => {
         .mockResolvedValueOnce(first.root)
         .mockResolvedValueOnce(second.root);
       runtime.deliverAgentHarnessCompletion.mockResolvedValue({ delivered: false, path: "none" });
-      const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
-        recoveryPollDelaysMs: [],
-      });
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
       try {
         const owner = await registerParent(monitor);
         const other = await registerParent(monitor);
@@ -287,9 +246,7 @@ describe("native assignment completion custody", () => {
     runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(source.root);
     const emit = vi.fn();
     runtime.createAgentHarnessCompletionEventSink.mockReturnValue(emit);
-    const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
-      recoveryPollDelaysMs: [],
-    });
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
     const parent = await registerParent(monitor);
     parent.bindTurn("parent-turn");
     for (const child of ["child-thread", "other-child"]) {
@@ -315,7 +272,6 @@ describe("native assignment completion custody", () => {
     const source = createCustody();
     runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(source.root);
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
-      recoveryPollDelaysMs: [],
       hasObservationBacking: () => true,
     });
     const parent = await registerParent(monitor);
@@ -424,7 +380,6 @@ describe("Codex native parent retirement", () => {
       const releaseChildThread = vi.fn(async () => {});
       onTestFinished(() => capture.resolve(forget));
       const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
-        recoveryPollDelaysMs: [],
         captureChildThreadForget,
         claimChildThread,
         releaseChildThread,
@@ -771,7 +726,6 @@ async function createFixture(submissionStore?: CodexNativeSubagentSubmissionStor
     };
   };
   const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
-    recoveryPollDelaysMs: [10],
     retainClient: () => retain(heldClients),
     retainParentThread: () => retain(heldThreads),
     hasObservationBacking: (parentThreadId, childThreadId) =>

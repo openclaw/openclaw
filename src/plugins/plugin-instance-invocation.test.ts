@@ -50,7 +50,7 @@ it.each(["ordinary", "consumer"] as const)(
       callback();
       expect(getScope()).toBe(outer);
     });
-    const frames = vi.spyOn(AsyncLocalStorage.prototype, "run");
+    const frames = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
     hook(() => {
       calls++;
       const scope = getScope();

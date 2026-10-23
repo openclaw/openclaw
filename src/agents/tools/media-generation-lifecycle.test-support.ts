@@ -6,12 +6,16 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { loadWebMedia } from "../../media/web-media.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { findMediaGenerationOperation } from "../media-generation-activity.js";
+import { observeMediaGenerationSettlement } from "../media-generation-activity.observer.test-support.js";
 import type { AnyAgentTool } from "./common.js";
 import type { createImageGenerateTool } from "./image-generate-tool.js";
 
 type MediaKind = "image" | "video" | "music";
 type ToolOptions = NonNullable<Parameters<typeof createImageGenerateTool>[0]>;
-type TaskMocks = Record<"createOperation" | "completeOperation", ReturnType<typeof vi.fn>>;
+type TaskMocks = Record<
+  "createOperation" | "completeOperation" | "failOperation",
+  ReturnType<typeof vi.fn>
+>;
 type ToolContract = {
   kind: MediaKind;
   createTool: (options: ToolOptions) => AnyAgentTool;
@@ -25,8 +29,15 @@ export function createMediaRequesterReadMock(
     sessionId: "media-requester",
     updatedAt: 1,
   }),
-): Pick<typeof SessionEntryRuntime, "withSessionEntryReadOnlyInWorker"> {
+): Pick<
+  typeof SessionEntryRuntime,
+  "withSessionEntryReadOnlyInWorker" | "readSessionEntryReadOnlyInWorker"
+> {
   return {
+    readSessionEntryReadOnlyInWorker: async (_scope, assertCurrent) => {
+      assertCurrent?.();
+      return readEntry();
+    },
     withSessionEntryReadOnlyInWorker: async (_scope, assertCurrent, consume) => {
       assertCurrent();
       return consume({ ok: true, value: readEntry() }, { kind: "file", assertCurrent });
@@ -43,6 +54,50 @@ const imageReference = (value: string) => ({
   buffer: Buffer.from(value),
   contentType: "image/png",
 });
+
+/** Hold external results while native detached tasks reach terminal publication. */
+export async function withHeldMediaGenerationResult(
+  generate: MockInstance,
+  tasks: TaskMocks,
+  run: (complete: (count?: number) => Promise<void>) => Promise<void>,
+) {
+  const producer = generate.getMockImplementation()!;
+  const released = createDeferred();
+  generate.mockImplementation(async (...args: unknown[]) => {
+    const result: unknown = await producer(...args);
+    await released.promise;
+    return result;
+  });
+  const settlement = observeMediaGenerationSettlement(tasks);
+  try {
+    await run(async (count = 1) => {
+      released.resolve();
+      expect(await settlement.wait(count)).toEqual(Array(count).fill("succeeded"));
+    });
+  } finally {
+    released.resolve();
+    await settlement.wait(tasks.createOperation.mock.calls.length);
+  }
+}
+
+/** Join the exact cron cleanup tail before this fixture restores module mocks. */
+export async function withHeldCronMediaGenerationResult(
+  ...args: Parameters<typeof withHeldMediaGenerationResult>
+) {
+  const cleanup = vi.spyOn(
+    await import("../../cron/run-continuation-cleanup.js"),
+    "removeCronRunContinuationSessionIfIdle",
+  );
+  try {
+    await withHeldMediaGenerationResult(...args);
+  } finally {
+    try {
+      await Promise.all(cleanup.mock.results.map(({ value }) => value));
+    } finally {
+      cleanup.mockRestore();
+    }
+  }
+}
 
 export function defineMediaGenerationCancellationTests(
   params: ToolContract & {
@@ -61,26 +116,21 @@ export function defineMediaGenerationCancellationTests(
     tasks.createOperation.mockReturnValue({ taskId: `task-${kind}-${phase}` });
     const controller = new AbortController();
     const abortReason = new Error(`${kind} requester cancelled`);
-    const scheduled: Array<() => Promise<void>> = [];
-    const scheduleBackgroundWork = vi.fn((work: () => Promise<void>) => scheduled.push(work));
     const tool = params.createTool({
       config: mediaConfig(kind, primary),
       requesterOrigin: params.requesterOrigin,
       agentSessionKey,
-      scheduleBackgroundWork,
       ...options,
     });
     return {
       controller,
       abortReason,
-      scheduled,
       generate,
       execute: (request: { prompt: string; images?: string[] } = { prompt: `a ${kind}` }) =>
         tool.execute(`call-${kind}-${phase}`, request, controller.signal),
       async expectNotStarted(pending: ReturnType<typeof tool.execute>) {
         await expect(pending).rejects.toBe(abortReason);
         expect(tasks.createOperation).not.toHaveBeenCalled();
-        expect(scheduleBackgroundWork).not.toHaveBeenCalled();
         expect(generate).not.toHaveBeenCalled();
       },
     };
@@ -122,19 +172,21 @@ export function defineMediaGenerationCancellationTests(
 
   it(`keeps an accepted detached ${kind} task running after its requester aborts`, async () => {
     const f = setup("accepted");
-    const result = await f.execute();
-    f.controller.abort(f.abortReason);
-    expect(result.details).toMatchObject({ status: "started" });
-    expect(f.scheduled).toHaveLength(1);
-    await f.scheduled[0]!();
-    expect(f.generate).toHaveBeenCalledOnce();
-    expect(tasks.completeOperation).toHaveBeenCalledOnce();
+    await withHeldMediaGenerationResult(f.generate, tasks, async (complete) => {
+      const result = await f.execute();
+      f.controller.abort(f.abortReason);
+      expect(result.details).toMatchObject({ status: "started" });
+      expect(tasks.completeOperation).not.toHaveBeenCalled();
+      await complete();
+      expect(f.generate).toHaveBeenCalledOnce();
+      expect(tasks.completeOperation).toHaveBeenCalledOnce();
+    });
   });
 }
 
 export function defineMediaGenerationDuplicateTests(
   params: ToolContract & {
-    setupProviders: () => void;
+    setupProviders: () => MockInstance;
     listTasks: ReturnType<typeof vi.fn>;
     cases: Array<{
       name: string;
@@ -151,50 +203,51 @@ export function defineMediaGenerationDuplicateTests(
   const { kind, tasks } = params;
   const title = kind.charAt(0).toUpperCase() + kind.slice(1);
   it.each(params.cases)("$name", async (testCase) => {
-    params.setupProviders();
+    const generate = params.setupProviders();
     const now = Date.now();
     const taskId = `task-${testCase.defaultModel ? "recent" : "model-only"}-${kind}`;
     tasks.createOperation.mockReturnValue({ taskId });
-    const scheduled: Array<() => Promise<void>> = [];
     const tool = params.createTool({
       config: mediaConfig(kind, testCase.primary, testCase.timeoutMs),
       agentDir: params.agentDir,
       agentSessionKey,
       requesterOrigin: params.requesterOrigin,
-      scheduleBackgroundWork: (work) => scheduled.push(work),
     });
-    await tool.execute("call-model-only-start", testCase.request);
-    const createdTask = tasks.createOperation.mock.calls[0]?.[0];
-    expect(createdTask?.runId).toMatch(new RegExp(`^tool:${kind}_generate:`));
-    params.listTasks.mockReturnValue([
-      {
-        taskId,
-        runId: createdTask.runId,
-        requestKey: findMediaGenerationOperation(String(createdTask.runId))?.requestKey,
-        taskKind: `${kind}_generation`,
-        sourceId: `${kind}_generate:google`,
-        requesterSessionKey: agentSessionKey,
-        task: testCase.request.prompt,
-        status: "succeeded",
-        endedAt: now - 10_000,
-        progressSummary: testCase.progressSummary,
-      },
-    ]);
-    const repeats = testCase.defaultModel
-      ? [testCase.primary, testCase.model]
-      : [`google/${testCase.model}`];
-    for (const [index, model] of repeats.entries()) {
-      const result = await tool.execute(`call-repeat-${index}`, {
-        ...testCase.request,
-        model,
-      });
-      expect(scheduled).toHaveLength(1);
-      expect(tasks.createOperation).toHaveBeenCalledTimes(1);
-      const text = `${title} generation task ${taskId} recently succeeded`;
-      expect(result).toMatchObject({
-        content: [{ type: "text", text: expect.stringContaining(text) }],
-        details: { duplicateGuard: true, active: false },
-      });
-    }
+    await withHeldMediaGenerationResult(generate, tasks, async (complete) => {
+      await tool.execute("call-model-only-start", testCase.request);
+      await complete();
+      const createdTask = tasks.createOperation.mock.calls[0]?.[0];
+      expect(createdTask?.runId).toMatch(new RegExp(`^tool:${kind}_generate:`));
+      params.listTasks.mockReturnValue([
+        {
+          taskId,
+          runId: createdTask.runId,
+          requestKey: findMediaGenerationOperation(String(createdTask.runId))?.requestKey,
+          taskKind: `${kind}_generation`,
+          sourceId: `${kind}_generate:google`,
+          requesterSessionKey: agentSessionKey,
+          task: testCase.request.prompt,
+          status: "succeeded",
+          endedAt: now - 10_000,
+          progressSummary: testCase.progressSummary,
+        },
+      ]);
+      const repeats = testCase.defaultModel
+        ? [testCase.primary, testCase.model]
+        : [`google/${testCase.model}`];
+      for (const [index, model] of repeats.entries()) {
+        const result = await tool.execute(`call-repeat-${index}`, {
+          ...testCase.request,
+          model,
+        });
+        expect(generate).toHaveBeenCalledOnce();
+        expect(tasks.createOperation).toHaveBeenCalledTimes(1);
+        const text = `${title} generation task ${taskId} recently succeeded`;
+        expect(result).toMatchObject({
+          content: [{ type: "text", text: expect.stringContaining(text) }],
+          details: { duplicateGuard: true, active: false },
+        });
+      }
+    });
   });
 }

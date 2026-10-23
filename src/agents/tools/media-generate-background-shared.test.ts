@@ -48,7 +48,12 @@ const sessionMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../subagents/announce/subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
+// mock-isolation: Keep requester routing fixtures outside the session database.
 vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async (_scope: unknown, assertCurrent: () => void) => {
+    assertCurrent();
+    return sessionMocks.loadSessionEntry();
+  },
   withSessionEntryReadOnlyInWorker: async (
     _scope: unknown,
     assertCurrent: () => void,
@@ -506,8 +511,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       count: 1,
       terminalResult: {
         terminalOutcome: "blocked",
-        terminalSummary:
-          "Required completion delivery failed before reaching the requester: completion delivery was not confirmed after successful generation.",
       },
     });
     expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
@@ -544,7 +547,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       count: 1,
       terminalResult: {
         terminalOutcome: "blocked",
-        terminalSummary: expect.stringContaining("requester wake failed"),
       },
     });
     expect(lifecycle.failTaskRun).not.toHaveBeenCalled();

@@ -42,6 +42,7 @@ const { values } = parseArgs({
     "warmup-cohorts": { type: "string", default: "5" },
     scenario: { type: "string", default: "all" },
     allocations: { type: "boolean", default: false },
+    "history-source": { type: "string" },
     "start-at": { type: "string" },
     output: { type: "string" },
     revision: { type: "string" },
@@ -190,6 +191,7 @@ async function seed() {
                 source_paths_json: "[]",
                 baseline_json: null,
                 baseline_ref: null,
+                checkpoint_json: null,
                 pending_ref: null,
                 pending_target: null,
                 journal_json: null,
@@ -358,9 +360,13 @@ async function measure() {
   );
   mkdirSync(output);
   const scopedReader = values["scoped-reader"];
+  const historySource = values["history-source"];
   const readerIdentity = "history-diff-reader@example.invalid";
   const readerOrigin = "https://history-diff.example.invalid";
-  let gatewayEnv = env;
+  let gatewayEnv: NodeJS.ProcessEnv = {
+    ...env,
+    ...(historySource ? { OPENCLAW_BENCH_HISTORY_SOURCE: path.resolve(historySource) } : {}),
+  };
   if (scopedReader) {
     const config: unknown = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
     if (!isRecord(config) || !isRecord(config.gateway)) {
@@ -388,7 +394,7 @@ async function measure() {
     };
     const configPath = path.join(output, "gateway-config.json");
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-    gatewayEnv = { ...env, OPENCLAW_CONFIG_PATH: configPath };
+    gatewayEnv = { ...gatewayEnv, OPENCLAW_CONFIG_PATH: configPath };
   }
   const clients: ReturnType<typeof createGatewayWsClient>[] = [];
   const readerProfileIds = new Set<string>();
@@ -619,17 +625,33 @@ async function measure() {
           throw new Error(`${variant.name}: missing patches`);
         }
       }
-      const comparable = Object.fromEntries(
-        Object.entries(response).filter(([key]) => key !== "root" && key !== "sessionKey"),
+      const comparable =
+        variant.method === "chat.history"
+          ? {
+              ...response,
+              ...(isRecord(response.sessionInfo)
+                ? { sessionInfo: { ...response.sessionInfo, snapshotAt: 0 } }
+                : {}),
+            }
+          : Object.fromEntries(
+              Object.entries(response).filter(([key]) => key !== "root" && key !== "sessionKey"),
+            );
+      const payloadJson = JSON.stringify(comparable, (_key, value: unknown) =>
+        variant.method === "chat.history" && typeof value === "string"
+          ? value.replaceAll(root, "<fixture>")
+          : value,
       );
-      const payloadSha256 = createHash("sha256").update(JSON.stringify(comparable)).digest("hex");
+      const payloadSha256 = createHash("sha256").update(payloadJson).digest("hex");
+      if (!diffHashes.has(variant.name)) {
+        writeFileSync(path.join(output, `${variant.name}.json`), payloadJson);
+      }
       if (variant.method === "sessions.diff") {
         const previous = diffHashes.get(variant.name);
         if (previous && previous !== payloadSha256) {
           throw new Error(`${variant.name}: unchanged checkout returned different payload bytes`);
         }
-        diffHashes.set(variant.name, payloadSha256);
       }
+      diffHashes.set(variant.name, payloadSha256);
       return {
         elapsedMs,
         payloadBytes: Buffer.byteLength(JSON.stringify(response)),
@@ -736,6 +758,16 @@ async function measure() {
     }
     const report = {
       revision: values.revision ?? null,
+      historySources: historySource
+        ? Object.fromEntries(
+            ["chat-history-session-read.ts", "chat-history-handler.ts"].map((file) => [
+              file,
+              createHash("sha256")
+                .update(readFileSync(path.join(historySource, file)))
+                .digest("hex"),
+            ]),
+          )
+        : undefined,
       entry: values.entry,
       scenario: values.scenario,
       profiling: values.allocations ? "allocations" : "cpu",

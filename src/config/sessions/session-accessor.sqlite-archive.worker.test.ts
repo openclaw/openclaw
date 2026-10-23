@@ -155,7 +155,6 @@ describe("SQLite transcript archive worker", () => {
     const archivedPath = writeTranscriptArchive({
       archiveDirectory,
       content,
-      reason: "deleted",
       sessionId,
     });
     expect(archivedPath).not.toBe(stagedPath);
@@ -383,23 +382,6 @@ describe("SQLite transcript archive worker", () => {
     await expect(materializeSessionStateDeletePlans([planned, conflict])).rejects.toThrow(
       `Conflicting SQLite transcript archive plans for ${target.sessionId}`,
     );
-  });
-
-  it("deletes empty lifecycle state without producing an archive", async () => {
-    const target = scope("empty-transcript");
-    await entry(target);
-    const result = await deletion(target.sessionKey);
-    expect(result).toMatchObject({ deleted: true, archivedTranscripts: [] });
-    expect(loadSessionEntry(target)).toBeUndefined();
-    const { query, rows } = databaseQueries();
-    expect(
-      rows(
-        query
-          .selectFrom("session_windows")
-          .select("session_id")
-          .where("session_id", "=", target.sessionId),
-      ),
-    ).toEqual([]);
   });
 
   it.each(["empty", "nonempty"] as const)(

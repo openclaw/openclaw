@@ -1,5 +1,4 @@
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
-import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { createContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
 import { beginContextEngineLogicalTurn } from "../../harness/context-engine-turn-begin.js";
 import type { AgentHarness } from "../../harness/types.js";
@@ -45,7 +44,6 @@ export async function admitEmbeddedContextEngine(
         capabilities: harness.contextEngineHostCapabilities ?? [],
       },
       recorder: params.userTurnTranscriptRecorder,
-      isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
       sessionTarget: params.sessionTarget,
     });
     return {

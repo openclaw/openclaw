@@ -2,10 +2,7 @@ import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { Frame, Page } from "playwright-core";
-import {
-  BROWSER_ACTION_NAVIGATION_GRACE_MS,
-  normalizeActBoundedNonNegativeMs,
-} from "./act-policy.js";
+import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import {
   assertBrowserNavigationResultAllowed,
   type BrowserNavigationPolicyOptions,
@@ -87,14 +84,6 @@ type NavigationObservablePage = Pick<Page, "url" | "mainFrame" | "on" | "off">;
 
 const pendingInteractionNavigationGuardCleanup = new WeakMap<Page, () => void>();
 
-export function resolveBoundedDelayMs(
-  value: number | undefined,
-  label: string,
-  maxMs: number,
-): number {
-  return normalizeActBoundedNonNegativeMs(Math.floor(value ?? 0), label, maxMs) ?? 0;
-}
-
 export async function getRestoredPageForTarget(opts: InteractionTargetOptions) {
   const page = await getPageForTargetId(opts);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -117,6 +106,29 @@ export function throwIfInteractionAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection");
   }
+}
+
+function createPolicyAbortSignal(signal?: AbortSignal): {
+  signal?: AbortSignal;
+  cleanup: () => void;
+} {
+  if (!signal) {
+    return { cleanup: () => {} };
+  }
+  const controller = new AbortController();
+  const onAbort = () => {
+    if (!isBrowserObservedDialogBlockedError(signal.reason)) {
+      controller.abort(signal.reason);
+    }
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  if (signal.aborted) {
+    onAbort();
+  }
+  return {
+    signal: controller.signal,
+    cleanup: () => signal.removeEventListener("abort", onAbort),
+  };
 }
 
 export async function runGuardedPageInteraction<T>(
@@ -252,6 +264,7 @@ async function assertObservedInteractionNavigations(
     page: Page;
     targetId?: string;
     observed: ObservedDelayedNavigations;
+    signal?: AbortSignal;
   } & BrowserNavigationPolicyOptions,
   onNoMainFrameNavigation?: () => Promise<void>,
 ): Promise<void> {
@@ -259,7 +272,11 @@ async function assertObservedInteractionNavigations(
   let subframeError: unknown;
   try {
     for (const frameUrl of opts.observed.subframes) {
-      await assertBrowserNavigationResultAllowed({ url: frameUrl, ...navigationPolicy });
+      await assertBrowserNavigationResultAllowed({
+        url: frameUrl,
+        ...navigationPolicy,
+        ...(opts.signal ? { signal: opts.signal } : {}),
+      });
     }
   } catch (err) {
     subframeError = err;
@@ -271,6 +288,7 @@ async function assertObservedInteractionNavigations(
       response: null,
       ...navigationPolicy,
       targetId: opts.targetId,
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
   } else if (onNoMainFrameNavigation) {
     await onNoMainFrameNavigation();
@@ -330,6 +348,7 @@ async function assertInteractionNavigationCompletedSafely<T>(
     page: Page;
     previousUrl: string;
     targetId?: string;
+    signal?: AbortSignal;
   } & BrowserNavigationPolicyOptions,
 ): Promise<T> {
   const navigationPolicy = interactionNavigationPolicy(opts);
@@ -432,6 +451,7 @@ async function awaitNavigationGuardedInteraction<T>(
   type PolicyCheckOutcome = { state: "allowed" } | { state: "failed"; error: unknown };
   const navigationPolicy = interactionNavigationPolicy(opts);
   const hasNavigationPolicy = hasInteractionNavigationPolicy(navigationPolicy);
+  const { signal: policySignal, cleanup: cleanupPolicySignal } = createPolicyAbortSignal(signal);
   let observedPolicyError: unknown;
   const activePolicyChecks = new Set<Promise<PolicyCheckOutcome>>();
   let unsafeSourceQuarantine: Promise<void> | undefined;
@@ -444,6 +464,7 @@ async function awaitNavigationGuardedInteraction<T>(
   const guardedAction = withPageNavigationRequestGuard({
     page: opts.page,
     ...navigationPolicy,
+    ...(policySignal ? { signal: policySignal } : {}),
     onPolicyCheckStarted: (check) => {
       const tracked = check.then<PolicyCheckOutcome, PolicyCheckOutcome>(
         () => ({ state: "allowed" }),
@@ -469,6 +490,7 @@ async function awaitNavigationGuardedInteraction<T>(
       try {
         return await assertInteractionNavigationCompletedSafely({
           ...opts,
+          signal: policySignal,
           action: async () => {
             try {
               // Preserve native dispatch ordering for callers without an authority check.
@@ -501,6 +523,7 @@ async function awaitNavigationGuardedInteraction<T>(
             response: null,
             ...navigationPolicy,
             targetId: opts.targetId,
+            ...(policySignal ? { signal: policySignal } : {}),
           });
         }
       }
@@ -536,5 +559,7 @@ async function awaitNavigationGuardedInteraction<T>(
       throw toErrorObject(observedPolicyError, "Non-Error thrown");
     }
     throw err;
+  } finally {
+    cleanupPolicySignal();
   }
 }

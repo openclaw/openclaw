@@ -9,7 +9,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
-import type { StoredConversationReference } from "./conversation-store.js";
+import type { StoredConversationReference as Reference } from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
@@ -21,9 +21,16 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function conversationStateKey(conversationId: string): string {
-  return crypto.createHash("sha256").update(conversationId).digest("hex");
+function reference(id: string, overrides: Reference = {}): Reference {
+  return {
+    conversation: { id },
+    channelId: "msteams",
+    serviceUrl: "https://service.example.com",
+    ...overrides,
+  };
 }
+
+const thread = (name: string) => `19:${name}@thread.tacv2`;
 
 describe("msteams conversation store (plugin state)", () => {
   let stateDir: string;
@@ -39,70 +46,53 @@ describe("msteams conversation store (plugin state)", () => {
 
   afterEach(() => vi.unstubAllEnvs());
 
-  function openStoredConversations() {
-    return createPluginStateKeyedStoreForTests<StoredConversationReference>("msteams", {
+  function createSeeder(defaults: Reference = reference("")) {
+    const sqlite = createPluginStateKeyedStoreForTests<Reference>("msteams", {
       namespace: "conversations",
       maxEntries: 2000,
       env,
     });
+    return (id: string, fields: Reference = {}) =>
+      sqlite.register(crypto.createHash("sha256").update(id).digest("hex"), {
+        ...defaults,
+        conversation: { ...defaults.conversation, id },
+        ...fields,
+      });
   }
 
   it("filters expired SQLite entries while preserving entries without lastSeenAt", async () => {
-    const ref: StoredConversationReference = {
-      conversation: { id: "19:active@thread.tacv2" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-      user: { id: "u1", aadObjectId: "aad1" },
-    };
-    const sqliteStore = openStoredConversations();
-    await sqliteStore.register(conversationStateKey("19:active@thread.tacv2"), ref);
-    await sqliteStore.register(conversationStateKey("19:old@thread.tacv2"), {
-      ...ref,
-      conversation: { id: "19:old@thread.tacv2" },
-      lastSeenAt: new Date(Date.now() - 366 * 24 * 60 * 60 * 1000).toISOString(),
-    });
-    await sqliteStore.register(conversationStateKey("19:legacy@thread.tacv2"), {
-      ...ref,
-      conversation: { id: "19:legacy@thread.tacv2" },
-    });
+    const user = { id: "u1", aadObjectId: "aad1" };
+    const seed = createSeeder(reference("", { user }));
+    await seed(thread("active"));
+    await seed(thread("old"), { lastSeenAt: new Date(Date.now() - 366 * 86400000).toISOString() });
+    await seed(thread("legacy"));
 
     const store = createMSTeamsConversationStoreState();
     const ids = (await store.list()).map((entry) => entry.conversationId).toSorted();
-    expect(ids).toEqual(["19:active@thread.tacv2", "19:legacy@thread.tacv2"]);
+    expect(ids).toEqual([thread("active"), thread("legacy")]);
 
-    expect(await store.get("19:old@thread.tacv2")).toBeNull();
-    const legacyConversation = await store.get("19:legacy@thread.tacv2");
-    if (!legacyConversation?.conversation) {
-      throw new Error("expected migrated legacy Teams conversation payload");
-    }
-    expect(legacyConversation.conversation.id).toBe("19:legacy@thread.tacv2");
+    expect(await store.get(thread("old"))).toBeNull();
+    expect((await store.get(thread("legacy")))?.conversation?.id).toBe(thread("legacy"));
 
-    await store.upsert("19:new@thread.tacv2", {
-      ...ref,
-      conversation: { id: "19:new@thread.tacv2" },
-    });
+    await store.upsert(thread("new"), reference(thread("new"), { user }));
     const idsAfter = (await store.list()).map((entry) => entry.conversationId).toSorted();
-    expect(idsAfter).toEqual([
-      "19:active@thread.tacv2",
-      "19:legacy@thread.tacv2",
-      "19:new@thread.tacv2",
-    ]);
+    expect(idsAfter).toEqual([thread("active"), thread("legacy"), thread("new")]);
     await fs.promises.access(path.join(stateDir, "state", "openclaw.sqlite"));
   });
 
   it("isolates account lookups and removal while preserving the default namespace", async () => {
-    const reference: StoredConversationReference = {
+    const ref: Reference = {
       conversation: { id: "19:shared", conversationType: "personal" },
       serviceUrl: "https://service.example.com/default",
       user: { id: "shared-user", aadObjectId: "shared-aad" },
     };
-    await openStoredConversations().register(conversationStateKey("19:shared"), reference);
+    await createSeeder(ref)("19:shared");
     const defaultStore = createMSTeamsConversationStoreState({ accountId: "default" });
     const namedStore = createMSTeamsConversationStoreState({ accountId: "19" });
-    expect(await defaultStore.get("19:shared")).toEqual(reference);
+    expect(await defaultStore.get("19:shared")).toEqual(ref);
     expect(await namedStore.get("19:shared")).toBeNull();
     await namedStore.upsert("19:shared", {
-      ...reference,
+      ...ref,
       serviceUrl: "https://service.example.com/named",
     });
     expect(await namedStore.findPreferredDmByUserId("shared-aad")).toMatchObject({
@@ -123,28 +113,15 @@ describe("msteams conversation store (plugin state)", () => {
   it("serializes concurrent upserts so sparse activities preserve independent fields", async () => {
     const store = createMSTeamsConversationStoreState();
 
-    await store.upsert("conv-race", {
+    const ref = reference("conv-race", {
       conversation: { id: "conv-race", conversationType: "personal" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
       user: { id: "u1" },
     });
+    await store.upsert("conv-race", ref);
 
     await Promise.all([
-      store.upsert("conv-race", {
-        conversation: { id: "conv-race", conversationType: "personal" },
-        channelId: "msteams",
-        serviceUrl: "https://service.example.com",
-        user: { id: "u1" },
-        timezone: "Europe/London",
-      }),
-      store.upsert("conv-race", {
-        conversation: { id: "conv-race", conversationType: "personal" },
-        channelId: "msteams",
-        serviceUrl: "https://service.example.com",
-        user: { id: "u1" },
-        tenantId: "tenant-1",
-      }),
+      store.upsert("conv-race", { ...ref, timezone: "Europe/London" }),
+      store.upsert("conv-race", { ...ref, tenantId: "tenant-1" }),
     ]);
 
     await expect(store.get("conv-race")).resolves.toMatchObject({
@@ -154,26 +131,15 @@ describe("msteams conversation store (plugin state)", () => {
   });
 
   it("prunes the timestamp-less conversation first at the row cap", async () => {
-    const sqliteStore = openStoredConversations();
-    const reference = {
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-    };
-    await sqliteStore.register(conversationStateKey("conv-legacy"), {
-      ...reference,
-      conversation: { id: "conv-legacy" },
-    });
+    const seed = createSeeder();
+    await seed("conv-legacy");
     for (let index = 0; index < 999; index += 1) {
       const id = `conv-seen-${String(index).padStart(4, "0")}`;
-      await sqliteStore.register(conversationStateKey(id), {
-        ...reference,
-        conversation: { id },
-        lastSeenAt: new Date(Date.UTC(2026, 1, 1, 0, 0, index)).toISOString(),
-      });
+      await seed(id, { lastSeenAt: new Date(Date.UTC(2026, 1, 1, 0, 0, index)).toISOString() });
     }
 
     const store = createMSTeamsConversationStoreState();
-    await store.upsert("conv-new", { ...reference, conversation: { id: "conv-new" } });
+    await store.upsert("conv-new", reference("conv-new"));
     const ids = (await store.list()).map((entry) => entry.conversationId);
 
     expect(ids).toHaveLength(1000);

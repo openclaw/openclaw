@@ -216,15 +216,14 @@ suite.define(() => {
     await expectFocused(transcriptTrigger);
 
     await openChatSidePanelType(page, "Files");
-    await page.locator(".chat-workspace-rail__group-summary", { hasText: "Artifacts" }).click();
-    const artifactRow = page.locator(".chat-workspace-rail__file-open", {
-      hasText: "openclaw-banner.png",
-    });
+    const artifactRow = page
+      .locator(".workspace-desktop")
+      .getByRole("button", { name: "openclaw-banner.png", exact: true });
     await artifactRow.waitFor({ state: "visible", timeout: 10_000 });
     await artifactRow.click();
-    const sidebarTrigger = page.getByRole("button", {
-      name: "Open image openclaw-banner.png",
-    });
+    const sidebarTrigger = page
+      .getByRole("button", { name: "Open image openclaw-banner.png", exact: true })
+      .filter({ has: page.getByRole("img", { name: "openclaw-banner.png", exact: true }) });
     await sidebarTrigger.waitFor({ state: "visible", timeout: 10_000 });
 
     await sidebarTrigger.click();
@@ -334,13 +333,21 @@ suite.define(() => {
     ).map((dataUrl) => dataUrl.split(",")[1]!);
     const sources = names.map((name) => "media://inbound/" + name + ".png");
     const mediaRequests: { source: string; variant: string | null; width: string | null }[] = [];
-    const renditionSources = () =>
-      mediaRequests.filter((request) => request.width === "1920").map((request) => request.source);
+    const metadataSources: string[] = [];
+    // Routing disables HTTP caching, so revisiting a decoded URL may refetch it.
+    const renditionSources = () => [
+      ...new Set(
+        mediaRequests
+          .filter((request) => request.width === "1920")
+          .map((request) => request.source),
+      ),
+    ];
     await page.route("**/__openclaw__/assistant-media?**", async (route) => {
       const url = new URL(route.request().url());
       const index = sources.indexOf(url.searchParams.get("source") ?? "");
       expect(index).toBeGreaterThanOrEqual(0);
       if (url.searchParams.get("meta") === "1") {
+        metadataSources.push(sources[index]!);
         await route.fulfill({
           json: {
             available: true,
@@ -401,6 +408,7 @@ suite.define(() => {
       await page.keyboard.press("ArrowLeft");
       await polledAttribute(image, "alt").toBe("after.png");
       expect(renditionSources()).toEqual(sources);
+      expect(metadataSources.toSorted()).toEqual(sources.toSorted());
       expect(mediaRequests.every((request) => request.variant === "thumbnail")).toBe(true);
       const requestedDownload = page.waitForEvent("download");
       await exactButton(lightbox, "Download image").click();
@@ -409,6 +417,7 @@ suite.define(() => {
         { source: sources[1], variant: null, width: null },
       ]);
       mediaRequests.length = 0;
+      metadataSources.length = 0;
       await page.keyboard.press("Escape");
       await expect.poll(() => lightbox.count()).toBe(0);
       await expectFocused(trigger);

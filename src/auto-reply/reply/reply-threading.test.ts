@@ -38,30 +38,22 @@ describe("resolveReplyToMode", () => {
       },
     } as OpenClawConfig;
     const topLevelFallbackCfg: OpenClawConfig = { channels: { slack: { replyToMode: "first" } } };
-    const cases: Array<{
-      cfg: OpenClawConfig;
-      channel?: "telegram" | "discord" | "slack";
-      chatType?: "direct" | "group" | "channel";
-      expected: "off" | "all" | "first";
-    }> = [
-      { cfg: emptyCfg, channel: "telegram", expected: "all" },
-      { cfg: emptyCfg, channel: "discord", expected: "all" },
-      { cfg: emptyCfg, channel: "slack", expected: "all" },
-      { cfg: emptyCfg, channel: undefined, expected: "all" },
-      { cfg: configuredCfg, channel: "telegram", expected: "all" },
-      { cfg: configuredCfg, channel: "discord", expected: "first" },
-      { cfg: configuredCfg, channel: "slack", expected: "all" },
-      { cfg: chatTypeCfg, channel: "slack", chatType: "direct", expected: "all" },
-      { cfg: chatTypeCfg, channel: "slack", chatType: "group", expected: "first" },
-      { cfg: chatTypeCfg, channel: "slack", chatType: "channel", expected: "off" },
-      { cfg: chatTypeCfg, channel: "slack", chatType: undefined, expected: "off" },
-      { cfg: topLevelFallbackCfg, channel: "slack", chatType: "direct", expected: "first" },
-      { cfg: topLevelFallbackCfg, channel: "slack", chatType: "channel", expected: "first" },
-    ];
-    for (const testCase of cases) {
-      expect(resolveReplyToMode(testCase.cfg, testCase.channel, null, testCase.chatType)).toBe(
-        testCase.expected,
-      );
+    for (const [cfg, channel, chatType, expected] of [
+      [emptyCfg, "telegram", undefined, "all"],
+      [emptyCfg, "discord", undefined, "all"],
+      [emptyCfg, "slack", undefined, "all"],
+      [emptyCfg, undefined, undefined, "all"],
+      [configuredCfg, "telegram", undefined, "all"],
+      [configuredCfg, "discord", undefined, "first"],
+      [configuredCfg, "slack", undefined, "all"],
+      [chatTypeCfg, "slack", "direct", "all"],
+      [chatTypeCfg, "slack", "group", "first"],
+      [chatTypeCfg, "slack", "channel", "off"],
+      [chatTypeCfg, "slack", undefined, "off"],
+      [topLevelFallbackCfg, "slack", "direct", "first"],
+      [topLevelFallbackCfg, "slack", "channel", "first"],
+    ] as const) {
+      expect(resolveReplyToMode(cfg, channel, null, chatType)).toBe(expected);
     }
   });
 

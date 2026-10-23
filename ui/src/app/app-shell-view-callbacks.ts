@@ -3,6 +3,7 @@ import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { createUpdateProgressWatcher, type UpdateProgress } from "./update-confirmation.ts";
@@ -10,7 +11,7 @@ import { createUpdateProgressWatcher, type UpdateProgress } from "./update-confi
 type ShellViewCallbackHost = {
   readonly context: ApplicationContext | undefined;
   readonly routeOutlet?: ControlUiReadinessOutlet;
-  openNewSession(agentId: string, target?: NewSessionTarget): void;
+  readonly shellNavigation: ShellNavigationCapability;
   toggleNavigationSurface(): void;
 };
 
@@ -50,7 +51,7 @@ export function createShellViewCallbacks(host: ShellViewCallbackHost) {
           sessionScope: true,
         }).allowed
       ) {
-        host.openNewSession(agentId, target);
+        host.shellNavigation.openNewSession(agentId, target);
       }
     },
     watchUpdateProgress: (listener: (progress: UpdateProgress) => void) => {

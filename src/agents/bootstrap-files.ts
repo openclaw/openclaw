@@ -18,6 +18,7 @@ import { getAgentWorkspaceAccess } from "./workspace-access.js";
 import { resolveWorkspaceBootstrapPath } from "./workspace-bootstrap-policy.js";
 import { loadPersonalUserBootstrapFile } from "./workspace-personal-bootstrap.js";
 import {
+  DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_USER_FILENAME,
@@ -261,6 +262,7 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
 type BootstrapFileResolutionParams = {
   bootstrapUserProfileId?: string;
   workspaceDir: string;
+  executionWorkspaceDir?: string;
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
@@ -285,7 +287,27 @@ export async function resolveBootstrapFilesForPreparation(
 export async function resolveBootstrapFilesForRun(
   params: BootstrapFileResolutionParams,
 ): Promise<WorkspaceBootstrapFile[]> {
-  return resolveBootstrapFiles(params, "registered");
+  const bootstrapFiles = await resolveBootstrapFiles(params, "registered");
+  const executionWorkspaceDir =
+    params.executionWorkspaceDir && resolveUserPath(params.executionWorkspaceDir);
+  if (executionWorkspaceDir && executionWorkspaceDir !== resolveUserPath(params.workspaceDir)) {
+    const executionAgentsPath = path.join(executionWorkspaceDir, DEFAULT_AGENTS_FILENAME);
+    // Execution projects contribute instructions, never agent identity or memory.
+    for (const file of await resolveBootstrapFiles(
+      { ...params, workspaceDir: executionWorkspaceDir },
+      "registered",
+    )) {
+      if (
+        file.name === DEFAULT_AGENTS_FILENAME &&
+        !file.missing &&
+        path.resolve(file.path) === executionAgentsPath
+      ) {
+        file.origin = { kind: "execution-project", rootPath: executionWorkspaceDir };
+        bootstrapFiles.push(file);
+      }
+    }
+  }
+  return bootstrapFiles;
 }
 
 async function resolveBootstrapFiles(
@@ -344,7 +366,7 @@ async function resolveBootstrapFiles(
     workspaceSetupCompleted,
     params.workspaceDir,
   );
-  // Heartbeat scratch is runner-owned; all lightweight runs omit bootstrap context.
+  // Lightweight runs omit bootstrap context.
   const bootstrapFiles = params.contextMode === "lightweight" ? [] : sessionFiles;
 
   const hooked =

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { createComponent, createMemo } from "solid-js";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { UsersListModelAccountsResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
@@ -21,6 +21,7 @@ import {
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -38,6 +39,9 @@ import {
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
+import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
+
+beforeEach(installModelPickerLayout);
 
 function composerControls(state: ChatPageHost) {
   return renderChatPaneComposerControls({
@@ -91,7 +95,7 @@ describe("chat pane composer controls", () => {
           ],
         },
       };
-      store.current().opts.onHello?.(hello);
+      store.current().testOptions.onHello?.(hello);
       const client = store.gateway.snapshot.client!;
       const { pane, state } = createTestChatPane({ client });
       pane.context = { ...pane.context, gateway: store.gateway };
@@ -133,13 +137,13 @@ describe("chat pane composer controls", () => {
 
       store
         .current()
-        .opts.onClose?.({ code: 1006, reason: "network unavailable", willRetry: true });
+        .testOptions.onClose?.({ code: 1006, reason: "network unavailable", willRetry: true });
       await refreshChatMetadata(state);
       expectOriginal();
       expect(composerControls(state).model.modelCatalogState.status).toBe("offline");
       expect(state.chatModelsLoading).toBe(false);
       const readsBeforeReconnect = reads;
-      store.current().opts.onHello?.(hello);
+      store.current().testOptions.onHello?.(hello);
       await waitForFast(() => expect(reads).toBe(readsBeforeReconnect + 1));
       expectOriginal();
       stale.resolve({
@@ -284,6 +288,7 @@ describe("chat pane composer controls", () => {
       await waitForSolid(() =>
         expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
       );
+      expandModelProviders(container);
       expect(container.textContent).toContain(failureLabel);
 
       const refresh =
@@ -318,6 +323,7 @@ describe("chat pane composer controls", () => {
       request.mockResolvedValueOnce({ models: cachedModels });
       await refreshChatModelCatalogOnDemand(state);
       flush();
+      expandModelProviders(container);
       expect(container.textContent).toContain("Cached Model");
       expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     },
@@ -395,6 +401,7 @@ describe("chat pane composer controls", () => {
       await waitForSolid(() =>
         expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
       );
+      expandModelProviders(container);
       if (cachedCatalog) {
         expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
         expect(
@@ -471,6 +478,7 @@ describe("chat pane composer controls", () => {
     await waitForSolid(() =>
       expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
     );
+    expandModelProviders(container);
     expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     expect(container.textContent).toContain("Cached Model");
     expect(container.textContent).not.toContain("Loading models…");

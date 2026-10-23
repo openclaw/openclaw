@@ -50,6 +50,7 @@ model tools or replace host tool authorization. See [Code Mode executors](/tools
     "usageProviders": ["acme-ai"],
     "migrationProviders": ["hermes"],
     "gatewayMethodDispatch": ["authenticated-request"],
+    "commandRuntimeCapabilities": ["subagents"],
     "tools": ["firecrawl_search", "firecrawl_scrape"]
   }
 }
@@ -82,6 +83,9 @@ Each list is optional. For `speechProviders` and `realtimeVoiceProviders`, list 
 | `usageProviders`                 | `string[]` | Provider ids whose usage-auth and usage-snapshot hooks this plugin owns.                                                             |
 | `migrationProviders`             | `string[]` | Import provider ids this plugin owns for [`openclaw migrate`](/cli/migrate).                                                         |
 | `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                                  |
+| `commandRuntimeCapabilities`     | `string[]` | Command runtime capabilities a command may request: `subagents` and `scheduledTurns`.                                                |
+| `sessionScheduledTurns`          | `string[]` | Scheduled command turns the plugin may request; currently `requester-command`.                                                       |
+| `subagentProfiles`               | `string[]` | Plugin-local native subagent profile IDs registered through `api.agent.registerSubagentProfile`.                                     |
 | `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                                                   |
 
 Document extractors may return optional completeness metadata with their text and images. `pages.processed` is a bounded list of 1-based pages actually processed; `pages.total` is the document page count; `pages.selection` distinguishes automatic limits from an explicit request; and `pages.truncated`, `textTruncated`, and `imagesTruncated` report known omissions. `maxPages` is a count cap; automatic page choice remains extractor-owned, while `pageNumbers` restricts an explicit selection. Omit `metadata` when the extractor cannot establish these facts; do not infer completeness downstream.
@@ -89,6 +93,23 @@ Document extractors may return optional completeness metadata with their text an
 The legacy `contracts.embeddedExtensionFactories` family has been removed. Tool-result transforms declare `contracts.agentToolResultMiddleware` and register with `api.registerAgentToolResultMiddleware(...)`. Installed plugins may use the same middleware interface only when explicitly enabled and only for runtimes they declare in `contracts.agentToolResultMiddleware`.
 
 Installed plugins that need the host-trusted pre-tool policy tier must declare each registered local id in `contracts.trustedToolPolicies` and be explicitly enabled. Bundled plugins keep the existing trusted-policy path, but installed plugins with undeclared policy ids are rejected before registration. Policy ids are scoped to the registering plugin, so two plugins may both declare and register `workflow-budget`; a single plugin may not register the same local id twice.
+
+Commands requesting `runtimeCapabilities: ["subagents"]` must also declare
+`contracts.commandRuntimeCapabilities: ["subagents"]` and set `requireAuth: true`.
+This declaration is install-review metadata, not tool or operator authority.
+The host grants the optional facade only for an eligible current invocation;
+see [command-scoped native children](/plugins/sdk-runtime/background-work#command-scoped-native-children).
+
+Commands requesting `runtimeCapabilities: ["subagents", "scheduledTurns"]` also
+declare `scheduledTurns` in `contracts.commandRuntimeCapabilities` and
+`contracts.sessionScheduledTurns: ["requester-command"]`. Probe
+`api.runtime.capabilities` for `command-scheduled-turns-v1` before registering
+such a command: hosts without it reject the registration. Hosts that also
+advertise `command-scheduled-turns-restart-v1` keep accepted schedules across a
+Gateway restart when the same plugin code loads again, including core-bundled
+plugins on the same OpenClaw build; each accepted schedule reports this as
+`survivesRestart`. See
+[requester-admitted scheduled commands](/plugins/sdk-runtime/background-work#requester-admitted-scheduled-commands).
 
 Runtime `api.registerTool(...)` registrations must match `contracts.tools`. Tool discovery uses this list to load only the plugin runtimes that can own the requested tools.
 

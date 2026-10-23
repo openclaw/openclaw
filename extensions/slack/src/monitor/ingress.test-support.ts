@@ -46,9 +46,10 @@ export function attachBoltIngress(
     authorize?: AppOptions["authorize"];
     pollIntervalMs?: number;
     adoptionStallTimeoutMs?: number;
+    clientOptions?: AppOptions["clientOptions"];
   } = {},
 ) {
-  const { authorize, ...ingressOptions } = options;
+  const { authorize, clientOptions, ...ingressOptions } = options;
   const ingress = createSlackDurableIngress({
     accountId: "default",
     queue,
@@ -64,6 +65,7 @@ export function attachBoltIngress(
     stop: async () => undefined,
   };
   const app = new App({
+    clientOptions,
     receiver: ingress.wrapReceiver(receiver),
     authorize:
       authorize ??

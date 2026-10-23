@@ -30,7 +30,16 @@ export function configProof(name: string, variant?: string) {
       directory = variant ? path.join(root, variant) : root;
     }
   });
-  return { enabled, directory: () => directory, capture: proofCapture(() => directory, enabled) };
+  const capture = async (surface: Page | Locator, fileName: string, fullPage = false) => {
+    if (enabled) {
+      await surface.screenshot({
+        animations: "disabled",
+        path: path.join(directory, fileName),
+        ...(fullPage ? { fullPage: true } : {}),
+      });
+    }
+  };
+  return { enabled, directory: () => directory, capture };
 }
 
 export function pageRunner(
@@ -88,18 +97,6 @@ export function settingsRow(page: Page, title: string): Locator {
   return page.locator(".settings-row").filter({
     has: page.locator(".settings-row__title").getByText(title, { exact: true }),
   });
-}
-
-function proofCapture(directory: () => string, enabled: boolean) {
-  return async (surface: Page | Locator, name: string, fullPage = false) => {
-    if (enabled) {
-      await surface.screenshot({
-        animations: "disabled",
-        path: path.join(directory(), name),
-        ...(fullPage ? { fullPage: true } : {}),
-      });
-    }
-  };
 }
 
 export async function composerStore(page: Page) {

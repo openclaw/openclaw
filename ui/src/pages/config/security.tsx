@@ -12,8 +12,11 @@ import {
   SettingsToggleRow,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
+import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
 import { PROFILE_OPTIONS } from "../../lib/agents/tool-catalog.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerPreferencesEnglish);
 
 type SecurityOverview = ReturnType<typeof extractQuickSettingsSecurity>;
 

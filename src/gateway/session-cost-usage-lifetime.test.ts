@@ -48,12 +48,7 @@ function appendUsage(
   const usage =
     tokens === undefined
       ? undefined
-      : {
-          input: tokens,
-          output: 0,
-          totalTokens: tokens,
-          cost: { total: tokens / 100 },
-        };
+      : { input: tokens, output: 0, totalTokens: tokens, cost: { total: tokens / 100 } };
   return persistSessionTranscriptTurn(target, {
     config,
     messages: [
@@ -117,6 +112,7 @@ it("keeps usage backfill and all-agent totals available while another agent's de
   signal,
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
     const config = { agents: { entries: { main: {}, retiring: {} } } };
     setRuntimeConfigSnapshot(config);
     for (const [agentId, tokens] of [
@@ -147,7 +143,7 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       endMs: timestamp + 2,
     });
     const readSettled = Promise.allSettled([reading]);
-    await withinTest(capturedRoster.promise, signal);
+    await wait(capturedRoster.promise);
     vi.useFakeTimers();
     const queued = new AsyncWorkScope();
     queued.run(() =>
@@ -191,17 +187,13 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       releaseRoster.resolve();
       expect.soft(await cost()).toMatchObject(fresh(10, 0.1));
       releaseBackfill.resolve();
-      await withinTest(startupRoster, signal);
+      await wait(startupRoster);
       await vi.advanceTimersByTimeAsync(0);
-      await withinTest(mainRefreshStarted.promise, signal);
-      const refreshed = await withinTest(
-        Promise.allSettled(refresh.mock.results.map((result) => result.value)),
-        signal,
+      await wait(mainRefreshStarted.promise);
+      const refreshed = await wait(
+        Promise.allSettled(refresh.mock.results.map(({ value }) => value)),
       );
-      await withinTest(
-        queued.runWhenIdle(() => {}),
-        signal,
-      );
+      await wait(queued.runWhenIdle(() => {}));
       await lifetime.stop();
       await queued.drain();
       expect(refreshed).toContainEqual({ status: "fulfilled", value: "refreshed" });
@@ -209,7 +201,7 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       expect.soft(publications.filter((event) => event.usageRefreshFailed)).toEqual([]);
       expect(warn).not.toHaveBeenCalled();
       expect(await cost()).toMatchObject(fresh(10, 0.1));
-      expect(await withinTest(reading, signal)).toMatchObject({ totals: { totalTokens: 10 } });
+      expect(await wait(reading)).toMatchObject({ totals: { totalTokens: 10 } });
     } finally {
       releaseRoster.resolve();
       releaseBackfill.resolve();
@@ -317,6 +309,7 @@ it("projects committed usage after startup preparation without borrowing its exp
   onTestFinished,
 }) => {
   const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
     const config = mainConfig();
     const target = seedUsage("usage-admission");
     const append = (tokens: number) =>
@@ -361,8 +354,8 @@ it("projects committed usage after startup preparation without borrowing its exp
     );
     let pendingRefreshes = -1;
     try {
-      await withinTest(firstStarted.promise, signal);
-      expect(await withinTest(outcomes[0]!, signal)).toEqual({ ok: true, context: "owner" });
+      await wait(firstStarted.promise);
+      expect(await wait(outcomes[0]!)).toEqual({ ok: true, context: "owner" });
       const initialRequests = requested.mock.calls.length;
       const refusal = createAgentDatabaseInspectionRefusal({
         agentId: target.agentId,
@@ -378,15 +371,15 @@ it("projects committed usage after startup preparation without borrowing its exp
           sessionChanges.emit({ all: true, scope: { agentId: target.agentId, topology: true } });
           await roster.mock.results.at(-1)?.value;
           if (requested.mock.calls.length > initialRequests) {
-            await withinTest(nextStarted.promise, signal);
+            await wait(nextStarted.promise);
           }
           pendingRefreshes = outcomes.length - 1;
         }),
       );
       await roster.mock.results.at(-1)?.value;
-      await withinTest(nextStarted.promise, signal);
+      await wait(nextStarted.promise);
       releaseRefresh.resolve();
-      const settled = await withinTest(Promise.all(outcomes), signal);
+      const settled = await wait(Promise.all(outcomes));
       await lifetime.stop();
       const summary = await cacheRuntime.loadCostUsageSummaryFromCache({
         ...costWindow(config),

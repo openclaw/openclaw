@@ -15,7 +15,7 @@ import {
   waitForAgentRunReply,
 } from "../run-wait.js";
 import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "../subagents/completion/subagent-completion-instructions.js";
-import { runAgentStep, type AgentStepSession } from "./agent-step.js";
+import { runAgentStep } from "./agent-step.js";
 import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
@@ -25,6 +25,7 @@ import {
   recoverSessionsSendReply,
   SESSIONS_SEND_TRUNCATION_NOTE,
 } from "./sessions-send-helpers.js";
+import type { AgentStepSession } from "./sessions-send-tool.types.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
 

@@ -108,7 +108,14 @@ export function parseReadableSqliteSessionEntryRow(
   projection: SessionEntryProjection = "full",
 ): SessionEntry | null {
   const parsed = parseReadableSessionEntryData(database, row, projection);
-  return parsed ? projectSqliteSessionParticipants(database.db, row.session_key, parsed) : null;
+  return parsed
+    ? projectSqliteSessionParticipants(
+        database.db,
+        row.session_key,
+        parsed,
+        row.participant_identities_json,
+      )
+    : null;
 }
 
 /** Decode supplied rows in caller order while sharing their lazy participant acquisition. */
@@ -119,7 +126,7 @@ export function prepareSqliteSessionEntryRowDecoder(
   projectParticipants = true,
   onParticipantProjectionError?: (sessionKey: string) => void,
 ): (row: ReadableSessionEntryRow) => SessionEntry | null {
-  const project =
+  const project: ReturnType<typeof prepareSqliteSessionParticipantProjection> =
     projection === "delivery" || !projectParticipants
       ? (_key: string, entry: SessionEntry) => entry
       : prepareSqliteSessionParticipantProjection(
@@ -132,7 +139,7 @@ export function prepareSqliteSessionEntryRowDecoder(
       return null;
     }
     try {
-      return project(row.session_key, parsed);
+      return project(row.session_key, parsed, row.participant_identities_json);
     } catch (error) {
       if (!onParticipantProjectionError) {
         throw error;
@@ -569,7 +576,7 @@ export function readQualifiedSessionEntryRow(
 }
 
 // SQLite's default trim removes only spaces; legacy ID matching used String.trim().
-const SESSION_ID_TRIM_CHARACTERS =
+export const SESSION_ID_TRIM_CHARACTERS =
   "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
 
 /** Uses the native current-ID and trimmed legacy-ID winner order inside the reader owner. */

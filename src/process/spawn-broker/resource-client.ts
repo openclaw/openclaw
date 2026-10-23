@@ -1,4 +1,4 @@
-import { connect } from "node:net";
+import { connect, type Socket } from "node:net";
 import type { MessagePort } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -113,7 +113,15 @@ export function attachBrokerNativeResource(
     if (failure || closed) {
       return;
     }
-    const candidate = connect(attachment.endpoint);
+    let candidate: Socket;
+    try {
+      candidate = connect(attachment.endpoint);
+    } catch (error) {
+      // An invalid endpoint throws before any socket exists. Report it like an asynchronous
+      // connection failure, after the caller has installed this attachment's owner.
+      queueMicrotask(() => lose(toErrorObject(error, "Native resource attachment failed")));
+      return;
+    }
     let connected = false;
     let connectionError: Error | undefined;
     candidate.once("error", (error) => {

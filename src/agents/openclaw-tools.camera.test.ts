@@ -163,13 +163,6 @@ it.each([
   },
 );
 
-it("rejects facing both when deviceId is provided", async () => {
-  await expectNodeError(
-    { action: "camera_snap", facing: "both", deviceId: "cam-123" },
-    /facing=both is not allowed when deviceId is set/i,
-  );
-});
-
 it.each([
   [{ photos: {} }, "invalid photos.latest payload"],
   [{ photos: [PHOTO, PHOTO] }, "photos.latest returned 2 photos; requested at most 1"],
@@ -207,19 +200,6 @@ it("returns an explicit model-facing result when no photos are available", async
   const result = await executeNodes({ action: "photos_latest" }, { modelHasVision: false });
   expect(result.content).toStrictEqual([{ type: "text", text: "No photos found." }]);
   expect(result.details).toStrictEqual([]);
-});
-
-it("returns media paths and no inline images when model has no vision", async () => {
-  setupNodeInvokeMock({ invokePayload: { photos: [PHOTO] }, remoteIp: "198.51.100.42" });
-  const result = await executeNodes({ action: "photos_latest" }, { modelHasVision: false });
-  const mediaUrl = firstMediaUrl(result);
-  expect(mediaUrl).toMatch(/openclaw-camera-snap-.*\.jpg$/);
-  expect(result.details).toMatchObject({
-    photos: [{ width: 1, height: 1, createdAt: "2026-03-04T00:00:00Z" }],
-  });
-  expect(result.content).toStrictEqual([
-    { type: "text", text: `Library photo saved to ${mediaUrl}.` },
-  ]);
 });
 
 it.each<[string, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>]>([

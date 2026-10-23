@@ -33,7 +33,6 @@ import type { UsageCostWorkerInput } from "./session-cost-usage-worker.types.js"
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 const fixture = vi.hoisted(() => ({
-  open: vi.fn(),
   withRead: vi.fn(),
   inventory: vi.fn<() => Promise<UsageCostTranscriptFile[]>>(),
   selectedFiles: vi.fn<() => Promise<UsageCostTranscriptFile[]>>(),
@@ -41,7 +40,6 @@ const fixture = vi.hoisted(() => ({
 
 // mock-isolation: Use only the borrowed native connection, without opening real agent stores.
 vi.mock("../state/openclaw-agent-db-readonly.js", () => ({
-  openOpenClawAgentDatabaseReadOnly: fixture.open,
   withOpenClawAgentDatabaseReadOnly: fixture.withRead,
 }));
 // mock-isolation: Pause transcript discovery without loading the worker's retained refresh state.
@@ -290,7 +288,10 @@ it("ends the cache snapshot before projection awaits and preserves a concurrent 
   };
   write(db, 3);
   // Borrow one native connection so an independent job can use it while projection waits.
-  fixture.open.mockReturnValue({ found: true, database: { db, close() {} } });
+  fixture.withRead.mockImplementation((read: (opened: { db: DatabaseSync }) => unknown) => ({
+    found: true,
+    value: read({ db }),
+  }));
   const projecting = createDeferredCore();
   const resume = createDeferredCore();
   fixture.inventory.mockImplementationOnce(async () => {

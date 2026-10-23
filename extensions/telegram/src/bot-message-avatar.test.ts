@@ -93,7 +93,10 @@ it.each([false, true])("removes the abort bridge (failure=%s)", async (fails) =>
   if (fails) {
     api.getUserProfilePhotos.mockRejectedValueOnce(new Error("request failed"));
   }
-  await load(resolve);
+  expect(await load(resolve)).toBe(fails ? undefined : "/media/inbound/portrait.png");
+  if (fails) {
+    expect(resolveMedia).not.toHaveBeenCalled();
+  }
   expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
 });
 
@@ -133,15 +136,6 @@ it("never shares native photos between senders or bot accounts", async () => {
   ]);
   expect(second.api.getUserProfilePhotos).toHaveBeenCalledOnce();
   expect(resolveMedia).toHaveBeenCalledTimes(3);
-});
-
-it("keeps initials for absent, private, or unavailable photos", async () => {
-  const { api, resolve } = account();
-  api.getUserProfilePhotos.mockResolvedValueOnce({ total_count: 0, photos: [] });
-  expect(await load(resolve)).toBe("");
-  api.getUserProfilePhotos.mockRejectedValueOnce(new Error("unavailable"));
-  await load(resolve, context(1000000002));
-  expect(resolveMedia).not.toHaveBeenCalled();
 });
 
 it("does not use a group photo, bot photo, or a private chat's different peer", () => {

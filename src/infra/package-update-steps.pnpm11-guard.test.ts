@@ -16,6 +16,12 @@ type PackageUpdateStepResult = Awaited<
 >["steps"][number];
 type UpdateOptions = Parameters<typeof runGlobalPackageUpdateSteps>[0];
 const installArgs = ["pnpm", "add", "-g", "--allow-build=openclaw"];
+const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
+const expectText = (...parts: string[]) => expect(readText(...parts)).resolves;
+const lifecycleScripts = {
+  "pnpm-package-preinstall": "scripts/preinstall-package-manager-warning.mjs",
+  "pnpm-package-postinstall": "scripts/postinstall-bundled-plugins.mjs",
+};
 
 function runPnpmUpdate(
   globalRoot: string,
@@ -157,9 +163,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
       await writeManifest(path.join(globalRoot, "old"));
       await fs.symlink(path.join(globalRoot, "old"), path.join(globalRoot, "hash-openclaw"), "dir");
 
-      const originalEnv: NodeJS.ProcessEnv = {
-        PATH: `${pathBinDir}${path.delimiter}${ownerBinDir}`,
-      };
+      const originalEnv = { PATH: `${pathBinDir}${path.delimiter}${ownerBinDir}` };
       const envBefore = { ...originalEnv };
       const pnpmWarning = "[WARN] Using --global skips the package manager check for this project";
       let stagedPackageRoot = "";
@@ -181,14 +185,13 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
         if (command === "pnpm root -g") {
           return { stdout: `${pnpmWarning}\n${globalRoot}\n`, stderr: "", code: 0 };
         }
-        if (command === "pnpm bin -g" || command === "pnpm --version") {
+        if (command === "pnpm bin -g") {
           expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(pathBinDir);
-          const value = command === "pnpm bin -g" ? ownerBinDir : "12.0.0";
-          return { stdout: `${pnpmWarning}\n${value}\n`, stderr: "", code: 0 };
+          return { stdout: `${pnpmWarning}\n${ownerBinDir}\n`, stderr: "", code: 0 };
         }
         throw new Error(`unexpected command: ${command}`);
       };
-      const runStep = vi.fn(
+      const runStep = vi.fn<NonNullable<UpdateOptions["runStep"]>>(
         async ({ name, argv, cwd, env, input }): Promise<PackageUpdateStepResult> => {
           if (name === "package-install") {
             expect(input).toBe("");
@@ -199,13 +202,10 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
             expect(cwd).toBe(stage.projectRoot);
             expect(stage.projectRoot).not.toBe(globalDir);
             expect(env?.PATH?.split(path.delimiter)[0]).toBe(stage.binDir);
-            const stageGlobalRoot = stage.globalRoot;
-            const newInstallRoot = path.join(stageGlobalRoot, "new");
-            const activeLink = path.join(stageGlobalRoot, "hash-openclaw");
+            const newInstallRoot = path.join(stage.globalRoot, "new");
+            const activeLink = path.join(stage.globalRoot, "hash-openclaw");
             stagedPackageRoot = path.join(newInstallRoot, "node_modules", "openclaw");
-            await expect(
-              fs.readFile(path.join(oldPackageRoot, "package.json"), "utf8"),
-            ).resolves.toContain('"version":"1.0.0"');
+            await expectText(oldPackageRoot, "package.json").toContain('"version":"1.0.0"');
             expect(env).toMatchObject({
               pnpm_config_global_dir: globalDir,
               PNPM_CONFIG_GLOBAL_DIR: globalDir,
@@ -223,14 +223,13 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
               `--config.global-bin-dir=${stage.binDir}`,
             ]);
             await fs.rm(activeLink, { force: true });
-            await fs.rm(path.join(stageGlobalRoot, "old"), { recursive: true, force: true });
+            await fs.rm(path.join(stage.globalRoot, "old"), { recursive: true, force: true });
             await writePackageRoot(stagedPackageRoot, "2.0.0");
             await fs.mkdir(path.join(stagedPackageRoot, "scripts", "lib"), { recursive: true });
             await Promise.all([
               ...[
                 PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH,
-                "scripts/preinstall-package-manager-warning.mjs",
-                "scripts/postinstall-bundled-plugins.mjs",
+                ...Object.values(lifecycleScripts),
               ].map((file) => fs.writeFile(path.join(stagedPackageRoot, file), "export {};\n")),
               fs.writeFile(
                 path.join(stagedPackageRoot, ".openclaw-lifecycle-pending"),
@@ -244,16 +243,10 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
             expect(input).toBeUndefined();
             expect(argv).toEqual([
               process.execPath,
-              path.join(
-                stagedPackageRoot,
-                "scripts",
-                name === "pnpm-package-preinstall"
-                  ? "preinstall-package-manager-warning.mjs"
-                  : "postinstall-bundled-plugins.mjs",
-              ),
+              path.join(stagedPackageRoot, lifecycleScripts[name]),
             ]);
             const marker = path.join(stagedPackageRoot, ".openclaw-lifecycle-pending");
-            await expect(fs.readFile(marker, "utf8")).resolves.toBe("pending\n");
+            await expectText(marker).toBe("pending\n");
             if (name === "pnpm-package-postinstall") {
               await fs.rm(marker);
             }
@@ -278,9 +271,11 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
       });
 
       expect(originalEnv).toEqual(envBefore);
-      expect(result.failedStep).toBeNull();
-      expect(result.afterVersion).toBe("2.0.0");
-      expect(result.activePackageRoot).toBe(newPackageRoot);
+      expect(result).toMatchObject({
+        failedStep: null,
+        afterVersion: "2.0.0",
+        activePackageRoot: newPackageRoot,
+      });
       expect(result.steps.map((step) => step.name)).toEqual([
         "package-install",
         "pnpm-package-preinstall",
@@ -431,9 +426,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
       expect(result.activePackageRoot).toBe(packageRoot);
       expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
       await expect(fs.realpath(activeLink)).resolves.toBe(path.dirname(path.dirname(packageRoot)));
-      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-        '"version":"1.0.0"',
-      );
+      await expectText(packageRoot, "package.json").toContain('"version":"1.0.0"');
     });
   });
 });

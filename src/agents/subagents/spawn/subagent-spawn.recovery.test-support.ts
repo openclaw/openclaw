@@ -1,9 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
-import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
 import { createOperatorRecoveryFixture } from "../../../gateway/operator-run-recovery.test-support.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import { bindSessionRowProjection } from "../../../gateway/session-row-projection-access.js";
+import { createSessionRowProjection } from "../../../gateway/session-row-projection.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { peekSystemEventEntries } from "../../../infra/system-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -16,11 +21,16 @@ import {
   resolveAdmittedRunActiveAssertion,
   resolvePreparedRunAdmission,
 } from "../../admitted-run-context.js";
+import { runEmbeddedAgent as runActualEmbeddedAgent } from "../../embedded-agent-runner/run.js";
+import { makeAttemptResult } from "../../embedded-agent-runner/run.overflow-compaction.fixture.js";
+import * as embeddedAttempts from "../../embedded-agent-runner/run/attempt.js";
 import { commitMainSessionRecovery } from "../../main-session-recovery/main-session-recovery-store.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
+import { createSessionsCreateTool } from "../../tools/sessions-create-tool.js";
+import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
@@ -41,9 +51,13 @@ export function registerRecoverySpawnCases(
     runEmbeddedAgent,
     settleRootWork,
   } = options;
-  it.for(["complete", "stop"] as const)(
-    "lets a recovered requester finish before its spawned child: %s",
-    async (outcome, { signal: testSignal }) => {
+  it.for([
+    { outcome: "stop", child: "spawned" },
+    { outcome: "complete", child: "resumed" },
+    { outcome: "retry", child: "spawned" },
+  ] as const)(
+    "lets a recovered requester finish before its $child child: $outcome",
+    async ({ outcome, child }, { signal: testSignal }) => {
       const stateDir = options.stateDir();
       const bound = await createBoundParent();
       const { context, runtime } = await createBoundGateway(bound);
@@ -97,6 +111,29 @@ export function registerRecoverySpawnCases(
       const childTerminal = createDeferred();
       let childRunId: string | undefined;
       let childSessionKey: string | undefined;
+      if (child === "resumed") {
+        childSessionKey = "agent:main:subagent:interrupted-child";
+        await replaceSessionEntry(
+          { storePath: bound.storePath, sessionKey: childSessionKey },
+          {
+            sessionId: "interrupted-child-session",
+            lifecycleRevision: "interrupted-child-lifecycle",
+            updatedAt: 1,
+            status: "interrupted",
+            spawnedBy: fixture.target.sessionKey,
+            parentSessionId: fixture.target.sessionId,
+            createdActor: fixture.entry.createdActor,
+            spawnDepth: 1,
+          },
+        );
+        const projection = await createSessionRowProjection({ cfg: bound.cfg, modelCatalog: [] });
+        onTestFinished(async () => {
+          projection.dispose();
+          await projection.ensureMaterialized();
+        });
+        bindSessionRowProjection(context, () => projection);
+        await projection.ensureMaterialized();
+      }
       const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
         // Stop may retire the registry row after publishing its terminal outcome.
         if (
@@ -117,13 +154,6 @@ export function registerRecoverySpawnCases(
         });
         await params.onExecutionStarted?.();
         if (params.sessionKey === fixture.target.sessionKey) {
-          const spawn = createSessionsSpawnTool({
-            config: bound.cfg,
-            expectedParentSessionId: fixture.target.sessionId,
-            agentSessionKey: fixture.target.sessionKey,
-            requesterRunId: params.runId,
-            requesterTurnRunId: params.runId,
-          });
           const caller = createAdmittedGatewayToolCallerIdentity({
             admittedRunContext: admitted,
             agentId: fixture.target.agentId,
@@ -132,18 +162,96 @@ export function registerRecoverySpawnCases(
           const spawned = await withPluginRuntimeGatewayRequestScope(
             { context, isWebchatConnect: () => false },
             () =>
-              withGatewayToolCallerIdentity(caller, () =>
-                spawn.execute!("recovery-spawn", { task: "bounded child" }),
-              ),
+              withGatewayToolCallerIdentity(caller, () => {
+                if (child === "resumed") {
+                  return createSessionsSendTool({
+                    config: bound.cfg,
+                    agentSessionKey: fixture.target.sessionKey,
+                    agentSessionId: fixture.target.sessionId,
+                    requesterTurnRunId: params.runId,
+                  }).execute!("recovery-resume", {
+                    sessionKey: childSessionKey,
+                    message: "Continue the interrupted child task.",
+                    mode: "followup",
+                    timeoutSeconds: 0,
+                  });
+                }
+                return createSessionsSpawnTool({
+                  config: bound.cfg,
+                  expectedParentSessionId: fixture.target.sessionId,
+                  agentSessionKey: fixture.target.sessionKey,
+                  requesterRunId: params.runId,
+                  requesterTurnRunId: params.runId,
+                }).execute!("recovery-spawn", { task: "bounded child" });
+              }),
           );
-          const accepted = expectDefined(
-            normalizeAcceptedSessionSpawnResult(spawned),
-            "recovered requester child",
-          );
-          childRunId = accepted.runId;
-          childSessionKey = accepted.childSessionKey;
-          await childStarted.promise;
+          if (child === "resumed") {
+            expect(spawned.details, JSON.stringify(spawned.details)).toMatchObject({
+              status: "accepted",
+            });
+          } else {
+            const accepted = expectDefined(
+              normalizeAcceptedSessionSpawnResult(spawned),
+              "recovered requester child",
+            );
+            childRunId = accepted.runId;
+            childSessionKey = accepted.childSessionKey;
+          }
+          await withinTest(childStarted.promise, testSignal);
         } else {
+          childRunId = params.runId;
+          if (outcome === "retry") {
+            const attempt = vi
+              .spyOn(embeddedAttempts, "runEmbeddedAttempt")
+              .mockRejectedValue(new Error("Unexpected extra embedded attempt"));
+            attempt.mockImplementationOnce(async () => {
+              expect(createSessionsCreateTool()).not.toBeNull();
+              childStarted.resolve();
+              await finishChild.promise;
+              return makeAttemptResult({
+                sessionIdUsed: params.sessionId,
+                promptError: Object.assign(new Error("Degenerate tool call arguments"), {
+                  code: "degenerate_output",
+                }),
+                promptErrorSource: "prompt",
+                assistantTexts: [],
+              });
+            });
+            attempt.mockImplementationOnce(async () => {
+              expect(createSessionsCreateTool()).not.toBeNull();
+              await recordSpawnBoundaryFinal({
+                storePath: bound.storePath,
+                sessionKey: expectDefined(params.sessionKey, "child session"),
+                runId: params.runId,
+                text: "Recovered task complete.",
+              });
+              return makeAttemptResult({
+                sessionIdUsed: params.sessionId,
+                assistantTexts: ["Recovered task complete."],
+              });
+            });
+            try {
+              const result = await runActualEmbeddedAgent(params);
+              expect(attempt).toHaveBeenCalledTimes(2);
+              expect(result.payloads).toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({ text: "Recovered task complete." }),
+                ]),
+              );
+              childFinished.resolve();
+              return result;
+            } catch (error) {
+              childStarted.reject(error);
+              childFinished.reject(error);
+              throw error;
+            } finally {
+              attempt.mockRestore();
+            }
+          }
+          if (child === "resumed") {
+            expect(params.prompt).toContain("Your previous turn was interrupted");
+            expect(params.lane).toBe(`nested:${childSessionKey}`);
+          }
           const signal = expectDefined(params.abortSignal, "child cancellation signal");
           const onAbort = () => finishChild.resolve();
           signal.addEventListener("abort", onAbort, { once: true });

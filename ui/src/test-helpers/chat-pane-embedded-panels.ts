@@ -1,6 +1,9 @@
-import { onTestFinished, vi } from "vitest";
+import { createComponent } from "solid-js";
+import { expect, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../api/types.ts";
+import type { ApplicationContext } from "../app/context.ts";
+import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { sidebarPanelDefinitions } from "../pages/chat/chat-pane-embedded-panels.ts";
 import type { SidebarPanelDefinitionParams } from "../pages/chat/chat-pane-embedded-types.ts";
 import { createChatPaneRails } from "../pages/chat/chat-pane-rails.ts";
@@ -14,11 +17,18 @@ import {
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { createPageState } from "../pages/chat/chat-state-page.ts";
 import "../pages/chat/components/chat-detail-panel.tsx";
+import "../pages/chat/components/chat-files-panel.tsx";
 import { createChatProps } from "../pages/chat/chat-view.test-helpers.ts";
 import "../pages/chat/components/chat-sidebar-region.runtime.tsx";
 import { createSessionWorkspaceProps } from "../pages/chat/components/chat-session-workspace.ts";
-import type { SidebarLayout, SidebarSlotId } from "../pages/chat/sidebar-layout.ts";
+import {
+  isSidebarSlotVisible,
+  type SidebarLayout,
+  type SidebarSlotId,
+} from "../pages/chat/sidebar-layout.ts";
+import { installResizeObserverStub } from "./resize-observer.ts";
 import { mountSolid } from "./solid-render.tsx";
+import { waitForSolid } from "./solid-settle.ts";
 
 const panelViews = new WeakMap<
   HTMLElement,
@@ -39,7 +49,9 @@ export async function renderPanelFixture(
   layout: SidebarLayout,
   definitions: ReturnType<typeof sidebarPanelDefinitions>,
   closePanelSlot: (slot: SidebarSlotId) => void = vi.fn(),
+  context: ApplicationContext = createInitializationContext(),
 ) {
+  installResizeObserverStub();
   const existing = panelViews.get(mount);
   const primary = existing?.primary ?? ChatPanelPrimary();
   const props = renderSidebarRegion({
@@ -48,6 +60,7 @@ export async function renderPanelFixture(
     callbacks: {
       activatePanel: vi.fn(),
       togglePanelExpanded: vi.fn(),
+      setDock: vi.fn(),
       closeSlot: closePanelSlot,
       openSlot: vi.fn(),
       reorderPanel: vi.fn(),
@@ -62,13 +75,44 @@ export async function renderPanelFixture(
   if (existing) {
     existing.update(props);
   } else {
-    const view = mountSolid(SidebarRegionView, props, mount);
+    const view = mountSolid(
+      (regionProps: ReturnType<typeof renderSidebarRegion>) =>
+        createComponent(ApplicationProvider, {
+          value: context,
+          host: mount,
+          get children() {
+            return createComponent(SidebarRegionView, regionProps);
+          },
+        }),
+      props,
+      mount,
+    );
     panelViews.set(mount, { primary, update: (next) => view.update(next) });
     onTestFinished(() => {
       panelViews.delete(mount);
     });
   }
-  await mount.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
+  if (layout.columns.length) {
+    await waitForSolid(() =>
+      expect(mount.querySelector("openclaw-chat-sidebar-region")).not.toBeNull(),
+    );
+    await mount.querySelector("openclaw-chat-sidebar-region")!.updateComplete;
+  }
+  for (const [slot, tag] of [
+    ["workspace", "openclaw-chat-files-panel"],
+    ["detail", "openclaw-chat-detail-panel"],
+  ] as const) {
+    const view = definitions.find((entry) => entry.slot === slot)?.view;
+    const kind = view?.detailContent?.kind;
+    if (
+      view &&
+      isSidebarSlotVisible(layout, slot) &&
+      (slot === "workspace" ||
+        (kind && kind !== "tool-output" && kind !== "loading" && kind !== "unavailable"))
+    ) {
+      await waitForSolid(() => expect(mount.querySelector(tag)).not.toBeNull());
+    }
+  }
   await mount.querySelector("openclaw-chat-files-panel")?.updateComplete;
   await Promise.all(
     [...mount.querySelectorAll("openclaw-chat-detail-panel")].map((panel) => panel.updateComplete),
@@ -174,7 +218,7 @@ export function createReviewFixture() {
   const renderPanels = async () => {
     const { closePanelSlot } = rails();
     const definitions = sidebarPanelDefinitions(sidebarPanelFixtureParams(state));
-    await renderPanelFixture(mount, state.sidebarLayout, definitions, closePanelSlot);
+    await renderPanelFixture(mount, state.sidebarLayout, definitions, closePanelSlot, context);
   };
   return { context, file, list, mount, preview, rails, renderPanels, sessions, state };
 }

@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { Server } from "node:http";
 import path from "node:path";
 import * as agentHarnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -5,8 +6,10 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { CodexAppServerClient } from "./client.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import {
   getCodexInferenceThread,
@@ -15,6 +18,7 @@ import {
 } from "./inference-routing.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import * as nativeToolCatalog from "./native-tool-catalog.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import { prepareCodexAttemptContext } from "./run-attempt-context.js";
@@ -40,10 +44,13 @@ import {
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import { createIsolatedCodexAppServerClient } from "./shared-client.js";
+import { createClientHarness } from "./test-support.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import * as threadLifecyclePreflight from "./thread-lifecycle-preflight.js";
 import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import { createLeasedCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function participantHostCapabilities(
   assertNativeSubagentSpawnAllowed: () => void,
@@ -336,7 +343,8 @@ describe("Codex native hook Gateway fallback", () => {
       params.abortSignal = abort.signal;
       const run = runCodexAppServerAttempt(params, {
         bindingStore: createCodexTestBindingStore(),
-        nativeHookRelay: hooks === "disabled" ? { enabled: false } : undefined,
+        nativeHookRelay:
+          hooks === "disabled" ? { enabled: false } : { events: ["post_tool_use"], enabled: true },
       });
       try {
         await Promise.race([
@@ -347,7 +355,10 @@ describe("Codex native hook Gateway fallback", () => {
         ]);
         expect(harness.requests.some(({ method }) => method === "thread/start")).toBe(false);
         expect(preflight).toHaveBeenCalledWith(
-          expect.objectContaining({ nativeHookRelayRequired: false }),
+          expect.objectContaining({
+            nativeHookRelayRequired: false,
+            nativeCodeModeEnabled: true,
+          }),
         );
         ready.resolve();
         await run.waitForTurnAccepted();
@@ -590,4 +601,90 @@ describe("Codex native hook Gateway fallback", () => {
       closeHost();
     }
   });
+});
+
+describe("Codex native tool catalog probe cleanup", () => {
+  setupRunAttemptTestHooks();
+
+  it.each([false, true])(
+    "awaits isolated catalog probe exit before continuing (read failure: %s)",
+    async (fails) => {
+      const params = createParams(path.join(tempDir, "session.jsonl"), tempDir);
+      const attempt = createStartedThreadHarness();
+      const connection = await prepareCodexAttemptConnection({
+        params,
+        options: {
+          bindingStore: testCodexAppServerBindingStore,
+          clientFactory: async () => attempt.client,
+          nativeHookRelay: { enabled: false },
+        },
+      });
+      const probe = createClientHarness({
+        autoEmitExit: false,
+        onWrite: (line, send) => {
+          const { id, method } = JSON.parse(line);
+          if (method === "initialize") {
+            send({ id, result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` } });
+          }
+        },
+      });
+      let pending: ReturnType<typeof prepareCodexAttemptTools> | undefined;
+      try {
+        const runtime = await prepareCodexAttemptRuntime(connection);
+        using _ = { [Symbol.dispose]: runtime.nativeExecutionPolicy.release };
+        connection.mutable.startupBinding = {
+          threadId: "catalog-thread",
+          cwd: params.workspaceDir,
+          connectionScope: "supervision",
+        };
+        vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(probe.client);
+        connection.attemptClientFactory = createIsolatedCodexAppServerClient;
+        connection.appServer.start = {
+          transport: "stdio",
+          command: process.execPath,
+          args: [],
+          headers: {},
+        };
+        connection.startupClientAuthProfileId = null;
+        const failure = new Error("native catalog unavailable");
+        const read = vi.spyOn(nativeToolCatalog, "loadCodexNativeToolCatalog");
+        if (fails) {
+          read.mockRejectedValue(failure);
+        } else {
+          read.mockResolvedValue([]);
+        }
+        const stdinClosed = once(probe.process.stdin, "close");
+        let settled = false;
+        pending = prepareCodexAttemptTools(runtime);
+        const outcome = pending.then(
+          () => {
+            settled = true;
+          },
+          () => {
+            settled = true;
+          },
+        );
+        await awaitGateBeforeSettlement(stdinClosed, outcome, "probe returned without closing");
+        expect(settled).toBe(false);
+        expect(probe.process.exitCode).toBeNull();
+        probe.emitExit();
+        if (fails) {
+          await expect(pending).rejects.toBe(failure);
+        } else {
+          await pending;
+        }
+      } finally {
+        probe.emitExit();
+        await pending?.then(
+          (tools) => tools.disposeTools("completed"),
+          () => undefined,
+        );
+        await probe.client.closeAndWait();
+        await attempt.client.closeAndWait();
+        connection.releaseBindingAuthority();
+        connection.cancellation.dispose();
+        connection.releaseModelExecution();
+      }
+    },
+  );
 });

@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -16,50 +15,30 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { questionPanelIn } from "../chat/components/chat-question-card.test-support.ts";
-import "./question-page-registration.ts";
+import "./question-page.tsx";
 
-const tag = "openclaw-question-page";
-type QuestionPage = HTMLElementTagNameMap[typeof tag];
+type QuestionPage = HTMLElementTagNameMap["openclaw-question-page"];
+const answers = { answers: { audience: ["The design team"] } };
+const question = (id = "q1") => ({
+  id,
+  status: "pending",
+  createdAtMs: Date.now(),
+  expiresAtMs: Date.now() + 60_000,
+  questions: [{ questionId: "audience", header: "To", question: id, options: [], isOther: true }],
+});
 
-function question(id = "question-one") {
-  return {
-    id,
-    status: "pending",
-    createdAtMs: Date.now(),
-    expiresAtMs: Date.now() + 60_000,
-    sessionKey: "agent:main:question-proof",
-    agentId: "main",
-    questions: [
-      {
-        questionId: "audience",
-        header: "Audience",
-        question: `Who should receive ${id}?`,
-        options: [],
-        isOther: true,
-      },
-    ],
-  };
-}
-
-function mount(request: GatewayRequestHandler) {
-  const harness = createApplicationGateway();
-  const { gateway } = harness;
-  harness.publish({
-    ...gateway.snapshot,
-    client: createTestGatewayClient(request),
-    phase: "connected",
-  });
+async function mount(request: GatewayRequestHandler) {
+  const { gateway, publish } = createApplicationGateway();
+  const update = (patch: Partial<ApplicationGatewaySnapshot>) =>
+    publish({ ...gateway.snapshot, ...patch });
+  update({ client: createTestGatewayClient(request), phase: "connected" });
   const provider = createApplicationContextProvider({ gateway } as ApplicationContext);
-  const page = document.createElement(tag);
-  page.questionId = "question-one";
+  const page = document.createElement("openclaw-question-page");
+  page.questionId = "q1";
   provider.append(page);
   document.body.append(provider);
-  return {
-    page,
-    update(this: void, patch: Partial<ApplicationGatewaySnapshot>) {
-      harness.publish({ ...gateway.snapshot, ...patch });
-    },
-  };
+  await settle(page);
+  return { page, update };
 }
 
 async function settle(page: QuestionPage) {
@@ -69,45 +48,55 @@ async function settle(page: QuestionPage) {
 }
 
 function retry(page: QuestionPage) {
-  return Array.from(page.querySelectorAll("button")).find(
-    (button) => button.textContent?.trim() === "Retry",
-  );
+  return page.querySelector<HTMLButtonElement>(".approval-page__state .btn");
 }
 
-beforeEach(async () => {
-  await i18n.setLocale("en");
+beforeEach(() => i18n.setLocale("en"));
+afterEach(() => document.body.replaceChildren());
+
+it.each(["question", "outside"] as const)("restores only question focus (%s)", async (focusAt) => {
+  const request = vi.fn().mockResolvedValue({ question: question() });
+  const { page } = await mount(request);
+  await questionPanelIn(page);
+  const input = page.querySelector("textarea")!;
+  const outside = document.body.appendChild(document.createElement("button"));
+  const target = focusAt === "question" ? input : outside;
+  target.focus();
+  expect(document.activeElement).toBe(target);
+
+  page.questionId = "";
+  await settle(page);
+
+  await waitForSolid(() => {
+    expect(input.isConnected).toBe(false);
+    const next = focusAt === "question" ? page.querySelector("#question-page-title") : outside;
+    expect(document.activeElement).toBe(next);
+  });
+  expect(page.textContent).toContain("Unavailable");
+  expect(request).toHaveBeenCalledTimes(1);
 });
 
-afterEach(() => {
-  document.body.replaceChildren();
+it("keeps focus on the collapsed question so it can be reopened", async () => {
+  const { page } = await mount(vi.fn().mockResolvedValue({ question: question() }));
+  await questionPanelIn(page);
+  const input = page.querySelector("textarea")!;
+  input.value = "The design team";
+  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  const collapse = page.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")!;
+  collapse.focus();
+  collapse.click();
+  await waitForSolid(() => {
+    const expand = page.querySelector(".chat-question-panel__collapsed-button");
+    expect(expand).not.toBeNull();
+    expect(document.activeElement).toBe(expand);
+  });
+
+  page.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")!.click();
+  await waitForSolid(() => {
+    expect(document.activeElement).toBe(page.querySelector(".chat-question-panel"));
+    expect(page.querySelector("textarea")?.value).toBe("The design team");
+  });
 });
-
-it.each(["question", "outside"] as const)(
-  "restores focus after removing a question only when it held focus (%s)",
-  async (focusAt) => {
-    const request = vi.fn().mockResolvedValue({ question: question() });
-    const { page } = mount(request);
-    await settle(page);
-    await questionPanelIn(page);
-    const input = page.querySelector("textarea")!;
-    const outside = document.body.appendChild(document.createElement("button"));
-    const target = focusAt === "question" ? input : outside;
-    target.focus();
-    expect(document.activeElement).toBe(target);
-
-    page.questionId = "";
-    await settle(page);
-
-    await waitForSolid(() => {
-      expect(input.isConnected).toBe(false);
-      expect(document.activeElement).toBe(
-        focusAt === "question" ? page.querySelector("#question-page-title") : outside,
-      );
-    });
-    expect(page.textContent).toContain("Unavailable");
-    expect(request).toHaveBeenCalledTimes(1);
-  },
-);
 
 it("recovers a failed reconnect lookup without losing the typed answer", async () => {
   const request = vi
@@ -115,12 +104,8 @@ it("recovers a failed reconnect lookup without losing the typed answer", async (
     .mockResolvedValueOnce({ question: question() })
     .mockRejectedValueOnce(new Error("temporary transport failure"))
     .mockResolvedValueOnce({ question: question() })
-    .mockResolvedValueOnce({
-      status: "answered",
-      answers: { answers: { audience: ["The design team"] } },
-    });
-  const { page, update } = mount(request);
-  await settle(page);
+    .mockResolvedValueOnce({ status: "answered", answers });
+  const { page, update } = await mount(request);
   await questionPanelIn(page);
   const input = page.querySelector("textarea")!;
   input.value = "The design team";
@@ -129,7 +114,7 @@ it("recovers a failed reconnect lookup without losing the typed answer", async (
   update({ phase: "reconnecting" });
   update({ phase: "connected" });
   await settle(page);
-  expect(retry(page)).toBeDefined();
+  await waitForSolid(() => expect(retry(page)?.textContent?.trim()).toBe("Retry"));
   expect(page.textContent).toContain("Could not load this question. Try again.");
   retry(page)!.click();
   await settle(page);
@@ -137,81 +122,92 @@ it("recovers a failed reconnect lookup without losing the typed answer", async (
   expect(page.querySelector("textarea")?.value).toBe("The design team");
   page.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
   await settle(page);
-  expect(request).toHaveBeenLastCalledWith(
-    "question.resolve",
-    {
-      id: "question-one",
-      answers: { answers: { audience: ["The design team"] } },
-    },
-    expect.any(Object),
-  );
+  const resolution = { id: "q1", answers };
+  expect(request).toHaveBeenLastCalledWith("question.resolve", resolution, expect.any(Object));
   await waitForSolid(() => expect(page.textContent).toContain("Answered"));
+  expect(page.querySelector(".chat-question-summary")?.textContent).toContain("The design team");
 });
 
-it.each(["id", "client"] as const)(
-  "ignores a late retry rejection after the %s changes",
-  async (change) => {
-    const pending = createDeferred<unknown>();
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("temporary lookup failure"))
-      .mockReturnValueOnce(pending.promise)
-      .mockResolvedValue({ question: question("question-two") });
-    const { page, update } = mount(request);
-    await settle(page);
-    expect(retry(page)).toBeDefined();
-    retry(page)!.click();
-    await settle(page);
-    if (change === "id") {
-      page.questionId = "question-two";
-      await page.updateComplete;
-    } else {
-      update({
-        client: createTestGatewayClient(vi.fn().mockResolvedValue({ question: question() })),
-      });
-    }
-    await settle(page);
-    await questionPanelIn(page);
-    pending.reject(new Error("old lookup failed"));
-    await settle(page);
-    expect(page.querySelector("textarea")).not.toBeNull();
-    expect(retry(page)).toBeUndefined();
-  },
-);
+it.each(["id", "client"] as const)("ignores stale retry rejection (%s)", async (change) => {
+  const pending = createDeferred<unknown>();
+  const request = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("temporary lookup failure"))
+    .mockReturnValueOnce(pending.promise)
+    .mockResolvedValue({ question: question("q2") });
+  const { page, update } = await mount(request);
+  await waitForSolid(() => expect(retry(page)?.textContent?.trim()).toBe("Retry"));
+  retry(page)!.click();
+  await waitForSolid(() => {
+    expect(page.querySelector("main")?.getAttribute("aria-busy")).toBe("true");
+    expect(retry(page)).toBeNull();
+  });
+  if (change === "id") {
+    page.questionId = "q2";
+    await page.updateComplete;
+  } else {
+    update({
+      client: createTestGatewayClient(vi.fn().mockResolvedValue({ question: question() })),
+    });
+  }
+  await settle(page);
+  await questionPanelIn(page);
+  pending.reject(new Error("old lookup failed"));
+  await settle(page);
+  expect(page.querySelector("textarea")).not.toBeNull();
+  expect(retry(page)).toBeNull();
+});
 
 it("keeps confirmed missing questions unavailable without a retry", async () => {
-  const request = vi.fn().mockRejectedValue(
-    new GatewayRequestError({
-      code: "INVALID_REQUEST",
-      message: "question not found",
-      details: { reason: "QUESTION_NOT_FOUND" },
-    }),
-  );
-  const { page } = mount(request);
-  await settle(page);
-  expect(page.textContent).toContain("Unavailable");
-  expect(retry(page)).toBeUndefined();
+  const error = new GatewayRequestError({
+    code: "INVALID_REQUEST",
+    message: "question not found",
+    details: { reason: "QUESTION_NOT_FOUND" },
+  });
+  const { page } = await mount(vi.fn().mockRejectedValue(error));
+  await waitForSolid(() => expect(page.textContent).toContain("Unavailable"));
+  expect(retry(page)).toBeNull();
 });
 
 it("loads only the final question when native IDs change in one turn", async () => {
-  const request = vi.fn(async (_method: string, params?: unknown) => {
-    if (!isRecord(params) || typeof params.id !== "string") {
-      throw new Error("Expected a question ID");
-    }
-    return { question: question(params.id) };
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce({ question: question() })
+    .mockResolvedValueOnce({ question: question("q3") });
+  const { page } = await mount(request);
+  await questionPanelIn(page);
+
+  page.questionId = "q2";
+  page.questionId = "q3";
+  await waitForSolid(() => expect(page.textContent).toContain("q3"));
+  await questionPanelIn(page);
+
+  expect(request.mock.calls.map(([, params]) => params)).toEqual([{ id: "q1" }, { id: "q3" }]);
+  expect(page.textContent).toContain("q3");
+});
+
+it("releases a held lookup when the native question ID changes", async () => {
+  const oldQuestion = createDeferred<unknown>();
+  const currentQuestion = createDeferred<unknown>();
+  const request = vi
+    .fn()
+    .mockReturnValueOnce(oldQuestion.promise)
+    .mockReturnValueOnce(currentQuestion.promise);
+  const { page } = await mount(request);
+  await waitForSolid(() => {
+    expect(page.querySelector("main")?.getAttribute("aria-busy")).toBe("true");
+    expect(document.title).toContain("Loading");
   });
-  const { page } = mount(request);
-  await settle(page);
-  await questionPanelIn(page);
 
-  page.questionId = "question-two";
-  page.questionId = "question-three";
-  await settle(page);
+  page.questionId = "q2";
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+  currentQuestion.resolve({ question: question("q2") });
+  await waitForSolid(() => expect(page.textContent).toContain("q2"));
   await questionPanelIn(page);
+  expect(page.querySelector("main")?.getAttribute("aria-busy")).toBe("false");
 
-  expect(request.mock.calls.map(([, params]) => params)).toEqual([
-    { id: "question-one" },
-    { id: "question-three" },
-  ]);
-  expect(page.textContent).toContain("Who should receive question-three?");
+  oldQuestion.reject(new Error("retired lookup"));
+  await settle(page);
+  expect(page.querySelector("textarea")).not.toBeNull();
+  expect(retry(page)).toBeNull();
 });

@@ -13,7 +13,10 @@ import type { PluginSourceCacheRecord } from "./plugin-cache-artifacts.js";
 import type { PluginCacheFact } from "./plugin-cache-management.js";
 import { createPluginCacheSdk } from "./plugin-cache-sdk.js";
 import type { PluginCache, PluginRootCacheRecord } from "./plugin-cache.types.js";
-import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
+import {
+  PluginInstanceDrainTimeoutError,
+  PluginInventoryRetiredError,
+} from "./plugin-instance-error.js";
 import {
   createPluginExecutionFrame,
   getPluginExecutionFrame,
@@ -110,7 +113,7 @@ export function getPluginCacheRetirementSignal(cache: PluginCache): AbortSignal 
 export function retainPluginCache(cache: PluginCache): () => void {
   const retained = getPluginCacheRetainers(cache);
   if (cache.retirement || retained.retirement) {
-    throw new Error("Plugin inventory has retired; begin a new plugin operation.");
+    throw new PluginInventoryRetiredError();
   }
   if (retained.references.size === 0) {
     retained.settled = createDeferredCore();
@@ -161,6 +164,7 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
 
 /** Invalidate discovery facts without retiring callbacks owned by this operation. */
 export function invalidatePluginCacheMetadata(cache: PluginCache): void {
+  cache.inspectionNativeEsmPolicy = undefined;
   cache.sourceAdmissions?.invalidate();
   cache.metadata = createPluginMetadataCache();
   cache.sdk.native.parents.clear();
@@ -350,6 +354,7 @@ export function retirePluginCacheInstance(
 export function retirePluginCache(
   cache: PluginCache,
   beforeRetire?: () => void,
+  options?: { waitForSettlement?: boolean },
 ): Promise<PluginHostCleanupResult> {
   const retained = getPluginCacheRetainers(cache);
   if (retained.retirement) {
@@ -364,7 +369,7 @@ export function retirePluginCache(
     }
     const work = new AsyncWorkScope();
     try {
-      return await work.track(() => beginPluginCacheRetirement(cache, beforeRetire));
+      return await work.track(() => beginPluginCacheRetirement(cache, beforeRetire, options));
     } finally {
       await work.drain();
     }
@@ -378,6 +383,7 @@ export function retirePluginCache(
 function beginPluginCacheRetirement(
   cache: PluginCache,
   beforeRetire?: () => void,
+  options?: { waitForSettlement?: boolean },
 ): Promise<PluginHostCleanupResult> {
   if (cache.retirement) {
     return cache.retirement;
@@ -395,7 +401,10 @@ function beginPluginCacheRetirement(
     // Registry teardown owns host hooks before instance disposal; then join remaining cleanup.
     const [registry] = await Promise.allSettled([registries]);
     const outcomes = await Promise.allSettled(
-      [...resources].map(async (resource) => ({ resource, result: await resource.dispose() })),
+      [...resources].map(async (resource) => ({
+        resource,
+        result: await resource.dispose(undefined, options),
+      })),
     );
     const nativeAdmissions = cache.sourceAdmissions;
     if (nativeAdmissions) {
@@ -492,10 +501,13 @@ function mergeRootFacts<T>(target: Map<string, T>, source: Map<string, T>): void
 
 /** Bind aliases only after a checked file establishes their shared package boundary. */
 export function bindPluginCacheRoot(rootDir: string, canonicalRoot: string): PluginRootCacheRecord {
+  const root = getPluginCacheRoot(rootDir);
+  if (root.rootDir === canonicalRoot) {
+    return root;
+  }
   const cache = getPluginCache();
   const lexical = path.resolve(rootDir);
   const canonical = path.resolve(canonicalRoot);
-  const root = getPluginCacheRoot(lexical);
   root.rootDir = canonical;
   const existing = cache.roots.get(canonical);
   if (existing && existing !== root) {

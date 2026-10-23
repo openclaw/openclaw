@@ -7,7 +7,6 @@ import {
 import {
   buildChannelOutboundSessionRoute,
   createChatChannelPlugin,
-  type ChannelOutboundSessionRouteParams,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import {
@@ -15,10 +14,7 @@ import {
   defineChannelMessageAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createConditionalWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import {
-  defineChannelSetupContract,
-  type ChannelSetupInput,
-} from "openclaw/plugin-sdk/channel-setup";
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -56,16 +52,6 @@ import { formatSmsProbeLines, probeSmsAccount, type SmsProbe } from "./status.js
 import type { ResolvedSmsAccount } from "./types.js";
 
 const CHANNEL_ID = "sms";
-
-type SmsSetupInput = ChannelSetupInput & {
-  accountSid?: string;
-  authToken?: string;
-  fromNumber?: string;
-  messagingServiceSid?: string;
-  webhookPath?: string;
-  publicWebhookUrl?: string;
-  dmPolicy?: string;
-};
 
 const smsConfigAdapter = createHybridChannelConfigAdapter<ResolvedSmsAccount>({
   sectionKey: CHANNEL_ID,
@@ -119,42 +105,6 @@ const collectSmsOpenDmFindings = createConditionalWarningCollector.findings({
   title: "SMS security warning",
 });
 
-function applySmsAccountConfig(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  input: SmsSetupInput;
-}): OpenClawConfig {
-  const patch: Record<string, unknown> = {};
-  for (const key of [
-    "accountSid",
-    "authToken",
-    "fromNumber",
-    "messagingServiceSid",
-    "defaultTo",
-    "webhookPath",
-    "publicWebhookUrl",
-    "dmPolicy",
-    "allowFrom",
-  ] as const) {
-    if (params.input[key] !== undefined) {
-      patch[key] = params.input[key];
-    }
-  }
-  const channels = { ...params.cfg.channels };
-  const current = { ...(channels[CHANNEL_ID] as Record<string, unknown> | undefined) };
-  if (params.accountId === DEFAULT_ACCOUNT_ID) {
-    channels[CHANNEL_ID] = { ...current, ...patch };
-    return { ...params.cfg, channels };
-  }
-  const accounts = { ...(current.accounts as Record<string, unknown> | undefined) };
-  accounts[params.accountId] = {
-    ...(accounts[params.accountId] as Record<string, unknown> | undefined),
-    ...patch,
-  };
-  channels[CHANNEL_ID] = { ...current, accounts };
-  return { ...params.cfg, channels };
-}
-
 const smsSetupContract = defineChannelSetupContract({
   fields: {
     accountSid: {
@@ -197,7 +147,39 @@ const smsSetupContract = defineChannelSetupContract({
       cli: { flags: "--allow-from <numbers>", description: "Allowed SMS senders" },
     },
   },
-  adapter: { applyAccountConfig: applySmsAccountConfig },
+  adapter: {
+    applyAccountConfig: (params) => {
+      const patch: Record<string, unknown> = {};
+      for (const key of [
+        "accountSid",
+        "authToken",
+        "fromNumber",
+        "messagingServiceSid",
+        "defaultTo",
+        "webhookPath",
+        "publicWebhookUrl",
+        "dmPolicy",
+        "allowFrom",
+      ] as const) {
+        if (params.input[key] !== undefined) {
+          patch[key] = params.input[key];
+        }
+      }
+      const channels = { ...params.cfg.channels };
+      const current = { ...(channels[CHANNEL_ID] as Record<string, unknown> | undefined) };
+      if (params.accountId === DEFAULT_ACCOUNT_ID) {
+        channels[CHANNEL_ID] = { ...current, ...patch };
+        return { ...params.cfg, channels };
+      }
+      const accounts = { ...(current.accounts as Record<string, unknown> | undefined) };
+      accounts[params.accountId] = {
+        ...(accounts[params.accountId] as Record<string, unknown> | undefined),
+        ...patch,
+      };
+      channels[CHANNEL_ID] = { ...current, accounts };
+      return { ...params.cfg, channels };
+    },
+  },
 });
 
 async function sendSmsText(ctx: {
@@ -351,24 +333,6 @@ const smsMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
-function resolveSmsOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
-  const to = normalizeSmsPhoneNumber(params.resolvedTarget?.to ?? params.target);
-  if (!looksLikeSmsPhoneNumber(to)) {
-    return null;
-  }
-  return buildChannelOutboundSessionRoute({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: CHANNEL_ID,
-    accountId: params.accountId,
-    recipientSessionExact: true,
-    peer: { kind: "direct", id: to },
-    chatType: "direct",
-    from: `sms:${to}`,
-    to: `sms:${to}`,
-  });
-}
-
 export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChatChannelPlugin({
   base: {
     id: CHANNEL_ID,
@@ -413,7 +377,23 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
       targetPrefixes: ["twilio-sms"],
       normalizeTarget: normalizeSmsPhoneNumber,
       inferTargetChatType: ({ to }) => (looksLikeSmsPhoneNumber(to) ? "direct" : undefined),
-      resolveOutboundSessionRoute: resolveSmsOutboundSessionRoute,
+      resolveOutboundSessionRoute: (params) => {
+        const to = normalizeSmsPhoneNumber(params.resolvedTarget?.to ?? params.target);
+        if (!looksLikeSmsPhoneNumber(to)) {
+          return null;
+        }
+        return buildChannelOutboundSessionRoute({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          channel: CHANNEL_ID,
+          accountId: params.accountId,
+          recipientSessionExact: true,
+          peer: { kind: "direct", id: to },
+          chatType: "direct",
+          from: `sms:${to}`,
+          to: `sms:${to}`,
+        });
+      },
       targetResolver: {
         looksLikeId: looksLikeSmsPhoneNumber,
         hint: "<+15551234567>",
@@ -430,7 +410,7 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
           accountId: ctx.account.accountId,
           setStatus: ctx.setStatus,
         });
-        return await startSmsGatewayAccount({
+        await startSmsGatewayAccount({
           cfg: ctx.cfg,
           account: ctx.account,
           channelRuntime: ctx.channelRuntime as unknown as SmsChannelRuntime,

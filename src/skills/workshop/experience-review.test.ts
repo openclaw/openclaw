@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveAdmittedRunActiveAssertion as activeAssertion } from "../../agents/admitted-run-context.js";
@@ -21,6 +22,10 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { readSqliteDatabaseScopedWriteTokensForPath } from "../../infra/sqlite-database-admission.js";
 import { runBeforeAgentReplyForTurn } from "../../plugins/before-agent-reply.js";
@@ -87,6 +92,7 @@ afterEach(async () => {
 });
 
 type ReviewParams = Parameters<typeof runSkillWorkshopReview>[0];
+const completedReview = { meta: { durationMs: 1 } };
 async function useRealReview() {
   const review = await vi.importActual<{ runSkillWorkshopReview: typeof runSkillWorkshopReview }>(
     "./review-run.js",
@@ -100,7 +106,7 @@ function withAdmission(run: (assertCurrent: ReturnType<typeof activeAssertion>) 
       const assertCurrent = activeAssertion(admitted, params.abortSignal);
       expect(assertCurrent).toBeDefined();
       await run(assertCurrent);
-      return { meta: { durationMs: 1 } };
+      return completedReview;
     } finally {
       params.preparedRunAdmission.close();
     }
@@ -124,7 +130,7 @@ it.each(["success", "failure"])(
       if (outcome === "failure") {
         throw new Error("review provider failed");
       }
-      return { meta: { durationMs: 1 } };
+      return completedReview;
     });
 
     const review = runSkillExperienceReview(candidate);
@@ -163,7 +169,7 @@ it("yields an in-flight review when interactive work starts", async () => {
 
 it("does not dispatch user reply hooks for a detached experience review", async () => {
   const handler = vi.fn(() => ({ handled: true }));
-  const reviewModel = vi.fn(() => ({ meta: { durationMs: 1 } }));
+  const reviewModel = vi.fn(() => completedReview);
   initializeGlobalHookRunner(
     createMockPluginRegistry([
       { hookName: "before_agent_reply", handler, eligibleTriggers: ["user"] },
@@ -190,7 +196,7 @@ it("does not dispatch user reply hooks for a detached experience review", async 
       context: { sessionKey: params.sessionKey, sessionId: params.sessionId },
       assertCurrent: activeAssertion(admitted, params.abortSignal),
     });
-    return hookResult?.handled ? { meta: { durationMs: 1 } } : reviewModel();
+    return hookResult?.handled ? completedReview : reviewModel();
   });
 
   await runSkillExperienceReview(candidate);
@@ -274,41 +280,36 @@ it.each(["permission", "reset", "replacement", "deletion", "rewrite", "membershi
       "---\nname: procedure\ndescription: Follow the verified procedure\n---\n\nOriginal steps.\n";
     await createWorkshopSkill(context, { name: "procedure", content: original });
     const skillDir = path.join(resolveWorkshopSkillsDir(config, "main"), "procedure");
+    const mutations = {
+      permission: () => upsertSessionEntryCore(source, { permissionMode: "read-only" }),
+      reset: () => upsertSessionEntryCore(source, { lifecycleRevision: "reset-revision" }),
+      replacement: () =>
+        upsertSessionEntryCore(source, { sessionId: `${source.sessionId}:replacement` }),
+      rewrite: async () => {
+        const session = await SessionManager.openAsync(source, state.workspaceDir);
+        await session.removeTrailingEntriesAsync((entry) => entry.type === "message");
+      },
+      membership: () =>
+        addSessionMember(source, {
+          identityId: "new-member",
+          addedBy: "owner",
+          expectedSessionId: source.sessionId,
+        }),
+      deletion: () =>
+        deleteSessionEntryLifecycle({
+          agentId: "main",
+          storePath: source.storePath,
+          target: { canonicalKey: source.sessionKey, storeKeys: [source.sessionKey] },
+          archiveTranscript: false,
+        }),
+    };
     let changed = false;
     const mkdir = fs.mkdir.bind(fs);
     vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
       const result = await mkdir(...args);
       if (args[0] === skillDir && !changed) {
         changed = true;
-        if (change === "rewrite") {
-          const session = await SessionManager.openAsync(source, state.workspaceDir);
-          await session.removeTrailingEntriesAsync((entry) => entry.type === "message");
-        } else if (change === "membership") {
-          await addSessionMember(source, {
-            identityId: "new-member",
-            addedBy: "owner",
-            expectedSessionId: source.sessionId,
-          });
-        } else if (change === "deletion") {
-          await deleteSessionEntryLifecycle({
-            agentId: "main",
-            storePath: source.storePath,
-            target: {
-              canonicalKey: source.sessionKey,
-              storeKeys: [source.sessionKey],
-            },
-            archiveTranscript: false,
-          });
-        } else {
-          await upsertSessionEntryCore(
-            source,
-            change === "permission"
-              ? { permissionMode: "read-only" }
-              : change === "reset"
-                ? { lifecycleRevision: "reset-revision" }
-                : { sessionId: `${source.sessionId}:replacement` },
-          );
-        }
+        await mutations[change]();
       }
       return result;
     });
@@ -328,5 +329,108 @@ it.each(["permission", "reset", "replacement", "deletion", "rewrite", "membershi
     await runSkillExperienceReview(candidate);
     expect(changed).toBe(true);
     expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toBe(original);
+  },
+);
+
+it.each([
+  { enabled: true, hasUsage: true, failed: false },
+  { enabled: true, hasUsage: true, failed: true },
+  { enabled: false, hasUsage: true, failed: false },
+  { enabled: true, hasUsage: false, failed: false },
+  { enabled: true, hasUsage: true, failed: false, unpriced: true },
+])(
+  "settles review usage without foreground attribution: %j",
+  async ({ enabled, hasUsage, failed, unpriced }) => {
+    const usageCandidate = await createExperienceReviewCandidate(
+      "usage-review",
+      [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
+      { workspaceDir: state.workspaceDir, modelId: "usage-fixture" },
+    );
+    usageCandidate.config.diagnostics = { enabled };
+    const provider = expectDefined(
+      usageCandidate.config.models?.providers?.openai,
+      "fixture provider",
+    );
+    provider.models = unpriced
+      ? []
+      : [
+          {
+            id: "usage-fixture",
+            name: "Usage fixture",
+            reasoning: false,
+            input: ["text"],
+            contextWindow: 100_000,
+            maxTokens: 2048,
+            cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 1 },
+          },
+        ];
+    const events: Extract<DiagnosticEventPayload, { type: "model.usage" }>[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => {
+      if (event.type === "model.usage") {
+        events.push(event);
+      }
+    });
+    mocks.runSkillWorkshopReview.mockImplementation(
+      async (params: Parameters<typeof runSkillWorkshopReview>[0]) => ({
+        meta: {
+          durationMs: 123,
+          ...(failed ? { error: { kind: "timeout", message: "synthetic review failed" } } : {}),
+          agentMeta: {
+            sessionId: params.sessionId,
+            provider: "openai",
+            model: "usage-fixture",
+            ...(hasUsage
+              ? {
+                  usage: { input: 10, output: 5 },
+                  diagnosticUsage: { input: 100, output: 40, cacheRead: 20, cacheWrite: 10 },
+                }
+              : {}),
+            lastCallUsage: { input: 10, output: 5 },
+            contextTokens: 100_000,
+            promptTokens: 10,
+          },
+        },
+      }),
+    );
+    try {
+      const pending = runSkillExperienceReview(usageCandidate);
+      if (failed) {
+        await expect(pending).rejects.toThrow("synthetic review failed");
+      } else {
+        await pending;
+      }
+      expect(events).toHaveLength(enabled && hasUsage ? 1 : 0);
+      if (enabled && hasUsage) {
+        const event = expectDefined(events[0], "Workshop review usage diagnostic");
+        expect(event).toMatchObject({
+          agentId: "main",
+          sessionKey: expect.stringMatching(
+            /^agent:main:internal-session-effects:skill-workshop-review/,
+          ),
+          sessionId: expect.stringMatching(/^internal-session-effects-skill-workshop-review/),
+          provider: "openai",
+          model: "usage-fixture",
+          usage: {
+            input: 100,
+            output: 40,
+            cacheRead: 20,
+            cacheWrite: 10,
+            promptTokens: 130,
+            total: 170,
+          },
+          lastCallUsage: { input: 10, output: 5 },
+          context: { limit: 100_000, used: 10 },
+          durationMs: 123,
+        });
+        if (unpriced) {
+          expect(event.costUsd).toBeUndefined();
+        } else {
+          expect(event.costUsd).toBeCloseTo(0.0002);
+        }
+        expect(event.channel).toBeUndefined();
+      }
+    } finally {
+      stop();
+    }
   },
 );

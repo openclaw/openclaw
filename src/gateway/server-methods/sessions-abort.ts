@@ -459,6 +459,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       captureYieldedMainSessionContinuation({
         entry: sessionEntry,
         requester: { agentId: targetAgentId, sessionKey: canonicalKey },
+        purpose: "stop",
       })
         ? {
             runId: yieldedRunId,

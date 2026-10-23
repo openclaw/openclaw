@@ -13,10 +13,8 @@ import {
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
-import {
-  classifyUpdateOutcome,
-  UPDATE_FOREIGN_DESTINATION_REASON,
-} from "../shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../shared/update-outcome-classification.js";
+import { UPDATE_FOREIGN_DESTINATION_REASON } from "../shared/update-outcome.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { VERSION } from "../version.js";
 import { sha256Hex } from "./crypto-digest.js";

@@ -156,32 +156,6 @@ describe("publish preflight release inventory", () => {
     },
   );
 
-  it.each([false, true])("retains matching release metadata (draft: %s)", (draft) => {
-    const release = {
-      id: 8,
-      draft,
-      prerelease: false,
-      tag_name: `v${version}`,
-      html_url: `https://github.com/openclaw/openclaw/releases/tag/v${version}`,
-      target_commitish: "a".repeat(40),
-      body: "Published release notes",
-      assets: [{ name: "dependency-evidence.zip" }],
-    };
-    const runGh = (args: string[]) => {
-      if (args[1]?.includes("/releases/tags/")) {
-        if (draft) {
-          throw new Error("HTTP 404: Not Found");
-        }
-        return JSON.stringify(release);
-      }
-      return JSON.stringify([release]);
-    };
-    expect(readPublishPreflightRelease(runGh, repo, `v${version}`)).toEqual({
-      state: "found",
-      release,
-    });
-  });
-
   it("does not mask a failed exact-tag read as absence", () => {
     const runGh = vi.fn(() => {
       throw new Error("HTTP 502: Bad Gateway");

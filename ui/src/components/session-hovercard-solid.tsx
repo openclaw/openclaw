@@ -402,7 +402,10 @@ function PullRequestDetails(props: { snapshot?: ControlUiSessionPullRequestSnaps
   );
   const remaining = createMemo(() => Math.max(0, count() - requests().length));
   const branchLabel = () =>
-    t("chat.pullRequests.createPrLabel", { branch: branch()?.branch ?? "" });
+    t("chat.pullRequests.createPrLabel", {
+      label: t("chat.pullRequests.createPr"),
+      branch: branch()?.branch ?? "",
+    });
   return (
     <>
       <Show when={branch() && !props.snapshot?.pullRequests.length}>

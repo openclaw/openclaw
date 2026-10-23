@@ -400,7 +400,6 @@ export class ManagedWorktreeService {
     slots: Awaited<ReturnType<typeof readPendingWorktrees>>,
   ): Promise<WorktreeCreation> {
     params.signal?.throwIfAborted();
-    params.onProgress?.("checkout");
     const collision = slots.find(
       ({ record, state }) =>
         (params.name &&
@@ -599,6 +598,7 @@ export class ManagedWorktreeService {
     const base = await timeWorktreePreparationPhase("base", () =>
       resolveWorktreeCreationBase(repository.repoRoot, params),
     );
+    params.onProgress?.("checkout");
     let gitBytes = 0;
     const provisionedBytes =
       params.provisionIgnoredFiles === false
@@ -628,7 +628,7 @@ export class ManagedWorktreeService {
     const setupBytes = runRepositorySetup
       ? Math.max(
           WORKTREE_SETUP_HEADROOM_BYTES,
-          await directorySizeBytes(repository.sourceRoot, true, {
+          await directorySizeBytes(repository.sourceRoot, {
             signal: params.signal,
             assertCurrent: params.commitGuard,
           }),

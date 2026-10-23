@@ -110,6 +110,7 @@ const oauthRecordSchema = strictRecord({
   createdAtMs: timestamp,
   pendingInitial: pendingInitialSchema.optional(),
   pendingRefresh: z.literal(true).optional(),
+  refreshClaim: z.string().uuid().optional(),
   refreshFailure: z.enum(["expired", "failed"]).optional(),
 }).refine(
   (record) =>
@@ -137,7 +138,6 @@ export function createGitHubOAuthRecord(params: {
   tokens: GitHubOAuthTokenPair;
   now: number;
   pendingInitial?: GitHubOAuthPendingInitial;
-  pendingRefresh?: true;
 }): GitHubOAuthRecord {
   return {
     version: 1,
@@ -152,7 +152,6 @@ export function createGitHubOAuthRecord(params: {
     scopes: params.tokens.scopes,
     createdAtMs: params.now,
     ...(params.pendingInitial ? { pendingInitial: params.pendingInitial } : {}),
-    ...(params.pendingRefresh ? { pendingRefresh: true } : {}),
   };
 }
 
@@ -237,15 +236,27 @@ export async function listGitHubDeviceAuthorizationRecords(): Promise<
   );
 }
 
-export async function writeGitHubOAuthRecord(record: GitHubOAuthRecord): Promise<void> {
-  const parsed = parseGitHubRecord(JSON.stringify(record), oauthRecordSchema);
+export async function writeGitHubOAuthRecord(
+  record: GitHubOAuthRecord,
+  expected?: GitHubOAuthRecord,
+): Promise<void> {
+  const parsed = parseGitHubOAuthRecord(JSON.stringify(record), record.profileId);
   if (!parsed || parsed.profileId !== record.profileId) {
     throw new Error("GitHub OAuth record is invalid.");
   }
   await writeHiddenGitHubSecretRecord({
     name: githubOAuthRecordName(record.profileId),
     value: JSON.stringify(parsed),
+    ...(expected ? { expectedValue: JSON.stringify(oauthRecordSchema.parse(expected)) } : {}),
   });
+}
+
+export function parseGitHubOAuthRecord(
+  raw: string | undefined,
+  profileId: string,
+): GitHubOAuthRecord | undefined {
+  const record = raw === undefined ? undefined : parseGitHubRecord(raw, oauthRecordSchema);
+  return record?.profileId === profileId ? record : undefined;
 }
 
 export async function inspectGitHubOAuthRecord(
@@ -257,8 +268,8 @@ export async function inspectGitHubOAuthRecord(
   if (raw === undefined) {
     return { state: "missing" };
   }
-  const record = parseGitHubRecord(raw, oauthRecordSchema);
-  return record?.profileId === profileId ? { state: "valid", record } : { state: "invalid" };
+  const record = parseGitHubOAuthRecord(raw, profileId);
+  return record ? { state: "valid", record } : { state: "invalid" };
 }
 
 export async function deleteGitHubOAuthRecord(profileId: string): Promise<void> {

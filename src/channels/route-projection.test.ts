@@ -1,8 +1,11 @@
-import { beforeEach, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { ChannelMessagingAdapter } from "./plugins/types.public.js";
-import { formatConversationTarget, deliveryContextFromConversation } from "./route-projection.js";
+import {
+  formatConversationTarget as target,
+  deliveryContextFromConversation,
+} from "./route-projection.js";
 
 beforeEach(() => {
   const plugin = (
@@ -39,17 +42,17 @@ beforeEach(() => {
 });
 
 it("formats plugin-defined conversation targets via channel messaging hooks", () => {
-  expect(formatConversationTarget({ channel: "room-chat", conversationId: "!room:example" })).toBe(
+  expect(target({ channel: "room-chat", conversationId: "!room:example" })).toBe(
     "room:!room:example",
   );
   expect(
-    formatConversationTarget({
+    target({
       channel: "room-chat",
       conversationId: "$thread",
       parentConversationId: "!room:example",
     }),
   ).toBe("room:!room:example");
-  expect(formatConversationTarget({ channel: "room-chat", conversationId: "  " })).toBeUndefined();
+  expect(target({ channel: "room-chat", conversationId: "  " })).toBeUndefined();
 });
 
 const ids = [
@@ -64,26 +67,17 @@ const ids = [
   ["negative infinity", Number.NEGATIVE_INFINITY, undefined],
   ["missing id", undefined, undefined],
 ] as const;
-it.each([...ids, ["padded string", "  12.9  ", "channel:12.9"] as const])(
-  "normalizes a %s conversation id before plugin projection",
-  (_label, value, expected) => {
-    expect(formatConversationTarget({ channel: "thread-chat", conversationId: value })).toBe(
-      expected,
-    );
-  },
-);
-it.each([...ids, ["padded string", "  parent  ", "channel:parent"] as const])(
-  "normalizes a %s parent id before plugin projection",
-  (_label, value, expected) => {
-    expect(
-      formatConversationTarget({
-        channel: "thread-chat",
-        conversationId: "child",
-        parentConversationId: value,
-      }),
-    ).toBe(expected ?? "channel:child");
-  },
-);
+describe.each(["conversationId", "parentConversationId"] as const)("%s normalization", (field) => {
+  it.each([...ids, ["padded string", "  12.9  ", "channel:12.9"] as const])(
+    "projects %s through the plugin",
+    (_label, value, expected) => {
+      const result = target({ channel: "thread-chat", conversationId: "child", [field]: value });
+      expect(result).toBe(
+        expected ?? (field === "parentConversationId" ? "channel:child" : undefined),
+      );
+    },
+  );
+});
 
 it("projects parent-child conversation refs through plugin delivery targets", () => {
   expect(
@@ -119,5 +113,5 @@ it("preserves thread-only plugin results while formatting can supply a target fa
     to: undefined,
     threadId: "$thread",
   });
-  expect(formatConversationTarget(conversation)).toBe("channel:$thread");
+  expect(target(conversation)).toBe("channel:$thread");
 });

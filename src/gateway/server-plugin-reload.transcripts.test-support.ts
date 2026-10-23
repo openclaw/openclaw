@@ -69,7 +69,7 @@ export async function startTranscriptReloadFixtureSidecars(
     minimalTestGateway: false,
     cfgAtStart: config,
     getConfig,
-    getReadiness: () => ({ ready: true, failing: [], uptimeMs: 0 }),
+    getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 0 }),
     port: 0,
     log,
     isNixMode: false,
@@ -83,6 +83,7 @@ export async function startTranscriptReloadFixtureSidecars(
     deps: {},
     startChannels: idle,
     mainSessionRecoveryStartupCheckedStorePaths: new Set<string>(),
+    isRestartRecoverySuppressed: () => false,
     recoveryRuntime: {
       prepareRestartRecovery: unusedRecovery,
       dispatchSessionMethod: unusedRecovery,

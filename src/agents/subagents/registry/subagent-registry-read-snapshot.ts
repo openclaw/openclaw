@@ -332,43 +332,35 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
   };
 }
 
-export type PreparedSubagentMaintenanceRead = {
-  capture(): ReadonlyMap<string, SubagentRunMaintenanceRecord>;
-};
-
-/** One complete maintenance snapshot advances through the registry owner's publications. */
+/** Maintenance consumes current publications synchronously into its own protected-key snapshot. */
 export async function prepareSubagentMaintenanceReadSnapshot(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   cache: SubagentRunsCache<SubagentRunMaintenanceRecord>,
   options?: { live?: true },
-): Promise<PreparedSubagentMaintenanceRead> {
+) {
   const context = shouldReadPersistedSubagentRuns()
     ? captureOpenClawStateWorkerContext()
     : undefined;
   const signal = getAsyncWorkSignal();
-  const assertCurrent = () => {
+  function* capture(persisted: ReadonlyMap<string, SubagentRunMaintenanceRecord>) {
     signal?.throwIfAborted();
     getAsyncWorkSignal()?.throwIfAborted();
     if (context) {
       assertSubagentReadContext(context);
     }
-  };
-  const capture = (persisted: ReadonlyMap<string, SubagentRunMaintenanceRecord>) => {
-    assertCurrent();
     const state = context ? selectSubagentCacheStateForRead(cache.state, context) : {};
-    const runs = new Map<string, SubagentRunMaintenanceRecord>(state.snapshot ?? persisted);
-    for (const [runId, { entry }] of state.changes ?? []) {
-      if (entry) {
-        runs.set(runId, entry);
-      } else {
-        runs.delete(runId);
+    for (const entry of (state.snapshot ?? persisted).values()) {
+      if (!inMemoryRuns.has(entry.runId) && !state.changes?.has(entry.runId)) {
+        yield entry;
       }
     }
-    for (const [runId, entry] of inMemoryRuns) {
-      runs.set(runId, entry);
+    for (const [runId, { entry }] of state.changes ?? []) {
+      if (entry && !inMemoryRuns.has(runId)) {
+        yield entry;
+      }
     }
-    return runs;
-  };
+    yield* inMemoryRuns.values();
+  }
   if (!context) {
     return {
       capture: () => capture(new Map()),
@@ -390,9 +382,6 @@ export async function prepareSubagentMaintenanceReadSnapshot(
     context,
   );
   return {
-    capture() {
-      // The owner publishes committed changes before the final maintenance grant.
-      return capture(persisted);
-    },
+    capture: () => capture(persisted),
   };
 }

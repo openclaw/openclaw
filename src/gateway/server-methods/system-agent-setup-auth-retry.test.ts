@@ -1,17 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { Compile } from "typebox/compile";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  SystemAgentSetupAuthStartParams,
-  WizardNextParams,
-  WizardNextResult,
-} from "../../../packages/gateway-protocol/src/index.js";
-import { WizardNextResultSchema } from "../../../packages/gateway-protocol/src/schema/wizard.js";
+import type { SystemAgentSetupAuthStartParams } from "../../../packages/gateway-protocol/src/index.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
-import { WizardSession } from "../../wizard/session.js";
+import type { WizardSession } from "../../wizard/session.js";
 import { whenAdmittedWizardSessionSettled } from "./setup-admission.js";
+import { callWizardNext, makeContext } from "./system-agent-setup.test-support.js";
 import { systemAgentHandlers } from "./system-agent.js";
 import type {
   GatewayClient,
@@ -24,20 +19,6 @@ const setupInferenceMocks = vi.hoisted(() => ({ activateSetupInference: vi.fn() 
 vi.mock("../../system-agent/setup-inference.js", () => ({
   activateSetupInference: setupInferenceMocks.activateSetupInference,
 }));
-const validateWizardResult = Compile(WizardNextResultSchema);
-
-function makeContext() {
-  const wizardSessions = new Map<string, WizardSession>();
-  return {
-    wizardSessions,
-    context: {
-      wizardSessions,
-      findRunningWizard: () => undefined,
-      purgeWizardSession: (id: string) => wizardSessions.delete(id),
-    } as unknown as GatewayRequestContext,
-  };
-}
-
 function makeRespond() {
   const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
   return {
@@ -97,24 +78,6 @@ async function settleAuthRequests(
     session.cancel();
     await whenAdmittedWizardSessionSettled(session);
   }
-}
-
-async function callWizardNext(
-  context: GatewayRequestContext,
-  params: WizardNextParams,
-): Promise<WizardNextResult> {
-  const { calls, respond } = makeRespond();
-  await expectDefined(
-    wizardHandlers["wizard.next"],
-    "wizard.next handler",
-  )({ params, respond, context } as never);
-  expect(calls).toHaveLength(1);
-  expect(calls[0]?.ok).toBe(true);
-  const payload = calls[0]?.payload;
-  if (!validateWizardResult.Check(payload)) {
-    throw new Error("wizard.next returned an invalid result");
-  }
-  return payload;
 }
 
 const signedIn = { ok: true, modelRef: "github-copilot/test", latencyMs: 1, lines: [] };

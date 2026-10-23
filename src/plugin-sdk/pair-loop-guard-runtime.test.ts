@@ -22,10 +22,11 @@ const base = {
   settings,
 };
 
-function createFixture(fixtureSettings = settings) {
+function createFixture(overrides: Partial<PairLoopGuardSettings> = {}) {
   const guard = createPairLoopGuard();
-  const record = (overrides: Partial<Parameters<typeof guard.recordAndCheck>[0]>) =>
-    guard.recordAndCheck({ ...base, settings: fixtureSettings, ...overrides });
+  const fixtureSettings = { ...settings, ...overrides };
+  const record = (event: Partial<Parameters<typeof guard.recordAndCheck>[0]>) =>
+    guard.recordAndCheck({ ...base, settings: fixtureSettings, ...event });
   return { guard, record };
 }
 
@@ -56,22 +57,20 @@ describe("createPairLoopGuard", () => {
   });
 
   it("does not consume another budget slot when the same event is retried", () => {
-    const strictSettings = { ...settings, maxEventsPerWindow: 1 };
-    const { record } = createFixture(strictSettings);
+    const { record } = createFixture({ maxEventsPerWindow: 1 });
 
     expect(record({ eventId: "event-1", nowMs: 1_000 })).toEqual({ suppressed: false });
     expect(record({ eventId: "event-1", nowMs: 1_000 })).toEqual({ suppressed: false });
     const second = record({ eventId: "event-2", nowMs: 1_001 });
     expect(second).toEqual({
       suppressed: true,
-      cooldownUntilMs: 1_001 + strictSettings.cooldownMs,
+      cooldownUntilMs: 1_001 + settings.cooldownMs,
     });
     expect(record({ eventId: "event-2", nowMs: 1_001 })).toEqual(second);
   });
 
   it("does not retain distinct suppressed event identities during cooldown", () => {
-    const strictSettings = { ...settings, maxEventsPerWindow: 1 };
-    const { guard, record } = createFixture(strictSettings);
+    const { guard, record } = createFixture({ maxEventsPerWindow: 1 });
 
     expect(record({ eventId: "event-1", nowMs: 1_000 })).toEqual({ suppressed: false });
     expect(record({ eventId: "event-2", nowMs: 1_001 }).suppressed).toBe(true);
@@ -87,7 +86,7 @@ describe("createPairLoopGuard", () => {
     expect(guard.snapshot()).toEqual([
       expect.objectContaining({
         recentCount: 0,
-        cooldownUntilMs: 1_001 + strictSettings.cooldownMs,
+        cooldownUntilMs: 1_001 + settings.cooldownMs,
       }),
     ]);
   });
@@ -103,25 +102,23 @@ describe("createPairLoopGuard", () => {
   });
 
   it("does not count future event timestamps against older reordered events", () => {
-    const strictSettings = { ...settings, maxEventsPerWindow: 1 };
-    const { record } = createFixture(strictSettings);
+    const { record } = createFixture({ maxEventsPerWindow: 1 });
 
     expect(record({ nowMs: 120_000 })).toEqual({ suppressed: false });
     expect(record({ nowMs: 0 })).toEqual({ suppressed: false });
     expect(record({ nowMs: 120_500 })).toEqual({
       suppressed: true,
-      cooldownUntilMs: 120_500 + strictSettings.cooldownMs,
+      cooldownUntilMs: 120_500 + settings.cooldownMs,
     });
   });
 
   it("does not apply a future cooldown to an older reordered event", () => {
-    const strictSettings = { ...settings, maxEventsPerWindow: 1 };
-    const { record } = createFixture(strictSettings);
+    const { record } = createFixture({ maxEventsPerWindow: 1 });
 
     expect(record({ nowMs: 120_000 })).toEqual({ suppressed: false });
     expect(record({ nowMs: 120_500 })).toEqual({
       suppressed: true,
-      cooldownUntilMs: 120_500 + strictSettings.cooldownMs,
+      cooldownUntilMs: 120_500 + settings.cooldownMs,
     });
     expect(record({ nowMs: 0 })).toEqual({ suppressed: false });
   });

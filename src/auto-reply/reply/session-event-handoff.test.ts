@@ -26,6 +26,9 @@ import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionReplacement from "../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   enqueueRequiredSystemEventEntry,
@@ -37,11 +40,14 @@ import * as gatewayWork from "../../process/gateway-work-admission.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { buildSessionEventContext } from "./session-event-context.js";
 import {
   assertSessionEventTargetCurrent,
   combineSessionEventTargetsForHost,
@@ -201,6 +207,66 @@ afterAll(() => {
 });
 
 describe("session event target custody", () => {
+  it("retains scheduled creation restrictions and private skill pins only for absent targets", async ({
+    state: _state,
+  }) => {
+    const profile = ensureProfileForEmail("scheduled-creator@example.test");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              agents: ["main"],
+              sessions: { others: "none" },
+              scopes: ["operator.read"],
+              sandbox: "required",
+            },
+          },
+        },
+      },
+    };
+    const actor = { type: "human", source: "profile", id: profile.id } as const;
+    const skills = [
+      {
+        skillId: "00000000-0000-0000-0000-000000000001",
+        revision: "1".repeat(64),
+        name: "private-report",
+        ownerProfileId: profile.id,
+      },
+    ];
+    const job = {
+      ...makeCronJob({ sessionTarget: `session:${sessionKey}` }),
+      createdActor: actor,
+      skillLibrarySelections: skills,
+    };
+    for (const targetSessionId of ["", "existing-session"]) {
+      const ctx = buildSessionEventContext({
+        cfg,
+        ...eventScope,
+        text: "Check the report",
+        options: {
+          source: "cron",
+          scheduledAutomation: {
+            occurrence: TEST_SCHEDULED_OCCURRENCE,
+            job,
+            admissionSource: "operator-schedule",
+            assertCurrent: () => {},
+          },
+        },
+        occurrenceId: "scheduled-creation",
+        target: { sessionId: targetSessionId, generation: "captured-generation" },
+        assertCurrent: () => {},
+      });
+      expect(ctx.SessionCreation).toEqual(
+        targetSessionId
+          ? undefined
+          : { via: "cron", actor, sandbox: "required", skillLibrarySelections: skills },
+      );
+    }
+  });
+
   it("cleans settled cron events from their captured store", async ({
     signal,
     coldState: state,

@@ -15,28 +15,23 @@ export type PluginMarketplaceListOptions = {
   json?: boolean;
 };
 
-export type PluginMarketplaceEntriesOptions = {
+export type PluginMarketplaceEntriesOptions = PluginMarketplaceListOptions & {
   feedProfile?: string;
   feedUrl?: string;
-  json?: boolean;
   offline?: boolean;
 };
 
-export type PluginMarketplaceRefreshOptions = {
+export type PluginMarketplaceRefreshOptions = PluginMarketplaceListOptions & {
   expectedSha256?: string;
   feedProfile?: string;
   feedUrl?: string;
-  json?: boolean;
 };
 
-export type PluginRegistryOptions = {
-  json?: boolean;
+export type PluginRegistryOptions = PluginMarketplaceListOptions & {
   refresh?: boolean;
 };
 
-export type PluginDoctorOptions = {
-  json?: boolean;
-};
+export type PluginDoctorOptions = PluginMarketplaceListOptions;
 
 const pluginAction = createLazyRuntimeMethodBinder(() => import("./plugins-cli.runtime.js"));
 const authoringAction = createLazyRuntimeMethodBinder(

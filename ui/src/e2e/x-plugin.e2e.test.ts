@@ -89,8 +89,7 @@ suite.define(() => {
         expect(await account.inputValue()).toBe("primary");
         expect(await surface.getByText("Read-only", { exact: true }).count()).toBe(1);
         expect((await gateway.waitForRequest("plugins.controlUi.report")).params).toMatchObject({
-          pluginId: "x",
-          status: "activated",
+          reports: [{ pluginId: "x", status: "activated" }],
         });
 
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {

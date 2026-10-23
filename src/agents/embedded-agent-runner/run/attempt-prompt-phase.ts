@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
@@ -17,7 +16,6 @@ import {
   type CompactionRequestBudget,
 } from "../../sessions/compaction/request-budget.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
-import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
 import {
@@ -52,7 +50,6 @@ import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.
 import { estimateToolSchemaTokenPressure } from "./preemptive-compaction.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
-type PromptAssemblyResult = Awaited<ReturnType<typeof prepareEmbeddedAttemptPromptAssembly>>;
 type PromptPreflightState = Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0]["state"];
 
 export type EmbeddedAttemptPromptState = Pick<
@@ -133,7 +130,6 @@ export async function runEmbeddedAttemptPromptPhase(
   let systemPromptText = sessionRuntimeState.systemPromptText;
   const toolSearchCompacted = prepared.toolCatalog.toolSearch.compacted;
   let skipPromptSubmission = false;
-  let leasedSteering: PromptAssemblyResult["leasedSteering"];
   let providerBoundaryPrecheck: MidTurnPrecheckRequest | undefined;
   const providerCompactionAtRequestBoundary = isChatGPTV2CompactionEligible({
     config: attempt.config,
@@ -160,17 +156,6 @@ export async function runEmbeddedAttemptPromptPhase(
     promptState.contextBudgetStatus = state.contextBudgetStatus;
     promptState.preflightRecovery = state.preflightRecovery;
     setFailure(state.promptError, state.promptErrorSource);
-  };
-  const releaseLeasedSteering = async (error?: unknown) => {
-    if (!leasedSteering) {
-      return;
-    }
-    await releasePendingAgentSteeringItems({
-      runIds: leasedSteering.runIds,
-      leaseId: leasedSteering.leaseId,
-      error: error ? formatErrorMessage(error) : undefined,
-    });
-    leasedSteering = undefined;
   };
   const handleMidTurnPrecheckRequest = async (request: MidTurnPrecheckRequest) => {
     const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
@@ -219,9 +204,6 @@ export async function runEmbeddedAttemptPromptPhase(
         );
         return refresh ? refresh(currentSystemPrompt) : currentSystemPrompt;
       },
-      setLeasedSteering: (lease) => {
-        leasedSteering = lease;
-      },
     });
     input.setup.prepStages.mark("prompt-build");
     systemPromptText = sessionRuntimeState.systemPromptText;
@@ -232,7 +214,6 @@ export async function runEmbeddedAttemptPromptPhase(
     }
     const { hookCtx, promptBuildPrependContext, promptBuildAppendContext } = promptAssembly;
     transcriptLeafId = promptAssembly.transcriptLeafId;
-    leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
 
     const promptContext = await prepareEmbeddedAttemptPromptContext({
       sessionVersion: sessionManager.getHeader()?.version,
@@ -521,7 +502,6 @@ export async function runEmbeddedAttemptPromptPhase(
           : {}),
         onModelRequest: preparedStreamRuntime.cache.onModelRequest,
         images: imageResult.images,
-        ...(leasedSteering ? { leasedSteering } : {}),
         modelPrompt: promptContext.promptForModel,
         onFinalPromptText: (prompt) => {
           promptState.finalPromptText = prompt;
@@ -529,9 +509,6 @@ export async function runEmbeddedAttemptPromptPhase(
         assertHostActive: promptAssembly.assertHostActive,
         withTranscriptWrite,
         getUserTranscriptContexts: sessionRuntime.boundary.getUserTranscriptContexts,
-        onSteeringAcknowledged: () => {
-          leasedSteering = undefined;
-        },
         persistToolResultProjections: async () => {
           if (
             !isRawModelRun &&
@@ -569,8 +546,6 @@ export async function runEmbeddedAttemptPromptPhase(
         toolResultPromptProjectionState,
         trajectoryRecorder,
       });
-    } else {
-      await releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
     }
     publishDispatchState(state);
   } catch (error) {
@@ -586,7 +561,6 @@ export async function runEmbeddedAttemptPromptPhase(
           source: "yield_cleanup",
         });
       },
-      releaseLeasedSteering,
       withOwnedTranscriptWrite,
       ...input.lifecycle.readYieldState(),
     });

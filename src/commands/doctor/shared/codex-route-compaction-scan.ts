@@ -17,7 +17,7 @@ import type {
   UnsupportedCodexCompactionOverride,
 } from "./codex-route-types.js";
 
-export const COMPACTION_OVERRIDE_KEYS: readonly CompactionOverrideKey[] = ["model", "provider"];
+export const UNSUPPORTED_CODEX_COMPACTION_KEYS = ["provider"] as const;
 export const LOSSLESS_CONTEXT_ENGINE_ID = "lossless-claw";
 
 type AgentCompactionScanParams = {
@@ -57,7 +57,7 @@ function collectUnsupportedCodexCompactionOverridesForAgent(
   if (normalizeString(providerValue) === LOSSLESS_CONTEXT_ENGINE_ID) {
     return [];
   }
-  return COMPACTION_OVERRIDE_KEYS.map((key) => readCompactionSlot(params, key)).flatMap(
+  return UNSUPPORTED_CODEX_COMPACTION_KEYS.map((key) => readCompactionSlot(params, key)).flatMap(
     ({ key, path, value }) =>
       typeof value === "string" && value.trim() ? [{ path, key, value: value.trim() }] : [],
   );

@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { twoFrames } from "./chat-presentation.test-support.ts";
 import {
   expectPaletteProjectGrouping,
   expectPaletteSettingsAlignment,
@@ -857,6 +858,16 @@ suite.define(() => {
       await gateway.deferNext("sessions.create");
       await input.press("ControlOrMeta+Enter");
       await gateway.waitForRequest("sessions.create");
+      // A disabled field loses focus on the next frame; the pending prompt stays focused and read-only.
+      await expect.poll(() => start.isEnabled()).toBe(false);
+      await twoFrames(page);
+      expect(
+        await input.evaluate((element: HTMLTextAreaElement) => [
+          document.activeElement === element,
+          element.readOnly,
+          element.getAttribute("aria-busy"),
+        ]),
+      ).toEqual([true, true, "true"]);
       await gateway.rejectDeferred("sessions.create", {
         code: "INVALID_REQUEST",
         message: "Fixture denied creation; correct the request and retry.",
@@ -867,6 +878,8 @@ suite.define(() => {
       expect(page.url()).toBe(url);
       expect(await composer.inputValue()).toBe(foregroundDraft);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      expect(await input.evaluate((element) => document.activeElement === element)).toBe(true);
+      expect(await input.getAttribute("aria-busy")).toBeNull();
       await capture("creation-failure-retains-prompt");
       await expect.poll(() => start.isEnabled()).toBe(true);
       await input.press("ControlOrMeta+Enter");

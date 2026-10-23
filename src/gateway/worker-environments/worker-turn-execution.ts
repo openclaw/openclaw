@@ -8,17 +8,11 @@ import {
   getAgentToolExecutionLocation,
 } from "../../agents/agent-tool-metadata.js";
 import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.js";
-import type { EmbeddedAttemptSteeringLease } from "../../agents/embedded-agent-runner/run/attempt-prompt-build.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { admitEmbeddedContextEngine } from "../../agents/embedded-agent-runner/run/context-engine-admission.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
-import {
-  ackPendingAgentSteeringItems,
-  releasePendingAgentSteeringItems,
-} from "../../agents/subagents/registry/subagent-registry.js";
-import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { createLibrarySkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-library.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
 import { logInfo } from "../../logger.js";
@@ -301,13 +295,6 @@ export async function executeWorkerTurn(
     }
   });
   let toolRuntime: WorkerGatewayToolRuntime | undefined;
-  await using steering: AsyncDisposable & { lease?: EmbeddedAttemptSteeringLease } = {
-    async [Symbol.asyncDispose]() {
-      if (this.lease) {
-        await releasePendingAgentSteeringItems(this.lease);
-      }
-    },
-  };
   const toolIdentity = {
     sessionId: placement.sessionId,
     runId: turn.runId,
@@ -342,7 +329,7 @@ export async function executeWorkerTurn(
       assertCurrent: assertToolSurfaceCurrent,
       signal,
       prepare: async (identity) => {
-        const inheritedPublicationToolRef: { current?: AnyAgentTool } = {};
+        const additionalInheritedToolNamesRef: string[] = [];
         const placementTools = createWorkerPlacementTools({
           ...turn,
           ...placement,
@@ -372,7 +359,7 @@ export async function executeWorkerTurn(
                   preparedModelRuntime: preparedRuntime.snapshot,
                   installedSkills,
                   githubPublicationAvailable: true,
-                  inheritedPublicationToolRef,
+                  additionalInheritedToolNamesRef,
                   cronCreatorAuthorityUnavailableReason: undefined,
                   runSessionKey: placement.sessionKey,
                   sessionKey: turn.sandboxSessionKey ?? placement.sessionKey,
@@ -394,14 +381,8 @@ export async function executeWorkerTurn(
                 { assertCurrent: assertToolSurfaceCurrent, signal },
               );
               if (turn.disableTools || turn.modelRun || turn.promptMode === "none") {
-                inheritedPublicationToolRef.current = undefined;
+                additionalInheritedToolNamesRef.length = 0;
                 return [];
-              }
-              if (inheritedPublicationToolRef.current) {
-                inheritedPublicationToolRef.current = applyEmbeddedAttemptToolsAllow(
-                  [inheritedPublicationToolRef.current],
-                  turn.toolsAllow,
-                )[0];
               }
               return applyEmbeddedAttemptToolsAllow(prepared, turn.toolsAllow).filter((tool) => {
                 const location = getAgentToolExecutionLocation(tool);
@@ -427,7 +408,10 @@ export async function executeWorkerTurn(
         return {
           policy: toolPolicy,
           presentation,
-          inheritedPublicationTool: inheritedPublicationToolRef.current,
+          additionalInheritedToolNames: applyEmbeddedAttemptToolsAllow(
+            additionalInheritedToolNamesRef.map((name) => ({ name })),
+            turn.toolsAllow,
+          ).map((tool) => tool.name),
           tools: tools.map((tool) =>
             copyAgentToolMetadata(tool, {
               ...tool,
@@ -476,9 +460,6 @@ export async function executeWorkerTurn(
       contextEngine: contextEngineAdmission.contextEngine,
       contextEnginePluginId:
         contextEngineAdmission.contextEngineLogicalTurnLease.effectiveEnginePluginId,
-      setLeasedSteering: (lease: EmbeddedAttemptSteeringLease) => {
-        steering.lease = lease;
-      },
       assertCurrent: assertActive,
     };
     const promptContext = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
@@ -627,9 +608,6 @@ export async function executeWorkerTurn(
     if (!isAuthorized()) {
       throw new Error("Worker turn authority changed while preparing its launch");
     }
-    if (steering.lease && !steering.lease.isCurrent()) {
-      throw new Error("Queued child results lost authority before worker prompt injection");
-    }
     recorder?.markSentToProvider?.();
     turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend });
     const handoffAbort = new AbortController();
@@ -692,12 +670,6 @@ export async function executeWorkerTurn(
       promptContext,
       prepareReplyMedia,
       takeFinishingOutcome: () => takeFinishingOutcome(credential.deliveryId),
-      settleSteering: async () => {
-        if (steering.lease) {
-          await ackPendingAgentSteeringItems(steering.lease);
-          steering.lease = undefined;
-        }
-      },
       signal,
       startedAt,
     });

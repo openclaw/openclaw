@@ -1,9 +1,12 @@
 import { safeParseJson } from "@openclaw/normalization-core";
-import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isRecord as isPlainRecord,
+  omitUndefinedFields,
+} from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import { z } from "zod";
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
-import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome.js";
+import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome-classification.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   executeSqliteQuerySync,
@@ -74,15 +77,6 @@ function isSafeInteger(value: unknown): value is number {
 
 // Optional properties are absent from the canonical payload, including when an
 // input explicitly supplies undefined. Keep nested diagnostic records untouched.
-function omitUndefinedFields<T extends object>(value: T): T {
-  for (const key in value) {
-    if (value[key] === undefined) {
-      delete value[key];
-    }
-  }
-  return value;
-}
-
 const restartSentinelLogSchema = z
   .object({
     stdoutTail: z.string().nullish(),

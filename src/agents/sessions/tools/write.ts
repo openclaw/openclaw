@@ -118,45 +118,6 @@ async function readOriginalWriteState(
   }
 }
 
-async function resolveWriteDetails(params: {
-  absolutePath: string;
-  content: string;
-  ops: WriteOperations;
-  path: string;
-  precheck: WriteToolPrecheck;
-  signal?: AbortSignal;
-}): Promise<WriteToolDetails> {
-  if (Buffer.byteLength(params.content, "utf8") > WRITE_DIFF_MAX_BYTES) {
-    // Keep diff work bounded; a partial patch would misrepresent the write.
-    if (params.precheck.beforeStat === null) {
-      return { changed: true, created: true };
-    }
-    return params.precheck.beforeStat ? { changed: true, created: false } : { changed: true };
-  }
-  const beforeStat = params.precheck.beforeStat;
-  let beforeText = params.precheck.beforeText;
-  if (
-    beforeText === undefined &&
-    !params.precheck.readAttempted &&
-    beforeStat?.type === "file" &&
-    beforeStat.size <= WRITE_DIFF_MAX_BYTES
-  ) {
-    const originalContent = await params.ops.readFile(params.absolutePath).catch(() => undefined);
-    const candidate = Buffer.isBuffer(originalContent)
-      ? originalContent.toString("utf8")
-      : originalContent;
-    if (candidate !== undefined && Buffer.byteLength(candidate, "utf8") <= WRITE_DIFF_MAX_BYTES) {
-      beforeText = candidate;
-    }
-  }
-  const created = beforeStat === null ? true : beforeStat ? false : undefined;
-  const receipt = await planFileWriteDiff(
-    { path: params.path, content: params.content, beforeText, created },
-    params.signal,
-  );
-  return { changed: true, ...(created === undefined ? {} : { created }), ...receipt };
-}
-
 async function didWriteMetadataChange(
   absolutePath: string,
   beforeStat: PersistedFileStat | null | undefined,
@@ -225,17 +186,41 @@ export function createWriteTool(
             changed: false,
           } satisfies WriteToolDetails);
         }
-        const details = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          assertCurrent();
-          return resolveWriteDetails({
-            absolutePath,
-            content,
-            ops,
-            path,
-            precheck,
-            signal,
-          });
-        });
+        const details = await runWithAgentToolSourceExecutionScope(
+          assertCurrent,
+          async (): Promise<WriteToolDetails> => {
+            assertCurrent();
+            if (Buffer.byteLength(content, "utf8") > WRITE_DIFF_MAX_BYTES) {
+              // Keep diff work bounded; a partial patch would misrepresent the write.
+              if (precheck.beforeStat === null) {
+                return { changed: true, created: true };
+              }
+              return precheck.beforeStat ? { changed: true, created: false } : { changed: true };
+            }
+            const beforeStat = precheck.beforeStat;
+            let beforeText = precheck.beforeText;
+            if (
+              beforeText === undefined &&
+              !precheck.readAttempted &&
+              beforeStat?.type === "file" &&
+              beforeStat.size <= WRITE_DIFF_MAX_BYTES
+            ) {
+              const originalContent = await ops.readFile(absolutePath).catch(() => undefined);
+              const candidate = Buffer.isBuffer(originalContent)
+                ? originalContent.toString("utf8")
+                : originalContent;
+              if (
+                candidate !== undefined &&
+                Buffer.byteLength(candidate, "utf8") <= WRITE_DIFF_MAX_BYTES
+              ) {
+                beforeText = candidate;
+              }
+            }
+            const created = beforeStat === null ? true : beforeStat ? false : undefined;
+            const receipt = await planFileWriteDiff({ path, content, beforeText, created }, signal);
+            return { changed: true, ...(created === undefined ? {} : { created }), ...receipt };
+          },
+        );
         assertFileToolNotAborted(signal);
         try {
           await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {

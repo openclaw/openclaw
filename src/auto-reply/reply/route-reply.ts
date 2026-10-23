@@ -155,7 +155,7 @@ async function routeReplyOperation(
     ...(reason === "channel_transform" ? { reason } : {}),
   });
   const payload = operation.kind === "raw" ? operation.payload : operation.plan.payload;
-  if (shouldSuppressReasoningPayload(payload)) {
+  if (operation.kind === "raw" && shouldSuppressReasoningPayload(payload)) {
     return suppress("suppressed");
   }
   const normalizedChannel = normalizeMessageChannel(channel);

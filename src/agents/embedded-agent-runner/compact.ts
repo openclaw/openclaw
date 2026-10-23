@@ -1,5 +1,5 @@
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
-import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { projectExecutionSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -211,7 +211,7 @@ export async function compactEmbeddedAgentSessionDirect(
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
   const requestedParams: CompactEmbeddedAgentSessionParams = {
     ...paramsBase,
-    sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
+    sessionEntry: entry ? projectExecutionSessionEntry(entry) : undefined,
     agentHarnessId: lockedHarnessRuntime ?? paramsBase.agentHarnessId,
     modelSelectionLocked: entry?.modelSelectionLocked ?? paramsBase.modelSelectionLocked,
     agentId: runSessionTarget.agentId,

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
 import * as codeRegions from "../shared/text/code-regions.js";
 import { consumePendingAssistantReplyDirectivesIntoReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
@@ -8,7 +8,7 @@ import {
   updateMessage,
 } from "./embedded-agent-subscribe.handlers.messages.test-helpers.js";
 import { extractAssistantVisibleText } from "./embedded-agent-utils.js";
-import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 const markup = [
   "<tool_call>exec<arg_key>command</arg_key><arg_value>echo hidden</arg_value></tool_call>",
@@ -17,146 +17,129 @@ const markup = [
   '<antml:invoke name="exec"><antml:parameter name="command">echo hidden</antml:parameter></antml:invoke>',
   '<mm:function_calls><mm:invoke name="exec"><mm:parameter name="command">echo hidden</mm:parameter></mm:invoke></mm:function_calls>',
   "<tool_call>exec<arg_key>command</arg_key><arg_value>[[reply_to:hidden]]\nMEDIA:/tmp/hidden.png</arg_value></tool_call>",
-];
+] as const;
+const textPart = (text: string) => ({ type: "text" as const, text });
 
 describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-responses"] as const)(
   "%s tool markup delivery",
   (api) => {
-    function message(text: string) {
-      return {
-        role: "assistant" as const,
+    let ctx: ReturnType<typeof createMessageUpdateContext>;
+    let events = vi.fn();
+    beforeEach(() => {
+      events = vi.fn();
+      ctx = createMessageUpdateContext({ onAgentEvent: events });
+      ctx.params.onBlockReply = vi.fn();
+    });
+    function message(content: string | AssistantMessage["content"]) {
+      return makeAgentAssistantMessage({
         api,
-        provider: "fixture",
-        model: "fixture",
-        usage: createZeroUsageFixture(),
-        timestamp: 0,
-        stopReason: "stop" as const,
         ...(api === "openai-responses" ? { phase: "final_answer" as const } : {}),
-        content: [{ type: "text" as const, text }],
-      };
+        content: typeof content === "string" ? [textPart(content)] : content,
+      });
+    }
+    function expectVisible(partial: AssistantMessage, text: string) {
+      expect(extractAssistantStreamSnapshot(ctx, partial)).toMatchObject({ text, blockText: text });
+      expect(extractAssistantVisibleText(partial)).toBe(text);
     }
 
+    function update(text: string, type: "text_delta" | "text_end", delta = text) {
+      const partial = message(text);
+      const chunk = type === "text_delta" ? { delta } : { content: text };
+      return updateMessage(ctx, {
+        message: partial,
+        assistantMessageEvent: { type, ...chunk, partial, contentIndex: 0 },
+      });
+    }
+
+    it("bounds unused block-delivery work after unfenced XML", async () => {
+      ctx.params.onBlockReply = undefined;
+      const source =
+        `Visible\n${markup[2]}\n` +
+        Array.from(
+          { length: 100 },
+          (_, index) => `Paragraph ${index}: the reply continues.\n`,
+        ).join("");
+      const regions = vi.spyOn(codeRegions, "findCodeRegions");
+      onTestFinished(() => regions.mockRestore());
+      let text = "";
+      for (let offset = 0; offset < source.length; offset += 4) {
+        const delta = source.slice(offset, offset + 4);
+        text += delta;
+        await update(text, "text_delta", delta);
+      }
+      expect(ctx.state.assistantStream?.text).toBe(source.replace(markup[2], "").trimEnd());
+      expect(regions.mock.calls.reduce((total, [parsed]) => total + parsed.length, 0)).toBeLessThan(
+        source.length * 8,
+      );
+    });
+
     it("bounds Markdown parse work after quoted tool XML in token-sized deltas", async () => {
-      const context = createMessageUpdateContext();
       const example = `\`\`\`xml\n${markup[2]}\n\`\`\`\n\n`;
       const continuation = "Explanation.\n\n- Item\n\n```python\nprint('hello')\n```\n\n".repeat(
         128,
       );
       const source = example + continuation;
       const regions = vi.spyOn(codeRegions, "findCodeRegions");
-      try {
-        let text = "";
-        for (let offset = 0; offset < source.length; offset += 4) {
-          const delta = source.slice(offset, offset + 4);
-          text += delta;
-          const partial = message(text);
-          await updateMessage(context, {
-            message: partial,
-            assistantMessageEvent: { type: "text_delta", delta, partial, contentIndex: 0 },
-          });
-        }
-        expect(context.state.assistantStream?.text).toBe(source.trimEnd());
-        const parsedCharacters = regions.mock.calls.reduce(
-          (total, [parsed]) => total + parsed.length,
-          0,
-        );
-        expect(parsedCharacters).toBeLessThan(source.length * 8);
-      } finally {
+      onTestFinished(() => {
         regions.mockRestore();
+      });
+      let text = "";
+      for (let offset = 0; offset < source.length; offset += 4) {
+        const delta = source.slice(offset, offset + 4);
+        text += delta;
+        await update(text, "text_delta", delta);
       }
+      expect(ctx.state.assistantStream?.text).toBe(source.trimEnd());
+      expect(regions.mock.calls.reduce((total, [parsed]) => total + parsed.length, 0)).toBeLessThan(
+        source.length * 8,
+      );
     });
 
-    it("keeps markup context across adjacent text and whitespace blocks", () => {
-      const partial = message("");
-      partial.content = [
-        { type: "text", text: "Visible\n<tool_call>exec<arg_key>command</arg_key><arg_value>" },
-        { type: "text", text: " \n" },
-        { type: "text", text: "hidden</arg_value></tool_call>\nDone." },
-      ];
-      const snapshot = extractAssistantStreamSnapshot(createMessageUpdateContext(), partial);
-      expect(snapshot.text).toBe("Visible\n\nDone.");
-      expect(snapshot.blockText).toBe("Visible\n\nDone.");
-      expect(extractAssistantVisibleText(partial)).toBe("Visible\n\nDone.");
-    });
+    const open = "Visible\n<tool_call>exec<arg_key>command</arg_key><arg_value>";
+    const close = "hidden</arg_value></tool_call>\nDone.";
+    const nativeOpen = '<tool_call>{"name":"exec","arguments":{}}';
+    const tool = { type: "toolCall", id: "call-1", name: "exec", arguments: {} } as const;
+    const thinking = { type: "thinking", thinking: "Private reasoning." } as const;
+    it.each([
+      [open, textPart(" \n"), close, "Visible\n\nDone."],
+      [nativeOpen, tool, "Done.", "Done."],
+      [nativeOpen, thinking, "Done.", "Done."],
+    ] as const)(
+      "preserves XML context across native blocks %#",
+      (before, boundary, after, visible) => {
+        expectVisible(message([textPart(before), boundary, textPart(after)]), visible);
+      },
+    );
 
     it.each([
-      { type: "toolCall", id: "call-1", name: "exec", arguments: {} },
-      { type: "thinking", thinking: "Private reasoning." },
-    ] as const)("ends XML context at a native $type block", (boundary) => {
-      const partial: AssistantMessage = {
-        ...message(""),
-        content: [
-          { type: "text", text: '<tool_call>{"name":"exec","arguments":{}}' },
-          boundary,
-          { type: "text", text: "Done." },
-        ],
-      };
-      const snapshot = extractAssistantStreamSnapshot(createMessageUpdateContext(), partial);
-      expect(snapshot.text).toBe("Done.");
-      expect(snapshot.blockText).toBe("Done.");
-      expect(extractAssistantVisibleText(partial)).toBe("Done.");
-    });
-
-    it.each(markup)(
-      "withholds every split of %s without losing surrounding prose",
-      async (shadow) => {
-        const onAgentEvent = vi.fn();
-        const context = createMessageUpdateContext({ onAgentEvent });
-        let text = "";
-        for (const delta of ["Visible\n", ...shadow.split(""), "\nDone."]) {
-          text += delta;
-          const partial = message(text);
-          await updateMessage(context, {
-            message: partial,
-            assistantMessageEvent: { type: "text_delta", delta, partial, contentIndex: 0 },
-          });
-          expect(context.state.assistantStream?.text).toBe(
-            text.endsWith("Done.") ? "Visible\n\nDone." : "Visible",
-          );
-        }
-        const partial = message(text);
-        await updateMessage(context, {
-          message: partial,
-          assistantMessageEvent: { type: "text_end", content: text, partial, contentIndex: 0 },
-        });
-        expect(context.state.assistantStream?.text).toBe("Visible\n\nDone.");
-        expect(extractAssistantStreamSnapshot(context, partial).blockText).toBe("Visible\n\nDone.");
-        if (api === "openai-responses") {
-          expect(context.blockChunker.bufferedText).toBe("Visible\n\nDone.");
-        }
-        expect(extractAssistantVisibleText(partial)).toBe("Visible\n\nDone.");
+      ...markup.map((source) => ({ source, literal: false })),
+      ...["Use <tool_call>exec", "Use <invoke", "Use <tool_"].map((source) => ({
+        source,
+        literal: true,
+      })),
+    ])("withholds ambiguous markup then finalizes $source", async ({ source, literal }) => {
+      const visible = literal ? source : "Visible\n\nDone.";
+      let text = "";
+      for (const delta of literal ? [source] : ["Visible\n", ...source.split(""), "\nDone."]) {
+        text += delta;
+        await update(text, "text_delta", delta);
+        expect(ctx.state.assistantStream?.text).toBe(
+          literal ? "Use" : text.endsWith("Done.") ? visible : "Visible",
+        );
+      }
+      const partial = message(text);
+      await update(text, "text_end");
+      expect(ctx.state.assistantStream?.text).toBe(visible);
+      expectVisible(partial, visible);
+      if (api === "openai-responses") {
+        expect(ctx.blockChunker.bufferedText).toBe(visible);
+      }
+      if (!literal) {
         expect(
-          consumePendingAssistantReplyDirectivesIntoReply(context.state, {
-            text: "Visible\n\nDone.",
-          }),
-        ).toEqual({ text: "Visible\n\nDone." });
-        expect(onAgentEvent.mock.calls.map(([event]) => event.data.text)).toEqual([
-          "Visible",
-          "Visible\n\nDone.",
-        ]);
-      },
-    );
-
-    it.each(["Use <tool_call>exec", "Use <invoke", "Use <tool_"])(
-      "restores the terminal literal %s after withholding its ambiguous suffix",
-      async (text) => {
-        const context = createMessageUpdateContext();
-        const partial = message(text);
-        await updateMessage(context, {
-          message: partial,
-          assistantMessageEvent: { type: "text_delta", delta: text, partial, contentIndex: 0 },
-        });
-        expect(context.state.assistantStream?.text).toBe("Use");
-        await updateMessage(context, {
-          message: partial,
-          assistantMessageEvent: { type: "text_end", content: text, partial, contentIndex: 0 },
-        });
-        expect(context.state.assistantStream?.text).toBe(text);
-        expect(extractAssistantStreamSnapshot(context, partial).blockText).toBe(text);
-        if (api === "openai-responses") {
-          expect(context.blockChunker.bufferedText).toBe(text);
-        }
-      },
-    );
+          consumePendingAssistantReplyDirectivesIntoReply(ctx.state, { text: visible }),
+        ).toEqual({ text: visible });
+        expect(events.mock.calls.map(([event]) => event.data.text)).toEqual(["Visible", visible]);
+      }
+    });
   },
 );

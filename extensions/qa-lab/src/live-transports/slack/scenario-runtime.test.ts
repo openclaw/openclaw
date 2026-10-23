@@ -1,19 +1,26 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { runSlackScenario } from "./scenario-runtime.js";
-import type { SlackMessage, SlackQaScenarioRun } from "./slack-live.contracts.js";
+import { writeSlackApprovalCheckpoint } from "./slack-live.approval-checkpoint.js";
+import { waitForSlackApprovalMessage } from "./slack-live.approvals.js";
+import type {
+  SlackMessage,
+  SlackQaScenarioRun,
+  SlackQaFetchFunction,
+  SlackQaApprovalContext,
+  SlackQaScenarioMetadata,
+} from "./slack-live.contracts.js";
+import { buildSlackApprovalCheckpointMessage } from "./slack-live.observations.js";
 import {
   slackQaChartPresentationNativeScenario,
   slackQaMpimAppMentionDedupeScenario,
   slackQaTablePresentationNativeScenario,
 } from "./slack-live.scenario-implementations.js";
+import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
-const { runSlackApprovalScenario, runSlackCodexApprovalScenario } = vi.hoisted(() => ({
-  runSlackApprovalScenario: vi.fn(),
-  runSlackCodexApprovalScenario: vi.fn(),
+vi.mock("./slack-live.approval-checkpoint.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./slack-live.approval-checkpoint.js")>()),
+  writeSlackApprovalCheckpoint: vi.fn(),
 }));
-
-vi.mock("./slack-live.approvals.js", () => ({ runSlackApprovalScenario }));
-vi.mock("./slack-live.codex-approval-runner.js", () => ({ runSlackCodexApprovalScenario }));
 
 function fixture(run: SlackQaScenarioRun, channelId = "C_QA", reply?: SlackMessage) {
   const postMessage = vi.fn().mockResolvedValue({ channel: channelId, ts: "1.000000" });
@@ -41,8 +48,13 @@ function fixture(run: SlackQaScenarioRun, channelId = "C_QA", reply?: SlackMessa
     sutIdentity: { userId: "U_SUT", ...(reply ? { botId: "B_SUT" } : {}) },
   };
   return {
-    env: environment as never,
-    implementation: { buildRun: () => run },
+    run: (
+      overrides: {
+        context?: SlackQaApprovalContext;
+        scenario?: SlackQaScenarioMetadata;
+        stopGateway?: (preserveDebugArtifacts: boolean) => Promise<void>;
+      } = {},
+    ) => runSlackScenario({ ...environment, ...overrides } as never, { buildRun: () => run }),
     postMessage,
     history,
     writes,
@@ -98,7 +110,10 @@ function expectRttEvidence(
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.mocked(writeSlackApprovalCheckpoint).mockReset();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 it.each([
@@ -125,7 +140,7 @@ it.each([
     );
     runtime.writes.mockResolvedValue([{ channelId, text: summaryText, ts: "2.000000" }]);
 
-    await expect(runSlackScenario(runtime.env, implementation)).resolves.toMatchObject({
+    await expect(runtime.run()).resolves.toMatchObject({
       details: expect.stringContaining("reply matched"),
     });
     expect(runtime.writes.mock.invocationCallOrder[0]).toBeLessThan(
@@ -143,43 +158,8 @@ it("returns structured RTT evidence for a matched reply", async () => {
     return { channel: "C_MPIM", ts: "1.000000" };
   });
 
-  expectRttEvidence(
-    await runSlackScenario(runtime.env, slackQaMpimAppMentionDedupeScenario),
-    1_750,
-    "request-to-observed-message",
-  );
+  expectRttEvidence(await runtime.run(), 1_750, "request-to-observed-message");
 });
-
-it.each([
-  ["native", "exec", "approval", "SLACK_QA_APPROVAL", 1_250],
-  ["Codex", "plugin", "codex-approval", "SLACK_QA_CODEX_APPROVAL", 2_500],
-] as const)(
-  "returns structured RTT evidence for a %s approval",
-  async (_label, approvalKind, kind, token, rttMs) => {
-    const base = { approvalKind, decision: "allow-once" as const, token };
-    const runtime = fixture(
-      kind === "codex-approval"
-        ? {
-            ...base,
-            approvalKind: "plugin",
-            kind,
-            appServerMethod: "item/commandExecution/requestApproval",
-          }
-        : { ...base, kind },
-    );
-    const runner = kind === "approval" ? runSlackApprovalScenario : runSlackCodexApprovalScenario;
-    runner.mockResolvedValueOnce({
-      requestStartedAt: new Date(requestStartedAt),
-      responseObservedAt: new Date(Date.parse(requestStartedAt) + rttMs),
-      rttMs,
-    });
-    expectRttEvidence(
-      await runSlackScenario(runtime.env, runtime.implementation),
-      rttMs,
-      "approval-request-to-resolution",
-    );
-  },
-);
 
 it.each([
   ["ignores off-channel captured commentary", "C_OTHER", "commentary", "1.500000", undefined],
@@ -201,7 +181,7 @@ it.each([
       ts,
     },
   ]);
-  const result = runSlackScenario(runtime.env, slackQaMpimAppMentionDedupeScenario);
+  const result = runtime.run();
   if (expectedMarkerCount) {
     await expect(result).rejects.toThrow(`got 2 response(s) and ${expectedMarkerCount}`);
     return;
@@ -209,4 +189,257 @@ it.each([
   await expect(result).resolves.toMatchObject({
     details: expect.stringContaining("one MPIM reply observed"),
   });
+});
+
+const actionValue =
+  'openclaw:approval:v1:{"approvalId":"plugin:owned","approvalKind":"plugin","decision":"allow-once"}';
+const buttons: NonNullable<SlackMessage["blocks"]> = [
+  {
+    type: "actions",
+    elements: [
+      {
+        type: "button",
+        text: { type: "plain_text", text: "Allow once" },
+        action_id: "approval",
+        value: actionValue,
+      },
+    ],
+  },
+];
+const message = (overrides: Partial<SlackMessage> = {}): SlackMessage => ({
+  user: "sut",
+  ts: "100.1",
+  text: "Plugin approval required marker",
+  blocks: buttons,
+  ...overrides,
+});
+
+function observation(pages: SlackMessage[][]) {
+  const fetch: SlackQaFetchFunction = async (input) => {
+    expect(new URL(String(input)).pathname).toBe("/api/conversations.history");
+    const messages = pages.shift();
+    expect(messages).toBeDefined();
+    return Response.json({ ok: true, messages });
+  };
+  const client = loadSlackQaRuntime().createSlackWebClient("xoxb-qa-approval-fixture", { fetch });
+  return {
+    approvalKind: "plugin" as const,
+    channelId: "channel",
+    client,
+    decision: "allow-once" as const,
+    oldestTs: "99.0",
+    scenarioId: "approval",
+    sutIdentity: { userId: "sut" },
+    timeoutMs: 3_000,
+    token: "marker",
+  };
+}
+
+it("builds approval checkpoint message evidence from Slack blocks", () => {
+  const text = "Plugin approval required";
+  expect(
+    buildSlackApprovalCheckpointMessage(
+      message({
+        text,
+        blocks: [{ type: "section", text: { type: "mrkdwn", text } }, ...buttons],
+      }),
+    ),
+  ).toEqual({
+    actionLabels: ["Allow once"],
+    blockText: [text, "Allow once"],
+    hasNativeActions: true,
+    text,
+  });
+});
+
+it.each(["ok", "failed", "missing-command-result"] as const)(
+  "records Codex approval RTT only after native verification (%s)",
+  async (outcome) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(requestStartedAt);
+    const phases: string[] = [];
+    const marker = "SLACK_QA_CODEX_APPROVAL";
+    const title = "Codex app-server command approval";
+    let runId: unknown;
+    let sessionKey: unknown;
+    let resolved = false;
+    const call = vi.fn(async (method: string, args?: unknown) => {
+      phases.push(method);
+      if (method === "agent") {
+        const request = args as { idempotencyKey: string; sessionKey: string };
+        runId = request.idempotencyKey;
+        sessionKey = request.sessionKey;
+      }
+      if (method === "plugin.approval.resolve") {
+        resolved = true;
+        vi.setSystemTime(Date.parse(requestStartedAt) + 2_500);
+      }
+      const replies: Record<string, unknown> = {
+        agent: { runId, status: "accepted" },
+        "plugin.approval.list": [
+          {
+            id: "plugin:owned",
+            request: {
+              pluginId: "codex",
+              title,
+              toolName: "codex_command_approval",
+              sessionKey,
+              turnSourceChannel: "slack",
+              turnSourceTo: "channel:channel",
+              turnSourceAccountId: "sut",
+            },
+          },
+        ],
+        "plugin.approval.resolve": {},
+        "agent.wait": { status: outcome === "failed" ? "failed" : "ok" },
+        "chat.history": {
+          messages: [
+            {
+              role: "toolResult",
+              content: outcome === "missing-command-result" ? "unrelated" : marker,
+            },
+            { role: "assistant", content: marker },
+          ],
+        },
+        "chat.abort": {},
+      };
+      if (!Object.hasOwn(replies, method)) {
+        throw new Error(`unexpected Gateway method ${method}`);
+      }
+      return replies[method];
+    });
+    const fetch: SlackQaFetchFunction = async () => {
+      phases.push(resolved ? "observe-resolved" : "observe-pending");
+      return Response.json({
+        ok: true,
+        messages: [
+          message({
+            text: `Plugin approval${resolved ? ": Allowed once" : " required"} codex ${title}`,
+            blocks: resolved ? [] : buttons,
+          }),
+        ],
+      });
+    };
+    const client = loadSlackQaRuntime().createSlackWebClient("xoxb-qa-approval-fixture", { fetch });
+    vi.mocked(writeSlackApprovalCheckpoint).mockImplementation(async ({ state }) => {
+      await Promise.resolve();
+      phases.push(`checkpoint-${state}`);
+    });
+    const stopGateway = vi.fn(async () => {
+      phases.push("stop");
+    });
+    const runtime = fixture(
+      {
+        kind: "codex-approval",
+        approvalKind: "plugin",
+        appServerMethod: "item/commandExecution/requestApproval",
+        decision: "allow-once",
+        token: marker,
+      },
+      "channel",
+    );
+    const result = runtime.run({
+      context: { gateway: { call }, sutIdentity: { userId: "sut" }, sutReadClient: client },
+      scenario: { id: "slack-codex-approval", title: "Slack Codex approval", timeoutMs: 1_000 },
+      stopGateway,
+    });
+    if (outcome === "ok") {
+      expectRttEvidence(await result, 2_500, "approval-request-to-resolution");
+    } else {
+      await expect(result).rejects.toThrow(
+        outcome === "failed"
+          ? "finished with status failed"
+          : "command result did not contain marker",
+      );
+    }
+    expect(phases).toEqual([
+      ..."agent observe-pending plugin.approval.list checkpoint-pending plugin.approval.resolve agent.wait".split(
+        " ",
+      ),
+      ...(outcome === "failed" ? [] : ["chat.history"]),
+      ...(outcome === "ok" ? ["observe-resolved", "checkpoint-resolved"] : []),
+      "chat.abort",
+      "agent.wait",
+      "stop",
+    ]);
+    expect(stopGateway).toHaveBeenCalledWith(outcome !== "ok");
+    expect(call).toHaveBeenCalledWith("chat.abort", { runId, sessionKey }, { timeoutMs: 10_000 });
+  },
+);
+
+it("waits for the requested native approval actions", async () => {
+  vi.useFakeTimers();
+  const withoutActions = message({ blocks: [] });
+  const params = observation([
+    [message({ user: "other" }), withoutActions, message({ text: "unrelated approval" })],
+    [withoutActions, message()],
+  ]);
+  const pending = waitForSlackApprovalMessage({
+    ...params,
+    state: "pending",
+    approvalId: "plugin:owned",
+  });
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(await pending).toMatchObject({
+    approvalId: "plugin:owned",
+    message: { ts: "100.1" },
+  });
+});
+
+it("waits for the original approval message to lose its native actions after resolution", async () => {
+  vi.useFakeTimers();
+  const resolvedText = "Plugin approval: Allowed once marker";
+  const params = observation([
+    [message({ ts: "200.1", text: resolvedText, blocks: [] }), message({ text: resolvedText })],
+    [message({ text: resolvedText, blocks: [] })],
+  ]);
+  const pending = waitForSlackApprovalMessage({
+    ...params,
+    state: "resolved",
+    messageTs: "100.1",
+  });
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(await pending).toMatchObject({ message: { ts: "100.1" } });
+});
+
+it("records native approval RTT and preserves the longer decision RPC deadline", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(requestStartedAt);
+  const call = vi.fn(async (method: string) => {
+    if (method === "plugin.approval.resolve") {
+      vi.setSystemTime(Date.parse(requestStartedAt) + 1_250);
+    }
+    return method === "plugin.approval.request"
+      ? { id: "plugin:owned", status: "accepted" }
+      : { decision: "allow-once" };
+  });
+  const params = observation([
+    [message()],
+    [message({ text: "Plugin approval: Allowed once marker", blocks: [] })],
+  ]);
+  vi.stubEnv("OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR", "");
+  const runtime = fixture(
+    {
+      kind: "approval",
+      approvalKind: "plugin",
+      decision: "allow-once",
+      token: "marker",
+    },
+    params.channelId,
+  );
+  const result = await runtime.run({
+    context: {
+      gateway: { call },
+      sutIdentity: params.sutIdentity,
+      sutReadClient: params.client,
+    },
+    scenario: { id: "slack-approval", title: "Slack approval", timeoutMs: 1_000 },
+  });
+  expectRttEvidence(result, 1_250, "approval-request-to-resolution");
+  for (const [method, input, expectFinal] of [
+    ["plugin.approval.resolve", { decision: "allow-once", id: "plugin:owned" }, false],
+    ["plugin.approval.waitDecision", { id: "plugin:owned" }, true],
+  ] as const) {
+    expect(call).toHaveBeenCalledWith(method, input, { expectFinal, timeoutMs: 35_000 });
+  }
 });

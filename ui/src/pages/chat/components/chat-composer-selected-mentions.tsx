@@ -1,11 +1,16 @@
-import { createMemo, For, onCleanup, onSettled, Show, type Accessor } from "solid-js";
+import { createMemo, For, onSettled, Show, type Accessor } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import "../../../styles/chat/composer-context-strip.css";
 import { ComposerContent } from "./chat-composer-content.tsx";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 type MentionPerson = { profileId: string; label: string; name: string; avatarUrl?: string };
 
@@ -15,9 +20,8 @@ function mentionOverflow(
   readMore: () => HTMLElement,
 ) {
   let element: HTMLElement | undefined;
-  let disposed = false;
   const sync = () => {
-    if (disposed || !element?.isConnected) {
+    if (!element?.isConnected) {
       return;
     }
     const people = readPeople().flatMap((person) => personElements.get(person.profileId) ?? []);
@@ -65,12 +69,7 @@ function mentionOverflow(
   }, sync);
   onSettled(() => {
     sync();
-    if (document.fonts?.status === "loading") {
-      void document.fonts.ready.then(sync);
-    }
-    return () => {
-      disposed = true;
-    };
+    return document.fonts ? listen(document.fonts, "loadingdone", sync) : undefined;
   });
   return (node: HTMLElement) => {
     element = node;
@@ -135,31 +134,32 @@ export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
           ref={mentionOverflow(people, personElements, () => more)}
         >
           <For keyed={(person) => person.profileId} each={people()}>
-            {(person, index) => {
-              onCleanup(() => personElements.delete(person().profileId));
-              return (
-                <span
-                  ref={(node) => {
-                    personElements.set(person().profileId, node);
+            {(person, index) => (
+              <span
+                ref={[
+                  elementRef((node) => {
+                    const initialProfileId = person().profileId;
+                    personElements.set(initialProfileId, node);
+                    return () => personElements.delete(initialProfileId);
+                  }),
+                ]}
+                class="composer-context-strip__person"
+                title={person().label}
+              >
+                <ChatAuthorAvatar
+                  sender={{
+                    id: person().profileId,
+                    name: person().name,
+                    identity: { type: "profile", id: person().profileId },
+                    profileAvatarUrl: person().avatarUrl,
                   }}
-                  class="composer-context-strip__person"
-                  title={person().label}
-                >
-                  <ChatAuthorAvatar
-                    sender={{
-                      id: person().profileId,
-                      name: person().name,
-                      identity: { type: "profile", id: person().profileId },
-                      profileAvatarUrl: person().avatarUrl,
-                    }}
-                  />
-                  <bdi class="composer-context-strip__person-name">
-                    {person().name}
-                    {index() < people().length - 1 ? "," : ""}
-                  </bdi>
-                </span>
-              );
-            }}
+                />
+                <bdi class="composer-context-strip__person-name">
+                  {person().name}
+                  {index() < people().length - 1 ? "," : ""}
+                </bdi>
+              </span>
+            )}
           </For>
           <span
             ref={(node) => (more = node)}

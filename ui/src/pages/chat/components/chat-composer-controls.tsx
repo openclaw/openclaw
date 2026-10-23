@@ -3,8 +3,10 @@ import { Show, createMemo, createUniqueId } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Kbd } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import { registerSessionNavigationEnglish } from "../../../i18n/locales/en-session-navigation.ts";
+import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
@@ -12,6 +14,8 @@ import { realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
 import { ComposerContent } from "./chat-composer-content.tsx";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { MicrophoneActivity, voiceStatusLabel } from "./chat-voice-activity.tsx";
+
+registerEnglishCatalog(registerSessionNavigationEnglish);
 
 type ChatRunControlsProps = ReturnType<typeof createChatComposerContext>["runControlsProps"];
 
@@ -448,7 +452,10 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
   const hasSendableContent = () =>
     hasComposedContent() && props.canSend && !props.sending && !sendDisabledReason();
   const showShortcutTooltip = () =>
-    !props.preparingAttachments && sendStatus() == null && alternateAvailable();
+    !isMobileBrowserPlatform() &&
+    !props.preparingAttachments &&
+    sendStatus() == null &&
+    alternateAvailable();
   const SendAction = () => (
     <openclaw-tooltip
       prop:content={

@@ -1,15 +1,7 @@
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import type { AgentWaitResult } from "../agents/run-wait.types.js";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-  writeConfigFile,
-} from "../config/config.js";
-import { resetConfigOverrides } from "../config/runtime-overrides.js";
+import { getRuntimeConfig, writeConfigFile } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -17,17 +9,16 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { setTestEnvValue } from "../test-utils/env.js";
+import { sendChatAndWait } from "./gateway-chat-fixture.test-support.js";
 import {
-  closeProvider,
-  listenProvider,
-  readProviderBody,
-} from "./gateway-provider-fixture.test-support.js";
-import { createGatewayConfigPath, setupGatewayTempHome } from "./gateway.test-support.js";
+  createGatewayConfigPath,
+  resetGatewayTestState,
+  setupGatewayTempHome,
+} from "./gateway.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 let sequence = 0;
@@ -35,17 +26,9 @@ let sequence = 0;
 const nextId = (prefix: string): string =>
   `${prefix}-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${sequence++}`;
 
-function resetGatewayState(): void {
-  resetConfigOverrides();
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  clearSessionStoreCacheForTest();
-  resetAgentEventsForTest({ preserveListeners: true });
-}
-
 describe("gateway compaction hot reload", () => {
-  beforeEach(resetGatewayState);
-  afterEach(resetGatewayState);
+  beforeEach(resetGatewayTestState);
+  afterEach(resetGatewayTestState);
 
   it(
     "applies hot-reloaded tool policy, context budgets, and compaction models without restarting",
@@ -61,35 +44,30 @@ describe("gateway compaction hot reload", () => {
       const providerRequests: string[] = [];
       const providerRequestToolNames: string[][] = [];
       const summaryByModel = new Map<string, string>();
-      const providerServer = createServer((request, response) => {
-        void (async () => {
-          const raw = await readProviderBody(request);
-          if (request.method !== "POST" || request.url !== "/v1/responses") {
-            response.writeHead(404).end();
-            return;
-          }
-          const body = JSON.parse(raw) as {
-            model?: string;
-            tools?: Array<{ name?: string; function?: { name?: string } }>;
-          };
-          const model = body.model ?? "";
-          providerRequests.push(model);
-          providerRequestToolNames.push(
-            body.tools?.map((tool) => tool.name ?? tool.function?.name ?? "") ?? [],
-          );
-          writeOpenAiResponsesText(response, {
-            text: summaryByModel.get(model) ?? "Primary assistant answer.",
-            messageId: nextId("provider-message"),
-            responseId: nextId("provider-response"),
-          });
-        })().catch((error: unknown) => {
-          response.writeHead(500).end(error instanceof Error ? error.message : String(error));
+      const providerServer = createTrackedProvider((raw, response, request) => {
+        if (request.method !== "POST" || request.url !== "/v1/responses") {
+          response.writeHead(404).end();
+          return;
+        }
+        const body = JSON.parse(raw) as {
+          model?: string;
+          tools?: Array<{ name?: string; function?: { name?: string } }>;
+        };
+        const model = body.model ?? "";
+        providerRequests.push(model);
+        providerRequestToolNames.push(
+          body.tools?.map((tool) => tool.name ?? tool.function?.name ?? "") ?? [],
+        );
+        writeOpenAiResponsesText(response, {
+          text: summaryByModel.get(model) ?? "Primary assistant answer.",
+          messageId: nextId("provider-message"),
+          responseId: nextId("provider-response"),
         });
       });
 
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       try {
-        const baseUrl = await listenProvider(providerServer);
+        const baseUrl = await providerServer.listen();
         const primaryModel = buildMockOpenAiResponsesProvider(baseUrl, "gpt-primary");
         const oldCompactionModel = buildMockOpenAiResponsesProvider(baseUrl, "gpt-old-summary");
         const newCompactionModel = buildMockOpenAiResponsesProvider(baseUrl, "gpt-new-summary");
@@ -191,21 +169,11 @@ describe("gateway compaction hot reload", () => {
         }
         expect(loadTranscriptEventsSync(scope).length).toBeGreaterThan(10);
 
-        const sendChatAndWait = async (message: string) => {
-          const started = await gatewayClient.request<{ runId: string; status: string }>(
-            "chat.send",
-            { sessionKey, message, idempotencyKey: nextId("compaction-chat") },
-          );
-          expect(started.status).toBe("started");
-          const completed = await gatewayClient.request<AgentWaitResult>(
-            "agent.wait",
-            { runId: started.runId, timeoutMs: 30_000 },
-            { timeoutMs: 35_000 },
-          );
-          expect(completed.status).toBe("ok");
-        };
-
-        await sendChatAndWait("Warm the existing prepared model runtime.");
+        await sendChatAndWait(
+          gatewayClient,
+          sessionKey,
+          "Warm the existing prepared model runtime.",
+        );
         expect(providerRequests).toContain(primaryModel.modelId);
         expect(providerRequestToolNames.at(-1)).toContain("exec");
         expect(loadSessionEntry(scope)?.compactionCount ?? 0).toBe(0);
@@ -215,7 +183,11 @@ describe("gateway compaction hot reload", () => {
         await expect
           .poll(() => getRuntimeConfig().tools?.deny, { timeout: 5_000, interval: 50 })
           .toEqual(["exec"]);
-        await sendChatAndWait("Apply the hot-reloaded tool deny policy to the existing runtime.");
+        await sendChatAndWait(
+          gatewayClient,
+          sessionKey,
+          "Apply the hot-reloaded tool deny policy to the existing runtime.",
+        );
         expect(providerRequestToolNames.at(-1)).not.toContain("exec");
 
         const reloadedConfig = { ...structuredClone(initialConfig), tools: reloadedTools };
@@ -232,7 +204,11 @@ describe("gateway compaction hot reload", () => {
           .toMatchObject({ model: newCompactionModel.modelRef, maxActiveTranscriptBytes: "10b" });
 
         const requestsBeforeCompaction = providerRequests.length;
-        await sendChatAndWait("Compact the existing conversation before answering.");
+        await sendChatAndWait(
+          gatewayClient,
+          sessionKey,
+          "Compact the existing conversation before answering.",
+        );
 
         const newRequests = providerRequests.slice(requestsBeforeCompaction);
         expect(newRequests).toContain(newCompactionModel.modelId);
@@ -250,7 +226,7 @@ describe("gateway compaction hot reload", () => {
           await disconnectGatewayClient(gateway.client);
           await gateway.server.close({ reason: "compaction hot reload integration test complete" });
         }
-        await closeProvider(providerServer);
+        await providerServer.close();
         await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
         envSnapshot.restore();
       }

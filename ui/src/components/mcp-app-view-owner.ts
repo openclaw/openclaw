@@ -1,5 +1,5 @@
 import { PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
-import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol";
+import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol/gateway-error-details";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { raceWithTimeout } from "@openclaw/retry";
 import type { ApplicationContext } from "../app/context.ts";
@@ -356,7 +356,7 @@ export function createMcpAppView(
 
   /** Restarts a torn-down view only when its parent kept the element connected. */
   function restartAfterTeardown() {
-    if (!host.isConnected || activeResources || teardownPromise) {
+    if (!retired || !host.isConnected || activeResources || teardownPromise) {
       return;
     }
     requestAbort = new AbortController();

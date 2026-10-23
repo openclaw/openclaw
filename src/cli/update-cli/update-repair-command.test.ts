@@ -57,7 +57,9 @@ const mocks = vi.hoisted(() => ({
     activatedPluginErrors: [] as { id: string; error: string }[],
     channelProbeErrors: [] as { id: string; error: string }[],
   })),
-  readiness: vi.fn(async () => ({ healthz: 200, readyz: 200 })),
+  readiness: vi.fn<
+    typeof import("../daemon-cli/restart-health-probe.js").waitForGatewayHttpReadiness
+  >(async () => ({ healthz: 200, readyz: 200 })),
   runtime: { log: vi.fn(), error: vi.fn(), writeJson: vi.fn(), exit: vi.fn() },
 }));
 
@@ -550,7 +552,7 @@ describe("update repair ledger recovery", () => {
       await updateRepairCommand({ json: true });
 
       expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({ reconciledRuns: [run.runId] }),
+        expect.objectContaining({ coreUpdate: "completed", reconciledRuns: [run.runId] }),
       );
       expect(getUpdateRun(run.runId)).toMatchObject({
         status: "failed",
@@ -587,6 +589,7 @@ describe("update repair ledger recovery", () => {
     expect(mocks.finalize).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith({
       status: "warning",
+      coreUpdate: "pending",
       mode: "repair",
       restart: false,
       reconciledRuns: [run.runId],
@@ -857,9 +860,9 @@ describe("update repair ledger recovery", () => {
     "missing installed version",
     "config",
     "plugin",
-    "channel",
+    "channel-only outage",
     "readiness",
-  ])("retains full repair when the serving generation is unverified: %s", async (problem) => {
+  ])("chooses repair from the serving generation's observed health: %s", async (problem) => {
     const run = seedRun();
     const root = await mocks.resolveRoot();
     if (problem === "missing installed build") {
@@ -871,6 +874,13 @@ describe("update repair ledger recovery", () => {
       mocks.readConfig.mockResolvedValue({ valid: false, config: {} });
     } else if (problem === "readiness") {
       mocks.readiness.mockResolvedValue({ healthz: 200, readyz: 503 });
+    } else if (problem === "channel-only outage") {
+      mocks.readiness.mockResolvedValue({
+        healthz: 200,
+        readyz: 503,
+        coreReady: true,
+        failingChannels: ["test"],
+      });
     }
     mocks.reachable.mockResolvedValue({
       reachable: true,
@@ -882,8 +892,23 @@ describe("update repair ledger recovery", () => {
             ? null
             : "installed-build",
       activatedPluginErrors: problem === "plugin" ? [{ id: "test", error: "failed" }] : [],
-      channelProbeErrors: problem === "channel" ? [{ id: "test", error: "failed" }] : [],
+      channelProbeErrors:
+        problem === "channel-only outage" ? [{ id: "test", error: "failed" }] : [],
     });
+    if (problem === "channel-only outage") {
+      await updateRepairCommand({});
+
+      expect(mocks.finalize).not.toHaveBeenCalled();
+      expect(getUpdateRun(run.runId)?.steps).toContainEqual(
+        expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
+      );
+      expect(mocks.runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Channel health warnings: test. Run openclaw channels status --probe.",
+        ),
+      );
+      return;
+    }
     mocks.finalize.mockRejectedValueOnce(new Error("Stop the service through its owner"));
 
     await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");

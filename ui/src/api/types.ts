@@ -42,6 +42,7 @@ export type {
   CronJob,
   CronRunLogEntry,
   CronScratchGetResult,
+  CronScratchSetResult,
   UpdateAvailable,
   UpdateHoldResult,
   UpdateReportResult,
@@ -77,6 +78,7 @@ export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
 export type {
+  AgentsCreateResult,
   AgentsListResult,
   ModelChoice as ModelCatalogEntry,
   ModelCatalogProviderOutcome,
@@ -88,8 +90,6 @@ export type ChannelAccountSnapshot = ChannelsStatusResult["channelAccounts"][str
 export type ChannelStatus = Omit<ChannelAccountSnapshot, "accountId" | "probe"> & {
   probe?: { ok?: boolean; status?: number | string | null; error?: string | null } | null;
 };
-
-type ConfigSnapshotIssue = { path: string; message: string };
 
 export type ConfigSnapshot = {
   writeError?: ErrorShape;
@@ -105,7 +105,7 @@ export type ConfigSnapshot = {
   resolved?: Record<string, unknown> | null;
   runtimeConfig?: Record<string, unknown> | null;
   config?: Record<string, unknown> | null;
-  issues?: ConfigSnapshotIssue[] | null;
+  issues?: { path: string; message: string }[] | null;
 };
 
 export type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";

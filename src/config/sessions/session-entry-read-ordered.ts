@@ -176,7 +176,6 @@ export function createAdmittedSessionEntryCohortReader(params: {
                   assertNativeCurrent = undefined;
                 }
               },
-              true,
               signal,
             ),
         },
@@ -344,7 +343,6 @@ export async function withOrderedSessionEntriesInWorker<T>(
           unsubscribe();
         }
       },
-      true,
       signal,
     );
   };

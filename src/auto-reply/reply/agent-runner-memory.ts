@@ -12,6 +12,7 @@ import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
+import { emitInternalRunUsageDiagnostic } from "../../agents/internal-run-usage.js";
 import { resolveModelCallUrgency } from "../../agents/run-trigger.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
@@ -35,7 +36,6 @@ import {
   refreshTranscriptByteCompactionLatch,
 } from "../../context-engine/transcript-byte-limit.js";
 import { logVerbose } from "../../globals.js";
-import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -58,11 +58,7 @@ import {
   estimatePromptTokensFromSessionTranscript,
   readSessionLogSnapshot,
 } from "./agent-runner-memory-transcript-context.js";
-import type {
-  MemoryFlushOutcome,
-  MemoryFlushResult,
-  MemoryFlushRunParams,
-} from "./agent-runner-memory.types.js";
+import type { MemoryFlushResult, MemoryFlushRunParams } from "./agent-runner-memory.types.js";
 import { buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
   buildEmbeddedRunExecutionParams,
@@ -76,8 +72,8 @@ import {
 import {
   buildVisibleMemoryFlushFailure,
   resolveVisibleMemoryFlushErrorPayloads,
-  truncateMemoryFlushErrorMessage,
 } from "./memory-flush-errors.js";
+import { recordMemoryFlushFailure } from "./memory-flush-failure.js";
 import {
   isToolsMemoryFlushPlan,
   memoryFlushResultIsSilent,
@@ -99,7 +95,6 @@ import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
-const MAX_FLUSH_FAILURES = 3;
 const preflightCompactionLog = createSubsystemLogger("auto-reply/preflight-compaction");
 const memoryFlushLog = createSubsystemLogger("auto-reply/memory-flush");
 
@@ -127,7 +122,6 @@ export async function runSessionCompactionIfNeeded(params: {
   sessionKey?: string;
   runtimePolicySessionKey?: string;
   storePath?: string;
-  isHeartbeat: boolean;
   /** Completed commands carry the actual harness, not the originally requested runtime. */
   agentHarnessId?: string;
   abortSignal?: AbortSignal;
@@ -225,7 +219,7 @@ export async function runSessionCompactionIfNeeded(params: {
   const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
   const shouldCheckActiveTranscriptBytes = maxActiveTranscriptBytes !== undefined;
   const transcriptUsageTokens =
-    params.isHeartbeat || (freshPersistedTokens !== undefined && !freshNeedsOutputRead)
+    freshPersistedTokens !== undefined && !freshNeedsOutputRead
       ? undefined
       : await estimatePromptTokensFromSessionTranscript({
           ...compactionTarget,
@@ -289,13 +283,11 @@ export async function runSessionCompactionIfNeeded(params: {
   );
   const tokenCountForCompaction = asPositiveFiniteNumber(projectedTokenCount);
 
-  const shouldCompactByTokens =
-    !params.isHeartbeat &&
-    shouldRunPreflightCompaction({
-      entry,
-      tokenCount: tokenCountForCompaction,
-      threshold,
-    });
+  const shouldCompactByTokens = shouldRunPreflightCompaction({
+    entry,
+    tokenCount: tokenCountForCompaction,
+    threshold,
+  });
   if (!shouldCompactByTokens && !shouldCompactByTranscriptBytes) {
     return entry;
   }
@@ -425,7 +417,7 @@ export async function runSessionCompactionIfNeeded(params: {
         trigger: "budget",
         modelCallUrgency: resolveModelCallUrgency({
           ...params.followupRun.run,
-          trigger: params.isHeartbeat ? "heartbeat" : "user",
+          trigger: "user",
           currentInboundEventKind: params.followupRun.currentInboundEventKind,
         }),
         force: true,
@@ -583,10 +575,7 @@ export async function runMemoryFlushIfNeeded(
     followupOwnsNativeCompaction(runtimeParams, runtimeId);
   // Only a native provider's flush can persist without a writable workspace, so other
   // resolvers are never called for a session whose workspace cannot be written.
-  const canAttemptFlush =
-    (memoryFlushWritable || isMemoryFlushPlanNativeProviderOwned()) &&
-    !params.isHeartbeat &&
-    !isCli;
+  const canAttemptFlush = (memoryFlushWritable || isMemoryFlushPlanNativeProviderOwned()) && !isCli;
   if (!canAttemptFlush) {
     return { sessionEntry: entry, outcome: "skipped" };
   }
@@ -928,6 +917,15 @@ export async function runMemoryFlushIfNeeded(
         return result;
       },
     });
+    emitInternalRunUsageDiagnostic(flushExecution.result, {
+      config: params.cfg,
+      agentId: params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg),
+      agentDir: params.followupRun.run.agentDir,
+      sessionId: memorySession.sessionId,
+      sessionKey: memorySession.sessionKey,
+      provider: flushExecution.provider,
+      model: flushExecution.model,
+    });
     deferredLifecycle.signal.throwIfAborted();
     if (visibleErrorPayloads.length > 0) {
       // Do not stamp memory-flush success for a resolved run that returned an error.
@@ -979,70 +977,5 @@ export async function runMemoryFlushIfNeeded(
     preparedRunAdmission.close();
     preparedAttempt.release();
   }
-}
-
-async function recordMemoryFlushFailure(
-  error: unknown,
-  run: MemoryFlushRunParams,
-  initialSessionEntry?: SessionEntry,
-): Promise<MemoryFlushResult> {
-  let sessionEntry = initialSessionEntry;
-  let outcome: MemoryFlushOutcome = "failed";
-  // Caller cancellation may use any reason, not only an AbortError instance.
-  if ((run.replyOperation?.abortSignal ?? run.abortSignal)?.aborted) {
-    logVerbose("memory flush cancelled by its owner");
-    return { sessionEntry, outcome };
-  }
-  const truncatedError = truncateMemoryFlushErrorMessage(error);
-  const { sessionKey, storePath } = run;
-  if (!isAbortError(error) && storePath && sessionKey) {
-    try {
-      let failureCount = 0;
-      const updatedEntry = await updateSessionEntry(
-        { storePath, sessionKey },
-        (currentEntry) => {
-          failureCount =
-            (currentEntry.memoryFlush?.kind === "failed"
-              ? currentEntry.memoryFlush.failureCount
-              : 0) + 1;
-          return {
-            memoryFlush:
-              failureCount >= MAX_FLUSH_FAILURES
-                ? { kind: "succeeded", compactionCount: currentEntry.compactionCount ?? 0 }
-                : {
-                    kind: "failed",
-                    ...(currentEntry.memoryFlush?.compactionCount !== undefined
-                      ? { compactionCount: currentEntry.memoryFlush.compactionCount }
-                      : {}),
-                    failureCount,
-                  },
-          };
-        },
-        { skipMaintenance: true, takeCacheOwnership: true },
-      );
-      if (updatedEntry) {
-        sessionEntry = updatedEntry;
-        if (run.sessionStore) {
-          run.sessionStore[sessionKey] = updatedEntry;
-        }
-      } else {
-        failureCount = 0;
-      }
-      logVerbose(
-        `memory flush failed (attempt ${failureCount}/${MAX_FLUSH_FAILURES}): ${truncatedError}`,
-      );
-      if (updatedEntry && failureCount >= MAX_FLUSH_FAILURES) {
-        outcome = "exhausted";
-        logVerbose(
-          `memory flush exhausted: skipping flush for this compaction cycle after ${failureCount} consecutive failures`,
-        );
-      }
-    } catch (persistError) {
-      logVerbose(`failed to persist memory flush failure metadata: ${String(persistError)}`);
-    }
-  } else {
-    logVerbose(`memory flush run failed: ${String(error)}`);
-  }
-  return { sessionEntry, outcome };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

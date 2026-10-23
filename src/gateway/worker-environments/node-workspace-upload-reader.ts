@@ -180,6 +180,15 @@ export async function readNodeWorkspaceUpload(params: {
   isAuthorized: () => boolean;
 }): Promise<NodeWorkspaceTransferUpload> {
   const { assertCurrent } = params;
+  const wrapValidationError = (
+    error: unknown,
+    reason: NodeWorkspaceTransferInvalidReason,
+    message: string,
+  ) =>
+    error instanceof WorkerTaskError || (params.signal.aborted && error === params.signal.reason)
+      ? error
+      : new NodeWorkspaceTransferInvalidError(reason, message, { cause: error });
+
   let stagingRoot: string | undefined;
   try {
     assertCurrent();
@@ -204,17 +213,7 @@ export async function readNodeWorkspaceUpload(params: {
         const decoded = await decodeWorkspaceManifest(raw, expectedRef, params.signal);
         return { raw, ref: decoded.manifestRef, manifest: decoded.manifest };
       } catch (error) {
-        if (
-          error instanceof WorkerTaskError ||
-          (params.signal.aborted && error === params.signal.reason)
-        ) {
-          throw error;
-        }
-        throw new NodeWorkspaceTransferInvalidError(
-          "manifest",
-          "Workspace transfer manifest is invalid",
-          { cause: error },
-        );
+        throw wrapValidationError(error, "manifest", "Workspace transfer manifest is invalid");
       }
     };
     const base = await readManifest(params.baseManifestRef);
@@ -283,16 +282,10 @@ export async function readNodeWorkspaceUpload(params: {
       });
     } catch (error) {
       // Discard joins this validation; a later cancellation must not hide its failure.
-      if (
-        error instanceof WorkerTaskError ||
-        (params.signal.aborted && error === params.signal.reason)
-      ) {
-        throw error;
-      }
-      throw new NodeWorkspaceTransferInvalidError(
+      throw wrapValidationError(
+        error,
         "staging",
         "Workspace transfer payload did not match its staged result",
-        { cause: error },
       );
     }
     assertCurrent();

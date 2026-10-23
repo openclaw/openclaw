@@ -5,18 +5,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveInstallAgentDir } from "../agents/install-agent-dir.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import {
-  createCallerModeSnapshot,
-  snapshotFiles,
-} from "./state-migrations.caller-mode.test-helpers.js";
-import {
-  autoMigrateLegacyState,
-  planLegacyStateMigrationsReadOnly,
-} from "./state-migrations.doctor.js";
+import { snapshotFiles } from "./state-migrations.caller-mode.test-helpers.js";
+import type { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import { resolveLegacyProfileMigrationExceptions } from "./state-migrations.profile-scope.js";
+import { createMigrationFixture } from "./state-migrations.shard-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -29,26 +23,12 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 async function makeFixture() {
   const root = tempDirs.make("openclaw-profile-workspace-");
-  const homeDir = path.join(root, "home");
-  const stateDir = path.join(root, "copied-state");
-  const configPath = path.join(root, "copied-openclaw.json");
-  fs.mkdirSync(homeDir, { recursive: true });
-  fs.mkdirSync(stateDir, { recursive: true });
   // Profile workspace ownership has no plugin-owned migration inputs.
   const bundledRoot = path.join(root, "extensions");
   fs.mkdirSync(bundledRoot);
-  fs.writeFileSync(configPath, "{}\n");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    HOME: homeDir,
-    OPENCLAW_HOME: homeDir,
-    OPENCLAW_PROFILE: "work",
-    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-  };
-  const fixture = { root, homeDir, stateDir, configPath, env };
+  const fixture = createMigrationFixture(root, { bundledPluginsDir: bundledRoot });
+  const { homeDir, configPath, env } = fixture;
+  Object.assign(env, { OPENCLAW_HOME: homeDir, OPENCLAW_PROFILE: "work" });
   return {
     ...fixture,
     source: path.join(homeDir, ".openclaw", "workspace-work"),
@@ -58,23 +38,10 @@ async function makeFixture() {
     migrate: (
       cfg: Parameters<typeof autoMigrateLegacyState>[0]["cfg"],
       log?: Parameters<typeof autoMigrateLegacyState>[0]["log"],
-    ) =>
-      autoMigrateLegacyState({
-        cfg,
-        ...(log ? { log } : {}),
-        env,
-        homedir: () => homeDir,
-        doctorOnlyStateMigrations: true,
-        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      }),
+    ) => fixture.migrate(cfg, log ? { log } : {}),
     plan: async () => {
       const before = snapshotFiles(root);
-      const plan = await planLegacyStateMigrationsReadOnly({
-        mode: "doctor",
-        candidate: { root, version: "test" },
-        snapshot: createCallerModeSnapshot(fixture),
-        env,
-      });
+      const plan = await fixture.plan();
       expect(snapshotFiles(root)).toEqual(before);
       return plan.steps.find((step) => step.id === "profile-workspace");
     },

@@ -36,6 +36,90 @@ function installStreamingReplyProbe() {
   let startedAt = 0;
   let current: Delta | undefined;
   let finalReceived = false;
+  let initialScrollHeight = 0;
+  let paneProbeAttached = false;
+  const pipeline = {
+    streamWrites: 0,
+    streamWriteMs: 0,
+    publications: 0,
+    paneRenders: 0,
+    paneRenderMs: 0,
+    railObservations: 0,
+    rowResizeDeliveries: 0,
+  };
+  // Observe existing owners from their registration, without a production probe seam.
+  const OriginalWeakMap = window.WeakMap;
+  class ProbeWeakMap<K extends WeakKey, V> extends OriginalWeakMap<K, V> {
+    override set(host: K, owner: V): this {
+      super.set(host, owner);
+      if (typeof owner !== "object" || owner === null) {
+        return this;
+      }
+      const fields = Reflect.get(owner, "fields");
+      const subscribe = Reflect.get(owner, "subscribe");
+      if (
+        Array.isArray(fields) &&
+        fields.includes("chatStream") &&
+        typeof subscribe === "function"
+      ) {
+        Reflect.apply(subscribe, owner, [() => active && pipeline.publications++]);
+        const descriptor = Object.getOwnPropertyDescriptor(host, "chatStream");
+        if (descriptor?.set) {
+          Object.defineProperty(host, "chatStream", {
+            ...descriptor,
+            set(value: unknown) {
+              const start = performance.now();
+              descriptor.set?.call(this, value);
+              if (active) {
+                pipeline.streamWrites++;
+                pipeline.streamWriteMs += performance.now() - start;
+              }
+            },
+          });
+        }
+      }
+      const render = Reflect.get(owner, "render");
+      if (
+        host instanceof HTMLElement &&
+        host.localName === "openclaw-chat-pane" &&
+        typeof render === "function"
+      ) {
+        paneProbeAttached = true;
+        Reflect.set(owner, "render", function (this: object, ...args: unknown[]) {
+          const start = performance.now();
+          try {
+            return Reflect.apply(render, this, args);
+          } finally {
+            if (active) {
+              pipeline.paneRenders++;
+              pipeline.paneRenderMs += performance.now() - start;
+            }
+          }
+        });
+      }
+      return this;
+    }
+  }
+  window.WeakMap = ProbeWeakMap;
+  const OriginalResizeObserver = window.ResizeObserver;
+  window.ResizeObserver = class extends OriginalResizeObserver {
+    constructor(callback: ResizeObserverCallback) {
+      super((entries, observer) => {
+        if (active) {
+          pipeline.rowResizeDeliveries += entries.filter((entry) =>
+            entry.target.classList.contains("chat-virtual-row"),
+          ).length;
+        }
+        callback(entries, observer);
+      });
+    }
+    override observe(target: Element, options?: ResizeObserverOptions) {
+      if (active && target.classList.contains("chat-position-rail__marks")) {
+        pipeline.railObservations++;
+      }
+      super.observe(target, options);
+    }
+  };
   const deltas: Delta[] = [];
   const frames: number[] = [];
   const inputs: Array<{ delayMs: number; nextFrameMs?: number; chars: number }> = [];
@@ -167,7 +251,13 @@ function installStreamingReplyProbe() {
       runId: string;
       deltas: string[];
       deltasPerSecond: number;
+      burstSize: number;
     }) {
+      if (window.WeakMap === ProbeWeakMap) {
+        window.WeakMap = OriginalWeakMap;
+      }
+      Reflect.deleteProperty(ProbeWeakMap.prototype, "set");
+      initialScrollHeight = document.querySelector("openclaw-chat-pane .chat-thread")!.scrollHeight;
       startedAt = performance.now();
       active = true;
       requestAnimationFrame(frame);
@@ -183,7 +273,8 @@ function installStreamingReplyProbe() {
               message: { role: "assistant", content: [{ type: "text", text }] },
             });
           },
-          ((index + 1) * 1000) / input.deltasPerSecond,
+          ((Math.floor(index / input.burstSize) + 1) * input.burstSize * 1000) /
+            input.deltasPerSecond,
         );
       }
     },
@@ -192,6 +283,17 @@ function installStreamingReplyProbe() {
     },
     finish() {
       active = false;
+      const thread = document.querySelector<HTMLElement>("openclaw-chat-pane .chat-thread")!;
+      const tailPosition = {
+        initialScrollHeight,
+        scrollHeight: thread.scrollHeight,
+        clientHeight: thread.clientHeight,
+        scrollTop: thread.scrollTop,
+        distanceFromBottom: thread.scrollHeight - thread.clientHeight - thread.scrollTop,
+      };
+      if (!pipeline.streamWrites || !pipeline.publications || !paneProbeAttached) {
+        throw new Error("Streaming owner probes did not capture the measured pipeline");
+      }
       if (deltas.some((delta) => !Number.isFinite(delta.parseChars))) {
         throw new Error("Streaming HTML probe produced a non-finite character count");
       }
@@ -206,6 +308,7 @@ function installStreamingReplyProbe() {
           median: quantile(0.5),
           p95: quantile(0.95),
           iqr: quantile(0.75) - quantile(0.25),
+          min: xs[0] ?? 0,
           max: xs.at(-1) ?? 0,
         };
       };
@@ -236,6 +339,8 @@ function installStreamingReplyProbe() {
           "Untraced streaming only. Per-delta taskAndMicrotasksMs is delivery to a MessageChannel task (includes app microtasks and scheduling delay). Parse/geometry/style totals include asynchronous work until the next delta. Frame loss assumes 60 Hz; keydown samples are trusted native input to next rAF, not presentation timestamps.",
         startedAt,
         elapsedMs: performance.now() - startedAt,
+        pipeline,
+        tailPosition,
         rig: {
           loaf: Reflect.get(window, "__perf")?.loaf?.filter(
             (entry: { start: number }) => entry.start >= startedAt,

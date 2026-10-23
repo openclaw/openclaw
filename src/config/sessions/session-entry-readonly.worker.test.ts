@@ -96,8 +96,8 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
         ifRevision,
       });
     try {
-      const originalRevision = retained.run(target, () => {
-        const first = read();
+      const originalRevision = await retained.run(target, async () => {
+        const first = await read();
         expect(first.entries).toMatchObject(listed("Team"));
         expect(first.revision).toBeTypeOf("string");
         const opened = withOpenClawAgentDatabaseReadOnly((reader) => reader, { ...target, env });
@@ -115,7 +115,7 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
         );
         using _ = { [Symbol.dispose]: () => payloads.restore() };
 
-        expect(read(first.revision)).toMatchObject({
+        expect(await read(first.revision)).toMatchObject({
           entries: [],
           unchanged: true,
           revision: first.revision,
@@ -133,7 +133,7 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
             .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
             .run(sessionKey);
         });
-        const changed = read(first.revision);
+        const changed = await read(first.revision);
         expect(changed.entries).toMatchObject(listed("Private"));
         expect(changed.revision).not.toBe(first.revision);
         expect(changed.unchanged).toBeUndefined();
@@ -141,9 +141,9 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
         return first.revision;
       });
       retained.close();
-      retained.run(target, () => {
+      await retained.run(target, async () => {
         // A new connection can reuse the original SQLite counters, but never its revision.
-        const reopened = read(originalRevision);
+        const reopened = await read(originalRevision);
         expect(reopened.revision).not.toBe(originalRevision);
         expect(reopened.unchanged).toBeUndefined();
         expect(reopened.entries).toMatchObject(listed("Private"));

@@ -12,7 +12,7 @@ import { Chat } from "@mistralai/mistralai/sdk/chat";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { getAiTransportHost } from "../host.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
-import { clampThinkingLevel } from "../model-utils.js";
+import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import {
@@ -23,13 +23,11 @@ import {
 } from "../transports/transport-stream-shared.js";
 import type {
   Message,
-  Model,
   SimpleStreamOptions,
   StreamFunction,
   StreamOptions,
   TextContent,
   ThinkingContent,
-  Tool,
   ToolCall,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -45,7 +43,6 @@ import { requireApiKey } from "../utils/required-api-key.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { boundResponseBody } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
-import { applyMistralUsage } from "./mistral-usage.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions, clampMaxTokensToModel } from "./simple-options.js";
 import {
@@ -53,6 +50,7 @@ import {
   extractToolResultText,
   formatToolResultText,
 } from "./tool-result-text.js";
+import { getPublishedRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
 
@@ -133,7 +131,27 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       let convertedToolNames: Set<string> | undefined;
 
       if (context.tools?.length) {
-        const tools = toFunctionTools(context.tools);
+        const toolsToConvert = context.tools;
+        const mutablePayload = Boolean(options?.onPayload);
+        const converted = toolsToConvert.map((tool) => {
+          const name = tool.name;
+          const description = tool.description;
+          const parameters = tool.parameters;
+          const value = {
+            type: "function",
+            function: {
+              name,
+              description,
+              parameters:
+                !mutablePayload && getPublishedRuntimeToolInputSchema(parameters)
+                  ? parameters
+                  : structuredClone(parameters),
+              strict: false,
+            },
+          } satisfies FunctionTool & { type: "function" };
+          return { name, description, value };
+        });
+        const tools = sortPromptCacheToolsByName(converted).map(({ value }) => value);
         convertedToolNames = new Set(tools.map((tool) => tool.function.name));
         payload.tools = tools;
       }
@@ -343,12 +361,35 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         }
 
         if (chunk.usage) {
-          applyMistralUsage(
-            output.usage,
-            chunk.usage,
-            model,
-            Boolean(terminalFinishReason || chunk.choices[0]?.finishReason),
-          );
+          const usageOutput = output.usage;
+          const usage = chunk.usage;
+          const terminal = Boolean(terminalFinishReason || chunk.choices[0]?.finishReason);
+          const promptTokens = usage.promptTokens || 0;
+          // SAFETY: SDK usage permits extra cache fields; only finite numeric counts are accepted below.
+          const record = usage as {
+            promptTokensDetails?: { cachedTokens?: unknown } | null;
+            prompt_tokens_details?: { cached_tokens?: unknown } | null;
+            cachedTokens?: unknown;
+            cached_tokens?: unknown;
+          };
+          const rawCachedTokens =
+            record.promptTokensDetails?.cachedTokens ??
+            record.prompt_tokens_details?.cached_tokens ??
+            record.cachedTokens ??
+            record.cached_tokens;
+          const cachedTokens =
+            typeof rawCachedTokens === "number" && Number.isFinite(rawCachedTokens)
+              ? rawCachedTokens
+              : 0;
+          const cacheRead = Math.min(promptTokens, Math.max(0, cachedTokens));
+          usageOutput.input = Math.max(0, promptTokens - cacheRead);
+          usageOutput.output = usage.completionTokens || 0;
+          usageOutput.cacheRead = cacheRead;
+          usageOutput.cacheWrite = 0;
+          usageOutput.totalTokens =
+            usage.totalTokens || usageOutput.input + usageOutput.output + cacheRead;
+          usageOutput.usageReport = { state: terminal ? "available" : "unavailable" };
+          calculateCost(model, usageOutput);
         }
 
         const choice = chunk.choices[0];
@@ -518,7 +559,10 @@ export const streamSimpleMistral: StreamFunction<"mistral-conversations", Simple
     : undefined;
   const reasoning = clampedReasoning === "off" ? undefined : clampedReasoning;
   const shouldUseReasoning = model.reasoning && reasoning !== undefined;
-  const supportsReasoningEffort = usesReasoningEffort(model);
+  const supportsReasoningEffort =
+    model.id === "mistral-small-2603" ||
+    model.id === "mistral-small-latest" ||
+    model.id === "mistral-medium-3-5";
 
   return streamMistral(model, context, {
     ...base,
@@ -574,24 +618,6 @@ function resolveMistralPromptCacheKey(options?: MistralOptions): string | undefi
     return undefined;
   }
   return options?.promptCacheKey?.trim() || options?.sessionId?.trim() || undefined;
-}
-
-function toFunctionTools(tools: Tool[]): Array<FunctionTool & { type: "function" }> {
-  const converted = tools.map((tool) => {
-    const name = tool.name;
-    const description = tool.description;
-    const value = {
-      type: "function",
-      function: {
-        name,
-        description,
-        parameters: structuredClone(tool.parameters),
-        strict: false,
-      },
-    } satisfies FunctionTool & { type: "function" };
-    return { name, description, value };
-  });
-  return sortPromptCacheToolsByName(converted).map(({ value }) => value);
 }
 
 function toChatMessages(
@@ -704,14 +730,6 @@ function toChatMessages(
   }
 
   return result;
-}
-
-function usesReasoningEffort(model: Model<"mistral-conversations">): boolean {
-  return (
-    model.id === "mistral-small-2603" ||
-    model.id === "mistral-small-latest" ||
-    model.id === "mistral-medium-3-5"
-  );
 }
 
 function mapToolChoice(

@@ -301,7 +301,6 @@ describe("CORE_HEALTH_CHECKS", () => {
     for (const [source, target, severity] of [
       ["openai-codex/gpt-5.6-sol", "openai/gpt-5.6-sol", "warning"],
       ["codex-cli/gpt-5.6-sol", "openai/gpt-5.6-sol", "warning"],
-      ["groq/llama3-70b-8192", "groq/llama-3.3-70b-versatile", "info"],
       ["google-gemini-cli/gemini-2.5-pro", "google/gemini-2.5-pro", "info"],
     ] as const) {
       expectFinding(findings, {
@@ -312,6 +311,7 @@ describe("CORE_HEALTH_CHECKS", () => {
       });
     }
     for (const target of [
+      "groq/llama3-70b-8192",
       "groq/llama-3.3-70b-versatile",
       "openai/not-in-the-local-catalog",
       "google/not-in-the-local-catalog",

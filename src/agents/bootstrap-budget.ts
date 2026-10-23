@@ -234,7 +234,6 @@ export function buildBootstrapBudgetState(params: {
     bootstrapMaxChars,
     bootstrapTotalMaxChars,
   });
-  const bootstrapPromptWarningMode: BootstrapPromptWarningMode = "always";
   const signature = buildBootstrapTruncationSignature(bootstrapAnalysis);
   let seenSignatures = normalizeUniqueTrimmedStringList(params.seenSignatures);
   if (params.previousSignature && !seenSignatures.includes(params.previousSignature)) {
@@ -253,7 +252,6 @@ export function buildBootstrapBudgetState(params: {
     bootstrapAnalysis,
     bootstrapMaxChars,
     bootstrapPromptWarning,
-    bootstrapPromptWarningMode,
     bootstrapTotalMaxChars,
   };
 }
@@ -261,11 +259,10 @@ export function buildBootstrapBudgetState(params: {
 /** Serializes truncation warning state for run reports and future dedupe. */
 export function buildBootstrapTruncationReportMeta(params: {
   analysis: BootstrapBudgetAnalysis;
-  warningMode: BootstrapPromptWarningMode;
   warning: BootstrapPromptWarning;
 }): BootstrapTruncationReportMeta {
   return {
-    warningMode: params.warningMode,
+    warningMode: "always",
     warningShown: params.warning.warningShown,
     promptWarningSignature: params.warning.signature,
     ...(params.warning.warningSignaturesSeen.length > 0

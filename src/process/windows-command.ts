@@ -70,7 +70,7 @@ function resolveWindowsCommandFromCwdOrPath(params: {
       { includeExtensionless: false },
     );
   }
-  const cwd = params.cwd?.trim() || process.cwd();
+  const cwd = params.cwd && params.cwd.trim() ? params.cwd : process.cwd();
   const pathValue =
     resolveEnvironmentValue(params.env, "PATH") ??
     resolveEnvironmentValue(process.env, "PATH") ??
@@ -117,21 +117,19 @@ function resolveSupportedWindowsCommand(params: {
   );
 }
 
-type SafeChildProcessInvocation = {
-  args: string[];
-  command: string;
-  usesWindowsExitCodeShim: boolean;
-  windowsHide: true;
-  windowsVerbatimArguments?: boolean;
-};
-
 /** Resolve one shell-free invocation before Execa can apply Windows fallbacks. */
 export function resolveSafeChildProcessInvocation(params: {
   argv: string[];
   cwd?: string | URL;
   env: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
-}): SafeChildProcessInvocation {
+}): {
+  args: string[];
+  command: string;
+  usesWindowsExitCodeShim: boolean;
+  windowsHide: true;
+  windowsVerbatimArguments?: boolean;
+} {
   const finalArgv = resolveNpmArgvForWindows(params.argv) ?? params.argv;
   const cwd = params.cwd instanceof URL ? fileURLToPath(params.cwd) : params.cwd;
   const resolvedCommand = resolveSupportedWindowsCommand({

@@ -5,17 +5,20 @@ import {
 } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
-import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-look.ts";
+import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
 import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
-import "../../components/tooltip.ts";
 import { SettingsRow } from "../../components/solid/settings-ui.tsx";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import "../../components/tooltip.ts";
+import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { LocalToggleRow } from "./local-toggle-row.tsx";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
 import type { ConfigProps } from "./view-types.ts";
+
+registerEnglishCatalog(registerPreferencesEnglish);
 
 export function LobsterPetSection(props: ConfigProps) {
   const activeTheme = createMemo(
@@ -143,13 +146,9 @@ export function LobsterPetSection(props: ConfigProps) {
                   <a
                     class="btn btn--sm lobsterdex__open"
                     href={props.lobsterdexHref}
-                    onClick={(event: MouseEvent) => {
-                      if (!shouldHandleNavigationClick(event)) {
-                        return;
-                      }
-                      event.preventDefault();
-                      props.onOpenLobsterdex?.();
-                    }}
+                    onClick={(event: MouseEvent) =>
+                      handleNavigationClick(event, () => props.onOpenLobsterdex?.())
+                    }
                   >
                     {t("quickSettings.appearance.lobsterdexOpen")}
                   </a>

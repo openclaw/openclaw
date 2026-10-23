@@ -1,9 +1,12 @@
 // Decorative long-wait text; the working row owns the accessible status.
 import { createMemo, createSignal, Show } from "solid-js";
+import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 const PHRASE_KEYS = [
   "shelling",
