@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  waitForControlUiGatewayReady,
+  waitForControlUiTerminalReady,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -26,8 +29,24 @@ suite.define(() => {
         terminalEnabled: true,
         featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
         methodResponses: {
-          "terminal.list": { sessions: [] },
+          "terminal.list": {
+            sessions: [
+              { ...terminalSession("keyboard-terminal", { shell: "/bin/sh" }), attached: true },
+            ],
+          },
           "terminal.open": terminalSession("keyboard-terminal", { shell: "/bin/sh" }),
+          "terminal.attach": {
+            cases: [
+              {
+                match: { sessionId: "keyboard-terminal" },
+                response: {
+                  ...terminalSession("keyboard-terminal", { shell: "/bin/sh" }),
+                  buffer: "",
+                  seq: 0,
+                },
+              },
+            ],
+          },
         },
       });
       await page.goto(`${suite.server.baseUrl}${route}`);
@@ -40,6 +59,9 @@ suite.define(() => {
         .locator("openclaw-terminal-panel")
         .filter({ has: page.locator(".tp-host") });
       const terminal = panel.locator(".tp-host");
+      if (route === "chat") {
+        await panel.locator(".tp-session.is-current").click();
+      }
       await terminal.locator("canvas").waitFor();
       await terminal.click();
       await page.keyboard.type("x");
@@ -53,6 +75,7 @@ suite.define(() => {
         await tabLabel.waitFor({ state: "hidden" });
         expect(await gateway.getRequests("terminal.input")).toEqual(before);
         await page.keyboard.press("Control+Backquote");
+        await panel.locator(".tp-session.is-current").click();
         await tabLabel.waitFor();
       } else {
         await expect
@@ -108,11 +131,7 @@ suite.define(() => {
       await page.getByText("Server updated", { exact: true }).waitFor();
 
       expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
-      expect(
-        await page.locator("openclaw-terminal-panel").evaluate((element) => {
-          return (element as HTMLElement & { available: boolean }).available;
-        }),
-      ).toBe(false);
+      expect(await page.locator("openclaw-terminal-panel").count()).toBe(0);
     });
   });
 
@@ -134,12 +153,7 @@ suite.define(() => {
 
       expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
       await gateway.waitForRequest("connect");
-      await page.waitForFunction(() => {
-        const panel = document.querySelector("openclaw-terminal-panel") as
-          | (HTMLElement & { available: boolean })
-          | null;
-        return panel?.available === true;
-      });
+      await waitForControlUiTerminalReady(page);
       await page.evaluate(() => {
         window.dispatchEvent(
           new CustomEvent("openclaw:terminal-toggle", {
@@ -187,12 +201,7 @@ suite.define(() => {
       expect((await page.goto(`${suite.server.baseUrl}new`))?.status()).toBe(200);
       await gateway.waitForRequest("connect");
       await page.locator(".new-session-page__message").waitFor();
-      await page.waitForFunction(() => {
-        const panel = document.querySelector("openclaw-terminal-panel") as
-          | (HTMLElement & { available: boolean })
-          | null;
-        return panel?.available === true;
-      });
+      await waitForControlUiTerminalReady(page);
       await evaluateControlUiContext(page, (context) => {
         context.agentSelection.set("research");
         window.dispatchEvent(
@@ -295,7 +304,7 @@ suite.define(() => {
       expect(closeControlMetrics.borderRadius).not.toBe("0px");
       expect(closeControlMetrics.closeBorderBottomWidth).toBe("0px");
       expect(closeControlMetrics.closeInset).toBeGreaterThanOrEqual(-0.5);
-      expect(closeControlMetrics.tabHeight).toBe(30);
+      expect(closeControlMetrics.tabHeight).toBe(28);
       expect(closeControlMetrics.width).toBe(28);
       expect(closeControlMetrics.height).toBe(28);
       expect(closeControlMetrics.centerOffset).toBeLessThanOrEqual(0.5);

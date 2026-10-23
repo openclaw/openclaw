@@ -1,28 +1,31 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { afterAll, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  installMockGateway,
-  startProductionControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { failControlUiModuleForDocuments } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const builds = useAutoCleanupTempDirTracker(afterAll);
-const enabledBuildId = "browser-capabilities-e2e";
 const enabled = createControlUiE2eSuite({
   name: "Control UI browser capability gate enabled",
-  startServer: async () => {
-    return await startProductionControlUiE2eServer(
-      builds.make("openclaw-browser-capabilities-"),
-      enabledBuildId,
-    );
-  },
 });
+
+const guidance = (page: Page) =>
+  page.getByRole("heading", { name: "Update your browser to use OpenClaw" });
+function watchRequests(page: Page) {
+  const counts = { recovery: 0, documents: 0 };
+  page.on("request", (request) => {
+    if (new URL(request.url()).searchParams.has("openclaw_mount_recovery")) {
+      counts.recovery++;
+    }
+    if (request.resourceType() === "document") {
+      counts.documents++;
+    }
+  });
+  return counts;
+}
 
 async function setBrowserFeatures(
   page: Page,
@@ -55,23 +58,20 @@ async function setBrowserFeatures(
 }
 
 enabled.define(() => {
-  it.each([false, true])("shows a stable fallback (native host: %s)", async (native) => {
-    await enabled.withPage(
+  it.each([false, true])("shows a stable fallback (native host: %s)", (native) =>
+    enabled.withPage(
       { viewport: { width: native ? 1180 : 390, height: 844 }, serviceWorkers: "block" },
       async ({ page }) => {
         await setBrowserFeatures(page, false);
         if (native) {
           await page.addInitScript(() => {
-            Object.defineProperty(window, "webkit", {
-              value: {
-                messageHandlers: {
-                  openclawLink: {
-                    postMessage: (message: unknown) => {
-                      document.documentElement.dataset.nativeLink = JSON.stringify(message);
-                    },
-                  },
-                },
+            const openclawLink = {
+              postMessage: (message: unknown) => {
+                document.documentElement.dataset.nativeLink = JSON.stringify(message);
               },
+            };
+            Object.defineProperty(window, "webkit", {
+              value: { messageHandlers: { openclawLink } },
             });
           });
         }
@@ -79,7 +79,7 @@ enabled.define(() => {
         const gateway = await installMockGateway(page, { awaitInitialRoster: false });
         const url = `${enabled.server.baseUrl}chat?keep=yes#synthetic-fragment`;
         await page.goto(url);
-        const heading = page.getByRole("heading", { name: "Update your browser to use OpenClaw" });
+        const heading = guidance(page);
         await heading.waitFor();
         expect(await page.getByText(/macOS 26.2 or iOS 26.2/).isVisible()).toBe(true);
         expect(
@@ -89,13 +89,8 @@ enabled.define(() => {
         expect(await gateway.getRequests()).toEqual([]);
         const open = page.getByRole("button", { name: "Open in browser", exact: true });
         expect(await open.isVisible()).toBe(native);
-        const viewports = native
-          ? [{ name: "macos", width: 1180, height: 844 }]
-          : [
-              { name: "desktop", width: 1180, height: 844 },
-              { name: "mobile", width: 390, height: 844 },
-            ];
-        for (const viewport of viewports) {
+        for (const name of native ? ["macos"] : ["desktop", "mobile"]) {
+          const viewport = { name, width: name === "mobile" ? 390 : 1180, height: 844 };
           for (const colorScheme of ["light", "dark"] as const) {
             await page.emulateMedia({ colorScheme });
             const frame = await takeControlUiScreenshotFrame(
@@ -105,7 +100,7 @@ enabled.define(() => {
               { animations: "disabled", viewport },
             );
             await writeFile(
-              path.join(enabled.artifactDir, `unsupported-${viewport.name}-${colorScheme}.png`),
+              path.join(enabled.artifactDir, `unsupported-${name}-${colorScheme}.png`),
               frame.png,
             );
           }
@@ -129,91 +124,79 @@ enabled.define(() => {
         expect(await heading.isVisible()).toBe(true);
         expect(await gateway.getRequests()).toEqual([]);
       },
-    );
-  });
+    ),
+  );
 
-  it("keeps a slow unsupported-screen download alive beyond the mount deadline", async () => {
-    const requested = createDeferred();
-    const release = createDeferred();
-    await enabled.withPage(
-      { serviceWorkers: "block" },
-      async ({ page }) => {
-        await setBrowserFeatures(page, false);
-        await page.clock.install();
-        let recoveryRequests = 0;
-        let documentRequests = 0;
-        page.on("request", (request) => {
-          if (new URL(request.url()).searchParams.has("openclaw_mount_recovery")) {
-            recoveryRequests += 1;
+  it.each(["slow", "failed"] as const)(
+    "does not auto-reload a %s unsupported-screen download",
+    async (mode) => {
+      const requested = createDeferred(),
+        release = createDeferred();
+      await enabled.withPage(
+        { serviceWorkers: "block" },
+        async ({ page }) => {
+          await setBrowserFeatures(page, false);
+          await page.clock.install();
+          const counts = watchRequests(page);
+          const failure =
+            mode === "failed"
+              ? await failControlUiModuleForDocuments(
+                  page,
+                  /\/assets\/unsupported-browser-[^/]+\.js$/u,
+                )
+              : undefined;
+          if (!failure) {
+            await page.route("**/assets/unsupported-browser-*.js", async (route) => {
+              requested.resolve();
+              await release.promise;
+              await route.continue();
+            });
           }
-          if (request.resourceType() === "document") {
-            documentRequests += 1;
+          await page.goto(`${enabled.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
+          const heading = page.getByRole("heading", { name: "Browser guidance could not load" });
+          if (failure) {
+            await heading.waitFor();
+          } else {
+            await requested.promise;
           }
-        });
-        await page.route("**/assets/unsupported-browser-*.js", async (route) => {
-          requested.resolve();
-          await release.promise;
-          await route.continue();
-        });
-        await page.goto(`${enabled.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
-        await requested.promise;
-        await page.clock.runFor(30_000);
-
-        expect(recoveryRequests).toBe(0);
-        expect(documentRequests).toBe(1);
-        release.resolve();
-        await page.getByRole("heading", { name: "Update your browser to use OpenClaw" }).waitFor();
-        expect(documentRequests).toBe(1);
-      },
-      async () => release.resolve(),
-    );
-  });
-
-  it("offers manual retry when the unsupported-screen download fails", async () => {
-    await enabled.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      await setBrowserFeatures(page, false);
-      await page.clock.install();
-      let recoveryRequests = 0;
-      page.on("request", (request) => {
-        if (new URL(request.url()).searchParams.has("openclaw_mount_recovery")) {
-          recoveryRequests += 1;
-        }
-      });
-      const failure = await failControlUiModuleForDocuments(
-        page,
-        /\/assets\/unsupported-browser-[^/]+\.js$/u,
+          await page.clock.runFor(30_000);
+          expect(counts.recovery).toBe(0);
+          expect(failure?.documentCount() ?? counts.documents).toBe(1);
+          if (failure) {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              page.locator("#openclaw-mount-fallback"),
+              [heading],
+              { animations: "disabled" },
+            );
+            await writeFile(
+              path.join(enabled.artifactDir, "unsupported-download-failed.png"),
+              frame.png,
+            );
+            await page.getByRole("button", { name: "Try again", exact: true }).click();
+          } else {
+            release.resolve();
+          }
+          await guidance(page).waitFor();
+          expect(failure?.documentCount() ?? counts.documents).toBe(failure ? 2 : 1);
+        },
+        async () => release.resolve(),
       );
-      await page.goto(`${enabled.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
-      await page.getByRole("heading", { name: "Browser guidance could not load" }).waitFor();
-      await page.clock.runFor(30_000);
-      expect(recoveryRequests).toBe(0);
-      expect(failure.documentCount()).toBe(1);
-      const frame = await takeControlUiScreenshotFrame(
-        page,
-        page.locator("#openclaw-mount-fallback"),
-        [page.getByRole("heading", { name: "Browser guidance could not load" })],
-        { animations: "disabled" },
-      );
-      await writeFile(path.join(enabled.artifactDir, "unsupported-download-failed.png"), frame.png);
-      await page.getByRole("button", { name: "Try again", exact: true }).click();
-      await page.getByRole("heading", { name: "Update your browser to use OpenClaw" }).waitFor();
-      expect(failure.documentCount()).toBe(2);
-    });
-  });
+    },
+  );
 
   it.each([true, false])(
     "starts the application with required overlays (field sizing: %s)",
-    async (fieldSizing) => {
-      await enabled.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+    (fieldSizing) =>
+      enabled.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         await setBrowserFeatures(page, true, fieldSizing);
-        const gateway = await installMockGateway(page, { serverBuildId: enabledBuildId });
+        const gateway = await installMockGateway(page);
         await page.goto(`${enabled.server.baseUrl}chat`);
         await page.locator(".agent-chat__composer-combobox textarea").waitFor();
         expect((await gateway.getRequests()).some((request) => request.method === "connect")).toBe(
           true,
         );
         expect(await page.locator(".unsupported-browser").count()).toBe(0);
-      });
-    },
+      }),
   );
 });

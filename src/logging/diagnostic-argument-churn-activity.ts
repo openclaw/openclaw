@@ -36,19 +36,16 @@ export type DiagnosticArgumentChurnObservationParams = {
 };
 
 function hasArgumentChurnContinuityExpired(
-  activity: DiagnosticArgumentChurnActivity & { lastProgressAt?: number },
+  activity: DiagnosticArgumentChurnActivity,
   now: number,
 ): boolean {
   const observationAt = activity.argumentChurnObservationAt;
-  const lastProgressAt = activity.lastProgressAt;
   const observationSequence = activity.argumentChurnObservationSequence;
   const lastProgressSequence = activity.lastProgressSequence;
   const progressFollowedObservation =
-    observationSequence !== undefined && lastProgressSequence !== undefined
-      ? lastProgressSequence > observationSequence
-      : lastProgressAt !== undefined &&
-        observationAt !== undefined &&
-        lastProgressAt > observationAt;
+    observationSequence !== undefined &&
+    lastProgressSequence !== undefined &&
+    lastProgressSequence > observationSequence;
   return (
     observationAt !== undefined &&
     progressFollowedObservation &&
@@ -86,66 +83,6 @@ export function resolveArgumentChurnProgress(
   };
 }
 
-function recordArgumentChurnActivityObservation(
-  activity: DiagnosticArgumentChurnActivity & { lastProgressAt?: number },
-  params: {
-    runId?: string;
-    active: boolean;
-    existingOnly?: boolean;
-    now: number;
-  },
-): void {
-  if (
-    params.existingOnly &&
-    (activity.argumentChurnStartedAt === undefined || activity.argumentChurnRunId !== params.runId)
-  ) {
-    return;
-  }
-  if (!params.active) {
-    if (activity.argumentChurnRunId === params.runId) {
-      clearArgumentChurnActivity(activity, params);
-    }
-    return;
-  }
-  const continuityExpired = hasArgumentChurnContinuityExpired(activity, params.now);
-  if (
-    activity.argumentChurnStartedAt === undefined ||
-    activity.argumentChurnRunId !== params.runId ||
-    continuityExpired
-  ) {
-    activity.argumentChurnStartedAt = params.now;
-    activity.argumentChurnRunId = params.runId;
-  }
-  activity.argumentChurnObservationAt = params.now;
-  activity.argumentChurnObservationSequence = ++diagnosticActivitySequence;
-}
-
-function updateArgumentChurnPolicyWait(
-  activity: DiagnosticArgumentChurnActivity,
-  params: {
-    action: "enter" | "exit";
-    runId?: string;
-    token: symbol;
-  },
-): void {
-  if (params.action === "enter") {
-    if (activity.argumentChurnPolicyWaitRunId !== params.runId) {
-      activity.argumentChurnPolicyWaitRunId = params.runId;
-      activity.argumentChurnPolicyWaitTokens = new Set();
-    }
-    activity.argumentChurnPolicyWaitTokens?.add(params.token);
-    return;
-  }
-  if (activity.argumentChurnPolicyWaitRunId !== params.runId) {
-    return;
-  }
-  activity.argumentChurnPolicyWaitTokens?.delete(params.token);
-  if (activity.argumentChurnPolicyWaitTokens?.size === 0) {
-    activity.argumentChurnPolicyWaitRunId = undefined;
-    activity.argumentChurnPolicyWaitTokens = undefined;
-  }
-}
-
 export function clearArgumentChurnPolicyWaits(
   activity: DiagnosticArgumentChurnActivity,
   params: { runId?: string } = {},
@@ -172,20 +109,48 @@ export function applyArgumentChurnObservation<T extends { runId: string; sequenc
   }
   if (params.policyWait) {
     if (params.policyWaitToken) {
-      updateArgumentChurnPolicyWait(activity, {
-        action: params.policyWait,
-        runId,
-        token: params.policyWaitToken,
-      });
+      if (params.policyWait === "enter") {
+        if (activity.argumentChurnPolicyWaitRunId !== runId) {
+          activity.argumentChurnPolicyWaitRunId = runId;
+          activity.argumentChurnPolicyWaitTokens = new Set();
+        }
+        activity.argumentChurnPolicyWaitTokens?.add(params.policyWaitToken);
+        return;
+      }
+      if (activity.argumentChurnPolicyWaitRunId !== runId) {
+        return;
+      }
+      activity.argumentChurnPolicyWaitTokens?.delete(params.policyWaitToken);
+      if (activity.argumentChurnPolicyWaitTokens?.size === 0) {
+        activity.argumentChurnPolicyWaitRunId = undefined;
+        activity.argumentChurnPolicyWaitTokens = undefined;
+      }
     }
     return;
   }
-  recordArgumentChurnActivityObservation(activity, {
-    runId,
-    active: params.active === true,
-    existingOnly: params.existingOnly,
-    now,
-  });
+  if (
+    params.existingOnly &&
+    (activity.argumentChurnStartedAt === undefined || activity.argumentChurnRunId !== runId)
+  ) {
+    return;
+  }
+  if (params.active !== true) {
+    if (activity.argumentChurnRunId === runId) {
+      clearArgumentChurnActivity(activity, { now, runId });
+    }
+    return;
+  }
+  const continuityExpired = hasArgumentChurnContinuityExpired(activity, now);
+  if (
+    activity.argumentChurnStartedAt === undefined ||
+    activity.argumentChurnRunId !== runId ||
+    continuityExpired
+  ) {
+    activity.argumentChurnStartedAt = now;
+    activity.argumentChurnRunId = runId;
+  }
+  activity.argumentChurnObservationAt = now;
+  activity.argumentChurnObservationSequence = ++diagnosticActivitySequence;
 }
 
 export function mergeArgumentChurnActivity(
@@ -194,22 +159,10 @@ export function mergeArgumentChurnActivity(
 ): void {
   const sourceObservationSequence = source.argumentChurnObservationSequence;
   const targetObservationSequence = target.argumentChurnObservationSequence;
-  const sourceClearsAtSameTime =
-    sourceObservationSequence === undefined &&
-    targetObservationSequence === undefined &&
-    source.argumentChurnObservationAt !== undefined &&
-    source.argumentChurnObservationAt === target.argumentChurnObservationAt &&
-    source.argumentChurnStartedAt === undefined &&
-    target.argumentChurnStartedAt !== undefined;
+  // Observations and clears always record their process-local sequence together.
   const sourceIsNewer =
-    sourceObservationSequence !== undefined
-      ? targetObservationSequence === undefined ||
-        sourceObservationSequence > targetObservationSequence
-      : targetObservationSequence === undefined &&
-        source.argumentChurnObservationAt !== undefined &&
-        (target.argumentChurnObservationAt === undefined ||
-          source.argumentChurnObservationAt > target.argumentChurnObservationAt ||
-          sourceClearsAtSameTime);
+    sourceObservationSequence !== undefined &&
+    sourceObservationSequence > (targetObservationSequence ?? 0);
 
   if (
     source.argumentChurnStartedAt !== undefined &&
@@ -220,12 +173,7 @@ export function mergeArgumentChurnActivity(
       target.argumentChurnStartedAt,
       source.argumentChurnStartedAt,
     );
-    if (
-      source.argumentChurnObservationAt !== undefined &&
-      (sourceIsNewer ||
-        (sourceObservationSequence === undefined &&
-          source.argumentChurnObservationAt >= (target.argumentChurnObservationAt ?? 0)))
-    ) {
+    if (sourceIsNewer) {
       target.argumentChurnObservationAt = source.argumentChurnObservationAt;
       target.argumentChurnObservationSequence = sourceObservationSequence;
     }

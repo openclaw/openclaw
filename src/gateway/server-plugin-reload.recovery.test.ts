@@ -41,6 +41,7 @@ import {
 } from "./server-plugin-reload.activation.test-support.js";
 import {
   verifyActiveCallDrainLease,
+  verifyAdmittedWorkBudgetIgnoresWallClockStep,
   verifyLateActiveCallDrainObservation,
 } from "./server-plugin-reload.active-call.test-support.js";
 import { verifyCancelledDrainRollbackLease } from "./server-plugin-reload.cancel-lease.test-support.js";
@@ -285,7 +286,6 @@ it.each(["commit", "rollback"] as const)(
         cronEnabled: false,
         log: mocks.log,
         enqueueSystemEvent: () => {},
-        requestHeartbeat: () => {},
         runIsolatedAgentJob: async () => ({ status: "ok" as const }),
       });
       const list = vi.spyOn(cron, "list").mockResolvedValue([]);
@@ -384,6 +384,9 @@ it.each([15_000, 70_000])(
 
 it("keeps restored plugins serving when an expired drain observation settles late", () =>
   verifyLateActiveCallDrainObservation(createRecoveryFixture));
+
+it("bounds the admitted-work drain budget across a wall-clock step", () =>
+  verifyAdmittedWorkBudgetIgnoresWallClockStep(createRecoveryFixture));
 
 it("keeps the lifecycle lease through cancelled drain rollback before admitting another writer", () =>
   verifyCancelledDrainRollbackLease(
@@ -757,8 +760,6 @@ it.for([
           if (outcome === "manual stop") {
             const tool = createTranscriptsTool({
               config,
-              stateDir,
-              logger: mocks.log,
               caller: { kind: "operator", source: "local" },
             });
             manualStop = withPluginRuntimeRegistryScope(fixture.registryOwner.registry, () =>

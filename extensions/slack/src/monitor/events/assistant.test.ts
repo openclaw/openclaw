@@ -46,7 +46,6 @@ const context = { channel_id: "C456", team_id: "T789", enterprise_id: "E123" };
 const savedContext = {
   assistantChannelId: "D123",
   threadTs: "1729999327.187299",
-  userId: "U123",
   channelId: "C456",
   teamId: "T789",
   enterpriseId: "E123",
@@ -133,7 +132,6 @@ describe("Slack assistant events", () => {
   it("preserves cached assistant thread context when updates omit optional fields", async () => {
     const cached = {
       ...savedContext,
-      userId: "UOLD",
       channelId: "COLD",
       teamId: "TOLD",
       enterpriseId: "EOLD",

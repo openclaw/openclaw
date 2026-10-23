@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { extractThinkingCached } from "../../lib/chat/message-extract.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import {
@@ -11,7 +12,7 @@ import {
 import { loadChatHistory } from "./chat-history.ts";
 import { projectChatReasoning } from "./chat-reasoning.ts";
 import { buildCachedChatItems, getChatItemsGeneration } from "./chat-thread.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatInto } from "./chat-view.test-helpers.ts";
 import { projectTranscriptChain } from "./components/chat-transcript-message-index.ts";
 import {
@@ -373,7 +374,7 @@ it("does not let an earlier receipt consume equal reasoning from the next assist
   }
 });
 
-it("keeps persisted tool-step reasoning visible until its run finishes", () => {
+it("keeps persisted tool-step reasoning visible until its run finishes", async () => {
   const sessionKey = "agent:main:dashboard:reasoning";
   const toolMessage = (index: number, owner: string, text: string, timestamp: number) =>
     transcriptRow(
@@ -448,7 +449,7 @@ it("keeps persisted tool-step reasoning visible until its run finishes", () => {
     ]);
   };
   show();
-  expectSteps();
+  await waitForSolid(expectSteps);
   for (const index of [0, 1]) {
     const message = toolMessage(index, runId, thoughts[index]!, 1_050 + index * 100);
     agent(
@@ -464,12 +465,12 @@ it("keeps persisted tool-step reasoning visible until its run finishes", () => {
     applyMessage(message, { sessionKey });
     for (const mode of ["on", "stream"] as const) {
       show(mode);
-      expectSteps();
+      await waitForSolid(expectSteps);
     }
   }
   showReasoning(0, "on", false);
   show();
-  expectSteps();
+  await waitForSolid(expectSteps);
 
   const worked = () =>
     container.querySelectorAll<HTMLButtonElement>(
@@ -483,7 +484,7 @@ it("keeps persisted tool-step reasoning visible until its run finishes", () => {
   worked()[0]!.click();
   show();
   expect(rawDetails().getAttribute("aria-expanded")).toBe("false");
-  expectSteps();
+  await waitForSolid(expectSteps);
   worked()[0]!.click();
   show();
 

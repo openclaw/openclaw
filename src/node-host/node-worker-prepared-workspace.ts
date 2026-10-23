@@ -1,8 +1,7 @@
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import type { WorkspaceHashMemo } from "../gateway/worker-environments/workspace-hash-memo.js";
-import { hasNodeErrorCode } from "../infra/path-guards.js";
+import { pathEntryExists } from "../infra/path-existence.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type {
   NodeWorkerPreparedWorkspaceInput,
@@ -243,15 +242,8 @@ export class NodeWorkerPreparedWorkspaceRuntime {
             },
             () => store.assertCurrent(retiring),
           );
-          if (!removed) {
-            try {
-              await fsp.lstat(ownerRoot);
-              throw new Error("INVALID_REQUEST: prepared workspace retirement path is not owned");
-            } catch (error) {
-              if (!hasNodeErrorCode(error, "ENOENT")) {
-                throw error;
-              }
-            }
+          if (!removed && (await pathEntryExists(ownerRoot))) {
+            throw new Error("INVALID_REQUEST: prepared workspace retirement path is not owned");
           }
           await store.retire(retiring, true);
           generationKeys.push(generationKey);

@@ -244,7 +244,6 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
           operations.retirement.signal,
           signal,
         ].filter((candidate): candidate is AbortSignal => candidate !== undefined),
-        selected.map((provider) => provider.id),
       );
     subscribe(progress);
     const enumerate = async () => {

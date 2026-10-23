@@ -123,16 +123,13 @@ describe("AppSidebar agent chip", () => {
       expect(row.querySelector("[data-sidebar-session-pin], .session-row-state")).toBeNull();
     }
     expect(sidebar.querySelector('[aria-label="Done"]')).not.toBeNull();
-    const runtimeStartMs = (
-      sidebar.querySelector('[data-session-key="agent:main:child-one"] openclaw-elapsed-time') as
-        | (HTMLElement & { startMs: number })
-        | null
-    )?.startMs;
+    const runtime = sidebar.querySelector(
+      '[data-session-key="agent:main:child-one"] openclaw-elapsed-time',
+    );
     const childTrail = childRows[0]?.querySelector<HTMLElement>(".session-row-trail");
     expect(childTrail?.querySelector("openclaw-elapsed-time")).not.toBeNull();
     expect(childRows[0]?.querySelector("a")?.getAttribute("aria-describedby")).toBe(childTrail?.id);
-    expect(runtimeStartMs).toBeGreaterThan(Date.now() - 31_000);
-    expect(runtimeStartMs).toBeLessThan(Date.now() - 29_000);
+    expect(runtime?.textContent).toMatch(/^(?:29|30|31)s$/);
 
     harness.list.mockResolvedValue(
       listResult(

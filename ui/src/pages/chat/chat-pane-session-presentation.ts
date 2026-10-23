@@ -5,14 +5,15 @@ import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { resolveChatPaneParentSession } from "./components/chat-pane-header.ts";
 
 export function chatSessionPresentationTitle(
   state: Pick<ChatPageHost, "sessions" | "sessionKey" | "hello"> | undefined,
   row?: GatewaySessionRow,
   sessionKey = "",
+  pending = false,
 ): string {
   const key = state
     ? resolveSessionKey(state.sessionKey, state.hello) || state.sessionKey
@@ -21,6 +22,10 @@ export function chatSessionPresentationTitle(
     areUiSessionKeysEquivalent(candidate.key, key),
   );
   // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
+  const source = presentation ?? row;
+  if (!source && pending) {
+    return "";
+  }
   return presentation
     ? resolveSessionDisplayName(key, presentation)
     : resolveSessionDisplayName(row?.key ?? key, row);

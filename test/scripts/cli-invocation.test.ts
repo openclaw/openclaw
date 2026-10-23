@@ -12,54 +12,42 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllGlobals());
+const execPath = "/synthetic/node";
+const entryPath = "/synthetic/openclaw.mjs";
+const execArgv = ["--import", "synthetic-loader"];
 
-it("retains the selected entry and interpreter flags for a loose CLI", () => {
-  expect(
-    resolveOpenClawCliInvocation({
-      execPath: "/synthetic/node",
-      entryPath: "/synthetic/openclaw.mjs",
-      execArgv: ["--import", "synthetic-loader"],
-      args: ["--profile", "fixture", "doctor", "--non-interactive"],
-    }),
-  ).toEqual({
-    command: "/synthetic/node",
-    args: [
-      "--import",
-      "synthetic-loader",
-      "/synthetic/openclaw.mjs",
-      "--profile",
-      "fixture",
-      "doctor",
-      "--non-interactive",
-    ],
-  });
-});
+function expectInvocation(
+  options: Parameters<typeof resolveOpenClawCliInvocation>[0] & { args: string[] },
+  prefix: string[] = [],
+) {
+  const expected = {
+    command: options.execPath ?? process.execPath,
+    args: [...prefix, ...options.args],
+  };
+  expect(resolveOpenClawCliInvocation(options)).toEqual(expected);
+}
 
-it("does not inherit the caller's entry for an explicit CLI command", () => {
-  expect(
-    resolveOpenClawCliInvocation({
-      execPath: "/synthetic/openclaw-wrapper",
-      entryPath: null,
-      execArgv: ["--inspect"],
-      args: ["gateway", "restart"],
-    }),
-  ).toEqual({ command: "/synthetic/openclaw-wrapper", args: ["gateway", "restart"] });
-});
-
-it("uses the embedded fact for a self respawn without a script or interpreter flags", () => {
-  vi.stubGlobal("__openclawStandaloneRootUrl", "file:///synthetic/runtime/");
-  expect(
-    resolveOpenClawCliInvocation({
-      entryPath: "/synthetic/runtime/openclaw.mjs",
-      execArgv: ["--disable-warning=ExperimentalWarning"],
-      args: ["--profile", "fixture", "--version"],
-    }),
-  ).toEqual({ command: process.execPath, args: ["--profile", "fixture", "--version"] });
+it.each([
+  ["loose", execPath, entryPath],
+  ["explicit", "/synthetic/openclaw-wrapper", null],
+  ["embedded", process.execPath, "/synthetic/runtime/openclaw.mjs"],
+] as const)("preserves arguments and chooses the %s CLI prefix", (mode, command, entry) => {
+  if (mode === "embedded") {
+    vi.stubGlobal("__openclawStandaloneRootUrl", "file:///synthetic/runtime/");
+  }
+  const args = ["--profile", "fixture", "doctor", "--non-interactive"];
+  expectInvocation(
+    { execPath: command, entryPath: entry, execArgv, args },
+    mode === "loose" ? [...execArgv, entryPath] : [],
+  );
 });
 
 it("uses a renamed standalone artifact's manifest for service invocation and runtime metadata", () => {
   const root = tempDirs.make("cli-invocation-");
   const executable = path.join(root, "renamed-runtime");
+  const runtime = path.join(root, "runtime");
+  const writeManifest = (value: unknown) =>
+    fs.writeFileSync(path.join(root, "manifest.json"), JSON.stringify(value));
   const manifest = {
     schemaVersion: 1,
     mode: "jit",
@@ -68,28 +56,17 @@ it("uses a renamed standalone artifact's manifest for service invocation and run
     openclaw: { version: "2026.10.3", commit: "c".repeat(40) },
     bun: { version: "1.4.3" },
   };
-  fs.writeFileSync(path.join(root, "manifest.json"), JSON.stringify(manifest));
-  // No executable bytes are needed: packaging owns hashes; planning owns the argv shape.
+  writeManifest(manifest);
   expect(readStandaloneRuntimeManifest(executable)).toEqual(manifest);
-  expect(readStandaloneRuntimeManifestForRoot(path.join(root, "runtime"))).toEqual(manifest);
+  expect(readStandaloneRuntimeManifestForRoot(runtime)).toEqual(manifest);
   expect(() => readStandaloneRuntimeManifestForRoot(path.join(root, "unrelated"))).toThrow(
     "Invalid standalone",
   );
-  expect(
-    resolveOpenClawCliInvocation({
-      execPath: executable,
-      args: ["gateway"],
-    }),
-  ).toEqual({ command: executable, args: ["gateway"] });
-  expect(
-    resolveOpenClawCliInvocation({
-      execPath: executable,
-      entryPath: path.join(root, "runtime", "openclaw.mjs"),
-      execArgv: ["--max-old-space-size=4096"],
-      args: ["--profile", "fixture", "gateway", "--port", "18790"],
-    }),
-  ).toEqual({
-    command: executable,
+  expectInvocation({ execPath: executable, args: ["gateway"] });
+  expectInvocation({
+    execPath: executable,
+    entryPath: path.join(runtime, "openclaw.mjs"),
+    execArgv: ["--max-old-space-size=4096"],
     args: ["--profile", "fixture", "gateway", "--port", "18790"],
   });
   expect(() =>
@@ -99,18 +76,10 @@ it("uses a renamed standalone artifact's manifest for service invocation and run
       args: ["doctor"],
     }),
   ).toThrow("cannot run another installation");
-  fs.writeFileSync(
-    path.join(root, "manifest.json"),
-    JSON.stringify({ ...manifest, executable: { path: "another-runtime" } }),
-  );
+  writeManifest({ ...manifest, executable: { path: "another-runtime" } });
   expect(() => isStandaloneRuntimeExecutable(executable)).toThrow("Invalid standalone");
-  fs.writeFileSync(
-    path.join(root, "manifest.json"),
-    JSON.stringify({ ...manifest, executable: { ...manifest.executable, path: "../outside" } }),
-  );
-  expect(() => readStandaloneRuntimeManifestForRoot(path.join(root, "runtime"))).toThrow(
-    "Invalid standalone",
-  );
+  writeManifest({ ...manifest, executable: { ...manifest.executable, path: "../outside" } });
+  expect(() => readStandaloneRuntimeManifestForRoot(runtime)).toThrow("Invalid standalone");
   fs.writeFileSync(path.join(root, "manifest.json"), "{");
   expect(() => readStandaloneRuntimeManifest(executable)).toThrow("Invalid standalone");
 });
@@ -118,27 +87,26 @@ it("uses a renamed standalone artifact's manifest for service invocation and run
 it("keeps loose parent-bound respawn bytes identical to the former runner prefix", () => {
   const env = { KEEP: "unchanged" };
   const invocation = resolveOpenClawCliRespawn({
-    execPath: "/synthetic/node",
-    entryPath: "/synthetic/openclaw.mjs",
-    execArgv: ["--no-warnings", "--import", "synthetic-loader"],
+    execPath,
+    entryPath,
+    execArgv: ["--no-warnings", ...execArgv],
     args: ["doctor", "--fix"],
     env,
   });
-  // Fixed bytes protect the self-removing preload, ordering, and inherited flags.
+  // Keep the self-removing preload's bytes independent of its production constant.
   const source = `
   globalThis[Symbol.for("openclaw.cliRespawnParent")] = { pid: process.ppid };
   process.execArgv = process.execArgv.filter((arg, index, args) =>
     arg !== import.meta.url && !(arg === "--import" && args[index + 1] === import.meta.url));
 `;
   expect(invocation).toEqual({
-    command: "/synthetic/node",
+    command: execPath,
     args: [
       "--import",
       `data:text/javascript,${encodeURIComponent(source)}`,
       "--no-warnings",
-      "--import",
-      "synthetic-loader",
-      "/synthetic/openclaw.mjs",
+      ...execArgv,
+      entryPath,
       "doctor",
       "--fix",
     ],

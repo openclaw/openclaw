@@ -24,6 +24,10 @@ export function collectRuntimeConfigAssignments(params: {
     return;
   }
   const { channel: msteams, surface } = resolved;
+  const explicitDefault = surface.hasExplicitAccounts
+    ? surface.accounts.find(({ accountId }) => normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID)
+    : undefined;
+  const defaultEnabled = explicitDefault?.enabled ?? surface.channelEnabled;
 
   collectSecretInputAssignment({
     value: msteams.appPassword,
@@ -31,7 +35,9 @@ export function collectRuntimeConfigAssignments(params: {
     expected: "string",
     defaults: params.defaults,
     context: params.context,
-    active: isRootDefaultIdentityActive(msteams, surface),
+    active:
+      defaultEnabled &&
+      (isConfiguredIdentityField(msteams.appId) || isConfiguredIdentityField(msteams.appPassword)),
     inactiveReason: "no enabled account inherits this top-level Microsoft Teams appPassword.",
     owner: {
       ownerKind: "account",
@@ -79,24 +85,6 @@ function isConfiguredIdentityField(value: unknown): boolean {
     return value.trim().length > 0;
   }
   return value !== undefined && value !== null;
-}
-
-function isRootDefaultIdentityActive(
-  channel: Record<string, unknown>,
-  surface: {
-    channelEnabled: boolean;
-    hasExplicitAccounts: boolean;
-    accounts: readonly { accountId: string; enabled: boolean }[];
-  },
-): boolean {
-  const explicitDefault = surface.hasExplicitAccounts
-    ? surface.accounts.find(({ accountId }) => normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID)
-    : undefined;
-  const defaultEnabled = explicitDefault?.enabled ?? surface.channelEnabled;
-  return (
-    defaultEnabled &&
-    (isConfiguredIdentityField(channel.appId) || isConfiguredIdentityField(channel.appPassword))
-  );
 }
 
 export const channelSecrets = {

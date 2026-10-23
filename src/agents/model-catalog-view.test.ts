@@ -184,6 +184,24 @@ describe("prepared model catalog view", () => {
     ]);
   });
 
+  it("builds provider-config inventory independently of picker allowlists", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { models: { "openai/allowlisted": {} } } },
+      ...providerConfig("openai", {
+        baseUrl: "https://api.openai.com/v1",
+        models: [
+          model("two", "Two", { contextWindow: 8192 }),
+          model("one", "One", { contextWindow: 8192 }),
+        ],
+      }),
+    };
+
+    expect(prepare({ cfg }).providerInventory(cfg, [])).toMatchObject([
+      { provider: "openai", id: "one", name: "One" },
+      { provider: "openai", id: "two", name: "Two" },
+    ]);
+  });
+
   it("uses authored inventory membership with canonical route metadata", () => {
     const cfg = providerConfig("custom", {
       baseUrl: "https://authored.example/v1",
@@ -298,9 +316,7 @@ function nativeRegistry(readiness: () => { accountType: string; authMode: string
 
 describe("prepared native catalog readiness", () => {
   it("does not let an uncredentialed API catalog twin hide a discovered native offering", () => {
-    const logical = row("custom", "native-model");
-    const api = { ...logical, api: "openai-responses" as const };
-    const read = nativeReader(api);
+    const read = nativeReader(row("custom", "native-model", { api: "openai-responses" }));
     expect(read()).toMatchObject(nativeResult(true));
   });
 
@@ -362,15 +378,8 @@ describe("prepared native catalog readiness", () => {
       },
       pluginRegistry: registry,
     });
-    const decision = read({
-      ...host,
-      unavailableReason: "missing-auth",
-    });
-    expect(decision).toMatchObject(
-      nativeResult(undefined, {
-        availabilityAuthoritative: true,
-      }),
-    );
+    const decision = read({ ...host, unavailableReason: "missing-auth" });
+    expect(decision).toMatchObject(nativeResult(undefined, { availabilityAuthoritative: true }));
     expect(decision.unavailableReason).toBeUndefined();
   });
 
@@ -399,14 +408,6 @@ describe("prepared native catalog readiness", () => {
       ...observed,
       requestedRuntimeId: "native-test",
     });
-    const credentialedHost: ModelAuthAvailabilityEvaluation = {
-      ...host,
-      availability: true,
-      evidence: "profile",
-      selectedProfileId: "custom:host",
-      selectedAuthMode: "api_key",
-    };
-    expect(read(credentialedHost, "native-test")).toEqual(credentialedHost);
     ready = false;
     expect(read(host, "native-test")).toMatchObject({ availability: false });
     ready = true;

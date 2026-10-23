@@ -40,7 +40,7 @@ import {
 } from "../../auth-profiles/store-runtime.js";
 import { withAuthProfileStoreAgentDir } from "../../auth-profiles/store.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
-import { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
+import { createRetryController } from "./failover-retry-controller.test-support.js";
 
 const saveStore = (store: AuthProfileStore, agentDir?: string) =>
   saveAuthProfileStore(store, agentDir, {
@@ -268,22 +268,10 @@ async function fixture(state: OpenClawTestState, owner: Owner = "local-agent", e
     setRuntimeAuthProfileStoreSnapshot(runtime, childDir);
     derived = { agentDir: childDir, durable: child, profiles: structuredClone(runtime.profiles) };
   }
-  const controller = createEmbeddedRunFailoverRetryController({
-    runInput: {
-      runParams: {
-        runId: "inline-auth-failure-run",
-        sessionId: "inline-auth-failure-session",
-        sessionFile: state.path("synthetic-session.jsonl"),
-        workspaceDir: state.workspaceDir,
-        prompt: "synthetic inline-key failure",
-        timeoutMs: 60_000,
-        config,
-      },
-      globalLane: "inline-auth-failure-test",
-      agentDir,
-      fallbackConfigured: false,
-    },
-    preparedRuntime: {
+  const controller = createRetryController({
+    agentDir,
+    runParams: { workspaceDir: state.workspaceDir, config },
+    runtime: {
       provider,
       modelId: "synthetic-model",
       profileFailureStore: store,
@@ -296,9 +284,7 @@ async function fixture(state: OpenClawTestState, owner: Owner = "local-agent", e
         mode: "api-key",
         source: "models.json",
       }),
-      advanceAttemptAuthProfile: async () => false,
     },
-    getSessionId: () => "inline-auth-failure-session",
   });
   const fail = (reason: "auth" | "timeout" = "auth") =>
     controller.maybeMarkAuthProfileFailure({ reason });

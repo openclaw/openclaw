@@ -48,12 +48,11 @@ describe("callBrowserRequest", () => {
     await callBrowserRequest(
       { json: true },
       { method: "GET", path: "/status", query: { profile: "openclaw" } },
-      { progress: true },
     );
 
     const call = gatewayMocks.callGatewayFromCli.mock.calls[0];
     const extra = call?.[3];
-    expect(extra).toEqual({ progress: true, scopes: ["operator.admin"] });
+    expect(extra).toEqual({ scopes: ["operator.admin"] });
   });
 
   it("rejects partial parent timeout values before gateway dispatch", async () => {

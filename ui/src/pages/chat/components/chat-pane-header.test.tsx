@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { GatewaySessionRow, PresenceEntry, SessionsListResult } from "../../../api/types.ts";
 import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
@@ -12,11 +11,12 @@ import {
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
+import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import {
   activePlacementSession,
   createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
-  createSessionContext,
   createTestChatPane,
 } from "../chat-pane.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
@@ -26,13 +26,11 @@ import {
   chatPaneHeaderSharing,
   chatPaneHeaderSessionMenu,
   mountChatPaneHeader,
-  mockWorkspaceIconFetch,
   openNativeMenu,
   selectNativeMenu,
   renderPaneHeaderInto,
-  type ChatPaneHeaderProps,
 } from "./chat-pane-header.test-support.ts";
-import { resolveChatPaneWorkspaceIcon } from "./chat-pane-header.tsx";
+import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 
 const containers: HTMLElement[] = [];
 
@@ -118,11 +116,14 @@ describe("chat pane header", () => {
   });
 
   it.each(["openclaw", null])(
-    "replaces the mobile workspace line with connection status for %s",
+    "preserves session identity alongside mobile connection status for %s",
     (workspaceLabel) => {
       const retry = vi.fn();
       const { container, update } = mountHeader({ mergedChrome: true, workspaceLabel });
       const title = container.querySelector(".chat-pane__session-title");
+      expect(container.querySelector(".chat-pane__workspace-chip") !== null).toBe(
+        Boolean(workspaceLabel),
+      );
       const drawer = container.querySelector<HTMLButtonElement>(".chat-pane__nav-toggle")!;
       update({ gatewayStatus: { kind: "offline", queuedCount: 2, onRetry: retry } });
       const line = container.querySelector(".mobile-connection-status")!;
@@ -142,44 +143,96 @@ describe("chat pane header", () => {
     },
   );
 
-  it("keeps only Share, Layout, and overflow at rest and moves layout actions into the menu", async () => {
+  it("routes desktop split and pane closure through session actions without a Layout rail", async () => {
     const onClosePane = vi.fn();
     const onSplitDown = vi.fn();
     const onSplitRight = vi.fn();
     const onOpenSplitView = vi.fn();
+    const sessionMenuAction = chatPaneHeaderSessionMenu();
     const { container, update } = mountHeader({
       onClosePane,
       onSplitDown,
       onSplitRight,
       onOpenSplitView,
       sharingControl: chatPaneHeaderSharing(),
-      sessionMenuAction: chatPaneHeaderSessionMenu(),
+      sessionMenuAction: {
+        ...sessionMenuAction,
+        compact: true,
+        splitAllowed: true,
+        session: { ...sessionMenuAction.session, target: { key: "agent:main:test" } },
+      },
     });
-    await container.querySelector("openclaw-chat-header-session-menu")!.updateComplete;
-    const actions = container.querySelector(".chat-pane__actions")!;
-    expect(actions.querySelector(".chat-header-session-menu__trigger")).not.toBeNull();
+    const menu = container.querySelector("openclaw-chat-header-session-menu")!;
+    await menu.updateComplete;
+    expect(container.querySelector(".chat-pane__layout-menu")).toBeNull();
+    expect(container.querySelector(".chat-pane__sharing-trigger")).not.toBeNull();
     expect(
-      [...actions.querySelectorAll("button:not([role^=menuitem])")].map((button) =>
-        button.textContent?.trim(),
-      ),
-    ).toEqual(["Share", "Layout", ""]);
-    const menu = actions.querySelector(".chat-pane__layout-menu")!;
-    expect(menu.querySelector("[role^=menuitem]")).toBeNull();
-    await openNativeMenu(menu);
-    expect(
-      [...menu.querySelectorAll("[role^=menuitem]")].map((item) => item.textContent?.trim()),
-    ).toEqual(["Open split view", "Split down", "Split right", "Close pane"]);
-    for (const [value, callback, args] of [
-      ["open-split-view", onOpenSplitView, []],
-      ["split-down", onSplitDown, ["pane-1"]],
-      ["split-right", onSplitRight, ["pane-1"]],
-      ["close-pane", onClosePane, ["pane-1"]],
+      container.querySelector(".chat-pane__identity-actions .chat-header-session-menu__trigger"),
+    ).not.toBeNull();
+    await selectNativeMenu(menu, "quick:open-split-view");
+    expect(onOpenSplitView).toHaveBeenCalledExactlyOnceWith();
+    await selectNativeMenu(menu, "compact:open-view");
+    expect(menu.querySelector('[data-value="layout:side-panel"]')).toBeNull();
+    await selectNativeMenu(menu, "layout:close-pane");
+    expect(onClosePane).toHaveBeenCalledExactlyOnceWith("pane-1");
+    for (const [value, callback] of [
+      ["split-right", onSplitRight],
+      ["split-below", onSplitDown],
     ] as const) {
+      await selectNativeMenu(menu, "compact:open-advanced");
+      await selectNativeMenu(menu, "compact:open-open-in");
       await selectNativeMenu(menu, value);
-      expect(callback).toHaveBeenCalledExactlyOnceWith(...args);
+      expect(callback).toHaveBeenCalledExactlyOnceWith("pane-1");
     }
+    update({ actionsDisabled: true });
+    await openNativeMenu(menu);
+    const split = menu.querySelector<HTMLButtonElement>('[data-value="quick:open-split-view"]')!;
+    expect(split.disabled).toBe(true);
+    split.click();
+    expect(onOpenSplitView).toHaveBeenCalledOnce();
     update({ onClosePane: undefined });
-    expect(container.querySelector(".chat-pane__close-pane")).toBeNull();
+    await selectNativeMenu(menu, "compact:open-view");
+    expect(menu.querySelector('[data-value="layout:close-pane"]')).toBeNull();
+  });
+
+  it("toggles Panels through the native owner and reflects its current layout", () => {
+    const onToggleSidePanel = vi.fn();
+    const { container, update } = mountHeader({
+      onToggleSidePanel,
+      sidebarLayout: { columns: [], open: false },
+    });
+    const toggle = container.querySelector<HTMLButtonElement>(".chat-pane__panels-toggle")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    toggle.click();
+    expect(onToggleSidePanel).toHaveBeenCalledOnce();
+    update({ sidebarLayout: openSlot({ columns: [] }, "detail") });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    update({ mergedChrome: true });
+    expect(container.querySelector(".chat-pane__panels-toggle")).toBeNull();
+  });
+
+  it("replaces desktop session actions with native connection status and Retry, then restores them", () => {
+    const onRetry = vi.fn();
+    const { container, update } = mountHeader({ sessionMenuAction: chatPaneHeaderSessionMenu() });
+    expect(container.querySelector("openclaw-chat-header-session-menu")).not.toBeNull();
+    update({ gatewayStatus: { kind: "offline", onRetry } });
+    expect(container.querySelector("openclaw-chat-header-session-menu")).toBeNull();
+    expect(container.querySelector("openclaw-chat-pane-versions-menu")).toBeNull();
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("Disconnected");
+    container.querySelector<HTMLButtonElement>(".chat-pane__connection-retry")!.click();
+    expect(onRetry).toHaveBeenCalledOnce();
+    update({ gatewayStatus: { kind: "restoring", onRetry } });
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("Restoring");
+    expect(container.querySelector(".chat-pane__connection-retry")).toBeNull();
+    update({ gatewayStatus: { kind: null, onRetry } });
+    expect(container.querySelector(".chat-pane__connection")).toBeNull();
+    expect(container.querySelector("openclaw-chat-header-session-menu")).not.toBeNull();
+    update({ mergedChrome: true, gatewayStatus: { kind: "offline", onRetry } });
+    expect(container.querySelector(".chat-pane__connection")).toBeNull();
+    expect(container.querySelector("openclaw-chat-header-session-menu")).toBeNull();
+    expect(container.querySelector(".mobile-connection-status")?.textContent).toContain(
+      "Disconnected",
+    );
   });
 
   it("keeps available panels in the narrow Layout menu while omitting split actions", async () => {
@@ -309,15 +362,18 @@ describe("chat pane header", () => {
     expect(nextMove).toHaveBeenCalledOnce();
   });
 
-  it("places placement and presence after the identity trail", () => {
+  it("keeps placement after identity and presence in the right control group", () => {
     const { container } = mountHeader({
       placementControl: { session: activePlacementSession() },
       presence: { staticUsers: [], personActivity: undefined },
     });
     const crumbs = container.querySelector(".chat-pane__crumbs");
     const placement = container.querySelector(".chat-pane__placement-control");
-    expect(crumbs?.nextElementSibling).toBe(placement);
-    expect(placement?.nextElementSibling?.classList.contains("chat-pane__presence")).toBe(true);
+    expect(crumbs?.parentElement).toBe(placement?.parentElement);
+    expect(crumbs!.compareDocumentPosition(placement!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(
+      container.querySelector(".chat-pane__header-trailing .chat-pane__presence"),
+    ).not.toBeNull();
   });
 
   it("keeps the public indicator visible in narrow headers", () => {
@@ -666,8 +722,10 @@ describe("chat pane header", () => {
     },
   );
 
-  it("keeps catalog sessions static and without a workspace chip", async () => {
+  it("keeps catalog identity static while Panels remains available", () => {
+    const onToggleSidePanel = vi.fn();
     const { container } = mountHeader({
+      onToggleSidePanel,
       catalog: true,
       session: undefined,
       panelMenuActions: [{ id: "terminal", label: "Terminal", icon: "copy", onActivate: vi.fn() }],
@@ -677,10 +735,11 @@ describe("chat pane header", () => {
       "Session title",
     );
     expect(container.querySelector(".chat-pane__workspace-chip")).toBeNull();
-    await openNativeMenu(container.querySelector(".chat-pane__layout-menu")!);
-    expect(
-      container.querySelector('.chat-pane__layout-menu [data-value="terminal"]'),
-    ).not.toBeNull();
+    expect(container.querySelector(".chat-pane__layout-menu")).toBeNull();
+    const panels = container.querySelector<HTMLButtonElement>(".chat-pane__panels-toggle")!;
+    expect(panels.getAttribute("aria-expanded")).toBe("false");
+    panels.click();
+    expect(onToggleSidePanel).toHaveBeenCalledOnce();
   });
 
   it("keeps read-only gateway session titles static", () => {
@@ -696,29 +755,37 @@ describe("chat pane header", () => {
     );
   });
 
-  it("opens panel docking choices and applies the selected dock", async () => {
-    const onLayoutChange = vi.fn();
-    const { container } = mountHeader({
-      sidebarLayout: openSlot({ columns: [] }, "detail"),
-      onLayoutChange,
-    });
-    const menu = container.querySelector(".chat-panel-layout-menu")!;
-    await openNativeMenu(menu);
-    expect(
-      Array.from(menu.querySelectorAll("[role^=menuitem]"), (item) =>
-        item.getAttribute("data-value"),
-      ),
-    ).toContain("dock-bottom");
-    await selectNativeMenu(menu, "dock-bottom");
-    expect(onLayoutChange).toHaveBeenCalledWith(expect.objectContaining({ dock: "bottom" }), {
-      geometryOnly: true,
-    });
-  });
-
-  it("shows copied feedback on the workspace chip", () => {
-    const { container } = mountHeader({ copiedAction: "copy-path" });
-    expect(container.querySelector(".chat-pane__workspace-chip")?.textContent).toContain("Copied");
-  });
+  it.each([false, true])(
+    "keeps workspace copy actions before Reveal and preserves feedback with mergedChrome=%s",
+    async (mergedChrome) => {
+      const { container, props, update } = mountHeader({ mergedChrome, narrow: mergedChrome });
+      const menu = container.querySelector(".chat-pane__workspace-menu")!;
+      await openNativeMenu(menu);
+      expect(
+        [...menu.querySelectorAll('[role="menuitem"]')].map((item) =>
+          item.getAttribute("data-value"),
+        ),
+      ).toEqual(["copy-path", "copy-branch", "reveal"]);
+      for (const action of ["copy-path", "copy-branch", "reveal"] as const) {
+        await selectNativeMenu(menu, action);
+        expect(props.onMenuAction).toHaveBeenLastCalledWith(action);
+        if (action !== "reveal") {
+          update({ copiedAction: action });
+          expect(container.querySelector(".chat-pane__workspace-chip")?.textContent).toContain(
+            "Copied",
+          );
+          update({ copiedAction: null });
+        }
+      }
+      expect(props.onMenuAction).toHaveBeenCalledTimes(3);
+      update({ canReveal: false, branch: null });
+      await openNativeMenu(menu);
+      expect(menu.querySelector('[data-value="reveal"]')).toBeNull();
+      expect(menu.querySelector('[data-value="copy-branch"]')).toBeNull();
+      expect(menu.querySelector('[role="separator"]')).toBeNull();
+      expect(menu.querySelector('[data-value="copy-path"]')).not.toBeNull();
+    },
+  );
 
   it("shows cloud placement and hides reveal when disabled", async () => {
     const session = row({ placement: { state: "active" } as GatewaySessionRow["placement"] });
@@ -769,281 +836,33 @@ describe("chat pane header", () => {
   });
 });
 
-describe("chat pane workspace chip icon", () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(async () => {
-    containers.splice(0).forEach((container) => container.remove());
-    await vi.advanceTimersByTimeAsync(0);
-    vi.useRealTimers();
-  });
-  async function mountChip(workspaceIcon: ChatPaneHeaderProps["workspaceIcon"]) {
-    const { container } = mountHeader({ workspaceIcon });
-    const element = container.querySelector("openclaw-workspace-icon");
-    await element?.updateComplete;
-    return { container, element };
-  }
-
-  it("keeps the folder glyph when the gateway resolved no project icon", async () => {
-    const { container, element } = await mountChip(null);
-    expect(element).toBeNull();
-    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
-  });
-
-  it("keeps the folder glyph while credentials are not ready", async () => {
-    const fetchSpy = mockWorkspaceIconFetch();
-    const { container, element } = await mountChip({
-      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
-      authTokens: [],
-      authReady: false,
-    });
-    expect(element).not.toBeNull();
-    expect(container.querySelector(".workspace-icon")).toBeNull();
-    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it("releases a queued icon render on disconnect and recovers on reconnect", async () => {
-    const fetchSpy = mockWorkspaceIconFetch().mockResolvedValue({
-      ok: false,
-      status: 503,
-      headers: new Headers({ "retry-after": "1" }),
-    } as Response);
-    const { container, element } = await mountChip({
-      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Adisconnected",
-      authTokens: ["token"],
-      authReady: true,
-    });
-    await Promise.resolve();
-    expect(fetchSpy).toHaveBeenCalledOnce();
-    if (element) {
-      element.authTokens = [...element.authTokens];
-    }
-    container.remove();
-    await element?.updateComplete;
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
-      "/__openclaw__/workspace-icon/agent%3Amain%3Adisconnected",
-    ]);
-    expect(fetchSpy.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
-
-    fetchSpy.mockResolvedValue({
-      ok: true,
-      blob: async () => new Blob(["icon"], { type: "image/png" }),
-    } as Response);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:reconnected-workspace-icon");
-    document.body.append(container);
-    await element?.updateComplete;
-    await vi.advanceTimersByTimeAsync(0);
-    await element?.updateComplete;
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
-      "blob:reconnected-workspace-icon",
-    );
-  });
-
-  it("recovers when a pending 503 settles between disconnect and immediate reconnect", async () => {
-    const pending = createDeferred<Response>();
-    const routeUrl = "/__openclaw__/workspace-icon/agent%3Amain%3Aimmediate-reconnect";
-    const fetchSpy = mockWorkspaceIconFetch()
-      .mockReturnValueOnce(pending.promise)
-      .mockResolvedValue({
-        ok: true,
-        blob: async () => new Blob(["icon"], { type: "image/png" }),
-      } as Response);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:immediate-reconnect");
-    const { container, element } = await mountChip({
-      routeUrl,
-      authTokens: ["token"],
-      authReady: true,
-    });
-    container.remove();
-    pending.resolve({
-      ok: false,
-      status: 503,
-      headers: new Headers({ "retry-after": "1" }),
-    } as Response);
-    await pending.promise;
-
-    // Reattach in this task, before the deferred DOM-handoff release can delete the entry.
-    document.body.append(container);
-    await element?.updateComplete;
-    await vi.advanceTimersByTimeAsync(1_000);
-    await element?.updateComplete;
-
-    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([routeUrl, routeUrl]);
-    expect(container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
-      "blob:immediate-reconnect",
-    );
-  });
-
-  it("recovers the workspace icon after a transient 503 without remounting", async () => {
-    // A previous header can disconnect with a property update still queued. Its
-    // released retry must not consume the replacement header's response.
-    mockWorkspaceIconFetch().mockResolvedValue({
-      ok: false,
-      status: 503,
-      headers: new Headers({ "retry-after": "1" }),
-    } as Response);
-    const previous = await mountChip({
-      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aprevious",
-      authTokens: ["token"],
-      authReady: true,
-    });
-    if (previous.element) {
-      previous.element.authTokens = [...previous.element.authTokens];
-    }
-    previous.container.remove();
-    await previous.element?.updateComplete;
-    const png = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
-    const fetchSpy = mockWorkspaceIconFetch()
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 503,
-        headers: new Headers({ "retry-after": "1" }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        blob: async () => png,
-      } as unknown as Response);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:recovered-workspace-icon");
-    const { container, element } = await mountChip({
-      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Arecovering",
-      authTokens: ["token"],
-      authReady: true,
-    });
-    await Promise.resolve();
-    expect(fetchSpy).toHaveBeenCalledOnce();
-    expect(container.querySelector(".workspace-icon")).toBeNull();
-    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    await Promise.resolve();
-    await element?.updateComplete;
-
-    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
-      "/__openclaw__/workspace-icon/agent%3Amain%3Arecovering",
-      "/__openclaw__/workspace-icon/agent%3Amain%3Arecovering",
-    ]);
-    expect(container.querySelector("openclaw-workspace-icon")).toBe(element);
-    expect(container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
-      "blob:recovered-workspace-icon",
-    );
-  });
-
-  it("does not refetch a missing project icon when the header rerenders", async () => {
-    const fetchSpy = mockWorkspaceIconFetch().mockResolvedValue({
-      ok: false,
-      status: 404,
-    } as Response);
-    const workspaceIcon = {
-      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
-      authTokens: ["token"],
-      authReady: true,
-    };
-    const mounted = mountHeader({ workspaceIcon });
-    const element = mounted.container.querySelector("openclaw-workspace-icon") as
-      | (HTMLElement & { updateComplete?: Promise<unknown> })
-      | null;
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    await element?.updateComplete;
-    mounted.update({ title: "Updated title", workspaceIcon });
-    await element?.updateComplete;
-    await Promise.resolve();
-
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    mounted.update({ workspaceIcon: { ...workspaceIcon, authTokens: ["new-token"] } });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-  });
-
-  it("recovers an exhausted mounted icon after a new Gateway connection, not a header render", async () => {
-    const fetchSpy = mockWorkspaceIconFetch().mockResolvedValue({
-      ok: false,
-      status: 503,
-      headers: new Headers({ "retry-after": "1" }),
-    } as Response);
-    const context = createSessionContext(createTestGatewayClient(async () => ({})));
-    const initial = context.gateway.snapshot;
-    if (!initial.hello) {
-      throw new Error("expected a connected Gateway fixture");
-    }
-    context.publishGatewaySnapshot({
-      ...initial,
-      hello: { ...initial.hello, server: { connId: "initial-connection" } },
-    });
-    const iconProps = () => resolveChatPaneWorkspaceIcon(context, "agent:main:connection");
-    const mounted = mountHeader({ workspaceIcon: null });
-    // Update one Solid root so recovery must retain the same workspace element.
-    const paint = async () => {
-      mounted.update({ workspaceIcon: iconProps() });
-      const icon = mounted.container.querySelector<
-        HTMLElement & { updateComplete: Promise<unknown> }
-      >("openclaw-workspace-icon");
-      if (!icon) {
-        throw new Error("expected a mounted workspace icon");
-      }
-      await icon.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-      await icon.updateComplete;
-      return icon;
-    };
-    const element = await paint();
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(fetchSpy).toHaveBeenCalledTimes(4);
-    await vi.advanceTimersByTimeAsync(60_000);
-    const unchanged = context.gateway.snapshot;
-    if (!unchanged.hello) {
-      throw new Error("expected a connected Gateway fixture");
-    }
-    context.publishGatewaySnapshot({
-      ...unchanged,
-      hello: { ...unchanged.hello, server: { ...unchanged.hello.server } },
-    });
-    await paint();
-    expect(fetchSpy).toHaveBeenCalledTimes(4);
-    expect(mounted.container.querySelector(".workspace-icon")).toBeNull();
-
-    fetchSpy.mockResolvedValue({ ok: true, blob: async () => new Blob(["icon"]) } as Response);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:new-gateway-connection");
-    const snapshot = context.gateway.snapshot;
-    const hello = snapshot.hello;
-    if (!hello) {
-      throw new Error("expected a connected Gateway fixture");
-    }
-    context.publishGatewaySnapshot({
-      ...snapshot,
-      hello: { ...hello, server: { ...hello.server, connId: "new-connection" } },
-    });
-    await paint();
-    expect(fetchSpy).toHaveBeenCalledTimes(5);
-    expect(mounted.container.querySelector("openclaw-workspace-icon")).toBe(element);
-    expect(mounted.container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
-      "blob:new-gateway-connection",
-    );
-  });
-});
-
 it("releases each merged-chrome toggle when its header branch closes", async () => {
   const elements = new RouteElements();
+  const register = (event: Event) => elements.register(event as RouteElementEvent);
+  document.addEventListener("openclaw-route-element", register);
+  onTestFinished(() => document.removeEventListener("openclaw-route-element", register));
   const mounted = mountHeader({ mergedChrome: false });
-  mounted.container.addEventListener("openclaw-route-element", (event) =>
-    elements.register(event as RouteElementEvent),
+  const retainedToggle = mounted.container.querySelector<HTMLButtonElement>(
+    ".mobile-header__navigation",
+  )!;
+  await waitForSolid(() =>
+    expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([retainedToggle]),
   );
   for (let mount = 0; mount < 2; mount += 1) {
     mounted.update({ mergedChrome: true });
     const toggle = mounted.container.querySelector<HTMLButtonElement>(".chat-pane__nav-toggle")!;
     await waitForSolid(() =>
-      expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([toggle]),
+      expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([
+        retainedToggle,
+        toggle,
+      ]),
     );
     mounted.update({ mergedChrome: false });
     // A connected retired button exposes a stale map entry instead of letting isConnected mask it.
     mounted.container.append(toggle);
     try {
       await waitForSolid(() =>
-        expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([]),
+        expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([retainedToggle]),
       );
     } finally {
       toggle.remove();
@@ -1052,9 +871,69 @@ it("releases each merged-chrome toggle when its header branch closes", async () 
   mounted.update({ mergedChrome: true });
   const toggle = mounted.container.querySelector<HTMLButtonElement>(".chat-pane__nav-toggle")!;
   await waitForSolid(() =>
-    expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([toggle]),
+    expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([
+      retainedToggle,
+      toggle,
+    ]),
   );
   mounted.unmount();
+  document.body.append(toggle);
+  try {
+    expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([]);
+  } finally {
+    toggle.remove();
+  }
+});
+
+it("publishes the active header while retaining mobile chrome across desktop transitions", async () => {
+  const elements = new RouteElements();
+  const register = (event: Event) => elements.register(event as RouteElementEvent);
+  document.addEventListener("openclaw-route-element", register);
+  onTestFinished(() => document.removeEventListener("openclaw-route-element", register));
+  const { pane, state } = createTestChatPane({
+    client: createTestGatewayClient(async () => ({})),
+  });
+  const nativeHeader = pane.renderPaneHeader(
+    createPaneHeaderWorkspaceFixture(state),
+    row(),
+    false,
+    undefined,
+    false,
+    null,
+  ).header;
+  const mobileHost: ChatMobileHost = createChatMobileHostFixture("header-registration");
+  const mounted = mountHeader({
+    mergedChrome: false,
+    onHeaderRef: nativeHeader.onHeaderRef,
+    detailsControl: {
+      chat: undefined,
+      elements: {},
+      mobile: true,
+      mobileHost,
+      presentation: true,
+      setRef: vi.fn(),
+    },
+  });
+  const mobileHeader = mounted.container.querySelector<HTMLElement>(".agent-chat__header--mobile")!;
+  const toggle = mobileHeader.querySelector<HTMLButtonElement>(".mobile-header__navigation")!;
+  for (let transition = 0; transition < 2; transition += 1) {
+    await waitForSolid(() =>
+      expect(pane.headerElement).toBe(mounted.container.querySelector(".chat-pane__header")),
+    );
+    expect(pane.headerElement).not.toBeNull();
+    mounted.update({ mergedChrome: true });
+    await waitForSolid(() => expect(pane.headerElement).toBe(mobileHeader));
+    expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([toggle]);
+    mounted.update({ mergedChrome: false });
+    expect(mounted.container.querySelector(".agent-chat__header--mobile")).toBe(mobileHeader);
+  }
+  await waitForSolid(() =>
+    expect(pane.headerElement).toBe(mounted.container.querySelector(".chat-pane__header")),
+  );
+  expect(pane.headerElement).not.toBeNull();
+  mounted.unmount();
+  expect(pane.headerElement).toBeNull();
+  // Keeping the retired trigger connected must not hide a leaked registration.
   document.body.append(toggle);
   try {
     expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([]);

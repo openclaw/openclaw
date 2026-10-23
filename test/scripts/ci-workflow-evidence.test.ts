@@ -56,9 +56,12 @@ const TRUSTED_QA_STEPS = [
   "Install selected dependencies",
 ];
 
-function writeJson(file: string, value: unknown, suffix = "") {
-  writeFileSync(file, JSON.stringify(value) + suffix, "utf8");
+function writeFixture(file: string, contents: string | Buffer) {
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, contents);
 }
+const writeJson = (file: string, value: unknown, suffix = "") =>
+  writeFixture(file, JSON.stringify(value) + suffix);
 
 function readJson(file: string) {
   return JSON.parse(readFileSync(file, "utf8"));
@@ -178,13 +181,11 @@ function workflowOccurrenceEvidence(
 }
 
 function writeWorkflowEvidenceApi(root: string, accessors = true) {
-  const apiPath = path.join(root, "extensions/qa-lab/api.ts");
-  mkdirSync(path.dirname(apiPath), { recursive: true });
   writeJson(path.join(root, "tsconfig.json"), { extends: path.resolve("tsconfig.json") });
   const source = pathToFileURL(path.resolve("extensions/qa-lab/src/evidence-summary.ts")).href;
   // Historical checkouts can validate v2 without exporting the v3 readers.
-  writeFileSync(
-    apiPath,
+  writeFixture(
+    path.join(root, "extensions/qa-lab/api.ts"),
     `export { validateQaEvidenceSummaryJson${accessors ? ", getEffectiveQaEvidenceEntries, projectQaEvidenceScenarioOutcomes" : ""} } from ${JSON.stringify(source)};\n`,
   );
 }
@@ -203,18 +204,17 @@ function runMantisEvidenceReader(
   const root = tempDirs.make("openclaw-mantis-reader-");
   const laneRoot = path.join(root, "lanes/baseline");
   const outputDir = path.join(root, "evidence/baseline");
-  mkdirSync(outputDir, { recursive: true });
   const moduleRoot = kind === "status-reactions" ? root : laneRoot;
   writeWorkflowEvidenceApi(moduleRoot, accessors);
   // A reader must not silently use a newer neighboring checkout's API.
   const otherRoot = kind === "status-reactions" ? laneRoot : root;
   writeWorkflowEvidenceApi(otherRoot);
-  writeFileSync(
+  writeFixture(
     path.join(otherRoot, "extensions/qa-lab/api.ts"),
     'throw new Error("wrong evidence API owner");\n',
   );
   if (evidence !== undefined) {
-    writeFileSync(
+    writeFixture(
       path.join(outputDir, "qa-evidence.json"),
       typeof evidence === "string" ? evidence : JSON.stringify(evidence),
     );
@@ -279,10 +279,8 @@ function runMaturityArtifactCopyScenario(
   for (const generatedPath of MATURITY_GENERATED_PR_PATHS) {
     const staged = path.join(staging, generatedPath);
     const selected = path.join(root, "selected", generatedPath);
-    mkdirSync(path.dirname(staged), { recursive: true });
-    mkdirSync(path.dirname(selected), { recursive: true });
-    writeFileSync(staged, `new ${generatedPath}\n`, "utf8");
-    writeFileSync(selected, `old ${generatedPath}\n`, "utf8");
+    writeFixture(staged, `new ${generatedPath}\n`);
+    writeFixture(selected, `old ${generatedPath}\n`);
   }
   if (options.extraFile) {
     writeFileSync(path.join(staging, "unexpected.txt"), "unexpected\n", "utf8");
@@ -325,9 +323,8 @@ function runQaProfileTimeoutFixture(mode: QaProfileTimeoutFixtureMode) {
   const selectedRoot = path.join(root, "selected");
   mkdirSync(selectedRoot);
   const binDir = path.join(root, "bin");
-  mkdirSync(binDir);
   const fakePnpm = path.join(binDir, "pnpm");
-  writeFileSync(
+  writeFixture(
     fakePnpm,
     `#!/usr/bin/env bash
 set -u
@@ -351,7 +348,6 @@ case "\${FAKE_PNPM_MODE}" in
     ;;
 esac
 `,
-    "utf8",
   );
   chmodSync(fakePnpm, 0o755);
   const fixturePath = `${binDir}:${process.env.PATH ?? ""}`;
@@ -453,10 +449,8 @@ function writeProtocolDescriptor(
       return `  { name: ${JSON.stringify(name)}${sinceProperty}${compatibilityProperty} },`;
     },
   );
-  const descriptor = path.join(repo, "src/gateway/methods/core-descriptors.ts");
-  mkdirSync(path.dirname(descriptor), { recursive: true });
-  writeFileSync(
-    descriptor,
+  writeFixture(
+    path.join(repo, "src/gateway/methods/core-descriptors.ts"),
     `export const CORE_GATEWAY_METHOD_SPECS = [\n${rows.join("\n")}\n] as const;\n`,
   );
 }
@@ -584,8 +578,7 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
     "scripts/lib/ts-guard-utils.mts",
   ]) {
     const target = path.join(checkout, scriptPath);
-    mkdirSync(path.dirname(target), { recursive: true });
-    writeFileSync(target, readFileSync(scriptPath, "utf8"));
+    writeFixture(target, readFileSync(scriptPath, "utf8"));
   }
   writeJson(path.join(checkout, "tsconfig.json"), {
     compilerOptions: {
@@ -1134,8 +1127,7 @@ describe("ci workflow guards", () => {
       const root = tempDirs.make("openclaw-qa-profile-artifact-");
       const selectedRoot = path.join(root, "selected");
       writeWorkflowEvidenceApi(selectedRoot, false);
-      mkdirSync(path.join(selectedRoot, "extensions/qa-lab/src"), { recursive: true });
-      writeFileSync(
+      writeFixture(
         path.join(selectedRoot, "extensions/qa-lab/src/profile-evidence-plan.ts"),
         `export { qaProfileEvidencePlan } from ${JSON.stringify(pathToFileURL(path.resolve("extensions/qa-lab/src/profile-evidence-plan.ts")).href)};\n`,
       );
@@ -1474,16 +1466,10 @@ describe("ci workflow guards", () => {
         'bash "${GITHUB_WORKSPACE}/scripts/release-telegram-provenance.sh"',
       );
     }
-  });
-
-  it("checks out the complete trusted Release Decision scripts tree", () => {
-    const workflow = readWorkflow(".github/workflows/full-release-validation.yml");
-    const checkout = step(workflow.jobs.release_decision, "Checkout release decision tooling");
-
-    expect(checkout?.with).toMatchObject({
+    expect(
+      step(fullReleaseWorkflow.jobs.release_decision, "Checkout release decision tooling").with,
+    ).toMatchObject({
       ref: "${{ github.sha }}",
-      "sparse-checkout": "scripts",
-      "sparse-checkout-cone-mode": false,
       "persist-credentials": false,
     });
   });

@@ -179,6 +179,7 @@ test.each([false, true])("keeps transaction-local reads uncached (rollback=%s)",
 });
 
 test.each([false, true])("isolates reused snapshots (rollback=%s)", (rollback) => {
+  const execute = vi.spyOn(database.db, "exec");
   const reads = trackReads({ paired: /^\s*select\b.*\b(?:from|join) "device_pairing_paired"/iu });
   const tokens = {
     operator: { token: "tok", role: "operator", scopes: ["operator.read"], createdAtMs: 2 },
@@ -224,6 +225,11 @@ test.each([false, true])("isolates reused snapshots (rollback=%s)", (rollback) =
       ),
     );
   expectTransaction(operate, rollback, "rollback pairing snapshot");
+  expect(
+    execute.mock.calls
+      .map(([sql]) => sql)
+      .filter((sql) => /^(SAVEPOINT|RELEASE|ROLLBACK TO)\b/iu.test(sql)),
+  ).toEqual([]);
   const committed = readState(database.db).pairedByDeviceId;
   expect(committed).toEqual(rollback ? initial.pairedByDeviceId : expected);
 });

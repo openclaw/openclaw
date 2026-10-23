@@ -52,6 +52,11 @@ async function withFixture(fixture: Fixture, body: () => Promise<void>) {
     await fixture.cleanup();
   }
 }
+async function sendTo(fixture: Fixture, signal: AbortSignal, message: string, sessionKey: string) {
+  await fixture.write(`${message}\r`);
+  const sent = await fixture.call("sendChat", signal, "message", message);
+  expect(sent.payload).toMatchObject({ sessionKey });
+}
 function sessionFixture(
   stateDir: string,
   env: NodeJS.ProcessEnv = {},
@@ -152,9 +157,7 @@ it("previews and restores the exact remembered session behind six newer prefix a
     const rows = await fixture.containing("local ready");
     expect(rows.join("\n")).toContain("session picker-target");
     expect(rows.join("\n")).not.toContain("session main");
-    await fixture.write("exact restore proof\r");
-    const sent = await fixture.call("sendChat", signal, "message", "exact restore proof");
-    expect(sent.payload).toMatchObject({ sessionKey: REMEMBERED_SESSION_KEY });
+    await sendTo(fixture, signal, "exact restore proof", REMEMBERED_SESSION_KEY);
   });
 }, 65_000);
 it("keeps raw unknown sessions excluded from remembered restore", async () => {
@@ -287,12 +290,9 @@ it("clears session-scoped names and modes while trace changes and delivery stays
     );
     const targetOutput = targetRows.join("\n");
     expect(targetOutput).toContain("deliver:on");
-    expect(targetOutput).not.toContain(" | fast | ");
-    expect(targetOutput).not.toContain("fast:auto");
-    expect(targetOutput).not.toContain("verbose full");
-    expect(targetOutput).not.toContain("trace:raw");
-    expect(targetOutput).not.toContain("reasoning:stream");
-    expect(targetOutput).not.toContain("Production incident");
+    expect(targetOutput).not.toMatch(
+      / \| fast \| |fast:auto|verbose full|trace:raw|reasoning:stream|Production incident/u,
+    );
     await modeFixture.write("/trace on\r");
     await modeFixture.call("patchSession", signal, "traceLevel", "on");
     await modeFixture.output("trace | deliver:on", modeStartupTimeoutMs);
@@ -301,24 +301,6 @@ it("clears session-scoped names and modes while trace changes and delivery stays
     expect(sent.payload).toMatchObject({ deliver: true });
   });
 }, 25_000);
-it("keeps the active stream when the current session is selected again", async () => {
-  const fixture = await createFixture();
-  await withFixture(fixture, async () => {
-    await fixture.output("local ready");
-    await fixture.write("streaming prompt\r");
-    await fixture.output("PTY_STREAMING: streaming prompt");
-    const historyLoadsBefore = (await readFixtureLog(fixture.logPath)).filter(
-      (entry) => entry.method === "loadHistory",
-    ).length;
-    await fixture.write("/session main\r/think\r");
-    await fixture.output("usage: /think");
-    const rows = await fixture.containing("PTY_STREAMING: streaming prompt");
-    expect(rows.join("\n")).not.toContain("local ready | idle");
-    expect(
-      (await readFixtureLog(fixture.logPath)).filter((entry) => entry.method === "loadHistory"),
-    ).toHaveLength(historyLoadsBefore);
-  });
-}, 65_000);
 it("hides a stale approval when startup restores the remembered session", async ({ signal }) => {
   const stateDir = tempDirs.make("openclaw-tui-identity-");
   await seedRememberedSession(stateDir);
@@ -490,9 +472,7 @@ it("keeps an explicit launch session authoritative over remembered state", async
   await withFixture(fixture, async () => {
     await fixture.output("session explicit-target");
     await fixture.output("local ready");
-    await fixture.write(`${marker}\r`);
-    const sent = await fixture.call("sendChat", signal, "message", marker);
-    expect(sent.payload).toMatchObject({ sessionKey: explicitSession });
+    await sendTo(fixture, signal, marker, explicitSession);
     const entries = await readFixtureLog(fixture.logPath);
     expect(
       entries.some((entry) => objectFieldEquals(entry, "sessionKey", REMEMBERED_SESSION_KEY)),
@@ -522,9 +502,7 @@ it("clears the provisional label after a remembered lookup error and retries on 
     const rows = await fixture.containing("local ready");
     expect(rows.join("\n")).toContain("session main");
     expect(rows.join("\n")).not.toContain("session picker-target");
-    await fixture.write(`${marker}\r`);
-    const sent = await fixture.call("sendChat", signal, "message", marker);
-    expect(sent.payload).toMatchObject({ sessionKey: "main" });
+    await sendTo(fixture, signal, marker, "main");
     expect(markerSends(await readFixtureLog(fixture.logPath), marker)).toHaveLength(1);
     await fixture.output(`PTY_RESPONSE: ${marker}`);
     // Another TUI can replace the scoped pointer after fallback. A transient
@@ -534,9 +512,7 @@ it("clears the provisional label after a remembered lookup error and retries on 
     await fixture.call("disconnect", signal);
     await fixture.containing("local ready", "session picker-target");
     const retryMarker = "restore lookup retry proof";
-    await fixture.write(`${retryMarker}\r`);
-    const retried = await fixture.call("sendChat", signal, "message", retryMarker);
-    expect(retried.payload).toMatchObject({ sessionKey: REMEMBERED_SESSION_KEY });
+    await sendTo(fixture, signal, retryMarker, REMEMBERED_SESSION_KEY);
     expect(markerSends(await readFixtureLog(fixture.logPath), retryMarker)).toHaveLength(1);
   });
 }, 65_000);
@@ -578,9 +554,7 @@ it.for([
       const rows = await fixture.containing("local ready");
       expect(rows.join("\n")).toContain(`session ${selectedKey.split(":").at(-1)}`);
       const marker = "superseded restore target proof";
-      await fixture.write(`${marker}\r`);
-      const sent = await fixture.call("sendChat", signal, "message", marker);
-      expect(sent.payload).toMatchObject({ sessionKey: selectedKey });
+      await sendTo(fixture, signal, marker, selectedKey);
     });
   },
 );

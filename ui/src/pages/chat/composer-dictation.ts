@@ -3,7 +3,6 @@ import { t } from "../../i18n/index.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import { ComposerDictationSession, formatDictationError } from "./composer-dictation-session.ts";
-import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
   HOLD_PROGRESS_MS = 350;
@@ -55,7 +54,6 @@ export function insertComposerDictation(
 
 // Gesture and session admission must remain synchronous across pointer and media callbacks.
 export class ComposerDictationOwner extends EventTarget {
-  readonly inputLevel = new RealtimeTalkLevelSignal();
   private readonly playback = new GatewaySpeechPlayback();
   private phase: DictationPhase = "idle";
   private pointerId: number | null = null;
@@ -121,7 +119,11 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   update(options: ComposerDictationOwnerOptions): void {
-    if (this.options.draftKey !== options.draftKey) {
+    if (
+      this.options.client !== options.client ||
+      this.options.sessionKey !== options.sessionKey ||
+      this.options.draftKey !== options.draftKey
+    ) {
       this.cancel();
     }
     this.options = options;
@@ -317,12 +319,10 @@ export class ComposerDictationOwner extends EventTarget {
             if (this.session === session) {
               void this.stop({ commit: true });
             } else if (this.pendingCommitSession === session) {
-              this.retirePendingCommit();
               this.dispatchEvent(new Event("change"));
             }
           }
         },
-        onLevel: (level) => this.inputLevel.set(level),
         onTranscriptChange: () => this.dispatchEvent(new Event("change")),
         onReady: () => {
           if (this.session === session && this.phase === "connecting") {
@@ -357,31 +357,22 @@ export class ComposerDictationOwner extends EventTarget {
     this.clearPointerGesture();
     const session = this.session;
     if (!session) {
-      this.reset();
+      this.setPhase("idle");
       return Promise.resolve(false);
     }
     this.setPhase("stopping");
-    const transcript = options.commit ? session.transcriptSnapshot() : "";
-    const committed = Boolean(options.commit && transcript && wasActive && !this.disposed);
     this.session = null;
-    this.reset();
+    this.setPhase("idle");
     if (!options.commit) {
       void session.cancel().catch(() => undefined);
       return Promise.resolve(false);
-    }
-    if (committed) {
-      this.playback.stop();
-      this.options.onCommit(transcript);
-      this.dispatchEvent(new Event("change"));
-      void session.finish().catch(() => undefined);
-      return Promise.resolve(true);
     }
     // The composer unlocks immediately, while this exact stopped session keeps
     // its final accumulator and voice claim until another voice action supersedes it.
     this.pendingCommitSession = session;
     this.syncCancellationListeners();
     return session
-      .finish(true)
+      .finish()
       .catch(() => "")
       .then((lateTranscript) => {
         const ownsPendingCommit = this.pendingCommitSession === session;
@@ -390,7 +381,14 @@ export class ComposerDictationOwner extends EventTarget {
           this.playback.stop();
           this.syncCancellationListeners();
         }
-        if (!ownsPendingCommit || !lateTranscript || !wasActive || this.disposed) {
+        if (
+          !ownsPendingCommit ||
+          !lateTranscript ||
+          !wasActive ||
+          this.disposed ||
+          !this.options.enabled ||
+          this.options.realtimeTalkActive
+        ) {
           return false;
         }
         this.options.onCommit(lateTranscript, true);
@@ -398,11 +396,6 @@ export class ComposerDictationOwner extends EventTarget {
         return true;
       })
       .catch(() => false);
-  }
-
-  private reset(): void {
-    this.inputLevel.set(0);
-    this.setPhase("idle");
   }
 
   private retirePendingCommit(): void {

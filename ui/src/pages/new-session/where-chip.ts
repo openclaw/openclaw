@@ -1,5 +1,4 @@
 import type {
-  EnvironmentsListResult,
   WorkerMachineOption,
   WorkerOperatingSystem,
 } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
@@ -26,19 +25,6 @@ import {
 } from "./hosted-environments.ts";
 
 registerNewSessionSetupEnglish();
-
-type WhereChipState = Readonly<{
-  kind: "local" | "device" | "auto-device" | "cloud" | "hosted";
-  label: string;
-  devices: readonly DevicePlacementOption[];
-  cloudProfiles: readonly DraftCloudProfile[];
-  cloudMachines: readonly WorkerMachineOption[];
-  selectedMachineId: string;
-  operatingSystems: readonly WorkerOperatingSystem[];
-  selectedOsId: string;
-  autoDeviceDisabledReason?: string;
-  hostedRuntimeId?: string;
-}>;
 
 export function draftWhereChipParams(
   place: DraftPlaceState,
@@ -72,7 +58,18 @@ export function resolveWhereChip(params: {
   autoDevice?: boolean;
   devicePlacement?: DevicePlacementRequirement;
   deviceDisabledReason?: string;
-}): WhereChipState {
+}): Readonly<{
+  kind: "local" | "device" | "auto-device" | "cloud" | "hosted";
+  label: string;
+  devices: readonly DevicePlacementOption[];
+  cloudProfiles: readonly DraftCloudProfile[];
+  cloudMachines: readonly WorkerMachineOption[];
+  selectedMachineId: string;
+  operatingSystems: readonly WorkerOperatingSystem[];
+  selectedOsId: string;
+  autoDeviceDisabledReason?: string;
+  hostedRuntimeId?: string;
+}> {
   const devices = projectDevicePlacements(
     params.environments,
     params.devicePlacement,
@@ -129,44 +126,3 @@ export function resolveWhereChip(params: {
       : t(params.autoDevice ? "newSession.autoDevice" : "newSession.local"),
   };
 }
-
-export type WhereChipOptions = {
-  hostedEnvironments?: readonly {
-    id: string;
-    label: string;
-    disabledReason?: string;
-    model?: string;
-  }[];
-  onSelectHostedEnvironment?: (id: string) => void;
-  hostDisabledReason?: string;
-  hostedLoading?: boolean;
-  autoPlacementMode?: "least-busy" | "eligible-order";
-  state: WhereChipState;
-  gatewayName: string;
-  environmentQuery: string;
-  onEnvironmentQueryInput: (query: string) => void;
-  cloudProfileId: string;
-  machineClass?: string;
-  os?: string;
-  deviceId: string;
-  autoDevice?: boolean;
-  cloudDisabledReason?: string;
-  cloudProfileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
-  submitting: boolean;
-  pendingPlacement: boolean;
-  popoverOpen: boolean;
-  isAdmin: boolean;
-  catalogLoading?: boolean;
-  onPopoverShow: () => void;
-  onPopoverHide: () => void;
-  onPopoverAfterHide: () => void;
-  onSelectDevice: (deviceId: string) => void;
-  onSelectAutoDevice: () => void;
-  onSelectCloudProfile: (profileId: string, useDefaults?: boolean) => void;
-  suggestedProfile?: EnvironmentsListResult["suggestedProfile"];
-  onAdoptSuggestedProfile?: () => void;
-  onSelectCloudOs?: (osId: string) => void;
-  onSelectCloudMachine?: (machineId: string) => void;
-  onConnectMachine: () => void;
-  onManageCloudWorkers: () => void;
-};

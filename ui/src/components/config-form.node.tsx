@@ -9,6 +9,7 @@ import { NumberInput, SelectInput, TextInput } from "./config-form.node.scalar.t
 import {
   isAnySchema,
   isSecretRefObject,
+  resolveConfigFieldPresentation,
   type ConfigNodeRenderParams,
   type ConfigNodeRenderer,
 } from "./config-form.node.shared.ts";
@@ -175,15 +176,15 @@ function ResolvedNode(props: {
   params: ConfigNodeRenderParams;
   node: ReturnType<typeof resolveNode>;
 }): JSX.Element {
-  const meta = createMemo(() => {
+  const field = createMemo(() => {
     getLocale();
-    return resolveConfigFieldMeta(props.params.path, props.params.schema, props.params.hints);
+    return resolveConfigFieldPresentation(props.params);
   });
   return (
     <Switch
       fallback={
         <FieldRow
-          label={meta().label}
+          label={field().label}
           showLabel
           control={undefined}
           error={t("configForm.unsupportedType", { type: String(schemaType(props.params.schema)) })}
@@ -195,9 +196,7 @@ function ResolvedNode(props: {
           when={(props.node.options?.length ?? 0) > 5 || props.node.nullable}
           fallback={
             <FieldRow
-              label={meta().label}
-              help={meta().help}
-              showLabel={props.params.showLabel ?? true}
+              {...field()}
               defaultDescription={renderSchemaDefaultDescription(
                 props.params.schema,
                 props.params.value,
@@ -211,7 +210,8 @@ function ResolvedNode(props: {
                       : props.params.schema.default
                   }
                   disabled={props.params.disabled}
-                  ariaLabel={meta().label}
+                  required={field().required}
+                  ariaLabel={field().label}
                   descriptionId={props.params.descriptionId}
                   onSelect={(option) => props.params.onPatch(props.params.path, option)}
                 />

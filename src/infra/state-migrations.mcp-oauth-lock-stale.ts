@@ -1,5 +1,4 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
-import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 
 const LEGACY_LOCK_STALE_MS = 60_000;
@@ -8,8 +7,6 @@ const LEGACY_LOCK_STALE_MS = 60_000;
 export function isDefinitelyStaleLegacyMcpOAuthLock(params: {
   raw: string;
   nowMs?: number;
-  isPidDefinitelyDead?: (pid: number) => boolean;
-  getProcessStartTime?: (pid: number) => number | null;
 }): boolean {
   const payload = safeParseJsonRecord(params.raw);
   if (!payload) {
@@ -38,9 +35,5 @@ export function isDefinitelyStaleLegacyMcpOAuthLock(params: {
   ) {
     return false;
   }
-  return isLockOwnerDefinitelyStale({
-    payload,
-    isPidDefinitelyDead: params.isPidDefinitelyDead ?? isPidDefinitelyDead,
-    getProcessStartTime: params.getProcessStartTime ?? getFileLockProcessStartTime,
-  });
+  return isLockOwnerDefinitelyStale({ payload });
 }

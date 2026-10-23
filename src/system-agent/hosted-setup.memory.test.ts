@@ -80,9 +80,6 @@ it("rechecks inference authority immediately before a hosted memory copy", async
   const engine = createEngine({
     surface: "gateway",
     verifiedInference,
-    deps: {
-      readConfigFileSnapshot: configFixture.read,
-    },
   });
 
   const confirm = await engine.handle("import memory");

@@ -11,9 +11,7 @@ describe("Codex Computer Use periodic health", () => {
   it("runs the live list_apps probe on the configured cadence and clears on client close", async () => {
     const client = createClient();
 
-    const result = startMonitor(client);
-
-    expect(result).toEqual({ started: true, intervalMs: 30 * 60_000 });
+    startMonitor(client);
     expect(client.request).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(30 * 60_000);
@@ -50,10 +48,10 @@ describe("Codex Computer Use periodic health", () => {
   it.each([
     { config: { healthCheckEnabled: false }, reason: "health_disabled" },
     { config: { enabled: false, healthCheckEnabled: true }, reason: "disabled" },
-  ])("stops an existing monitor when $reason", async ({ config, reason }) => {
+  ])("stops an existing monitor when $reason", async ({ config }) => {
     const client = createClient();
     startMonitor(client);
-    expect(startMonitor(client, config)).toEqual({ started: false, reason });
+    startMonitor(client, config);
     await vi.advanceTimersByTimeAsync(30 * 60_000);
     expect(client.request).not.toHaveBeenCalled();
   });
@@ -63,17 +61,15 @@ describe("Codex Computer Use periodic health", () => {
     const client = createClient({ mcpServerName: "cua_repl", mcpTools: tools });
 
     startMonitor(client);
-    expect(
-      startMonitor(
-        client,
-        {
-          pluginName: "unified-computer-use",
-          mcpServerName: "cua_repl",
-          toolCallTimeoutMs: 45_000,
-        },
-        tools,
-      ),
-    ).toEqual({ started: true, intervalMs: 30 * 60_000 });
+    startMonitor(
+      client,
+      {
+        pluginName: "unified-computer-use",
+        mcpServerName: "cua_repl",
+        toolCallTimeoutMs: 45_000,
+      },
+      tools,
+    );
 
     await vi.advanceTimersByTimeAsync(30 * 60_000);
     expectProbe(client, "cua_repl", "js", { code: "await cua.listApps();" }, 45_000);

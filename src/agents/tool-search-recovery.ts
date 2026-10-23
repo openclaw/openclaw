@@ -79,7 +79,10 @@ export function formatUnknownToolIdError(
   const suggestions = uniqueStrings(
     entries
       .map((entry) => ({
-        value: options.exactIdOnly || (nameCounts.get(entry.name) ?? 0) > 1 ? entry.id : entry.name,
+        value:
+          options.exactIdOnly || entry.requiresExactId || (nameCounts.get(entry.name) ?? 0) > 1
+            ? entry.id
+            : entry.name,
         score: scoreUnknownToolSuggestion(normalizedNeedle, needleTokens, entry),
       }))
       .filter((candidate) => candidate.score > 0)

@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { Worker } from "node:worker_threads";
 import type { OpenBlobStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
@@ -16,11 +17,14 @@ import { resolveMemoryWikiConfig } from "./src/config.js";
 import { deferred } from "./src/deferred.test-helpers.js";
 import {
   appendMemoryWikiLog,
+  hashMemoryWikiVaultSources,
   loadMemoryWikiValidatedVaultIdentity,
   loadMemoryWikiVaultIdentity,
-  resolveMemoryWikiVaultSourceGeneration,
 } from "./src/log.js";
+import { renderWikiMarkdown } from "./src/markdown.js";
 import { withMemoryWikiVaultMutation } from "./src/mutation-coordinator.js";
+import { closeMemoryWikiQueryReader } from "./src/query-reader.js";
+import { getMemoryWikiPage } from "./src/query.js";
 import { waitForMemoryWikiImportedSourceSyncs } from "./src/source-sync.js";
 import { createMemoryWikiTestHarness } from "./src/test-helpers.js";
 
@@ -173,6 +177,53 @@ describe("memory-wiki plugin", () => {
     }
   });
 
+  it("terminates the query reader workers on service stop and starts fresh ones for later reads", async () => {
+    const rootDir = await createTempDir("memory-wiki-index-stop-reader-");
+    const { api, registerService } = createPluginApi();
+    api.pluginConfig = { vault: { path: rootDir } };
+    plugin.register(api);
+    const service = registerService.mock.calls[0]?.[0];
+    await service?.start?.();
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+    for (const name of ["alpha", "beta"]) {
+      await fs.writeFile(
+        path.join(rootDir, "sources", `${name}.md`),
+        renderWikiMarkdown({
+          frontmatter: { pageType: "source", id: `source.${name}`, title: name },
+          body: `# ${name}\n`,
+        }),
+      );
+    }
+    const config = resolveMemoryWikiConfig(api.pluginConfig);
+    // An id lookup reads the whole vault, which runs on the reader's workers.
+    const lookup = () => getMemoryWikiPage({ config, lookup: "source.alpha" });
+    // Start without reader workers, so every worker counted below belongs to this test.
+    await closeMemoryWikiQueryReader();
+    const workers: Worker[] = [];
+    const exited = new Set<Worker>();
+    const onWorker = (worker: Worker) => {
+      workers.push(worker);
+      worker.once("exit", () => exited.add(worker));
+    };
+    process.on("worker", onWorker);
+    try {
+      await expect(lookup()).resolves.toMatchObject({ path: "sources/alpha.md" });
+      const beforeStop = workers.length;
+      expect(beforeStop).toBeGreaterThan(0);
+      // Idle workers stay alive until they are retired or the reader closes.
+      expect(exited.size).toBe(0);
+
+      await service?.stop?.();
+
+      expect(exited.size).toBe(beforeStop);
+      await expect(lookup()).resolves.toMatchObject({ path: "sources/alpha.md" });
+      expect(workers.length).toBeGreaterThan(beforeStop);
+    } finally {
+      process.off("worker", onWorker);
+      await service?.stop?.();
+    }
+  });
+
   it("fences cache publication when the plugin service stops", async () => {
     const rootDir = await createTempDir("memory-wiki-index-stop-fence-");
     await fs.mkdir(path.join(rootDir, ".openclaw-wiki"), { recursive: true });
@@ -299,7 +350,7 @@ describe("memory-wiki plugin", () => {
       timestamp: "2026-07-17T00:00:00.000Z",
       details: { compiledCacheReservationId: reservationId },
     });
-    const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(rootDir);
+    const sourceGeneration = hashMemoryWikiVaultSources([]);
     await appendMemoryWikiLog(rootDir, {
       type: "compile",
       timestamp: "2026-07-17T00:00:00.000Z",

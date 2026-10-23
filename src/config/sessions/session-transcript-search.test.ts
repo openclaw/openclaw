@@ -4,8 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -130,21 +128,8 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-function agentKysely() {
-  const database = openOpenClawAgentDatabase({ agentId: "main", env: env() });
-  return {
-    db: database.db,
-    kysely: getNodeSqliteKysely<
-      Pick<
-        OpenClawAgentKyselyDatabase,
-        | "session_transcript_active_events"
-        | "session_transcript_fts"
-        | "session_transcript_fts_rows"
-        | "session_transcript_index_state"
-        | "transcript_events"
-      >
-    >(database.db),
-  };
+function agentDatabase() {
+  return openOpenClawAgentDatabase({ agentId: "main", env: env() }).db;
 }
 
 describe("searchSessionTranscripts", () => {
@@ -235,13 +220,9 @@ describe("searchSessionTranscripts", () => {
     await replaceSessionEntry(scope, { sessionId: "current", updatedAt: Date.now() });
     const options = { agentId: "main", env: env() };
     runOpenClawAgentWriteTransaction(({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(db)
-          .updateTable("session_windows")
-          .set({ updated_at: 1, transcript_updated_at: 1 })
-          .where("session_id", "=", scope.sessionId),
-      );
+      db.prepare(
+        "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+      ).run(scope.sessionId);
     }, options);
     const watermark = readSessionTranscriptWatermark(scope);
     await expect(
@@ -500,17 +481,9 @@ describe("searchSessionTranscripts", () => {
   it("hides dirty search rows after their transcript is gone while preserving other sessions", async () => {
     await appendUserMessage("stale", "agent:main:stale", "hidden needle");
     await appendUserMessage("current", "agent:main:current", "visible needle");
-    const { db, kysely } = agentKysely();
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .updateTable("session_transcript_index_state")
-        .set({ needs_rebuild: 1 })
-        .where("session_id", "=", "stale"),
-    );
-    executeSqliteQuerySync(
-      db,
-      kysely.deleteFrom("transcript_events").where("session_id", "=", "stale"),
+    const db = agentDatabase();
+    db.exec(
+      "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = 'stale'; DELETE FROM transcript_events WHERE session_id = 'stale'",
     );
 
     // A retained window can hold stale FTS rows even when no hot transcript needs reconciliation.
@@ -533,15 +506,13 @@ describe("searchSessionTranscripts", () => {
 
   it("preserves stale FTS rows until a replaced transcript is reconciled after commit", async () => {
     await appendUserMessage("session-1", "agent:main:main", "obsolete branch text");
-    const { db, kysely } = agentKysely();
+    const db = agentDatabase();
     const indexedRows = () =>
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .selectFrom("session_transcript_fts")
-          .select(["message_id", "text"])
-          .where("session_id", "=", "session-1"),
-      ).rows;
+      db
+        .prepare(
+          "SELECT message_id, text FROM session_transcript_fts WHERE session_id = 'session-1'",
+        )
+        .all();
     const originalIndexedRows = indexedRows();
     expect(originalIndexedRows).toEqual([
       expect.objectContaining({ text: "obsolete branch text" }),
@@ -559,13 +530,11 @@ describe("searchSessionTranscripts", () => {
 
     expect(indexedRows()).toEqual(originalIndexedRows);
     expect(
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .selectFrom("session_transcript_index_state")
-          .select("needs_rebuild")
-          .where("session_id", "=", "session-1"),
-      ).rows,
+      db
+        .prepare(
+          "SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = 'session-1'",
+        )
+        .all(),
     ).toEqual([{ needs_rebuild: 1 }]);
     expect(isSessionTranscriptIndexReconcileRunning({ agentId: "main", env: env() })).toBe(true);
     expect(search("obsolete")).toMatchObject({ hits: [], indexing: true });
@@ -645,41 +614,29 @@ describe("searchSessionTranscripts", () => {
   it("detects missing, dirty, lagging, and unclassified transcript projections", async () => {
     await appendUserMessage("session-0", "agent:main:sibling", "indexed sibling");
     await appendUserMessage("session-1", "agent:main:main", "indexed message");
-    const { db, kysely } = agentKysely();
+    const db = agentDatabase();
     const pending = () => listSessionsNeedingTranscriptIndexReconcile(db);
 
     expect(pending()).toEqual([]);
     expect(search("indexed").indexing).toBe(false);
     expect(search("indexed").hits).toHaveLength(2);
 
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .updateTable("session_transcript_index_state")
-        .set({ needs_rebuild: 1 })
-        .where("session_id", "=", "session-1"),
+    db.exec(
+      "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = 'session-1'",
     );
     expect(pending()).toEqual(["session-1"]);
     expect(search("indexed").indexing).toBe(true);
     await waitForSearchReconcile("indexed");
 
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .updateTable("session_transcript_index_state")
-        .set({ indexed_seq: -1, needs_rebuild: 0 })
-        .where("session_id", "=", "session-1"),
+    db.exec(
+      "UPDATE session_transcript_index_state SET indexed_seq = -1, needs_rebuild = 0 WHERE session_id = 'session-1'",
     );
     expect(pending()).toEqual(["session-1"]);
     expect(search("indexed").indexing).toBe(true);
     await waitForSearchReconcile("indexed");
 
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .updateTable("session_transcript_active_events")
-        .set({ context_eligible: null })
-        .where("session_id", "=", "session-1"),
+    db.exec(
+      "UPDATE session_transcript_active_events SET context_eligible = NULL WHERE session_id = 'session-1'",
     );
     expect(pending()).toEqual(["session-1"]);
     expect(search("indexed", { sessionKeys: ["agent:main:sibling"] })).toMatchObject({
@@ -689,10 +646,7 @@ describe("searchSessionTranscripts", () => {
     await waitForSearchReconcile("indexed");
     expect(search("indexed", { sessionKeys: ["agent:main:sibling"] }).indexing).toBe(false);
 
-    executeSqliteQuerySync(
-      db,
-      kysely.deleteFrom("session_transcript_index_state").where("session_id", "=", "session-1"),
-    );
+    db.exec("DELETE FROM session_transcript_index_state WHERE session_id = 'session-1'");
     expect(pending()).toEqual(["session-1"]);
     expect(search("indexed").indexing).toBe(true);
   });
@@ -700,7 +654,7 @@ describe("searchSessionTranscripts", () => {
   it("sweeps orphaned index rows even when transcript watermarks are current", async () => {
     await appendUserMessage("session-1", "agent:main:main", "anchor row");
     await appendUserMessage("session-2", "agent:main:sibling", "anchor sibling");
-    const { db, kysely } = agentKysely();
+    const db = agentDatabase();
     // Simulate derived rows left by an out-of-band writer with foreign keys disabled.
     db.exec(`
       PRAGMA foreign_keys = OFF;
@@ -733,13 +687,9 @@ describe("searchSessionTranscripts", () => {
     );
 
     const ghostRows = () =>
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .selectFrom("session_transcript_fts")
-          .select("message_id")
-          .where("session_id", "=", "session-ghost"),
-      ).rows.length;
+      db
+        .prepare("SELECT message_id FROM session_transcript_fts WHERE session_id = 'session-ghost'")
+        .all().length;
     expect(ghostRows()).toBe(1);
     expect(search("anchor").indexing).toBe(false);
     await reconcileSessionTranscriptIndexes({ agentId: "main", env: env() });

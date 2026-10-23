@@ -43,6 +43,7 @@ class CodexAttemptState {
   settlementWarning?: AttemptSettlementWarning;
   // Finalization fills this slot while its transcript mirror is pending.
   pendingSettlementStage?: string;
+  readRetainedNativeCommands?: () => ReadonlyMap<string, string>;
   clientClosedPromptError?: string;
   clientClosedDiagnostic?: string;
   clientClosedAbort = false;
@@ -185,7 +186,13 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
         state.pendingSettlementStage ??
         projectorRef.current?.settlement.pendingStage ??
         "notification_queue";
-      if (timeout.kind === "settlement" && projectorRef.current?.recoverCompletedAnswer()) {
+      if (
+        timeout.kind === "settlement" &&
+        projectorRef.current?.recoverCompletedAnswer(
+          prompt.context.attemptTools.toolBridge.telemetry,
+          { readRetainedNativeCommands: state.readRetainedNativeCommands },
+        )
+      ) {
         state.settlementWarning = {
           pendingStage,
           elapsedMs: timeout.elapsedMs,

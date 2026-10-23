@@ -191,50 +191,44 @@ describe("AppSidebar hidden catalog discovery", () => {
     expect(request).toHaveBeenCalledTimes(16);
   });
 
-  it("renews a finished empty sweep on invalidation so older membership changes remain discoverable", async () => {
-    let added = false;
-    const request = createGatewayRequestMock((_method, params) => {
-      const cursor = catalogParams(params).cursors?.["gateway:local"];
-      return Promise.resolve(
-        !cursor
-          ? catalogPage([], "page-2")
-          : cursor === "page-2"
-            ? added
-              ? catalogPage([{ threadId: "older", name: "Older session now visible" }])
-              : catalogPage([], "page-3")
-            : catalogPage([]),
-      );
-    });
-    const { sidebar } = await mountDiscovery(request);
-    added = true;
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(sidebar.textContent).not.toContain("Older session now visible");
-    expect(request).toHaveBeenCalledTimes(3);
-    document.dispatchEvent(new Event("visibilitychange"));
-    await vi.advanceTimersByTimeAsync(5_000);
-    await settle(sidebar);
-    expect(sidebar.textContent).toContain("Older session now visible");
-    expect(requestedCursors(request)).toEqual([undefined, "page-2", "page-3", undefined, "page-2"]);
-  });
-
-  it("restarts empty discovery after an explicit catalog invalidation", async () => {
-    let added = false;
-    const request = createGatewayRequestMock((_method, params) =>
-      Promise.resolve(
-        !catalogParams(params).cursors
-          ? catalogPage([], "page-2")
-          : added
-            ? catalogPage([{ threadId: "restored", name: "Restored native session" }])
-            : catalogPage([]),
-      ),
-    );
-    const { sidebar } = await mountDiscovery(request);
-    added = true;
-    sidebar.sessionData.invalidateSessionCatalogs();
-    await settle(sidebar);
-    expect(sidebar.textContent).toContain("Restored native session");
-    expect(requestedCursors(request)).toEqual([undefined, "page-2", undefined, "page-2"]);
-  });
+  it.each(["activation", "explicit"] as const)(
+    "renews a finished empty sweep on %s invalidation",
+    async (invalidation) => {
+      let added = false;
+      const request = createGatewayRequestMock((_method, params) => {
+        const cursor = catalogParams(params).cursors?.["gateway:local"];
+        return Promise.resolve(
+          !cursor
+            ? catalogPage([], "page-2")
+            : cursor === "page-2"
+              ? added
+                ? catalogPage([{ threadId: "older", name: "Older session now visible" }])
+                : catalogPage([], invalidation === "activation" ? "page-3" : undefined)
+              : catalogPage([]),
+        );
+      });
+      const { sidebar } = await mountDiscovery(request);
+      added = true;
+      if (invalidation === "activation") {
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(sidebar.textContent).not.toContain("Older session now visible");
+        expect(request).toHaveBeenCalledTimes(3);
+        document.dispatchEvent(new Event("visibilitychange"));
+        await vi.advanceTimersByTimeAsync(5_000);
+      } else {
+        sidebar.sessionData.invalidateSessionCatalogs();
+      }
+      await settle(sidebar);
+      expect(sidebar.textContent).toContain("Older session now visible");
+      expect(requestedCursors(request)).toEqual([
+        undefined,
+        "page-2",
+        ...(invalidation === "activation" ? ["page-3"] : []),
+        undefined,
+        "page-2",
+      ]);
+    },
+  );
 
   it.each(["request", "catalog", "missing host", "missing catalog"] as const)(
     "preserves discovery progress and retries a %s page failure",
@@ -384,16 +378,12 @@ async function loadMore(sidebar: SidebarLifecycleState) {
 }
 
 async function mountExpanded(request: ReturnType<typeof expandedRequest>) {
-  const gateway = discoveryGateway(request);
-  const mounted = await mountSidebar(gateway.gateway, createSessions("main", ["agent:main:main"]));
-  mounted.sidebar.connected = true;
-  await mounted.sidebar.updateComplete;
-  await settle(mounted.sidebar);
+  const mounted = await mountDiscovery(request);
   await loadMore(mounted.sidebar);
   await loadMore(mounted.sidebar);
   expect(request).toHaveBeenCalledTimes(3);
   expect(mounted.sidebar.textContent).toContain("Original 3");
-  return { ...mounted, gateway };
+  return mounted;
 }
 
 describe("AppSidebar expanded catalog refresh visibility", () => {

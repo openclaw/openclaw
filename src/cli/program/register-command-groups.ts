@@ -98,80 +98,6 @@ function findCommandPathEnd(argv: readonly string[], command: Command): number {
   return -1;
 }
 
-/** Restore parent-option placement without stealing options owned by the loaded child command. */
-function hoistLazyParentOptions(
-  argv: string[],
-  parentCommand: Command,
-  lazyCommandName: string,
-): string[] {
-  let lazyCommandIndex = findCommandPathEnd(argv, parentCommand);
-  if (lazyCommandIndex === -1) {
-    return argv;
-  }
-  while (lazyCommandIndex < argv.length) {
-    const option = findOption(parentCommand, argv[lazyCommandIndex] ?? "");
-    if (!option) {
-      break;
-    }
-    const count = optionTokenCount(option, argv, lazyCommandIndex);
-    if (count === 0) {
-      return argv;
-    }
-    lazyCommandIndex += count;
-  }
-  if (argv[lazyCommandIndex] !== lazyCommandName) {
-    return argv;
-  }
-
-  const lazyCommand = parentCommand.commands.find((command) =>
-    matchesCommandName(command, lazyCommandName),
-  );
-  if (!lazyCommand) {
-    return argv;
-  }
-  let selectedCommand = lazyCommand;
-  const selectedCommands = [selectedCommand];
-
-  const hoisted: string[] = [];
-  const remaining: string[] = [];
-  let acceptsSubcommands = true;
-  for (let index = lazyCommandIndex + 1; index < argv.length; index += 1) {
-    const token = argv[index] ?? "";
-    if (token === "--") {
-      remaining.push(...argv.slice(index));
-      break;
-    }
-    const childOption = findNearestOption(selectedCommands, token);
-    const parentOption = findOption(parentCommand, token);
-    const option = childOption ?? parentOption;
-    if (option) {
-      const count = optionTokenCount(option, argv, index);
-      if (count === 0) {
-        return argv;
-      }
-      const tokens = argv.slice(index, index + count);
-      (childOption ? remaining : hoisted).push(...tokens);
-      index += count - 1;
-      continue;
-    }
-    if (acceptsSubcommands && !token.startsWith("-")) {
-      const nextCommand: Command | undefined = selectedCommand.commands.find((command) =>
-        matchesCommandName(command, token),
-      );
-      if (nextCommand) {
-        selectedCommand = nextCommand;
-        selectedCommands.push(nextCommand);
-      } else {
-        acceptsSubcommands = false;
-      }
-    }
-    remaining.push(token);
-  }
-  return hoisted.length === 0
-    ? argv
-    : [...argv.slice(0, lazyCommandIndex), ...hoisted, lazyCommandName, ...remaining];
-}
-
 export type CommandGroupPlaceholder = {
   name: string;
   description: string;
@@ -241,7 +167,77 @@ export function registerLazyCommandGroup(
     const rootProgram = getRootCommand(command) as Command & { rawArgs: string[] };
     // Commander 15 snapshots the full parse input on the root before actions run.
     const parseArgv = buildParseArgv(rootProgram.rawArgs, rootProgram.name());
-    const normalizedArgv = hoistLazyParentOptions(parseArgv, program, command.name());
+    const lazyCommandName = command.name();
+    /** Restore parent-option placement without stealing options owned by the loaded child command. */
+    function hoistLazyParentOptions(): string[] {
+      let lazyCommandIndex = findCommandPathEnd(parseArgv, program);
+      if (lazyCommandIndex === -1) {
+        return parseArgv;
+      }
+      while (lazyCommandIndex < parseArgv.length) {
+        const option = findOption(program, parseArgv[lazyCommandIndex] ?? "");
+        if (!option) {
+          break;
+        }
+        const count = optionTokenCount(option, parseArgv, lazyCommandIndex);
+        if (count === 0) {
+          return parseArgv;
+        }
+        lazyCommandIndex += count;
+      }
+      if (parseArgv[lazyCommandIndex] !== lazyCommandName) {
+        return parseArgv;
+      }
+
+      const lazyCommand = program.commands.find((candidate) =>
+        matchesCommandName(candidate, lazyCommandName),
+      );
+      if (!lazyCommand) {
+        return parseArgv;
+      }
+      let selectedCommand = lazyCommand;
+      const selectedCommands = [selectedCommand];
+
+      const hoisted: string[] = [];
+      const remaining: string[] = [];
+      let acceptsSubcommands = true;
+      for (let index = lazyCommandIndex + 1; index < parseArgv.length; index += 1) {
+        const token = parseArgv[index] ?? "";
+        if (token === "--") {
+          remaining.push(...parseArgv.slice(index));
+          break;
+        }
+        const childOption = findNearestOption(selectedCommands, token);
+        const parentOption = findOption(program, token);
+        const option = childOption ?? parentOption;
+        if (option) {
+          const count = optionTokenCount(option, parseArgv, index);
+          if (count === 0) {
+            return parseArgv;
+          }
+          const tokens = parseArgv.slice(index, index + count);
+          (childOption ? remaining : hoisted).push(...tokens);
+          index += count - 1;
+          continue;
+        }
+        if (acceptsSubcommands && !token.startsWith("-")) {
+          const nextCommand: Command | undefined = selectedCommand.commands.find((candidate) =>
+            matchesCommandName(candidate, token),
+          );
+          if (nextCommand) {
+            selectedCommand = nextCommand;
+            selectedCommands.push(nextCommand);
+          } else {
+            acceptsSubcommands = false;
+          }
+        }
+        remaining.push(token);
+      }
+      return hoisted.length === 0
+        ? parseArgv
+        : [...parseArgv.slice(0, lazyCommandIndex), ...hoisted, lazyCommandName, ...remaining];
+    }
+    const normalizedArgv = hoistLazyParentOptions();
     await rootProgram.parseAsync(normalizedArgv);
   });
 }

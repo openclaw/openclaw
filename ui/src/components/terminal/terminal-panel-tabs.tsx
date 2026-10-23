@@ -1,5 +1,9 @@
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import type { PanelHostedTab } from "../panel-hosted-tabs.ts";
+import { StrokeIcon } from "../solid/stroke-icon.tsx";
+
+registerTerminalEnglish();
 
 export type TerminalPanelTab = {
   id: string;
@@ -17,18 +21,9 @@ export type TerminalPanelTab = {
 
 export function terminalPanelTabIcon() {
   return (
-    <svg
-      viewBox="0 0 16 16"
-      width="13"
-      height="13"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.4"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
+    <StrokeIcon viewBox="0 0 16 16" width="13" height="13" stroke-width="1.4">
       <path d="M3 4l3 3-3 3M8 11h5" />
-    </svg>
+    </StrokeIcon>
   );
 }
 

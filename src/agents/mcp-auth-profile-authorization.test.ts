@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import * as directoryObservation from "../infra/owned-directory-observation.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
@@ -10,6 +10,7 @@ import { readAuthProfileAuthorizationLifetime } from "./auth-profiles/authorizat
 import { retainAuthProfileAuthorizationObservation } from "./auth-profiles/authorization-observation.js";
 import { captureAuthProfileAuthorization as captureAuth } from "./auth-profiles/authorization.js";
 import { createOAuthManager } from "./auth-profiles/oauth-manager.js";
+import { mockOAuthProviderOperations } from "./auth-profiles/oauth-native-provider.test-support.js";
 import {
   removeAuthProfilesAcrossOwnerStores,
   upsertAuthProfileWithLockOrThrow,
@@ -30,6 +31,7 @@ import { persistAuthProfileBatch } from "./auth-profiles/upsert-with-lock.js";
 import { captureMcpAuthProfileAuthorization as captureMcp } from "./mcp-auth-profile-authorization.js";
 
 const { seedRoot, apiKey } = createAuthOwnerTestFixtures();
+afterEach(() => vi.restoreAllMocks());
 type AuthRoot = Awaited<ReturnType<typeof seedRoot>>;
 type Authority = Awaited<ReturnType<typeof captureAuth>>;
 type AuthFixture = AuthRoot & {
@@ -199,10 +201,7 @@ it("keeps the same lifetime through the real refresh owner's claim and settlemen
     const authority = await root.capture("fixture:oauth", root.agentDir, true);
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const manager = createOAuthManager({
-      buildApiKey: async (_provider, value) => value.access,
-      canRefreshCredential: async () => true,
-      readBootstrapCredential: () => null,
+    mockOAuthProviderOperations({
       refreshCredential: async () => {
         entered.resolve();
         await release.promise;
@@ -214,6 +213,7 @@ it("keeps the same lifetime through the real refresh owner's claim and settlemen
         };
       },
     });
+    const manager = createOAuthManager();
     const refresh = manager.resolveOAuthAccess({
       store: loadAuthProfileStoreWithoutExternalProfiles(root.agentDir),
       profileId: "fixture:oauth",
@@ -286,3 +286,36 @@ it("enrolls an absent agent's inheritance tombstone through its native first-use
     await expect(authority.revalidate()).rejects.toMatchObject(retiredCode);
   });
 });
+
+it.each([undefined, ""])(
+  "retains access-only OAuth until expiry (refresh: %s)",
+  async (refresh) => {
+    await withRoot(async (root) => {
+      const expires = Date.now() + 3_600_000;
+      await persistAuthProfileBatch({
+        profiles: [
+          {
+            profileId: "fixture:access-only",
+            credential: {
+              type: "oauth",
+              provider: "fixture",
+              access: "synthetic-access-only",
+              ...(refresh === undefined ? {} : { refresh }),
+              expires,
+              // Persisted access-only input intentionally lacks the writer type's refresh field.
+            } as OAuthCredential,
+          },
+        ],
+      });
+      const generic = await root.capture("fixture:access-only", root.agentDir, true);
+      const mcp = await root.capture("fixture:access-only");
+      expect(generic.authorizationId).toBe(mcp.authorizationId);
+      expect(generic.assertCurrent).not.toThrow();
+      expect(mcp.assertCurrent).not.toThrow();
+      vi.spyOn(Date, "now").mockReturnValue(expires);
+      expect(generic.assertCurrent).toThrow(retired);
+      expect(mcp.assertCurrent).toThrow(retired);
+      await expect(root.capture("fixture:access-only")).rejects.toMatchObject(retiredCode);
+    });
+  },
+);

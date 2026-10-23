@@ -3,7 +3,6 @@ import type { MockInstance } from "vitest";
 import { afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createDuckDuckGoWebSearchProvider } from "../web-search-contract-api.js";
-import { resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
 import { runDuckDuckGoSearch } from "./ddg-client.js";
 
 let fetch: MockInstance<typeof globalThis.fetch>;
@@ -37,7 +36,7 @@ async function search(query: string, html?: string) {
   if (html !== undefined) {
     fetch.mockResolvedValue(htmlResponse(html));
   }
-  return await runDuckDuckGoSearch({ query, cacheTtlMinutes: 0 });
+  return await runDuckDuckGoSearch({ query });
 }
 
 it.each([4.5, 11])("rejects invalid count %s before searching", async (count) => {
@@ -111,16 +110,25 @@ it("bounds successful DuckDuckGo HTML bodies without using response.text()", asy
   expect(textSpy).not.toHaveBeenCalled();
 });
 
-it("reads region from plugin config and normalizes empty values away", () => {
-  expect(resolveDdgRegion(pluginConfig({ region: "de-de" }))).toBe("de-de");
-  expect(resolveDdgRegion(pluginConfig({ region: "   " }))).toBeUndefined();
-});
-
-it("defaults safeSearch to moderate and accepts strict and off", () => {
-  expect(resolveDdgSafeSearch(undefined)).toBe("moderate");
-  expect(resolveDdgSafeSearch(pluginConfig({ safeSearch: "strict" }))).toBe("strict");
-  expect(resolveDdgSafeSearch(pluginConfig({ safeSearch: "off" }))).toBe("off");
-});
+it.each([
+  { label: "configured region", options: { region: "de-de" }, region: "de-de", safeSearch: "-1" },
+  { label: "blank region", options: { region: "   " }, region: null, safeSearch: "-1" },
+  { label: "default safeSearch", options: {}, region: null, safeSearch: "-1" },
+  { label: "strict safeSearch", options: { safeSearch: "strict" }, region: null, safeSearch: "1" },
+  { label: "off safeSearch", options: { safeSearch: "off" }, region: null, safeSearch: "-2" },
+])(
+  "sends $label from plugin config in the search request",
+  async ({ label, options, region, safeSearch }) => {
+    fetch.mockResolvedValue(htmlResponse(""));
+    await createSearchTool(pluginConfig(options)).execute({ query: `DuckDuckGo config ${label}` });
+    expect(fetch).toHaveBeenCalledOnce();
+    const request = fetch.mock.calls[0]?.[0];
+    assert(typeof request === "string", "Expected DuckDuckGo request URL");
+    const url = new URL(request);
+    expect(url.searchParams.get("kl")).toBe(region);
+    expect(url.searchParams.get("kp")).toBe(safeSearch);
+  },
+);
 
 it("parses href-first links and highlights without mistaking snippets for a challenge", async () => {
   const html = `
@@ -208,4 +216,88 @@ it("uses an honest User-Agent and returns the first two valid results with their
   ];
   expect(result).toMatchObject({ count: expected.length, results: expected });
   expect(JSON.stringify(result)).not.toContain("Discarded");
+});
+
+it("honors tools.web.search maxResults when count is omitted", async () => {
+  fetch.mockResolvedValue(
+    htmlResponse(
+      [1, 2, 3]
+        .map((index) => resultHtml(`https://example.com/${index}`, `Result ${index}`))
+        .join(""),
+    ),
+  );
+  const tool = createDuckDuckGoWebSearchProvider().createTool({
+    config: { tools: { web: { search: { cacheTtlMinutes: 0 } } } },
+    searchConfig: { maxResults: 2, timeoutSeconds: 2 },
+  });
+  assert(tool, "Expected tool definition");
+  const result = (await tool.execute({ query: "openclaw docs" })) as {
+    results?: unknown[];
+  };
+  expect(result.results).toHaveLength(2);
+});
+
+it("keeps an explicit count ahead of the configured maxResults", async () => {
+  fetch.mockResolvedValue(
+    htmlResponse(
+      [1, 2, 3]
+        .map((index) => resultHtml(`https://example.com/${index}`, `Result ${index}`))
+        .join(""),
+    ),
+  );
+  const tool = createDuckDuckGoWebSearchProvider().createTool({
+    config: { tools: { web: { search: { cacheTtlMinutes: 0 } } } },
+    searchConfig: { maxResults: 1 },
+  });
+  assert(tool, "Expected tool definition");
+  const result = (await tool.execute({ query: "openclaw docs", count: 2 })) as {
+    results?: unknown[];
+  };
+  expect(result.results).toHaveLength(2);
+});
+
+function mockHangingFetchUntilAbort() {
+  fetch.mockImplementation(
+    (_url, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          const reason = init.signal?.reason;
+          reject(reason instanceof Error ? reason : new Error("aborted"));
+        });
+      }) as Promise<Response>,
+  );
+}
+
+it("cancels a slow DuckDuckGo search at the configured deadline", async () => {
+  mockHangingFetchUntilAbort();
+  const tool = createDuckDuckGoWebSearchProvider().createTool({
+    config: {},
+    searchConfig: { timeoutSeconds: 1 },
+  });
+  assert(tool, "Expected tool definition");
+  vi.useFakeTimers();
+  try {
+    const pending = expect(tool.execute({ query: "openclaw docs" })).rejects.toThrow(
+      /timed out|TimeoutError|aborted/i,
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await pending;
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("keeps the client fallback deadline when timeoutSeconds is not configured", async () => {
+  vi.useFakeTimers();
+  try {
+    mockHangingFetchUntilAbort();
+    const tool = createSearchTool({ tools: { web: { search: { cacheTtlMinutes: 0 } } } });
+    const pending = expect(tool.execute({ query: "fallback deadline" })).rejects.toThrow(
+      /timed out|TimeoutError|aborted/i,
+    );
+    await vi.advanceTimersByTimeAsync(20_000);
+    await pending;
+  } finally {
+    vi.useRealTimers();
+  }
 });

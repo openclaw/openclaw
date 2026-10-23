@@ -17,6 +17,7 @@ import {
 import {
   getSessionMcpRequestSignal,
   runWithSessionMcpRequestSignal,
+  withSessionMcpCallerAuthority,
 } from "./agent-bundle-mcp-request-context.js";
 import type { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import { createSessionMcpRuntimeParts } from "./agent-bundle-mcp-runtime-parts.js";
@@ -61,6 +62,7 @@ import {
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import type { McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
+import { recordModelFallbackStop } from "./model-fallback-stop.js";
 import { observeNativeMcpProbe } from "./native-mcp-connect.js";
 import { createNativeMcpClientBridge } from "./native-mcp-runtime-client.js";
 import {
@@ -302,14 +304,20 @@ function createServerMcpRuntime(
     session: BundleMcpSession,
     request: (signal: AbortSignal, holdForHumanInput: () => () => void) => Promise<T>,
     options?: McpRequestOptions,
-  ) => runGuardedServerRequest(session, () => requests.run(session, request), options);
+  ) =>
+    runGuardedServerRequest(
+      session,
+      () => requests.run(session, withSessionMcpCallerAuthority(request)),
+      options,
+    );
   const collectServerItems = (session: BundleMcpSession, kind: "prompts" | "resources") =>
     listMcpServerItems(kind, {
       client: session.client,
       timeoutMs: session.requestTimeoutMs,
       signal: lifecycleAbortController.signal,
       callerSignal: getSessionMcpRequestSignal(),
-      runRequest: (request, signal) => requests.run(session, request, signal),
+      runRequest: (request, signal) =>
+        requests.run(session, withSessionMcpCallerAuthority(request), signal),
     });
 
   const loadCatalog = async (
@@ -585,6 +593,8 @@ function createServerMcpRuntime(
           capabilities,
           serverVersion: session.client.getServerVersion(),
           serverCapabilities: session.client.getServerCapabilities(),
+          // Served whole, as Claude's native connection received them.
+          instructions: session.client.getInstructions()?.trim() || undefined,
           pluginId: loaded.pluginIdsByServer?.[serverName],
           connection: resolved,
         });
@@ -870,7 +880,9 @@ function createServerMcpRuntime(
       await Promise.allSettled(pendingDisposals);
       if (cleanupFailed) {
         recordAgentCleanupFailure();
-        throw new Error("MCP runtime cleanup could not confirm closure");
+        const error = new Error("MCP runtime cleanup could not confirm closure");
+        recordModelFallbackStop(error);
+        throw error;
       }
     },
     dispose() {

@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
-import { shouldComputeCommandAuthorized } from "../../auto-reply/command-detection.js";
+import { hasCommandSyntax } from "../../auto-reply/command-detection.js";
 import {
   resolveChannelResetConfig,
   resolveSessionResetType,
@@ -89,11 +89,7 @@ type DurableChatClaimResolution =
   | { kind: "rejected"; message: string; unavailable?: true };
 
 function hasRestartUnsafeMessageSemantics(rawMessage: string, cfg: OpenClawConfig): boolean {
-  if (
-    shouldComputeCommandAuthorized(rawMessage, cfg) ||
-    rawMessage.startsWith("/") ||
-    rawMessage.startsWith("!")
-  ) {
+  if (hasCommandSyntax(rawMessage, cfg) || rawMessage.startsWith("/")) {
     return true;
   }
   const directives = parseInlineDirectives(rawMessage, {
@@ -498,6 +494,7 @@ export function buildRestartSafeChatTranscriptState(params: {
       restartRecoveryRequesterSenderId: undefined,
       restartRecoverySameChannelThreadRequired: undefined,
       restartRecoverySourceIngress: params.sourceIngress,
+      restartRecoverySourceMessageChannel: "webchat",
       restartRecoveryOperatorSource: params.admission.retryExpectedState
         ? params.admission.retryExpectedState.restartRecoveryOperatorSource
         : params.operatorSource,

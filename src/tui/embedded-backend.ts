@@ -154,8 +154,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   onEvent?: (evt: TuiEvent) => void;
   onConnected?: () => void;
-  onDisconnected?: (reason: string) => void;
-  onGap?: (info: { expected: number; received: number }) => void;
 
   private readonly deps = createDefaultDeps();
   private readonly localSenderId = randomUUID();
@@ -268,10 +266,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.unsubscribe = undefined;
     this.pendingLifecycleErrors.forEach(clearTimeout);
     this.pendingLifecycleErrors.clear();
-    for (const run of this.runs.values()) {
-      run.controller.abort();
-    }
-    this.runs.clear();
     defaultRuntime.log = this.previousRuntimeLog ?? defaultRuntime.log;
     defaultRuntime.error = this.previousRuntimeError ?? defaultRuntime.error;
     this.previousRuntimeLog = undefined;
@@ -1126,7 +1120,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private async runTurn(runId: string, run: LocalRunState, opts: ChatSendOptions) {
-    // This turn owns its state until finally; stop waits for owned promises before clearing runs.
+    // This turn owns its state until finally; stop waits for every owned promise.
     const { controller, queuedAfter } = run;
     try {
       if (queuedAfter) {

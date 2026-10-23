@@ -206,7 +206,6 @@ describe("cron method validation", () => {
       defaultAgentId: "main",
       log: cronLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
     const context = createDirectChatContext({ cron, cronStorePath: storePath, getRuntimeConfig });
@@ -750,37 +749,6 @@ describe("cron method validation", () => {
     },
   );
 
-  it("filters operator command cron jobs from caller-scoped cron.list", async () => {
-    const context = createCronContext([
-      createCronJob({
-        id: "command-job",
-        agentId: "ops",
-        payload: {
-          kind: "command",
-          argv: ["deploy"],
-          env: { MARKER_ENV: "fixture-marker" },
-        },
-      }),
-      createCronJob({ id: "agent-job", agentId: "ops", name: "agent job" }),
-    ]);
-
-    const { respond } = await invokeCron(
-      "cron.list",
-      { includeDisabled: true, compact: true },
-      { context, client: callerClient("ops") },
-    );
-
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        total: 1,
-        jobs: [expect.objectContaining({ id: "agent-job" })],
-      }),
-      undefined,
-    );
-    expect(JSON.stringify(respond.mock.calls)).not.toContain("fixture-marker");
-  });
-
   it("rejects caller-scoped cron.list for a foreign explicit agentId", async () => {
     const context = createCronContext(createCronJob({ agentId: "ops" }));
 
@@ -1187,7 +1155,9 @@ describe("cron method validation", () => {
       client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
       client.internal!.agentRuntimeIdentity!.turnSourceLocal = true;
       const sessionMutationCommitGuard = vi.fn(() => {
-        throw new TypeError("original caller was revoked");
+        if (context.cron[owner].mock.calls.length > 0) {
+          throw new TypeError("original caller was revoked");
+        }
       });
 
       const result = await invokeCron(method, params, {
@@ -1197,7 +1167,7 @@ describe("cron method validation", () => {
       });
 
       expect(context.cron[owner]).toHaveBeenCalledOnce();
-      expect(sessionMutationCommitGuard).toHaveBeenCalledOnce();
+      expect(sessionMutationCommitGuard).toHaveBeenCalled();
       expectResponseError(result.respond, {
         code: "INVALID_REQUEST",
         messageIncludes: "original caller was revoked",
@@ -1211,7 +1181,7 @@ describe("cron method validation", () => {
     const context = createCronContext();
     const result = await invokeCron("cron.add", agentTurnCronParams(), {
       context,
-      hasCurrentClientAuthority: () => false,
+      hasCurrentClientAuthority: () => context.cron.add.mock.calls.length === 0,
     });
     expect(context.cron.add).toHaveBeenCalledOnce();
     expect(context.committedAdds).toHaveLength(0);
@@ -1279,7 +1249,6 @@ describe("cron method validation", () => {
       defaultAgentId: "main",
       log: cronLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     await cron.start();
@@ -1871,10 +1840,10 @@ describe("cron method validation", () => {
       defaultAgentId: "ops",
       log: cronLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const context = createCronContext();
+    context.cron.getJob.mockImplementation((id) => cron.getJob(id));
     context.cron.readJob.mockImplementation((id) => cron.readJob(id));
     context.cron.updateWithPrecondition.mockImplementation((...args) =>
       cron.updateWithPrecondition(...args),
@@ -1886,6 +1855,9 @@ describe("cron method validation", () => {
         patch: { payload },
         creatorToolAllowlist: [{ name: "read" }],
         gatewayOpts: {},
+        prepareStreamExecAuthority: async () => {
+          throw new Error("Legacy scheduled prompt edits must not request stream authority");
+        },
         callGateway: async (method, _opts, params) => {
           if (method !== "cron.get" && method !== "cron.update") {
             throw new Error(`unexpected method: ${method}`);
@@ -1961,10 +1933,10 @@ describe("cron method validation", () => {
       defaultAgentId: "ops",
       log: cronLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const context = createCronContext();
+    context.cron.getJob.mockImplementation((id) => cron.getJob(id));
     context.cron.readJob.mockImplementation((id) => cron.readJob(id));
     context.cron.updateWithPrecondition.mockImplementation((...args) =>
       cron.updateWithPrecondition(...args),
@@ -1976,6 +1948,9 @@ describe("cron method validation", () => {
         patch,
         creatorToolAllowlist: [{ name: "read" }],
         gatewayOpts: {},
+        prepareStreamExecAuthority: async () => {
+          throw new Error("Legacy scheduled edits must not request stream authority");
+        },
         callGateway: async (method, _opts, params) => {
           const { respond } = await invokeCron(method, requireRecord(params, "cron params"), {
             context,

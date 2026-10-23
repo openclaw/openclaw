@@ -23,7 +23,6 @@ import {
 } from "../run-wait.js";
 import { resolveSubagentAnnounceTimeoutMs } from "../subagents/announce/subagent-announce-delivery-retry.js";
 import type { FollowupCompletionOwner } from "../subagents/completion/session-followup-completion.types.js";
-import type { AgentStepSession } from "./agent-step.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
@@ -33,6 +32,7 @@ import { recordSessionToolActionFact } from "./sessions-access.js";
 import { sendReplyResult } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import type { SessionsSendStart } from "./sessions-send-tool.delivery.js";
+import type { AgentStepSession } from "./sessions-send-tool.types.js";
 import { jsonResult } from "./tool-results.js";
 const log = createSubsystemLogger("agents/sessions-send");
 
@@ -289,6 +289,7 @@ export async function finishSessionsSendReply(params: {
   start: SessionsSendStart;
   completion?: FollowupCompletionOwner;
   registryCompletion: boolean;
+  requesterTurnRunId?: string;
   watchField: { watched?: boolean };
   replyContext: SessionsSendReplyContext;
   targetSession: GatewaySessionStoreTargetWithStore;
@@ -378,12 +379,13 @@ export async function finishSessionsSendReply(params: {
       notifyRequesterOnWaitFailure: notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
     });
   const result =
-    timeoutSeconds === 0
+    // An active turn has no final-response identity correlated to this accepted input.
+    timeoutSeconds === 0 || start.targetDisposition === "steered"
       ? undefined
       : completion
         ? await completion.take(timeoutMs)
         : await waitForAgentRunReply({ runId, timeoutMs, callGateway: replyContext.callGateway });
-  if (!result) {
+  if (!result || result.yielded === true || result.status === "pending") {
     await startReplyFlow(true);
     return accepted();
   }
@@ -406,6 +408,25 @@ export async function finishSessionsSendReply(params: {
       await startReplyFlow(true);
       return accepted();
     }
+  }
+  if (
+    registryCompletion &&
+    params.requesterTurnRunId &&
+    (result.status === "ok" ||
+      isTerminalAgentWaitTimeout(result) ||
+      (result.status === "error" && result.endedAt !== undefined))
+  ) {
+    if (!replyContext.requesterSessionKey) {
+      throw new Error("Inline child result is missing its requester session.");
+    }
+    const { acknowledgeSubagentResultForRequesterTurn } =
+      await import("../subagents/registry/subagent-registry-requester-claim.js");
+    await acknowledgeSubagentResultForRequesterTurn({
+      runId,
+      requesterSessionKey: replyContext.requesterSessionKey,
+      requesterAgentId,
+      requesterTurnRunId: params.requesterTurnRunId,
+    });
   }
   if (result.status === "timeout" || result.status === "error") {
     return jsonResult({

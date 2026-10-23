@@ -9,15 +9,12 @@ import type { GatewayClient } from "../src/gateway/client.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { extractAssistantPhaseText } from "../src/shared/chat-message-content.js";
-import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
+import { connectRestartClient, writeRestartToolCalls } from "./gateway-restart.test-support.js";
 import {
   createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
 } from "./helpers/openai-responses-model-fixture.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
@@ -35,29 +32,10 @@ function writeTool(
     arguments: JSON.stringify(args),
     status: "completed",
   };
-  writeOpenAiResponsesSse(response, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...item, status: "in_progress", arguments: "" },
-    },
-    {
-      type: "response.function_call_arguments.done",
-      item_id: item.id,
-      output_index: 0,
-      arguments: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${name}_${ordinal}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-      },
-    },
-  ]);
+  writeRestartToolCalls(response, `resp_${name}_${ordinal}`, [item], {
+    argumentEvent: "done",
+    usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+  });
 }
 
 it.skipIf(process.platform === "win32")(
@@ -154,19 +132,14 @@ it.skipIf(process.platform === "win32")(
         };
         await instance.state.writeConfig(config);
         const deviceIdentity = loadOrCreateDeviceIdentity({
-          path: instance.state.path("restart-operator-device.sqlite"),
+          path: instance.state.path("restart-operator-device", "client", "credentials.sqlite"),
         });
         const connect = () =>
-          acquireGatewayTestClient(
-            {
-              url: instance.url,
-              token: instance.gatewayToken,
-              deviceIdentity,
-              clientName: GATEWAY_CLIENT_IDS.TUI,
-              mode: GATEWAY_CLIENT_MODES.UI,
-              scopes: ["operator.admin", "operator.read", "operator.write"],
-            },
-            { timeoutMs: 60_000, timeoutMessage: "connect timeout", closeMessage: "closed" },
+          connectRestartClient(
+            instance,
+            { deviceIdentity, clientName: GATEWAY_CLIENT_IDS.TUI, mode: GATEWAY_CLIENT_MODES.UI },
+            undefined,
+            60_000,
           );
         await instance.startGateway();
         client = await connect();

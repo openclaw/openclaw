@@ -140,11 +140,8 @@ export function resolveSessionStoreKey(params: {
   storeAgentId?: string;
 }): string {
   const raw = normalizeOptionalString(params.sessionKey) ?? "";
-  if (!raw) {
-    return raw;
-  }
-  const rawLower = normalizeLowercaseStringOrEmpty(raw);
-  if (rawLower === "global" || rawLower === "unknown") {
+  const rawLower = raw.toLowerCase();
+  if (!raw || rawLower === "global" || rawLower === "unknown") {
     return rawLower;
   }
 
@@ -244,11 +241,8 @@ export function resolveStoredSessionKeyForAgentStore(params: {
   preserveQualifiedAddress?: boolean;
 }): string {
   const raw = normalizeOptionalString(params.sessionKey) ?? "";
-  if (!raw) {
-    return raw;
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(raw);
-  if (lowered === "global" || lowered === "unknown") {
+  const lowered = raw.toLowerCase();
+  if (!raw || lowered === "global" || lowered === "unknown") {
     return lowered;
   }
   const parsed = parseAgentSessionKey(raw);

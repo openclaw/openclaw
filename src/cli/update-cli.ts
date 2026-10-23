@@ -441,7 +441,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .command("status")
     .description("Show update channel and version status")
     .option("--json", "Output result as JSON", false)
-    .option("--timeout <seconds>", "Timeout for update checks in seconds (default: 3)")
+    .option("--timeout <seconds>", "Check timeout (default: shared 30s; longer values extend it)")
     .addHelpText(
       "after",
       () =>

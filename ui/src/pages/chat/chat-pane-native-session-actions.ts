@@ -33,6 +33,8 @@ export class ChatPaneNativeSessionActions {
       [
         ...pluginActions.flatMap(({ id, label, disabled }) => [id, label, disabled]),
         canStop,
+        row?.key,
+        context,
         stopDisabledReason,
         i18n.getLocale(),
         onAction,

@@ -63,6 +63,14 @@ export function isPluginNativeExecutable(source: string, boundary: string): bool
   return withPluginSourceFile(source, boundary, isPluginNativeDescriptor);
 }
 
+export function isPluginWasmModule(source: string, boundary: string): boolean {
+  return withPluginSourceFile(
+    source,
+    boundary,
+    (fd) => fs.readSync(fd, scratch, 0, 4, 0) === 4 && scratch.readUInt32BE(0) === 0x0061736d,
+  );
+}
+
 function isPluginNativeDescriptor(fd: number): boolean {
   if (fs.readSync(fd, scratch, 0, 4, 0) !== 4) {
     return false;
@@ -74,49 +82,6 @@ function isPluginNativeDescriptor(fd: number): boolean {
       magic,
     )
   );
-}
-
-function copySmallPluginSourceFile(
-  target: string,
-  fd: number,
-  admitted: fs.BigIntStats,
-  mode: number,
-  hashCopiedContent?: boolean,
-) {
-  using copied = createFileSync(target, { mode: 0o600 });
-  const identity = fs.fstatSync(copied.fd, { bigint: true });
-  const assertCurrent = () => {
-    const named = fs.lstatSync(target, { bigint: true });
-    const current = fs.fstatSync(copied.fd, { bigint: true });
-    if (
-      !named.isFile() ||
-      named.nlink !== 1n ||
-      named.dev !== identity.dev ||
-      named.ino !== identity.ino ||
-      !current.isFile() ||
-      current.nlink !== 1n ||
-      current.dev !== identity.dev ||
-      current.ino !== identity.ino
-    ) {
-      throw new FsSafeError("path-mismatch", "Plugin capture destination changed during copying");
-    }
-  };
-  // The pinned source and exclusive output own this synchronous transfer.
-  // Source edits after opening are best effort; validate the completed destination once.
-  const bytes = copyFileDescriptorSync(fd, copied.fd, {
-    maxBytes: Number(admitted.size),
-  });
-  if (bytes !== Number(admitted.size)) {
-    throw new FsSafeError("path-mismatch", "Plugin source changed while copying");
-  }
-  fs.fchmodSync(copied.fd, mode);
-  assertCurrent();
-  return hashCopiedContent
-    ? {
-        ...hashPluginSourceDescriptor(copied.fd),
-        sourceIdentity: pluginSourceStatIdentity(admitted),
-      }
-    : undefined;
 }
 
 /**
@@ -164,7 +129,41 @@ export function copyPluginSourceFile(
           !isPluginNativeDescriptor(fd) &&
           fs.realpathSync.native(path.dirname(target)) === path.dirname(target)
         ) {
-          return copySmallPluginSourceFile(target, fd, admitted, mode, options.hashCopiedContent);
+          const hashCopiedContent = options.hashCopiedContent;
+          using copied = createFileSync(target, { mode: 0o600 });
+          const identity = fs.fstatSync(copied.fd, { bigint: true });
+          // The pinned source and exclusive output own this synchronous transfer.
+          // Source edits after opening are best effort; validate the completed destination once.
+          const bytes = copyFileDescriptorSync(fd, copied.fd, {
+            maxBytes: Number(admitted.size),
+          });
+          if (bytes !== Number(admitted.size)) {
+            throw new FsSafeError("path-mismatch", "Plugin source changed while copying");
+          }
+          fs.fchmodSync(copied.fd, mode);
+          const named = fs.lstatSync(target, { bigint: true });
+          const current = fs.fstatSync(copied.fd, { bigint: true });
+          if (
+            !named.isFile() ||
+            named.nlink !== 1n ||
+            named.dev !== identity.dev ||
+            named.ino !== identity.ino ||
+            !current.isFile() ||
+            current.nlink !== 1n ||
+            current.dev !== identity.dev ||
+            current.ino !== identity.ino
+          ) {
+            throw new FsSafeError(
+              "path-mismatch",
+              "Plugin capture destination changed during copying",
+            );
+          }
+          return hashCopiedContent
+            ? {
+                ...hashPluginSourceDescriptor(copied.fd),
+                sourceIdentity: pluginSourceStatIdentity(admitted),
+              }
+            : undefined;
         }
         // Keep our pin alive; fs-safe binds its own admitted open to this exact inode.
         using copied = (options.copyFile ?? copyRootFileSync)({

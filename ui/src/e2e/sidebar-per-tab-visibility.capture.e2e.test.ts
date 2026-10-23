@@ -142,7 +142,7 @@ suite.define(() => {
         await expectVisible(sidebar, false);
         expect(await sessionTab.locator(".sidebar-rail").isVisible()).toBe(true);
         await expect
-          .poll(async () => (await sessionTab.locator(".shell-nav").boundingBox())?.width)
+          .poll(async () => (await sessionTab.locator("main.content").boundingBox())?.x)
           .toBe(52);
         expect(await page.locator("openclaw-app-sidebar .sidebar-shell").isVisible()).toBe(true);
         await sessionTab.keyboard.press("ControlOrMeta+B");

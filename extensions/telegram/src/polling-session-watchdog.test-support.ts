@@ -11,7 +11,6 @@ vi.mock("./polling-liveness.js", async (importOriginal) => {
     TelegramPollingLivenessTracker: class extends actual.TelegramPollingLivenessTracker {
       constructor() {
         super({
-          now: () => watchdogClock.now ?? Date.now(),
           monotonicNow: () => watchdogClock.now ?? performance.now(),
         });
       }

@@ -53,7 +53,6 @@ export function prepareSessionAgentPurgeInDatabase(
       archiveDirectory: input.archiveDirectory,
       database,
       entry,
-      reason: "deleted",
       referencedSessionIds,
     }),
   );

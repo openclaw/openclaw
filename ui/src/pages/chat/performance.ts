@@ -1,9 +1,5 @@
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 
-export function controlUiNowMs(): number {
-  return performance.now();
-}
-
 function runAfterPaint(callback: () => void, complete: () => void): () => void {
   let active = true;
   let frame: number | null = null;

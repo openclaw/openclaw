@@ -78,7 +78,6 @@ async function prepareCliDiagnosticBlockWriter(): Promise<
       const formatted = error === undefined ? message : format(message, error);
       process.stderr.write(
         formatConsoleDiagnosticBlock({
-          level: "error",
           message: formatted.endsWith("\n") ? formatted : `${formatted}\n`,
         }),
       );

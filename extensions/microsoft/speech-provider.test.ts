@@ -1,4 +1,5 @@
 import { writeFileSync } from "node:fs";
+import { EdgeTTS } from "node-edge-tts";
 import {
   createDebugProxyCaptureReaderAsync,
   finalizeDebugProxyCaptureAsync,
@@ -9,7 +10,6 @@ import { isTtsProviderConfigured, resolveTtsConfig } from "openclaw/plugin-sdk/t
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
 import { buildMicrosoftSpeechProvider } from "./speech-provider.js";
-import * as ttsModule from "./tts.js";
 
 const provider = buildMicrosoftSpeechProvider();
 
@@ -94,7 +94,20 @@ it("supports the public synchronous TTS readiness API through the compatibility 
 });
 
 it("maps the default voice to Chinese for CJK input", async () => {
-  const edgeSpy = vi.spyOn(ttsModule, "edgeTTS").mockImplementation(async ({ outputPath }) => {
+  const state = await createOpenClawTestState({ layout: "state-only" });
+  onTestFinished(() => state.cleanup());
+  const edgeSpy = vi.spyOn(EdgeTTS.prototype, "ttsPromise").mockImplementation(async function (
+    this: EdgeTTS,
+    _text,
+    outputPath,
+  ) {
+    expect(this).toMatchObject({
+      voice: "zh-CN-XiaoxiaoNeural",
+      lang: "zh-CN",
+      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+      saveSubtitles: false,
+      timeout: 1000,
+    });
     writeFileSync(outputPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
   });
   onTestFinished(() => edgeSpy.mockRestore());
@@ -103,30 +116,16 @@ it("maps the default voice to Chinese for CJK input", async () => {
   await provider.synthesize({
     text,
     cfg: {},
-    providerConfig: { outputFormatConfigured: true },
+    providerConfig: {},
     providerOverrides: {},
     timeoutMs: 1000,
     target: "audio-file",
   });
 
-  expect(edgeSpy).toHaveBeenCalledExactlyOnceWith({
+  expect(edgeSpy).toHaveBeenCalledExactlyOnceWith(
     text,
-    outputPath: expect.stringMatching(/[/\\]speech\.mp3$/),
-    timeoutMs: 1000,
-    config: {
-      enabled: true,
-      voice: "zh-CN-XiaoxiaoNeural",
-      lang: "zh-CN",
-      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-      outputFormatConfigured: true,
-      saveSubtitles: false,
-      pitch: undefined,
-      rate: undefined,
-      volume: undefined,
-      proxy: undefined,
-      timeoutMs: undefined,
-    },
-  });
+    expect.stringMatching(/speech[.]mp3.*[.]part$/),
+  );
 });
 
 it("preserves inherited Microsoft Talk settings and filters blank request overrides", () => {

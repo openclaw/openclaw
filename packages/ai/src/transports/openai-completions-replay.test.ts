@@ -8,6 +8,7 @@ import {
   buildOpenAICompletionsRequest,
   buildOpenAICompletionsParams,
 } from "./openai-completions-params.js";
+import { applyCompletionsReplay } from "./openai-completions-replay.js";
 import {
   makeCompletionsModel,
   openRouterModel,
@@ -148,6 +149,26 @@ describe("Chat Completions historical tools", () => {
 });
 
 describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () => {
+  it.each([
+    ["native reasoning", "native reasoning"],
+    ["", "streamed reasoning"],
+  ])("prefers nonempty reasoning_content when explicitly required (%j)", (native, expected) => {
+    const model = {
+      ...customReasoningProxyModel,
+      compat: { requiresReasoningContentOnAssistantMessages: true },
+    };
+    const message = {
+      role: "assistant" as const,
+      content: "Answer",
+      reasoning_content: native,
+      reasoning: "streamed reasoning",
+      reasoning_text: "alternate reasoning",
+      reasoning_details: "not replayable here",
+    };
+    applyCompletionsReplay([message], { messages: [] }, model, getCompat(model));
+    expect(message).toEqual({ role: "assistant", content: "Answer", reasoning_content: expected });
+  });
+
   it.each(["reasoning_text"])(
     "strips %s from stock OpenAI Chat Completions assistant replay",
     (thinkingSignature) => {

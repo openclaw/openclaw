@@ -1,174 +1,128 @@
-import { describe, expect, it } from "vitest";
-import {
-  ControlUiReplyCorrelation,
-  controlUiRequestSettled,
-  summarizeControlUiRequests,
-} from "../../scripts/lib/gateway-bench-control-ui-correlation.ts";
+import { expect, it } from "vitest";
+import * as reply from "../../scripts/lib/gateway-bench-control-ui-correlation.ts";
 
 function fixture() {
-  const correlation = new ControlUiReplyCorrelation();
-  const row = correlation.register({
-    clientIndex: 0,
-    requestId: "request-1",
-    sessionKey: "session-1",
-    token: "OPENCLAW_E2E_ONE",
-    sentMs: 0,
-  });
-  const event = (state: string, extra = {}) => ({
-    state,
-    runId: "reply-1",
-    sessionKey: row.sessionKey,
-    ...extra,
-  });
-  const final = () =>
-    event("final", {
+  const correlation = new reply.ControlUiReplyCorrelation();
+  const register = (requestId = "request-1", token = "OPENCLAW_E2E_ONE", sentMs = 0) =>
+    correlation.register({ clientIndex: 0, requestId, sessionKey: "session-1", token, sentMs });
+  const row = register();
+  const observe = (state: string, atMs: number, extra = {}) =>
+    correlation.observe({ state, runId: "reply-1", sessionKey: row.sessionKey, ...extra }, atMs);
+  const final = (atMs = 5, extra = {}) =>
+    observe("final", atMs, {
       message: { role: "assistant", content: [{ type: "text", text: row.token }] },
+      ...extra,
     });
   const ack = () =>
     correlation.acknowledge(row.requestId, { runId: row.requestId, status: "started" }, 1);
-  return { correlation, row, event, final, ack };
+  return { correlation, row, register, observe, final, ack };
 }
 
-describe("Control UI reply correlation", () => {
-  it("correlates a follow-up after custody arrives", () => {
-    const { correlation, row, event, final, ack } = fixture();
-    ack();
-    const custody = () => correlation.observe(event("final", { runId: row.requestId }), 2);
-    custody();
-    expect(correlation.observe(event("delta", { deltaText: "OPENCLAW_" }), 3)).toEqual({
-      kind: "delta",
-      sessionKey: row.sessionKey,
-      runId: "reply-1",
-      firstDeltaMs: 3,
-    });
-    expect(row.firstDeltaMs).toBeNull();
-    expect(correlation.observe(event("delta", { deltaText: "E2E_ONE" }), 4)).toBeUndefined();
-    correlation.observe(final(), 5);
-    expect(row).toMatchObject({
-      ackMs: 1,
-      firstDeltaMs: 3,
-      finalMs: 5,
-      replyRunId: "reply-1",
-      error: null,
-    });
-    expect(controlUiRequestSettled(row)).toBe(true);
+it("correlates a follow-up after custody arrives", () => {
+  const { row, observe, final, ack } = fixture();
+  ack();
+  observe("final", 2, { runId: row.requestId });
+  expect(observe("delta", 3, { deltaText: "OPENCLAW_" })).toEqual({
+    kind: "delta",
+    sessionKey: row.sessionKey,
+    runId: "reply-1",
+    firstDeltaMs: 3,
   });
-
-  it("retains a final received before the ACK", () => {
-    const { correlation, row, final, ack } = fixture();
-    correlation.observe(final(), 5);
-    expect(controlUiRequestSettled(row)).toBe(false);
-    ack();
-    expect(controlUiRequestSettled(row)).toBe(true);
-    expect(row.firstDeltaMs).toBeNull();
+  expect(row.firstDeltaMs).toBeNull();
+  expect(observe("delta", 4, { deltaText: "E2E_ONE" })).toBeUndefined();
+  final();
+  expect(row).toMatchObject({
+    ackMs: 1,
+    firstDeltaMs: 3,
+    finalMs: 5,
+    replyRunId: "reply-1",
+    error: null,
   });
-
-  it("ignores status, empty deltas and custody finals without inventing first-delta timing", () => {
-    const { correlation, row, event, final, ack } = fixture();
-    ack();
-    correlation.observe(event("status", { phase: "starting_model" }), 2);
-    correlation.observe(event("delta", { deltaText: "", replace: true }), 3);
-    correlation.observe(event("final", { runId: row.requestId }), 4);
-    expect(controlUiRequestSettled(row)).toBe(false);
-    correlation.observe(final(), 5);
-    expect(row.firstDeltaMs).toBeNull();
-  });
-
-  it("keeps late custody and duplicate finals from completing the next request", () => {
-    const { correlation, row, event, final, ack } = fixture();
-    ack();
-    correlation.observe(final(), 5);
-    const next = correlation.register({
-      clientIndex: 0,
-      requestId: "request-2",
-      sessionKey: row.sessionKey,
-      token: "OPENCLAW_E2E_TWO",
-      sentMs: 6,
-    });
-    correlation.observe(event("final", { runId: row.requestId }), 7);
-    correlation.observe(final(), 8);
-    correlation.observe(event("delta", { deltaText: "stale" }), 9);
-    expect(row.finalMs).toBe(5);
-    expect(row.firstDeltaMs).toBeNull();
-    expect(controlUiRequestSettled(next)).toBe(false);
-    expect(() => correlation.observe({ ...final(), runId: "duplicate-reply" }, 10)).toThrow(
-      "Multiple visible reply runs",
-    );
-  });
-
-  it("refuses unexpected tokens, cross-session replies and duplicate request identities", () => {
-    const { correlation, row, event, final } = fixture();
-    expect(() =>
-      correlation.observe(event("final", { message: { role: "assistant", text: "wrong" } }), 2),
-    ).toThrow("unexpected synthetic reply");
-    correlation.register({
-      ...row,
-      requestId: "other",
-      token: "OTHER",
-      sessionKey: "other-session",
-    });
-    expect(() => correlation.observe({ ...final(), sessionKey: "other-session" }, 2)).toThrow(
-      "unexpected synthetic reply",
-    );
-    expect(() => correlation.register(row)).toThrow("identity duplicated");
-  });
-
-  it("records terminal and ACK failures, and refuses an uncorrelated error", () => {
-    const { correlation, row, event } = fixture();
-    correlation.acknowledge(row.requestId, { runId: "wrong", status: "started" }, 1);
-    expect(row.error).toContain("changed the request identity");
-    correlation.observe(event("delta", { runId: row.requestId, deltaText: "partial" }), 1.5);
-    correlation.observe(
-      event("error", { runId: row.requestId, errorMessage: "provider failed" }),
-      2,
-    );
-    expect(row.error).toBe("chat error: provider failed");
-    expect(row.firstDeltaMs).toBe(1.5);
-    expect(() => correlation.observe(event("aborted"), 3)).toThrow("Uncorrelated");
-  });
-
-  it("reports late reply failures after drain without assigning them to a successor", () => {
-    const { correlation, row, event, final, ack } = fixture();
-    ack();
-    expect(correlation.observe(final(), 5)).toBe(row);
-    const next = correlation.register({
-      clientIndex: 0,
-      requestId: "request-2",
-      sessionKey: row.sessionKey,
-      token: "OPENCLAW_E2E_TWO",
-      sentMs: 6,
-    });
-    expect(summarizeControlUiRequests([row], 10, 1).replies).toBe(1);
-    const observed = correlation.observe(event("error", { errorMessage: "late failure" }), 11);
-    expect(observed).toBe(row);
-    expect(row).toMatchObject({ finalMs: 5, error: "chat error: late failure" });
-    expect(next.error).toBeNull();
-    expect(summarizeControlUiRequests([row, next], 10, 1)).toMatchObject({
-      replies: 0,
-      errors: 1,
-      pending: 1,
-    });
-  });
+  expect(reply.controlUiRequestSettled(row)).toBe(true);
 });
 
-describe("Control UI load statistics", () => {
-  it("does not count failed or unacknowledged requests as replies", () => {
-    const { row } = fixture();
-    const result = summarizeControlUiRequests(
-      [
-        { ...row, finalMs: 5 },
-        { ...row, ackMs: 2, finalMs: 6, error: "failed" },
-        { ...row, clientIndex: 1, sentMs: 11, ackMs: 12, finalMs: 15 },
-      ],
-      10,
-      2,
-    );
-    expect(result).toMatchObject({ replies: 0, errors: 1, pending: 1, missingActiveClients: [1] });
-    expect(summarizeControlUiRequests([], 10, 1)).toMatchObject({
-      replies: 0,
-      ackMs: null,
-      firstDeltaMs: null,
-    });
-    expect(() => summarizeControlUiRequests([], 0, 1)).toThrow("positive");
+it.each([true, false])("ignores non-replies and retains finals with ACK first=%s", (ackFirst) => {
+  const { row, observe, final, ack } = fixture();
+  if (ackFirst) {
+    ack();
+  }
+  observe("status", 2, { phase: "starting_model" });
+  observe("delta", 3, { deltaText: "", replace: true });
+  observe("final", 4, { runId: row.requestId });
+  expect(reply.controlUiRequestSettled(row)).toBe(false);
+  final();
+  expect(reply.controlUiRequestSettled(row)).toBe(ackFirst);
+  if (!ackFirst) {
+    ack();
+  }
+  expect(reply.controlUiRequestSettled(row)).toBe(true);
+  expect(row.firstDeltaMs).toBeNull();
+});
+
+it("keeps late custody and duplicate finals from completing the next request", () => {
+  const { row, register, observe, final, ack } = fixture();
+  ack();
+  final();
+  const next = register("request-2", "OPENCLAW_E2E_TWO", 6);
+  observe("final", 7, { runId: row.requestId });
+  final(8);
+  observe("delta", 9, { deltaText: "stale" });
+  expect(row).toMatchObject({ finalMs: 5, firstDeltaMs: null });
+  expect(reply.controlUiRequestSettled(next)).toBe(false);
+  expect(() => final(10, { runId: "duplicate-reply" })).toThrow("Multiple visible reply runs");
+});
+
+it("refuses unexpected tokens, cross-session replies and duplicate request identities", () => {
+  const { correlation, row, observe, final } = fixture();
+  expect(() => observe("final", 2, { message: { role: "assistant", text: "wrong" } })).toThrow(
+    "unexpected synthetic reply",
+  );
+  correlation.register({
+    ...row,
+    requestId: "other",
+    token: "OTHER",
+    sessionKey: "other-session",
   });
+  expect(() => final(2, { sessionKey: "other-session" })).toThrow("unexpected synthetic reply");
+  expect(() => correlation.register(row)).toThrow("identity duplicated");
+});
+
+it("records terminal and ACK failures, and refuses an uncorrelated error", () => {
+  const { correlation, row, observe } = fixture();
+  correlation.acknowledge(row.requestId, { runId: "wrong", status: "started" }, 1);
+  expect(row.error).toContain("changed the request identity");
+  observe("delta", 1.5, { runId: row.requestId, deltaText: "partial" });
+  observe("error", 2, { runId: row.requestId, errorMessage: "provider failed" });
+  expect(row).toMatchObject({ error: "chat error: provider failed", firstDeltaMs: 1.5 });
+  expect(() => observe("aborted", 3)).toThrow("Uncorrelated");
+});
+
+it("reports late reply failures after drain without assigning them to a successor", () => {
+  const { row, register, observe, final, ack } = fixture();
+  ack();
+  expect(final()).toBe(row);
+  const next = register("request-2", "OPENCLAW_E2E_TWO", 6);
+  expect(reply.summarizeControlUiRequests([row], 10, 1).replies).toBe(1);
+  const observed = observe("error", 11, { errorMessage: "late failure" });
+  expect(observed).toBe(row);
+  expect(row).toMatchObject({ finalMs: 5, error: "chat error: late failure" });
+  expect(next.error).toBeNull();
+  const drained = reply.summarizeControlUiRequests([row, next], 10, 1);
+  expect(drained).toMatchObject({ replies: 0, errors: 1, pending: 1 });
+});
+it("does not count failed or unacknowledged requests as replies", () => {
+  const { row } = fixture();
+  const result = reply.summarizeControlUiRequests(
+    [
+      { ...row, finalMs: 5 },
+      { ...row, ackMs: 2, finalMs: 6, error: "failed" },
+      { ...row, clientIndex: 1, sentMs: 11, ackMs: 12, finalMs: 15 },
+    ],
+    10,
+    2,
+  );
+  expect(result).toMatchObject({ replies: 0, errors: 1, pending: 1, missingActiveClients: [1] });
+  const empty = reply.summarizeControlUiRequests([], 10, 1);
+  expect(empty).toMatchObject({ replies: 0, ackMs: null, firstDeltaMs: null });
+  expect(() => reply.summarizeControlUiRequests([], 0, 1)).toThrow("positive");
 });

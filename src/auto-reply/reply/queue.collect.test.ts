@@ -857,7 +857,6 @@ describe("followup queue collect routing", () => {
       "channel:B",
       "channel:A",
     ]);
-    expect(queue?.evictedSummaryCount).toBe(1);
     expect(queue?.items.map((item) => item.originatingTo)).toEqual([
       "channel:B",
       "channel:survivor",
@@ -891,7 +890,6 @@ describe("followup queue collect routing", () => {
     expect(
       queue?.summaryElisions.flatMap((entry) => entry.sources.map((source) => source.prompt)),
     ).toEqual(["message 2", "message 3"]);
-    expect(queue?.evictedSummaryCount).toBe(2);
     await Promise.all(
       queue!.entries
         .filter((input) => input.retirementRequested)

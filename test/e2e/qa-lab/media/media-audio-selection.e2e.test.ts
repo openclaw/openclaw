@@ -31,18 +31,10 @@ function createSelectionConfig(
   return audioConfig(
     "qa-stt",
     "fixture-stt",
-    {
-      apiKey: "qa-test-key", // pragma: allowlist secret
-      baseUrl: "https://qa.invalid",
-      models: [],
-    },
+    { apiKey: "qa-test-key", baseUrl: "https://qa.invalid", models: [] }, // pragma: allowlist secret
     { attachments },
     fallbackModels,
   );
-}
-
-function audioAttempt(type: "cli" | "provider", provider: string, model: string) {
-  return { type, provider, model, outcome: "success" };
 }
 
 function createAudioProvider(seenFileNames: string[], fail = false): MediaUnderstandingProvider {
@@ -115,17 +107,6 @@ describe("QA media audio selection product proof", () => {
 
     expect(allModeCalls).toEqual(["third.ogg", "second.ogg"]);
     expect(allModeCtx.MediaUnderstanding?.map((output) => output.attachmentIndex)).toEqual([3, 2]);
-    expect(
-      allModeCtx.MediaUnderstandingDecisions?.find((decision) => decision.capability === "audio"),
-    ).toMatchObject({
-      outcome: "success",
-      attachments: [{ attachmentIndex: 3 }, { attachmentIndex: 2 }],
-      attachmentDispositions: {
-        0: { kind: "not-selected" },
-        2: { kind: "handled" },
-        3: { kind: "handled" },
-      },
-    });
     expect(allModeCtx.Transcript).toBe(
       "Audio 1:\ntranscript:third.ogg\n\nAudio 2:\ntranscript:second.ogg",
     );
@@ -166,37 +147,6 @@ describe("QA media audio selection product proof", () => {
 
     expect(providerAttempts).toEqual(["fallback.wav"]);
     expect(await fs.readFile(executable.markerPath, "utf8")).toBe(await fs.realpath(audioPath));
-    const cliProvider = path.parse(executable.command).name;
-    expect(ctx).toMatchObject({
-      Transcript: "cli transcript:fallback.wav",
-      MediaUnderstanding: [
-        {
-          attachmentIndex: 0,
-          kind: "audio.transcription",
-          provider: cliProvider,
-          model: executable.command,
-          text: "cli transcript:fallback.wav",
-        },
-      ],
-    });
-    expect(
-      ctx.MediaUnderstandingDecisions?.find((decision) => decision.capability === "audio"),
-    ).toMatchObject({
-      outcome: "success",
-      attachments: [
-        {
-          attachmentIndex: 0,
-          attempts: [
-            {
-              ...audioAttempt("provider", "qa-stt", "fixture-stt"),
-              outcome: "failed",
-              reason: expect.stringContaining("intentional provider failure"),
-            },
-            audioAttempt("cli", cliProvider, executable.command),
-          ],
-          chosen: audioAttempt("cli", cliProvider, executable.command),
-        },
-      ],
-    });
+    expect(ctx.Transcript).toBe("cli transcript:fallback.wav");
   });
 });

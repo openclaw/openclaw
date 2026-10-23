@@ -40,7 +40,10 @@ import {
   getOwnedSessionTranscriptReader,
 } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseScopedWriteTokenForPath as readScopedWriteToken,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import type { Message } from "../../llm/types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
@@ -104,9 +107,7 @@ export type {
 } from "./session-manager-types.js";
 
 export class SessionManager extends SessionManagerBranching {
-  private preparedInitialContext:
-    | { branch: SessionEntry[]; writeToken: string; view: object }
-    | undefined;
+  private preparedInitialContext?: { branch: SessionEntry[]; writeToken: string; view: object };
 
   private constructor(
     cwd: string,
@@ -138,7 +139,12 @@ export class SessionManager extends SessionManagerBranching {
   async [sessionManagerReadInitialContext]() {
     const prepared = this.preparedInitialContext;
     this.preparedInitialContext = undefined;
-    if (!this.persistenceTarget || !this.boundedContextLimits || this.pendingDeliberateAppend) {
+    if (
+      !this.persistenceTarget ||
+      !this.boundedContextLimits ||
+      "compaction" in this.boundedContextLimits ||
+      this.pendingDeliberateAppend
+    ) {
       return this.buildSessionContext();
     }
     // A deliberate local branch owns its view; a concurrent selection must not
@@ -151,12 +157,13 @@ export class SessionManager extends SessionManagerBranching {
       prepared &&
       reader &&
       !resolveSessionTranscriptReadFence(target) &&
-      prepared.writeToken === readSqliteDatabaseWriteTokenForPath(reader.database.path) &&
+      prepared.writeToken ===
+        readScopedWriteToken(reader.database.path, [sqliteSessionIdWriteScope(target.sessionId)]) &&
       Object.keys(prepared.view).every(
         (key) => Reflect.get(prepared.view, key) === Reflect.get(initial, key),
       )
     ) {
-      // The cohort already owns these bytes. Completed writes invalidate its receipt;
+      // The cohort owns these bytes. Unrelated session writes leave its receipt current;
       // materializing this snapshot need not join a later, still-pending write.
       this.assertTranscriptWriteActive();
       reader.assertCurrent();
@@ -465,27 +472,28 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /** @internal Prepare legacy compaction without hydrating the same transcript again. */
+  /** @internal Read complete current context and compaction facts in one owner snapshot. */
   static async [sessionManagerOpenCompaction](
     target: SessionTranscriptRuntimeTarget,
     options: { cwd?: string; signal?: AbortSignal } = {},
   ) {
-    const hydration = prepareSessionTranscriptHydration(target, undefined, options.signal);
+    const { cwd, signal } = options;
+    const limits = { compaction: true } as const;
+    const hydration = prepareSessionTranscriptHydration(target, limits, signal);
     const prepared = await hydration.read({ compaction: true });
-    if (prepared.kind !== "full" || !prepared.compaction) {
+    if (prepared.kind !== "bounded" || !prepared.compaction) {
       throw new Error("Expected a prepared compaction transcript");
     }
-    const entries = prepared.snapshot.events;
-    const header = findSessionTranscriptHeader(entries);
+    const context = prepared.snapshot;
+    const header = findSessionTranscriptHeader(context.events);
     return {
       ...prepared.compaction,
-      eventCount: entries.length,
+      eventCount: context.totalEvents,
       sessionManager: new SessionManager(
-        options.cwd ?? header?.cwd ?? process.cwd(),
+        cwd ?? header?.cwd ?? process.cwd(),
         prepared.compaction.sessionTarget,
-        entries,
-        undefined,
-        prepared.snapshot.version,
+        context.events,
+        { ...context, limits },
       ),
     };
   }
@@ -558,7 +566,11 @@ export class SessionManager extends SessionManagerBranching {
         const manager = new SessionManager(cwd, captured, context.events, { ...context, limits });
         const branch = manager.getBranch();
         const reader = context.completeActivePath && getOwnedSessionTranscriptReader(captured);
-        const writeToken = reader && readSqliteDatabaseWriteTokenForPath(reader.database.path);
+        const writeToken =
+          reader &&
+          readScopedWriteToken(reader.database.path, [
+            sqliteSessionIdWriteScope(captured.sessionId),
+          ]);
         if (writeToken && !manager.migrated && branch.length === context.totalEvents) {
           const events = cloneSessionModelContextEntries(manager.getHeader(), branch);
           manager.preparedInitialContext = {

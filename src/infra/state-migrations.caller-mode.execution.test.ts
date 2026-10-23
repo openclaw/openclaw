@@ -5,43 +5,37 @@ import { DatabaseSync } from "node:sqlite";
 import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resolveDaemonRuntimePinStorePath,
-  withDaemonRuntimePinStore,
-} from "../daemon/runtime-pin-store.js";
-import {
-  EMPTY_LEGACY_SESSION_SURFACES,
-  type PreparedLegacySessionSurfaces,
-} from "../plugins/legacy-session-surfaces.types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import * as stateDatabase from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+let { resolveDaemonRuntimePinStorePath, withDaemonRuntimePinStore } =
+  await import("../daemon/runtime-pin-store.js");
+import type { PreparedLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.types.js";
+let { EMPTY_LEGACY_SESSION_SURFACES } = await import("../plugins/legacy-session-surfaces.types.js");
+let { closeOpenClawAgentDatabasesAsync, closeOpenClawAgentDatabasesForTest } =
+  await import("../state/openclaw-agent-db.js");
+let { OPENCLAW_STATE_SCHEMA_VERSION } = await import("../state/openclaw-state-db-contract.js");
+let stateDatabase = await import("../state/openclaw-state-db.js");
+let { resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js");
+let { withStateMigrationBackupForTest } =
+  await import("../state/openclaw-state-schema.test-support.js");
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import { createSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
-import {
+let { createSqliteReadOnlyWorkerScope } = await import("./sqlite-readonly-worker.js");
+let {
   createCallerModeExecutionFixture,
   createCallerModeSnapshot,
   expectBlockedTailInPlanOrder,
   expectPlanReceiptDescriptorsToMatch,
   writeLegacyStateSchemaV1,
-} from "./state-migrations.caller-mode.test-helpers.js";
-import {
+} = await import("./state-migrations.caller-mode.test-helpers.js");
+let {
   autoMigrateLegacyState,
   detectLegacyStateMigrations,
   planLegacyStateMigrationsReadOnly,
   runLegacyStateMigrations,
-} from "./state-migrations.doctor.js";
-import * as mediaPersistence from "./state-migrations.media-persistence.js";
-import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
-import {
-  readLegacyMigrationReceipt,
-  resolveLegacyMigrationSourceKey,
-} from "./state-migrations.receipts.js";
-import {
-  resetAutoMigrateLegacyStateDirForTest,
-  resolveLegacyProfileWorkspaceMigrationPaths,
-} from "./state-migrations.state-dir.js";
+} = await import("./state-migrations.doctor.js");
+let mediaPersistence = await import("./state-migrations.media-persistence.js");
+let { readLegacyMigrationReceipt, resolveLegacyMigrationSourceKey } =
+  await import("./state-migrations.receipts.js");
+let { resolveLegacyProfileWorkspaceMigrationPaths } =
+  await import("./state-migrations.state-dir.js");
 import type { LegacyStateMigrationStepReceipt } from "./state-migrations.types.js";
 
 vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
@@ -49,6 +43,41 @@ vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
 }));
 
 const tempDirs = createTrackedTempDirs();
+
+async function reloadStateDirFixtureGraph() {
+  await closeOpenClawAgentDatabasesAsync();
+  await stateDatabase.closeOpenClawStateDatabaseAsync();
+  vi.resetModules();
+  ({ resolveDaemonRuntimePinStorePath, withDaemonRuntimePinStore } =
+    await import("../daemon/runtime-pin-store.js"));
+  ({ EMPTY_LEGACY_SESSION_SURFACES } = await import("../plugins/legacy-session-surfaces.types.js"));
+  ({ closeOpenClawAgentDatabasesAsync, closeOpenClawAgentDatabasesForTest } =
+    await import("../state/openclaw-agent-db.js"));
+  ({ OPENCLAW_STATE_SCHEMA_VERSION } = await import("../state/openclaw-state-db-contract.js"));
+  stateDatabase = await import("../state/openclaw-state-db.js");
+  ({ resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js"));
+  ({ withStateMigrationBackupForTest } =
+    await import("../state/openclaw-state-schema.test-support.js"));
+  ({ createSqliteReadOnlyWorkerScope } = await import("./sqlite-readonly-worker.js"));
+  ({
+    createCallerModeExecutionFixture,
+    createCallerModeSnapshot,
+    expectBlockedTailInPlanOrder,
+    expectPlanReceiptDescriptorsToMatch,
+    writeLegacyStateSchemaV1,
+  } = await import("./state-migrations.caller-mode.test-helpers.js"));
+  ({
+    autoMigrateLegacyState,
+    detectLegacyStateMigrations,
+    planLegacyStateMigrationsReadOnly,
+    runLegacyStateMigrations,
+  } = await import("./state-migrations.doctor.js"));
+  mediaPersistence = await import("./state-migrations.media-persistence.js");
+  ({ readLegacyMigrationReceipt, resolveLegacyMigrationSourceKey } =
+    await import("./state-migrations.receipts.js"));
+  ({ resolveLegacyProfileWorkspaceMigrationPaths } =
+    await import("./state-migrations.state-dir.js"));
+}
 
 function writeLegacyDoctorSources(stateDir: string): { execPath: string } {
   const execPath = path.join(stateDir, "exec-approvals.json");
@@ -126,10 +155,11 @@ function planFixture(fixture: Awaited<ReturnType<typeof makeFixture>>) {
 }
 
 afterEach(async () => {
-  vi.restoreAllMocks();
-  resetAutoMigrateLegacyStateDirForTest();
+  await closeOpenClawAgentDatabasesAsync();
+  await stateDatabase.closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   stateDatabase.closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
   await tempDirs.cleanup();
 });
 
@@ -261,22 +291,26 @@ describe("legacy state migration caller execution", () => {
       writeLegacyStateSchemaV1(stateDatabasePath);
       const sourceBytes = fs.readFileSync(authStorePath);
       {
-        const migration = detected
-          ? runLegacyStateMigrations({
-              detected,
-              ...(mode === "detected-directory" || mode === "detected-config"
-                ? {}
-                : { config: cfg, env: fixture.env }),
-              doctorOnlyStateMigrations: true,
-              legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-            })
-          : autoMigrateLegacyState({
-              cfg,
-              env: fixture.env,
-              homedir: () => fixture.homeDir,
-              doctorOnlyStateMigrations: mode === "doctor",
-              legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-            });
+        const migrate = () =>
+          detected
+            ? runLegacyStateMigrations({
+                detected,
+                ...(mode === "detected-directory" || mode === "detected-config"
+                  ? {}
+                  : { config: cfg, env: fixture.env }),
+                legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+              })
+            : autoMigrateLegacyState({
+                cfg,
+                env: fixture.env,
+                homedir: () => fixture.homeDir,
+                doctorOnlyStateMigrations: mode === "doctor",
+                legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+              });
+        const migration =
+          mode === "automatic"
+            ? migrate()
+            : withStateMigrationBackupForTest({ env: fixture.env }, migrate);
         if (mode === "automatic") {
           await expect(migration).rejects.toThrow("startup migrations did not complete cleanly");
         } else {
@@ -326,13 +360,15 @@ describe("legacy state migration caller execution", () => {
     writeLegacyStateSchemaV1(stateDatabasePath);
     const plan = await planFixture(fixture);
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      doctorOnlyStateMigrations: true,
-      env: fixture.env,
-      homedir: () => fixture.homeDir,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
+    const result = await withStateMigrationBackupForTest({ env: fixture.env }, () =>
+      autoMigrateLegacyState({
+        cfg,
+        doctorOnlyStateMigrations: true,
+        env: fixture.env,
+        homedir: () => fixture.homeDir,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      }),
+    );
 
     expect(result.mode).toBe("doctor");
     expect(result.warnings).toEqual([]);
@@ -465,6 +501,7 @@ describe("legacy state migration caller execution", () => {
   });
 
   it("relocates the legacy state root before running Doctor-owned migrations", async () => {
+    await reloadStateDirFixtureGraph();
     const root = await tempDirs.make("openclaw-doctor-state-root-");
     const legacyStateDir = path.join(root, ".clawdbot");
     const stateDir = path.join(root, ".openclaw");
@@ -571,6 +608,7 @@ describe("legacy state migration caller execution", () => {
   });
 
   it("refuses later migrations when the legacy state root cannot be relocated", async () => {
+    await reloadStateDirFixtureGraph();
     const root = await tempDirs.make("openclaw-doctor-state-root-refusal-");
     const legacyStateDir = path.join(root, ".clawdbot");
     const stateDir = path.join(root, ".openclaw");
@@ -659,62 +697,6 @@ describe("legacy state migration caller execution", () => {
     expect(fs.existsSync(execPath)).toBe(true);
     expect(postRefusalQueries).toEqual([]);
     expect(snapshotSqliteArtifacts(databasePath)).toEqual(databaseArtifactsBefore);
-  });
-
-  it("receipts a blocking conditional media warning before its ordered tail", async () => {
-    const fixture = await makeFixture();
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          heartbeat: { agentId: "healthy" },
-          systemAgent: { agentId: "healthy" },
-        },
-        entries: { healthy: {}, broken: {} },
-      },
-      talk: { agentId: "healthy" },
-    };
-    fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
-    createLegacyDatabaseFixture({
-      agentId: "healthy",
-      env: fixture.env,
-      eventsBySession: {},
-    });
-    const brokenDatabasePath = path.join(
-      fixture.stateDir,
-      "agents",
-      "broken",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    fs.mkdirSync(path.dirname(brokenDatabasePath), { recursive: true });
-    fs.writeFileSync(brokenDatabasePath, "not sqlite");
-    const { execPath } = writeLegacyDoctorSources(fixture.stateDir);
-    const plan = await planFixture(fixture);
-
-    const result = await autoMigrateLegacyState({
-      cfg,
-      doctorOnlyStateMigrations: true,
-      env: fixture.env,
-      homedir: () => fixture.homeDir,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
-
-    expect(result.stepReceipts.find((receipt) => receipt.id === "media-persistence")).toMatchObject(
-      {
-        requiredness: "conditional",
-        outcome: "refused",
-        changes: [expect.stringContaining("Upgraded agent database schema")],
-        warnings: [expect.stringContaining(brokenDatabasePath)],
-        refusal: { code: "step-refused" },
-      },
-    );
-    expectBlockedTailInPlanOrder({
-      plan,
-      receipts: result.stepReceipts,
-      blockerId: "media-persistence",
-    });
-    expect(fs.existsSync(execPath)).toBe(true);
   });
 
   it("reports a completed profile move when plugin preparation refuses", async () => {

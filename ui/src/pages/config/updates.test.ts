@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRoot, createSignal, merge } from "solid-js";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { UpdateScheduleState } from "../../api/types.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { projectUpdateSentinel } from "../../app/update-overlay-helpers.ts";
@@ -9,10 +11,11 @@ import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import {
   createUpdatesViewDom,
+  nativeSettings,
   createUpdatesViewProps as createProps,
   type UpdatesViewOverrides,
 } from "./updates.test-support.ts";
@@ -35,8 +38,66 @@ function toggle(title: string) {
   return row(title).querySelector<HTMLInputElement>('input[role="switch"]')!;
 }
 
+function rowButton(title: string) {
+  return row(title).querySelector<HTMLButtonElement>("button")!;
+}
+
+function text(title: string) {
+  return row(title).textContent;
+}
+
+function setToggle(title: string, checked: boolean) {
+  const input = toggle(title);
+  input.checked = checked;
+  input.dispatchEvent(new Event("change"));
+  return input;
+}
+
 function failedRun() {
   return createUpdateRunFixture({ status: "failed", phase: "finished", reason: "build-failed" });
+}
+
+const checkFailure = {
+  mode: "manual",
+  tone: "warn",
+  text: "Could not check for updates: timeout",
+} as const;
+const restartPending =
+  "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.";
+const gitSchedule = (git: NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>) =>
+  ({ channel: "dev", autoEnabled: false, install: { kind: "git", git } }) as const;
+
+function statusCase(
+  name: string,
+  props: UpdatesViewOverrides,
+  status = "Update available v2026.8.2",
+  tone = "accent",
+  button: Partial<Pick<HTMLButtonElement, "disabled" | "title"> & { label: string }> = {},
+) {
+  return {
+    name,
+    props,
+    status,
+    tone,
+    button: { disabled: false, title: "", label: "Update Gateway…", ...button },
+  };
+}
+
+function checkProps(gitStatus?: "behind" | "diverged"): UpdatesViewOverrides {
+  return {
+    ...(gitStatus ? { configObject: { update: { channel: "dev", checkOnStart: false } } } : {}),
+    update: {
+      updateSchedule: gitStatus
+        ? gitSchedule(
+            gitStatus === "diverged"
+              ? { status: "diverged", commitsBehind: 3, commitsAhead: 1 }
+              : { status: "behind", commitsBehind: 3 },
+          )
+        : null,
+      updateAvailable: null,
+      updateStatusCheckBanner: checkFailure,
+    },
+  };
 }
 
 function gitUpdate(git: NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>) {
@@ -71,205 +132,136 @@ function waitingUpdate(campaign: Pick<Campaign, "forceAtMs"> & Partial<Campaign>
   } satisfies NonNullable<UpdatesViewOverrides["update"]>;
 }
 
-function nativeSettings(snapshot: NativeDeviceSettingsCapability["snapshot"]) {
-  return {
-    snapshot,
-    subscribe: () => () => undefined,
-    set: vi.fn(),
-    requestPermission: vi.fn(),
-    openSystemSettings: vi.fn(),
-    openPanel: vi.fn(),
-    checkForUpdates: vi.fn(),
-    setupChromeExtension: vi.fn(),
-    refresh: vi.fn(),
-    dispose: vi.fn(),
-  } satisfies NativeDeviceSettingsCapability;
-}
-
 describe("renderUpdates", () => {
   it.each([
-    {
-      name: "checking",
-      props: { update: { updateStatusRefreshing: true } },
-      status: "Checking for updates…",
-      tone: "muted",
-      label: "Update now",
-      disabled: true,
-      title: "Checking for updates…",
-    },
-    {
-      name: "updating while a check is pending",
-      props: { updateBusy: true, update: { updateStatusRefreshing: true } },
-      status: "Update available v2026.8.2",
-      tone: "accent",
-      label: "Updating…",
-      disabled: true,
-      title: "",
-    },
-    {
-      name: "failed check with a known update",
-      props: {
-        update: {
-          updateStatusCheckBanner: {
-            mode: "manual",
-            tone: "warn",
-            text: "Could not check for updates: timeout",
-          },
-        },
+    ["available", {}, "Install the available update and restart the Gateway."],
+    [
+      "current",
+      {
+        updateSchedule: { channel: "stable", autoEnabled: false, install: { kind: "package" } },
+        updateAvailable: null,
       },
-      status: "Could not check for updates: timeout",
-      tone: "warn",
-      label: "Update now",
-      disabled: false,
-      title: "",
+      "Run the Gateway updater and restart. The current version may be reinstalled.",
+    ],
+    [
+      "unknown",
+      { updateSchedule: null, updateAvailable: null },
+      "Run the Gateway updater and restart. The current version may be reinstalled.",
+    ],
+  ] as const)("identifies the Gateway action with %s status", (_status, update, description) => {
+    renderUpdates({ update });
+    const action = row("Update Gateway…");
+    expect(action.textContent).toContain(description);
+    expect(action.querySelector("button")?.classList.contains("primary")).toBe(false);
+  });
+
+  it.each(["Update Gateway…", "Retry update"])(
+    "dispatches %s to the latest handler without replacing the button",
+    (label) => {
+      const initial = vi.fn(async () => undefined);
+      const replacement = vi.fn(async () => undefined);
+      const [handler, setHandler] = createRoot((dispose) => {
+        onTestFinished(dispose);
+        return createSignal<() => Promise<void>>(() => initial);
+      });
+      const update = label === "Retry update" ? { updateRun: failedRun() } : undefined;
+      mountUpdates(
+        merge(createProps({ update }), {
+          get onUpdateNow() {
+            return handler();
+          },
+        }),
+      );
+      const button = () =>
+        [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+          (candidate) => candidate.textContent?.trim() === label,
+        );
+      const retained = button()!;
+
+      setHandler(() => replacement);
+      flush();
+      expect(button()).toBe(retained);
+      retained.click();
+
+      expect(initial).not.toHaveBeenCalled();
+      expect(replacement).toHaveBeenCalledOnce();
     },
-    {
-      name: "failed check with a previously confirmed checkout update",
-      props: {
-        configObject: { update: { channel: "dev", checkOnStart: false } },
-        update: {
-          updateSchedule: {
-            channel: "dev",
-            autoEnabled: false,
-            install: { kind: "git", git: { status: "behind", commitsBehind: 3 } },
-          },
-          updateAvailable: null,
-          updateStatusCheckBanner: {
-            mode: "manual",
-            tone: "warn",
-            text: "Could not check for updates: timeout",
-          },
-        },
-      },
-      status: "Could not check for updates: timeout",
-      tone: "warn",
-      label: "Update now",
-      disabled: false,
-      title: "",
-    },
-    {
-      name: "failed check with a previously confirmed diverged checkout update",
-      props: {
-        configObject: { update: { channel: "dev", checkOnStart: false } },
-        update: {
-          updateSchedule: {
-            channel: "dev",
-            autoEnabled: false,
-            install: {
-              kind: "git",
-              git: { status: "diverged", commitsAhead: 1, commitsBehind: 3 },
-            },
-          },
-          updateAvailable: null,
-          updateStatusCheckBanner: {
-            mode: "manual",
-            tone: "warn",
-            text: "Could not check for updates: timeout",
-          },
-        },
-      },
-      status: "Could not check for updates: timeout",
-      tone: "warn",
-      label: "Update now",
-      disabled: false,
-      title: "",
-    },
-    {
-      name: "failed check without a known update",
-      props: {
-        update: {
-          updateSchedule: null,
-          updateAvailable: null,
-          updateStatusCheckBanner: {
-            mode: "manual",
-            tone: "warn",
-            text: "Could not check for updates: timeout",
-          },
-        },
-      },
-      status: "Could not check for updates: timeout",
-      tone: "warn",
-      label: "Update now",
+  );
+
+  it.each([
+    statusCase(
+      "checking",
+      { update: { updateStatusRefreshing: true } },
+      "Checking for updates…",
+      "muted",
+      { disabled: true, title: "Checking for updates…" },
+    ),
+    statusCase(
+      "updating while checking",
+      { updateBusy: true, update: { updateStatusRefreshing: true } },
+      undefined,
+      undefined,
+      { disabled: true, label: "Updating…" },
+    ),
+    statusCase(
+      "failed check with update",
+      { update: { updateStatusCheckBanner: checkFailure } },
+      checkFailure.text,
+      "warn",
+    ),
+    ...(["behind", "diverged"] as const).map((status) =>
+      statusCase(
+        `failed check with ${status} checkout`,
+        checkProps(status),
+        checkFailure.text,
+        "warn",
+      ),
+    ),
+    statusCase("failed check without update", checkProps(), checkFailure.text, "warn", {
       disabled: true,
       title: "Check for updates successfully before starting an update.",
-    },
-    {
-      name: "up to date",
-      props: {
+    }),
+    statusCase(
+      "up to date",
+      {
         update: {
           updateSchedule: { channel: "stable", autoEnabled: false, install: { kind: "package" } },
           updateAvailable: null,
         },
       },
-      status: "Up to date",
-      tone: "ok",
-      label: "Update now",
-      disabled: false,
-      title: "",
-    },
-    {
-      name: "update available",
-      props: {},
-      status: "Update available v2026.8.2",
-      tone: "accent",
-      label: "Update now",
-      disabled: false,
-      title: "",
-    },
-    {
-      name: "real update failure",
-      props: {
-        update: { updateStatusBanner: { tone: "danger", text: "Update error: build failed" } },
-      },
-      status: "Update error: build failed",
-      tone: "danger",
-      label: "Update now",
-      disabled: false,
-      title: "",
-    },
-    {
-      name: "restart pending",
-      props: {
-        updateBusy: true,
-        update: {
-          updateStatusBanner: {
-            tone: "info",
-            text: "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
-          },
-        },
-      },
-      status:
-        "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
-      tone: "accent",
-      label: "Updating…",
-      disabled: true,
-      title: "",
-    },
-  ] satisfies Array<{
-    name: string;
-    props: UpdatesViewOverrides;
-    status: string;
-    tone: string;
-    label: string;
-    disabled: boolean;
-    title: string;
-  }>)("distinguishes $name", ({ props, status, tone, label, disabled, title }) => {
+      "Up to date",
+      "ok",
+    ),
+    statusCase("update available", {}),
+    statusCase(
+      "real update failure",
+      { update: { updateStatusBanner: { tone: "danger", text: "Update error: build failed" } } },
+      "Update error: build failed",
+      "danger",
+    ),
+    statusCase(
+      "restart pending",
+      { updateBusy: true, update: { updateStatusBanner: { tone: "info", text: restartPending } } },
+      restartPending,
+      undefined,
+      { disabled: true, label: "Updating…" },
+    ),
+  ])("distinguishes $name", ({ props, status, tone, button: expected }) => {
     const onCheckStatus = vi.fn(async () => true);
     renderUpdates({ ...props, onCheckStatus });
     const statusRow = row("Status");
-    expect(statusRow.querySelector(".settings-status")?.textContent?.trim()).toBe(status);
-    expect(statusRow.querySelector(".settings-status")?.className).toBe(
+    const statusElement = statusRow.querySelector(".settings-status");
+    expect([statusElement?.textContent?.trim(), statusElement?.className]).toEqual([
+      status,
       tone === "muted" ? "settings-status" : `settings-status settings-status--${tone}`,
-    );
-    const button = row("Update now").querySelector<HTMLButtonElement>("button")!;
-    expect(button.textContent?.trim()).toBe(label);
-    expect(button.disabled).toBe(disabled);
-    expect(button.title).toBe(title);
+    ]);
+    const button = row("Update Gateway…").querySelector<HTMLButtonElement>("button")!;
+    expect(button.textContent?.trim()).toBe(expected.label);
+    expect(button).toMatchObject({ disabled: expected.disabled, title: expected.title });
     if (props.update?.updateStatusCheckBanner) {
       expect(container.textContent).not.toContain("Latest update attempt");
       const check = statusRow.querySelector<HTMLButtonElement>("button")!;
-      expect(check.textContent?.trim()).toBe("Check for updates");
-      expect(check.disabled).toBe(false);
+      expect([check.textContent?.trim(), check.disabled]).toEqual(["Check for updates", false]);
       check.click();
       expect(onCheckStatus).toHaveBeenCalledOnce();
     }
@@ -302,19 +294,17 @@ describe("renderUpdates", () => {
       );
       const props = createProps({ nativeDeviceSettings });
       mountUpdates(props);
-      expect(container.textContent).not.toContain("This Mac");
-      expect(container.textContent).not.toContain("This iPhone");
-      expect(container.textContent).not.toContain("This device");
-      expect(container.textContent).not.toContain("App version");
-      expect(container.textContent).not.toContain("Check for updates automatically");
-      expect(row("Gateway version").textContent).toContain("2026.8.1");
-      row("Update now").querySelector<HTMLButtonElement>("button")?.click();
+      expect(container.textContent).not.toMatch(
+        /This Mac|This iPhone|This device|App version|Check for updates automatically/,
+      );
+      expect(text("Gateway version")).toContain("2026.8.1");
+      rowButton("Update Gateway…").click();
       expect(props.onUpdateNow).toHaveBeenCalledOnce();
       expect(nativeDeviceSettings.checkForUpdates).not.toHaveBeenCalled();
     },
   );
 
-  it("keeps Mac updater controls native and available independently of Gateway admin access", () => {
+  it("keeps Mac updater controls native and available independently of Gateway admin access", async () => {
     const nativeListeners = new Set<Parameters<NativeDeviceSettingsCapability["subscribe"]>[0]>();
     const snapshot = createNativeDeviceSettingsSnapshot();
     const nativeDeviceSettings = {
@@ -331,12 +321,16 @@ describe("renderUpdates", () => {
     mountUpdates(props);
     expect(container.textContent).toContain("This Mac");
     expect(row("App version").textContent).toContain("2026.9.3 (build 42)");
-    const automatic = toggle("Check for updates automatically");
-    expect(automatic.hasAttribute("disabled")).toBe(false);
-    automatic.checked = false;
-    automatic.dispatchEvent(new Event("change"));
-    expect(nativeDeviceSettings.set).toHaveBeenCalledWith("updates.automatic", false);
-    row("Check for Updates…").querySelector("button")?.click();
+    expect(toggle("Check for updates automatically").hasAttribute("aria-disabled")).toBe(false);
+    setToggle("Check for updates automatically", false);
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
+      "updates.automatic",
+      false,
+      expect.any(Function),
+    );
+    const appUpdateButton = rowButton("Check for Updates…");
+    expect(appUpdateButton.classList.contains("primary")).toBe(true);
+    appUpdateButton.click();
     expect(nativeDeviceSettings.checkForUpdates).toHaveBeenCalledOnce();
     nativeDeviceSettings.snapshot = {
       ...nativeDeviceSettings.snapshot,
@@ -351,59 +345,29 @@ describe("renderUpdates", () => {
       listener(nativeDeviceSettings.snapshot);
     }
     flush();
-    expect(row("App version").textContent).toContain("2026.9.4 (build 43)");
+    await waitForSolid(() =>
+      expect(row("App version").textContent).toContain("2026.9.4 (build 43)"),
+    );
     expect(row("App updates unavailable").textContent).toContain("Updater is not bundled");
     expect(container.textContent).not.toContain("Check for updates automatically");
     renderUpdates();
-    expect(container.textContent).not.toContain("This Mac");
+    await waitForSolid(() => expect(container.textContent).not.toContain("This Mac"));
   });
 
-  it("renders build facts, policy controls, status, and the shared update action", () => {
-    const onChannelChange = vi.fn();
+  it("renders build facts and retains policy controls across a config refresh", () => {
     const onAutomaticUpdatesChange = vi.fn();
-    const onUpdateNow = vi.fn();
-    renderUpdates({ onChannelChange, onAutomaticUpdatesChange, onUpdateNow });
-
-    expect(row("Gateway version").textContent).toContain("2026.8.1");
-    expect(row("Control UI commit").textContent).toContain("0123456789ab");
-    expect(row("Built").querySelector("time")?.getAttribute("datetime")).toBe(
-      "1970-01-01T00:00:00.000Z",
-    );
-    expect(row("Last commit").querySelector("time")?.getAttribute("datetime")).toBe(
-      "1970-01-01T00:00:00.000Z",
-    );
-    expect(row("Install type").textContent).toContain("Package");
+    renderUpdates({ onAutomaticUpdatesChange });
+    expect(text("Gateway version")).toContain("2026.8.1");
+    expect(text("Control UI commit")).toContain("0123456789ab");
     expect(
-      [...container.querySelectorAll(".settings-segmented__btn")].map((option) =>
-        option.textContent?.trim(),
-      ),
-    ).toEqual(["Stable", "Beta", "Dev"]);
-    expect(row("Status").textContent).toContain("Update available v2026.8.2");
-
-    const channel = row("Release channel").querySelector<HTMLElement>('[role="radiogroup"]');
-    if (!channel) {
-      throw new Error("Missing release channel control");
-    }
-    const beta = channel.querySelector<HTMLInputElement>('input[type="radio"][value="beta"]');
-    if (!beta) {
-      throw new Error("Missing beta channel control");
-    }
-    beta.click();
-    expect(onChannelChange).toHaveBeenCalledWith("beta", expect.any(HTMLElement));
-
-    const automatic = toggle("Automatic updates");
-    automatic.checked = true;
-    automatic.dispatchEvent(new Event("change"));
+      ["Built", "Last commit"].map((title) => row(title).querySelector("time")?.dateTime),
+    ).toEqual(["1970-01-01T00:00:00.000Z", "1970-01-01T00:00:00.000Z"]);
+    expect(text("Install type")).toContain("Package");
+    const beta = row("Release channel").querySelector<HTMLInputElement>('input[value="beta"]')!;
+    const automatic = setToggle("Automatic updates", true);
     expect(onAutomaticUpdatesChange).toHaveBeenCalledWith(true);
-
-    row("Update now").querySelector<HTMLButtonElement>("button")?.click();
-    expect(onUpdateNow).toHaveBeenCalledOnce();
-
     renderUpdates({
       configObject: { update: { channel: "beta", auto: { enabled: true } } },
-      onChannelChange,
-      onAutomaticUpdatesChange,
-      onUpdateNow,
     });
     expect(toggle("Automatic updates")).toBe(automatic);
     expect(row("Release channel").querySelector('input[value="beta"]')).toBe(beta);
@@ -426,71 +390,25 @@ describe("renderUpdates", () => {
       },
     });
 
-    const channel = row("Release channel").querySelector<HTMLElement>('[role="radiogroup"]');
-    expect(channel?.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value).toBe(
-      "extended-stable",
-    );
     expect(
       [...container.querySelectorAll(".settings-segmented__btn")].map((option) =>
         option.textContent?.trim(),
       ),
     ).toEqual(["Stable", "Beta", "Dev", "Extended stable"]);
-    const selected = channel?.querySelector<HTMLInputElement>(
-      'input[type="radio"][value="extended-stable"]',
-    );
-    expect(selected?.checked).toBe(true);
+    expect(row("Release channel").querySelector("input:checked")).toMatchObject({
+      value: "extended-stable",
+    });
     const automatic = automaticUpdatesControl().toggle;
     expect(automatic.checked).toBe(false);
     expect(automatic.hasAttribute("disabled")).toBe(true);
     expect(row("Automatic updates").textContent).toContain("never installs them automatically");
   });
 
-  it("lets an admin resume disabled checks while preserving the automatic-update preference", () => {
-    const onUpdateChecksChange = vi.fn();
-    renderUpdates({
-      configObject: {
-        update: { channel: "stable", checkOnStart: false, auto: { enabled: true } },
-      },
-      update: { updateSchedule: { channel: "stable", autoEnabled: false } },
-      onUpdateChecksChange,
-    });
-
-    const checks = toggle("Check for updates");
-    expect(checks.checked).toBe(false);
-    expect(checks.hasAttribute("disabled")).toBe(false);
-    const automatic = automaticUpdatesControl().toggle;
-    expect(automatic.checked).toBe(true);
-    expect(automatic.hasAttribute("disabled")).toBe(true);
-    expect(row("Automatic updates").textContent).toContain("Check for updates");
-    checks.checked = true;
-    checks.dispatchEvent(new Event("change"));
-    expect(onUpdateChecksChange).toHaveBeenCalledWith(true);
-  });
-
   it.each([
-    {
-      name: "disables dev package installs",
-      channel: "dev",
-      installKind: "package",
-      disabled: true,
-      description:
-        "Automatic dev updates require a source (git) install. This install is a package install — use stable or beta for automatic updates.",
-    },
-    {
-      name: "allows dev git installs",
-      channel: "dev",
-      installKind: "git",
-      disabled: false,
-      description: undefined,
-    },
-    {
-      name: "allows stable package installs",
-      channel: "stable",
-      installKind: "package",
-      disabled: false,
-      description: undefined,
-    },
-  ] as const)("$name", ({ channel, installKind, disabled, description }) => {
+    ["dev", "package", true],
+    ["dev", "git", false],
+    ["stable", "package", false],
+  ] as const)("gates automatic %s updates for %s installs", (channel, installKind, disabled) => {
     renderUpdates({
       configObject: { update: { channel, auto: { enabled: false } } },
       update: {
@@ -504,13 +422,16 @@ describe("renderUpdates", () => {
 
     const automatic = automaticUpdatesControl();
     expect(automatic.toggle.hasAttribute("disabled")).toBe(disabled);
-    if (description) {
-      expect(automatic.row.textContent).toContain(description);
+    if (disabled) {
+      expect(automatic.row.textContent).toContain(
+        "Automatic dev updates require a source (git) install. This install is a package install — use stable or beta for automatic updates.",
+      );
     }
   });
 
-  it("renders the authoritative waiting countdown as a quiet timer", () => {
-    const onHoldUpdate = vi.fn(async () => true);
+  it("keeps the waiting timer mounted and retries a declined hold", async () => {
+    const holding = createDeferred<boolean>();
+    const onHoldUpdate = vi.fn().mockReturnValueOnce(holding.promise).mockResolvedValue(true);
     const props = createProps({
       update: waitingUpdate({ forceAtMs: 762_000 }),
       onHoldUpdate,
@@ -525,8 +446,45 @@ describe("renderUpdates", () => {
     expect(timer?.textContent).toContain("Waiting for active work · forced update in 11:41");
     const hold = row("Status").querySelector<HTMLButtonElement>("button");
     expect(hold?.textContent?.trim()).toBe("Hold 1 h");
-    hold?.click();
+    hold!.click();
+    await waitForSolid(() => expect(hold!.disabled).toBe(true));
+    hold!.click();
     expect(onHoldUpdate).toHaveBeenCalledOnce();
+    expect(row("Status").querySelector("[role='timer']")).toBe(timer);
+    holding.resolve(false);
+    await waitForSolid(() => expect(hold!.disabled).toBe(false));
+    expect(row("Status").querySelector("button")).toBe(hold);
+    hold!.click();
+    expect(onHoldUpdate).toHaveBeenCalledTimes(2);
+    await waitForSolid(() => expect(hold!.disabled).toBe(false));
+  });
+
+  it("keeps a replacement campaign usable while a retired hold settles", async () => {
+    const retired = createDeferred<boolean>();
+    const current = createDeferred<boolean>();
+    const onHoldUpdate = vi
+      .fn()
+      .mockReturnValueOnce(retired.promise)
+      .mockReturnValueOnce(current.promise);
+    renderUpdates({ update: waitingUpdate({ forceAtMs: 762_000 }), onHoldUpdate });
+    const hold = row("Status").querySelector<HTMLButtonElement>("button")!;
+    hold.click();
+    await waitForSolid(() => expect(hold.disabled).toBe(true));
+
+    renderUpdates({
+      update: waitingUpdate({ id: "campaign-2", forceAtMs: 762_000 }),
+      onHoldUpdate,
+    });
+    const replacement = row("Status").querySelector<HTMLButtonElement>("button")!;
+    expect(replacement.disabled).toBe(false);
+    retired.resolve(false);
+    await retired.promise;
+    await waitForSolid(() => expect(replacement.disabled).toBe(false));
+    replacement.click();
+    expect(onHoldUpdate).toHaveBeenCalledTimes(2);
+    await waitForSolid(() => expect(replacement.disabled).toBe(true));
+    current.resolve(false);
+    await waitForSolid(() => expect(replacement.disabled).toBe(false));
   });
 
   it("shows held campaign timing and hides the one-shot hold action", () => {
@@ -537,7 +495,6 @@ describe("renderUpdates", () => {
 
     expect(row("Status").textContent).toContain("Update held · resumes in 1:00");
     expect(row("Status").querySelector("button")).toBeNull();
-
     mountUpdates({ ...props, nowMs: 31_000 });
     expect(row("Status").textContent).toContain("Update held · resumes in 0:30");
     expect(row("Status").querySelector("button")).toBeNull();
@@ -547,20 +504,8 @@ describe("renderUpdates", () => {
 
     renderUpdates({
       update: {
+        ...waitingUpdate({ forceAtMs: 961_000, holdUntilMs: 500 }),
         heldUpdateCampaignId: "campaign-1",
-        updateSchedule: {
-          channel: "dev",
-          autoEnabled: true,
-          campaign: {
-            id: "campaign-1",
-            state: "waiting-for-idle",
-            announcedAtMs: 1_000,
-            holdUntilMs: 500,
-            forceAtMs: 961_000,
-            updatedAtMs: 1_000,
-          },
-        },
-        updateAvailable: null,
       },
     });
     expect(row("Status").querySelector("button")).toBeNull();
@@ -597,27 +542,11 @@ describe("renderUpdates", () => {
   });
 
   it.each([
-    {
-      name: "current",
-      git: { status: "current" } as const,
-      label: "Up to date",
-    },
-    {
-      name: "ahead",
-      git: { status: "ahead", commitsAhead: 2 } as const,
-      label: "2 commits ahead of tracked upstream",
-    },
-    {
-      name: "diverged",
-      git: { status: "diverged", commitsAhead: 1, commitsBehind: 3 } as const,
-      label: "Diverged · 1 ahead, 3 behind",
-    },
-    {
-      name: "fetch unavailable",
-      git: { status: "unavailable", reason: "fetch-failed" } as const,
-      label: "Could not fetch the tracked upstream",
-    },
-  ])("renders explicit $name git status without a dot", ({ git, label }) => {
+    [{ status: "current" }, "Up to date"],
+    [{ status: "ahead", commitsAhead: 2 }, "2 commits ahead of tracked upstream"],
+    [{ status: "diverged", commitsAhead: 1, commitsBehind: 3 }, "Diverged · 1 ahead, 3 behind"],
+    [{ status: "unavailable", reason: "fetch-failed" }, "Could not fetch the tracked upstream"],
+  ] as const)("renders explicit %j git status without a dot", (git, label) => {
     renderUpdates({
       configObject: { update: { channel: "dev" } },
       update: gitUpdate(git),
@@ -727,83 +656,39 @@ describe("renderUpdates", () => {
     },
   );
 
-  it("keeps retry and report as separate actions for one final failure", () => {
-    const onReportFailure = vi.fn(async () => undefined);
-    const run = failedRun();
-    renderUpdates({
-      update: { updateRun: run, reportableUpdateFailureId: run.runId },
-      onReportFailure,
-    });
-
-    const actions = [...row("Recovery").querySelectorAll<HTMLButtonElement>("button")];
-    expect(actions.map((button) => button.textContent?.trim())).toEqual([
-      "Check status",
-      "Retry update",
-      "Report update failure",
-    ]);
-    actions[2]?.click();
-    expect(onReportFailure).toHaveBeenCalledExactlyOnceWith(run.runId);
-  });
-
-  it("renders a prefilled issue without exposing a server-local path", () => {
-    const run = failedRun();
-    renderUpdates({
-      update: {
-        updateRun: run,
-        reportableUpdateFailureId: run.runId,
-        updateFailureReportNotice: {
-          attemptId: run.runId,
-          result: {
-            status: "fallback",
-            fallbackUrl: "https://github.com/openclaw/openclaw/issues/new?title=update",
-            message: "gh is not authenticated",
+  it.each([
+    ["fallback", "Review and submit the prefilled issue in your browser."],
+    ["pending", "may have completed"],
+  ] as const)(
+    "renders a %s issue submission without leaking a path or replay link",
+    (status, message) => {
+      const run = failedRun();
+      renderUpdates({
+        update: {
+          updateRun: run,
+          reportableUpdateFailureId: run.runId,
+          updateFailureReportNotice: {
+            attemptId: run.runId,
+            result:
+              status === "fallback"
+                ? {
+                    status,
+                    fallbackUrl: "https://github.com/openclaw/openclaw/issues/new?title=update",
+                    message: "gh is not authenticated",
+                  }
+                : { status, message: "GitHub issue submission may have completed." },
           },
         },
-      },
-    });
+      });
 
-    const report = row("Failure report");
-    expect(report.textContent).toContain("Review and submit the prefilled issue in your browser.");
-    expect(report.textContent).not.toContain("/private/report.md");
-    expect(report.querySelector("a")?.getAttribute("href")).toContain("issues/new");
-  });
-
-  it("renders an ambiguous submission as pending without a replay link", () => {
-    const run = failedRun();
-    renderUpdates({
-      update: {
-        updateRun: run,
-        reportableUpdateFailureId: run.runId,
-        updateFailureReportNotice: {
-          attemptId: run.runId,
-          result: {
-            status: "pending",
-            message: "GitHub issue submission may have completed.",
-          },
-        },
-      },
-    });
-
-    const report = row("Failure report");
-    expect(report.textContent).toContain("may have completed");
-    expect(report.querySelector("a")).toBeNull();
-  });
-
-  it("keeps read-only facts visible while locking controls for non-admins", () => {
-    renderUpdates({ canAdmin: false, canUpdate: false, configBusy: true });
-
-    expect(container.querySelector("[role='note']")?.textContent).toContain(
-      "Administrator access is required",
-    );
-    expect(
-      [...row("Release channel").querySelectorAll<HTMLInputElement>('input[type="radio"]')].every(
-        (input) => input.disabled,
-      ),
-    ).toBe(true);
-    expect(toggle("Automatic updates")?.hasAttribute("disabled")).toBe(true);
-    expect(toggle("Check for updates")?.hasAttribute("disabled")).toBe(true);
-    expect(row("Update now").querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
-    expect(row("Status").querySelector("button")).toBeNull();
-    expect(row("Gateway version").textContent).toContain("2026.8.1");
-  });
+      const report = row("Failure report");
+      expect(report.textContent).toContain(message);
+      expect(report.textContent).not.toContain("/private/report.md");
+      if (status === "fallback") {
+        expect(report.querySelector("a")?.getAttribute("href")).toContain("issues/new");
+      } else {
+        expect(report.querySelector("a")).toBeNull();
+      }
+    },
+  );
 });

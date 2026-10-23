@@ -474,6 +474,18 @@ describe("embedded run session prompt state", () => {
     expect(prompt.match(/Continue from the compacted transcript/gu)).toHaveLength(1);
   });
 
+  it("drops a retained compaction continuation once its internal prompt is persisted", async () => {
+    await using state = await createState();
+    state.activateCompactionContinuation("continue after compaction");
+    state.activateInternalPrompt("visible-answer retry");
+    expect(state.activePrompt.override).toBe("visible-answer retry\n\ncontinue after compaction");
+
+    state.onUserMessagePersisted(makeUserMessage(state.activePrompt.override));
+    state.activateInternalPrompt("empty-response retry");
+
+    expect(state.activePrompt.override).toBe("empty-response retry");
+  });
+
   it("keeps a draft revision pending until its owned projection is ready", async () => {
     const reconcile = await import("../../config/sessions/session-transcript-reconcile.js");
     const projection = createDeferred();

@@ -33,7 +33,7 @@ export function voiceRuntimes() {
       };
       return { authority, runId, client, connId: client.connId };
     },
-    cleanup() {
+    cleanup: () => {
       for (const authority of authorities.splice(0)) {
         releaseAgentRunDelegatedAuthority(authority);
         clearAgentRunContext(authority.operationalRunInstance.runId);
@@ -83,15 +83,10 @@ export function voiceRpc(
   }
   return {
     start,
-    async invoke(
-      this: void,
-      method: string,
-      params: Record<string, unknown>,
-      client = options().client,
-    ) {
-      const request = start(method, params, client);
-      await request.completed;
-      return request.respond;
+    invoke: async (...args: Parameters<typeof start>) => {
+      const { respond, completed } = start(...args);
+      await completed;
+      return respond;
     },
   };
 }
@@ -101,11 +96,9 @@ export function expectSuccess(respond: RespondFn, result: Record<string, unknown
 }
 
 export function expectFailure(respond: RespondFn, message?: string) {
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
+  const error =
     message === undefined
       ? expect.any(Object)
-      : expect.objectContaining({ message: expect.stringContaining(message) }),
-  );
+      : expect.objectContaining({ message: expect.stringContaining(message) });
+  expect(respond).toHaveBeenCalledWith(false, undefined, error);
 }

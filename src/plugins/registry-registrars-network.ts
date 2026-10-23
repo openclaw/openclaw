@@ -44,7 +44,6 @@ import {
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginApi,
-  OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginMcpServerConnectionResolver,
   PluginRegistrationMode,
@@ -324,21 +323,6 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     replacePluginHttpRoutes(registry, registration, canonicalMatches, true);
   };
 
-  const registerHostedMediaResolver = (
-    record: PluginRecord,
-    resolver: OpenClawPluginHostedMediaResolver,
-  ) => {
-    if (typeof resolver !== "function") {
-      reportRegistrationError(record, "hosted media resolver registration missing resolver");
-      return;
-    }
-    registry.hostedMediaResolvers.push(
-      createRegistration(record, {
-        resolver,
-      }),
-    );
-  };
-
   const registerMcpServerConnectionResolver = (
     record: PluginRecord,
     resolver: OpenClawPluginMcpServerConnectionResolver,
@@ -513,7 +497,6 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     registerGatewayMethod,
     registerSessionCatalog,
     registerHttpRoute,
-    registerHostedMediaResolver,
     registerMcpServerConnectionResolver,
     registerChannel,
   };

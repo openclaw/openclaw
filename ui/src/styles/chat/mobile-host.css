@@ -1,0 +1,667 @@
+/* The new wrappers are transparent to the existing desktop grid. */
+.chat-mobile-host,
+.chat-mobile-host__panels {
+  display: contents;
+}
+
+/* More specific than the native dock/narrow grid; desktop never matches. */
+.sidebar-region.sidebar-region--mobile-host:not(.sidebar-region--expanded):not(
+    .sidebar-region--expanded-side
+  ) {
+  --mobile-safe-top: env(safe-area-inset-top, 0px);
+  --mobile-sheet-radius: 26px;
+  --mobile-content-inset: 16px;
+  --mobile-rail-inset: 16px;
+  --mobile-control-icon-size: 16px;
+  --mobile-dock-size: max(
+    var(--mobile-min-height, 152px),
+    min(var(--mobile-dock-height, 52%), calc(100% - 200px))
+  );
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) var(
+      --mobile-live-reserved,
+      var(--mobile-reserved-height, 0px)
+    );
+  background: var(--bg);
+  grid-template-areas: "main-header" "main" "mobile-host";
+  transition: grid-template-rows 280ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.sidebar-region--mobile-host[data-mobile-open]::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: var(--mobile-live-reserved, var(--mobile-reserved-height, 0px));
+  height: var(--mobile-sheet-radius);
+  background: var(--popover);
+  pointer-events: none;
+}
+
+.sidebar-region--mobile-host[data-mobile-open] > .sidebar-region__primary {
+  position: relative;
+  z-index: 6;
+  background: var(--bg);
+  border-radius: 0 0 var(--mobile-sheet-radius) var(--mobile-sheet-radius);
+}
+
+.sidebar-region--mobile-host > .chat-mobile-host {
+  position: absolute;
+  inset: auto 0 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  height: var(--mobile-live-height, var(--mobile-dock-size));
+  min-height: 0;
+  overflow: hidden;
+  background: var(--popover);
+  --rail-header-background: var(--mobile-panel-rail-background);
+  color: var(--text);
+  border-radius: 0;
+  opacity: 1;
+  transform: none;
+  transition:
+    height 280ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    transform var(--duration-slow) var(--ease-out),
+    opacity var(--duration-normal) var(--ease-out);
+  @starting-style {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+
+.sidebar-region--mobile-host > .chat-mobile-host[data-mode="expanded"] {
+  z-index: 7;
+  height: var(
+    --mobile-live-height,
+    var(--mobile-expanded-height, min(85%, calc(100% - max(24px, env(safe-area-inset-top)))))
+  );
+  max-height: calc(100% - env(safe-area-inset-top));
+  border-radius: var(--mobile-sheet-radius) var(--mobile-sheet-radius) 0 0;
+  border-top: 1px solid var(--border-strong);
+}
+
+.sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__grabber {
+  display: grid;
+  place-items: center;
+  position: relative;
+  flex: 0 0 10px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  touch-action: none;
+  cursor: ns-resize;
+}
+
+.sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__grabber span {
+  width: 36px;
+  height: 4px;
+  transform: translateY(4px);
+  border-radius: 2px;
+  background: var(--muted);
+  opacity: 0.4;
+}
+
+.sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 52px;
+  padding: 8px;
+
+  .chat-mobile-host__circle {
+    display: grid;
+    place-items: center;
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: 50%;
+    color: var(--muted);
+    background: var(--bg-hover);
+  }
+
+  .chat-mobile-host__circle:is(:hover, :focus-visible) {
+    border-color: var(--border-hover);
+    color: var(--text-strong);
+  }
+
+  .chat-mobile-host__circle svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .chat-mobile-host__segments {
+    display: flex;
+    justify-content: center;
+    flex: 1;
+    min-width: 0;
+    gap: 0;
+    max-width: 240px;
+    padding: 3px;
+    margin-inline: auto;
+    border-radius: 18px;
+    background: var(--bg);
+  }
+
+  .chat-mobile-host__segments button {
+    flex: 1;
+    min-width: 0;
+    height: 30px;
+    padding: 5px 12px;
+    border: 0;
+    border-radius: 16px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .chat-mobile-host__segments button[aria-pressed="true"] {
+    background: var(--bg-hover);
+    color: var(--text-strong);
+  }
+
+  .chat-mobile-host__title {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 24px;
+    font-weight: 500;
+    color: var(--text-strong);
+    overflow: hidden;
+    text-overflow: clip;
+    white-space: nowrap;
+
+    /* Selected PR is the sole two-line heading exception. Keep the header height. */
+    &[data-details-route="pull-request"] {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      text-overflow: ellipsis;
+      font-size: 16px;
+      line-height: 20px;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+  }
+}
+
+.sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__panels {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-areas: "side-header" "mobile-back" "side";
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__details,
+.sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__page,
+.sidebar-region--mobile-host
+  > .chat-mobile-host
+  > .chat-mobile-host__panels
+  > .sidebar-region__right-runtime
+  > .side-panel
+  > .chat-mobile-host__page {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.sidebar-region--mobile-host
+  > .chat-mobile-host
+  > .chat-mobile-host__panels
+  > .sidebar-region__right-runtime
+  > .side-panel
+  > .chat-mobile-host__local-back {
+  grid-area: mobile-back;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 12px;
+}
+
+.sidebar-region--mobile-host
+  > .chat-mobile-host
+  > .chat-mobile-host__panels
+  > .sidebar-region__right-runtime
+  > .side-panel
+  > .chat-mobile-host__local-back
+  button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.sidebar-region--mobile-host
+  > .chat-mobile-host
+  > .chat-mobile-host__panels
+  > .sidebar-region__right-runtime
+  > .side-panel
+  > .chat-mobile-host__local-back
+  svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sidebar-region--mobile-host
+  > .chat-mobile-host
+  > .chat-mobile-host__details
+  > div
+  > .chat-details {
+  position: static;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: none;
+  padding: 0;
+  background: transparent;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.sidebar-region--mobile-host > .chat-mobile-host[hidden],
+.sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__panels[hidden],
+.sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__details[hidden],
+.sidebar-region--mobile-host
+  > .chat-mobile-host
+  > .chat-mobile-host__panels
+  > .sidebar-region__right-runtime
+  > .side-panel
+  > .side-panel__body[hidden],
+.sidebar-region--mobile-host
+  > .chat-mobile-host
+  > .chat-mobile-host__details
+  > div
+  > .chat-details[hidden] {
+  display: none;
+}
+
+.sidebar-region--mobile-host[data-mobile-dragging],
+.sidebar-region--mobile-host[data-mobile-dragging] > .chat-mobile-host {
+  transition: none;
+}
+
+/* Keyboard activation remains immediate; pointer openings reveal the sheet. */
+.sidebar-region--mobile-host:has(button:focus-visible, [role="button"]:focus-visible)
+  > .chat-mobile-host {
+  transition: none;
+  @starting-style {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-region.sidebar-region--mobile-host,
+  .sidebar-region--mobile-host > .chat-mobile-host {
+    transition: none;
+    @starting-style {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}
+
+.sidebar-region--mobile-host
+  > .chat-mobile-host
+  > .chat-mobile-host__details
+  .chat-mobile-details-page {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.sidebar-region--mobile-host
+  > .chat-mobile-host
+  > .chat-mobile-host__details
+  .chat-mobile-details-page[hidden] {
+  display: none;
+}
+
+.sidebar-region--mobile-host
+  > .chat-mobile-host
+  > .chat-mobile-host__details
+  .chat-mobile-details-page__body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+.sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__details {
+  display: flex;
+  overflow: hidden;
+}
+
+/* Host-owned insets only for leaves without an interior padding owner.
+   Root Details, automation bodies, transcripts and tool canvases stay full bleed. */
+.sidebar-region--mobile-host
+  .chat-mobile-host__page:is(
+    [data-mobile-page="people"],
+    [data-mobile-page="sharing"],
+    [data-mobile-page="session-access"],
+    [data-mobile-page="task-progress"]
+  ),
+.sidebar-region--mobile-host
+  .chat-mobile-details-page:is(
+    [data-details-page="people"],
+    [data-details-page="sharing"],
+    [data-details-page="session-access"],
+    [data-details-page="task-progress"],
+    [data-details-page="pull-requests"],
+    [data-details-page="pull-request"],
+    [data-details-page="pull-request-checks"],
+    [data-details-page="pull-request-monitoring"],
+    [data-details-page="outputs"],
+    [data-details-page="versions"],
+    [data-details-page="publication"]
+  )
+  > .chat-mobile-details-page__body {
+  padding: var(--mobile-content-inset) var(--mobile-content-inset) 24px;
+  scroll-padding-block: 12px 24px;
+}
+
+/* The tab rail belongs to the sheet surface; native control rails use --bg. */
+.sidebar-region--mobile-host .side-panel__header {
+  background: var(--popover);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.sidebar-region--mobile-host .side-panel__header:not(.side-panel__header--occupied) {
+  display: none;
+}
+
+.sidebar-region--mobile-host .side-panel__header .tabstrip:not(.tabstrip--desktop) .tabstrip-tab {
+  height: 30px;
+  padding-inline: 10px 30px;
+  border-radius: 10px;
+}
+
+.sidebar-region--mobile-host
+  .side-panel__header
+  .tabstrip:not(.tabstrip--desktop)
+  .tabstrip-tab:hover,
+.sidebar-region--mobile-host
+  .side-panel__header
+  .tabstrip:not(.tabstrip--desktop)
+  .tabstrip-tab[active] {
+  border-radius: 10px;
+  background: var(--bg-hover);
+}
+
+.sidebar-region--mobile-host
+  .side-panel__header
+  .tabstrip:not(.tabstrip--desktop)
+  .tabstrip-tab[active] {
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.sidebar-region--mobile-host
+  .side-panel__header
+  .tabstrip:not(.tabstrip--desktop)
+  .tabstrip-tab__close {
+  height: 30px;
+  margin-inline-start: -28px;
+  z-index: 1;
+  border-radius: 10px;
+  background: transparent;
+}
+
+.sidebar-region--mobile-host
+  .side-panel__header
+  .tabstrip:not(.tabstrip--desktop)
+  .tabstrip-tab:hover
+  + .tabstrip-tab__close,
+.sidebar-region--mobile-host
+  .side-panel__header
+  .tabstrip:not(.tabstrip--desktop)
+  .tabstrip-tab[active]
+  + .tabstrip-tab__close,
+.sidebar-region--mobile-host
+  .side-panel__header
+  .tabstrip:not(.tabstrip--desktop)
+  .tabstrip-tab__close:hover,
+.sidebar-region--mobile-host
+  .side-panel__header
+  .tabstrip:not(.tabstrip--desktop)
+  .tabstrip-tab__close:focus-visible {
+  background: transparent;
+}
+
+/* Appearance alone changes on interaction. Native width and stable gutters do
+   not change when scroll begins/ends, including nested light-DOM scrollers. */
+.sidebar-region--mobile-host .chat-mobile-host,
+.sidebar-region--mobile-host .chat-mobile-host * {
+  --scrollbar-thumb: transparent;
+  --scrollbar-thumb-hover: transparent;
+  scrollbar-color: transparent transparent;
+}
+
+/* Reserve space only on existing scrollports. Hidden layout wrappers must not
+   accumulate gutters; embedded native views keep their own scrollbar policy. */
+.sidebar-region--mobile-host
+  .chat-mobile-host
+  :is(
+    .chat-mobile-host__page,
+    .chat-mobile-details-page__body,
+    .chat-workspace-mobile__scroll,
+    .chat-panel-launcher-mobile,
+    .chat-subagents-mobile,
+    .chat-processes__list,
+    .chat-processes__output,
+    .session-diff-mobile__scroll,
+    .session-automation-mobile__task,
+    .sidebar-file-view .cm-scroller,
+    .sidebar-file-view__markdown-scroll,
+    .sidebar-file-view__markdown,
+    .sidebar-image-view__canvas,
+    .lr-content,
+    .lr-diff,
+    .bp-viewport
+  ) {
+  scrollbar-gutter: stable;
+}
+
+/* Separate hover: the build guards hover selectors on touch devices. */
+.sidebar-region--mobile-host .chat-mobile-host :hover,
+.sidebar-region--mobile-host .chat-mobile-host :is(:focus-within, [data-mobile-scrolling]) {
+  --scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--muted) 64%, transparent);
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.sidebar-region--mobile-host .side-panel__header .tabstrip {
+  margin-inline-end: 0;
+  scrollbar-width: thin;
+}
+
+.sidebar-region--mobile-host
+  .side-panel__header
+  .tabstrip-tab:not([active])
+  + .tabstrip-tab__close {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Search/navigation rails sit inside the lighter sheet, not on the tab rail. */
+.sidebar-region--mobile-host .chat-workspace-mobile__rail {
+  background: var(--popover);
+}
+
+.sidebar-region--mobile-host .chat-mobile-host__local-back {
+  background: var(--bg);
+}
+
+/* Resource wrappers must reveal the host surface; canvases keep their own fill. */
+.sidebar-region--mobile-host .chat-mobile-host .side-panel__panel {
+  background: transparent;
+}
+
+/* Like the desktop fallback rail, this fills only the gap before a native reader
+   supplies its own chrome, including lazy loading, errors and generic content. */
+.sidebar-region--mobile-host
+  .chat-files-panel__page:has(> .chat-files-panel__reader .sidebar-file-mobile__rail)
+  > .chat-files-panel__mobile-fallback-rail {
+  display: none;
+}
+
+/* The mobile viewport owns the outer edges; all spacing remains inside sheets. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .shell--mobile-nav .content--chat:not(.content--new-session) {
+    --content-inline-padding: 0px;
+    padding-inline: 0;
+  }
+
+  .shell--mobile-nav .content--chat .chat.chat {
+    border-radius: 0;
+  }
+}
+
+.sidebar-region--mobile-host[data-mobile-dragging] > .chat-mobile-host {
+  z-index: 7;
+}
+
+.sidebar-region--mobile-host > .chat-mobile-host[data-presentation="sheet"] {
+  z-index: 7;
+  height: var(--mobile-live-height, var(--mobile-sheet-height, auto));
+  max-height: 50%;
+  border-radius: var(--mobile-sheet-radius) var(--mobile-sheet-radius) 0 0;
+  border-top: 1px solid var(--border-strong);
+}
+
+.sidebar-region--mobile-host
+  > .chat-mobile-host[data-presentation="sheet"]
+  > .chat-mobile-host__page {
+  flex: 0 1 auto;
+}
+
+/* Mounted pages reveal without delaying interaction or resetting their scroll. */
+.sidebar-region--mobile-host
+  .chat-mobile-host
+  :is(
+    .chat-mobile-host__details,
+    .chat-mobile-host__panels,
+    .chat-mobile-host__page,
+    .chat-mobile-details-page
+  ):not([hidden]) {
+  opacity: 1;
+  translate: 0 0;
+  transition:
+    opacity 125ms var(--ease-out, ease-out),
+    translate 125ms var(--ease-out, ease-out);
+  @starting-style {
+    opacity: 0.92;
+    translate: 0 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+    @starting-style {
+      opacity: 1;
+      translate: 0 0;
+    }
+  }
+}
+
+.sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__grabber::before {
+  content: "";
+  position: absolute;
+  inset: -8px 0;
+}
+
+.chat-mobile-host__backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  background: color-mix(in srgb, var(--overlay-palette-backdrop) 50%, transparent);
+  touch-action: none;
+}
+
+.chat-mobile-host__scroll-fades {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.chat-mobile-host__scroll-edge {
+  position: absolute;
+  height: 10px;
+  pointer-events: none;
+}
+
+.chat-mobile-host__scroll-edge--top {
+  background: linear-gradient(to bottom, var(--mobile-fade-surface), transparent);
+}
+
+.chat-mobile-host__scroll-edge--bottom {
+  background: linear-gradient(to top, var(--mobile-fade-surface), transparent);
+}
+
+.chat-mobile-host__scroll-edge[hidden] {
+  display: none;
+}
+
+@media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+  .chat-mobile-host__scroll-fades {
+    display: none;
+  }
+}
+
+/* The more spacious independent-sheet sample is limited to Move to group. */
+.sidebar-region--mobile-host > .chat-mobile-host[data-mobile-page="session-group"] {
+  max-height: calc(100% - env(safe-area-inset-top));
+  padding-top: 4px;
+}
+
+.sidebar-region--mobile-host
+  > .chat-mobile-host[data-mobile-page="session-group"]
+  > .chat-mobile-host__header {
+  flex-basis: 52px;
+  padding: 6px 16px 10px;
+}
+
+.sidebar-region--mobile-host
+  > .chat-mobile-host[data-mobile-page="session-group"]
+  > .chat-mobile-host__grabber {
+  flex-basis: 14px;
+}
+
+.sidebar-region--mobile-host
+  > .chat-mobile-host[data-mobile-page="session-group"]
+  > .chat-mobile-host__grabber
+  span {
+  transform: none;
+}
+
+.sidebar-region--mobile-host
+  > .chat-mobile-host[data-mobile-page="session-group"]
+  > .chat-mobile-host__header
+  .chat-mobile-host__title {
+  text-align: center;
+}
+
+.sidebar-region--mobile-host
+  > .chat-mobile-host[data-mobile-page="session-group"]
+  > .chat-mobile-host__page {
+  scrollbar-gutter: auto;
+}
+
+.chat-mobile-host__panels:has(.chat-subagents-mobile__header) .chat-mobile-host__local-back {
+  display: none;
+}

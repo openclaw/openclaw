@@ -16,7 +16,6 @@ const providerIdentity = { ok: true, appId: "cli_alpha", botOpenId: "bot_alpha",
 
 const alphaAccount: ResolvedFeishuAccount = {
   accountId: "alpha",
-  selectionSource: "explicit",
   enabled: true,
   configured: true,
   appId: "cli_alpha",
@@ -132,19 +131,14 @@ describe("Feishu monitor startup preflight", () => {
 
   it("parses startup probe timeout env strictly", () => {
     expect(resolveStartupProbeTimeoutMs({})).toBe(30_000);
-    expect(
-      resolveStartupProbeTimeoutMs({ OPENCLAW_FEISHU_STARTUP_PROBE_TIMEOUT_MS: "90000" }),
-    ).toBe(90_000);
-    expect(
-      resolveStartupProbeTimeoutMs({
-        OPENCLAW_FEISHU_STARTUP_PROBE_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER),
-      }),
-    ).toBe(MAX_TIMER_TIMEOUT_MS);
-
-    for (const value of ["0x10", "1e3", "10.5"]) {
+    for (const [value, expected] of [
+      ["90000", 90_000],
+      [String(Number.MAX_SAFE_INTEGER), MAX_TIMER_TIMEOUT_MS],
+      ...["0x10", "1e3", "10.5"].map((invalid) => [invalid, 30_000] as const),
+    ] as const) {
       expect(
         resolveStartupProbeTimeoutMs({ OPENCLAW_FEISHU_STARTUP_PROBE_TIMEOUT_MS: value }),
-      ).toBe(30_000);
+      ).toBe(expected);
     }
   });
 
@@ -204,7 +198,6 @@ describe("Feishu monitor startup preflight", () => {
 
     await expect(fetchBotIdentityForMonitor(alphaAccount, { runtime })).resolves.toEqual({
       botOpenId: "bot_alpha",
-      botName: "Alpha",
       source: "provider",
     });
     expect(writeCachedFeishuBotIdentityMock).toHaveBeenCalledWith({
@@ -254,7 +247,6 @@ describe("Feishu monitor startup preflight", () => {
 
     await expect(fetchBotIdentityForMonitor(alphaAccount, { runtime })).resolves.toEqual({
       botOpenId: "bot_alpha",
-      botName: "Alpha",
       source: "provider",
     });
 

@@ -2,7 +2,7 @@ import type {
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
 } from "openclaw/plugin-sdk/types";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   OnePasswordBroker,
   type AuditRow,
@@ -13,6 +13,10 @@ import type { OnePasswordConfig, OnePasswordItemConfig } from "./config.js";
 import { MemoryKeyedStore } from "./memory-store.test-support.js";
 import { AUTHORIZATION_NONCE_PARAM } from "./pending-authorization.js";
 import { createOnePasswordTool } from "./tool.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const invocation = {
   agentId: "agent-a",
@@ -40,6 +44,7 @@ function config() {
 
 function setup(nowValue = 1_000, configured: OnePasswordConfig = config()) {
   let now = nowValue;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
   let currentConfig: OnePasswordConfig | undefined = configured;
   const audit = new MemoryKeyedStore<AuditRow>(() => now);
   const grants = new MemoryKeyedStore<StandingGrant>(() => now);
@@ -55,7 +60,6 @@ function setup(nowValue = 1_000, configured: OnePasswordConfig = config()) {
       resolveConfig: () => currentConfig,
       opClient: { getItem },
       stores,
-      now: () => now,
     });
   const broker = createBroker();
   return {

@@ -454,29 +454,19 @@ export class SubagentLifecycleController {
   resumeAncestorCleanup = (settledEntry: SubagentRunRecord): void =>
     resumeAncestorCleanup(this, settledEntry);
 
-  static discardTerminalDelivery(
-    this: void,
-    entry: SubagentRunRecord,
-    completedAt: number,
-    reason: "dismissed" | "expired" = "dismissed",
-  ): void {
+  static discardTerminalDelivery(this: void, entry: SubagentRunRecord, completedAt: number): void {
     const delivery = ensureDeliveryState(entry);
     const payload = delivery.payload;
-    if (reason === "dismissed") {
-      delivery.disposition = "intentional_non_delivery";
-      delivery.dismissedAt = completedAt;
-    } else {
-      delivery.discardedAt = completedAt;
-      delivery.discardReason = "expired";
-      delivery.discardedPayloadSummary = {
-        requesterSessionKey: payload?.requesterSessionKey ?? entry.requesterSessionKey,
-        childSessionKey: payload?.childSessionKey ?? entry.childSessionKey,
-        childRunId: payload?.childRunId ?? entry.runId,
-        endedAt: payload?.endedAt ?? entry.execution.endedAt,
-        status: payload?.outcome?.status ?? entry.execution.outcome?.status,
-        lastError: getDeliveryLastError(entry) ?? null,
-      };
-    }
+    delivery.discardedAt = completedAt;
+    delivery.discardReason = "expired";
+    delivery.discardedPayloadSummary = {
+      requesterSessionKey: payload?.requesterSessionKey ?? entry.requesterSessionKey,
+      childSessionKey: payload?.childSessionKey ?? entry.childSessionKey,
+      childRunId: payload?.childRunId ?? entry.runId,
+      endedAt: payload?.endedAt ?? entry.execution.endedAt,
+      status: payload?.outcome?.status ?? entry.execution.outcome?.status,
+      lastError: getDeliveryLastError(entry) ?? null,
+    };
     Object.assign(delivery, {
       status: "discarded",
       queueId: undefined,

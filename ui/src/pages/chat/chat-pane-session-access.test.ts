@@ -19,7 +19,10 @@ import {
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
-import { renderPaneHeaderInto } from "./components/chat-pane-header.test-support.ts";
+import {
+  openNativeMenu,
+  renderPaneHeaderInto,
+} from "./components/chat-pane-header.test-support.ts";
 
 async function createHeaderDraftPane(row: GatewaySessionRow) {
   const fixture = createTestChatPane({
@@ -454,13 +457,21 @@ describe("chat pane session access", () => {
         container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled,
       ).toBe(false),
     );
-    container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.click();
+    const menu = container.querySelector(".chat-pane__sharing-menu")!;
+    await openNativeMenu(menu, "access");
+    expect(container.querySelector(".chat-pane__sharing-permissions")).toBeNull();
     await waitForSolid(() =>
-      expect(container.querySelector(".chat-pane__sharing-panel")?.matches(":popover-open")).toBe(
-        true,
+      expect(container.querySelector<HTMLButtonElement>('[data-value="access"]')?.disabled).toBe(
+        false,
       ),
     );
-    expect(container.querySelector('[data-value="visibility:read-only"]')).not.toBeNull();
-    expect(container.textContent).not.toContain("People");
+    const access = container.querySelector<HTMLButtonElement>('[data-value="access"]');
+    expect(access).not.toBeNull();
+    access!.click();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector<HTMLButtonElement>('[data-value="visibility:read-only"]')?.disabled,
+      ).toBe(false),
+    );
   });
 });

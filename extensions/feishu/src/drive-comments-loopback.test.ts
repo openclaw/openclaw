@@ -21,6 +21,26 @@ const config = {
 type DeliveryContext = { channel?: string; to?: string; threadId?: string | number };
 type WireRequest = { method: string; url: string; body: string };
 type ApiReply = { body: unknown; status?: number; wait?: Promise<void>; received?: () => void };
+type TargetCase = {
+  action: string;
+  ambient?: string;
+  token: string;
+  file: string;
+  type: string;
+  defaulted: boolean;
+  channel?: string;
+  explicitType?: string;
+};
+const targetCase = (
+  action: string,
+  ambient: string | undefined,
+  token: string,
+  file: string,
+  type: string,
+  defaulted = false,
+  extra: Pick<TargetCase, "channel" | "explicitType"> = {},
+): TargetCase => ({ action, ambient, token, file, type, defaulted, ...extra });
+const ambient = (type: string) => `comment:${type}:ambient_file:ambient_comment`;
 
 async function createDriveLoopback(replies: ApiReply[], deliveryContext?: DeliveryContext) {
   const requests: WireRequest[] = [];
@@ -210,72 +230,24 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
   );
 
   it.each([
-    {
-      action: "list_comments",
-      ambient: undefined,
-      token: " raw/+ ",
-      file: "%20raw%2F%2B%20",
-      type: "docx",
-      defaulted: true,
-    },
-    {
-      action: "list_comments",
-      ambient: "comment:sheet:ambient_file:ambient_comment",
-      token: " ",
-      file: "ambient_file",
-      type: "sheet",
-      defaulted: false,
-    },
-    {
-      action: "list_comment_replies",
-      ambient: "comment:file:ambient_file:ambient_comment",
-      token: " ",
-      file: "ambient_file",
-      type: "file",
-      defaulted: false,
-    },
-    {
-      action: "list_comment_replies",
-      ambient: "comment:sheet:ambient_file:ambient_comment",
-      channel: "slack",
-      token: " raw/+ ",
-      file: "%20raw%2F%2B%20",
-      type: "docx",
-      defaulted: true,
-    },
-    {
-      action: "add_comment",
-      ambient: "comment:doc:ambient_file:ambient_comment",
-      token: " ",
-      file: "ambient_file",
-      type: "doc",
-      defaulted: false,
-    },
-    {
-      action: "add_comment",
-      ambient: "comment:slides:ambient_file:ambient_comment",
-      token: " raw/+ ",
-      file: "%20raw%2F%2B%20",
-      type: "docx",
-      defaulted: true,
-    },
-    {
-      action: "reply_comment",
-      ambient: "comment:slides:ambient_file:ambient_comment",
-      token: " ",
-      file: "ambient_file",
-      type: "slides",
-      defaulted: false,
-    },
-    {
-      action: "reply_comment",
-      ambient: "comment:doc:ambient_file:ambient_comment",
-      token: " explicit/+ ",
-      file: "explicit%2F%2B",
-      type: "docx",
-      defaulted: false,
+    targetCase("list_comments", undefined, " raw/+ ", "%20raw%2F%2B%20", "docx", true),
+    targetCase("list_comments", ambient("sheet"), " ", "ambient_file", "sheet"),
+    targetCase("list_comment_replies", ambient("file"), " ", "ambient_file", "file"),
+    targetCase(
+      "list_comment_replies",
+      ambient("sheet"),
+      " raw/+ ",
+      "%20raw%2F%2B%20",
+      "docx",
+      true,
+      { channel: "slack" },
+    ),
+    targetCase("add_comment", ambient("doc"), " ", "ambient_file", "doc"),
+    targetCase("add_comment", ambient("slides"), " raw/+ ", "%20raw%2F%2B%20", "docx", true),
+    targetCase("reply_comment", ambient("slides"), " ", "ambient_file", "slides"),
+    targetCase("reply_comment", ambient("doc"), " explicit/+ ", "explicit%2F%2B", "docx", false, {
       explicitType: "docx",
-    },
+    }),
   ])("resolves $action targets over HTTP ($type, $file)", async (testCase) => {
     const isReply = testCase.action === "reply_comment";
     const fixture = await createDriveLoopback(

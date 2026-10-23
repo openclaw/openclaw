@@ -110,6 +110,35 @@ function expectWithoutHostSql(action: () => void) {
   }
 }
 
+it.for(["runtime", "automation"])(
+  "retains sharing facts across metadata but invalidates broad %s changes",
+  async (scope, { state }) => {
+    const storePath = state.statePath("metadata-sharing.sqlite");
+    const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
+    const sessionKey = "agent:main:metadata-sharing";
+    const harness = sharingHarness(cfg, sessionKey, storePath);
+    harness.write(restrictedEntry("metadata-sharing", "first"));
+    using prepared = releasing(await harness.prepare());
+    for (const metadata of [
+      "profiles",
+      "catalog",
+      "acp",
+      "agent-runs",
+      "subagent-runs",
+      "worker-placements",
+      "worker-environments",
+      "config",
+      "config-presentation",
+      "config-profiles",
+    ]) {
+      sessionChanges.emit({ all: true, scope: metadata });
+      expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("metadata-sharing");
+    }
+    sessionChanges.emit({ all: true, scope });
+    expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
+  },
+);
+
 it("refuses a worker sharing result whose captured birthtime differs from its retained source", async ({
   state,
 }) => {

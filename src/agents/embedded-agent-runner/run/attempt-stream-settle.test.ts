@@ -121,7 +121,6 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       requesterSessionKey: sessionKey,
       taskKind: "image_generation",
       status: "running",
-      createdAt: Date.now(),
     });
     const controller = new AbortController();
     const input = createSettleFixture({
@@ -425,7 +424,6 @@ describe("attempt projection persistence through settlement", () => {
             images: [],
             modelPrompt: "continue",
             onFinalPromptText: () => {},
-            onSteeringAcknowledged: () => {},
             persistToolResultProjections: async () => {
               await persistToolResultProjections(projectionState, (customType, data) =>
                 manager.appendCustomEntryAsync(customType, data),

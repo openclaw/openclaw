@@ -36,9 +36,11 @@ async function withSideChat(run: SideChatRun, chatSendShortcut: ChatSendShortcut
   });
 }
 
-async function dropSideChatImage(composer: Locator, fileName: string) {
-  const image =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+async function dropSideChatImage(
+  composer: Locator,
+  fileName: string,
+  image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+) {
   await composer.evaluate(
     (element, file) => {
       const dataTransfer = new DataTransfer();
@@ -115,7 +117,7 @@ suite.define(() => {
             details: { reason: "image-input-unsupported" },
           });
           await text(
-            "This Side chat model cannot read images. Choose an image-capable utility model, then retry.",
+            "This Side chat model cannot read images. Choose an image-capable model, then retry.",
           ).waitFor();
           expect(await text("No utility model is configured for this session.").count()).toBe(0);
           const retry = side.getByRole("button", { name: "Retry", exact: true });
@@ -136,7 +138,7 @@ suite.define(() => {
           expect(await gateway.getRequests("sessions.companion.reset")).toEqual([]);
           await capture("recovered-image.png");
         } else {
-          await side.locator(".chat-session-rail__answer").waitFor();
+          await text("The next step is ready.").waitFor();
           expect(
             await side.locator(".chat-session-rail__composer .chat-attachment-thumb").count(),
           ).toBe(0);
@@ -145,6 +147,55 @@ suite.define(() => {
       });
     },
   );
+
+  it("opens composer image previews in Side chat and the main chat", async () => {
+    await withSideChat(async (_gateway, composer, page) => {
+      const capture = screenshot(page, "composer-image-preview", "disabled");
+      const image = await page.evaluate(() => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 480;
+        canvas.height = 270;
+        const context = canvas.getContext("2d")!;
+        context.fillStyle = "#1f6feb";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = "#ffffff";
+        context.font = "bold 40px sans-serif";
+        context.fillText("Composer preview", 64, 150);
+        return canvas.toDataURL("image/png").split(",")[1]!;
+      });
+      const openPreview = async (scope: Locator, fileName: string) => {
+        await scope.getByRole("button", { name: `Open image ${fileName}`, exact: true }).click();
+        const dialog = page.getByRole("dialog", { name: `Image preview: ${fileName}` });
+        await dialog.waitFor();
+        await page
+          .locator("openclaw-image-lightbox img")
+          .first()
+          .evaluate((element) => (element as HTMLImageElement).decode());
+        return dialog;
+      };
+
+      const side = page.locator("openclaw-chat-session-rail");
+      await dropSideChatImage(composer, "side-chat-preview.png", image);
+      await capture("side-chat-attached.png");
+      const sideDialog = await openPreview(side, "side-chat-preview.png");
+      await capture("side-chat-preview.png");
+      await page.keyboard.press("Escape");
+      await sideDialog.waitFor({ state: "detached" });
+      expect(await side.locator(".chat-attachment-thumb").count()).toBe(1);
+
+      const main = page.locator(".agent-chat__composer-shell");
+      await main.locator(".agent-chat__file-input").setInputFiles({
+        name: "main-chat-preview.png",
+        mimeType: "image/png",
+        buffer: Buffer.from(image, "base64"),
+      });
+      const mainDialog = await openPreview(main, "main-chat-preview.png");
+      await capture("main-chat-preview.png");
+      await page.keyboard.press("Escape");
+      await mainDialog.waitFor({ state: "detached" });
+      expect(await main.locator(".chat-attachment-thumb").count()).toBe(1);
+    });
+  });
 
   it.each(["Enter", "Control+Enter", "Meta+Enter"])(
     "preserves newlines and sends with the configured %s shortcut",

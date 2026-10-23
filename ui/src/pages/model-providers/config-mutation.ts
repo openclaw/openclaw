@@ -15,13 +15,18 @@ import {
 } from "../../lib/model-setting.ts";
 import type { DefaultModelSelection, DefaultsDraft, ModelBehaviorConfig } from "./data.ts";
 
+export type ModelDefaultsSaveField = "thinking" | "fastMode" | "defaults";
+
 function replaceFirstFallback(fallbacks: string[], model: string | null): string[] {
   return model ? [model, ...fallbacks.slice(1).filter((fallback) => fallback !== model)] : [];
 }
 
 export function modelDefaultsActions(
   getDefaults: () => DefaultModelSelection,
-  stageDefaults: (patch: Partial<DefaultModelSelection & ModelBehaviorConfig>) => void,
+  stageDefaults: (
+    patch: Partial<DefaultModelSelection & ModelBehaviorConfig>,
+    field?: ModelDefaultsSaveField,
+  ) => void,
 ) {
   return {
     onPrimaryChange: (model: string) => {
@@ -49,11 +54,13 @@ export function modelDefaultsActions(
     },
     onDecisionChange: (model: string | null) => stageDefaults({ decisionModel: model }),
     onThinkingChange: (level: string) =>
-      stageDefaults({ thinkingLevel: level, thinkingOverridden: true }),
-    onThinkingReset: () => stageDefaults({ thinkingLevel: undefined, thinkingOverridden: false }),
+      stageDefaults({ thinkingLevel: level, thinkingOverridden: true }, "thinking"),
+    onThinkingReset: () =>
+      stageDefaults({ thinkingLevel: undefined, thinkingOverridden: false }, "thinking"),
     onFastModeChange: (mode: FastMode) =>
-      stageDefaults({ fastMode: mode, fastModeOverridden: true }),
-    onFastModeReset: () => stageDefaults({ fastMode: undefined, fastModeOverridden: false }),
+      stageDefaults({ fastMode: mode, fastModeOverridden: true }, "fastMode"),
+    onFastModeReset: () =>
+      stageDefaults({ fastMode: undefined, fastModeOverridden: false }, "fastMode"),
   };
 }
 
@@ -315,7 +322,7 @@ export async function runModelProviderApiKeyMutation(
     client: GatewayBrowserClient;
     agentId: string;
     provider: string;
-    apiKey: string | null;
+    apiKey: string;
     success: string;
   },
 ): Promise<{ ok: false } | { ok: true; warning: string | null }> {
@@ -329,15 +336,10 @@ export async function runModelProviderApiKeyMutation(
           throw new Error(t("modelProviders.requestFailed"));
         }
         const target = { provider: params.provider, agentId: params.agentId };
-        const receipt = await (params.apiKey === null
-          ? client.request<{ warning?: string }>("models.authLogout", {
-              ...target,
-              credentialType: "api_key",
-            })
-          : client.request<{ warning?: string }>("models.authSetApiKey", {
-              ...target,
-              apiKey: params.apiKey,
-            }));
+        const receipt = await client.request<{ warning?: string }>("models.authSetApiKey", {
+          ...target,
+          apiKey: params.apiKey,
+        });
         invalidateModelAuthStatusRequests(client);
         return receipt;
       },

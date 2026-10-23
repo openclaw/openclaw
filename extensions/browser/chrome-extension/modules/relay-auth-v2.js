@@ -85,11 +85,6 @@ export async function createExtensionRelayAuthClient({
   };
 
   return {
-    keyId,
-    clientNonce: nonce,
-    get authenticated() {
-      return state === "authenticated";
-    },
     start() {
       if (state !== "new") {
         return fail(new Error("relay auth hello is out of sequence"));

@@ -1,14 +1,18 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import { readSkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
+import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../../src/shared/transcript-only-openclaw-assistant.js";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
+import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { userTurnRunId } from "./chat-thread-items.ts";
 import { optionalBoundaryIdentity } from "./chat-thread-run-identity.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { resolveSystemNoticeKind, type PendingInputStatus } from "./system-notice-kinds.ts";
+
+registerChatSessionEnglish();
 
 /** Pending custody and persisted history share the same system-turn presentation. */
 export function projectChatSystemNotice(
@@ -63,10 +67,29 @@ export function projectChatSystemNotice(
       ...pendingItems,
     ];
   }
-  const skillNoticeMessage = skillChanges && (normalized ?? safeNormalizeMessage(item.message));
-  if (skillChanges && skillNoticeMessage) {
+  // Persisted notices from before structured skill markers still carry the
+  // Workshop writer's idempotency key. Keep their original text, not a guessed
+  // skill/Undo payload, outside assistant answer ownership and Worked rollups.
+  const noticeKey = raw?.idempotencyKey ?? asRecord(raw?.["__openclaw"])?.idempotencyKey;
+  const legacySkillNotice =
+    isOpenClawDeliveryMirrorAssistantMessage(item.message) &&
+    typeof noticeKey === "string" &&
+    noticeKey.startsWith("skill-workshop-notice:") &&
+    noticeKey.length > "skill-workshop-notice:".length;
+  const skillNoticeMessage =
+    (skillChanges || legacySkillNotice) && (normalized ?? safeNormalizeMessage(item.message));
+  if (skillNoticeMessage) {
     const { timestamp } = skillNoticeMessage;
-    return [{ kind: "notice", key: item.key, text: "", timestamp, skillChanges }, ...pendingItems];
+    return [
+      {
+        kind: "notice",
+        key: item.key,
+        text: skillChanges ? "" : (extractTextCached(item.message) ?? ""),
+        timestamp,
+        ...(skillChanges ? { skillChanges } : {}),
+      },
+      ...pendingItems,
+    ];
   }
   if (provenance?.kind !== "internal_system") {
     return [item, ...pendingItems];

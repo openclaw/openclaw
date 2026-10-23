@@ -118,6 +118,16 @@ export function makeEmptySessionStore(): TestSessionStore {
   };
 }
 
+export function makeSessionStore(initial?: Record<string, unknown>) {
+  let record = initial;
+  return {
+    load: vi.fn<TestSessionStore["load"]>(async () => record),
+    save: vi.fn<TestSessionStore["save"]>(async (next) => {
+      record = next;
+    }),
+  };
+}
+
 export function makeTurn(
   input: { requestId: string },
   overrides: Partial<AcpRuntimeTurn> = {},

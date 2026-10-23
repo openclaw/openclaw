@@ -29,7 +29,7 @@ async function releaseFixture(configs: string[], estimate = 1, files?: string[])
   vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(prices);
   const { createNodeTestShardBundles: plan } =
     await import("../../scripts/lib/ci-node-test-plan.mts");
-  const price = (rows: NodeTestShard[], seconds: number) => {
+  const price = (rows: ReadonlyArray<{ timing_key?: string }>, seconds: number) => {
     for (const row of rows) {
       prices[expectDefined(row.timing_key, "split timing identity")] = seconds;
     }
@@ -49,6 +49,14 @@ async function releaseFixture(configs: string[], estimate = 1, files?: string[])
 
 const rowFiles = (row: NodeTestShard) =>
   (row.groups ?? [row]).flatMap((group) => group.includePatterns ?? []);
+// Release packing may pair measured stripes into one job; each stripe keeps its
+// own process and timing identity as a packed group.
+const splitUnits = (rows: NodeTestShard[]): Array<{ shardName: string; timing_key?: string }> =>
+  rows.flatMap((row) =>
+    row.groups
+      ? row.groups.map((group) => ({ shardName: group.shard_name, timing_key: group.timing_key }))
+      : [{ shardName: row.shardName, timing_key: row.timing_key }],
+  );
 const totalSeconds = (rows: NodeTestShard[]) =>
   rows.reduce((sum, row) => sum + row.predictedSeconds!, 0);
 function expectInventory(rows: NodeTestShard[], files: string[]) {
@@ -81,17 +89,20 @@ it.each([
   expect(rows.length).toBeGreaterThan(1);
   expectInventory(rows, files);
   expect(totalSeconds(rows)).toBeGreaterThanOrEqual(3355);
+  const units = splitUnits(rows);
+  for (const unit of units) {
+    expect(unit.shardName).toMatch(new RegExp(`^${owner}-hosted-\\d+$`, "u"));
+  }
   for (const row of rows) {
-    expect(row.shardName).toMatch(new RegExp(`^${owner}-hosted-\\d+$`, "u"));
     expect(row.predictedSeconds).toBeLessThanOrEqual(720);
     expect(row.env).toBeUndefined();
     expect(row.timeoutMinutes).toBe(beforeBlacksmith[0]!.timeoutMinutes);
   }
-  price(rows, 50);
+  price(units, 50);
   expect(plan(pullRequest)).toEqual(beforePr);
   expect(plan({ runnerBackend: "blacksmith" })).toEqual(beforeBlacksmith);
-  expect(full().map((row) => row.predictedSeconds)).toEqual([rows.length * 50]);
-  price(rows, 0);
+  expect(full().map((row) => row.predictedSeconds)).toEqual([units.length * 50]);
+  price(units, 0);
   expect(full()).toHaveLength(1);
 });
 

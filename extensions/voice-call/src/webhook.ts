@@ -42,11 +42,7 @@ import type { WebhookResponsePayload } from "./webhook.types.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { acceptRealtimeInboundRequest } from "./webhook/realtime-inbound-admission.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
-import {
-  StreamDisconnectGrace,
-  type StreamDisconnectLifecycle,
-} from "./webhook/stream-disconnect-grace.js";
-import { appendRecentTalkEventMetadata } from "./webhook/talk-event-metadata.js";
+import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 
 const MAX_WEBHOOK_BODY_BYTES = WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes;
 const WEBHOOK_BODY_TIMEOUT_MS = WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
@@ -127,7 +123,6 @@ export class VoiceCallWebhookServer {
     private readonly manager: CallManager,
     private readonly provider: VoiceCallProvider,
     private readonly coreConfig?: OpenClawConfig,
-    private readonly fullConfig?: OpenClawConfig,
     private readonly agentRuntime?: OpenClawPluginApi["runtime"]["agent"],
     logger?: PluginLogger,
   ) {
@@ -187,7 +182,7 @@ export class VoiceCallWebhookServer {
     this.realtimeHandler = handler;
   }
 
-  getStreamDisconnectLifecycle(): StreamDisconnectLifecycle {
+  getStreamDisconnectLifecycle(): StreamDisconnectGrace {
     return this.streamDisconnectGrace;
   }
 
@@ -254,7 +249,7 @@ export class VoiceCallWebhookServer {
 
   private async initializeMediaStreaming(): Promise<void> {
     const streaming = this.config.streaming;
-    const pluginConfig = this.fullConfig ?? this.coreConfig ?? undefined;
+    const pluginConfig = this.coreConfig;
     const { getRealtimeTranscriptionProvider, listRealtimeTranscriptionProviders } =
       await loadRealtimeTranscriptionRuntime();
     const resolution = await resolveConfiguredCapabilityProviderAsync({
@@ -356,20 +351,6 @@ export class VoiceCallWebhookServer {
       onPartialTranscript: (callId, partial, streamSid) => {
         this.logger.info(`Partial transcript ${callId} chars=${partial.length}`);
         this.interruptStreamReply(callId, streamSid);
-      },
-      onTalkEvent: (providerCallId, streamSid, event) => {
-        const current = this.getCurrentStream(providerCallId, streamSid);
-        if (current) {
-          void this.manager
-            .updateCallMetadata(current.call, (metadata) =>
-              this.getCurrentStream(providerCallId, streamSid)
-                ? appendRecentTalkEventMetadata(metadata, event, "streaming")
-                : metadata,
-            )
-            .catch((error: unknown) => {
-              this.logger.warn(`Failed to update stream call metadata: ${String(error)}`);
-            });
-        }
       },
       onConnect: (callId, streamSid) => {
         this.logger.info(`Media stream connected: ${callId} -> ${streamSid}`);
@@ -823,23 +804,19 @@ export class VoiceCallWebhookServer {
   }
 
   private isRealtimeWebSocketUpgrade(pathname: string | null): boolean {
-    try {
-      const pattern = this.realtimeHandler?.getStreamPathPattern();
-      if (pathname === null || !pattern) {
-        return false;
-      }
-      const normalizedPattern = normalizeWebhookPath(pattern);
-      const normalizedPathname = normalizeWebhookPath(pathname);
-      if (normalizedPattern === "/") {
-        return true;
-      }
-      return (
-        normalizedPathname === normalizedPattern ||
-        normalizedPathname.startsWith(`${normalizedPattern}/`)
-      );
-    } catch {
+    const pattern = this.realtimeHandler?.getStreamPathPattern();
+    if (pathname === null || !pattern) {
       return false;
     }
+    const normalizedPattern = normalizeWebhookPath(pattern);
+    const normalizedPathname = normalizeWebhookPath(pathname);
+    if (normalizedPattern === "/") {
+      return true;
+    }
+    return (
+      normalizedPathname === normalizedPattern ||
+      normalizedPathname.startsWith(`${normalizedPattern}/`)
+    );
   }
 
   private getRealtimeTwimlParams(ctx: WebhookContext): URLSearchParams | null {

@@ -14,6 +14,7 @@ import type {
 } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { defaultRuntime } from "../runtime.js";
+import { throwExpectedCliError } from "./failure-output.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -297,7 +298,9 @@ export function registerWorktreesCli(program: Command): void {
       ) => {
         const removedAt = parseStrictNonNegativeInteger(opts.removedAt);
         if (removedAt === undefined) {
-          throw new Error("--removed-at must be a non-negative integer (epoch milliseconds).");
+          throwExpectedCliError(
+            `--removed-at must be a non-negative integer (epoch milliseconds). Got: ${JSON.stringify(opts.removedAt)}`,
+          );
         }
         const input = {
           id,

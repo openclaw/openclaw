@@ -27,6 +27,7 @@ import type {
   SessionEntryLifecycleUpsert,
   SessionLifecycleArchivedTranscript,
 } from "./session-accessor.sqlite-contract.js";
+import { conversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import {
   planSessionStateDeleteIfUnreferenced,
   readSessionStateDeleteSnapshot,
@@ -243,7 +244,6 @@ export function planSessionStateAfterEntryRemoval(params: {
   archiveTranscript?: boolean;
   database: OpenClawAgentDatabase;
   entry: SessionEntry;
-  reason: "deleted" | "reset";
   referencedSessionIds?: ReadonlySet<string>;
 }): SessionStateDeletePlan[] {
   const candidates = collectSessionStateIdsForEntry(params.entry);
@@ -254,7 +254,7 @@ export function planSessionStateAfterEntryRemoval(params: {
       archiveTranscript: params.archiveTranscript,
       archiveDirectory: params.archiveDirectory,
       database: params.database,
-      reason: params.reason,
+      reason: "deleted",
       referencedSessionIds,
       sessionId,
     });
@@ -378,7 +378,6 @@ export function finishProjectedLifecycleRemovalPlans(
       archiveTranscript,
       database,
       entry,
-      reason: "deleted",
       referencedSessionIds,
     }),
   );
@@ -602,6 +601,7 @@ function deleteSqliteSessionStateRows(database: OpenClawAgentDatabase, sessionId
     ),
   );
   retireSqliteDatabaseWriteScopes(database.db, [sqliteSessionIdWriteScope(sessionId)]);
+  conversationPublication.stageRows(database, { removedWindows: [sessionId] });
 }
 
 export function deletePlannedLifecycleArtifactEntries(

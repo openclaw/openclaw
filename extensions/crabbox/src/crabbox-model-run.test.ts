@@ -2,10 +2,11 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { Command } from "commander";
 import type { CommandOptions, SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import type { ConfiguredModelEgress } from "openclaw/plugin-sdk/secret-egress-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CRABBOX_MIN_VERSION, resolveManagedCrabboxBinaryPath } from "./crabbox-managed-binary.js";
 
 const mocks = vi.hoisted(() => ({ run: vi.fn(), version: vi.fn(), withEgress: vi.fn() }));
@@ -17,9 +18,13 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
 vi.mock("openclaw/plugin-sdk/secret-egress-runtime", () => ({
   withConfiguredModelEgress: mocks.withEgress,
 }));
-const { runCrabboxModelCommand } = await import("./crabbox-model-run.js");
+const { registerCrabboxModelRunCommand } = await import("./crabbox-model-run-cli.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.unstubAllEnvs());
+const originalExitCode = process.exitCode;
+afterEach(() => {
+  vi.unstubAllEnvs();
+  process.exitCode = originalExitCode;
+});
 const execFileAsync = promisify(execFile);
 const capabilityHelp = "  -upstream-proxy-env string\n";
 const egress: ConfiguredModelEgress = {
@@ -41,106 +46,124 @@ const options = {
 function result(stdout = "", code = 0): SpawnResult {
   return { stdout, stderr: "", code, signal: null, killed: false, termination: "exit" };
 }
+async function run(timeout = String(options.timeoutMs / 1000)) {
+  const program = new Command().exitOverride();
+  registerCrabboxModelRunCommand({ program, config: options.config });
+  await program.parseAsync(
+    [
+      "crabbox",
+      "run",
+      "--binary",
+      options.binary,
+      "--id",
+      options.id,
+      "--model",
+      options.model,
+      "--timeout",
+      timeout,
+      "--",
+      ...options.argv,
+    ],
+    { from: "user" },
+  );
+}
+
+function nativeResult(output: SpawnResult) {
+  mocks.run.mockResolvedValueOnce(result(capabilityHelp)).mockResolvedValueOnce(output);
+}
 beforeEach(() => {
   mocks.run.mockReset();
   mocks.version.mockReset().mockResolvedValue(result(CRABBOX_MIN_VERSION));
-  mocks.withEgress.mockReset();
-  mocks.withEgress.mockImplementation(async (_options, run) => await run(egress));
+  mocks.withEgress.mockReset().mockImplementation(async (_options, invoke) => await invoke(egress));
 });
 
-describe("Crabbox protected model command", () => {
-  it("upgrades an outdated executable before capability and credential use", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("crabbox-model-managed-"));
-    const binary = resolveManagedCrabboxBinaryPath();
-    await fs.mkdir(path.dirname(binary), { recursive: true });
-    await fs.writeFile(binary, CRABBOX_MIN_VERSION);
-    mocks.version.mockImplementation(async ([candidate]: string[]) =>
-      result(candidate === options.binary ? "0.76.0" : CRABBOX_MIN_VERSION),
+it.each(["0x10", "1e3", "0b101", "0o17"])(
+  "rejects non-decimal timeout %s before external calls",
+  async (timeout) => {
+    await expect(run(timeout)).rejects.toThrow(
+      "--timeout must be an integer between 1 and 86400 seconds",
     );
-    mocks.run.mockResolvedValueOnce(result(capabilityHelp)).mockResolvedValueOnce(result("done"));
+    expect(mocks.version).not.toHaveBeenCalled();
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(mocks.withEgress).not.toHaveBeenCalled();
+  },
+);
 
-    await expect(runCrabboxModelCommand(options)).resolves.toMatchObject({ stdout: "done" });
-    expect(mocks.run.mock.calls.map(([argv]) => argv[0])).toEqual([binary, binary]);
-    expect(mocks.withEgress).toHaveBeenCalledOnce();
-  });
+it("upgrades an outdated executable before capability and credential use", async () => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("crabbox-model-managed-"));
+  const binary = resolveManagedCrabboxBinaryPath();
+  await fs.mkdir(path.dirname(binary), { recursive: true });
+  await fs.writeFile(binary, CRABBOX_MIN_VERSION);
+  mocks.version.mockImplementation(async ([candidate]: string[]) =>
+    result(candidate === options.binary ? "0.76.0" : CRABBOX_MIN_VERSION),
+  );
+  nativeResult(result("done"));
 
-  it("preserves command output returned to the caller", async () => {
-    const output = {
-      ...result("API_TOKEN = computeToken()\n"),
-      stderr: "sk-abc123456789012345678",
-    };
-    mocks.run.mockResolvedValueOnce(result(capabilityHelp)).mockResolvedValueOnce(output);
-    expect(await runCrabboxModelCommand(options)).toEqual(output);
-  });
+  await run();
+  expect(process.exitCode).toBe(0);
+  expect(mocks.run.mock.calls.map(([argv]) => argv[0])).toEqual([binary, binary]);
+  expect(mocks.withEgress).toHaveBeenCalledOnce();
+});
 
-  it("delegates one native job with a host-only proxy grant and sentinel-only app environment", async () => {
-    let remoteInput = "";
-    mocks.run.mockImplementation(async (argv: string[], params: CommandOptions) => {
-      if (argv.includes("--help")) {
-        return result(capabilityHelp);
-      }
-      expect(argv).toEqual([
-        "crabbox-fixture",
-        "egress",
-        "run",
-        "--id",
-        "cbx_owned",
-        "--allow",
-        "api.example.com",
-        "--upstream-proxy-env",
-        "CRABBOX_MODEL_PROXY",
-        "--no-sync",
-        "--no-hydrate",
-        "--script-stdin",
-        "--",
-        "node",
-        "test-app.js",
-      ]);
-      expect(params.env?.CRABBOX_MODEL_PROXY).toBe(egress.hostEnv.HTTPS_PROXY);
-      expect(params.env?.CRABBOX_ENV_ALLOW).toBe(",");
-      expect(params.killGraceMs).toBeGreaterThan(60_000);
-      expect(argv.join(" ")).not.toContain("proxy-password-fixture");
-      remoteInput = String(params.input);
-      expect(remoteInput).not.toContain("proxy-password-fixture");
-      return result("app finished\n", 7);
+it("delegates one native job with a host-only proxy grant and sentinel-only app environment", async () => {
+  const output = {
+    ...result("API_TOKEN = computeToken()\n", 7),
+    stderr: "sk-abc123456789012345678",
+  };
+  let remoteInput = "";
+  mocks.run.mockImplementation(async (argv: string[], params: CommandOptions) => {
+    if (argv.includes("--help")) {
+      return result(capabilityHelp);
+    }
+    expect(argv).toEqual(
+      (
+        "crabbox-fixture egress run --id cbx_owned --allow api.example.com " +
+        "--upstream-proxy-env CRABBOX_MODEL_PROXY --no-sync --no-hydrate " +
+        "--script-stdin -- node test-app.js"
+      ).split(" "),
+    );
+    expect(params).toMatchObject({
+      env: { CRABBOX_MODEL_PROXY: egress.hostEnv.HTTPS_PROXY, CRABBOX_ENV_ALLOW: "," },
     });
-    expect(await runCrabboxModelCommand(options)).toMatchObject({
-      code: 7,
-      stdout: "app finished\n",
-    });
-    expect(mocks.run).toHaveBeenCalledTimes(2);
+    expect(params.killGraceMs).toBeGreaterThan(60_000);
+    expect(argv.join(" ")).not.toContain("proxy-password-fixture");
+    remoteInput = String(params.input);
+    expect(remoteInput).not.toContain("proxy-password-fixture");
+    return output;
+  });
+  await run();
+  expect(process.exitCode).toBe(7);
+  expect(mocks.run).toHaveBeenCalledTimes(2);
 
-    const fixture = `const fs = require('fs'); console.log(JSON.stringify({
+  const fixture = `const fs = require('fs'); console.log(JSON.stringify({
       key: process.env.OPENAI_API_KEY, baseUrl: process.env.OPENAI_BASE_URL,
       model: process.env.OPENAI_MODEL, proxy: process.env.HTTPS_PROXY,
       ca: fs.readFileSync(process.env.SSL_CERT_FILE, 'utf8'), path: process.env.SSL_CERT_FILE
     }));`;
-    const child = execFileAsync("bash", ["-s", "--", process.execPath, "-e", fixture], {
-      env: { ...process.env, NODE_OPTIONS: undefined },
-    });
-    child.child.stdin!.end(remoteInput);
-    const observed = JSON.parse((await child).stdout);
-    expect(observed).toMatchObject({
-      key: egress.sentinel,
-      baseUrl: egress.baseUrl,
-      model: egress.model,
-      proxy: "http://127.0.0.1:3128",
-      ca: `${egress.caBundle}\n`,
-    });
-    await expect(execFileAsync("test", ["-e", observed.path])).rejects.toThrow();
+  const child = execFileAsync("bash", ["-s", "--", process.execPath, "-e", fixture], {
+    env: { ...process.env, NODE_OPTIONS: undefined },
   });
+  child.child.stdin!.end(remoteInput);
+  const observed = JSON.parse((await child).stdout);
+  expect(observed).toMatchObject({
+    key: egress.sentinel,
+    baseUrl: egress.baseUrl,
+    model: egress.model,
+    proxy: "http://127.0.0.1:3128",
+    ca: `${egress.caBundle}\n`,
+  });
+  await expect(execFileAsync("test", ["-e", observed.path])).rejects.toThrow();
+});
 
-  it("refuses lookalike native flags before credential access", async () => {
-    mocks.run.mockResolvedValue(
-      result("  --upstream-proxy-env-name string\n per-upstream-proxy-env help"),
-    );
-    await expect(runCrabboxModelCommand(options)).rejects.toThrow("lacks native egress run");
-    expect(mocks.withEgress).not.toHaveBeenCalled();
-  });
+it("refuses lookalike native flags before credential access", async () => {
+  mocks.run.mockResolvedValue(
+    result("  --upstream-proxy-env-name string\n per-upstream-proxy-env help"),
+  );
+  await expect(run()).rejects.toThrow("lacks native egress run");
+  expect(mocks.withEgress).not.toHaveBeenCalled();
+});
 
-  it("reports unconfirmed native process cleanup as failure", async () => {
-    mocks.run.mockResolvedValueOnce(result(capabilityHelp));
-    mocks.run.mockResolvedValueOnce({ ...result(), cleanup: "uncertain" });
-    await expect(runCrabboxModelCommand(options)).rejects.toThrow("could not confirm");
-  });
+it("reports unconfirmed native process cleanup as failure", async () => {
+  nativeResult({ ...result(), cleanup: "uncertain" });
+  await expect(run()).rejects.toThrow("could not confirm");
 });

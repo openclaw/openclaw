@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { McpCodexToolApprovalMode, McpServerConfig } from "../config/types.mcp.js";
 
 export type McpCodexToolAnnotations = {
@@ -27,10 +27,7 @@ export function resolveProjectedMcpCodexToolApprovalMode(
   projectedServer?: Record<string, unknown>,
   toolName?: string,
 ): McpCodexToolApprovalMode | undefined {
-  const codex =
-    server.codex && typeof server.codex === "object" && !Array.isArray(server.codex)
-      ? (server.codex as Record<string, unknown>)
-      : {};
+  const codex = asNonArrayRecord(server.codex);
   const projectedTools = isRecord(projectedServer?.tools) ? projectedServer.tools : undefined;
   const projectedTool =
     toolName && isRecord(projectedTools?.[toolName]) ? projectedTools[toolName] : undefined;

@@ -1,5 +1,8 @@
 // @vitest-environment node
+import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
+import { CronJobSchema } from "../../../../packages/gateway-protocol/src/schema/cron.js";
+import { cronJobReadView } from "../../../../src/cron/job-read-view.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../../../src/cron/normalize.js";
 import { applyJobPatch, createJob } from "../../../../src/cron/service/jobs.js";
 import { createCronServiceState } from "../../../../src/cron/service/state.js";
@@ -7,42 +10,14 @@ import type { CronStoredJob } from "../../../../src/cron/types.js";
 import { createTestGatewayScheduler } from "../../../../src/test-utils/gateway-scheduler-clock.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CronJob } from "../../api/types.ts";
-import { addCronJob, cancelCronEdit, createInitialCronState, startCronEdit } from "./index.ts";
-import type { CronState } from "./types.ts";
-
-function createCronJob(overrides: Pick<CronJob, "id" | "name">): CronJob {
-  return {
-    ...overrides,
-    enabled: true,
-    createdAtMs: 0,
-    updatedAtMs: 0,
-    configRevision: "config-revision-1",
-    schedule: { kind: "cron", expr: "0 * * * *" },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "run" },
-    state: {},
-  };
-}
-
-function cronJobsListResponse(jobs: CronJob[]) {
-  return {
-    jobs,
-    snapshotRevision: "editor-jobs",
-    total: jobs.length,
-    offset: 0,
-    limit: 50,
-    hasMore: false,
-    nextOffset: null,
-  };
-}
-
-function createStateWithRequest(request: unknown, overrides: Partial<CronState>): CronState {
-  return {
-    ...createInitialCronState({ connected: true, client: { request } as CronState["client"] }),
-    ...overrides,
-  };
-}
+import { invalidateStaleDeliveryRoute } from "../../pages/cron/delivery-conversations.ts";
+import {
+  createCronJob,
+  createStateWithRequest,
+  cronJobsListResponse,
+} from "./cron.test-support.ts";
+import { addCronJob, cancelCronEdit, startCronEdit } from "./index.ts";
+import type { CronFormState } from "./types.ts";
 
 function applyWirePatch(stored: CronStoredJob, params: unknown) {
   // Exercise the Gateway's normalization against the serialized UI request.
@@ -56,11 +31,236 @@ function applyWirePatch(stored: CronStoredJob, params: unknown) {
   return patch.schedule;
 }
 
+function readPublicJob(stored: CronStoredJob): CronJob {
+  // Validate the JSON response shape that reaches the editor over the Gateway wire.
+  const response = JSON.stringify(cronJobReadView(stored));
+  const job: unknown = JSON.parse(response);
+  if (!Value.Check(CronJobSchema, job)) {
+    throw new Error("Expected a public automation job from the Gateway read projection");
+  }
+  return job;
+}
+
 describe("automation save editor ownership", () => {
+  it("edits a migrated ordinary job's policies without retaining its old channel recipient", async () => {
+    const job: CronJob = {
+      ...createCronJob("migrated-job", "Evening notes"),
+      sessionTarget: "session:agent:main:main",
+      activeHours: { start: "22:00", end: "06:00", timezone: "Europe/Vienna" },
+      idleOnly: true,
+      payload: {
+        kind: "agentTurn",
+        message: "Check notes",
+        skipIfScratchEmpty: true,
+        includeReasoning: true,
+      },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        accountId: "operator",
+        to: "old-group",
+        threadId: 5,
+        directPolicy: "block",
+      },
+    };
+    const request = vi.fn(async (method: string) =>
+      method === "cron.update"
+        ? job
+        : method === "cron.list"
+          ? cronJobsListResponse([job])
+          : { enabled: true, jobs: 1 },
+    );
+    const state = createStateWithRequest(request, {});
+    startCronEdit(state, job);
+    expect(state.cronForm.payloadLocked).toBe(false);
+    state.cronForm = {
+      ...state.cronForm,
+      deliveryTarget: "owner",
+      deliveryDirectPolicy: "allow",
+      activeHoursEnabled: false,
+      idleOnly: false,
+      payloadSkipIfScratchEmpty: false,
+      payloadIncludeReasoning: false,
+    };
+    await expect(addCronJob(state)).resolves.toEqual({ saved: true, jobId: job.id });
+    expect(request).toHaveBeenCalledWith(
+      "cron.update",
+      expect.objectContaining({
+        id: job.id,
+        expectedConfigRevision: job.configRevision,
+        patch: expect.objectContaining({
+          activeHours: null,
+          idleOnly: false,
+          payload: expect.objectContaining({
+            kind: "agentTurn",
+            message: "Check notes",
+            skipIfScratchEmpty: false,
+            includeReasoning: false,
+          }),
+          delivery: expect.objectContaining({
+            mode: "announce",
+            target: "owner",
+            channel: "telegram",
+            accountId: "operator",
+            to: null,
+            threadId: null,
+            directPolicy: "allow",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("retains main agent turns and disabled owner delivery through save and reopen", async () => {
+    const stored: CronStoredJob = {
+      id: "shared-main-turn",
+      name: "Shared notes",
+      enabled: false,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      activeHours: { start: "22:00", end: "06:00", timezone: "UTC" },
+      idleOnly: true,
+      payload: {
+        kind: "agentTurn",
+        message: "Check notes",
+        skipIfScratchEmpty: true,
+        includeReasoning: true,
+      },
+      delivery: { mode: "none" },
+      state: {},
+    };
+    const readJob = () => readPublicJob(stored);
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.update") {
+        applyWirePatch(stored, params);
+        return readJob();
+      }
+      if (method === "cron.get") {
+        return readJob();
+      }
+      if (method === "cron.list") {
+        return cronJobsListResponse([readJob()]);
+      }
+      return { enabled: false, jobs: 1 };
+    });
+    const state = createStateWithRequest(request, {});
+    startCronEdit(state, readJob());
+    expect(state.cronForm).toMatchObject({
+      sessionTarget: "main",
+      payloadKind: "agentTurn",
+      activeHoursEnabled: true,
+      idleOnly: true,
+      payloadSkipIfScratchEmpty: true,
+      payloadIncludeReasoning: true,
+    });
+    state.cronForm.description = "Updated notes";
+    await expect(addCronJob(state)).resolves.toEqual({ saved: true, jobId: stored.id });
+    expect(stored).toMatchObject({
+      sessionTarget: "main",
+      payload: {
+        kind: "agentTurn",
+        message: "Check notes",
+        skipIfScratchEmpty: true,
+        includeReasoning: true,
+      },
+      activeHours: { start: "22:00", end: "06:00", timezone: "UTC" },
+      idleOnly: true,
+    });
+    // Disabled delivery may retain owner targeting for a later re-enable.
+    stored.sessionTarget = "isolated";
+    stored.delivery = {
+      mode: "none",
+      target: "owner",
+      directPolicy: "block",
+      channel: "telegram",
+      accountId: "operator",
+    };
+    cancelCronEdit(state, null);
+    startCronEdit(state, readJob());
+    expect(state.cronForm).toMatchObject({
+      deliveryMode: "none",
+      deliveryTarget: "owner",
+      deliveryDirectPolicy: "block",
+    });
+    state.cronForm.deliveryMode = "announce";
+    await expect(addCronJob(state)).resolves.toEqual({ saved: true, jobId: stored.id });
+    expect(stored.delivery).toMatchObject({
+      mode: "announce",
+      target: "owner",
+      directPolicy: "block",
+      channel: "telegram",
+      accountId: "operator",
+    });
+    expect(stored.delivery?.to).toBeUndefined();
+    expect(stored.delivery?.threadId).toBeUndefined();
+  });
+
+  it("clears retained owner routing when disabled delivery is re-enabled for a channel", async () => {
+    const stored: CronStoredJob = {
+      id: "disabled-owner",
+      name: "Evening notes",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "cron", expr: "0 * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run" },
+      state: {},
+      delivery: {
+        mode: "none",
+        target: "owner",
+        directPolicy: "block",
+        channel: "telegram",
+        accountId: "operator",
+      },
+    };
+    const readJob = () => readPublicJob(stored);
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.update") {
+        applyWirePatch(stored, params);
+        return readJob();
+      }
+      if (method === "cron.list") {
+        return cronJobsListResponse([readJob()]);
+      }
+      return { enabled: true, jobs: 1 };
+    });
+    const state = createStateWithRequest(request, {});
+    startCronEdit(state, readJob());
+    state.cronForm = {
+      ...state.cronForm,
+      deliveryMode: "announce",
+      deliveryTarget: "",
+      deliveryTo: "team-room",
+      deliveryDirectPolicy: "",
+    };
+    await expect(addCronJob(state)).resolves.toEqual({ saved: true, jobId: stored.id });
+    expect(stored.delivery).toMatchObject({
+      mode: "announce",
+      channel: "telegram",
+      accountId: "operator",
+      to: "team-room",
+    });
+    expect(stored.delivery?.target).toBeUndefined();
+    expect(stored.delivery?.directPolicy).toBeUndefined();
+    cancelCronEdit(state, null);
+    startCronEdit(state, readJob());
+    expect(state.cronForm).toMatchObject({
+      deliveryMode: "announce",
+      deliveryTarget: "",
+      deliveryTo: "team-room",
+      deliveryDirectPolicy: "",
+    });
+  });
+
   it.each(["save", "conflict read", "conflict read failure"] as const)(
     "preserves a reopened editor when an earlier %s settles",
     async (pendingPhase) => {
-      const job = createCronJob({ id: "reopened-job", name: "Saved definition" });
+      const job = createCronJob("reopened-job", "Saved definition");
       const updated = { ...job, name: "Earlier save", configRevision: "earlier-save-revision" };
       const pending = createDeferred<CronJob>();
       const conflict = Object.assign(new Error("Definition changed"), {
@@ -113,6 +313,116 @@ describe("automation save editor ownership", () => {
       expect(state.cronJobs).toEqual([updated]);
     },
   );
+});
+
+describe("automation delivery thread save round trip", () => {
+  it.each<{
+    name: string;
+    patch: Partial<CronFormState>;
+    threadId: string | number;
+    expected: string | number | undefined;
+  }>([
+    {
+      name: "recipient change",
+      patch: { deliveryTo: "-100new" },
+      threadId: 42,
+      expected: undefined,
+    },
+    {
+      name: "account change",
+      patch: { deliveryAccountId: "new" },
+      threadId: 42,
+      expected: undefined,
+    },
+    {
+      name: "channel change",
+      patch: { deliveryChannel: "last" },
+      threadId: 42,
+      expected: undefined,
+    },
+    { name: "agent change", patch: { agentId: "other" }, threadId: 42, expected: undefined },
+    {
+      name: "cleared agent override",
+      patch: { clearAgent: true },
+      threadId: 42,
+      expected: undefined,
+    },
+    {
+      name: "delivery disabled",
+      patch: { deliveryMode: "none" },
+      threadId: 42,
+      expected: undefined,
+    },
+    { name: "unchanged topic", patch: { description: "Edited" }, threadId: 42, expected: 42 },
+    { name: "zero topic", patch: { description: "Edited" }, threadId: 0, expected: 0 },
+    {
+      name: "recipient whitespace",
+      patch: { deliveryTo: " -100old " },
+      threadId: 42,
+      expected: 42,
+    },
+    {
+      name: "account whitespace",
+      patch: { deliveryAccountId: " old " },
+      threadId: 42,
+      expected: 42,
+    },
+    { name: "agent whitespace", patch: { agentId: " writer " }, threadId: 42, expected: 42 },
+    {
+      name: "replacement topic",
+      patch: { deliveryTo: "-100new", deliveryThreadId: "topic-new" },
+      threadId: 42,
+      expected: "topic-new",
+    },
+  ])("persists $name after saving and reopening", async ({ patch, threadId, expected }) => {
+    const stored = {
+      id: "delivery-thread",
+      name: "Synthetic routed task",
+      agentId: "writer",
+      enabled: false,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "Synthetic paused task" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "-100old",
+        accountId: "old",
+        threadId,
+      },
+      state: {},
+    } satisfies CronStoredJob;
+    const readJob = (): CronJob => ({
+      ...structuredClone(stored),
+      configRevision: "delivery-revision",
+    });
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.update") {
+        applyWirePatch(stored, params);
+        return readJob();
+      }
+      if (method === "cron.get") {
+        return readJob();
+      }
+      if (method === "cron.list") {
+        return cronJobsListResponse([readJob()]);
+      }
+      return { enabled: false, jobs: 1 };
+    });
+    const state = createStateWithRequest(request, {});
+    startCronEdit(state, readJob());
+    state.cronForm = { ...state.cronForm, ...invalidateStaleDeliveryRoute(state.cronForm, patch) };
+
+    await expect(addCronJob(state)).resolves.toEqual({ saved: true, jobId: stored.id });
+    expect(state.cronError).toBeNull();
+    cancelCronEdit(state, null);
+    startCronEdit(state, readJob());
+    expect(stored.delivery?.threadId).toBe(expected);
+    expect(state.cronForm.deliveryThreadId).toBe(expected);
+  });
 });
 
 describe("automation stagger save round trip", () => {
@@ -240,7 +550,7 @@ describe("automation default timing", () => {
         storePath: "unused-paused-automation-store",
         cronEnabled: false,
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
+        enqueueSessionEvent: vi.fn(),
         runIsolatedAgentJob: async () => {
           throw new Error("Paused automation must not execute");
         },
@@ -254,19 +564,7 @@ describe("automation default timing", () => {
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "Synthetic paused task" },
       });
-      const readJob = (): CronJob => ({
-        id: stored.id,
-        name: stored.name,
-        enabled: stored.enabled,
-        createdAtMs: stored.createdAtMs,
-        updatedAtMs: stored.updatedAtMs,
-        schedule: structuredClone(stored.schedule),
-        sessionTarget: stored.sessionTarget,
-        wakeMode: stored.wakeMode,
-        payload: structuredClone(stored.payload),
-        state: structuredClone(stored.state),
-        configRevision: "default-timing-revision",
-      });
+      const readJob = () => readPublicJob(stored);
       const request = vi.fn(async (method: string, params?: unknown) => {
         if (method === "cron.add") {
           const serialized = JSON.stringify(params);

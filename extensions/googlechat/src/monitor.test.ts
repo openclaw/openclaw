@@ -10,6 +10,7 @@ import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { GoogleChatApiError } from "./api.js";
 import {
   createGoogleChatIngressMonitor,
   type GoogleChatIngressLifecycle,
@@ -62,7 +63,10 @@ vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => ({
 }));
 
 // mock-isolation: Network responses come only from the monitor fixture.
-vi.mock("./api.js", () => apiMocks);
+vi.mock("./api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api.js")>()),
+  ...apiMocks,
+}));
 // mock-isolation: The fixture supplies access decisions without pairing state.
 vi.mock("./monitor-access.js", () => accessMocks);
 
@@ -166,9 +170,9 @@ function makeEvent(params: EventInput): GoogleChatEvent {
     eventTime: params.eventTime,
     message: {
       name: `${params.space?.name ?? "spaces/MEDIA"}/messages/${params.id}`,
-      ...(params.text === undefined ? {} : { text: params.text }),
+      text: params.text,
       sender: params.sender ?? { name: "users/alice", type: "HUMAN" },
-      ...(params.attachments ? { attachment: params.attachments } : {}),
+      attachment: params.attachments,
     },
   };
 }
@@ -357,59 +361,70 @@ it("keeps a transient fetch failure retryable", async () => {
   expect(runTurn).not.toHaveBeenCalled();
 });
 
-it("adopts an oversized attachment so the next message in its durable lane can run", async () => {
-  const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-googlechat-oversized-"));
-  const stateDir = await fs.realpath(created);
-  const queue = createChannelIngressQueueForTests<{ version: 1; rawEvent: string }>({
-    channelId: "googlechat",
-    accountId: "work",
-    stateDir,
-  });
-  const { buildContext, dispatch, runTurn } = createHarness();
-  const runtime = createRuntimeSpies();
-  const receivedBodies: string[] = [];
-  apiMocks.downloadGoogleChatMedia.mockRejectedValueOnce(
-    new MediaFetchError("max_bytes", "Google Chat media exceeds max bytes (10485760)"),
-  );
-  runTurn.mockImplementation(
-    async (params: { turnAdoptionLifecycle?: GoogleChatIngressLifecycle }) => {
-      const context = buildContext.mock.calls.at(-1)?.[0] as { message: { rawBody: string } };
-      receivedBodies.push(context.message.rawBody);
-      await params.turnAdoptionLifecycle?.onAdopted();
-    },
-  );
-  runtimeMocks.openChannelIngressQueue.mockReturnValue(queue);
-  const ingress = createGoogleChatIngressMonitor({
-    accountId: googleChatMediaTestAccount.accountId,
-    runtime,
-    dispatch: (event, turnAdoptionLifecycle) => dispatch(event, { runtime, turnAdoptionLifecycle }),
-  });
-  const first = makeEvent({
-    id: "oversized",
-    text: "first caption",
-    attachments: [attachment("oversized")],
-  });
-  const second = makeEvent({ id: "follow-up", text: "next message" });
+it.each([
+  {
+    failure: "oversized",
+    error: new MediaFetchError("max_bytes", "Google Chat media exceeds max bytes (10485760)"),
+    notice: "[Google Chat attachment too large; maximum 10 MB]",
+  },
+  {
+    failure: "missing",
+    error: new GoogleChatApiError(404, "Google Chat API 404: Not Found"),
+    notice: "[Google Chat attachment unavailable: file not found; upload the file directly]",
+  },
+])(
+  "adopts a $failure attachment so the next message in its durable lane can run",
+  async ({ error, notice, failure }) => {
+    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-googlechat-media-"));
+    const stateDir = await fs.realpath(created);
+    const queue = createChannelIngressQueueForTests<{ version: 1; rawEvent: string }>({
+      channelId: "googlechat",
+      accountId: "work",
+      stateDir,
+    });
+    const { buildContext, dispatch, runTurn } = createHarness();
+    const runtime = createRuntimeSpies();
+    const receivedBodies: string[] = [];
+    apiMocks.downloadGoogleChatMedia.mockRejectedValueOnce(error);
+    runTurn.mockImplementation(
+      async (params: { turnAdoptionLifecycle?: GoogleChatIngressLifecycle }) => {
+        const context = buildContext.mock.calls.at(-1)?.[0] as { message: { rawBody: string } };
+        receivedBodies.push(context.message.rawBody);
+        await params.turnAdoptionLifecycle?.onAdopted();
+      },
+    );
+    runtimeMocks.openChannelIngressQueue.mockReturnValue(queue);
+    const ingress = createGoogleChatIngressMonitor({
+      accountId: googleChatMediaTestAccount.accountId,
+      runtime,
+      dispatch: (event, turnAdoptionLifecycle) =>
+        dispatch(event, { runtime, turnAdoptionLifecycle }),
+    });
+    const first = makeEvent({
+      id: failure,
+      text: "first caption",
+      attachments: [attachment(failure)],
+    });
+    const second = makeEvent({ id: "follow-up", text: "next message" });
 
-  ingress.start();
-  try {
-    await ingress.receive(first);
-    await ingress.waitForIdle();
-    await ingress.receive(second);
-    await ingress.waitForIdle();
+    ingress.start();
+    try {
+      await ingress.receive(first);
+      await ingress.waitForIdle();
+      await ingress.receive(second);
+      await ingress.waitForIdle();
 
-    expect(receivedBodies).toEqual([
-      "first caption\n\n[Google Chat attachment too large; maximum 10 MB]",
-      "next message",
-    ]);
-    expect(await queue.listPending({ limit: "all" })).toEqual([]);
-    expect(await queue.listClaims()).toEqual([]);
-  } finally {
-    await ingress.stop();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
-});
+      expect(receivedBodies).toEqual([`first caption\n\n${notice}`, "next message"]);
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(notice));
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      expect(await queue.listClaims()).toEqual([]);
+    } finally {
+      await ingress.stop();
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  },
+);
 
 it.each([
   ["identity", undefined, undefined, "Alvin", "_Alvin is typing..._"],
@@ -433,7 +448,6 @@ it.each([
         id: "1",
         text: "hello",
         space: { name: "spaces/IDENTITY", type: "DM" },
-        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
       },
       {
         account,
@@ -477,8 +491,6 @@ it("drops invalid event timestamps from inbound runtime payloads", async () => {
       id: "2",
       text: "hello",
       eventTime: "not-a-timestamp",
-      space: { name: "spaces/DM", type: "DM" },
-      sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
     },
     { account },
   );

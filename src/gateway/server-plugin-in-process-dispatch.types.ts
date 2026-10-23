@@ -4,7 +4,10 @@ import type { SubagentCompletionToolHandoffRegistration } from "../agents/subage
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { SessionControllerInput } from "../sessions/session-controller.contracts.js";
-import type { RequesterSettleWakeReplay } from "./agent-turn/internal-facade.types.js";
+import type {
+  AgentTurnStartOwner,
+  RequesterSettleWakeReplay,
+} from "./agent-turn/internal-facade.types.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type {
   GatewayAgentRunTaskOwner,
@@ -41,6 +44,7 @@ export type DispatchGatewayMethodInProcessOptions = {
   nodeInvokeStream?: GatewayNodeInvokeStream;
   nodeInvokeApprovalSessionKey?: string;
   onAccepted?: (payload: unknown) => void;
+  onStartOwner?: (owner: AgentTurnStartOwner) => void;
   onExecution?: (execution: Promise<void>) => void;
   onExecutionStarted?: () => void;
   onSignalAbort?: () => Promise<void> | void;
@@ -64,7 +68,9 @@ export type DispatchGatewayMethodInProcessOptions = {
 };
 
 export type ResolvedInProcessGatewayDispatch = {
-  /** Source custody after an accepted transfer, independent of its authorizing invocation. */
+  /** Gateway instance lifetime; accepted execution checks its own retained principal. */
+  assertGatewayCurrent: () => void;
+  /** Original source grant and Gateway lifetime, rechecked during turn admission. */
   assertSourceCurrent: () => void;
   assertContextCurrent: () => void;
   assertCreatedInputSourceCurrent?: () => void;

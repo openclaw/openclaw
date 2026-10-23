@@ -7,7 +7,11 @@ import type { CronJob } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { pickerValue as readPickerValue } from "../test-helpers/select-picker-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
+import { cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
 import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -19,28 +23,21 @@ const suite = createControlUiE2eSuite({
 
 const gardenMessage = "Summarize the fictional garden inventory.";
 function gardenJob(overrides: Partial<CronJob> = {}): CronJob {
-  return {
-    id: "garden-keyboard",
-    name: "Garden keyboard task",
-    enabled: true,
-    createdAtMs: 0,
-    updatedAtMs: 0,
+  return cronJob("garden-keyboard", "Garden keyboard task", {
     configRevision: "garden-revision",
     schedule: { kind: "every", everyMs: 1_800_000 },
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: gardenMessage },
-    state: {},
     ...overrides,
-  };
+  });
 }
 
 function cronResponses(jobs: CronJob[], snapshotRevision: string, enabled = true, compact = true) {
-  const pagination = { total: 0, offset: 0, limit: 50, hasMore: false, nextOffset: null };
-  const list = { ...pagination, jobs, total: jobs.length, snapshotRevision };
+  const list = cronList(jobs, snapshotRevision);
   return {
     "cron.list": compact ? cronListResponseFixture(list) : list,
-    "cron.runs": { ...pagination, entries: [] },
+    "cron.runs": cronRuns([]),
     "cron.status": { enabled, jobs: jobs.length, nextWakeAtMs: null },
   };
 }
@@ -55,7 +52,7 @@ suite.define(() => {
     { mode: "create", enabled: true, keyboardName: true, narrow: true },
     { mode: "edit", enabled: true, keyboardName: true, narrow: true },
   ])(
-    "keeps keyboard schedule choices clear of actions ($mode, scheduler $enabled, narrow $narrow)",
+    "keeps actions at the scrollport edge and keyboard choices clear ($mode, scheduler $enabled, narrow $narrow)",
     async ({ mode, enabled, keyboardName, narrow }) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1416, height: 707 } },
@@ -138,6 +135,8 @@ suite.define(() => {
               bottom: choice.bottom,
               top: choice.top,
               footerTop: footer.top,
+              footerBottom: footer.bottom,
+              scrollportBottom: document.querySelector(".content")!.getBoundingClientRect().bottom,
               footerHeight: footer.height,
               reachable: hit === element || (hit !== null && element.contains(hit)),
             };
@@ -149,6 +148,7 @@ suite.define(() => {
           expect(geometry.top).toBeGreaterThanOrEqual(0);
           expect(geometry.bottom).toBeLessThanOrEqual(geometry.footerTop);
           expect(geometry.reachable).toBe(true);
+          expect(Math.abs(geometry.footerBottom - geometry.scrollportBottom)).toBeLessThan(1);
           if (narrow && mode === "create") {
             const buttonTops = await page
               .locator(".cron-editor-actions > button")
@@ -157,6 +157,16 @@ suite.define(() => {
               );
             expect(new Set(buttonTops).size).toBeGreaterThan(1);
           }
+          await scroller.evaluate((element) => {
+            element.scrollTop = element.scrollHeight;
+          });
+          const bottomGap = await page.locator(".cron-editor-actions").evaluate((element) => {
+            const scrollport = element.closest(".content")!;
+            return (
+              scrollport.getBoundingClientRect().bottom - element.getBoundingClientRect().bottom
+            );
+          });
+          expect(Math.abs(bottomGap)).toBeLessThan(1);
           for (const method of ["cron.add", "cron.update", "cron.run"]) {
             expect(await gateway.getRequests(method)).toHaveLength(0);
           }
@@ -171,7 +181,7 @@ suite.define(() => {
             await page.setViewportSize({ width: 1416, height: 707 });
           }
           const pages = await openSidebarPages(page);
-          await pages.getByRole("link", { name: "Agents", exact: true }).click();
+          await pages.getByRole("link", { name: "Sessions", exact: true }).click();
           await expect.poll(() => scrollPadding(page)).toBe(initialPadding);
         },
       );
@@ -237,63 +247,56 @@ suite.define(() => {
   });
 
   it("shows the authoritative defaults in the create-form selects", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1_280 },
-      },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          methodResponses: cronResponses([], "cron-select-values-fixture", true, false),
-        });
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: cronResponses([], "cron-select-values-fixture", true, false),
+      });
 
-        const response = await page.goto(`${suite.server.baseUrl}cron`);
-        expect(response?.status()).toBe(200);
-        await page.locator('[data-test-id="cron-list-tab-activity"]').click();
-        const sortMenu = page.locator(".cron-filter-dropdown__details", {
-          has: page.locator(".cron-run-sort"),
-        });
-        const sort = page.getByRole("button", { name: "Sort Newest first", exact: true });
-        await sort.waitFor({ state: "visible" });
-        await sort.click();
-        await sortMenu.locator('[data-value="asc"]').click();
-        await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
-        // Switching tabs recreates the dropdown with the persisted non-first value.
-        await page.locator('[data-test-id="cron-tab-all"]').click();
-        await page.locator('[data-test-id="cron-list-tab-activity"]').click();
-        await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
-        expect(await sortMenu.locator('[data-value="asc"]').getAttribute("aria-current")).toBe(
-          "true",
-        );
-        await page.locator('[data-test-id="cron-new-task"]').click();
+      const response = await page.goto(`${suite.server.baseUrl}cron`);
+      expect(response?.status()).toBe(200);
+      await page.locator('[data-test-id="cron-list-tab-activity"]').click();
+      const sortMenu = page.locator(".cron-filter-dropdown__details", {
+        has: page.locator(".cron-run-sort"),
+      });
+      const sort = page.getByRole("button", { name: "Sort Newest first", exact: true });
+      await sort.waitFor({ state: "visible" });
+      await sort.click();
+      await sortMenu.locator('[data-value="asc"]').click();
+      await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
+      // Switching tabs recreates the dropdown with the persisted non-first value.
+      await page.locator('[data-test-id="cron-tab-all"]').click();
+      await page.locator('[data-test-id="cron-list-tab-activity"]').click();
+      await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
+      expect(await sortMenu.locator('[data-value="asc"]').getAttribute("aria-current")).toBe(
+        "true",
+      );
+      await page.locator('[data-test-id="cron-new-task"]').click();
 
-        const pickerValue = (selector: string) =>
-          readPickerValue(page.locator(`openclaw-select-picker:has(${selector})`));
-        const action = page.locator("#cron-payload-kind");
-        await action.waitFor({ state: "visible" });
-        // Form defaults are agentTurn / isolated / minutes — none of which is
-        // the first option of its select; the rendered selection must agree.
-        expect(await pickerValue("#cron-payload-kind")).toBe("agentTurn");
-        expect(await pickerValue("#cron-session-target")).toBe("isolated");
-        const unit = page.locator("openclaw-select-picker").filter({
-          has: page.getByRole("button", { name: /^Unit: /u }),
-        });
-        expect(await readPickerValue(unit)).toBe("minutes");
-        expect(await pickerValue("#cron-delivery-mode")).toBe("none");
-        expect(await page.locator("#cron-delivery-channel").count()).toBe(0);
+      const pickerValue = (selector: string) =>
+        readPickerValue(page.locator(`openclaw-select-picker:has(${selector})`));
+      const action = page.locator("#cron-payload-kind");
+      await action.waitFor({ state: "visible" });
+      // Form defaults are agentTurn / isolated / minutes — none of which is
+      // the first option of its select; the rendered selection must agree.
+      expect(await pickerValue("#cron-payload-kind")).toBe("agentTurn");
+      expect(await pickerValue("#cron-session-target")).toBe("isolated");
+      const unit = page.locator("openclaw-select-picker").filter({
+        has: page.getByRole("button", { name: /^Unit: /u }),
+      });
+      expect(await readPickerValue(unit)).toBe("minutes");
+      expect(await pickerValue("#cron-delivery-mode")).toBe("none");
+      expect(await page.locator("#cron-delivery-channel").count()).toBe(0);
 
-        await action.click();
-        await page.getByRole("option", { name: "Post to main timeline", exact: true }).click();
-        await expect.poll(() => pickerValue("#cron-payload-kind")).toBe("systemEvent");
-        await expect.poll(() => pickerValue("#cron-session-target")).toBe("main");
+      await action.click();
+      await page.getByRole("option", { name: "Post to main timeline", exact: true }).click();
+      await expect.poll(() => pickerValue("#cron-payload-kind")).toBe("systemEvent");
+      await expect.poll(() => pickerValue("#cron-session-target")).toBe("main");
 
-        const target = page.locator("#cron-session-target");
-        await target.click();
-        await page.getByRole("option", { name: "Isolated session", exact: true }).click();
-        await expect.poll(() => pickerValue("#cron-session-target")).toBe("isolated");
-        await expect.poll(() => pickerValue("#cron-payload-kind")).toBe("agentTurn");
-      },
-    );
+      const target = page.locator("#cron-session-target");
+      await target.click();
+      await page.getByRole("option", { name: "Isolated session", exact: true }).click();
+      await expect.poll(() => pickerValue("#cron-session-target")).toBe("isolated");
+      await expect.poll(() => pickerValue("#cron-payload-kind")).toBe("agentTurn");
+    });
   });
 });

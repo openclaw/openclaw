@@ -194,9 +194,6 @@ export async function prepareHostedSmsMedia(params: PrepareHostedSmsMediaParams)
   });
   const store = getHostedSmsMediaStore(params.account.accountId);
   const captionByteLength = params.captionByteLength ?? 0;
-  if (!Number.isSafeInteger(captionByteLength) || captionByteLength < 0) {
-    throw new Error("MMS caption byte length must be a non-negative integer.");
-  }
   const aggregateMediaBudget = TWILIO_MMS_IMAGE_MAX_BYTES - captionByteLength - 1;
   if (aggregateMediaBudget < 1) {
     throw new Error("Twilio MMS caption leaves no room for an attachment below 5,000,000 bytes.");

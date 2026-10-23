@@ -1,4 +1,5 @@
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 
 export function floatToPcm16(samples: Float32Array): Uint8Array {
   const bytes = new Uint8Array(samples.length * 2);
@@ -172,7 +173,7 @@ export class RealtimeTalkMediaStreamMeter {
   }
 }
 
-export function estimateBase64DecodedByteLength(value: string): number {
+function estimateBase64DecodedByteLength(value: string): number {
   const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
   return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
 }
@@ -255,7 +256,7 @@ export class RealtimeTalkPcmOutputQueue {
     const source = outputContext.createBufferSource();
     this.sources.add(source);
     this.sourceListeners ??= new AbortController();
-    source.addEventListener("ended", () => this.sources.delete(source), {
+    listen(source, "ended", () => this.sources.delete(source), {
       once: true,
       signal: this.sourceListeners.signal,
     });

@@ -216,7 +216,6 @@ function combineChannelStopCaptures(captures: readonly ChannelStopCapture[]): Ch
 export function abortSessionRunTargetWithOutcome(params: {
   capture: ChannelStopCapture | (() => ChannelStopCapture);
   assertCurrent?: () => void;
-  afterQueued?: () => void;
   hookContext: SessionStopHookContext;
   messageIdentity?: unknown;
   recordAbortTarget?: SessionStopRequest["recordAbortTarget"];
@@ -278,7 +277,6 @@ export function abortSessionRunTargetWithOutcome(params: {
     },
     afterQueued: () => {
       const capture = resolveCapture();
-      params.afterQueued?.();
       for (const retirement of capture.idleMcpRetirements) {
         trackRetirement(retirement.sessionId, () =>
           retirement.retire(() => params.assertCurrent?.()),
@@ -408,8 +406,8 @@ export async function executeFastAbortRequest(
     readChannelContextGatewayContextResolver(ctx) ??
     getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const assertCurrent = () => {
-    if (params.isCommandTargetCurrent?.sessionSource?.assertScopeCurrent) {
-      params.isCommandTargetCurrent.sessionSource.assertScopeCurrent();
+    if (params.isCommandTargetCurrent?.sessionSource) {
+      params.isCommandTargetCurrent.sessionSource();
       return;
     }
     if (params.isCommandTargetCurrent?.() === false) {

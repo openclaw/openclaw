@@ -1,4 +1,4 @@
-import type { Component, OverlayHandle } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import type {
   QuestionGetResult,
   QuestionListResult,
@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createOverlayHandle } from "./tui-overlay.test-support.js";
 import { createTuiQuestionController } from "./tui-questions.js";
 
 const UP = "\x1b[A";
@@ -80,15 +81,7 @@ function createHarness(initialRecord?: QuestionRecord) {
   const onPendingChange = vi.fn<(text: string) => void>();
   const openOverlay = vi.fn((component: Component) => {
     shown = component;
-    return {
-      hide() {},
-      setHidden() {},
-      isHidden: () => false,
-      focus() {},
-      unfocus() {},
-      isFocused: () => true,
-      getBounds: () => undefined,
-    } satisfies OverlayHandle;
+    return createOverlayHandle();
   });
   const listQuestions = vi.fn(async (): Promise<QuestionListResult> => ({ questions: [] }));
   const getQuestion = vi.fn<(id: string) => Promise<QuestionGetResult>>(async () => ({

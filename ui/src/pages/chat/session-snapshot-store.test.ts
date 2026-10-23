@@ -10,12 +10,14 @@ import {
 } from "../../lib/chat/control-ui-database.runtime.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
 import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
   observeChatCache,
   type ChatMessageCache,
+  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import {
   CHAT_SNAPSHOT_DB_NAME as DB,
@@ -31,7 +33,6 @@ import {
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
-import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 const snapshotHost = {
   settings: { gatewayUrl: "wss://cache.example" },
@@ -139,6 +140,98 @@ describe("persistent chat session snapshots", () => {
     await clearStoredChatSnapshots();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("restores a board snapshot and its original ticket receipt with the conversation", async () => {
+    const sessionKey = key("agent:main:dashboard");
+    const value: ChatSessionSnapshot = {
+      ...snapshot("dashboard conversation"),
+      board: {
+        receivedAtMs: 100,
+        snapshot: {
+          sessionKey: "agent:main:dashboard",
+          revision: 1,
+          tabs: [{ tabId: "overview", title: "Overview", position: 0, chatDock: "right" }],
+          widgets: [
+            {
+              name: "chart",
+              tabId: "overview",
+              contentKind: "html",
+              sizeW: 12,
+              sizeH: 8,
+              position: 0,
+              grantState: "none",
+              revision: 1,
+              frameUrl: "/__openclaw__/board/dashboard/chart/index.html?bt=synthetic-ticket",
+              viewTicket: "synthetic-ticket",
+              viewTicketTtlMs: 1200000,
+            },
+          ],
+        },
+      },
+    };
+    await persist(writer, sessionKey, value);
+    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(value);
+    await deleteStoredChatSnapshot(sessionKey);
+    expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+  });
+
+  it("does not present a cached board after its pending read is invalidated", async () => {
+    const sessionKey = key("agent:main:retired-dashboard");
+    await persist(writer, sessionKey, {
+      ...snapshot("retired conversation"),
+      historyState: { stateRevision: {}, commands: [] },
+      board: {
+        snapshot: { sessionKey: rawKey(sessionKey), revision: 1, tabs: [], widgets: [] },
+        receivedAtMs: 100,
+      },
+    });
+    const reader = new SessionSnapshotStore();
+    const presentBoard = vi.fn();
+    const reading = reader.read(sessionKey, presentBoard);
+    reader.forget(sessionKey);
+    expect(await reading).toBeNull();
+    expect(presentBoard).not.toHaveBeenCalled();
+  });
+
+  it("persists board removal before any transcript is in memory", async () => {
+    const memory: ChatMessageCache = new Map();
+    const store = makeStore(memory);
+    const sessionKey = key("agent:main:removed-dashboard");
+    await persist(writer, sessionKey, {
+      ...snapshot("saved conversation"),
+      board: {
+        snapshot: { sessionKey: rawKey(sessionKey), revision: 1, tabs: [], widgets: [] },
+        receivedAtMs: 100,
+      },
+    });
+    cacheChatBoardSnapshotAfterHydration(
+      { ...snapshotHost, chatMessagesBySession: memory },
+      { sessionKey: rawKey(sessionKey) },
+      null,
+      100,
+      () => true,
+    );
+    await store.flush();
+    expect((await new SessionSnapshotStore().read(sessionKey))?.board).toBeNull();
+  });
+
+  it("discards an invalid persisted board receipt", async () => {
+    const sessionKey = key("agent:main:invalid-board");
+    await persist(writer, sessionKey, snapshot("initialize database"));
+    await putRawRecord({
+      ...envelope(sessionKey, snapshot("conversation")),
+      snapshot: {
+        ...snapshot("conversation"),
+        board: {
+          receivedAtMs: -1,
+          snapshot: { sessionKey: "dashboard", revision: 1, tabs: [], widgets: [] },
+        },
+      },
+    });
+    const presentBoard = vi.fn();
+    expect(await new SessionSnapshotStore().read(sessionKey, presentBoard)).toBeNull();
+    expect(presentBoard).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

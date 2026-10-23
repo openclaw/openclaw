@@ -15,6 +15,7 @@ import { formatCliFailureLines, formatCliJsonFailure } from "../cli/failure-outp
 import type { OpenClawConfig } from "../config/config.js";
 import * as embeddedStateLock from "../infra/embedded-state-lock.js";
 import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-support.js";
+import * as gatewayLockProcessModule from "../infra/gateway-lock-process.js";
 import {
   acquireGatewayLock,
   GatewayLockError,
@@ -468,11 +469,14 @@ it("keeps an ownerless explicit global session fail-closed through --local", asy
   expect(agentCommand).not.toHaveBeenCalled();
 });
 
-it.each([false, true])("reads a UTF-8 message file (symlink chain=%s)", async (symlinks) => {
+it.each([false, true])("reads literal UTF-8 files (symlink chain=%s)", async (symlinks) => {
   const { dir } = testStore;
-  const messageFile = path.join(dir, "task.md");
+  const messageFile = path.join(dir, process.platform === "win32" ? "task.md" : " task.md ");
   const messageBody = 'first line\n```json\n{"ok":true}\n```\nsecond line\n';
   fs.writeFileSync(messageFile, `\uFEFF${messageBody}`, "utf8");
+  if (process.platform !== "win32") {
+    fs.writeFileSync(messageFile.trim(), "wrong neighboring prompt", "utf8");
+  }
   let inputFile = messageFile;
   if (symlinks) {
     for (const name of ["link-a.md", "link-b.md", "link-c.md"]) {
@@ -489,18 +493,14 @@ it.each([false, true])("reads a UTF-8 message file (symlink chain=%s)", async (s
   expect(gatewayParams()).toMatchObject({
     message: messageBody,
     sessionKey: "agent:main:incident-42",
-    sessionId: undefined,
-    to: undefined,
   });
   expect(gatewayRequest().config).toBe(loadConfig.mock.results[0]?.value);
-  expect(loadConfig).toHaveBeenCalledWith();
   expectUncalled(agentCommand, loadAgentSessionModuleMock);
 });
 
 it("refuses --local before embedded startup when a live Gateway owns the state directory", async () => {
-  const lockOptions = createLocalGatewayLockOptions(testStore.dir, {
-    readProcessStartTime: () => 123_456,
-  });
+  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockReturnValue(123_456);
+  const lockOptions = createLocalGatewayLockOptions(testStore.dir);
   useLocalGatewayLockOptions(lockOptions);
   const gatewayLock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
   expect(gatewayLock).not.toBeNull();

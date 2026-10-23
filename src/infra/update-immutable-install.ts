@@ -213,7 +213,7 @@ export async function adoptImmutableInstall(params: {
     verifyImmutableGeneration,
     assertImmutableGenerationControlVersion,
   } = await import("./update-immutable-generation.js");
-  const { verifyImmutableService } = await import("./update-immutable-service.js");
+  const { readImmutableService } = await import("./update-immutable-service.js");
   const { ImmutableInstallDescriptorSchema } = await import("./update-immutable-install-schema.js");
   if (!params.previousUpdaterStopped) {
     throw new Error("The previous updater must be stopped before adoption.");
@@ -398,7 +398,7 @@ export async function adoptImmutableInstall(params: {
         );
       }
     }
-    await verifyImmutableService(descriptor.service, root, descriptor.current.path, runtime);
+    await readImmutableService(descriptor.service, root, descriptor.current.path, runtime);
     assertCurrent();
     await installImmutableLauncher({ root, runtimePath: runtime });
     assertCurrent();
@@ -527,7 +527,7 @@ export async function prepareImmutableUpdate(params: {
       };
     }
     requireUpdater();
-    const { verifyImmutableService } = await import("./update-immutable-service.js");
+    const { readImmutableService } = await import("./update-immutable-service.js");
     const { runImmutableBuild } = await import("./update-immutable-build.js");
     const { resolveImmutableOperatorBuildAccount } =
       await import("./update-immutable-build-account.js");
@@ -573,7 +573,7 @@ export async function prepareImmutableUpdate(params: {
         assertImmutableDescriptorCurrent(descriptor);
       };
       const verifyService = () =>
-        verifyImmutableService(
+        readImmutableService(
           descriptor.service,
           descriptor.root,
           descriptor.current.path,

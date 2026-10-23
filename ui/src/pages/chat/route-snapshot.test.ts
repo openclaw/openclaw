@@ -6,6 +6,8 @@ import { createApplicationRouter, startApplicationRouter } from "../../app-route
 import { loadChatRoute } from "./route-loader.ts";
 import {
   createSessionRouteContext,
+  createSessionRouteRow,
+  sessionRouteListResult,
   sessionRouteKey,
   sessionRouteUuid,
 } from "./route-resolution.test-support.ts";
@@ -40,6 +42,29 @@ async function setup(key = sessionRouteKey, storedPrefix = prefix) {
   Object.assign(fixture.context.gateway.snapshot.client!, { offlineRecoveryScope: "account-a" });
   return fixture;
 }
+
+it("keeps cached roster admission ahead of a prewarmed full-UUID snapshot", async () => {
+  const { context, request } = await setup();
+  await context.sessions.whenCachedRosterSettled();
+  context.gateway.snapshot.phase = "connecting";
+  context.sessions.state.result = sessionRouteListResult([createSessionRouteRow()]);
+  context.sessions.state.resultCached = true;
+  Object.defineProperty(context.sessions, "cachedRoutingDefaults", {
+    value: { mainKey: "main", scope: "per-sender" },
+  });
+  const result = await loadChatRoute(
+    context,
+    { pathname: `/chat/roboclaw/${sessionRouteUuid.replaceAll("-", "")}`, search: "", hash: "" },
+    "chat",
+    new AbortController().signal,
+  );
+  expect(result).toMatchObject({
+    kind: "session",
+    sessionKey: sessionRouteKey,
+    sessionResolutionFromCache: "roster",
+  });
+  expect(request).not.toHaveBeenCalled();
+});
 
 it.each([sessionRouteUuid, sessionRouteUuid.replaceAll("-", "")])(
   "admits an off-roster full UUID %s from the scoped snapshot and leaves it for the pane",
@@ -105,6 +130,18 @@ it.each([
 it.each([
   { response: { ok: false }, expected: { kind: "missing-session" } },
   {
+    response: {
+      ok: true,
+      key: "agent:roboclaw:chat:87654321-90ab-cdef-1234-567890abcdef",
+      agentId: "roboclaw",
+    },
+    expected: {
+      kind: "session",
+      sessionKey: "agent:roboclaw:chat:87654321-90ab-cdef-1234-567890abcdef",
+      agentId: "roboclaw",
+    },
+  },
+  {
     response: { ok: true, key: `agent:other:thread:${sessionRouteUuid}`, agentId: "other" },
     expected: {
       kind: "session",
@@ -125,25 +162,32 @@ it.each([
   expect(result).not.toHaveProperty("sessionResolutionFromCache");
 });
 
-it("does not admit a snapshot across a reconnect during its read", async () => {
-  const held = createDeferred<unknown>();
-  const read = database.readStoredChatSnapshotRecord;
-  vi.spyOn(database, "readStoredChatSnapshotRecord").mockReturnValueOnce(held.promise);
-  const { context, request } = await setup();
-  let revision = 0;
-  Object.defineProperty(context.gateway, "connectionRevision", { get: () => revision });
-  const loading = loadChatRoute(
-    context,
-    { pathname: `/chat/roboclaw/${sessionRouteUuid}`, search: "", hash: "" },
-    "chat",
-    new AbortController().signal,
-  );
-  await vi.dynamicImportSettled();
-  revision++;
-  held.resolve(await read(prefix + sessionRouteKey));
-  expect(await loading).toMatchObject({ kind: "missing-session" });
-  expect(request).toHaveBeenCalled();
-});
+it.each(["reconnect", "account change"])(
+  "does not admit a snapshot across %s during its read",
+  async (change) => {
+    const held = createDeferred<unknown>();
+    const read = database.readStoredChatSnapshotRecord;
+    vi.spyOn(database, "readStoredChatSnapshotRecord").mockReturnValueOnce(held.promise);
+    const { context, request } = await setup();
+    let revision = 0;
+    Object.defineProperty(context.gateway, "connectionRevision", { get: () => revision });
+    const loading = loadChatRoute(
+      context,
+      { pathname: `/chat/roboclaw/${sessionRouteUuid}`, search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+    await vi.dynamicImportSettled();
+    if (change === "reconnect") {
+      revision++;
+    } else {
+      Object.assign(context.gateway.snapshot.client!, { offlineRecoveryScope: "account-b" });
+    }
+    held.resolve(await read(prefix + sessionRouteKey));
+    expect(await loading).toMatchObject({ kind: "missing-session" });
+    expect(request).toHaveBeenCalled();
+  },
+);
 
 it.each([false, true])(
   "revalidates cached admission through the router after hello (deleted: %s)",

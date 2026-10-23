@@ -1,12 +1,18 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { captureFreshDoctorMigrationTables } from "../commands/doctor-migration-backup.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
-import { recordSessionStateEventInDatabase } from "../sessions/session-state-events.kernel.js";
+import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import { runWithDoctorMigrationBackup } from "../infra/update-doctor-migration-attribution.js";
+import { recordSessionStateEventsInDatabase } from "../sessions/session-state-events.kernel.js";
 import { readSessionStateSequence } from "../sessions/session-state-events.read.worker.js";
+import { sessionStateOperations } from "../sessions/session-state-events.worker.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -30,19 +36,38 @@ const directories = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
-function record(db: EngineConnection, agentId: string, dedupeKey: string, now: number) {
-  return recordSessionStateEventInDatabase(
-    db,
-    {
-      sessionKey: "global",
-      agentId,
-      kind: "human_direct_message",
-      actorType: "human",
-      summary: "synthetic event",
-      dedupeKey,
+async function withMigrationCustody(pathname: string, run: () => void | Promise<void>) {
+  const maintenance = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent() {},
+    assertDatabaseAccess(databasePath) {
+      expect(databasePath).toBe(pathname);
     },
-    now,
-  );
+  });
+  try {
+    await maintenance.run(() =>
+      runWithDoctorMigrationBackup(captureFreshDoctorMigrationTables, run),
+    );
+  } finally {
+    await maintenance.run(() => closeOpenClawStateDatabaseAsync());
+    await maintenance.close();
+  }
+}
+
+function record(db: EngineConnection, agentId: string, dedupeKey: string, now: number) {
+  return recordSessionStateEventsInDatabase(db, [
+    {
+      event: {
+        sessionKey: "global",
+        agentId,
+        kind: "human_direct_message",
+        actorType: "human",
+        summary: "synthetic event",
+        dedupeKey,
+      },
+      now,
+    },
+  ]).rows[0];
 }
 
 function heads(db: EngineConnection) {
@@ -78,31 +103,33 @@ it.each([
   { schema: "current", integrityCheck: "full" },
 ] as const)(
   "reserves untouched index recovery for $integrityCheck verification with $schema schema",
-  ({ schema, integrityCheck }) => {
+  async ({ schema, integrityCheck }) => {
     const { options, pathname } = legacyDatabase();
-    if (schema === "current") {
-      expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-    }
-    const source = new DatabaseSync(pathname);
-    source.exec(`
-      CREATE TABLE untouched_payloads (value TEXT);
-      CREATE INDEX idx_untouched_payload ON untouched_payloads(value);
-      INSERT INTO untouched_payloads VALUES ('retained');
-    `);
-    source.close();
-    corruptSqliteIndexKey(pathname, "idx_untouched_payload", "retained", "mismatch");
-    const result = repairOpenClawStateDatabaseSchema({ ...options, integrityCheck });
-    expect(result.warnings).toEqual([]);
-    expect(result.changes.some((change) => change.includes("idx_untouched_payload"))).toBe(
-      integrityCheck === "full",
-    );
-    using database = new DatabaseSync(pathname);
-    expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check === "ok").toBe(
-      integrityCheck === "full",
-    );
-    expect(database.prepare("SELECT value FROM untouched_payloads NOT INDEXED").all()).toEqual([
-      { value: "retained" },
-    ]);
+    await withMigrationCustody(pathname, () => {
+      if (schema === "current") {
+        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+      }
+      const source = new DatabaseSync(pathname);
+      source.exec(`
+        CREATE TABLE untouched_payloads (value TEXT);
+        CREATE INDEX idx_untouched_payload ON untouched_payloads(value);
+        INSERT INTO untouched_payloads VALUES ('retained');
+      `);
+      source.close();
+      corruptSqliteIndexKey(pathname, "idx_untouched_payload", "retained", "mismatch");
+      const result = repairOpenClawStateDatabaseSchema({ ...options, integrityCheck });
+      expect(result.warnings).toEqual([]);
+      expect(result.changes.some((change) => change.includes("idx_untouched_payload"))).toBe(
+        integrityCheck === "full",
+      );
+      using database = new DatabaseSync(pathname);
+      expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check === "ok").toBe(
+        integrityCheck === "full",
+      );
+      expect(database.prepare("SELECT value FROM untouched_payloads NOT INDEXED").all()).toEqual([
+        { value: "retained" },
+      ]);
+    });
   },
 );
 
@@ -110,66 +137,75 @@ it.each(["runtime", "doctor"] as const)(
   "migrates v25 heads through %s within scope and preserves subsequent event writes",
   async (owner) => {
     const { options, pathname, before } = legacyDatabase();
-    using scope = new DatabaseSync(pathname);
-    const { db } = await assertSqliteMigrationScopePreserved(
-      scope,
-      [
-        "schema_meta",
-        "config_machine_state",
-        "github_publication_requests",
-        "github_personal_publication_requests",
-        "github_repository_publication_requests",
-        "session_state_heads",
-        "acp_replay_events",
-        "skill_usage",
-        "state_leases",
-        "sqlite_stat1",
-        "sqlite_stat4",
-      ],
-      () => {
-        if (owner === "doctor") {
-          expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-        }
-        return openOpenClawStateDatabase(options);
-      },
-    );
-    expect(db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
-    expect(
-      db.prepare("SELECT wr FROM pragma_table_list WHERE name = 'session_state_heads'").get(),
-    ).toEqual({ wr: 1 });
-    expect(heads(db)).toEqual(before);
-    expect(
-      db.prepare("SELECT name FROM sqlite_schema WHERE name = 'local_head_updated'").get(),
-    ).toEqual({ name: "local_head_updated" });
+    await withMigrationCustody(pathname, async () => {
+      using scope = new DatabaseSync(pathname);
+      const { db } = await assertSqliteMigrationScopePreserved(
+        scope,
+        [
+          "schema_meta",
+          "config_machine_state",
+          "github_publication_requests",
+          "github_personal_publication_requests",
+          "github_repository_publication_requests",
+          "session_state_heads",
+          "acp_replay_events",
+          "skill_usage",
+          "state_leases",
+          "device_identities",
+          "device_auth_tokens",
+          "gateway_origin_device_tokens",
+          "exec_approvals_config",
+          "local_workspace_projections",
+          "local_workspace_manifest_nodes",
+          "sqlite_stat1",
+          "sqlite_stat4",
+        ],
+        () => {
+          if (owner === "doctor") {
+            expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+          }
+          return openOpenClawStateDatabase(options);
+        },
+      );
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+      expect(
+        db.prepare("SELECT wr FROM pragma_table_list WHERE name = 'session_state_heads'").get(),
+      ).toEqual({ wr: 1 });
+      expect(heads(db)).toEqual(before);
+      expect(
+        db.prepare("SELECT name FROM sqlite_schema WHERE name = 'local_head_updated'").get(),
+      ).toEqual({ name: "local_head_updated" });
 
-    const inserted = runOpenClawStateWriteTransaction(
-      ({ db: writer }) => record(writer, "main", "main-after", 200),
-      options,
-    );
-    expect(readSessionStateSequence(db, "global", "main")).toBe(inserted.row?.sequence);
-    expect(readSessionStateSequence(db, "global", "other")).toBe(2);
-    expect(
-      db
-        .prepare("SELECT pruned_max_sequence FROM session_state_heads WHERE agent_id = 'main'")
-        .get(),
-    ).toEqual({ pruned_max_sequence: 1 });
-    const after = heads(db);
-    runOpenClawStateWriteTransaction(
-      ({ db: writer }) => record(writer, "main", "main-after", 300),
-      options,
-    );
-    expect(heads(db)).toEqual(after);
-    await closeOpenClawStateDatabaseAsync();
-    expect(heads(openOpenClawStateDatabase(options).db)).toEqual(after);
+      const inserted = runOpenClawStateWriteTransaction(
+        ({ db: writer }) => record(writer, "main", "main-after", 200),
+        options,
+      );
+      expect(readSessionStateSequence(db, "global", "main")).toBe(inserted?.sequence);
+      expect(readSessionStateSequence(db, "global", "other")).toBe(2);
+      expect(
+        db
+          .prepare("SELECT pruned_max_sequence FROM session_state_heads WHERE agent_id = 'main'")
+          .get(),
+      ).toEqual({ pruned_max_sequence: 1 });
+      const after = heads(db);
+      runOpenClawStateWriteTransaction(
+        ({ db: writer }) => record(writer, "main", "main-after", 300),
+        options,
+      );
+      expect(heads(db)).toEqual(after);
+      await closeOpenClawStateDatabaseAsync();
+      expect(heads(openOpenClawStateDatabase(options).db)).toEqual(after);
+    });
   },
 );
 
 it("rolls back the rebuilt head table and version when publication fails", async () => {
   const { options, pathname, before } = legacyDatabase(true);
-  expect(() => openOpenClawStateDatabase(options)).toThrow("fixture publication refusal");
-  await closeOpenClawStateDatabaseAsync();
+  await withMigrationCustody(pathname, () => {
+    expect(() => openOpenClawStateDatabase(options)).toThrow("fixture publication refusal");
+  });
   using db = new DatabaseSync(pathname, { readOnly: true });
   expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 25 });
   expect(
@@ -213,4 +249,90 @@ it("preserves local constraints, generated values, indexes, and triggers during 
   db.exec("UPDATE session_state_heads SET last_sequence = 4");
   expect(db.prepare("SELECT * FROM head_changes").all()).toEqual([{ sequence: 4 }]);
   expect(() => db.exec("UPDATE session_state_heads SET last_sequence = 0")).toThrow(/CHECK/);
+});
+
+it("batches creation heads without rewinding replayed or shared-key agent heads", () => {
+  const env = { OPENCLAW_STATE_DIR: directories.make("head-batch-") };
+  const options = { env, path: resolveOpenClawStateSqlitePath(env) };
+  const database = openOpenClawStateDatabase(options);
+  const grant = admission.createSqliteWorkerOperationAdmission((_request, allow) => allow());
+  const postMessage = grant.port.postMessage.bind(grant.port);
+  // Service the real admission owner synchronously while both ends share this thread.
+  const dispatch = vi.spyOn(grant.port, "postMessage").mockImplementation((message, transfers) => {
+    postMessage(message, transfers);
+    grant.service();
+  });
+  const write = <T>(operation: (db: typeof database) => T) =>
+    admission.withSqliteWorkerOperationAdmission({ port: grant.port }, () =>
+      runOpenClawStateWriteTransaction(operation, options),
+    );
+  const context = {
+    open: () => database,
+    stateOptions: () => options,
+    write,
+    writeAdmitted: write,
+  };
+  const created = (agentId: string, dedupeKey: string) => ({
+    sessionKey: "global",
+    agentId,
+    dedupeKey,
+    kind: "created" as const,
+    actorType: "system" as const,
+    summary: "created",
+  });
+  const events = [
+    created("main", "one"),
+    created("other", "two"),
+    created("main", "three"),
+    created("main", "one"),
+  ];
+  if (!(database.db instanceof DatabaseSync)) {
+    throw new Error("SQLite fixture required");
+  }
+  const counter = trackSqliteStatementExecutions(database.db, ["heads"], (sql) =>
+    /^insert into "session_state_heads"/i.test(sql) ? "heads" : null,
+  );
+  try {
+    const first = sessionStateOperations["sessionState.record"]({ events, now: 100 }, context);
+    expect(first.rows.map((row) => row.sequence)).toEqual([1, 2, 3, 1]);
+    expect(counter.counts.heads).toBe(1);
+    database.db.exec(
+      "UPDATE session_state_heads SET pruned_max_sequence = 1 WHERE agent_id = 'main'",
+    );
+    sessionStateOperations["sessionState.record"](
+      { events: [created("main", "four"), events[0]!], now: 200 },
+      context,
+    );
+    const stored = heads(database.db);
+    expect(stored).toEqual([
+      {
+        session_key: "global",
+        agent_id: "main",
+        last_sequence: 5,
+        pruned_max_sequence: 1,
+        updated_at: 200,
+      },
+      {
+        session_key: "global",
+        agent_id: "other",
+        last_sequence: 2,
+        pruned_max_sequence: 0,
+        updated_at: 100,
+      },
+    ]);
+    expect(() =>
+      write(() => {
+        sessionStateOperations["sessionState.record"](
+          { events: [created("main", "rolled-back")], now: 300 },
+          context,
+        );
+        throw new Error("rollback batch");
+      }),
+    ).toThrow("rollback batch");
+    expect(heads(database.db)).toEqual(stored);
+  } finally {
+    counter.restore();
+    dispatch.mockRestore();
+    grant.finish();
+  }
 });

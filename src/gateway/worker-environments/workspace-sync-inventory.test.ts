@@ -23,6 +23,7 @@ import {
   runWorkspaceInventoryCommandToFile,
 } from "./workspace-sync-inventory.js";
 import { preflightWorkerWorkspace } from "./workspace-sync-preflight.js";
+import { writeWorkspaceFiles as files } from "./workspace-sync-scripts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let receipts: FixtureReceiptChannel;
@@ -97,16 +98,6 @@ function interceptOutput(target: string, intercept: (handle: FileHandle) => File
       ? (intercept(handle) ?? handle)
       : handle;
   });
-}
-
-async function files(root: string, entries: Record<string, string>) {
-  await Promise.all(
-    Object.entries(entries).map(async ([name, content]) => {
-      const file = path.join(root, name);
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      await fs.writeFile(file, content);
-    }),
-  );
 }
 
 async function workspace(entries: Record<string, string> = {}, committed = false) {
@@ -234,7 +225,6 @@ describe("runWorkspaceInventoryCommandToFile", () => {
           : preflightWorkerWorkspace({
               localPath: root,
               signal: controller.signal,
-              timeoutMs: 10_000,
             });
       const settled = vi.fn();
       void producing.then(settled, settled);
@@ -628,7 +618,7 @@ describe("preflightWorkerWorkspace", () => {
     await fs.symlink("tracked.txt", path.join(root, "safe-link"));
     await git(path.join(root, "nested"), "init", "--quiet");
 
-    await preflightWorkerWorkspace({ localPath: root, timeoutMs: 10_000 });
+    await preflightWorkerWorkspace({ localPath: root });
     const transferPath = await transferList(root, transferDirectory);
     const paths = new Set((await fs.readFile(transferPath, "utf8")).split("\0").filter(Boolean));
 
@@ -648,7 +638,7 @@ describe("preflightWorkerWorkspace", () => {
     const root = await workspace({ "tracked.txt": "tracked\n" }, true);
     await fs.symlink("../outside", path.join(root, "escape"));
 
-    const error = await preflightWorkerWorkspace({ localPath: root, timeoutMs: 10_000 }).catch(
+    const error = await preflightWorkerWorkspace({ localPath: root }).catch(
       (value: unknown) => value,
     );
 

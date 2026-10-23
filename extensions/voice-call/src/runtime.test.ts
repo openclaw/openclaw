@@ -4,7 +4,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
 import {
   createMockSessionRuntime,
@@ -12,6 +12,7 @@ import {
 } from "./runtime.fast-context.test-support.js";
 import { createExternalProviderConfig, createVoiceCallBaseConfig } from "./test-fixtures.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
+import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 
 const mocks = vi.hoisted(() => ({
   resolveVoiceCallConfig: vi.fn(),
@@ -230,11 +231,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
     mocks.webhookGetRealtimeHandler.mockReturnValue({
       setPublicUrl: mocks.realtimeHandlerSetPublicUrl,
     });
-    mocks.webhookGetStreamDisconnectLifecycle.mockReturnValue({
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      retire: vi.fn(),
-    });
+    const streamDisconnectLifecycle = new StreamDisconnectGrace(() => {});
+    mocks.webhookGetStreamDisconnectLifecycle.mockReturnValue(streamDisconnectLifecycle);
+    onTestFinished(() => streamDisconnectLifecycle.close());
     mocks.webhookCtorArgs.length = 0;
     mocks.realtimeHandlerCtorArgs.length = 0;
     mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
@@ -295,7 +294,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const tunnelStop = vi.fn().mockResolvedValue(undefined);
     mocks.startTunnel.mockResolvedValue({
       publicUrl: "https://public.example:8443/voice/webhook",
-      provider: "tailscale-funnel",
       stop: tunnelStop,
     });
     mocks.managerInitialize.mockRejectedValue(new Error("init failed"));
@@ -325,7 +323,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
     mocks.webhookStop.mockReturnValue(webhookStopped.promise);
     mocks.startTunnel.mockResolvedValue({
       publicUrl: "https://public.example/voice/webhook",
-      provider: "ngrok",
       stop: tunnelStop,
     });
 
@@ -370,14 +367,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(await stopped).toBe(transportFailure);
   });
 
-  it("passes fullConfig to the webhook server for streaming provider resolution", async () => {
-    const coreConfig = { tts: { provider: "openai" } } as OpenClawConfig;
-    const fullConfig: OpenClawConfig = { plugins: { entries: { openai: { enabled: true } } } };
+  it("passes the complete config to the webhook server for streaming provider resolution", async () => {
+    const coreConfig: OpenClawConfig = { plugins: { entries: { openai: { enabled: true } } } };
 
-    await createRuntime({ coreConfig, fullConfig });
+    await createRuntime({ coreConfig });
 
     expect(mocks.webhookCtorArgs[0]?.[4]).toBe(coreConfig);
-    expect(mocks.webhookCtorArgs[0]?.[5]).toBe(fullConfig);
   });
 
   it("builds realtime instructions for the agent frozen on each call", async () => {
@@ -393,7 +388,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       },
       { agentId: "operator" },
     );
-    const fullConfig: OpenClawConfig = {
+    const coreConfig: OpenClawConfig = {
       agents: {
         entries: {
           operator: { identity: { name: "Main Voice" } },
@@ -401,7 +396,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
         },
       },
     };
-    const runtime = await createRuntime({ config, fullConfig });
+    const runtime = await createRuntime({ config, coreConfig });
 
     const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[2];
     expect(mocks.realtimeHandlerCtorArgs[0]?.[4]).toBe(
@@ -483,10 +478,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
       logger,
     });
 
-    expect(runtime).toMatchObject({
-      webhookUrl: "https://voice.example.com/voice/webhook",
-      publicUrl: "https://voice.example.com/voice/webhook",
-    });
+    expect(mocks.managerInitialize).toHaveBeenCalledWith(
+      expect.anything(),
+      "https://voice.example.com/voice/webhook",
+    );
     expect(logger.info).toHaveBeenCalledWith(
       "[voice-call] Webhook URL: https://voice.example.com/voice/webhook",
     );

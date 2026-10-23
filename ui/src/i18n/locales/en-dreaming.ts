@@ -11,6 +11,7 @@ const enDreaming = {
     header: {
       refresh: "Refresh",
       refreshing: "Refreshing…",
+      toggle: "Dreaming",
       on: "Dreaming On",
       off: "Dreaming Off",
       engineOff: "Memory engine is Off. Choose an engine in Settings to enable dreaming.",

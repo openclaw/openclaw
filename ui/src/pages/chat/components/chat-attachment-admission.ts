@@ -5,10 +5,13 @@
 import { resolveChatAttachmentFrameBudgetBytes } from "../../../../../src/shared/chat-attachment-frame-budget.ts";
 import type { GatewayHelloOk } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { getChatAttachmentDataUrl } from "../attachment-payload-store.ts";
 import { canResizeChatAttachment } from "./chat-attachment-image.ts";
+
+registerChatComposerEnglish();
 
 export type ChatAttachmentLimits = {
   maxBytes: number;
@@ -51,11 +54,11 @@ function skippedFilesToast(messageKey: string, skipped: readonly File[]): void {
   if (skipped.length === 0) {
     return;
   }
+  const tooLarge = messageKey === "chat.attachments.tooLarge";
   showToast({
-    message: skippedFilesMessage(
-      messageKey,
-      skipped.map((file) => file.name),
-    ),
+    message: tooLarge ? t("chat.attachments.tooLargeToast") : t(messageKey),
+    placement: "top-center",
+    severity: "error",
   });
 }
 
@@ -66,7 +69,7 @@ export function admitAttachmentFiles(
   options: {
     resizeImages?: boolean;
     compressVideos?: boolean;
-    onRejected?: (file: File, message: string) => void;
+    notify?: boolean;
   } = {},
 ): File[] {
   const admitted: File[] = [];
@@ -97,14 +100,11 @@ export function admitAttachmentFiles(
       total += reservation;
     }
   }
-  for (const [messageKey, files] of [
-    ["chat.attachments.readFailed", empty],
-    ["chat.attachments.tooLarge", oversized],
-  ] as const) {
-    skippedFilesToast(messageKey, files);
-    for (const file of files) {
-      options.onRejected?.(file, messageKey);
-    }
+  if (options.notify !== false) {
+    skippedFilesToast(
+      oversized.length ? "chat.attachments.tooLarge" : "chat.attachments.readFailed",
+      oversized.length ? oversized : empty,
+    );
   }
   return admitted;
 }

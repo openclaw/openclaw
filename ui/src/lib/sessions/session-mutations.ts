@@ -2,6 +2,8 @@ import type {
   SessionOwner,
   SessionsAssignOwnerParams,
   SessionsAssignOwnerResult,
+  SessionsPatchManyParams,
+  SessionsPatchManyResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
@@ -11,17 +13,14 @@ import {
   type SessionCreateParams,
   type SessionCreateRequestOptions,
 } from "./create.ts";
-import type { SessionPatch, SessionPatchOptions, SessionPatchOutcome } from "./patch.ts";
+import type {
+  SessionPatch,
+  SessionPatchOptions,
+  SessionPatchOutcome,
+  SessionPatchRoute,
+} from "./patch.ts";
 import { mapSessionResultRows } from "./reconcile.ts";
 import { createSessionArchiveState, projectSessionArchiveFields } from "./session-archive-state.ts";
-import type {
-  SessionCapability,
-  SessionConnectionScope,
-  SessionCreateReconciliation,
-  SessionRefreshOutcome,
-  SessionResetOptions,
-  SessionResetResult,
-} from "./session-capability.ts";
 import { deferSessionMetadataPatch } from "./session-deferred-metadata.ts";
 import { createSessionModelOverrides } from "./session-model-overrides.ts";
 import {
@@ -48,6 +47,13 @@ import {
   requestSessionReset,
 } from "./session-requests.ts";
 import { createSessionRowLocalPatch } from "./session-row-local-patch.ts";
+import type {
+  SessionConnectionScope,
+  SessionCreateReconciliation,
+  SessionRefreshOutcome,
+  SessionResetOptions,
+  SessionResetResult,
+} from "./session-types.ts";
 
 export function createSessionMutations(host: SessionMutationsHost) {
   const reportError = (scope: SessionConnectionScope, error: unknown) => {
@@ -141,15 +147,25 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       return result;
     } catch (error) {
-      if (!options.signal?.aborted) {
-        reportError(scope, error);
+      if (options.signal?.aborted || !host.connection.isCurrent(scope)) {
+        return null;
       }
-      return null;
+      reportError(scope, error);
+      throw error;
     }
   };
 
-  const create = async (params: SessionCreateParams = {}, options?: SessionCreateRequestOptions) =>
-    (await createResult(params, options))?.key ?? null;
+  const create = async (
+    params: SessionCreateParams = {},
+    options?: SessionCreateRequestOptions,
+  ) => {
+    try {
+      return (await createResult(params, options))?.key ?? null;
+    } catch {
+      // Key-only callers consume the owner's published error; result callers retain its cause.
+      return null;
+    }
+  };
 
   const patchNow = async (
     key: string,
@@ -474,11 +490,14 @@ export function createSessionMutations(host: SessionMutationsHost) {
     }
   };
 
-  const patch: SessionCapability["patch"] = async (key, patchParams, options = {}) =>
+  const patch: SessionPatchRoute = async (key, patchParams, options = {}) =>
     deferSessionMetadataPatch(host, metadataFields, patchNow, key, patchParams, options) ??
     patchNow(key, patchParams, options);
 
-  const patchMany: SessionCapability["patchMany"] = async (targets, patchParams) => {
+  const patchMany = async (
+    targets: SessionsPatchManyParams["targets"],
+    patchParams: SessionsPatchManyParams["patch"],
+  ): Promise<SessionsPatchManyResult | null> => {
     const scope = host.connection.capture();
     if (!scope) {
       return null;
@@ -583,8 +602,11 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       return result.owner;
     } catch (error) {
+      if (!host.connection.isCurrent(scope)) {
+        return null;
+      }
       reportError(scope, error);
-      return null;
+      throw error;
     }
   };
 

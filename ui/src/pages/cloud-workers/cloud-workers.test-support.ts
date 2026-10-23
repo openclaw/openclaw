@@ -3,14 +3,9 @@ import { flush } from "solid-js";
 import { afterEach, expect } from "vitest";
 import type { EnvironmentSummary } from "../../../../packages/gateway-protocol/src/index.js";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import {
-  button,
-  mountPage,
-  setupSnapshotsDomSuite,
-} from "./cloud-worker-snapshots-dom.test-support.ts";
+import * as dom from "./cloud-worker-snapshots-dom.test-support.ts";
 import { buildEnvironmentFixture } from "./cloud-worker-snapshots.test-support.ts";
 
-type WorkerFixture = ReturnType<typeof buildEnvironmentFixture>;
 type WorkerDetails = NonNullable<NonNullable<EnvironmentSummary["preparation"]>["details"]>;
 export function makeWorker(
   state = "provisioning",
@@ -36,14 +31,12 @@ export function makeWorker(
   };
 }
 
-export function preparedInventory(
-  environments: Array<WorkerFixture | ReturnType<typeof makeWorker>>,
-) {
-  return (method: string, params?: Record<string, unknown>) =>
+export const preparedInventory =
+  (environments: ReturnType<typeof makeWorker>[]) =>
+  (method: string, params?: Record<string, unknown>) =>
     method === "environments.list" && params?.includePreparedDetails
       ? { environments, profiles: [] }
       : undefined;
-}
 
 export function machineProfile(machineClass = "standard", settings: Record<string, unknown> = {}) {
   return { provider: "crabbox", settings: { provider: "aws", class: machineClass, ...settings } };
@@ -56,17 +49,16 @@ export function setupSnapshotTests() {
       dispose();
     }
   });
-  setupSnapshotsDomSuite();
-  return (...args: Parameters<typeof mountPage>) => {
-    const fixture = mountPage(...args);
+  dom.setupSnapshotsDomSuite();
+  return (...args: Parameters<typeof dom.mountPage>) => {
+    const fixture = dom.mountPage(...args);
     disposers.push(fixture.dispose);
     return fixture;
   };
 }
 
-export function sheet(page: Element) {
-  return expectDefined(page.querySelector(".cloud-environments__sheet"), "Environment sheet");
-}
+export const sheet = (page: Element) =>
+  expectDefined(page.querySelector(".cloud-environments__sheet"), "Environment sheet");
 
 export function change(
   element: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement,
@@ -80,40 +72,32 @@ export function change(
 }
 
 export function click(page: Element, label: string) {
-  button(page, label).click();
+  dom.button(page, label).click();
   flush();
 }
 
-export function configSnapshot(config: Record<string, unknown>, hash: string) {
-  return {
-    config,
-    sourceConfig: config,
-    raw: JSON.stringify(config),
-    hash,
-    appliedConfigHash: hash,
-    valid: true,
-    issues: [],
-  };
+export const configSnapshot = (config: Record<string, unknown>, hash: string) => ({
+  config,
+  sourceConfig: config,
+  raw: JSON.stringify(config),
+  hash,
+  appliedConfigHash: hash,
+  valid: true,
+  issues: [],
+});
+
+export function configPatch(request: ReturnType<typeof dom.mountPage>["request"]) {
+  return waitForSolid(() => {
+    const call = request.mock.calls.find(([method]) => method === "config.patch");
+    return expectDefined(call, "Config patch request")[1];
+  });
 }
 
-export async function configPatch(request: ReturnType<typeof mountPage>["request"]) {
-  await waitForSolid(() =>
-    expect(request.mock.calls.some(([method]) => method === "config.patch")).toBe(true),
-  );
-  return expectDefined(
-    request.mock.calls.find(([method]) => method === "config.patch"),
-    "Config patch request",
-  )[1];
-}
+export const waitText = (element: () => Element, text: string) =>
+  waitForSolid(() => expect(element().textContent).toContain(text));
 
-export function waitText(element: () => Element, text: string) {
-  return waitForSolid(() => expect(element().textContent).toContain(text));
-}
-
-export function waitRequest(
-  request: ReturnType<typeof mountPage>["request"],
+export const waitRequest = (
+  request: ReturnType<typeof dom.mountPage>["request"],
   method: string,
   params: Record<string, unknown>,
-) {
-  return waitForSolid(() => expect(request).toHaveBeenCalledWith(method, params));
-}
+) => waitForSolid(() => expect(request).toHaveBeenCalledWith(method, params));

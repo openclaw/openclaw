@@ -56,10 +56,8 @@ export type ExecutedToolCallBatch = {
   fatal?: { error: unknown };
 };
 
-type AssistantMessageUpdateEvent = Extract<AssistantMessageEvent, { contentIndex: number }>;
-
 function resolveAssistantMessageUpdate(
-  event: AssistantMessageUpdateEvent,
+  event: Extract<AssistantMessageEvent, { contentIndex: number }>,
   currentMessage: AssistantMessage,
 ): AssistantMessage {
   if ("partial" in event && event.partial) {
@@ -272,7 +270,9 @@ export async function streamAgentResponse(
       apiKey: resolvedApiKey,
       signal: requestSignal,
       onActiveResponse: steering.onActiveResponse,
-      asyncToolExecution: true,
+      // Async results reach the model only when it calls sessions_yield, the result
+      // collector. Without it (cron runs) the model would answer before any result.
+      asyncToolExecution: llmContext.tools?.some((tool) => tool.name === "sessions_yield") === true,
     });
 
     return await runAgentCoreStream(

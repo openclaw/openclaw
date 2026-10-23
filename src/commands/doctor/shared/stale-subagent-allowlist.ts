@@ -1,6 +1,7 @@
-import { listAgentEntries, listAgentIds } from "../../../agents/agent-scope-config.js";
+import { resolveConfiguredAcpSubagentTargetIds } from "../../../agents/agent-roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizeAgentId, normalizeOptionalAgentId } from "../../../routing/session-key.js";
+import { groupPluginRecords as groupRecords } from "../../../plugins/record-groups.js";
+import { normalizeAgentId } from "../../../routing/session-key.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 
 type StaleSubagentAllowlistHit = {
@@ -10,24 +11,6 @@ type StaleSubagentAllowlistHit = {
   /** Normalized agent id used for matching configured targets. */
   normalizedAgentId: string;
 };
-
-function collectConfiguredSubagentTargetIds(cfg: OpenClawConfig): Set<string> {
-  const ids = new Set<string>(listAgentIds(cfg));
-  const targets = [
-    ...listAgentEntries(cfg).flatMap((agent) =>
-      agent.runtime?.type === "acp" ? [agent.runtime.acp?.agent] : [],
-    ),
-    cfg.acp?.defaultAgent,
-    ...(cfg.acp?.allowedAgents ?? []).filter((entry) => entry.trim() !== "*"),
-  ];
-  for (const target of targets) {
-    const acpAgent = normalizeOptionalAgentId(target);
-    if (acpAgent) {
-      ids.add(acpAgent);
-    }
-  }
-  return ids;
-}
 
 function collectStaleAllowlistEntries(params: {
   allowAgents: unknown;
@@ -76,7 +59,7 @@ function listSubagentAllowlists(cfg: OpenClawConfig) {
 export function scanStaleSubagentAllowlistReferences(
   cfg: OpenClawConfig,
 ): StaleSubagentAllowlistHit[] {
-  const configuredTargetIds = collectConfiguredSubagentTargetIds(cfg);
+  const configuredTargetIds = resolveConfiguredAcpSubagentTargetIds(cfg);
   return listSubagentAllowlists(cfg).flatMap(({ subagents, pathLabel }) =>
     collectStaleAllowlistEntries({
       allowAgents: subagents.allowAgents,
@@ -113,10 +96,7 @@ export function maybeRepairStaleSubagentAllowlists(cfg: OpenClawConfig): {
   }
 
   const next = structuredClone(cfg);
-  const hitsByPath = new Map<string, StaleSubagentAllowlistHit[]>();
-  for (const hit of hits) {
-    hitsByPath.set(hit.pathLabel, [...(hitsByPath.get(hit.pathLabel) ?? []), hit]);
-  }
+  const hitsByPath = groupRecords(hits, (hit) => hit.pathLabel);
 
   for (const { subagents, pathLabel } of listSubagentAllowlists(next)) {
     const pathHits = hitsByPath.get(pathLabel);

@@ -1,8 +1,12 @@
 import { createRequire } from "node:module";
 import { Api } from "grammy";
 import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
-import { assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { getOrCreateAccountThrottler, runReplaceableTelegramRequest } from "./account-throttler.js";
+import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  getOrCreateAccountThrottler,
+  releaseAccountThrottler,
+  runReplaceableTelegramRequest,
+} from "./account-throttler.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
 import { resetTelegramAccountThrottlersForTest } from "./runtime.test-support.js";
 
@@ -452,26 +456,37 @@ it("keeps the later deadline when overlapping 429s carry different retry_after",
   await expect(Promise.all([first, second])).resolves.toHaveLength(2);
 });
 
-it("uses edited message ids as lanes when Telegram omits topic ids", async () => {
+it.each(["edited-message", "string-topic"])("uses %s ids for fair group lanes", async (kind) => {
+  const edited = kind === "edited-message";
+  const expected = edited
+    ? ["101:first", "202:other", "101:second"]
+    : ["+10:first", "0x20:other", "+10:second"];
   const { firstGate, entered, throttler, prev } = laneProbe(
-    "edited-message",
-    (request) => `${request.message_id}:${request.text}`,
+    kind,
+    (request) => `${edited ? request.message_id : request.message_thread_id}:${request.text}`,
   );
-
-  const edit = (message_id: number, text: string) =>
-    throttler(prev, "editMessageText", { chat_id: -100123, message_id, text }, undefined);
-  const first = edit(101, "first-edit");
-  await vi.waitFor(() => expect(entered).toEqual(["101:first-edit"]));
-
-  const secondSameMessage = edit(101, "second-edit");
-  const otherMessage = edit(202, "other-edit");
-
+  const send = (other: boolean, text: string) =>
+    edited
+      ? throttler(
+          prev,
+          "editMessageText",
+          { chat_id: -100123, message_id: other ? 202 : 101, text },
+          undefined,
+        )
+      : callLooseSendMessage(throttler, prev, {
+          chat_id: "-100123",
+          message_thread_id: other ? "0x20" : "+10",
+          text,
+        });
+  const first = send(false, "first");
+  await vi.waitFor(() => expect(entered).toEqual([expected[0]]));
+  const sameLane = send(false, "second");
+  const otherLane = send(true, "other");
   firstGate.resolve();
   await vi.waitFor(() => expect(entered.length).toBeGreaterThanOrEqual(2));
-  expect(entered[1]).toBe("202:other-edit");
-  await Promise.all([first, secondSameMessage, otherMessage]);
-
-  expect(entered).toEqual(["101:first-edit", "202:other-edit", "101:second-edit"]);
+  expect(entered[1]).toBe(expected[1]);
+  await Promise.all([first, sameLane, otherLane]);
+  expect(entered).toEqual(expected);
 });
 
 it("does not group-throttle fractional chat ids", async () => {
@@ -492,24 +507,303 @@ it("does not group-throttle fractional chat ids", async () => {
   await Promise.all([first, second]);
 });
 
-it("uses strict decimal string ids for fair group lanes", async () => {
-  const { firstGate, entered, throttler, prev } = laneProbe(
-    "private-chat",
-    (request) => `${request.message_thread_id}:${request.text}`,
-  );
+describe("releaseAccountThrottler", () => {
+  beforeEach(() => {
+    resetTelegramAccountThrottlersForTest();
+  });
 
-  const send = (message_thread_id: string, text: string) =>
-    callLooseSendMessage(throttler, prev, { chat_id: "-100123", message_thread_id, text });
-  const first = send("+10", "first");
-  await vi.waitFor(() => expect(entered).toEqual(["+10:first"]));
+  const ownedFactory =
+    (dispose: () => Promise<void>) =>
+    (): { transformer: TelegramTransform; dispose: () => Promise<void> } => ({
+      transformer: (async (prev, method, payload, signal) =>
+        prev(method, payload, signal)) as TelegramTransform,
+      dispose,
+    });
 
-  const sameTopic = send("+10", "second");
-  const otherTopic = send("0x20", "hex");
+  it("returns false when the token has no cached throttler", async () => {
+    await expect(releaseAccountThrottler("never-created")).resolves.toBe(false);
+  });
 
-  firstGate.resolve();
-  await vi.waitFor(() => expect(entered.length).toBeGreaterThanOrEqual(2));
-  expect(entered[1]).toBe("0x20:hex");
-  await Promise.all([first, sameTopic, otherTopic]);
+  it("drops the cache entry so the next lookup creates a fresh throttler", async () => {
+    const dispose = vi.fn(async () => {});
+    const first = getOrCreateAccountThrottler("released-token", ownedFactory(dispose));
 
-  expect(entered).toEqual(["+10:first", "0x20:hex", "+10:second"]);
+    expect(getOrCreateAccountThrottler("released-token", ownedFactory(dispose))).toBe(first);
+
+    await expect(releaseAccountThrottler("released-token")).resolves.toBe(true);
+    expect(dispose).toHaveBeenCalledOnce();
+
+    const recreated = getOrCreateAccountThrottler("released-token", ownedFactory(dispose));
+    expect(recreated).not.toBe(first);
+  });
+
+  it("stops timers and settles queued sends on release", async () => {
+    vi.useFakeTimers();
+    const fakeSetInterval = globalThis.setInterval;
+    const fakeClearInterval = globalThis.clearInterval;
+    const live = new Set<ReturnType<typeof setInterval>>();
+    globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
+      const handle = fakeSetInterval(...args);
+      live.add(handle);
+      return handle;
+    }) as typeof setInterval;
+    globalThis.clearInterval = ((handle?: ReturnType<typeof setInterval>) => {
+      if (handle !== undefined) {
+        live.delete(handle);
+      }
+      return fakeClearInterval(handle);
+    }) as typeof clearInterval;
+
+    try {
+      const account = getOrCreateAccountThrottler("settle-release");
+      const entered: string[] = [];
+      let releaseFirst!: () => void;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const prev = vi.fn(async (_method: string, payload: unknown) => {
+        const request = payload as { text?: string };
+        entered.push(request.text ?? "");
+        if (entered.length === 1) {
+          await firstGate;
+        }
+        return { ok: true, result: request.text ?? "" };
+      }) as unknown as TelegramPreviousCall;
+
+      const send = (text: string) =>
+        account.transformer(prev, "sendMessage", { chat_id: 42, text }, undefined);
+
+      const first = send("first");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(entered).toEqual(["first"]);
+      expect(live.size).toBeGreaterThan(0);
+      const queued = send("queued");
+      // Attach the rejection handler before releasing so the drop never lands
+      // as an unhandled rejection.
+      const queuedRejection = expect(queued).rejects.toThrow(/stopped/i);
+      // Releasing stops the owned limiter and drops its waiting jobs; the
+      // in-flight send stays parked on the gate so stopping cannot deadlock.
+      const releasing = releaseAccountThrottler("settle-release");
+      await vi.advanceTimersByTimeAsync(0);
+      await queuedRejection;
+      releaseFirst();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await first;
+      await releasing;
+      expect(live.size).toBe(0);
+      await expect(send("after-release")).rejects.toThrow(/released/i);
+      expect(getOrCreateAccountThrottler("settle-release")).not.toBe(account);
+    } finally {
+      globalThis.setInterval = fakeSetInterval;
+      globalThis.clearInterval = fakeClearInterval;
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects queued group sends and new work once the account is retired", async () => {
+    vi.useFakeTimers();
+    try {
+      const account = getOrCreateAccountThrottler("group-retire");
+      const entered: string[] = [];
+      let releaseFirst!: () => void;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const prev = vi.fn(async (_method: string, payload: unknown) => {
+        const request = payload as { text?: string };
+        entered.push(request.text ?? "");
+        if (entered.length === 1) {
+          await firstGate;
+        }
+        return { ok: true, result: request.text ?? "" };
+      }) as unknown as TelegramPreviousCall;
+      const send = (text: string) =>
+        callLooseSendMessage(account.transformer, prev, { chat_id: "-100123", text });
+      const chatAction = (action: string) =>
+        (
+          account.transformer as (
+            prev: TelegramPreviousCall,
+            method: "sendChatAction",
+            payload: Record<string, unknown>,
+            signal: undefined,
+          ) => ReturnType<TelegramTransform>
+        )(prev, "sendChatAction", { chat_id: "-100123", action }, undefined);
+
+      const first = send("first");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(entered).toEqual(["first"]);
+      const queued = send("queued");
+      const queuedRejection = expect(queued).rejects.toThrow(/released/i);
+      // Retirement settles scheduler lanes synchronously; the owned limiter's
+      // stop() then waits for the in-flight send, so keep the gate closed
+      // until the queued rejection is observed.
+      const releasing = releaseAccountThrottler("group-retire");
+      await queuedRejection;
+      releaseFirst();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await first;
+      await releasing;
+      await expect(send("after-release")).rejects.toThrow(/released/i);
+      await expect(chatAction("typing")).rejects.toThrow(/released/i);
+      expect(getOrCreateAccountThrottler("group-retire")).not.toBe(account);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles a pacing action and never dispatches it when the account is retired", async () => {
+    vi.useFakeTimers();
+    try {
+      let sent = 0;
+      const api = new Api("123:pacing-retire", {
+        fetch: asTelegramClientFetch(async () => {
+          sent++;
+          return new Response(JSON.stringify({ ok: true, result: true }));
+        }),
+      });
+      api.config.use(getOrCreateAccountThrottler("pacing-retire").transformer);
+      const first = api.sendChatAction(-100123, "typing", { message_thread_id: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      await first;
+      expect(sent).toBe(1);
+      const second = api.sendChatAction(-100123, "typing", { message_thread_id: 2 });
+      const secondRejection = expect(second).rejects.toThrow(/released/i);
+      // The successor is sleeping out its one-second pacing window when the
+      // token is retired: it must settle now and never reach the dispatch.
+      await vi.advanceTimersByTimeAsync(100);
+      const releasing = releaseAccountThrottler("pacing-retire");
+      await vi.advanceTimersByTimeAsync(0);
+      await secondRejection;
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(sent).toBe(1);
+      await releasing;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles actions queued behind a running predecessor when the account is retired", async () => {
+    vi.useFakeTimers();
+    const held = deferred<Response>();
+    try {
+      let sent = 0;
+      const api = new Api("123:queued-retire", {
+        fetch: asTelegramClientFetch(async () => {
+          sent++;
+          if (sent === 1) {
+            return held.promise;
+          }
+          return new Response(JSON.stringify({ ok: true, result: true }));
+        }),
+      });
+      api.config.use(getOrCreateAccountThrottler("queued-retire").transformer);
+      const first = api.sendChatAction(-100123, "typing", { message_thread_id: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sent).toBe(1);
+      const second = api.sendChatAction(-100123, "typing", { message_thread_id: 2 });
+      const secondRejection = expect(second).rejects.toThrow(/released/i);
+      // Retire while the predecessor's dispatch is in flight: the queued
+      // successor settles immediately, the in-flight I/O completes.
+      const releasing = releaseAccountThrottler("queued-retire");
+      await vi.advanceTimersByTimeAsync(0);
+      await secondRejection;
+      held.resolve(new Response(JSON.stringify({ ok: true, result: true })));
+      await vi.advanceTimersByTimeAsync(1_000);
+      await first;
+      await releasing;
+      expect(sent).toBe(1);
+    } finally {
+      held.resolve(new Response(JSON.stringify({ ok: true, result: true })));
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles a backing-off action immediately when the account is retired", async () => {
+    vi.useFakeTimers();
+    try {
+      let sent = 0;
+      const api = new Api("123:backoff-retire", {
+        fetch: asTelegramClientFetch(async () => {
+          sent++;
+          return new Response(
+            JSON.stringify(
+              sent === 1
+                ? { ok: false, error_code: 401, description: "Unauthorized" }
+                : { ok: true, result: true },
+            ),
+          );
+        }),
+      });
+      api.config.use(getOrCreateAccountThrottler("backoff-retire").transformer);
+      const first = api.sendChatAction(-100123, "typing", { message_thread_id: 1 });
+      const failed = expect(first).rejects.toThrow("Unauthorized");
+      await vi.advanceTimersByTimeAsync(0);
+      await failed;
+      expect(sent).toBe(1);
+      const second = api.sendChatAction(-100123, "typing", { message_thread_id: 2 });
+      const settled = vi.fn();
+      const outcome = second.then(settled, settled);
+      // The successor clears pacing, then parks in the 401 authorization
+      // backoff; retiring during that backoff settles the caller right away,
+      // and the guarded dispatch can never send afterwards.
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(sent).toBe(1);
+      const releasing = releaseAccountThrottler("backoff-retire");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toHaveBeenCalledOnce();
+      await expect(second).rejects.toThrow(/released/i);
+      await releasing;
+      // Even after the remaining backoff elapses, the retired token never
+      // dispatches.
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(sent).toBe(1);
+      await outcome;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles a backing-off DM action immediately when the account is retired", async () => {
+    vi.useFakeTimers();
+    let sent = 0;
+    const api = new Api("123:dm-backoff-retire", {
+      fetch: asTelegramClientFetch(async () => {
+        sent++;
+        return new Response(
+          JSON.stringify({ ok: false, error_code: 401, description: "Unauthorized" }),
+        );
+      }),
+    });
+    api.config.use(getOrCreateAccountThrottler("dm-backoff-retire").transformer);
+    // Four consecutive 401 failures put the next DM action into an 8s
+    // authorization backoff before any transport I/O starts.
+    const failed = Array.from({ length: 4 }, () =>
+      expect(api.sendChatAction(42, "typing")).rejects.toThrow("Unauthorized"),
+    );
+    const second = api.sendChatAction(42, "typing");
+    const secondRejection = expect(second).rejects.toThrow(/released/i);
+    try {
+      // All warm-up actions fail and the successor parks sleeping in backoff
+      // (its 8s sleep would end around the 16s mark).
+      await vi.advanceTimersByTimeAsync(9_500);
+      await Promise.all(failed);
+      expect(sent).toBe(4);
+      const releasing = releaseAccountThrottler("dm-backoff-retire");
+      // Retiring during that backoff settles the caller and the throttler
+      // right away, without waiting for the remaining backoff to elapse.
+      // A tick on the faked clock delivers the dropped waiting job's
+      // rejection; the settlement must not wait out the remaining sleep.
+      await vi.advanceTimersByTimeAsync(10);
+      await secondRejection;
+      await releasing;
+      // Even after the remaining backoff elapses, the retired token never
+      // dispatches.
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(sent).toBe(4);
+    } finally {
+      await vi.advanceTimersByTimeAsync(600_000);
+      await Promise.allSettled([...failed, second]);
+      vi.useRealTimers();
+    }
+  });
 });

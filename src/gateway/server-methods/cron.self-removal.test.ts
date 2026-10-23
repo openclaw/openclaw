@@ -146,7 +146,6 @@ describe("cron self-removal", () => {
         defaultAgentId: "main",
         log: logger,
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         onEvent: (event) => {
           events.push(event);
           if (event.action === "finished") {

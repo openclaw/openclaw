@@ -8,13 +8,11 @@ export function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
   );
 }
 
-type AnthropicAuthModel = {
+export function usesFoundryBearerAuth(model: {
   provider?: string;
   authHeader?: boolean;
   headers?: Record<string, string>;
-};
-
-export function usesFoundryBearerAuth(model: AnthropicAuthModel): boolean {
+}): boolean {
   return (
     model.provider === "microsoft-foundry" &&
     (model.authHeader === true ||

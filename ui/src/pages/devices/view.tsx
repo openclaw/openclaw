@@ -1,21 +1,34 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { createMemo, For } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import {
+  createMemo,
+  Errored,
+  For,
+  isPending,
+  latest,
+  Loading,
+  omit,
+  type Accessor,
+} from "solid-js";
 import { resolveNodeIdFromCandidates } from "../../../../src/shared/node-match.js";
 import { SettingsRow, SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../styles/devices.css";
+import type { DevicePolicyRead } from "./devices-policy-reads.ts";
 import { ExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.tsx";
-import { DeviceInventory } from "./view-inventory.tsx";
+import { DeviceInventory } from "./view-inventory-readiness.tsx";
 import { resolveConfigAgents, resolveNodeTargets } from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
 registerEnglishCatalog(registerDevicesEnglish);
 
 export function DevicesView(props: DevicesProps) {
-  const bindingState = createMemo(() => resolveBindingsState(props));
-  const approvalsState = createMemo(() => resolveExecApprovalsState(props));
+  const bindingState = createMemo(() => resolveBindingsState(omit(props, "inventorySaving")));
+  const approvalsState = createMemo(() =>
+    resolveExecApprovalsState(omit(props, "inventorySaving")),
+  );
   return (
     <SettingsPage wide={true}>
       <>
@@ -30,10 +43,61 @@ export function DevicesView(props: DevicesProps) {
             )}
           </div>
         ) : undefined}
-        <DeviceInventory {...props} /> <ExecApprovals {...approvalsState()} />
-        <Bindings {...bindingState()} />
+        {props.devicesError ? (
+          <div class="callout danger" role="alert">
+            {props.devicesError}
+          </div>
+        ) : undefined}
+        {props.lastError ? (
+          <div class="callout danger" role="alert">
+            {props.lastError}
+          </div>
+        ) : undefined}
+        <DeviceInventory {...props} />
+        <PolicyRead read={props.execApprovalsRead} onRetry={() => props.onLoadExecApprovals()}>
+          {(pending) => (
+            <ExecApprovals
+              {...approvalsState()}
+              loading={pending() || approvalsState().loading}
+              disabled={pending() || approvalsState().disabled}
+            />
+          )}
+        </PolicyRead>
+        <PolicyRead read={props.configRead} onRetry={() => props.onLoadConfig()}>
+          {(pending) => (
+            <Bindings
+              {...bindingState()}
+              configLoading={pending() || props.configLoading}
+              disabled={pending() || bindingState().disabled}
+            />
+          )}
+        </PolicyRead>
       </>
     </SettingsPage>
+  );
+}
+
+function PolicyRead(props: {
+  read: DevicePolicyRead;
+  onRetry: () => void;
+  children: (pending: Accessor<boolean>) => JSX.Element;
+}) {
+  return (
+    <Errored
+      fallback={(error) => (
+        <div class="callout danger" role="alert">
+          {String(error())}
+          <button class="btn" onClick={() => props.onRetry()}>
+            {t("common.retry")}
+          </button>
+        </div>
+      )}
+    >
+      <Loading on={props.read.scope()} fallback={props.children(() => true)}>
+        {(latest(props.read.value), null)}
+        {props.children(() => isPending(props.read.value))}
+      </Loading>
+    </Errored>
   );
 }
 
@@ -56,7 +120,7 @@ function resolveBindingsState(input: DevicesProps) {
 }
 
 function Bindings(props: BindingState) {
-  const supportsBinding = createMemo(() => props.nodes.length > 0);
+  const supportsBinding = () => props.nodes.length > 0;
   const saveButton = (
     <button
       class="btn"
@@ -81,7 +145,7 @@ function Bindings(props: BindingState) {
             <button
               class="btn"
               disabled={!props.connected || props.configLoading}
-              onClick={props.onLoadConfig}
+              onClick={() => props.onLoadConfig()}
             >
               {props.configLoading ? t("common.loading") : t("common.loadConfig")}
             </button>
@@ -121,10 +185,9 @@ function Bindings(props: BindingState) {
 }
 
 function AgentBinding(props: BindingState & { agent: BindingAgent }) {
-  const bindingValue = createMemo(() => props.agent.binding ?? "__default__");
-  const label = createMemo(() =>
-    props.agent.name?.trim() ? `${props.agent.name} (${props.agent.id})` : props.agent.id,
-  );
+  const bindingValue = () => props.agent.binding ?? "__default__";
+  const label = () =>
+    props.agent.name?.trim() ? `${props.agent.name} (${props.agent.id})` : props.agent.id;
   return (
     <SettingsRow
       title={label()}

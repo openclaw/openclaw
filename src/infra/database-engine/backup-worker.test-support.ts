@@ -31,10 +31,20 @@ vi.mock("../sqlite-snapshot-source.js", async (importOriginal) => {
 });
 vi.mock("../worker-task-pool.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../worker-task-pool.js")>();
+  const { nativeProcessTestEntrypoints } =
+    await import("../native-process-runtime.test-support.js");
+  const { resolveRuntimeWorkerUrl } = await import("../runtime-worker-url.js");
   return {
     ...actual,
     WorkerTaskPool: new Proxy(actual.WorkerTaskPool, {
       construct(Target, args: ConstructorParameters<typeof actual.WorkerTaskPool>) {
+        // Retain real PG discovery without loading source TypeScript inside the test deadline.
+        if (/\/update-candidate-state\.postgres\.[jt]s$/.test(args[0].workerUrl.pathname)) {
+          return new Target({
+            ...args[0],
+            workerUrl: resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.updatePostgresState),
+          });
+        }
         if (!/\/database-backup\.[jt]s$/.test(args[0].workerUrl.pathname)) {
           return new Target(...args);
         }

@@ -1,9 +1,12 @@
 import { safeParseJson } from "@openclaw/normalization-core";
-import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isRecord as isPlainRecord,
+  omitUndefinedFields,
+} from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import { z } from "zod";
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
-import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome.js";
+import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome-classification.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   executeSqliteQuerySync,
@@ -74,15 +77,6 @@ function isSafeInteger(value: unknown): value is number {
 
 // Optional properties are absent from the canonical payload, including when an
 // input explicitly supplies undefined. Keep nested diagnostic records untouched.
-function omitUndefinedFields<T extends object>(value: T): T {
-  for (const key in value) {
-    if (value[key] === undefined) {
-      delete value[key];
-    }
-  }
-  return value;
-}
-
 const restartSentinelLogSchema = z
   .object({
     stdoutTail: z.string().nullish(),
@@ -209,38 +203,47 @@ function decodeRestartSentinelRow(row: RestartSentinelRow): RestartSentinel | nu
   return payload ? { version: 1, payload, revision: row.updated_at_ms } : null;
 }
 
-export function readRestartSentinelRowForKeySync(
-  db: EngineConnection,
-  sentinelKey: string,
+function selectRestartSentinelRows(db: EngineConnection) {
+  return getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db)
+    .selectFrom("gateway_restart_sentinel")
+    .select([
+      "version",
+      "kind",
+      "status",
+      "ts",
+      "session_key",
+      "thread_id",
+      "delivery_channel",
+      "delivery_to",
+      "delivery_account_id",
+      "message",
+      "continuation_json",
+      "doctor_hint",
+      "stats_json",
+      "updated_at_ms",
+    ]);
+}
+
+function decodeRestartSentinelRowState(
+  row: RestartSentinelRow | undefined,
 ): RestartSentinelRowState {
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("gateway_restart_sentinel")
-      .select([
-        "version",
-        "kind",
-        "status",
-        "ts",
-        "session_key",
-        "thread_id",
-        "delivery_channel",
-        "delivery_to",
-        "delivery_account_id",
-        "message",
-        "continuation_json",
-        "doctor_hint",
-        "stats_json",
-        "updated_at_ms",
-      ])
-      .where("sentinel_key", "=", sentinelKey),
-  );
   if (!row) {
     return { kind: "missing" };
   }
   const sentinel = decodeRestartSentinelRow(row);
   return sentinel ? { kind: "valid", sentinel } : { kind: "invalid", revision: row.updated_at_ms };
+}
+
+export function readRestartSentinelRowForKeySync(
+  db: EngineConnection,
+  sentinelKey: string,
+): RestartSentinelRowState {
+  return decodeRestartSentinelRowState(
+    executeSqliteQueryTakeFirstSync(
+      db,
+      selectRestartSentinelRows(db).where("sentinel_key", "=", sentinelKey),
+    ),
+  );
 }
 
 export function readRestartSentinelRowSync(db: EngineConnection): RestartSentinelRowState {
@@ -282,13 +285,17 @@ function readRestartSentinelRevisionFloorSync(db: EngineConnection): number | nu
       .select("updated_at_ms")
       .where("sentinel_key", "=", RESTART_SENTINEL_REVISION_FLOOR_KEY),
   );
-  if (!row) {
+  return decodeRestartSentinelRevisionFloor(row?.updated_at_ms);
+}
+
+function decodeRestartSentinelRevisionFloor(revision: number | undefined): number | null {
+  if (revision === undefined) {
     return null;
   }
-  if (!Number.isSafeInteger(row.updated_at_ms)) {
+  if (!Number.isSafeInteger(revision)) {
     throw new Error("Restart sentinel revision floor is outside the safe integer range");
   }
-  return row.updated_at_ms;
+  return revision;
 }
 
 function maxRevision(left: number | null, right: number | null): number | null {
@@ -365,12 +372,20 @@ export function writeRestartSentinelRowSync(
   return { version: 1, payload, revision };
 }
 
-/** Read inside a transaction; the floor also identifies an absent, consumed notification. */
+/** One statement owns the snapshot; the floor also identifies an absent, consumed notification. */
 export function readRestartSentinelSnapshotSync(db: EngineConnection): {
   state: RestartSentinelRowState;
   revision: number | null;
 } {
-  const state = readRestartSentinelRowSync(db);
+  const rows = executeSqliteQuerySync(
+    db,
+    selectRestartSentinelRows(db)
+      .select("sentinel_key")
+      .where("sentinel_key", "in", [RESTART_SENTINEL_KEY, RESTART_SENTINEL_REVISION_FLOOR_KEY]),
+  ).rows;
+  const state = decodeRestartSentinelRowState(
+    rows.find((row) => row.sentinel_key === RESTART_SENTINEL_KEY),
+  );
   const currentRevision =
     state.kind === "missing"
       ? null
@@ -379,7 +394,12 @@ export function readRestartSentinelSnapshotSync(db: EngineConnection): {
         : state.revision;
   return {
     state,
-    revision: maxRevision(currentRevision, readRestartSentinelRevisionFloorSync(db)),
+    revision: maxRevision(
+      currentRevision,
+      decodeRestartSentinelRevisionFloor(
+        rows.find((row) => row.sentinel_key === RESTART_SENTINEL_REVISION_FLOOR_KEY)?.updated_at_ms,
+      ),
+    ),
   };
 }
 

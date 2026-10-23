@@ -144,6 +144,11 @@ import {
   resolveGatewayLiveModelThinkingLevel,
   resolveGatewayLiveThinkingLevel,
 } from "./gateway-models.profiles.live.test-helpers.js";
+import {
+  assertOpenAIUltraWireEffort,
+  OPENAI_ULTRA_NORMAL_EFFORT,
+  type OpenAIUltraWireObservation,
+} from "./gateway-models.profiles.live.ultra-wire.test-helpers.js";
 import { restoreLiveEnv, snapshotLiveEnv } from "./live-env-test-helpers.js";
 import {
   hasExpectedSingleNonce,
@@ -4051,24 +4056,8 @@ type GatewayModelSuiteParams = {
   providerOverrides?: Record<string, ModelProviderConfig>;
 };
 
-type OpenAIUltraWireObservation = {
-  model?: string;
-  reasoningEffort?: string;
-  sessionsSpawn?: { strict?: boolean; categoryRequired: boolean };
-  requestIndex?: number;
-  traceparent?: string;
-  dispatch?: {
-    runId: string;
-    callId: string;
-    sessionId?: string;
-    sessionKey?: string;
-    isHeartbeat?: boolean;
-  } | null;
-};
-
 const OPENAI_ULTRA_WIRE_CAPTURE_LIMIT = 512;
 const OPENAI_ULTRA_UTILITY_MODEL = "openai/gpt-5.4-mini";
-const OPENAI_ULTRA_NORMAL_EFFORT = "medium";
 const openAIUltraRunsByClient = new WeakMap<GatewayClient, Map<string, string>>();
 
 function recordOpenAIUltraAdmission(client: GatewayClient, runId: string, sessionKey: string) {
@@ -4131,7 +4120,7 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
   );
   const observations: Array<
     OpenAIUltraWireObservation & {
-      owner?: { diagnostic: DiagnosticEmbeddedRunOwner; isHeartbeat: boolean };
+      owner?: { diagnostic: DiagnosticEmbeddedRunOwner };
     }
   > = [];
   const dispatches = new Map<
@@ -4229,9 +4218,7 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
               validateAgentRunDelegatedAuthority(authority);
             observations.push({
               ...readOpenAIUltraWireObservation(body),
-              ...(ownsRequest && typeof context.isHeartbeat === "boolean"
-                ? { owner: { diagnostic, isHeartbeat: context.isHeartbeat } }
-                : {}),
+              ...(ownsRequest ? { owner: { diagnostic } } : {}),
               requestIndex: observations.length + 1,
               ...(traceparent ? { traceparent } : {}),
             });
@@ -4259,8 +4246,8 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
           owner.diagnostic.sessionKey === dispatch.facts.sessionKey;
         return Object.assign(entry, {
           dispatch:
-            dispatch && dispatch.model === entry.model
-              ? { ...dispatch.facts, ...(matchesOwner ? { isHeartbeat: owner.isHeartbeat } : {}) }
+            dispatch && dispatch.model === entry.model && matchesOwner
+              ? { ...dispatch.facts }
               : null,
         });
       });
@@ -4310,7 +4297,7 @@ function createOpenAIUltraTestRun(purpose: string) {
     isCompacting: () => false,
     abort: () => {},
   };
-  registerAgentRunContext(runId, { sessionId, sessionKey, isHeartbeat: true });
+  registerAgentRunContext(runId, { sessionId, sessionKey });
   const authority = claimAgentRunDelegatedAuthority({ runId, instanceId: randomUUID() });
   setActiveEmbeddedRun(sessionId, handle, sessionKey);
   return {
@@ -4336,11 +4323,9 @@ describe("OpenAI Ultra wire capture", () => {
     const capture = startOpenAIUltraWireCapture(["https://api.openai.com/v1"]);
     const model = createGatewayLiveTestModel("openai", "gpt-5.6-luna");
     const fetchModel = expectDefined(getAiTransportHost().buildModelFetch(model), "model fetch");
-    // Even a heartbeat flag on accepted probe/child admissions cannot lower Ultra.
     const probe = createOpenAIUltraTestRun("probe");
     const child = createOpenAIUltraTestRun("child");
-    const heartbeat = createOpenAIUltraTestRun("heartbeat");
-    const runs = [probe, child, heartbeat];
+    const runs = [probe, child];
     const ultraRuns = new Map([probe, child].map((run) => [run.runId, run.sessionKey]));
     const send = async (run: (typeof runs)[number], effort: string, call: number) => {
       const trace = createDiagnosticTraceContext();
@@ -4371,7 +4356,6 @@ describe("OpenAI Ultra wire capture", () => {
     };
     try {
       await send(probe, "max", 1);
-      await send(heartbeat, "medium", 1);
       await send(child, "max", 1);
       await send(probe, "max", 2);
       await send(child, "max", 2);
@@ -4383,21 +4367,20 @@ describe("OpenAI Ultra wire capture", () => {
       expect(runs.every((run) => getAgentRunContext(run.runId) === undefined)).toBe(true);
       expect(beforeDelivery.every((entry) => entry.dispatch === null)).toBe(true);
       const observations = capture.observations;
-      expect(observations.map((entry) => entry.dispatch?.isHeartbeat)).toEqual([
-        true,
-        true,
-        true,
-        true,
-        true,
+      expect(observations.map((entry) => entry.dispatch?.runId)).toEqual([
+        probe.runId,
+        child.runId,
+        probe.runId,
+        child.runId,
       ]);
-      expect(transport).toHaveBeenCalledTimes(5);
+      expect(transport).toHaveBeenCalledTimes(4);
       const childContinuation = observations.with(1, {
         ...observations[1],
+        reasoningEffort: "medium",
         dispatch: {
           runId: "continuation-run",
           callId: "continuation-call",
           sessionKey: child.sessionKey,
-          isHeartbeat: true,
         },
       });
       expect(() =>
@@ -4409,11 +4392,11 @@ describe("OpenAI Ultra wire capture", () => {
       ).toThrow(/observed=medium request=2/);
       expect(
         assertOpenAIUltraWireEffort({ expectedModel: model.id, observations, ultraRuns }),
-      ).toBe(5);
+      ).toBe(4);
       // A lost explicit override on a medium-default fixture is a failure, as are
-      // downgrades on descendants/continuations and a heartbeat elevated to max.
+      // downgrades on descendants and continuations.
       for (const [index, entry] of observations.entries()) {
-        const wrongEfforts = index === 1 ? ["low", "max"] : ["low", "medium"];
+        const wrongEfforts = ["low", "medium"];
         for (const reasoningEffort of wrongEfforts) {
           const changed = observations.with(index, { ...entry, reasoningEffort });
           expect(() =>
@@ -4436,7 +4419,7 @@ describe("OpenAI Ultra wire capture", () => {
           observations: capture.observations,
           ultraRuns,
         }),
-      ).toThrow(/observed=low request=6 run=unknown/);
+      ).toThrow(/observed=low request=5 run=unknown/);
     } finally {
       for (const run of runs) {
         run.close();
@@ -4456,13 +4439,13 @@ describe("OpenAI Ultra wire capture", () => {
     "stale lifecycle",
     "closed stream owner",
     "aborted stream",
-  ])("cannot grant medium effort from %s attribution", async (fault) => {
+  ])("does not attribute a request from %s", async (fault) => {
     const host = getAiTransportHost();
     configureAiTransportHost({ ...host, buildModelFetch: () => async () => new Response("ok") });
     const capture = startOpenAIUltraWireCapture(["https://api.openai.com/v1"]);
     const model = createGatewayLiveTestModel("openai", "gpt-5.6-luna");
     const fetchModel = expectDefined(getAiTransportHost().buildModelFetch(model), "model fetch");
-    const run = createOpenAIUltraTestRun("invalid-heartbeat");
+    const run = createOpenAIUltraTestRun("invalid-owner");
     const trace = createDiagnosticTraceContext();
     const event = {
       runId: run.runId,
@@ -4515,7 +4498,7 @@ describe("OpenAI Ultra wire capture", () => {
       );
       await waitForDiagnosticEventsDrained();
       expect(capture.observations).toHaveLength(1);
-      expect(capture.observations[0]?.dispatch?.isHeartbeat).toBeUndefined();
+      expect(capture.observations[0]?.dispatch).toBeNull();
       expect(() =>
         assertOpenAIUltraWireEffort({
           expectedModel: model.id,
@@ -4717,65 +4700,6 @@ function resolveOpenAIUltraUpstreamBaseUrl(params: {
     providerConfig?.baseUrl?.trim() ||
     OPENAI_LIVE_DEFAULT_BASE_URL
   );
-}
-
-function assertOpenAIUltraWireEffort(params: {
-  expectedModel: string;
-  observations: OpenAIUltraWireObservation[];
-  ultraRuns: ReadonlyMap<string, string>;
-}): number {
-  const matching = params.observations.filter((entry) => entry.model === params.expectedModel);
-  expect(
-    matching.length,
-    `expected captured OpenAI requests for ${params.expectedModel}; captured=${params.observations.length}`,
-  ).toBeGreaterThan(0);
-  const ultraSessions = new Set(params.ultraRuns.values());
-  const expectedEffort = ({ dispatch }: OpenAIUltraWireObservation) =>
-    dispatch?.isHeartbeat === true &&
-    !params.ultraRuns.has(dispatch.runId) &&
-    !ultraSessions.has(dispatch.sessionKey ?? "")
-      ? OPENAI_ULTRA_NORMAL_EFFORT
-      : "max";
-  const heartbeats = matching.filter(
-    (entry) => expectedEffort(entry) === OPENAI_ULTRA_NORMAL_EFFORT,
-  );
-  if (heartbeats.length) {
-    logProgress(
-      `[ultra] ${params.expectedModel}: independent_heartbeats=${heartbeats.length} first=${JSON.stringify(heartbeats.slice(0, 3))}`,
-    );
-  }
-  const violations = matching.flatMap((entry, index) =>
-    entry.reasoningEffort === expectedEffort(entry)
-      ? []
-      : [
-          {
-            ...entry,
-            requestIndex: entry.requestIndex ?? index + 1,
-            expectedEffort: expectedEffort(entry),
-          },
-        ],
-  );
-  const first = violations[0];
-  if (first) {
-    logProgress(
-      `[ultra] ${params.expectedModel}: violations=${violations.length}/${matching.length} first=${JSON.stringify(violations.slice(0, 3))}`,
-    );
-  }
-  expect(
-    matching.every((entry) => entry.reasoningEffort === expectedEffort(entry)),
-    `expected effort=${first?.expectedEffort ?? "max"} for ${params.expectedModel}; observed=${first?.reasoningEffort ?? "missing"} request=${first?.requestIndex} run=${first?.dispatch?.runId ?? "unknown"}; violations=${violations.length}/${matching.length}`,
-  ).toBe(true);
-  const spawnSchemas = [
-    ...new Set(
-      matching.flatMap((entry) =>
-        entry.sessionsSpawn ? [JSON.stringify(entry.sessionsSpawn)] : [],
-      ),
-    ),
-  ];
-  logProgress(
-    `[ultra] ${params.expectedModel}: checked=${matching.length} max=${matching.length - heartbeats.length} medium=${heartbeats.length} sessions_spawn wire schemas=${spawnSchemas.join(",")}`,
-  );
-  return matching.length;
 }
 
 type LiveModelRegistry = ModelRegistry;
@@ -6284,7 +6208,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           saveAuthProfileStore(preparedDiscoveryAuthProfileStore, discoveryAgentDir);
         }
         logProgress("[all-models] preparing models.json");
-        const modelsJsonResult = await withGatewayLiveSetupTimeout(
+        await withGatewayLiveSetupTimeout(
           ensureOpenClawModelsJson(cfg, discoveryAgentDir, {
             workspaceDir,
             ...(providerList ? { providerDiscoveryProviderIds: providerList } : {}),
@@ -6295,7 +6219,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           }),
           "[all-models] prepare models.json",
         );
-        const agentDir = modelsJsonResult.agentDir;
+        const agentDir = discoveryAgentDir;
         const providerScopedModelProviders = providerScopedModelRegistryProviders({
           providerList,
           useSmall,

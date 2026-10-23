@@ -1,13 +1,26 @@
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
-import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
+import {
+  handleMarkdownCodeBlockClick,
+  readMarkdownCodeBlockCopyText,
+} from "./markdown-code-blocks.ts";
+import { parseMarkdownJson } from "./markdown-json.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import { htmlFragment } from "./markdown.test-support.ts";
-import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import {
+  toSanitizedJsonHtml,
+  toSanitizedMarkdownHtml,
+  toStreamingMarkdownParts,
+} from "./markdown.ts";
 
 function render(source: string, options?: MarkdownRenderOptions) {
-  const fragment = htmlFragment(toSanitizedMarkdownHtml(source, options));
+  return interactiveHtml(toSanitizedMarkdownHtml(source, options));
+}
+
+function interactiveHtml(html: string) {
+  const fragment = htmlFragment(html);
   fragment.addEventListener("click", handleMarkdownCodeBlockClick);
   return fragment;
 }
@@ -120,7 +133,6 @@ it("reobserves retained Markdown DOM while fencing scans queued before hide or d
 });
 
 it("does not remeasure settled Markdown while neighboring prose streams", async () => {
-  vi.stubGlobal("ResizeObserver", undefined);
   const { container, section, blocks } = mountBlocks();
   const paragraph = document.createElement("p");
   paragraph.textContent = "First";
@@ -158,11 +170,8 @@ function expectText(root: ParentNode, selector: string) {
 }
 
 it("ignores an older clipboard attempt that finishes after the latest denied copy", async () => {
-  let resolveFirstWrite!: () => void;
-  const firstWrite = new Promise<void>((resolve) => {
-    resolveFirstWrite = resolve;
-  });
-  mockClipboard(vi.fn().mockReturnValueOnce(firstWrite).mockRejectedValueOnce(denied));
+  const firstWrite = createDeferred();
+  mockClipboard(vi.fn().mockReturnValueOnce(firstWrite.promise).mockRejectedValueOnce(denied));
   const button = renderCodeCopyButton();
 
   button.click();
@@ -171,7 +180,7 @@ it("ignores an older clipboard attempt that finishes after the latest denied cop
 
   expect(button.getAttribute("aria-label")).toBe("Copy failed");
 
-  resolveFirstWrite();
+  firstWrite.resolve();
   await vi.advanceTimersByTimeAsync(0);
 
   expectCopyFailed(button);
@@ -281,10 +290,14 @@ it.each([
   ["wrap", "is-wrapped", "aria-pressed", [true, false]],
 ] as const)("handles %s through the shared click owner", (action, className, attribute, states) => {
   const fragment = interactive();
+  document.body.append(fragment);
+  const outside = document.body.appendChild(document.createElement("button"));
+  outside.focus();
   const wrapper = fragment.querySelector(".code-block-wrapper");
   const button = fragment.querySelector<HTMLButtonElement>(`.code-block-${action}`);
   for (const state of states) {
     button?.click();
+    expect(document.activeElement).toBe(outside);
     expect(wrapper?.classList.contains(className)).toBe(state);
     expect(button?.getAttribute(attribute)).toBe(String(state));
   }
@@ -302,4 +315,135 @@ it("localizes the hidden-line count and the language fallback", async () => {
   } finally {
     await i18n.setLocale("en");
   }
+});
+
+describe("source-preserving JSON tree", () => {
+  const jsonOptions = { codeBlockInteraction: "interactive" } as const;
+  const find = (selector: string) => document.body.querySelector<HTMLElement>(selector);
+  const texts = (selector: string) =>
+    [...document.body.querySelectorAll(selector)].map((node) => node.textContent);
+  function expectSource(source: string, suffix = "") {
+    expect(find("pre code")?.textContent).toBe(source + suffix);
+    expect(readMarkdownCodeBlockCopyText(find(".code-block-copy")!)).toBe(source);
+  }
+  function renderJson(source: string, fenced = false) {
+    const json = parseMarkdownJson(source);
+    if (!json) {
+      throw new Error("Expected valid JSON fixture");
+    }
+    document.body.replaceChildren(
+      fenced
+        ? render("```json\n" + source + "\n```", jsonOptions)
+        : interactiveHtml(toSanitizedJsonHtml(json, jsonOptions)),
+    );
+  }
+
+  it.each([
+    {
+      source: String.raw`{"2":1.00,"1":1E+03,"a":9007199254740993,"a":1e400,"nested":{"a":-0,"a":1e-999}}`,
+      keys: ['"2"', '"1"', '"a"', '"a"', '"nested"', '"a"', '"a"'],
+      literals: ["1.00", "1E+03", "9007199254740993", "1e400", "-0", "1e-999"],
+    },
+    {
+      source: '\t{\n\t\t"nested": {\n\t\t\t"text": "  keep these spaces  "\n\t\t}\n\t}',
+      keys: ['"nested"', '"text"'],
+      literals: [],
+    },
+  ])(
+    "preserves source lexemes and indentation in Tree, Raw and Copy: $source",
+    ({ source, keys, literals }) => {
+      for (const fenced of [false, true]) {
+        renderJson(source, fenced);
+        expect(texts(".code-block-json-key")).toEqual(keys);
+        expect(texts(".code-block-json-value--literal")).toEqual(literals);
+        find('[data-json-mode="raw"]')!.click();
+        expect(find(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(true);
+        expectSource(source, fenced ? "\n" : "");
+      }
+    },
+  );
+
+  it("keeps literal escapes, whitespace, Unicode separators and HTML inert", () => {
+    const source =
+      ' \r\n{ "\\u0061": "\\u0061", "html": "</code><img src=x onerror=alert(1)>", "text": "**literal**' +
+      "\u2028\u2029" +
+      '" }\r\n ';
+    renderJson(source);
+    expectSource(source);
+    expect(find(".code-block-json-key")?.textContent).toBe('"\\u0061"');
+    expect(find(".code-block-json-value--string")?.textContent).toBe('"\\u0061"');
+    expect(find("img, script, strong")).toBeNull();
+  });
+
+  it("switches views through the existing owner without replacing source or node state", () => {
+    renderJson('{"nested":{"value":true}}');
+    const node = document.querySelectorAll<HTMLDetailsElement>(".code-block-json-node")[1]!;
+    node.querySelector<HTMLElement>("summary")!.click();
+    expect(node.open).toBe(false);
+    const raw = find('[data-json-mode="raw"]')!;
+    const tree = find('[data-json-mode="tree"]')!;
+    raw.click();
+    expect(raw.getAttribute("aria-pressed")).toBe("true");
+    expect(tree.getAttribute("aria-pressed")).toBe("false");
+    expect(find(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(true);
+    tree.click();
+    expect(node.open).toBe(false);
+    expect(document.querySelectorAll(".code-block-json-node")[1]).toBe(node);
+    expect(find(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(false);
+  });
+
+  it("renders empty containers and null", () => {
+    const source = '{"empty":[],"nothing":null}';
+    renderJson(source);
+    expect(find(".code-block-json-tree")).not.toBeNull();
+    expect(find("pre code")?.textContent).toBe(source);
+  });
+
+  it.each(['{"trailing":1,}', '{/*comment*/"a":1}', '{"a":1} trailing'])(
+    "leaves invalid JSON on the existing raw fence path: %s",
+    (source) => {
+      expect(parseMarkdownJson(source)).toBeNull();
+      document.body.innerHTML = toSanitizedMarkdownHtml(
+        "```json\n" + source + "\n```",
+        jsonOptions,
+      );
+      expect(find(".code-block-json-tree")).toBeNull();
+      expect(find("pre code")?.textContent).toBe(source + "\n");
+    },
+  );
+
+  it.each([
+    "[".repeat(1000) + "0" + "]".repeat(1000),
+    "[" + "0,".repeat(3000) + "0]",
+    " ".repeat(20_000) + "{}",
+  ])("keeps over-budget trees literal and complete", (source) => {
+    renderJson(source);
+    expect(find(".code-block-json-tree, strong")).toBeNull();
+    expectSource(source);
+  });
+
+  it("leaves inputs above the shared parsing limit to the existing literal-text renderer", () => {
+    const source = '{"text":"**literal** ' + "x".repeat(40_000) + '"}';
+    expect(parseMarkdownJson(source)).toBeNull();
+    document.body.innerHTML = toSanitizedMarkdownHtml(source, jsonOptions);
+    expect(find("strong")).toBeNull();
+    expect(document.body.textContent).toBe(source);
+  });
+
+  it("does not emit inert view controls in static/user hosts", () => {
+    const json = parseMarkdownJson('{"a":1}')!;
+    for (const options of [{}, { codeBlockChrome: "none" as const }]) {
+      document.body.innerHTML = toSanitizedJsonHtml(json, options);
+      expect(find(".code-block-json-mode")).toBeNull();
+      expect(find("pre code")?.textContent).toBe(json.text);
+    }
+  });
+
+  it("waits for a closing fence before offering the tree", () => {
+    const source = '```json\n{"a":1}';
+    document.body.innerHTML = toStreamingMarkdownParts(source, jsonOptions).join("");
+    expect(find(".code-block-json-tree")).toBeNull();
+    document.body.innerHTML = toStreamingMarkdownParts(source + "\n```", jsonOptions).join("");
+    expect(find(".code-block-json-tree")).not.toBeNull();
+  });
 });

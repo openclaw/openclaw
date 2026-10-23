@@ -1,29 +1,17 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
+import { afterEach, expect, it, vi } from "vitest";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { IdentitySection } from "./identity-section.tsx";
+import { IdentitySection, type IdentitySectionProps } from "./identity-section.tsx";
+import { modelAccountProfile } from "./profile-page.test-support.tsx";
 
-type IdentitySectionProps = Parameters<typeof IdentitySection>[0];
+const PROFILE = { ...modelAccountProfile, displayName: "Ada Lovelace" };
 
-const PROFILE: UserProfile = {
-  id: "profile-1",
-  displayName: "Ada Lovelace",
-  avatarMime: "image/png",
-  mergedInto: null,
-  createdAt: 1,
-  updatedAt: 2,
-  emails: ["ada@example.test", "ada@work.test"],
-  githubIdentity: null,
-  hasAvatar: true,
-};
-
-function createProps(overrides: Partial<IdentitySectionProps> = {}): IdentitySectionProps {
-  return {
+function mountIdentity(overrides: Partial<IdentitySectionProps> = {}) {
+  const props: IdentitySectionProps = {
     profile: PROFILE,
     connected: true,
     avatarUrl: "/api/users/profile-1/avatar?v=2",
@@ -37,115 +25,94 @@ function createProps(overrides: Partial<IdentitySectionProps> = {}): IdentitySec
     onGitCoauthorChange: vi.fn(),
     ...overrides,
   };
+  unmount?.();
+  const view = mountSolid(() => <IdentitySection {...props} />);
+  ({ container, unmount } = view);
+  flush();
+  return props;
 }
 
 let unmount: (() => void) | undefined;
-function mountIdentity(props: IdentitySectionProps, container: HTMLElement) {
-  unmount?.();
-  unmount = mountSolid(() => <IdentitySection {...props} />, { container }).unmount;
-  flush();
-}
+let container: HTMLElement;
+const fileInput = () => container.querySelector<HTMLInputElement>('input[type="file"]');
+const avatarButton = () =>
+  container.querySelector<HTMLButtonElement>(".identity-avatar-control .btn");
+it("hides upload controls while preserving avatar display and name editing", () => {
+  const base = createApplicationConfigCapability({ resourceBasePath: "" });
+  const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
+  const props = mountIdentity({ config, displayName: "Ada" });
+  const input = fileInput()!;
+  config.current.uploadsEnabled = false;
+  Object.defineProperty(input, "files", { value: [new File(["avatar"], "avatar.png")] });
+  input.dispatchEvent(new Event("change"));
+  expect(props.onAvatarSelect).not.toHaveBeenCalled();
+  mountIdentity(props);
+  expect([fileInput(), avatarButton()]).toEqual([null, null]);
+  expect(container.querySelector("openclaw-viewer-avatar")).not.toBeNull();
+  expect(container.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled).toBe(
+    false,
+  );
+  container
+    .querySelector(".identity-name-control")
+    ?.dispatchEvent(new SubmitEvent("submit", { cancelable: true }));
+  expect(props.onSaveDisplayName).toHaveBeenCalledOnce();
+});
+afterEach(() => {
+  setAvatarGatewayOrigin(null);
+  vi.restoreAllMocks();
+});
 
-describe("IdentitySection", () => {
-  it("hides upload controls while preserving avatar display and name editing", () => {
-    const base = createApplicationConfigCapability({ resourceBasePath: "" });
-    const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
-    const props = createProps({ config, displayName: "Ada" });
-    const container = document.createElement("div");
-    mountIdentity(props, container);
-    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
-    config.current.uploadsEnabled = false;
-    Object.defineProperty(input, "files", { value: [new File(["avatar"], "avatar.png")] });
-    input.dispatchEvent(new Event("change"));
-    expect(props.onAvatarSelect).not.toHaveBeenCalled();
-    mountIdentity(props, container);
-    expect(container.querySelector('input[type="file"]')).toBeNull();
-    expect(container.querySelector(".identity-avatar-control button")).toBeNull();
-    expect(container.querySelector("openclaw-viewer-avatar")).not.toBeNull();
-    expect(
-      container.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled,
-    ).toBe(false);
-    container
-      .querySelector(".identity-name-control")
-      ?.dispatchEvent(new SubmitEvent("submit", { cancelable: true }));
-    expect(props.onSaveDisplayName).toHaveBeenCalledOnce();
+it("falls back to initials when no same-origin avatar route is available", async () => {
+  mountIdentity({
+    avatarUrl: null,
+    profile: { ...PROFILE, emails: ["profile-preview@example.test"], hasAvatar: false },
   });
-  afterEach(() => {
-    document.body.replaceChildren();
-    setAvatarGatewayOrigin(null);
-    vi.restoreAllMocks();
-  });
+  const avatar = container.querySelector<HTMLElement & { updateComplete?: Promise<unknown> }>(
+    "openclaw-viewer-avatar",
+  );
+  await avatar?.updateComplete;
 
-  it("falls back to initials when no same-origin avatar route is available", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    mountIdentity(
-      createProps({
-        avatarUrl: null,
-        profile: { ...PROFILE, emails: ["profile-preview@example.test"], hasAvatar: false },
-      }),
-      container,
-    );
-    const avatar = container.querySelector<HTMLElement>("openclaw-viewer-avatar") as
-      | (HTMLElement & { updateComplete?: Promise<unknown> })
-      | null;
-    await avatar?.updateComplete;
+  // No route means initials, not a CSP-blocked direct Gravatar request.
+  expect(avatar?.querySelector("img")).toBeNull();
+  expect(avatar?.textContent?.trim()).toBe("AL");
+});
 
-    // The gateway route (userProfileAvatarUrl) serves the Gravatar fallback
-    // server-side and stays same-origin under the Control UI CSP. When no route
-    // is available — e.g. a cross-origin gateway returns null — the chip shows
-    // deterministic initials rather than a CSP-blocked direct gravatar.com image.
-    expect(avatar?.querySelector("img")).toBeNull();
-    expect(avatar?.textContent?.trim()).toBe("AL");
-  });
+it("forwards an allowlisted avatar file and resets the picker", () => {
+  const { onAvatarSelect } = mountIdentity();
 
-  it("forwards an allowlisted avatar file and resets the picker", () => {
-    const onAvatarSelect = vi.fn();
-    const container = document.createElement("div");
-    mountIdentity(createProps({ onAvatarSelect }), container);
+  const chooser = avatarButton();
+  const input = fileInput();
+  const clickInput = vi.spyOn(input!, "click");
+  chooser?.click();
+  expect(chooser?.type).toBe("button");
+  expect(clickInput).toHaveBeenCalledOnce();
 
-    const chooser = container.querySelector<HTMLButtonElement>(".identity-avatar-control .btn");
-    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
-    const clickInput = vi.spyOn(input!, "click");
-    chooser?.click();
-    expect(chooser?.type).toBe("button");
-    expect(clickInput).toHaveBeenCalledOnce();
+  const file = new File(["avatar"], "avatar.webp", { type: "image/webp" });
+  Object.defineProperty(input, "files", { configurable: true, value: [file] });
+  input?.dispatchEvent(new Event("change", { bubbles: true }));
 
-    const file = new File(["avatar"], "avatar.webp", { type: "image/webp" });
-    Object.defineProperty(input, "files", { configurable: true, value: [file] });
-    input?.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(input).toMatchObject({ accept: "image/png,image/jpeg,image/webp", value: "" });
+  expect(onAvatarSelect).toHaveBeenCalledWith(file);
 
-    expect(input?.accept).toBe("image/png,image/jpeg,image/webp");
-    expect(input?.value).toBe("");
-    expect(onAvatarSelect).toHaveBeenCalledWith(file);
+  mountIdentity({ busy: "display-name" });
+  expect([avatarButton()?.disabled, fileInput()?.disabled]).toEqual([true, true]);
+});
 
-    mountIdentity(createProps({ busy: "display-name" }), container);
-    expect(
-      container.querySelector<HTMLButtonElement>(".identity-avatar-control .btn")?.disabled,
-    ).toBe(true);
-    expect(container.querySelector<HTMLInputElement>('input[type="file"]')?.disabled).toBe(true);
-  });
+it("explains personal GitHub sign-in for the shared owner without email or retry rows", () => {
+  mountIdentity({ profile: { ...PROFILE, id: "gateway-owner", emails: [] } });
 
-  it("explains personal GitHub sign-in for the shared owner without email or retry rows", () => {
-    const container = document.createElement("div");
-    mountIdentity(
-      createProps({ profile: { ...PROFILE, id: "gateway-owner", emails: [] } }),
-      container,
-    );
-
-    const descriptions = [...container.querySelectorAll(".settings-row__desc")].map((node) =>
-      node.textContent?.trim(),
-    );
-    expect(descriptions).toContain(
+  const descriptions = [...container.querySelectorAll(".settings-row__desc")].map((node) =>
+    node.textContent?.trim(),
+  );
+  expect(descriptions).toEqual(
+    expect.arrayContaining([
       "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
-    );
-    expect(descriptions).toContain(
       "Requires GitHub-backed sign-in through Cloudflare Access or Tailscale Serve.",
-    );
-    expect(container.textContent).not.toContain("Linked emails");
-    expect(container.textContent).not.toContain("Refresh to retry");
-    const toggle = container.querySelector<HTMLInputElement>("input.settings-toggle__input");
-    expect(toggle?.checked).toBe(false);
-    expect(toggle?.hasAttribute("disabled")).toBe(true);
-  });
+    ]),
+  );
+  expect(container.textContent).not.toContain("Linked emails");
+  expect(container.textContent).not.toContain("Refresh to retry");
+  const toggle = container.querySelector<HTMLInputElement>("input.settings-toggle__input");
+  expect(toggle?.checked).toBe(false);
+  expect(toggle?.disabled).toBe(true);
 });

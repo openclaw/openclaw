@@ -158,17 +158,13 @@ describe("runCodexIsolatedCompletion", () => {
     });
   });
 
-  it("rejects hook continuations without active managed attestation", async () => {
-    turn([hook("hook-1")]);
-
-    await expect(run()).rejects.toThrow("unexpected native item: hookPrompt");
-  });
-
-  it("rejects native tools even when managed hooks were attested", async () => {
-    turn([{ id: "tool", type: "commandExecution" }], true);
-
+  it.each([
+    ["hookPrompt", undefined],
+    ["commandExecution", true],
+  ] as const)("rejects native %s with managed attestation %s", async (type, attested) => {
+    turn([type === "hookPrompt" ? hook("hook-1") : { id: "tool", type }], attested);
     await expect(run()).rejects.toThrow(
-      "Codex isolated completion returned unexpected native item: commandExecution",
+      `Codex isolated completion returned unexpected native item: ${type}`,
     );
   });
 

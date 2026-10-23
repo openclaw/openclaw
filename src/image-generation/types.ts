@@ -14,11 +14,11 @@ export type GeneratedImageAsset = {
 
 export type ImageGenerationResolution = "1K" | "2K" | "4K";
 
-export type ImageGenerationQuality = "low" | "medium" | "high" | "xhigh" | "max" | "auto";
+type ImageGenerationQuality = "low" | "medium" | "high" | "xhigh" | "max" | "auto";
 
 export type ImageGenerationOutputFormat = "png" | "jpeg" | "webp";
 
-export type ImageGenerationBackground = "transparent" | "opaque" | "auto";
+type ImageGenerationBackground = "transparent" | "opaque" | "auto";
 
 export type ImageGenerationOpenAIBackground = ImageGenerationBackground;
 
@@ -62,6 +62,8 @@ export type ImageGenerationRequest = {
   agentDir?: string;
   authStore?: AuthProfileStore;
   timeoutMs?: number;
+  /** Cancels image generation and any result downloads owned by this request. */
+  signal?: AbortSignal;
   count?: number;
   size?: string;
   aspectRatio?: string;

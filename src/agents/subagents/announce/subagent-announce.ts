@@ -11,15 +11,11 @@ import { waitForSessionRunEnd } from "../../../sessions/session-controller.nativ
 import { isSessionRunActive } from "../../../sessions/session-controller.queries.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import { createLazyPromise } from "../../../shared/lazy-promise.js";
-import {
-  type DeliveryContext,
-  normalizeDeliveryContext,
-} from "../../../utils/delivery-context.shared.js";
+import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
-import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -42,10 +38,10 @@ import {
   resolveRequesterForChildSession,
   shouldIgnorePostCompletionAnnounceForSession,
 } from "../registry/subagent-registry-read.js";
+import type { PendingFinalDeliveryPayload } from "../registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
-import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   hasAnnounceSendEvidence,
@@ -115,32 +111,17 @@ function buildAnnounceReplyInstruction(params: {
   return `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}${modelRouteInstruction} Otherwise send a truthful user-facing update unless this exact result is already visible to the user in this same turn. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim.`;
 }
 
-type SubagentAnnounceFlowParams = {
-  childSessionKey: string;
+type SubagentAnnounceFlowParams = Omit<PendingFinalDeliveryPayload, "requesterDisplayKey"> & {
   childAgentId?: string;
   childSessionIdentity?: { sessionId: string; lifecycleRevision?: string };
-  childRunId: string;
   runTimeoutSeconds?: number;
-  requesterSessionKey: string;
   requesterAgentId?: string;
-  requesterOrigin?: DeliveryContext;
-  task: string;
   timeoutMs: number;
   cleanup: "delete" | "keep";
   roundOneReply?: string;
-  terminalReply?: AgentRunTerminalReplySnapshot;
   /** Cached pre-wake result for legacy runs without terminal facts. */
   fallbackReply?: string;
-  startedAt?: number;
-  endedAt?: number;
-  label?: string;
-  outcome?: SubagentRunOutcome;
-  expectsCompletionMessage?: boolean;
-  completionTarget?: "parent";
-  completionRequesterSessionId?: string;
   completionRequesterLifecycleRevision?: string;
-  spawnMode?: SpawnSubagentMode;
-  wakeOnDescendantSettle?: boolean;
   /** Deliver only frozen terminal facts; never inspect or mutate the child session. */
   suppressChildSessionEffects?: boolean;
   /** Refresh database currency before child-session reads or effects. */

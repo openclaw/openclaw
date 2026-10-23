@@ -13,7 +13,10 @@ import {
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  controlUiE2eWaitTimeoutMs,
+  waitForControlUiGatewayReady,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -30,7 +33,7 @@ const PROOF_SESSION_ID = "tg-dm-owner-attribution-proof";
 const PROOF_STORE_KEY = "agent:main:telegram:dm";
 const PROOF_LABEL = "Telegram DM";
 
-async function capture(page: Page, name: string) {
+async function capture(page: Page, name: string, proofSuite = suite) {
   if (!captureUiProof) {
     return;
   }
@@ -38,7 +41,7 @@ async function capture(page: Page, name: string) {
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(suite.artifactDir, name),
+    path: path.join(proofSuite.artifactDir, name),
   });
 }
 
@@ -78,184 +81,221 @@ async function requestGateway<T>(
   );
 }
 
-suite.define(() => {
-  it.for([false, true])(
-    "keeps same-id owners separate with an empty current session: %s",
-    async (resetCurrentSession, context) => {
-      let fixture: OpenClawTestState | undefined;
-      let gateway: Promise<GatewayServer> | undefined;
-      await suite.runScenario(context, {
-        retainedState: () => fixture?.root,
-        close: async () => {
-          const server = await gateway;
-          await server?.close({ reason: "usage sessions owner attribution e2e cleanup" });
-        },
-        release: async () => {
-          await fixture?.cleanup();
-          resetLogger();
-        },
-        run: async (signal) => {
-          const port = await getFreePort();
-          signal.throwIfAborted();
-          const state = await createOpenClawTestState({
-            label: "usage-sessions-owner-attribution",
-            env: {
-              OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-              OPENCLAW_SKIP_CANVAS_HOST: "1",
-              OPENCLAW_SKIP_CHANNELS: "1",
-              OPENCLAW_SKIP_CRON: "1",
-              OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-              OPENCLAW_SKIP_PROVIDERS: "1",
-              OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-              VITEST: "1",
-            },
-          });
-          fixture = state;
-          setLoggerOverride({
-            file: state.path("gateway.log"),
-            level: "silent",
-            consoleLevel: "silent",
-          });
-          signal.throwIfAborted();
+const ownerScenarios = [
+  {
+    resetCurrentSession: false,
+    sessionId: PROOF_SESSION_ID,
+    storeKey: PROOF_STORE_KEY,
+  },
+  {
+    resetCurrentSession: true,
+    sessionId: `${PROOF_SESSION_ID}-reset`,
+    storeKey: `${PROOF_STORE_KEY}-reset`,
+  },
+] as const;
 
-          const { startGatewayServer } = await import("../../../src/gateway/server.js");
-          signal.throwIfAborted();
-          const { persistSessionTranscriptTurn, upsertSessionEntryCore } =
-            await import("../../../src/config/sessions/session-accessor.js");
-
-          signal.throwIfAborted();
-          const config: OpenClawConfig = {
-            agents: {
-              ownership: "explicit",
-              defaults: { workspace: state.workspaceDir },
-              entries: {
-                main: { name: "Molty", workspace: state.workspaceDir },
-                opus: { name: "Molty", workspace: state.workspaceDir },
-              },
-            },
-            gateway: {
-              mode: "local",
-              port,
-              bind: "loopback",
-              auth: { mode: "none" },
-              controlUi: { enabled: false },
-            },
-            plugins: { enabled: false },
-            session: {
-              store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-            },
-          };
-          await state.writeConfig(config);
-          setRuntimeConfigSnapshot(config);
-
-          for (const agentId of ["main", "opus"]) {
-            signal.throwIfAborted();
-            const scope = {
-              agentId,
-              sessionId: PROOF_SESSION_ID,
-              sessionKey: agentId === "main" ? PROOF_STORE_KEY : `agent:opus:${PROOF_SESSION_ID}`,
-              storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
-            };
-            const now = Date.now();
-            if (agentId === "main") {
-              await upsertSessionEntryCore(scope, {
-                sessionId: PROOF_SESSION_ID,
-                label: PROOF_LABEL,
-                updatedAt: now,
-              });
-            }
-            signal.throwIfAborted();
-            // Both transcripts must fall inside the dashboard's current date window.
-            await persistSessionTranscriptTurn(scope, {
-              cwd: state.workspaceDir,
-              updateMode: "none",
-              messages: [
-                { message: { role: "user", content: `${agentId} turn`, timestamp: now }, now },
-              ],
-            });
-          }
-
-          signal.throwIfAborted();
-          if (resetCurrentSession) {
-            await upsertSessionEntryCore(
-              {
-                agentId: "main",
-                sessionKey: PROOF_STORE_KEY,
-                storePath: path.join(state.sessionsDir("main"), "sessions.json"),
-              },
-              {
-                sessionId: "empty-current-session",
-                label: PROOF_LABEL,
-                updatedAt: Date.now(),
-              },
-            );
-          }
-
-          signal.throwIfAborted();
-          gateway = startGatewayServer(port, {
-            auth: { mode: "none" },
-            bind: "loopback",
-            controlUiEnabled: false,
-            sidecarStartup: "defer",
-          });
-          await gateway;
-          signal.throwIfAborted();
-
-          await suite.withPage(
-            {
-              locale: "en-US",
-              serviceWorkers: "block",
-              viewport,
-            },
-            async ({ page }) => {
-              const pageErrors: string[] = [];
-              page.on("pageerror", (error) => pageErrors.push(String(error)));
-
-              const url = new URL("usage", suite.server.baseUrl);
-              url.searchParams.set("gatewayUrl", `ws://127.0.0.1:${port}`);
-              await page.goto(url.toString());
-              const confirmation = page.locator("openclaw-gateway-url-confirmation");
-              await confirmation.waitFor();
-              await confirmation
-                .getByRole("button", { name: `Switch to 127.0.0.1:${port}`, exact: true })
-                .click();
-
-              const otherRow = page.locator(
-                `.session-bar-row[title="agent:opus:${PROOF_SESSION_ID}"]`,
-              );
-              // A rendered usage row proves the handshake and requested report both arrived.
-              await otherRow.waitFor();
-              await expect.poll(() => otherRow.count()).toBe(1);
-              await otherRow.scrollIntoViewIfNeeded();
-              await capture(page, "01-other-owner.png");
-
-              // The named family stays visible before its new current instance has a transcript.
-              const row = page.locator(`.session-bar-row[title="${PROOF_STORE_KEY}"]`);
-              await row.waitFor();
-              await expect.poll(() => row.count()).toBe(1);
-              for (const [ownerRow, agentId] of [
-                [row, "main"],
-                [otherRow, "opus"],
-              ] as const) {
-                const chip = ownerRow.getByRole("img", {
-                  name: `Molty (agent:${agentId})`,
-                  exact: true,
-                });
-                await expect.poll(() => chip.getAttribute("data-agent-id")).toBe(agentId);
-                await expect.poll(() => ownerRow.locator(".agent-row-chip").count()).toBe(1);
-              }
-              await expect.poll(() => page.locator(".session-bar-row").count()).toBe(2);
-
-              await row.scrollIntoViewIfNeeded();
-              await capture(page, "02-current-owner.png");
-              expect(pageErrors).toEqual([]);
-            },
-          );
+let ownerFixture: OpenClawTestState | undefined;
+let ownerGateway: Promise<GatewayServer> | undefined;
+let ownerPort: number;
+const ownerSuite = createControlUiE2eSuite({
+  name: "Control UI usage sessions owner attribution",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not available at ${executablePath}`,
+  resources: {
+    retainedState: () => ownerFixture?.root,
+    close: async () => {
+      const server = await ownerGateway;
+      await server?.close({ reason: "usage sessions owner attribution e2e cleanup" });
+    },
+    release: async () => {
+      await ownerFixture?.cleanup();
+      resetLogger();
+    },
+    run: async (signal) => {
+      ownerPort = await getFreePort();
+      signal.throwIfAborted();
+      const state = await createOpenClawTestState({
+        label: "usage-sessions-owner-attribution",
+        env: {
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+          OPENCLAW_SKIP_PROVIDERS: "1",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+          VITEST: "1",
         },
       });
+      ownerFixture = state;
+      setLoggerOverride({
+        file: state.path("gateway.log"),
+        level: "silent",
+        consoleLevel: "silent",
+      });
+      signal.throwIfAborted();
+
+      const { startGatewayServer } = await import("../../../src/gateway/server.js");
+      signal.throwIfAborted();
+      const { persistSessionTranscriptTurn, upsertSessionEntryCore } =
+        await import("../../../src/config/sessions/session-accessor.js");
+
+      signal.throwIfAborted();
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { workspace: state.workspaceDir },
+          entries: {
+            main: { name: "Molty", workspace: state.workspaceDir },
+            opus: { name: "Molty", workspace: state.workspaceDir },
+          },
+        },
+        gateway: {
+          mode: "local",
+          port: ownerPort,
+          bind: "loopback",
+          auth: { mode: "none" },
+          controlUi: { enabled: false },
+        },
+        plugins: { enabled: false },
+        session: {
+          store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+      };
+      await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
+
+      for (const scenario of ownerScenarios) {
+        for (const agentId of ["main", "opus"]) {
+          signal.throwIfAborted();
+          const scope = {
+            agentId,
+            sessionId: scenario.sessionId,
+            sessionKey: agentId === "main" ? scenario.storeKey : `agent:opus:${scenario.sessionId}`,
+            storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
+          };
+          const now = Date.now();
+          if (agentId === "main") {
+            await upsertSessionEntryCore(scope, {
+              sessionId: scenario.sessionId,
+              label: PROOF_LABEL,
+              updatedAt: now,
+            });
+          }
+          signal.throwIfAborted();
+          // Both transcripts must fall inside the dashboard's current date window.
+          await persistSessionTranscriptTurn(scope, {
+            cwd: state.workspaceDir,
+            updateMode: "none",
+            messages: [
+              { message: { role: "user", content: `${agentId} turn`, timestamp: now }, now },
+            ],
+          });
+        }
+
+        signal.throwIfAborted();
+        if (scenario.resetCurrentSession) {
+          await upsertSessionEntryCore(
+            {
+              agentId: "main",
+              sessionKey: scenario.storeKey,
+              storePath: path.join(state.sessionsDir("main"), "sessions.json"),
+            },
+            {
+              sessionId: "empty-current-session",
+              label: PROOF_LABEL,
+              updatedAt: Date.now(),
+            },
+          );
+        }
+
+        signal.throwIfAborted();
+      }
+
+      ownerGateway = startGatewayServer(ownerPort, {
+        auth: { mode: "none" },
+        bind: "loopback",
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      });
+      await ownerGateway;
+      signal.throwIfAborted();
+    },
+  },
+});
+
+ownerSuite.define(() => {
+  it.for([false, true])(
+    "keeps same-id owners separate with an empty current session: %s",
+    async (resetCurrentSession) => {
+      const scenario = resetCurrentSession ? ownerScenarios[1] : ownerScenarios[0];
+      await ownerSuite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport },
+        async ({ page }) => {
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(String(error)));
+
+          const url = new URL("usage", ownerSuite.server.baseUrl);
+          url.searchParams.set("gatewayUrl", `ws://127.0.0.1:${ownerPort}`);
+          await page.goto(url.toString());
+          const confirmation = page.locator("openclaw-gateway-url-confirmation");
+          await confirmation.waitFor();
+          await confirmation
+            .getByRole("button", { name: `Switch to 127.0.0.1:${ownerPort}`, exact: true })
+            .click();
+          // The dismissed dialog can leave the pointer over a row and lift its title.
+          await page.mouse.move(0, 0);
+
+          const otherRow = page.locator(
+            `.session-bar-row[title="agent:opus:${scenario.sessionId}"]`,
+          );
+          // A rendered usage row proves the handshake and requested report both arrived.
+          await otherRow.waitFor();
+          await expect.poll(() => otherRow.count()).toBe(1);
+          await otherRow.scrollIntoViewIfNeeded();
+          await capture(page, "01-other-owner.png", ownerSuite);
+
+          // The named family stays visible before its new current instance has a transcript.
+          const row = page.locator(`.session-bar-row[title="${scenario.storeKey}"]`);
+          await row.waitFor();
+          await expect.poll(() => row.count()).toBe(1);
+          // Usage rows can render before the agent-name roster finishes.
+          await evaluateControlUiContext(page, async (app) => {
+            const read = app.agents.listRead;
+            if (!read) {
+              throw new Error("Usage page has not requested the agent roster");
+            }
+            await read;
+          });
+          for (const [ownerRow, agentId] of [
+            [row, "main"],
+            [otherRow, "opus"],
+          ] as const) {
+            const chip = ownerRow.getByRole("img", {
+              name: `Molty (agent:${agentId})`,
+              exact: true,
+            });
+            await chip.waitFor({ state: "attached", timeout: controlUiE2eWaitTimeoutMs });
+            await expect.poll(() => chip.getAttribute("data-agent-id")).toBe(agentId);
+            await expect.poll(() => ownerRow.locator(".agent-row-chip").count()).toBe(1);
+          }
+          const pair = page.locator(
+            `.session-bar-row[title="${scenario.storeKey}"], .session-bar-row[title="agent:opus:${scenario.sessionId}"]`,
+          );
+          await expect.poll(() => pair.count()).toBe(2);
+          await expect.poll(() => page.locator(".session-bar-row").count()).toBe(4);
+
+          await row.scrollIntoViewIfNeeded();
+          await capture(page, "02-current-owner.png", ownerSuite);
+          expect(pageErrors).toEqual([]);
+        },
+      );
     },
   );
+});
 
+suite.define(() => {
   it.for([1, 2])(
     "clears ranges after session recreation (%s points)",
     async (pointCount, context) => {
@@ -522,12 +562,10 @@ suite.define(() => {
                 .toEqual({ sessionId: replacementId, tokens: pointCount * 300 });
               const focusOverviewStart = observedOverviews.length;
 
-              // Keep the real connection active while aging the browser's five-minute focus TTL.
+              // Age the focus TTL, then refresh inbound activity before focusing the page.
               const browserNow = await page.evaluate(() => Date.now());
-              for (let step = 1; step <= 31; step++) {
-                await page.clock.setFixedTime(new Date(browserNow + step * 10_000));
-                await requestGateway(page, "health", {});
-              }
+              await page.clock.setFixedTime(new Date(browserNow + 310_000));
+              await requestGateway(page, "health", {});
               await page.bringToFront();
               await page.evaluate(() => window.dispatchEvent(new Event("focus")));
               await expect

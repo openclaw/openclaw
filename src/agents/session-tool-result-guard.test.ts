@@ -257,10 +257,11 @@ describe("installSessionToolResultGuard", () => {
 
   it("consumes runtime attribution when a hook blocks the marker before the next user", () => {
     let writes = 0;
-    const { sm, guard } = setup({
+    const context = {
+      nextUserMessagePersistence: "runtime" as const,
       beforeMessageWriteHook: () => (writes++ === 0 ? { block: true } : undefined),
-    });
-    guard.setNextUserMessagePersistence("runtime");
+    };
+    const { sm } = setup({ captureMessageContext: () => context });
     sm.appendMessage(makeUserMessage("runtime-only marker", 1));
     sm.appendMessage(makeUserMessage("actual user", 2));
 

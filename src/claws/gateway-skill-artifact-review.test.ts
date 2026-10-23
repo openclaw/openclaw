@@ -2,72 +2,27 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { projectClawAddPlan } from "./gateway-plan-projection.js";
-import type { ClawAddPlan, ClawAddPlanAction } from "./types.js";
+import { packageInstallPlan } from "./packages.test-support.js";
 
 const root = "/tmp/claw-skill-artifact-review";
 const oldIntegrity = `sha256:${"a".repeat(64)}`;
 const newIntegrity = `sha256:${"b".repeat(64)}`;
 const addConfig: OpenClawConfig = { agents: { entries: {} } };
 
-function skillAction(version: string, integrity: string): ClawAddPlanAction {
-  return {
-    kind: "package",
-    id: "skill:triage",
-    action: "install",
-    target: `clawhub:triage@${version}`,
-    digest: integrity,
-    blocked: false,
-    details: {
+function addPlan() {
+  const plan = packageInstallPlan([
+    {
       kind: "skill",
       source: "clawhub",
       ref: "triage",
-      version,
-      integrity,
-      ownerAction: "install",
-    },
-  };
-}
-
-function addPlan(): ClawAddPlan {
-  return {
-    schemaVersion: "openclaw.clawAddPlan.v1",
-    manifestSchemaVersion: 1,
-    stability: "experimental",
-    dryRun: true,
-    mutationAllowed: false,
-    planIntegrity: "sha256:source",
-    claw: {
-      kind: "package",
-      name: "@openclaw/worker",
       version: "1.0.0",
-      packageRoot: root,
-      manifestPath: `${root}/CLAW.md`,
-      integrityKind: "artifact",
       integrity: oldIntegrity,
-      byteLength: 100,
     },
-    agent: {
-      requestedId: "worker",
-      finalId: "worker",
-      workspace: "/tmp/worker",
-      config: { id: "worker", workspace: "/tmp/worker" },
-    },
-    summary: {
-      totalActions: 1,
-      agentActions: 0,
-      workspaceActions: 0,
-      packageActions: 1,
-      mcpServerActions: 0,
-      cronJobActions: 0,
-      blockedActions: 0,
-      capabilityEscalations: 0,
-    },
-    actions: [skillAction("1.0.0", oldIntegrity)],
-    capabilityChanges: [],
-    readiness: { ready: true, requirements: [] },
-    blockers: [],
-    diagnostics: [],
-  };
+  ]);
+  plan.claw.packageRoot = root;
+  plan.claw.manifestPath = `${root}/CLAW.md`;
+  plan.actions[0]!.digest = oldIntegrity;
+  return plan;
 }
 
 describe("Claw skill artifact review", () => {

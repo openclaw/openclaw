@@ -295,7 +295,6 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
               modelPolicy: { allow: [modelRef] },
               models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
               thinkingDefault: "low",
-              heartbeat: { every: "0m" },
               skipBootstrap: true,
               skills: [],
               timeoutSeconds: 600,
@@ -332,7 +331,7 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
           env: instance.env,
         });
         const deviceIdentity = loadOrCreateDeviceIdentity({
-          path: instance.state.path("restart-operator-device.sqlite"),
+          path: instance.state.path("restart-operator-device", "client", "credentials.sqlite"),
         });
         const connect = () =>
           acquireGatewayTestClient(
@@ -721,7 +720,9 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
             });
             return settled!;
           },
-          { timeout: 30_000 },
+          // This is the third unclean boot within the crash-loop window, so the
+          // breaker pauses restart settlement until that window drains.
+          { timeout: 360_000, interval: 1_000 },
         );
         const orphanProviderDispatches = workerRequests(
           provider.requests,
