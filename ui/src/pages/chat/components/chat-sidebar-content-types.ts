@@ -34,6 +34,7 @@ export type SessionWorkspaceNavigation = SessionWorkspaceTreeState & {
 };
 
 export type SessionWorkspaceDirectory = {
+  readResult?: Promise<void>;
   browser?: SessionWorkspaceListResult["browser"];
   loading: boolean;
   error: string | null;
@@ -48,6 +49,7 @@ export type SessionWorkspaceMobileNavigation = {
 };
 
 export type SessionWorkspacePreview = {
+  readResult?: Promise<SessionWorkspacePreview | undefined>;
   id: string;
   label: string;
   content: SidebarSelection;
@@ -280,7 +282,12 @@ export type FileSidebarNavigation =
   | { line: number; view?: FileReaderViewRequest }
   | { line?: number; view: FileReaderViewRequest };
 
-export type SessionFileSource = { sessionKey: string; agentId?: string; path: string };
+export type SessionFileSource = {
+  sessionKey: string;
+  agentId?: string;
+  path: string;
+  messageEntryId?: string;
+};
 
 export type FileReaderDownload = SessionFileDownload | { blob: Blob; filename: string };
 
@@ -318,6 +325,7 @@ export type ToolOutputSidebarContent = {
 type McpAppSidebarContent = {
   kind: "mcp-app";
   title: string;
+  observeRetirement: import("../../../components/mcp-app-launch.ts").McpAppPanelRetirement;
   launch: import("../../../components/mcp-app-launch.ts").McpAppOpenDetail;
   rawText?: null;
 };

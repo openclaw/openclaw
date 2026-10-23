@@ -25,6 +25,7 @@ import {
   reconcileManagedLlamaServer as reconcileLocalService,
 } from "./managed-server.js";
 import { resolveLlamaCppMediaModels } from "./media-config.js";
+import { formatLlamaServerRuntimeError } from "./runtime-error.js";
 
 type AcquireLocalService = OpenClawPluginApi["runtime"]["llm"]["acquireLocalService"];
 type LocalServiceAwareOptions = EmbeddingProviderCreateOptions & {
@@ -134,8 +135,9 @@ export async function createLlamaCppEmbeddingProvider(
       await refreshFacts();
       return value;
     } catch (error) {
-      await refreshFacts(error instanceof Error ? error.message : String(error));
-      throw error;
+      const failure = formatLlamaServerRuntimeError(error);
+      await refreshFacts(failure.message);
+      throw failure;
     }
   };
   const wrapped: EmbeddingProvider = {

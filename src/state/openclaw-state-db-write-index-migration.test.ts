@@ -106,6 +106,8 @@ it.each(["runtime", "doctor"] as const)(
           "device_auth_tokens",
           "gateway_origin_device_tokens",
           "exec_approvals_config",
+          "local_workspace_projections",
+          "local_workspace_manifest_nodes",
           "sqlite_stat1",
           "sqlite_stat4",
         ],

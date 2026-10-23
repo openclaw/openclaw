@@ -73,6 +73,7 @@ export async function resolveMatrixInboundContext(config: {
     canDetectMention,
     shouldRequireMention,
     commandAuthorized,
+    isControlCommand,
     locationPayload,
     media,
     preflightAudioTranscript,
@@ -137,7 +138,7 @@ export async function resolveMatrixInboundContext(config: {
   }
   const replySenderAllowed =
     !replyContext?.senderId || isRoomContextSenderAllowed(replyContext.senderId);
-  const roomInfo = isRoom ? await getRoomInfo(roomId) : undefined;
+  const roomInfo = isRoom ? await getRoomInfo(roomId, { currentName: true }) : undefined;
   const roomName = roomInfo?.name;
   const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
   const textWithId = `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;
@@ -277,7 +278,7 @@ export async function resolveMatrixInboundContext(config: {
       GroupChannel: isRoom ? roomId : undefined,
       GroupId: isRoom ? roomId : undefined,
       ...locationPayload?.context,
-      CommandSource: "text" as const,
+      CommandSource: isControlCommand ? ("text" as const) : undefined,
       NativeDirectUserId: isDirectMessage ? senderId : undefined,
     },
   });

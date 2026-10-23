@@ -71,6 +71,7 @@ const schemaMigrationDescriptions = {
   "local-client-credentials-v29": "client credentials and native socket material -> local owner",
   "automation-policy-fence-v30":
     "heartbeat monitors -> ordinary automation timing and delivery policy fence",
+  "local-workspace-manifests-v31": "local workspace baselines -> incremental checkpoint manifests",
   "subagent-operator-recovery-v25": "subagent recovery -> original operator authority required",
   "meeting-transcript-start-time": "meeting transcript start times -> persisted chronology",
   "predicate-columns-v21":

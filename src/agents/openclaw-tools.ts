@@ -1,14 +1,20 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
-import { createShowWidgetTool, hasRegisteredShowWidgetKinds } from "../canvas/widget-tool.js";
+import {
+  createShowWidgetTool,
+  hasRegisteredShowWidgetKinds,
+  resolveCurrentChannelWidgetPresenter,
+} from "../canvas/widget-tool.js";
 import { getRuntimeConfig, selectApplicableRuntimeConfig } from "../config/config.js";
 import { resolveControlUiSessionLinkBase } from "../config/control-ui-link-base.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
+import { resolveWidgetPresenters } from "../plugins/widget-presenters.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveSkillWorkshopToolConstructionBlock } from "../skills/workshop/tool-availability.js";
 import { hasMultipleSessionSharingIdentitiesNative } from "../state/user-profile-list.native.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { hasConfiguredWebSearchProvider } from "../web-search/runtime.js";
 import {
   resolveAgentDir,
@@ -21,10 +27,7 @@ import {
   resolveOpenClawPluginToolsForOptionsAsync,
 } from "./openclaw-plugin-tools.js";
 import { finalizeOpenClawTools } from "./openclaw-tools.finalize.js";
-import {
-  createHostedConversationTools,
-  createHostedGatewayTools,
-} from "./openclaw-tools.gateway.js";
+import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
   mergeFactoryPolicyList,
@@ -41,7 +44,6 @@ import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.j
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
 import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
-import { resolveWidgetPresentationForRun } from "./openclaw-tools.widget-presentation.js";
 import {
   withPreparedToolConstruction,
   type PreparedToolConstruction,
@@ -51,6 +53,7 @@ import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createAskUserTool } from "./tools/ask-user-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createComputerTool } from "./tools/computer-tool.js";
+import { createHostedConversationTools } from "./tools/conversation-tools.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createDecisionTool } from "./tools/decision-tool.js";
@@ -62,7 +65,6 @@ import {
   createGetGoalTool,
   createUpdateGoalTool,
 } from "./tools/goal-tools.js";
-import { resolveHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { callAgentToolGatewayRequest } from "./tools/in-process-gateway.js";
@@ -151,11 +153,7 @@ export async function createOpenClawToolsWithPreparation(
 }
 
 /** @deprecated Use createOpenClawToolsAsync for runtime construction. */
-export function createOpenClawTools(
-  options?: OpenClawToolsOptions,
-  preparedDelegateTools?: AnyAgentTool[],
-  preparedWebSearchConfigured?: boolean,
-): AnyAgentTool[] {
+export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentTool[] {
   const captured = { ...options };
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
@@ -168,8 +166,8 @@ export function createOpenClawTools(
   );
   const steps = createOpenClawToolsSteps(
     captured,
-    preparedDelegateTools,
-    preparedWebSearchConfigured,
+    undefined,
+    undefined,
     undefined,
     undefined,
     !isEmbeddedMode() && hasMultipleSessionSharingIdentitiesNative(),
@@ -224,7 +222,27 @@ function* createOpenClawToolsSteps(
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir ?? inferredWorkspaceDir);
   const spawnWorkspaceDir = resolveWorkspaceRoot(options?.spawnWorkspaceDir ?? workspaceDir);
   options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
-  const widgetPresentation = resolveWidgetPresentationForRun(options);
+  const widgetDeliveryContext = normalizeDeliveryContext({
+    channel: options?.agentChannel,
+    to: options?.agentTo ?? options?.currentMessagingTarget ?? options?.currentChannelId,
+    accountId: options?.agentAccountId,
+    threadId: options?.agentThreadId,
+  });
+  const widgetSessionKey = options?.runSessionKey ?? options?.agentSessionKey;
+  const widgetPresenterContext = {
+    messageChannel: options?.agentChannel,
+    accountId: options?.agentAccountId,
+    deliveryContext: widgetDeliveryContext,
+    nativeChannelId: options?.nativeChannelId,
+    currentChannelId: options?.currentChannelId,
+    currentMessagingTarget: options?.currentMessagingTarget,
+    sessionKey: widgetSessionKey,
+  };
+  const widgetPresenters = resolveWidgetPresenters().map((registration) => registration.presenter);
+  const currentChannelWidgetPresenter = resolveCurrentChannelWidgetPresenter(
+    widgetPresenters,
+    widgetPresenterContext,
+  );
   const inlineWidgetClientAvailable = options?.clientCaps?.includes("inline-widgets") === true;
   const sessionKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
@@ -283,7 +301,7 @@ function* createOpenClawToolsSteps(
     agentSessionKey: mediaGenerationAgentSessionKey,
     requesterRunSessionKey: trimmedRunSessionKey,
     requesterAgentId: sessionAgentId,
-    requesterOrigin: widgetPresentation.deliveryContext,
+    requesterOrigin: widgetDeliveryContext,
     workspaceDir,
     sandbox,
   };
@@ -375,7 +393,6 @@ function* createOpenClawToolsSteps(
           workspaceDir,
         },
       })[0] ?? null);
-  const heartbeatTool = resolveHeartbeatResponseTool(options);
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");
   const nodesToolBase = createNodesTool({
     ...options,
@@ -408,7 +425,7 @@ function* createOpenClawToolsSteps(
     (options?.pinnedWidgetAuthoring === true ||
       (options?.gatewayCallerScheduled === true && scheduledWidgetExplicitlyAllowed)) &&
     !inlineWidgetClientAvailable &&
-    !widgetPresentation.currentChannelPresenter &&
+    !currentChannelWidgetPresenter &&
     Boolean(sessionKey) &&
     !isCronRunSessionKey(sessionKey);
   const includeMessageTool =
@@ -511,7 +528,7 @@ function* createOpenClawToolsSteps(
     includeMessageTool ? messageTool : null,
     !isCoreCanvasHostEnabled(resolvedConfig) &&
     !hasRegisteredShowWidgetKinds() &&
-    !widgetPresentation.currentChannelPresenter
+    !currentChannelWidgetPresenter
       ? null
       : createShowWidgetTool({
           sessionId: options?.sessionId,
@@ -520,19 +537,18 @@ function* createOpenClawToolsSteps(
           inlineHostEnabled: isCoreCanvasHostEnabled(resolvedConfig),
           inlineClientAvailable: inlineWidgetClientAvailable,
           pinnedOnly: pinnedWidgetOnly,
-          presenters: widgetPresentation.presenters,
-          presenterContext: widgetPresentation.context,
+          presenters: widgetPresenters,
+          presenterContext: widgetPresenterContext,
         }),
-    heartbeatTool,
     createDecisionTool(sessionAgentId, options),
     createTtsTool({ ...options, agentId: sessionAgentId }),
     options?.githubPublicationAvailable !== undefined ? createGitHubIdentityStatusTool() : null,
     options?.githubPublicationAvailable === true ||
     (options?.githubPublicationAvailable === false && githubActionsAvailable)
       ? createGitHubPublishTool({
+          ...options,
           publicationAvailable: options.githubPublicationAvailable,
           actionsAvailable: githubActionsAvailable,
-          sandbox: options.sandbox,
         })
       : null,
     transcriptsTool,

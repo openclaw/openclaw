@@ -80,6 +80,8 @@ In the Control UI, an open automation refreshes its next-run time and condition 
 
 An authenticated channel sender explicitly listed in `commands.ownerAllowFrom`, or a Control UI administrator with `operator.admin`, can ask the agent to list, inspect, update, run, or remove any existing automation on that Gateway, regardless of its creator or channel. For example, ask it to disable a reminder created in Telegram. This matches the administrator's authority on the **Automations** page. Create command payloads through the operator CLI or Gateway API.
 
+When `tools.gatewayPolicy.automations.scope` is `"caller"`, model turns keep ordinary caller scope even for administrators and configured channel owners. `allowCommandJobs: false` additionally blocks model changes to and runs of command jobs. Direct human administration remains available. See [Gateway tool policy](/gateway/config-tools/tool-policy#automation-scope-and-command-jobs).
+
 Fresh authenticated Control UI administrator turns can also create ordinary automations through chat, including recurring agent turns in the current conversation with `timeoutSeconds: 0`. Creation keeps the caller's account/session ownership and captured tool restrictions. Remote administration does not grant local-host or provider-read authority, or permission to capture fresh configured-MCP execution authority. An incomplete tool capture still prevents inheriting an uncaptured tool surface.
 
 The Gateway grants this authority from the authenticated turn's admission facts. Each operation uses a one-use grant that expires after 60 seconds and remains bound to that exact active run. Channel owner membership is rechecked against the current global owner list when the capability is used and immediately before a mutation commits. Channel allowlists, wildcard entries, display names, account IDs, and session routes do not establish ownership. Other channel turns and Control UI turns without `operator.admin` receive no management grant. If access is denied or a grant expires, retry from a fresh authenticated configured channel owner or Control UI administrator turn, or use the **Automations** page.
@@ -227,7 +229,11 @@ Automation jobs, run history, and quarantined malformed jobs live in the shared 
 
 Set `cron.skipMissedJobs: true` to skip recurring (`cron` and `every`) slots missed while the Gateway was offline. At startup, those jobs advance to their next future occurrence instead of catching up, avoiding stale reminders and unnecessary model calls at the cost of dropping missed work. The default is `false` (catch up); one-shot (`at`) jobs retain their normal catch-up behavior either way.
 
-Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
+Disable automatic runs: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`. These settings do not prevent manual runs.
+
+A caller who can define a host-executed automation can make the Gateway start a process with its host privileges. That process can access credentials readable by the Gateway or alter configuration files writable by it. Direct file writes bypass Gateway API restrictions such as `OPENCLAW_CONFIG_READONLY` even when local terminals are disabled.
+
+To block this execution path, start the Gateway with `OPENCLAW_DISABLE_CRON_HOST_EXECUTION=1` in its launch environment. The Gateway refuses command and script payloads, condition triggers, `on-exit` schedules, and Gateway-hosted `stream` sources, including persisted and manually requested jobs. Scheduled agent turns and authorized sandbox-backed stream sources remain available. Existing blocked jobs can still be disabled or removed. Gateway configuration cannot change this control; change the launch environment and restart the Gateway to change it. The control does not govern tools used by agent turns or provide filesystem isolation.
 
 <AccordionGroup>
   <Accordion title="Retry behavior">

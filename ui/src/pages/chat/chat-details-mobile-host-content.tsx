@@ -113,8 +113,8 @@ function MobileHostContent(
     if (!data) {
       return undefined;
     }
-    const { rows, error, loading } = data.snapshot;
-    return { rows, error, loading, refresh: () => data.refresh() };
+    const { rows, error, errorKind, loading } = data.snapshot;
+    return { rows, error, errorKind, loading, refresh: () => data.refresh() };
   });
   const route = () => props.host.destination.page?.details;
   const activePeople = createMemo(() =>

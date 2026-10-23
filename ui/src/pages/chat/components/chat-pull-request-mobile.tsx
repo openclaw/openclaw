@@ -1,4 +1,4 @@
-import { For, Show, createSignal, onSettled } from "solid-js";
+import { Errored, For, latest, Show } from "solid-js";
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
@@ -7,10 +7,10 @@ import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { GitDiffValues } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { sessionPullRequestStateIcons } from "../../../lib/session-pull-request-presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
+import { createPullRequestCopy } from "./chat-pull-request-copy.ts";
 import { ChecksRows } from "./chat-pull-request-shared.tsx";
 import { chatPullRequestId } from "./chat-pull-requests.ts";
 import "./chat-pull-request-presenters.css";
@@ -23,7 +23,6 @@ registerGitHubEnglish();
 export type ChatPullRequestMobileRecoveryProps = {
   status: ControlUiSessionPullRequestSnapshot["status"];
   hasSnapshot: boolean;
-  lastUpdatedAt?: number;
   retrying: boolean;
   onRetry: () => void;
 };
@@ -58,17 +57,8 @@ export function ChatPullRequestMobileRecovery(
                   : "chat.pullRequests.couldNotLoad",
             )}
           </strong>
-          <Show when={props.hasSnapshot} fallback={<p>{t("chat.pullRequests.tryAgain")}</p>}>
-            <Show when={props.lastUpdatedAt !== undefined}>
-              <p>
-                {t("chat.pullRequests.lastUpdated", {
-                  time: new Date(props.lastUpdatedAt!).toLocaleTimeString(undefined, {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  }),
-                })}
-              </p>
-            </Show>
+          <Show when={!props.hasSnapshot}>
+            <p>{t("chat.pullRequests.tryAgain")}</p>
           </Show>
         </div>
         <button
@@ -165,37 +155,11 @@ export type ChatPullRequestMobileDetailProps = ChatPullRequestMobileRecoveryProp
 
 /** Body only: actual title, Back, scroll fades and presentation are owned by the mobile host. */
 export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailProps) {
-  const [copying, setCopying] = createSignal(false);
-  const [copyFailed, setCopyFailed] = createSignal(false);
-  let mounted = false;
-  onSettled(() => {
-    mounted = true;
-    return () => {
-      mounted = false;
-    };
+  const clipboard = createPullRequestCopy({
+    url: () => props.pullRequest?.url,
+    presented: () => props.hasSnapshot,
+    onCopied: () => showToast({ message: t("chat.pullRequests.linkCopied") }),
   });
-  const copy = async () => {
-    const pr = props.pullRequest;
-    if (!pr || copying()) {
-      return;
-    }
-    setCopying(true);
-    setCopyFailed(false);
-    const current = () => mounted && props.pullRequest?.url === pr.url;
-    const copied = await copyToClipboard(pr.url, current);
-    if (!mounted) {
-      return;
-    }
-    setCopying(false);
-    if (!current()) {
-      return;
-    }
-    if (copied) {
-      showToast({ message: t("chat.pullRequests.linkCopied") });
-    } else {
-      setCopyFailed(true);
-    }
-  };
   return (
     <div class="chat-pr-mobile">
       <ChatPullRequestMobileRecovery {...props} />
@@ -301,14 +265,24 @@ export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailPr
                 <span>{t("chat.pullRequests.openGitHub")}</span>
                 <Icon name="externalLink" />
               </a>
-              <button type="button" disabled={copying()} onClick={() => void copy()}>
+              <button
+                type="button"
+                disabled={clipboard.copying()}
+                onClick={() => void clipboard.copy()}
+              >
                 <Icon name="link" />
                 <span>{t("chat.pullRequests.copyLink")}</span>
               </button>
-              <Show when={copyFailed()}>
-                <p class="chat-pr-menu__error" role="alert">
-                  {t("chat.pullRequests.copyFailed")}
-                </p>
+              <Show when={!clipboard.copying()}>
+                <Errored
+                  fallback={
+                    <p class="chat-pr-menu__error" role="alert">
+                      {t("chat.pullRequests.copyFailed")}
+                    </p>
+                  }
+                >
+                  {latest(clipboard.outcome)}
+                </Errored>
               </Show>
               <button
                 type="button"

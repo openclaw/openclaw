@@ -1,6 +1,7 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createMemo, createStore, onSettled } from "solid-js";
+import { createDeferred } from "@solidjs/signals";
+import { action, createMemo, createOptimistic, createStore, onSettled } from "solid-js";
 import type { ApplicationContext, ApplicationGateway } from "../../../app/context.ts";
 import { hasOperatorReadAccess } from "../../../app/operator-access.ts";
 import {
@@ -10,13 +11,16 @@ import {
 import { t } from "../../../i18n/index.ts";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { currentConfigObject } from "../../../lib/config/config-state-model.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../../lib/gateway-page-binding.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
 import { projectOwner, projectMutableSource } from "../../../lib/reactive/projection.ts";
+import { showToast } from "../../../lib/toast.ts";
 import {
   canCallDreamingMethod,
+  clearSettledDreamingRead,
   copyDreamingArchivePath,
   createDreamingState,
   createDreamingViewState,
@@ -76,6 +80,11 @@ export function createAgentMemory(
   let pendingEnabled: boolean | null = null;
   let wikiPreview: WikiPreviewRequest | null = null;
   let pendingWikiRead: { request: WikiPreviewRequest } | null = null;
+  const [configOpenScope, setConfigOpenScope] = createOptimistic<DreamingState>();
+  const [configOpening, setConfigOpening] = createOptimistic(false);
+  const [diaryRequest, setDiaryRequest] = createOptimistic<DreamingState>();
+  const [diarySaving, setDiarySaving] = createOptimistic(false);
+  let diaryPresentationLifetime = Promise.withResolvers<void>();
   const [viewState, setViewState] = createStore(createDreamingViewState());
   function updateViewState(update: (draft: DreamingViewState) => void) {
     const now = Date.now();
@@ -97,17 +106,15 @@ export function createAgentMemory(
   const gateway = new GatewayPageBinding(notify, {
     getGateway: () => context.gateway,
     invalidateRequests: ({ identityChanged }) => {
+      retireDiaryPresentation();
       // Retain published data in a new owner; retired reads can only mutate the old state.
       dreaming = {
         ...dreaming,
+        resourceReads: {},
         get configSnapshot() {
           return context.runtimeConfig.state.configSnapshot;
         },
       };
-      dreaming.dreamingStatusLoading = false;
-      dreaming.dreamDiaryLoading = false;
-      dreaming.wikiImportInsightsLoading = false;
-      dreaming.wikiOverviewLoading = false;
       if (
         !identityChanged &&
         dreaming.dreamDiaryActionLoading &&
@@ -152,11 +159,44 @@ export function createAgentMemory(
   }
 
   function resetTransientState() {
+    retireDiaryPresentation();
     wikiPreview = null;
     pendingWikiRead = null;
     retireToggle();
     pendingEnabled = null;
   }
+
+  function retireDiaryPresentation() {
+    diaryPresentationLifetime.resolve();
+    diaryPresentationLifetime = Promise.withResolvers<void>();
+  }
+
+  const openConfig = async () => {
+    const scope = captureTaskScope();
+    if (!scope || !isTaskScopeCurrent(scope)) {
+      return;
+    }
+    const retired = diaryPresentationLifetime.promise;
+    const pending = Promise.race([context.runtimeConfig.openFile(), retired]);
+    // The runtime owner publishes admission before the presentation action starts.
+    await Promise.resolve();
+    await presentConfigOpen(scope, pending);
+  };
+
+  const presentConfigOpen = action(function* (scope: DreamingTaskScope, pending: Promise<unknown>) {
+    try {
+      if (isTaskScopeCurrent(scope)) {
+        setConfigOpenScope(scope.state);
+        setConfigOpening(true);
+      }
+      yield pending;
+    } catch (error) {
+      // Expected failures already use the runtime owner's toast contract.
+      if (isTaskScopeCurrent(scope)) {
+        showToast({ message: formatUiError(error) });
+      }
+    }
+  });
 
   function createGatewayState(snapshot = context.gateway.snapshot): DreamingState {
     return {
@@ -234,21 +274,34 @@ export function createAgentMemory(
     if (!scope || !(await showConfirmDialog(confirmation)) || !isTaskScopeCurrent(scope)) {
       return;
     }
-    await runDreamingTask(
+    await runDiaryAction(method, scope);
+  }
+
+  async function runDiaryAction(method: DreamDiaryActionMethod, scope = captureTaskScope()) {
+    if (!scope || !isTaskScopeCurrent(scope) || scope.state.dreamDiaryActionLoading) {
+      return;
+    }
+    const retired = diaryPresentationLifetime.promise;
+    const pending = runDreamingTask(
       (current) => runDreamDiaryAction(current, method, () => isTaskScopeCurrent(scope)),
       scope,
     );
+    // Publish owner admission before joining its operation to the presentation action.
+    await Promise.resolve();
+    await presentDiaryAction(scope, pending, retired);
   }
 
-  function runDiaryAction(method: DreamDiaryActionMethod) {
-    const scope = captureTaskScope();
-    return scope
-      ? runDreamingTask(
-          (current) => runDreamDiaryAction(current, method, () => isTaskScopeCurrent(scope)),
-          scope,
-        )
-      : undefined;
-  }
+  const presentDiaryAction = action(function* (
+    scope: DreamingTaskScope,
+    pending: Promise<unknown>,
+    retired: Promise<void>,
+  ) {
+    if (isTaskScopeCurrent(scope)) {
+      setDiaryRequest(scope.state);
+      setDiarySaving(true);
+    }
+    yield Promise.race([pending, retired]);
+  });
 
   async function loadResources(
     resource: DreamingResourceKey | "all" = "all",
@@ -288,6 +341,7 @@ export function createAgentMemory(
     }
     pendingEnabled = enabled;
     dreaming.dreamingStatusError = null;
+    clearSettledDreamingRead(dreaming, "dreamingStatus");
     notify();
   }
 
@@ -298,6 +352,7 @@ export function createAgentMemory(
     pendingEnabled = null;
     retireToggle();
     dreaming.dreamingStatusError = null;
+    clearSettledDreamingRead(dreaming, "dreamingStatus");
     notify();
   }
 
@@ -323,6 +378,7 @@ export function createAgentMemory(
     const request = { ...Promise.withResolvers<void>(), pending: true };
     toggleRequest = request;
     dreaming.dreamingStatusError = null;
+    clearSettledDreamingRead(dreaming, "dreamingStatus");
     // The dialog can disappear before it consumes a terminal rejection.
     void request.promise.catch(() => undefined);
     void updateToggle(scope, enabled)
@@ -406,11 +462,14 @@ export function createAgentMemory(
     // cached payload for a future refresh, but never present it as current runtime state.
     const dreamingStatus = configuredDreaming.engineOff ? null : dreaming.dreamingStatus;
     const dreamingOn = dreamingStatus?.enabled ?? configuredDreaming.enabled;
-    const loading = dreaming.dreamingStatusLoading || dreaming.dreamingModeSaving;
+    const loading =
+      (dreaming.resourceReads.dreamingStatus?.pending ?? false) || dreaming.dreamingModeSaving;
     const canUpdateConfig = canCallDreamingMethod(dreaming, "config.patch", "operator.admin");
     const canRunAction = (method: DreamDiaryActionMethod) =>
       canCallDreamingMethod(dreaming, method, "operator.write");
-    const refreshLoading = dreaming.dreamingStatusLoading || dreaming.dreamDiaryLoading;
+    const refreshLoading =
+      (dreaming.resourceReads.dreamingStatus?.pending ?? false) ||
+      (dreaming.resourceReads.dreamDiary?.pending ?? false);
 
     return {
       header: { configuredDreaming, dreamingOn, loading, canUpdateConfig, refreshLoading },
@@ -427,37 +486,31 @@ export function createAgentMemory(
         },
         active: dreamingOn,
         selectedAgentId: dreaming.selectedAgentId ?? "",
-        shortTermCount: dreamingStatus?.shortTermCount ?? 0,
-        promotedCount: dreamingStatus?.promotedToday ?? 0,
-        phases: dreamingStatus?.phases ?? undefined,
-        shortTermEntries: dreamingStatus?.shortTermEntries ?? [],
-        promotedEntries: dreamingStatus?.promotedEntries ?? [],
-        nextCycle: resolveDreamingNextCycle(dreamingStatus),
-        timezone: dreamingStatus?.timezone ?? null,
         statusError: dreaming.dreamingStatusError,
+        readStatus: () => readResource(resourceReads.dreamingStatus()),
+        readStatusData: () => statusDataRead(),
+        readDiary: () => readResource(resourceReads.dreamDiary()),
+        readImports: () => readResource(resourceReads.wikiImportInsights()),
+        readOverview: () => readResource(resourceReads.wikiOverview()),
         modeSaving: dreaming.dreamingModeSaving,
-        dreamDiaryLoading: dreaming.dreamDiaryLoading,
-        dreamDiaryActionLoading: dreaming.dreamDiaryActionLoading,
+        dreamDiaryLoading: dreaming.resourceReads.dreamDiary?.pending ?? false,
         dreamDiaryActionMessage: dreaming.dreamDiaryActionMessage,
         dreamDiaryActionArchivePath: dreaming.dreamDiaryActionArchivePath,
-        dreamDiaryError: dreaming.dreamDiaryError,
         dreamDiaryContent: dreaming.dreamDiaryContent,
         memoryWikiEnabled: isPluginEnabledInConfigSnapshot(
           configState.configSnapshot,
           "memory-wiki",
           { enabledByDefault: false },
         ),
-        wikiImportInsightsLoading: dreaming.wikiImportInsightsLoading,
-        wikiImportInsightsError: dreaming.wikiImportInsightsError,
+        wikiImportInsightsLoading: dreaming.resourceReads.wikiImportInsights?.pending ?? false,
         wikiImportInsights: dreaming.wikiImportInsights,
-        wikiOverviewLoading: dreaming.wikiOverviewLoading,
-        wikiOverviewError: dreaming.wikiOverviewError,
+        wikiOverviewLoading: dreaming.resourceReads.wikiOverview?.pending ?? false,
         wikiOverview: dreaming.wikiOverview,
         onRefreshDiary: () =>
           void runDreamingTask((current) => loadDreamingResource(current, "dreamDiary")),
         onRefreshImports: () => void loadResources("wikiImportInsights"),
         onRefreshWikiOverview: () => void loadResources("wikiOverview"),
-        onOpenConfig: () => void context.runtimeConfig.openFile(),
+        onOpenConfig: openConfig,
         onOpenWikiPage: openWikiPreview,
         onCloseWikiPreview: () => {
           wikiPreview = null;
@@ -550,6 +603,77 @@ export function createAgentMemory(
     }
   }
   const projection = projectMutableSource(context, read);
+  // Keep the action affordance outside the held owner snapshot and retire it on scope changes.
+  const diaryActionBusy = () => {
+    projection.revision();
+    return diaryRequest() === dreaming && diarySaving();
+  };
+  const diaryOutcome = createMemo(() => {
+    projection.revision();
+    return {
+      message: dreaming.dreamDiaryActionMessage,
+      archivePath: dreaming.dreamDiaryActionArchivePath,
+    };
+  });
+  function resourceRead<T>(key: DreamingResourceKey, readValue: (state: DreamingState) => T) {
+    const scope = createMemo(() => {
+      projection.revision();
+      return dreaming.resourceReads[key] ? dreaming : null;
+    });
+    const scoped = createMemo(() => {
+      const current = scope();
+      if (!current) {
+        return () => ({ value: readValue(dreaming) });
+      }
+      const request = createMemo(() => {
+        projection.revision();
+        return current.resourceReads[key];
+      });
+      const load = (): { value: T; error?: unknown } | Promise<{ value: T; error?: unknown }> => {
+        const issued = request();
+        return issued
+          ? issued.promise.then(
+              () => ({ value: readValue(current) }),
+              (error: unknown) => ({ value: readValue(current), error }),
+            )
+          : { value: readValue(current) };
+      };
+      const value = readValue(current);
+      // A new scope suspends its first read; same-agent reconnects retain accepted data.
+      return value === null
+        ? createDeferred(load)
+        : createDeferred(load, { loadingValue: { value } });
+    });
+    return () => scoped()();
+  }
+  function readResource<T>(result: { value: T; error?: unknown }): T {
+    if ("error" in result) {
+      throw result.error;
+    }
+    return result.value;
+  }
+  const resourceReads = {
+    dreamingStatus: resourceRead("dreamingStatus", (state) => state.dreamingStatus),
+    dreamDiary: resourceRead("dreamDiary", (state) => state.dreamDiaryContent),
+    wikiImportInsights: resourceRead("wikiImportInsights", (state) => state.wikiImportInsights),
+    wikiOverview: resourceRead("wikiOverview", (state) => state.wikiOverview),
+  };
+  const statusDataRead = createMemo(() => {
+    config.read();
+    const status = resolveConfiguredDreaming(currentConfigObject(context.runtimeConfig.state))
+      .engineOff
+      ? null
+      : resourceReads.dreamingStatus().value;
+    return {
+      shortTermCount: status?.shortTermCount ?? 0,
+      promotedCount: status?.promotedToday ?? 0,
+      phases: status?.phases,
+      shortTermEntries: status?.shortTermEntries ?? [],
+      promotedEntries: status?.promotedEntries ?? [],
+      nextCycle: resolveDreamingNextCycle(status),
+      timezone: status?.timezone ?? null,
+    };
+  });
   const wikiSource = createMemo(() => {
     projection.revision();
     return wikiPreview?.source ?? null;
@@ -574,6 +698,12 @@ export function createAgentMemory(
     };
   });
   return {
+    configOpening: () => {
+      projection.revision();
+      return configOpening() && configOpenScope() === dreaming;
+    },
+    diaryActionBusy,
+    diaryOutcome,
     loadResources,
     setEnabled,
     view() {

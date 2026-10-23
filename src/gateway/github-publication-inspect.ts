@@ -24,7 +24,7 @@ import {
 import { captureOwnGitHubPullRequestReader } from "./github-publication-inspect-reader.js";
 import {
   prepareGitHubPublicationRequesterV2,
-  type GitHubPublicationRequesterV2,
+  type GitHubPublicationRequesterPolicyV2,
 } from "./github-publication-requester.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
@@ -134,7 +134,7 @@ function refFacts(
 export async function inspectOwnGitHubPullRequest(params: {
   pullRequestUrl: string;
   agentId: string;
-  requester: GitHubPublicationRequesterV2;
+  requester: GitHubPublicationRequesterPolicyV2;
   assertCurrent: () => void;
 }): Promise<{ result: Inspection; assertCurrent: () => void }> {
   params.assertCurrent();

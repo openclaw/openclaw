@@ -93,15 +93,15 @@ export function createUpdateStateInspectionReporter(legacy = false) {
       return;
     }
     let line = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify(progress)}\n`;
-    if (legacy && emittedBytes + Buffer.byteLength(line) > 12_000) {
-      // Released parents cap stderr at 20 KB. Stop naming an active source once
-      // progress is suppressed, and leave room for the worker's final error.
-      exhausted = true;
+    const omitDetails = legacy && emittedBytes + Buffer.byteLength(line) > 12_000;
+    if (omitDetails) {
+      // Released parents cap stderr at 20 KB; reserve room for the worker's final error.
       line = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "schema inspection; detailed progress omitted" })}\n`;
     }
-    emittedBytes += Buffer.byteLength(line);
     try {
       writeSync(2, line);
+      emittedBytes += Buffer.byteLength(line);
+      exhausted = omitDetails;
     } catch (error) {
       // Advisory progress must not fail inspection when the nonblocking pipe is full.
       const code = extractErrorCode(error);

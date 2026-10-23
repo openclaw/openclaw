@@ -33,6 +33,7 @@ import {
   workerStartupCredential,
 } from "./server-worker-environment-startup.runtime.test-support.js";
 import { withGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.state.test-support.js";
+import { gatewayTestTextTransport } from "./server/connection-transport.test-support.js";
 import { createWorkerProjectPreparation } from "./worker-environments/project-preparation.js";
 import { createProjectPreparationFixture } from "./worker-environments/project-preparation.test-support.js";
 import * as serviceModule from "./worker-environments/service.js";
@@ -170,7 +171,7 @@ async function createPreparedNodeAcknowledgement(root: string, cleanup: AsyncDis
   const socket = await connected;
   nodeRegistry.register(
     makeClient(connId, nodeId, [], {
-      socket,
+      socket: gatewayTestTextTransport(socket),
       clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
       version: "test",
       platform: "test",

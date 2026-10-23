@@ -5,7 +5,11 @@ import { generateUUID } from "../../lib/uuid.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { isTerminalFailureChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
+import {
+  formatTerminalChatSendAckError,
+  isTerminalFailureChatSendAck,
+  type ChatSendAck,
+} from "./chat-send-ack.ts";
 import {
   settleChatCommandComposer,
   submittedCommandScopeIsVisible,
@@ -17,10 +21,7 @@ import {
   requestChatSend,
   resolveDisplayedLeafEntryId,
 } from "./chat-send-request.ts";
-import {
-  formatTerminalChatSendAckError,
-  UNCONFIRMED_CHAT_SEND_ERROR,
-} from "./chat-send-support.ts";
+import { UNCONFIRMED_CHAT_SEND_ERROR } from "./chat-send-support.ts";
 import { formatConnectError } from "./connect-error.ts";
 
 export async function sendDetachedCommandMessage(

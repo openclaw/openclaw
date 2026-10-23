@@ -7,7 +7,7 @@ import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway, projectMentions, projectOverlays } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { projectAgents, projectAgentIdentity } from "../lib/reactive/domain-capabilities.ts";
@@ -52,6 +52,7 @@ export type SidebarAttentionPanelPosition = { left: number } & (
 );
 export type SidebarAttentionPanelParams = {
   entries: readonly SidebarInboxEntry[];
+  approvalPending?: boolean;
   onApprovalDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
   onClose: () => void;
   onDismiss: (dismissal: SidebarAttentionDismissal) => void;
@@ -140,6 +141,7 @@ function SidebarInboxItem(props: {
         {(entry) => (
           <SidebarApprovalItem
             approval={entry().approval}
+            pending={props.panel.approvalPending}
             context={props.readContext()}
             onNavigate={(route, options) => props.panel.onNavigate(route, options)}
             onDecision={props.panel.onApprovalDecision}
@@ -360,13 +362,9 @@ export function SidebarAttentionPanel(
                   class="sidebar-brand__icon"
                   aria-label={t("attention.mentions.notifications")}
                   href={pathForRoute("notifications", context.basePath)}
-                  onClick={(event) => {
-                    if (!shouldHandleNavigationClick(event)) {
-                      return;
-                    }
-                    event.preventDefault();
-                    props.onNavigate("notifications");
-                  }}
+                  onClick={(event) =>
+                    handleNavigationClick(event, () => props.onNavigate("notifications"))
+                  }
                 >
                   <Icon name="settings" />
                 </a>

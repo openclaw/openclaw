@@ -884,11 +884,14 @@ describe("openSessionWorkspaceFile", () => {
 
       const container = document.createElement("div");
       const updateRail = mountWorkspaceRail(container, state);
-      const row = container.querySelector<HTMLButtonElement>(
-        ".chat-workspace-rail__list--browser .chat-workspace-rail__file-open",
-      );
-      expect(row).toBeInstanceOf(HTMLButtonElement);
-      row!.click();
+      const row = await waitForSolid(() => {
+        const button = container.querySelector<HTMLButtonElement>(
+          ".chat-workspace-rail__list--browser .chat-workspace-rail__file-open",
+        );
+        expect(button).toBeInstanceOf(HTMLButtonElement);
+        return button!;
+      });
+      row.click();
 
       await vi.waitFor(() => expect(getFile).toHaveBeenCalledOnce());
       expect(getFile.mock.calls[0]?.[1]).toBe(expected);

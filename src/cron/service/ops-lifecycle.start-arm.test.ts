@@ -63,7 +63,6 @@ it.each([false, true])(
       log,
       enqueueSystemEvent: vi.fn(),
       runSessionEvent,
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
     gateway.state = {

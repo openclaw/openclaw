@@ -1,11 +1,7 @@
 import type { SessionsCompanionStateResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
-import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
-import { shellViewport, type ShellViewportSnapshot } from "../../app/shell-viewport.ts";
-import { t } from "../../i18n/index.ts";
-import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { shellViewport } from "../../app/shell-viewport.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { buildCompanionQuestionPrefill } from "../../lib/chat/companion-question.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
@@ -20,7 +16,6 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { formatChatSelectionAnnotation } from "./components/chat-selection-attachment.ts";
 import type { SidebarLayout, SidebarSlotId } from "./sidebar-layout-types.ts";
 import {
   closeSlot,
@@ -34,8 +29,6 @@ import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   sidebarMainPanel,
 } from "./sidebar-layout.ts";
-
-registerChatSessionEnglish();
 
 export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
   sidebarRegionElement: HTMLElement | null = null;
@@ -160,16 +153,12 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
           return;
         }
         this.mobilePresentation.height = height;
-        if (mode) {
-          this.mobilePresentation.mode = mode;
-        }
-        if (reservedHeight !== undefined) {
-          this.mobilePresentation.reservedHeight = reservedHeight;
-        }
+        this.mobilePresentation.mode = mode;
+        this.mobilePresentation.reservedHeight = reservedHeight;
       },
-      keyboardVisible: shellViewport.snapshot?.keyboardVisible,
+      keyboardVisible:
+        this.mobilePresentation.publishedKeyboard ?? shellViewport.snapshot?.keyboardVisible,
       onComposerEditingChange: this.onMobileComposerEditingChange,
-      onViewportChange: this.onMobileViewportChange,
     };
   }
 
@@ -204,10 +193,11 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
     if (previousSuspended !== this.mobilePresentation.suspended) {
       this.syncMobileObserverVisibility();
     }
-    this.onMobileViewportChange(viewport);
+    this.onMobileViewportChange();
   };
 
-  private readonly onMobileViewportChange = (viewport: ShellViewportSnapshot | undefined): void => {
+  private readonly onMobileViewportChange = (): void => {
+    const viewport = shellViewport.snapshot;
     const recovery = this.mobilePresentation.viewportRecovery;
     const previousSuspended = this.mobilePresentation.suspended;
     if (viewport && recovery && this.mobilePresentation.suspended && viewport.nativeScale) {
@@ -240,6 +230,11 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       this.mobilePresentation.publishedKeyboard = viewport?.keyboardVisible;
     }
   };
+
+  observeMobileViewport(): () => void {
+    this.onMobileViewportChange();
+    return shellViewport.subscribe(this.onMobileViewportChange);
+  }
 
   protected navigateMobileHost(destination: MobileHostDestination, source?: HTMLElement): void {
     if (!this.usesMobileHost) {
@@ -587,28 +582,14 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
     }
     const agentId = resolveChatAgentId(state);
     const thread = this.sessionCompanionThreads.view(sourceSessionKey, agentId);
-    const nextAttachments = [...(thread.attachments ?? []), attachment];
-    // Only an oversized passage gets the old quote-only path; comments stay correctable.
     if (
-      formatChatSelectionAnnotation({ ...attachment.selectionAnnotation, comment: "" }).length >
-      SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS
-    ) {
-      showToast({
-        message: t(
-          thread.draft.trim() ? "chat.rail.selectionTooLong" : "chat.rail.selectionQuoteOnly",
-        ),
-      });
-    } else if (
-      !this.sessionCompanionThreads.setAttachments(sourceSessionKey, nextAttachments, agentId)
+      !this.sessionCompanionThreads.setAttachments(
+        sourceSessionKey,
+        [...(thread.attachments ?? []), attachment],
+        agentId,
+      )
     ) {
       return false;
-    }
-    if (!thread.draft.trim()) {
-      this.sessionCompanionThreads.setDraft(
-        sourceSessionKey,
-        buildCompanionQuestionPrefill(attachment.selectionAnnotation.text) ?? "",
-        agentId,
-      );
     }
     this.requestSessionRail("open");
     return true;

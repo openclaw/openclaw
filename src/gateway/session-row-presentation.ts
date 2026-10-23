@@ -225,15 +225,15 @@ export function prepareSessionRowPublication(
     const recipient = prepareSessionRowRecipient(read, client, view);
     let presentation: ReturnType<typeof prepareProjectedSessionPresentation> | undefined;
     return {
-      get audienceKey() {
+      getAudienceKey() {
         return JSON.stringify([
-          recipient.sharing.cacheKey,
+          recipient.sharing.getCacheKey(),
           recipient.presentFastMode("ultrafast"),
           recipient.publicationState?.factsRevision,
         ]);
       },
       // Event fanout needs display structures only on an audience miss, after live authority.
-      get presentation() {
+      getPresentation() {
         return (presentation ??= prepareProjectedSessionPresentation(
           read,
           client,
@@ -324,7 +324,7 @@ export function prepareProjectedSessionPresentation(
     }
     const key = JSON.stringify([
       client === undefined,
-      sharing.cacheKey,
+      sharing.getCacheKey(),
       presentFastMode("ultrafast"),
       Object.entries(query).toSorted(([left], [right]) => left.localeCompare(right)),
     ]);

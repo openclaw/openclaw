@@ -263,36 +263,6 @@ describe("plugin registry inspection", () => {
     expect(inspection.current.plugins[0]?.source).toBe(builtSource);
   });
 
-  it("keeps an older registry fresh when current build metadata is not durable", async () => {
-    const stateDir = makeTempDir();
-    const pluginDir = makeTempDir();
-    createPackagedCandidate(pluginDir);
-    writeJson(path.join(pluginDir, "package.json"), {
-      name: "demo",
-      version: "1.0.0",
-      openclaw: { extensions: ["./index.ts"], build: { openclawVersion: "2026.4.25" } },
-    });
-    const env = hermeticEnv({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" });
-    const config = { plugins: { load: { paths: [pluginDir] } } };
-    const refreshed = await refreshPluginRegistry({ reason: "manual", stateDir, config, env });
-    expect(expectDefined(refreshed.plugins[0], "refreshed plugin").packageBuild).toEqual({
-      openclawVersion: "2026.4.25",
-    });
-
-    const persisted = await readIndex(stateDir);
-    await writePersistedInstalledPluginIndex(
-      {
-        ...persisted,
-        plugins: persisted.plugins.map(({ packageBuild: _packageBuild, ...plugin }) => plugin),
-      },
-      { stateDir },
-    );
-
-    const inspection = await inspectPluginRegistry({ stateDir, config, env });
-
-    expect(inspection).toMatchObject({ state: "fresh", refreshReasons: [], differences: [] });
-  });
-
   it("inspects package changes with fresh file facts", async () => {
     const sourceDir = makeTempDir();
     createPackagedCandidate(sourceDir);

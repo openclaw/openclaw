@@ -269,12 +269,15 @@ test.each(["lifecycle", "outstanding"] as const)(
         expect(laterParentTurn).toContain(CHILD_SESSION_KEY);
         expect(laterParentTurn).not.toContain("## Active Subagents");
       } finally {
-        if (gateway) {
-          await disconnectGatewayClient(gateway.client).catch(() => undefined);
-          await gateway.server.close({ reason: "subagent prompt recent proof complete" });
+        try {
+          if (gateway) {
+            await disconnectGatewayClient(gateway.client).catch(() => undefined);
+            await gateway.server.close({ reason: "subagent prompt recent proof complete" });
+          }
+          await closeProvider(providerServer);
+        } finally {
+          env.restore();
         }
-        await closeProvider(providerServer);
-        env.restore();
       }
     });
   },

@@ -11,6 +11,7 @@ import {
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { createOAuthRefreshError } from "../../shared/oauth-refresh-outcome.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -134,6 +135,49 @@ afterEach(async () => {
 });
 
 describe("createOAuthManager", () => {
+  it("preserves the stored refresh credential after transient failures and recovers on next use", async () => {
+    await withOAuthAgentDirs("oauth-manager-transient-", async ({ mainAgentDir }) => {
+      const profileId = "xai:default";
+      const original = createCredential({
+        provider: "xai",
+        expires: Date.now() - 60_000,
+        accountId: "acct-transient",
+      });
+      const rotated = {
+        ...original,
+        access: "rotated-access",
+        refresh: "rotated-refresh",
+        expires: Date.now() + 600_000,
+      };
+      const failure = createOAuthRefreshError("OAuth dispatch did not start", {
+        version: 1,
+        phase: "before-dispatch",
+        outcome: "not-attempted",
+        recovery: { kind: "later", evidence: "dispatch-not-started" },
+      });
+      const refreshCredential = vi
+        .fn()
+        .mockRejectedValueOnce(failure)
+        .mockResolvedValueOnce(rotated);
+      const manager = createTestManager({ refreshCredential });
+      saveCredential(profileId, original, mainAgentDir);
+      await expect(resolve(manager, profileId, original, mainAgentDir)).rejects.toThrow(
+        "dispatch did not start",
+      );
+      const persisted = loadPersistedAuthProfileStore(mainAgentDir)!;
+      expect(persisted.profiles[profileId]).toEqual(original);
+      expect(persisted.usageStats?.[profileId]).toBeUndefined();
+      await expect(resolve(manager, profileId, original, mainAgentDir)).resolves.toMatchObject({
+        apiKey: rotated.access,
+      });
+      expect(refreshCredential).toHaveBeenCalledTimes(2);
+      expect(refreshCredential.mock.calls[1]?.[0]).toEqual(original);
+      expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toMatchObject(
+        rotated,
+      );
+    });
+  });
+
   it("serializes personal refreshes without CLI bootstrap or shared copies", async () => {
     const provider = "xai";
     const metadata = {

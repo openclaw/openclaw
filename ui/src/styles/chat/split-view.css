@@ -1183,7 +1183,7 @@
   text-align: center;
 }
 
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-empty > span + span {
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-empty > span:where(:not(:first-child)) {
   font-size: 11px;
 }
 

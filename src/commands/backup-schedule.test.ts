@@ -367,7 +367,6 @@ describe("scheduled backups", () => {
         cronEnabled: false,
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: runJob,
         runCommandJob: runJob,
       });

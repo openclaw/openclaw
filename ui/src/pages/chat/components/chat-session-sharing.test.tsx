@@ -1,8 +1,10 @@
 import { createSignal, flush } from "solid-js";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { ChatSessionSharing, type ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
+import type { ChatSessionSharingProps } from "./chat-session-sharing-shared.tsx";
+import { ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
 
 function renderSharing(props: Partial<ChatSessionSharingProps>) {
   return {
@@ -99,7 +101,10 @@ async function openMenu(root: HTMLElement) {
   const trigger = root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger");
   if (panel && trigger && !trigger.disabled && !panel.matches(":popover-open")) {
     trigger.click();
-    await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(true));
+    await waitForSolid(() => {
+      expect(panel.matches(":popover-open")).toBe(true);
+      expect(panel.querySelector('[data-value="access"]')).not.toBeNull();
+    });
   }
   return panel;
 }
@@ -265,6 +270,59 @@ describe("chat session sharing menu", () => {
     expect(part(root, "sharing-panel")?.matches(":popover-open")).toBe(true);
   });
 
+  it("keeps the empty permissions status on command failure and clears it during retry", async () => {
+    const retry = createDeferred<{ status: "success" }>();
+    const onPublicShareChange = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Sharing command failed"))
+      .mockReturnValueOnce(retry.promise);
+    const root = await mount({ state: sharingState(), onPublicShareChange });
+    const toggle = root.querySelector<HTMLButtonElement>(".chat-pane__sharing-public-toggle")!;
+    expect(part(root, "sharing-permissions")).toBeNull();
+    toggle.click();
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain("Sharing command failed");
+      expect(part(root, "sharing-permissions")).not.toBeNull();
+      expect(part(root, "sharing-empty")).not.toBeNull();
+    });
+    toggle.click();
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')).toBeNull();
+      expect(part(root, "sharing-permissions")).toBeNull();
+      expect(toggle.disabled).toBe(true);
+    });
+    retry.resolve({ status: "success" });
+    await waitForSolid(() => expect(toggle.disabled).toBe(false));
+  });
+
+  it("retains the copy control and clears its failure while a retry is pending", async () => {
+    const retry = createDeferred<{ status: "success" }>();
+    const onCopyPublicLink = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "failed", error: "Clipboard unavailable" })
+      .mockReturnValueOnce(retry.promise);
+    const root = await mount({
+      state: { ...sharingState({ publicShare }), publicUrl: "https://example.test/shared" },
+      onCopyPublicLink,
+    });
+    const copy = item(root, "public:copy")!;
+    copy.click();
+    await waitForSolid(() =>
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain("Clipboard unavailable"),
+    );
+    expect(item(root, "public:copy")).toBe(copy);
+    copy.click();
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')).toBeNull();
+      expect(copy.disabled).toBe(true);
+    });
+    retry.resolve({ status: "success" });
+    await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
+    expect(item(root, "public:copy")).toBe(copy);
+    expect(copy.disabled).toBe(false);
+    expect(part(root, "sharing-panel")?.matches(":popover-open")).toBe(true);
+  });
+
   it.each(["loading", "read-only", "member"] as const)(
     "refuses public mutations for %s controls",
     async (blocked) => {
@@ -285,6 +343,45 @@ describe("chat session sharing menu", () => {
       expect(onPublicShareChange).not.toHaveBeenCalled();
     },
   );
+
+  it("uses read readiness and retains the roster and search through a failed refresh", async () => {
+    const initialRead = createDeferred();
+    const props = renderSharing({ state: { loading: false, read: initialRead.promise } });
+    const root = await mount(props);
+    expect(root.querySelector('[role="status"][aria-label="Loading…"]')).not.toBeNull();
+    expect(item(root, "member:alice")).toBeNull();
+    const ready = renderSharing({ state: sharingState({ identities: [human("alice", "Alice")] }) });
+    render(ready, root);
+    initialRead.resolve();
+    await waitForSolid(() => expect(item(root, "member:alice")).not.toBeNull());
+    const person = item(root, "member:alice");
+    root.querySelector<HTMLButtonElement>('[aria-label="Search people…"]')!.click();
+    await waitForSolid(() => expect(root.querySelector("input[type=search]")).not.toBeNull());
+    const search = root.querySelector<HTMLInputElement>("input[type=search]")!;
+    search.value = "Ali";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    const refresh = createDeferred();
+    render({ ...ready, state: { ...ready.state!, loading: true, read: refresh.promise } }, root);
+    expect(item(root, "member:alice")).toBe(person);
+    expect(root.querySelector("input[type=search]")).toBe(search);
+    expect(search.value).toBe("Ali");
+    render({ ...ready, state: { ...ready.state!, error: "Membership refresh failed" } }, root);
+    refresh.resolve();
+    await waitForSolid(() =>
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain(
+        "Membership refresh failed",
+      ),
+    );
+    expect(item(root, "member:alice")).toBe(person);
+    expect(root.querySelector("input[type=search]")).toBe(search);
+    const retry = createDeferred();
+    render({ ...ready, state: { ...ready.state!, loading: true, read: retry.promise } }, root);
+    render(ready, root);
+    retry.resolve();
+    await waitForSolid(() => expect(root.querySelector('[role="alert"]')).toBeNull());
+    expect(item(root, "member:alice")).toBe(person);
+    expect(search.value).toBe("Ali");
+  });
 
   it("shows the owner picker with policy-gated modes and known identities", async () => {
     const onVisibilityChange = vi.fn();
@@ -457,17 +554,46 @@ describe("chat session sharing menu", () => {
       false,
     );
     expect(part(root, "sharing-permissions")).toBeNull();
-    expect(root.textContent).not.toContain("Message permissions");
+    expect(root.textContent).not.toContain("Session members");
     await openAccess(root);
     expect(item(root, "visibility:read-only")).not.toBeNull();
 
     await select(root, "visibility:read-only");
     await backToOverview(root);
     expect(part(root, "sharing-permissions")).toBeNull();
-    expect(root.textContent).not.toContain("Message permissions");
+    expect(root.textContent).not.toContain("Session members");
 
     expect(onOpen).toHaveBeenCalledOnce();
     expect(onVisibilityChange).toHaveBeenCalledWith("read-only");
+  });
+
+  it("retains the access controls through a rejected command and held retry", async () => {
+    const failed = createDeferred();
+    const retry = createDeferred();
+    const change = vi.fn().mockReturnValueOnce(failed.promise).mockReturnValueOnce(retry.promise);
+    const root = await mount({
+      allowedVisibilities: ["shared", "read-only"],
+      onVisibilityChange: change,
+    });
+    await select(root, "visibility:read-only");
+    const button = item(root, "visibility:read-only");
+    expect(button?.disabled).toBe(true);
+    failed.reject(new Error("Sharing command rejected"));
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain(
+        "Sharing command rejected",
+      );
+      expect(button?.disabled).toBe(false);
+    });
+    button!.click();
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')).toBeNull();
+      expect(item(root, "visibility:read-only")).toBe(button);
+      expect(button?.disabled).toBe(true);
+    });
+    retry.resolve();
+    await waitForSolid(() => expect(button?.disabled).toBe(false));
+    expect(item(root, "visibility:read-only")).toBe(button);
   });
 
   it("shows rejected sharing changes for visibility-only Gateways", async () => {

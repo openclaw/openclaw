@@ -40,10 +40,10 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service.js")>()),
   resolveGatewayService: mocks.service,
 }));
-vi.mock("../../daemon/schtasks.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/schtasks.js")>()),
+vi.mock("../../daemon/schtasks-control.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/schtasks-control.js")>()),
   suspendScheduledTaskAutoStartForUpdate: vi.fn<
-    typeof import("../../daemon/schtasks.js").suspendScheduledTaskAutoStartForUpdate
+    typeof import("../../daemon/schtasks-control.js").suspendScheduledTaskAutoStartForUpdate
   >(async (_env, options) => {
     const enabled = mocks.enabled;
     if (enabled) {
@@ -53,7 +53,7 @@ vi.mock("../../daemon/schtasks.js", async (importOriginal) => ({
     return enabled;
   }),
   resumeScheduledTaskAutoStartAfterUpdate: vi.fn<
-    typeof import("../../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate
+    typeof import("../../daemon/schtasks-control.js").resumeScheduledTaskAutoStartAfterUpdate
   >(async (_env, options) => {
     await options?.beforeMutation?.();
     mocks.enabled = true;

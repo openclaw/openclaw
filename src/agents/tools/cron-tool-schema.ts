@@ -12,6 +12,7 @@ import {
   optionalStringEnum,
   stringEnum,
 } from "../schema/typebox.js";
+import { CRON_SCOPED_READ_ACTIONS } from "./automations-tool-name.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 
 export const REMINDER_CONTEXT_MESSAGES_MAX = 10;
@@ -36,9 +37,6 @@ const CRON_ACTIONS = [
 
 const CRON_SELF_ACTIONS = ["status", "list", "get", "remove", "runs"] as const;
 
-// Scheduler status exposes global metadata; recovery inspects caller-visible records only.
-export const CRON_SCOPED_READ_ACTIONS: readonly string[] = ["list", "get", "runs"];
-
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream", "event"] as const;
 // When cron.triggers.enabled is explicitly false, the scheduler rejects
 // stream schedules, script payloads, and condition triggers, so the
@@ -54,6 +52,7 @@ type CronToolSchemaOptions = {
   readOnly?: boolean;
   agentSessionKey?: string;
   management?: "only" | "also";
+  allowCommandJobs?: boolean;
   selfRemoveOnly?: boolean;
   activeRun?: boolean;
   nextCheckEnabled?: boolean;
@@ -366,6 +365,7 @@ const cronToolSchemas = createCachedToolSchema({
     JSON.stringify([
       options?.triggersEnabled !== false,
       options?.management ?? null,
+      options?.allowCommandJobs !== false,
       options?.selfRemoveOnly === true,
       options?.readOnly === true,
       options?.activeRun === true,
@@ -410,7 +410,10 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
             { additionalProperties: false },
           ),
         ),
-        schedule: createCronScheduleSchema({ triggersEnabled, management }),
+        schedule: createCronScheduleSchema({
+          triggersEnabled,
+          management: management && options?.allowCommandJobs !== false,
+        }),
         pacing: createCronPacingSchema(),
         activeHours: Type.Optional(
           Type.Union([
@@ -433,7 +436,10 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           }),
         ),
         wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "Wake timing" }),
-        payload: createCronPayloadSchema({ triggersEnabled, management }),
+        payload: createCronPayloadSchema({
+          triggersEnabled,
+          management: management && options?.allowCommandJobs !== false,
+        }),
         delivery: createCronDeliverySchema(),
         // Session-scoped updates reject retargeting; do not advertise it to the model.
         ...(management || !options?.agentSessionKey?.trim()

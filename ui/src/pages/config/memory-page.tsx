@@ -1,6 +1,14 @@
 import type { JSX } from "@solidjs/web";
 // The URL owns the active tab; Settings owners supply agent and configuration state.
-import { createMemo, createSignal, createStore, onSettled, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  createStore,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { ControlUiSettingsSnapshot } from "../../../../src/plugin-sdk/control-ui-settings.js";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -30,6 +38,7 @@ import { AgentMemoryPanel } from "../agents/memory/memory-panel.tsx";
 import { createCuratedSettingsEditor } from "./curated-settings-editor.ts";
 import { curatedSettingsPresentation } from "./curated-settings-presentation.ts";
 import { CuratedSettingsPanel } from "./curated-settings.tsx";
+import { memoryAddonPresentations } from "./memory-addon-presentation.ts";
 import {
   memoryTabForRoute,
   resolveMemoryEngineSelection,
@@ -98,21 +107,60 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   const catalogSource = projectMutableSource(catalogState, (state) => state);
   const catalog = createMemo(async () => catalogSource.read().read);
   let pageConnection: CatalogConnection | null = null;
+  let mutationPresentationLifetime = Promise.withResolvers<void>();
+  function retireMutationPresentation() {
+    mutationPresentationLifetime.resolve();
+    mutationPresentationLifetime = Promise.withResolvers<void>();
+  }
   const catalogScope = createMemo(() => {
     catalogSource.revision();
     return pageConnection;
   });
 
-  const [engineBusy, setEngineBusy] = createSignal(false);
+  function createMutation<T extends string | boolean>() {
+    const presentation = createMemo(() => {
+      const connection = catalogScope();
+      const [preview, setPreview] = createOptimistic<T>();
+      const [saving, setSaving] = createOptimistic(false);
+      return { connection, preview, setPreview, saving, setSaving };
+    });
+    const current = () => {
+      const view = presentation();
+      return view.connection === pageConnection ? view.preview() : undefined;
+    };
+    return {
+      current,
+      capture: presentation,
+      busy: () => {
+        const view = presentation();
+        return view.connection === pageConnection && view.saving();
+      },
+      run: action(function* (
+        view: ReturnType<typeof presentation>,
+        value: T,
+        pending: Promise<void>,
+        retired: Promise<void>,
+      ) {
+        if (view.connection === pageConnection) {
+          view.setPreview(() => value);
+          view.setSaving(true);
+        }
+        yield Promise.race([pending, retired]);
+      }),
+    };
+  }
+  const engineMutation = createMutation<string>();
+  const addonMutations = new Map(
+    memoryAddonPresentations.map(({ id }) => [id, createMutation<boolean>()]),
+  );
 
   const [engineOutcome, setEngineOutcome] = createSignal<MemoryEngineOutcome | null>(null);
 
   const [addonOutcomes, setAddonOutcomes] = createStore<{
-    busy: Partial<Record<string, true>>;
     errors: Partial<Record<string, string>>;
     notices: Partial<Record<string, MemoryAddonNotice>>;
     refreshWarnings: Partial<Record<string, string>>;
-  }>({ busy: {}, errors: {}, notices: {}, refreshWarnings: {} });
+  }>({ errors: {}, notices: {}, refreshWarnings: {} });
 
   let settingsEpoch = 0;
   const settingsListeners = new Set<() => void>();
@@ -157,6 +205,9 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
 
   function syncGateway(snapshot: ApplicationGatewaySnapshot) {
     const { client } = snapshot;
+    if (!readGatewayOperatorAccess(snapshot).canAdmin) {
+      retireMutationPresentation();
+    }
     const connected = snapshot.phase === "connected";
     const bootId = snapshot.hello?.server?.bootId;
     const generation = snapshot.pluginCapabilities?.generation;
@@ -177,11 +228,10 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       connected,
       bootId,
     };
+    retireMutationPresentation();
     pageConnection = connection;
-    setEngineBusy(false);
     setEngineOutcome(null);
     setAddonOutcomes((draft) => {
-      draft.busy = {};
       draft.refreshWarnings = {};
     });
     retireSettingsReads();
@@ -243,6 +293,9 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     if (!active || pageConnection !== connection || pageCatalogRequest !== request) {
       return;
     }
+    if (nextCatalog.kind === "ready" && !nextCatalog.mutationAllowed) {
+      retireMutationPresentation();
+    }
     catalogState.value = nextCatalog;
     catalogState.read = read;
     catalogSource.publish();
@@ -289,8 +342,10 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   }
 
   async function changeAddon(pluginId: string, enabled: boolean) {
+    const addonMutation = addonMutations.get(pluginId);
     if (
-      addonOutcomes.busy[pluginId] ||
+      !addonMutation ||
+      addonMutation.busy() ||
       props.mutationDisabled ||
       catalogState.value.kind !== "ready" ||
       !catalogCanMutate() ||
@@ -308,62 +363,65 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     const noticeOperation = {};
     addonNoticeOperations.set(pluginId, noticeOperation);
     setAddonOutcomes((draft) => {
-      draft.busy[pluginId] = true;
       delete draft.errors[pluginId];
       delete draft.refreshWarnings[pluginId];
     });
-    try {
-      const mutation = await runPluginConfigMutation(
-        application.runtimeConfig,
-        client,
-        async (current) => {
-          const bootId = application.gateway.snapshot.hello?.server?.bootId;
-          return {
-            result: await setPluginEnabled(current, pluginId, enabled),
-            bootId,
-          };
-        },
-        {
-          canDispatch: () => canDispatchPluginMutation(connection),
-        },
-      );
-      const { result, bootId } = mutation.value;
-      const warnings = "warnings" in result ? (result.warnings ?? []) : [];
-      const notice = warnings.join(" ");
-      if (addonNoticeOperations.get(pluginId) === noticeOperation) {
-        applyPluginRefreshOutcome(connection, mutation.refreshError, pluginId);
-        const currentBootId = application.gateway.snapshot.hello?.server?.bootId;
-        const keepNotice =
-          notice &&
-          (bootId && currentBootId ? bootId === currentBootId : pageConnection === connection);
-        setAddonOutcomes((draft) => {
-          if (keepNotice) {
-            draft.notices[pluginId] = { message: notice, bootId };
-          } else {
-            delete draft.notices[pluginId];
+    const view = addonMutation.capture();
+    const retired = mutationPresentationLifetime.promise;
+    const pending = (async () => {
+      try {
+        const mutation = await runPluginConfigMutation(
+          application.runtimeConfig,
+          client,
+          async (current) => {
+            const bootId = application.gateway.snapshot.hello?.server?.bootId;
+            return {
+              result: await setPluginEnabled(current, pluginId, enabled),
+              bootId,
+            };
+          },
+          {
+            canDispatch: () => canDispatchPluginMutation(connection),
+          },
+        );
+        const { result, bootId } = mutation.value;
+        const warnings = "warnings" in result ? (result.warnings ?? []) : [];
+        const notice = warnings.join(" ");
+        if (addonNoticeOperations.get(pluginId) === noticeOperation) {
+          if (retired === mutationPresentationLifetime.promise) {
+            applyPluginRefreshOutcome(connection, mutation.refreshError, pluginId);
           }
-        });
+          const currentBootId = application.gateway.snapshot.hello?.server?.bootId;
+          const keepNotice =
+            notice &&
+            (bootId && currentBootId ? bootId === currentBootId : pageConnection === connection);
+          setAddonOutcomes((draft) => {
+            if (keepNotice) {
+              draft.notices[pluginId] = { message: notice, bootId };
+            } else {
+              delete draft.notices[pluginId];
+            }
+          });
+        }
+        const currentConnection = pageConnection;
+        if (currentConnection?.connected && currentConnection.client) {
+          await loadCatalog(currentConnection.client, currentConnection);
+        }
+      } catch (error) {
+        if (pageConnection === connection && retired === mutationPresentationLifetime.promise) {
+          setAddonOutcomes((draft) => {
+            draft.errors[pluginId] = formatUiError(error);
+          });
+        }
+      } finally {
+        if (addonNoticeOperations.get(pluginId) === noticeOperation) {
+          addonNoticeOperations.delete(pluginId);
+        }
       }
-      const currentConnection = pageConnection;
-      if (currentConnection?.connected && currentConnection.client) {
-        await loadCatalog(currentConnection.client, currentConnection);
-      }
-    } catch (error) {
-      if (pageConnection === connection) {
-        setAddonOutcomes((draft) => {
-          draft.errors[pluginId] = formatUiError(error);
-        });
-      }
-    } finally {
-      if (addonNoticeOperations.get(pluginId) === noticeOperation) {
-        addonNoticeOperations.delete(pluginId);
-      }
-      if (pageConnection === connection) {
-        setAddonOutcomes((draft) => {
-          delete draft.busy[pluginId];
-        });
-      }
-    }
+    })();
+    // Publish the configuration owner's admission before starting optimistic presentation.
+    await Promise.resolve();
+    await addonMutation.run(view, enabled, pending, retired);
   }
 
   function catalogCanMutate() {
@@ -384,7 +442,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   }
 
   async function changeEngine(engineId: string | null, currentSelection: MemoryEngineSelection) {
-    if (engineBusy() || props.mutationDisabled || catalogBlocksMutation()) {
+    if (engineMutation.busy() || props.mutationDisabled || catalogBlocksMutation()) {
       return;
     }
     if (engineId === selectedEngineId(currentSelection)) {
@@ -402,33 +460,36 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     if (!connection || !client) {
       return;
     }
-    setEngineBusy(true);
-    try {
-      const mutation = await runPluginConfigMutation(
-        application.runtimeConfig,
-        client,
-        (current) => setPluginEnabled(current, engineId, true),
-        {
-          canDispatch: () => canDispatchPluginMutation(connection),
-        },
-      );
-      applyPluginRefreshOutcome(connection, mutation.refreshError);
-      const currentConnection = pageConnection;
-      if (currentConnection?.connected && currentConnection.client) {
-        await loadCatalog(currentConnection.client, currentConnection);
+    const view = engineMutation.capture();
+    const retired = mutationPresentationLifetime.promise;
+    const pending = (async () => {
+      try {
+        const mutation = await runPluginConfigMutation(
+          application.runtimeConfig,
+          client,
+          (current) => setPluginEnabled(current, engineId, true),
+          {
+            canDispatch: () => canDispatchPluginMutation(connection),
+          },
+        );
+        if (retired === mutationPresentationLifetime.promise) {
+          applyPluginRefreshOutcome(connection, mutation.refreshError);
+        }
+        const currentConnection = pageConnection;
+        if (currentConnection?.connected && currentConnection.client) {
+          await loadCatalog(currentConnection.client, currentConnection);
+        }
+      } catch (error) {
+        if (pageConnection === connection && retired === mutationPresentationLifetime.promise) {
+          setEngineOutcome({
+            kind: "error",
+            message: formatUiError(error),
+          });
+        }
       }
-    } catch (error) {
-      if (pageConnection === connection) {
-        setEngineOutcome({
-          kind: "error",
-          message: formatUiError(error),
-        });
-      }
-    } finally {
-      if (pageConnection === connection) {
-        setEngineBusy(false);
-      }
-    }
+    })();
+    await Promise.resolve();
+    await engineMutation.run(view, engineId, pending, retired);
   }
 
   function syncSupport(runtimeConfig: ApplicationContext["runtimeConfig"]) {
@@ -500,6 +561,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     ];
     syncGateway(gateway.read().snapshot);
     return () => {
+      retireMutationPresentation();
       active = false;
       pageConnection = null;
       pageSupportProbe = null;
@@ -509,6 +571,10 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   });
 
   const engineSelection = () => resolveMemoryEngineSelection(props.configObject);
+  const displayedEngineSelection = (): MemoryEngineSelection => {
+    const next = engineMutation.current();
+    return next !== undefined ? { kind: "pinned", pluginId: next } : engineSelection();
+  };
   const agentId = () => agentSelection.read().state.selectedId;
   function readSettingsSnapshot(): ControlUiSettingsSnapshot {
     // Read authority directly from each live owner.
@@ -558,8 +624,11 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
         catalog={catalog()}
         catalogScope={catalogScope()}
         addonOutcomes={addonOutcomes}
-        engineSelection={engineSelection()}
-        engineBusy={engineBusy() || props.mutationDisabled}
+        readAddonExpected={(id) => addonMutations.get(id)?.current()}
+        readAddonBusy={(id) => addonMutations.get(id)?.busy() ?? false}
+        engineSelection={displayedEngineSelection()}
+        enginePending={engineMutation.current() !== undefined}
+        engineBusy={engineMutation.busy() || props.mutationDisabled}
         engineOutcome={engineOutcome()}
         onEngineChange={(nextEngineId) => void changeEngine(nextEngineId, engineSelection())}
         canToggleAddons={

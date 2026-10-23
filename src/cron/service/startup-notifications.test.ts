@@ -55,7 +55,6 @@ it.each([
       expect(readEnabled()).toBe(0);
       order.push("notify");
     });
-    const requestHeartbeat = vi.fn();
     const warn = vi.fn();
     const runner = vi.fn(async () => ({ status: "ok" as const }));
     const resolveDefaultAgentId = vi.fn(() => {
@@ -73,7 +72,6 @@ it.each([
       // Exercise the actual startup-settlement auto-disable producer on Date overflow.
       missedJobStaggerMs: Number.MAX_SAFE_INTEGER,
       enqueueSessionEvent,
-      requestHeartbeat,
       runIsolatedAgentJob: runner,
     });
     state.deps.log = { ...state.deps.log, warn };
@@ -114,7 +112,6 @@ it.each([
       if (route === "absence") {
         expect(order).toEqual(["commit"]);
         expect(enqueueSessionEvent).not.toHaveBeenCalled();
-        expect(requestHeartbeat).not.toHaveBeenCalled();
         expect(warn).toHaveBeenCalledWith(
           { error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE },
           "cron: post-persist notification failed",
@@ -129,7 +126,6 @@ it.each([
             contextKey: `cron:${job.id}:auto-disabled`,
           }),
         );
-        expect(requestHeartbeat).not.toHaveBeenCalled();
         if (route !== "default") {
           expect(resolveDefaultAgentId).not.toHaveBeenCalled();
         }

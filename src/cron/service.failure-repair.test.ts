@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { advanceCronActiveJobGeneration } from "./active-jobs.js";
 import { cronScriptFailureMetadata } from "./script-failure.js";
 import {
@@ -7,6 +6,7 @@ import {
   expectAlertTextContaining,
   setupFailureAlertSuite,
 } from "./service.failure-alert.test-helpers.js";
+import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "./service/state.js";
 import { applyJobResult } from "./service/timer-outcomes.js";
 import type { CronJob } from "./types.js";
@@ -23,7 +23,7 @@ const owned = {
 };
 
 function withRepair(run: AlertParams[1], failureAlert?: AlertParams[0]["failureAlert"]) {
-  return withFailureAlertCron({ scheduler: createTestGatewayScheduler(), failureAlert }, run);
+  return withFailureAlertCron({ failureAlert }, run);
 }
 
 function expectNotifications(f: RepairFixture, repairs: number, alerts: number, notices?: number) {
@@ -70,21 +70,18 @@ function applyError(
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     },
   };
-  const job: CronJob = {
+  const job = cronTestJob({
     id: "owned-job",
     name: "owned job",
-    enabled: true,
     createdAtMs: runningAtMs,
     updatedAtMs: runningAtMs,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "sync" },
     owner: owned.owner,
     failureAlert: { ...owned.failureAlert, channel: "telegram", to: "19098680" },
     state: { consecutiveErrors: 2 },
     ...overrides,
-  };
+  });
   const deferredNotifications: DeferredCronNotifications = [];
   applyJobResult(
     state,

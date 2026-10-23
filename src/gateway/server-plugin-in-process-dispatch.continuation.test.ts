@@ -16,6 +16,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   captureGatewayDeviceRevocation,
@@ -23,6 +24,8 @@ import {
   readGatewayDeviceSourceAuthority,
 } from "./device-revocation.js";
 import * as operatorCapture from "./operator-run-authority.js";
+import { retainGatewayOperatorRun } from "./operator-run-cancellation.js";
+import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
   captureOperatorToolGatewayContinuationContext,
@@ -64,6 +67,123 @@ describe("typed in-process agent continuation authorization", () => {
     startTurn.mockReset();
     waitForTurn.mockReset();
   });
+
+  it.each(["parent settled", "parent retired before acceptance"] as const)(
+    "checks an accepted child independently of recovered parent work: %s",
+    (boundary) =>
+      withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+        setRuntimeConfigSnapshot({});
+        const context = createContext();
+        context.resolveGatewayContext = () => context;
+        const profile = ensureProfileForEmail("recovered-facade-parent@example.test");
+        const fixture = await createOperatorRecoveryFixture({
+          stateDir,
+          context,
+          profileId: profile.id,
+          config: {},
+        });
+        const restored = await fixture.restore();
+        assert(restored, "Expected recovered parent authority");
+        const childKey = "agent:main:facade-child";
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: childKey },
+          {
+            sessionId: "facade-child-session",
+            updatedAt: Date.now(),
+            spawnedBy: fixture.target.sessionKey,
+            parentSessionId: fixture.target.sessionId,
+          },
+        );
+        const client = {
+          ...fixture.client,
+          internal: { ...fixture.client.internal, operatorRunAuthority: restored.authority },
+        };
+        const entered = createDeferredCore();
+        const resume = createDeferredCore();
+        const outcome = createDeferredCore<unknown>();
+        let child: Awaited<ReturnType<typeof retainGatewayOperatorRun>> | undefined;
+        let effects = 0;
+        startTurn.mockImplementation(
+          async (
+            { principal, io, assertAdmissionCurrent, preflight: { request } },
+            assertGatewayLifetimeCurrent,
+          ) => {
+            try {
+              if (boundary === "parent retired before acceptance") {
+                fixture.retire();
+              }
+              assertAdmissionCurrent?.();
+              child = await retainGatewayOperatorRun({
+                client: principal,
+                context,
+                runId: request.idempotencyKey,
+                spawnedBy: fixture.target.sessionKey,
+              });
+              child.authority?.assertCurrent();
+              io.emitAcceptance([
+                true,
+                { runId: request.idempotencyKey, status: "accepted" },
+                undefined,
+              ]);
+              entered.resolve();
+              await resume.promise;
+              // The execution boundary checks its facade binding before its admitted principal.
+              assertGatewayLifetimeCurrent?.();
+              child.authority?.assertCurrent();
+              effects += 1;
+              io.emitFinal([true, { runId: request.idempotencyKey, status: "ok" }, undefined]);
+              outcome.resolve(undefined);
+            } catch (error) {
+              entered.resolve();
+              outcome.resolve(error);
+              throw error;
+            }
+          },
+        );
+        try {
+          const pending = withPluginRuntimeGatewayRequestScope(
+            {
+              client,
+              context,
+              resolveGatewayContext: () => context,
+              isWebchatConnect: () => false,
+            },
+            () =>
+              callAgentToolGatewayRequest({
+                method: "agent",
+                params: {
+                  agentId: "main",
+                  sessionKey: childKey,
+                  message: "Continue independently",
+                  idempotencyKey: "accepted-recovered-facade-child",
+                },
+              }),
+          );
+          if (boundary === "parent retired before acceptance") {
+            await expect(pending).rejects.toThrow("Recovery claim retired");
+            expect(effects).toBe(0);
+            return;
+          }
+          await pending;
+          await entered.promise;
+          assert(child?.authority, "Expected independently retained child policy");
+          if (boundary === "parent settled") {
+            fixture.retire();
+            restored.release();
+            expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
+          }
+          expect(child.authority.assertCurrent).not.toThrow();
+          resume.resolve();
+          expect(await outcome.promise).toBeUndefined();
+          expect(effects).toBe(1);
+        } finally {
+          resume.resolve();
+          await startTurn.mock.results.at(-1)?.value.catch(() => undefined);
+          child?.release();
+          restored.release();
+        }
+      }),
+  );
 
   it.each(["invocation", "receipt"] as const)(
     "rejects continuation transfer when its %s closes during preparation",

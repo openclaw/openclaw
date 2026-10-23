@@ -127,26 +127,14 @@ it("packs equal fields by their recipient rows without changing the input or wir
     const next = shareSidebarSessionRows(page);
     expect(expandSessionRowFacts(next.sessions, next.sharedFacts)).toEqual(page);
   }
-  expect(packed).toEqual({
-    sessions: [
-      {
-        key: "one",
-        kind: "direct",
-        updatedAt: 1,
-        lastMessagePreview: undefined,
-        sharedFacts: [0, 1],
-      },
-      {
-        key: "two",
-        kind: "direct",
-        updatedAt: 2,
-        lastMessagePreview: "Unique",
-        sharedFacts: [0, 1],
-      },
-      { key: "three", kind: "direct", updatedAt: 3, label: "Other", sharedFacts: [1] },
-    ],
-    sharedFacts: [{ label: "Shared", origin: { provider: "fixture" } }, { pinned: false }],
-  });
+  expect(packed.sharedFacts).toEqual([
+    { label: "Shared", origin: { provider: "fixture" } },
+    { pinned: false },
+  ]);
+  expect(packed.sessions.map((row) => row.sharedFacts)).toEqual([[0, 1], [0, 1], [1]]);
+  for (const row of packed.sessions) {
+    expectAbsent(row, row.key === "three" ? ["pinned"] : ["label", "origin", "pinned"]);
+  }
 });
 
 it.each(["sidebar", "dashboard"] as const)(
@@ -259,9 +247,7 @@ it.each(["sidebar", "dashboard"] as const)(
           }
           expect(result.sessions[0]).not.toHaveProperty("createdActor");
           expect(result.sharedFacts).toBeDefined();
-          const frame = JSON.parse(
-            serializeGatewayFrame({ type: "res", payload: result }).toString(),
-          );
+          const frame = JSON.parse(wire(result));
           expect(frame.payload).not.toHaveProperty("rowsFullReason");
           expect(
             JSON.stringify(

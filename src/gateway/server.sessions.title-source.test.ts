@@ -17,7 +17,7 @@ afterEach(() => {
   testState.agentConfig = undefined;
 });
 
-it("names task-bearing prepare, create, and send requests while preserving controls and manual names", async () => {
+it("names task-bearing sends and attachments while ignoring control-only messages", async () => {
   await withTitleProvider(
     "Repair request routing",
     async ({ cfg, workspaceDir, storePath, requests }) => {
@@ -80,33 +80,26 @@ Handle the supplied task.
         counts: { block: 0, final: 0, tool: 0 },
       });
       const task = "/route_proof /api request routing needs repair";
-      const prepared = await request("sessions.title.prepare", { agentId: "main", message: task });
-      expect(prepared).toMatchObject({ title: "Repair request routing" });
-
-      const createdKey = "agent:main:dashboard:created-title-source";
-      await create(createdKey, { titleSource: task });
-      await waitForTitle(createdKey);
-      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-        "sessions.changed",
-        expect.objectContaining({ sessionKey: createdKey, reason: "chat.title" }),
-        expect.anything(),
-        expect.anything(),
-      );
-
       const sentKey = "agent:main:dashboard:sent-title-source";
       await create(sentKey);
       await send(sentKey, "/status", "title-control");
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), { timeout: 20_000 });
       expect(entry(sentKey)?.displayName).toBeUndefined();
-      expect(requests).toHaveLength(2);
+      expect(requests).toHaveLength(0);
       await send(sentKey, task, "title-task");
       await waitForTitle(sentKey);
-
+      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({ sessionKey: sentKey, reason: "chat.title" }),
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(requests).toHaveLength(1);
       const manualKey = "agent:main:dashboard:manual-title-source";
       await create(manualKey, { label: "My chosen name", titleSource: task });
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), { timeout: 20_000 });
       expect(entry(manualKey)?.label).toBe("My chosen name");
-      expect(requests).toHaveLength(3);
+      expect(requests).toHaveLength(1);
       const attachmentKey = "agent:main:dashboard:attachment-title-source";
       await create(attachmentKey);
       await request("chat.send", {
@@ -123,14 +116,14 @@ Handle the supplied task.
         ],
       });
       await waitForTitle(attachmentKey);
-      expect(requests).toHaveLength(4);
+      expect(requests).toHaveLength(2);
       for (const [index, titleRequest] of requests.entries()) {
         const messages = titleRequest.body.messages as Array<{ role: string; content: string }>;
         expect(
           JSON.parse(messages.findLast((message) => message.role === "user")!.content),
         ).toEqual({
           conversationLabelSource:
-            index < 3 ? "/api request routing needs repair" : "Repair the attachment incident",
+            index === 0 ? "/api request routing needs repair" : "Repair the attachment incident",
         });
       }
     },

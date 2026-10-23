@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { exactBoardWidgetHeightPx, FINE_POINTER_QUERY } from "../../lib/board/grid.ts";
-import "./board-view.ts";
+import "./board-view.tsx";
 import {
   boardWidget,
   callbacks,

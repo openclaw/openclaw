@@ -21,6 +21,7 @@ import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import type { DomainScope } from "../../../state/openclaw-state-worker-store.types.js";
 import { captureEnv, setTestEnvValue, withEnvAsync } from "../../../test-utils/env.js";
 import {
   cleanupSessionStateForTest,
@@ -220,6 +221,33 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
       return stateDir;
     },
     worker,
+    interceptWorkerCommand(
+      intercept: (command: Parameters<DomainScope["execute"]>[0]) => void | Promise<void>,
+      phase: "before" | "after" = "before",
+    ) {
+      worker.mockImplementation((context, operation, operationOptions) =>
+        runSubagentStateWorkerOperation(
+          context,
+          (scope) =>
+            operation({
+              ...scope,
+              execute: async (command, executeOptions) => {
+                const before = phase === "before" ? intercept(command) : undefined;
+                if (before) {
+                  await before;
+                }
+                const result = await scope.execute(command, executeOptions);
+                const after = phase === "after" ? intercept(command) : undefined;
+                if (after) {
+                  await after;
+                }
+                return result;
+              },
+            }),
+          operationOptions,
+        ),
+      );
+    },
     rejectRegistryWrites(reject: (row: SubagentRunRecord) => boolean, message: string) {
       worker.mockImplementation((context, operation, operationOptions) =>
         runSubagentStateWorkerOperation(

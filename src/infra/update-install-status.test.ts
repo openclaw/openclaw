@@ -1,10 +1,10 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { ownImmutableFixture } from "./package-update-activation-fixtures.test-support.js";
 import {
   prepareStartupUpdateInstall,
   resolveStartupInstallStatus,
@@ -38,15 +38,7 @@ it.each(["root", "current", "release"] as const)(
     await fs.mkdir(release, { recursive: true, mode: 0o755 });
     await fs.mkdir(path.join(release, ".git"));
     await fs.symlink(`releases/${sha}`, path.join(root, "current"));
-    const lstat = fsSync.lstatSync;
-    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
-      const stat = lstat(...args);
-      // Synthetic layout retains its inode/mode checks under an unprivileged test runner.
-      if (stat && String(args[0]).startsWith(root)) {
-        Object.defineProperty(stat, "uid", { value: typeof stat.uid === "bigint" ? 0n : 0 });
-      }
-      return stat;
-    });
+    ownImmutableFixture(root, true);
     mocks.root.mockResolvedValue(
       spelling === "root" ? root : spelling === "current" ? path.join(root, "current") : release,
     );

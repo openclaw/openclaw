@@ -35,6 +35,7 @@ import {
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCopilotCleanupTests } from "./attempt-cleanup.test-support.js";
+import { registerCopilotPromptTests } from "./attempt-prompt.test-support.js";
 import type { AttemptParamsLike, CopilotAttemptDeps } from "./attempt-types.js";
 import { registerCopilotWorkspaceTests } from "./attempt-workspace.test-support.js";
 import { runCopilotAttempt as runCopilotAttemptEntry } from "./attempt.js";
@@ -42,6 +43,7 @@ import {
   makeAssistantMessageEvent,
   makeFakePool,
   makeFakeSdk,
+  makeUserTurnRecorder,
   projectAgentRunAttemptTerminal,
   runCopilotAttempt,
   type FakeSdk,
@@ -337,32 +339,6 @@ function replayState(sdkSessionId: string, replayInvalid = false) {
   return { sdkSessionId, replayInvalid, hadPotentialSideEffects: false };
 }
 
-function makeUserTurnRecorder(
-  message: Extract<AgentMessage, { role: "user" }>,
-): NonNullable<AgentHarnessAttemptParams["userTurnTranscriptRecorder"]> {
-  let blocked = false;
-  let persisted = false;
-  return {
-    message,
-    resolveMessage: vi.fn(async () => message),
-    markRuntimePersistencePending: vi.fn(),
-    markRuntimePersisted: vi.fn(() => {
-      persisted = true;
-    }),
-    markBlocked: vi.fn(() => {
-      blocked = true;
-    }),
-    hasPersisted: () => persisted,
-    isBlocked: () => blocked,
-    hasRuntimePersistencePending: () => false,
-    getAdmissionReceipt: () => undefined,
-    waitForRuntimePersistence: vi.fn(async () => undefined),
-    persistApproved: vi.fn(async () => undefined),
-    persistBlocked: vi.fn(async () => undefined),
-    persistFallback: vi.fn(async () => undefined),
-  };
-}
-
 function installHooks(
   hooks: Record<string, Parameters<typeof createMockPluginRegistry>[0][number]["handler"]>,
 ) {
@@ -489,6 +465,18 @@ function expectNotCalled(...mocks: unknown[]) {
   for (const mock of mocks) {
     expect(mock).not.toHaveBeenCalled();
   }
+}
+
+function stubToolBridge(
+  build: (
+    input: CopilotToolBridgeInput,
+  ) =>
+    | ReturnType<typeof createStubToolBridge>
+    | Promise<ReturnType<typeof createStubToolBridge>> = () => createStubToolBridge(),
+) {
+  const mock = vi.fn(async (input: CopilotToolBridgeInput) => build(input));
+  copilotAttemptOverrides.createToolBridge = mock;
+  return mock;
 }
 
 function expectHook(mock: unknown, event: object, context: object = { sessionId: "session-1" }) {
@@ -680,7 +668,7 @@ describe("runCopilotAttempt", () => {
           } as const,
         };
       });
-    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+    stubToolBridge((input) => {
       input.attemptParams?.observeToolTerminal?.({
         toolCallId: "send-1",
         toolName: "message",
@@ -696,11 +684,7 @@ describe("runCopilotAttempt", () => {
       });
       return createStubToolBridge();
     });
-    const { run } = makeAttempt((session) => {
-      session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
-    });
-
-    copilotAttemptOverrides.createToolBridge = createToolBridge;
+    const { run } = makeTurnAttempt(async () => makeAssistantMessageEvent("done"));
     const result = await run({ observeToolTerminal });
 
     expect(observeToolTerminal).toHaveBeenCalledTimes(2);
@@ -711,14 +695,13 @@ describe("runCopilotAttempt", () => {
     const beforeCompaction = vi.fn();
     const afterCompaction = vi.fn();
     let computerContextEpoch: CopilotToolBridgeInput["computerContextEpoch"];
-    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+    stubToolBridge((input) => {
       computerContextEpoch = input.computerContextEpoch;
       return createStubToolBridge();
     });
     installHooks({ before_compaction: beforeCompaction, after_compaction: afterCompaction });
     const { sdk, run } = makeCompactingAttempt({ validated: true });
 
-    copilotAttemptOverrides.createToolBridge = createToolBridge;
     const attempt = run({ agentAccountId: "account-a" });
     await vi.waitFor(() => expect(requireSession(sdk).sendAndWait).toHaveBeenCalled());
     const activeSession = requireSession(sdk);
@@ -1118,9 +1101,7 @@ describe("runCopilotAttempt", () => {
       sessionCreated.resolve(session);
     });
 
-    const createToolBridge = vi.fn(async () => createStubToolBridge());
-
-    copilotAttemptOverrides.createToolBridge = createToolBridge;
+    stubToolBridge();
     const runPromise = run();
     const session = await sessionCreated.promise;
     await vi.waitFor(() => expect(session.sendAndWait).toHaveBeenCalledTimes(1));
@@ -1152,9 +1133,7 @@ describe("runCopilotAttempt", () => {
     installHooks({ before_prompt_build: () => ({ toolsAllow: [] }) });
     const { sdk, run } = makeAttempt();
 
-    copilotAttemptOverrides.createToolBridge = vi.fn(async () =>
-      createStubToolBridge([makeSdkTool("message"), makeSdkTool("read")]),
-    );
+    stubToolBridge(() => createStubToolBridge([makeSdkTool("message"), makeSdkTool("read")]));
     await run({ sourceReplyDeliveryMode: "message_tool_only" });
 
     expect(
@@ -1168,7 +1147,7 @@ describe("runCopilotAttempt", () => {
   it("F7: preserves an accepted session spawn when the tool bridge yields the attempt", async () => {
     const { run } = makeAttempt();
 
-    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+    stubToolBridge(async (input) => {
       await input.onToolCompleted?.({
         args: { task: "review" },
         isError: false,
@@ -1189,7 +1168,6 @@ describe("runCopilotAttempt", () => {
       return createStubToolBridge();
     });
 
-    copilotAttemptOverrides.createToolBridge = createToolBridge;
     const result = await run();
 
     expect(result.yieldDetected).toBe(true);
@@ -1208,11 +1186,10 @@ describe("runCopilotAttempt", () => {
     installHooks({ agent_end: agentEnd });
     const { sdk, pool, run } = makeAttempt();
 
-    const createToolBridge = vi.fn(async () => {
+    stubToolBridge(() => {
       throw new Error("bridge failed");
     });
 
-    copilotAttemptOverrides.createToolBridge = createToolBridge;
     const result = await run();
 
     expect(getPromptErrorCode(result)).toBe("tool_bridge_failure");
@@ -1479,90 +1456,27 @@ describe("runCopilotAttempt", () => {
     },
   );
 
-  describe("workspace bootstrap (systemMessage)", () => {
-    beforeEach(() => {
-      workspaceBootstrapMock.loadCopilotWorkspaceInstructions.mockReset();
-      workspaceBootstrapMock.loadCopilotWorkspaceInstructions.mockResolvedValue(undefined);
-    });
-
-    it("sends the final appended developer instructions to the SDK and llm_input", async () => {
-      const rendered = "# Project Context\nSoul voice goes here.";
-      workspaceBootstrapMock.loadCopilotWorkspaceInstructions.mockResolvedValueOnce(rendered);
-      const { sdk, run } = makeAttempt();
-      const llmInput = vi.fn();
-      installHooks({ llm_input: llmInput });
-      const toolNames = [
-        "message",
-        "sessions_send",
-        "sessions_spawn",
-        "sessions_yield",
-        "skill_workshop",
-        "subagents",
-      ];
-
-      copilotAttemptOverrides.createToolBridge = vi.fn(async () =>
-        createStubToolBridge(toolNames.map(makeSdkTool)),
-      );
-      await run({
-        agentId: "main",
-        extraSystemPrompt: "Only answer in the current group thread.",
-        disableTools: false,
-        sessionKey: "agent:main:main",
-      });
-      await waitForEventLoopTurn();
-
-      const content = requireSystemMessage(sdk);
-      expect(requireCreateSessionConfig(sdk).systemMessage).toMatchObject({ mode: "append" });
-      expect(content).toContain(
-        `${rendered}\n\n## Conversation Context\nOnly answer in the current group thread.`,
-      );
-      expect(content).toContain("You are a personal agent running inside OpenClaw.");
-      expect(content).toContain("## Skill Workshop");
-      expect(content).toContain("## Delegation");
-      expect(content).toContain("spawn `sessions_spawn` with `visible=true`");
-      expect(content).toContain("automatically to the caller.");
-      expect(llmInput).toHaveBeenCalledWith(
-        expect.objectContaining({ systemPrompt: content }),
-        expect.any(Object),
-      );
-    });
-
-    it.each([{ modelRun: true }, { promptMode: "none" as const }])(
-      "keeps raw model runs outside generic prompt hooks: %j",
-      async (mode) => {
-        const beforePromptBuild = vi.fn(() => ({
-          appendContext: "must not reach raw model probes",
-          prependSystemContext: "must not reach raw model probes",
-        }));
-        installHooks({ before_prompt_build: beforePromptBuild });
-        const { sdk, run } = makeAttempt();
-
-        await run(mode);
-
-        expect(beforePromptBuild).not.toHaveBeenCalled();
-        expect(requireCreateSessionConfig(sdk)).not.toHaveProperty("systemMessage");
-        expect(requireSession(sdk).sendAndWait.mock.calls[0]?.[0]).toMatchObject({
-          prompt: "hello",
-        });
-      },
-    );
+  registerCopilotPromptTests({
+    makeAttempt,
+    makeSdkTool,
+    createStubToolBridge,
+    stubToolBridge,
+    requireCreateSessionConfig,
+    requireSystemMessage,
+    requireSession,
+    installHooks,
+    waitForEventLoopTurn,
+    workspaceBootstrapMock,
   });
-
   it("retains a timed-out session until later compaction reaches session.idle", async () => {
     const afterCompaction = vi.fn();
     const onDeferredCompaction = vi.fn();
     const cleanupToolBridge = vi.fn();
     installHooks({ after_compaction: afterCompaction });
-    const { sdk, run } = makeAttempt((session) => {
-      session.sendAndWait.mockRejectedValueOnce(
-        new Error("Timeout after 60000ms waiting for session.idle"),
-      );
+    const { sdk, run } = makeTurnAttempt(async () => {
+      throw new Error("Timeout after 60000ms waiting for session.idle");
     });
-    const createToolBridge = vi.fn(async () =>
-      createStubToolBridge([], [], { cleanup: cleanupToolBridge }),
-    );
-
-    copilotAttemptOverrides.createToolBridge = createToolBridge;
+    stubToolBridge(() => createStubToolBridge([], [], { cleanup: cleanupToolBridge }));
     const result = await run({}, { onDeferredCompaction });
     const activeSession = requireSession(sdk);
 
@@ -1608,9 +1522,7 @@ describe("runCopilotAttempt", () => {
       return sendDeferred.promise;
     });
 
-    const createToolBridge = vi.fn(async () => createStubToolBridge());
-
-    copilotAttemptOverrides.createToolBridge = createToolBridge;
+    stubToolBridge();
     const runPromise = run({ onAssistantDelta });
     const session = await sendStarted.promise;
     session.emit("assistant.message_delta", { deltaContent: "partial-", messageId: "msg-1" });
@@ -1961,12 +1873,10 @@ describe("runCopilotAttempt", () => {
       } as never);
       const { sdk, run } = makeAttempt();
 
-      const createToolBridge = vi.fn(async () => createStubToolBridge());
-      const resolveSandboxContextOverride = vi.fn(async () => sandbox);
+      stubToolBridge();
 
       try {
-        copilotAttemptOverrides.createToolBridge = createToolBridge;
-        copilotAttemptOverrides.resolveSandboxContext = resolveSandboxContextOverride;
+        copilotAttemptOverrides.resolveSandboxContext = async () => sandbox;
         await run({
           config: { tools: { fs: { workspaceOnly: true } } },
           model: makeImageModel(),
@@ -1991,7 +1901,7 @@ describe("runCopilotAttempt", () => {
         const agentEnd = vi.fn();
         installHooks({ agent_end: agentEnd });
         const { sdk, run } = makeAttempt();
-        const createToolBridge = vi.fn(async () => createStubToolBridge());
+        const createToolBridge = stubToolBridge();
         const blockingFile = path.join(tmpdir(), `copilot-sandbox-block-${Date.now()}`);
         if (mode === "workspace creation") {
           await fsp.writeFile(blockingFile, "not a directory");
@@ -2004,7 +1914,6 @@ describe("runCopilotAttempt", () => {
                 workspaceDir: path.join(blockingFile, "copy"),
               });
         try {
-          copilotAttemptOverrides.createToolBridge = createToolBridge;
           copilotAttemptOverrides.resolveSandboxContext = async () => sandbox;
           const result = await run(
             mode === "cwd override"
@@ -2040,8 +1949,7 @@ describe("runCopilotAttempt", () => {
             throw new Error("session not found");
           },
         });
-        const createToolBridge = vi.fn(async () => createStubToolBridge());
-        copilotAttemptOverrides.createToolBridge = createToolBridge;
+        const createToolBridge = stubToolBridge();
         const result = await runCopilotAttempt(
           makeFinalizationParams(
             mode === "stale"
@@ -2110,13 +2018,12 @@ describe("runCopilotAttempt", () => {
       const onAssistantDelta = vi.fn();
       const onSessionEstablished = vi.fn();
       const pool = makeFakePool(sdk);
-      const createToolBridge = vi.fn(async () =>
+      const createToolBridge = stubToolBridge(() =>
         createStubToolBridge([makeSdkTool("unsafe_tool")]),
       );
       const workspaceBootstrapCalls =
         workspaceBootstrapMock.loadCopilotWorkspaceInstructions.mock.calls.length;
 
-      copilotAttemptOverrides.createToolBridge = createToolBridge;
       const result = await runCopilotAttempt(
         makeFinalizationParams({
           disableTools: false,
@@ -2226,8 +2133,7 @@ describe("runCopilotAttempt", () => {
     ["host-scoped", ["openclaw"], false, true, ["openclaw"]],
   ] as const)("restricts the SDK catalog: %s", async (_name, tools, restricted, host, expected) => {
     const { sdk, run } = makeAttempt();
-    copilotAttemptOverrides.createToolBridge = async () =>
-      createStubToolBridge(tools.map(makeSdkTool));
+    stubToolBridge(() => createStubToolBridge(tools.map(makeSdkTool)));
     if (host) {
       copilotAttemptOverrides.isHostScopedAgentToolActive = (toolName: string) =>
         toolName === "openclaw";

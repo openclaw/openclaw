@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import "../../styles/channels.css";
 import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
@@ -10,14 +10,19 @@ import {
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
-import "../../components/openclaw-mascot.ts";
+import "../../components/openclaw-mascot.tsx";
 import { WizardBusyButton, WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
+import {
+  channelSnapshotEntryIsActive,
+  resolveChannelAccounts,
+  type ChannelRead,
+  type ChannelsState,
+} from "../../lib/channels/index.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { channelDocsUrl } from "./hub-meta.ts";
 import { renderChannelDetail as ChannelDetail } from "./view.detail.tsx";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.tsx";
@@ -44,16 +49,7 @@ const RECOMMENDED_CHANNEL_ORDER: string[] = [
   "nostr",
 ];
 
-export function ChannelsView(props: ChannelsProps) {
-  const snapshot = createMemo(() => props.channels.channelsSnapshot);
-  const channelOrder = createMemo(() => resolveChannelOrder(snapshot()));
-  // Key both lists so status updates cannot retarget an in-flight channel click.
-  const connected = createMemo(() =>
-    channelOrder().filter((key) => channelSnapshotEntryIsActive(snapshot(), key)),
-  );
-  const available = createMemo(() =>
-    channelOrder().filter((key) => !channelSnapshotEntryIsActive(snapshot(), key)),
-  );
+function ChannelStatusNotices(props: { channels: ChannelsState; error: string | null }) {
   const showingStaleSnapshot = () =>
     Boolean(
       props.channels.channelsLoading &&
@@ -68,22 +64,77 @@ export function ChannelsView(props: ChannelsProps) {
         .map((warning) => formatUiExternalText(warning))
         .join("; ") ?? "",
   );
+  return (
+    <>
+      {showingStaleSnapshot() ? (
+        <div class="callout info">{t("channels.refreshingStaleSnapshot")}</div>
+      ) : undefined}
+      {props.channels.channelsSnapshot?.partial ? (
+        <div class="callout warn">
+          {t("channels.hub.partialSnapshot")}
+          {partialWarnings()}
+        </div>
+      ) : undefined}
+      {props.error ? (
+        <div class="callout danger" role="alert">
+          {props.error}
+        </div>
+      ) : undefined}
+    </>
+  );
+}
+
+function ChannelStatusSettled(props: { channels: ChannelsState; receipt: ChannelRead }) {
+  const ready = createMemo(async () => {
+    const error = await props.receipt.completion;
+    if (error !== null) {
+      throw new Error(error);
+    }
+    return true;
+  });
+  return (
+    <Show when={ready()}>
+      <ChannelStatusNotices channels={props.channels} error={null} />
+    </Show>
+  );
+}
+
+function ChannelStatusFeedback(props: { channels: ChannelsState }) {
+  const retained = () => (
+    <ChannelStatusNotices channels={props.channels} error={props.channels.channelsError} />
+  );
+  return (
+    <Show when={props.channels.channelsRead} keyed fallback={retained()}>
+      {(receipt) => (
+        <Errored
+          fallback={(error) => (
+            <ChannelStatusNotices channels={props.channels} error={formatUiError(error())} />
+          )}
+        >
+          <Loading fallback={retained()}>
+            <ChannelStatusSettled channels={props.channels} receipt={receipt} />
+          </Loading>
+        </Errored>
+      )}
+    </Show>
+  );
+}
+
+export function ChannelsView(props: ChannelsProps) {
+  const snapshot = createMemo(() => props.channels.channelsSnapshot);
+  const channelOrder = createMemo(() => resolveChannelOrder(snapshot()));
+  // Key both lists so status updates cannot retarget an in-flight channel click.
+  const connected = createMemo(() =>
+    channelOrder().filter((key) => channelSnapshotEntryIsActive(snapshot(), key)),
+  );
+  const available = createMemo(() =>
+    channelOrder().filter((key) => !channelSnapshotEntryIsActive(snapshot(), key)),
+  );
 
   return (
     <>
       <SettingsPage>
-        {showingStaleSnapshot() ? (
-          <div class="callout info">{t("channels.refreshingStaleSnapshot")}</div>
-        ) : undefined}
-        {props.channels.channelsSnapshot?.partial ? (
-          <div class="callout warn">
-            {t("channels.hub.partialSnapshot")}
-            {partialWarnings()}
-          </div>
-        ) : undefined}
-        {props.channels.channelsError ? (
-          <div class="callout danger">{props.channels.channelsError}</div>
-        ) : undefined}
+        <ChannelStatusFeedback channels={props.channels} />
         {props.wizardHost.blockedByDirtyConfig() && props.config.configFormDirty ? (
           <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
         ) : undefined}
@@ -353,7 +404,7 @@ function WizardStepBody(props: {
                 ? props.controls.wizardHost.draft.textValue
                 : props.wizard.step.initialValue
           }
-          busy={props.wizard.busy}
+          busy={props.controls.mutationBusy?.wizard || props.wizard.busy}
           inputId="channel-wizard-text-input"
           validationErrorId={
             props.wizard.validationError ? "channel-wizard-validation-error" : undefined
@@ -380,7 +431,7 @@ function WizardStepBody(props: {
       {message() ? <div class={outputClass()}>{message()}</div> : undefined}
       <openclaw-modal-actions class="channels-wizard__footer">
         {gatewayOwned() ? renderCloseButton(props.controls, "common.cancel") : undefined}
-        {gatewayOwned() || props.wizard.busy ? (
+        {gatewayOwned() || props.controls.mutationBusy?.wizard || props.wizard.busy ? (
           <WizardBusyButton
             statusLabel={(gatewayOwned() && message()) || t("channels.setup.working")}
           />
@@ -400,6 +451,7 @@ function WizardStepBody(props: {
 
 function renderWhatsAppLinking(props: ChannelsProps) {
   const connected = () => props.channels.whatsappLoginConnected === true;
+  const busy = () => props.mutationBusy?.whatsapp || props.channels.whatsappBusy;
   return (
     <>
       <div class="channels-wizard__message" role="status">
@@ -418,7 +470,7 @@ function renderWhatsAppLinking(props: ChannelsProps) {
                 src={props.channels.whatsappLoginQrDataUrl}
                 alt={t("channels.setup.whatsappQrAlt")}
               />
-            ) : props.channels.whatsappBusy ? undefined : (
+            ) : busy() ? undefined : (
               <div class="channels-wizard__spinner">{t("channels.setup.whatsappQrHint")}</div>
             )}
           </div>
@@ -430,23 +482,27 @@ function renderWhatsAppLinking(props: ChannelsProps) {
           renderCloseButton(props, "channels.setup.finish", true)
         ) : (
           <>
-            {props.channels.whatsappBusy ? (
+            {renderCloseButton(props, "channels.setup.linkLater")}
+            {busy() ? (
               <WizardBusyButton statusLabel={t("channels.setup.whatsappQrLoading")} />
             ) : (
               <>
-                <button type="button" class="btn" onClick={() => props.onWhatsAppStart(true)}>
+                <button type="button" class="btn" onClick={() => void props.onWhatsAppStart(true)}>
                   {props.channels.whatsappLoginQrDataUrl
                     ? t("channels.setup.regenerateQr")
                     : t("common.showQr")}
                 </button>
                 {props.channels.whatsappLoginQrDataUrl ? (
-                  <button type="button" class="btn primary" onClick={() => props.onWhatsAppWait()}>
+                  <button
+                    type="button"
+                    class="btn primary"
+                    onClick={() => void props.onWhatsAppWait()}
+                  >
                     {t("common.waitForScan")}
                   </button>
                 ) : undefined}
               </>
             )}
-            {renderCloseButton(props, "channels.setup.linkLater")}
           </>
         )}
       </openclaw-modal-actions>
@@ -475,29 +531,42 @@ function renderDoneBody(channels: readonly string[], props: ChannelsProps) {
 }
 
 function ChannelWizard(props: ChannelsProps): JSX.Element {
-  const activeWizard = () => {
-    const wizard = props.wizardHost.state();
-    return wizard.phase === "idle" ? undefined : wizard;
-  };
   return (
-    <Show when={activeWizard()}>
-      {(wizard) => <WizardDialog wizard={wizard()} controls={props} />}
+    <Show when={props.wizardHost.state().phase !== "idle"}>
+      <WizardDialog controls={props} />
     </Show>
   );
 }
 
-function WizardDialog(props: {
-  wizard: Exclude<ChannelWizardState, { phase: "idle" }>;
-  controls: ChannelsProps;
-}) {
-  const label = createMemo(() =>
-    props.wizard.channel
-      ? resolveChannelLabel(props.controls, props.wizard.channel)
-      : t("channels.setup.genericTitle"),
-  );
-  const step = () => (props.wizard.phase === "step" ? props.wizard : undefined);
-  const error = () => (props.wizard.phase === "error" ? props.wizard : undefined);
-  const done = () => (props.wizard.phase === "done" ? props.wizard : undefined);
+function WizardDialog(props: { controls: ChannelsProps }) {
+  const wizard = () => props.controls.wizardHost.state();
+  const channel = () => {
+    const current = wizard();
+    return current.phase === "idle" ? null : current.channel;
+  };
+  const label = createMemo(() => {
+    const current = channel();
+    return current
+      ? resolveChannelLabel(props.controls, current)
+      : t("channels.setup.genericTitle");
+  });
+  const step = () => {
+    const current = wizard();
+    return current.phase === "step" ? current : undefined;
+  };
+  // Keep same-ID controls through action settlement and fresh validation replies.
+  const steps = createMemo(() => {
+    const current = step();
+    return current ? [current] : [];
+  });
+  const error = () => {
+    const current = wizard();
+    return current.phase === "error" ? current : undefined;
+  };
+  const done = () => {
+    const current = wizard();
+    return current.phase === "done" ? current : undefined;
+  };
   return (
     <openclaw-modal-dialog
       label={t("channels.setup.dialogLabel", { channel: label() })}
@@ -505,13 +574,13 @@ function WizardDialog(props: {
     >
       <div class="channels-wizard">
         <div class="channels-wizard__header">
-          <Show when={props.wizard.channel}>
-            {(channel) => (
+          <Show when={channel()}>
+            {(channelId) => (
               <ChannelIcon
-                channelId={channel()}
+                channelId={channelId()}
                 label={label()}
                 variant="tile"
-                pluginIconUrl={props.controls.presentation.pluginIconUrls[channel()]}
+                pluginIconUrl={props.controls.presentation.pluginIconUrls[channelId()]}
               />
             )}
           </Show>
@@ -519,10 +588,10 @@ function WizardDialog(props: {
             <h2>{t("channels.setup.title", { channel: label() })}</h2>
             <div class="muted channels-wizard__subtitle">
               <span>{t("channels.setup.subtitle")}</span>{" "}
-              {props.wizard.channel ? (
+              {channel() ? (
                 <a
                   class="channels-wizard__link"
-                  href={channelDocsUrl(props.wizard.channel)}
+                  href={channelDocsUrl(channel()!)}
                   target="_blank"
                   rel="noreferrer noopener"
                 >
@@ -547,7 +616,7 @@ function WizardDialog(props: {
               </div>
             )}
           </Show>
-          <Show when={props.wizard.phase === "starting"}>
+          <Show when={wizard().phase === "starting"}>
             <openclaw-modal-actions class="channels-wizard__footer">
               <WizardBusyButton statusLabel={t("channels.setup.starting")} />
             </openclaw-modal-actions>
@@ -567,7 +636,7 @@ function WizardDialog(props: {
           <Show when={done()}>
             {(completed) => <>{renderDoneBody(completed().channels, props.controls)}</>}
           </Show>
-          <Show when={step()}>
+          <For each={steps()} keyed={(current) => current.step.id}>
             {(current) => (
               <>
                 {current().validationError ? (
@@ -582,7 +651,7 @@ function WizardDialog(props: {
                 <WizardStepBody wizard={current()} controls={props.controls} />
               </>
             )}
-          </Show>
+          </For>
         </div>
       </div>
     </openclaw-modal-dialog>

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
@@ -8,7 +9,8 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
-import { LogsPage } from "./logs-page.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { renderSolid as LogsRoute } from "./logs-page.tsx";
 
 type TestContext = ReturnType<typeof contextWithClient>;
 
@@ -33,7 +35,7 @@ function mountPage(initial: TestContext) {
   };
   const { container, unmount: dispose } = mountSolid(() => (
     <ApplicationProvider value={liveContext as unknown as ApplicationContext}>
-      <LogsPage />
+      <LogsRoute />
     </ApplicationProvider>
   ));
   return {
@@ -99,6 +101,13 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("names the page with a level-one heading", async () => {
+  const { page } = await setup(vi.fn().mockResolvedValue(tail(1, ["one"])));
+  expect(getQueriesForElement(page.container).getByRole("heading", { level: 1 }).textContent).toBe(
+    "Logs",
+  );
+});
+
 it.each([{ lines: [] }, { lines: ["next line"] }])(
   "retains the truncation notice after an incremental response with $lines",
   async ({ lines }) => {
@@ -130,6 +139,7 @@ it("warns only after the display buffer evicts rows and retains that notice", as
   });
   const { page } = await setup(request);
   expect(page.container.textContent).not.toContain(TRUNCATION_NOTICE);
+  const secondRow = page.container.querySelectorAll(".log-row")[1];
   for (const count of [1000, 1500, 2000]) {
     await poll();
     expect(page.lines()).toHaveLength(count);
@@ -140,6 +150,7 @@ it("warns only after the display buffer evicts rows and retains that notice", as
   const retained = page.lines();
   expect(retained).toHaveLength(2000);
   expect(retained[0]).toBe("line 2");
+  expect(page.container.querySelector(".log-row")).toBe(secondRow);
   expect(retained.at(-1)).toBe("line 2001");
   expect(page.container.textContent).toContain(TRUNCATION_NOTICE);
 
@@ -213,6 +224,13 @@ it("retains one initial request across metadata snapshots with empty logs", asyn
   const { client, context, page } = await setup(request, false);
   context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
   expect(request).toHaveBeenCalledOnce();
+  await waitForSolid(() =>
+    expect(
+      getQueriesForElement(page.container)
+        .getByRole("button", { name: "Loading…" })
+        .hasAttribute("disabled"),
+    ).toBe(true),
+  );
   context.gateway.publish({ ...context.gateway.snapshot });
   expect(request.mock.calls.map((call) => call[2].signal.aborted)).toEqual([false]);
 
@@ -345,7 +363,14 @@ it("serializes quiet polls so an older cursor cannot overwrite a newer one", asy
   const pending = deferred<ReturnType<typeof tail>>();
   const request = responding(tail(1, ["seed"])).mockReturnValue(pending.promise);
   const { page } = await setup(request);
+  const row = page.container.querySelector(".log-row");
   await poll();
+  expect(
+    getQueriesForElement(page.container)
+      .getByRole("button", { name: "Refresh" })
+      .hasAttribute("disabled"),
+  ).toBe(true);
+  expect(page.container.querySelector(".log-row")).toBe(row);
   await poll();
   expect(request).toHaveBeenCalledTimes(2);
   expect(page.lines()).toEqual(["seed"]);
@@ -374,12 +399,35 @@ it("reloads a changed log file before publishing any rows from it", async () => 
 });
 
 it.each([false, true])("recovers a logs error with previously loaded rows: %s", async (loaded) => {
+  const pending = deferred<ReturnType<typeof tail>>();
   const request = responding(...(loaded ? [tail(1, ["old"])] : []))
-    .mockRejectedValueOnce(new Error("logs unavailable"))
+    .mockReturnValueOnce(pending.promise)
     .mockResolvedValueOnce({ ...tail(2, ["recovered"]), reset: loaded });
   const { context, page } = await setup(request);
+  const input = page.container.querySelector<HTMLInputElement>(".settings-input")!;
+  const stream = page.container.querySelector(".log-stream");
+  input.focus();
   if (loaded) {
     await page.refresh();
+    expect(page.lines()).toEqual(["old"]);
+  }
+  expect(
+    getQueriesForElement(page.container)
+      .getByRole("button", { name: "Loading…" })
+      .hasAttribute("disabled"),
+  ).toBe(true);
+  expect(page.container.querySelector(".log-stream")).toBe(stream);
+  expect(page.container.querySelector(".settings-input")).toBe(input);
+  expect(document.activeElement).toBe(input);
+  pending.reject(new Error("logs unavailable"));
+  await waitForSolid(() =>
+    expect(
+      getQueriesForElement(page.container)
+        .getByRole("button", { name: "Refresh" })
+        .hasAttribute("disabled"),
+    ).toBe(false),
+  );
+  if (loaded) {
     expect(page.lines()).toEqual(["old"]);
     expect(page.container.querySelector(".logs-refresh-status")?.textContent).toContain(
       "Showing stale data",
@@ -395,9 +443,12 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
     "logs unavailable",
   );
   await (loaded ? page.refresh() : poll());
-  expect(page.lines()).toEqual(["recovered"]);
+  await waitForSolid(() => expect(page.lines()).toEqual(["recovered"]));
   expect(page.container.textContent).not.toContain("logs unavailable");
   expect(page.container.querySelector(".logs-refresh-status")).toBeNull();
+  expect(page.container.querySelector(".log-stream")).toBe(stream);
+  expect(page.container.querySelector(".settings-input")).toBe(input);
+  expect(document.activeElement).toBe(input);
 });
 
 it("keeps text and level filters active as quiet polls append rows", async () => {

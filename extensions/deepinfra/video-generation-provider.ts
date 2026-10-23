@@ -30,10 +30,7 @@ import {
   normalizeDeepInfraModelRef,
 } from "./media-models.js";
 import type { DeepInfraSurfaceModel } from "./media-models.js";
-import {
-  buildDeepInfraVideoModelCapabilities,
-  resolveDeepInfraVideoModelCapabilities,
-} from "./surface-model-catalogs.js";
+import { buildDeepInfraVideoModelCapabilities } from "./surface-model-catalogs.js";
 
 // Per-poll request budget; the total operation budget comes from req.timeoutMs.
 const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
@@ -109,7 +106,6 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
     label: "DeepInfra",
     defaultModel,
     models: ids,
-    resolveModelCapabilities: resolveDeepInfraVideoModelCapabilities,
     isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "deepinfra", ...ctx }),
     capabilities: {
       ...capabilities,

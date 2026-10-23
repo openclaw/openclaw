@@ -22,6 +22,25 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+## Command palette file attachments
+
+Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
+images or files onto the palette, or paste images into its input, to prepare a
+new background session without changing your current conversation or composer.
+
+The first attachment switches the palette from navigation to **New session**.
+Add optional instructions, adjust the session settings, then choose **New session**
+or press **Cmd/Ctrl+Enter**. Dropping a file does not start the session by itself.
+Files remain visible while preparing. If a file is rejected, an error toast
+explains the failure and only that file is removed. You can manually start a
+session with the remaining text and files; a rejected file cancels a pending
+automatic start. File admission and size limits match the chat composer.
+
+Closing the palette keeps its attachment draft in memory for the same Gateway
+and account. Removing the final attachment keeps new-session mode while
+instructions remain; clearing both files and instructions restores navigation.
+Reloading or leaving the app does not preserve this in-memory draft.
+
 ## Temporary disconnections
 
 When the connection drops, the Control UI keeps loaded catalogs, automation
@@ -29,6 +48,9 @@ editors, Memory Import selections, Activity history, Dreaming results, approval
 queues, and open board and portal documents in memory. A transport interruption
 does not reset those page-local drafts. The connection indicator at the bottom
 left shows the connection state; retained data may be out of date until reconnect.
+While automatic reconnection is running, the indicator shows **Reconnecting…**
+with the sidebar's standard spinner and without a Retry button. **Retry** remains available when automatic recovery stops.
+A required page refresh keeps its separate refresh action.
 
 If a chat side panel fails to load, its Close control remains available independently of the failed panel. Closing it keeps the conversation and its draft in place without reloading the page. Retry still respects unsaved work that blocks document reloads.
 
@@ -67,7 +89,9 @@ Reloading a previously visited chat restores the last settled sidebar while the 
 
 A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen.
 
-The cached transcript also preserves its conversation title when the conversation is outside the saved sidebar page. Live session metadata replaces that display projection when it arrives.
+GitHub item URLs and repository-qualified references such as `owner/repo#126` render as compact links. Use `PR owner/repo#126` for a pull request or `issue owner/repo#126` for an issue. References identified by keywords, such as `PR #126`, remain plain text without a repository qualifier. Project display names, the checkout, the project catalog, and other messages do not supply a destination. A standalone hash token that is also a valid hexadecimal color, such as `#126`, retains its color preview without a GitHub link.
+
+The cached transcript also preserves its conversation title when the conversation is outside the saved sidebar page. Live session metadata replaces that display projection when it arrives. Reloading a full-UUID chat link can show that scoped cache while the Gateway confirms the route. Sending and restored queued messages wait for confirmation; a deleted or moved conversation replaces the cached view with the Gateway's result.
 
 An authenticated same-origin reload includes shared display settings and your profile’s appearance and sidebar preferences in the document. Chat uses this display projection while connecting, without loading the full editable configuration. Preference changes from other tabs refresh through the Gateway’s existing notifications; settings pages and configuration writes still load the full snapshot.
 
@@ -153,6 +177,10 @@ Changing Gateway, losing access, or selecting different content retires the old
 frame and its local state.
 
 Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Agent-specific catalog changes retain other agents’ cached choices and pending catalog requests. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
+
+Deleting a session refreshes the roster and invalidates that session's model choices without reloading metadata for unrelated chats. Session action menus build their contents when opened.
+
+Provider speed observations are tracked separately for each requested tier. Repeated identical responses retain the matching Fast or Ultrafast hint without refreshing every open chat's model choices. Recovery or expiry clears only the affected hint.
 
 Metadata refreshes wait for an in-progress model-runtime replacement to publish. An agent whose model runtime is unavailable does not interrupt commands or model choices for healthy agents; its metadata becomes available when its owner publishes.
 
@@ -303,6 +331,11 @@ existing settings without switching the selected agent. Reopening the menu
 brings the selected agent into view.
 
 ## Download files
+
+Chat filename links first try the named path. If a bare filename is missing there,
+the preview opens a nested file only when a complete workspace search finds exactly
+one matching filename. Ambiguous or incomplete searches keep the missing-file error;
+use an explicit path to select the intended file.
 
 If the **Files** panel shows a listing error, select **Retry** to load the current
 folder or search again. This keeps the session and query in place; access checks

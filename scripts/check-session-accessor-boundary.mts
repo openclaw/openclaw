@@ -185,7 +185,6 @@ const migratedTranscriptWriterFiles = new Set([
 const migratedSessionLifecycleCleanupFiles = new Set([
   "src/config/sessions/cleanup-service.ts",
   "src/cron/session-reaper.ts",
-  "src/infra/heartbeat-runner.ts",
 ]);
 
 export const readOnlyGatewaySessionAccessorFiles = new Set([

@@ -1,19 +1,9 @@
-import { onCleanup } from "solid-js";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 
 const CHAT_ATTACHMENT_VIEWPORT_MARGIN = "240px 0px";
 
 export function createChatAttachmentViewportRef(onVisible: () => void) {
-  let element: Element | undefined;
-  let stopObserving: (() => void) | undefined;
-  onCleanup(() => stopObserving?.());
-  return (target: Element | undefined): void => {
-    if (element === target) {
-      return;
-    }
-    stopObserving?.();
-    element = target;
-    stopObserving = target ? observeChatAttachmentViewport(target, onVisible) : undefined;
-  };
+  return elementRef((element: Element) => observeChatAttachmentViewport(element, onVisible));
 }
 
 // Start bounded media work just before its card or image enters view so decoding

@@ -7,7 +7,7 @@ import { browserTabCardRevision } from "../../../lib/chat/browser-tab-preview.ts
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
-import type { WorkGroupRenderItem } from "../chat-thread-grouping.ts";
+import type { WorkGroupRenderItem } from "../chat-turn-presentation.ts";
 
 export type BrowserTabPreview = {
   preview: Extract<ToolPreview, { kind: "browser-tab" }>;

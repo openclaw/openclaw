@@ -139,14 +139,12 @@ function applyUnknownConfigKeyStep(params: {
   });
 
   return {
-    state: {
-      cfg: params.shouldRepair ? protectedAuth.config : params.state.cfg,
-      candidate: protectedAuth.config,
-      pendingChanges: true,
-      fixHints: params.shouldRepair
-        ? params.state.fixHints
-        : [...params.state.fixHints, `Run "${params.doctorFixCommand}" to remove these keys.`],
-    },
+    state: applyDoctorConfigMutation({
+      state: params.state,
+      mutation: { config: protectedAuth.config, changes: unknown.removed },
+      shouldRepair: params.shouldRepair,
+      fixHint: `Run "${params.doctorFixCommand}" to remove these keys.`,
+    }),
     removed: unknown.removed,
     repairs: protectedAuth.repairs,
     warnings: protectedAuth.warnings,

@@ -252,6 +252,30 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
     );
   });
 
+  it("focuses the compact editor on its first touch before the layout moves", async () => {
+    await withComposer(true, false, async (page, gateway) => {
+      const textarea = page.locator(".agent-chat__input textarea");
+      const shell = page.locator(".agent-chat__composer-shell");
+      await expect.poll(() => shell.getAttribute("data-composer-editing")).toBe("false");
+      await textarea.evaluate((node) => {
+        node.addEventListener(
+          "pointerdown",
+          () => {
+            node.dataset.focusedAtPointerDown = String(document.activeElement === node);
+          },
+          { once: true },
+        );
+      });
+      await textarea.tap();
+      expect(await textarea.getAttribute("data-focused-at-pointer-down")).toBe("true");
+      await expectComposerFocus(page);
+      await expect.poll(() => shell.getAttribute("data-composer-editing")).toBe("true");
+      await page.keyboard.insertText("First tap is ready to type");
+      expect(await textarea.inputValue()).toBe("First tap is ready to type");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    });
+  });
+
   it("sends and stops without moving the action out from under an Android-like tap", async () => {
     await narrowSendAndStop(true);
   });

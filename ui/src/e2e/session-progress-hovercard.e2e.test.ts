@@ -399,7 +399,7 @@ suite.define(() => {
 
         const notepad = card.locator(".session-hovercard__notepad");
         expect(await notepad.locator(".session-hovercard__notepad-title").textContent()).toBe(
-          "Agent Notepad",
+          "Task progress",
         );
         const markdown = notepad.locator(".session-progress-card__markdown");
         expect(await markdown.locator(":scope > :first-child").getAttribute("class")).toContain(

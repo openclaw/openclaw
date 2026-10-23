@@ -33,20 +33,29 @@ function createSendMessageMock() {
       opts: SendMattermostMessageOptions,
     ): Promise<MattermostSendResult> => {
       const messageId = `post-${++sendCount}`;
-      return {
+      return sendResult(
         messageId,
-        channelId: "channel-1",
-        content: content.trim(),
-        receipt: createMessageReceiptFromOutboundResults({
-          results: [{ channel: "mattermost", messageId, channelId: "channel-1" }],
-          kind:
-            "buttons" in opts && Array.isArray(opts.buttons) && opts.buttons.length
-              ? "card"
-              : "text",
-        }),
-      };
+        content.trim(),
+        "buttons" in opts && Array.isArray(opts.buttons) && opts.buttons.length ? "card" : "text",
+      );
     },
   );
+}
+
+function sendResult(
+  messageId: string,
+  content: string,
+  kind: "text" | "card" = "text",
+): MattermostSendResult {
+  return {
+    messageId,
+    channelId: "channel-1",
+    content,
+    receipt: createMessageReceiptFromOutboundResults({
+      results: [{ channel: "mattermost", messageId, channelId: "channel-1" }],
+      kind,
+    }),
+  };
 }
 
 let sendMessage: ReturnType<typeof createSendMessageMock>;
@@ -72,9 +81,11 @@ function deliver(
   });
 }
 
-function openPresentation(): NonNullable<ReplyPayload["presentation"]> {
-  return { blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }] };
-}
+type Presentation = NonNullable<ReplyPayload["presentation"]>;
+const present = (...blocks: Presentation["blocks"]): Pick<ReplyPayload, "presentation"> => ({
+  presentation: { blocks },
+});
+const openControls = present({ type: "buttons", buttons: [{ label: "Open", value: "open" }] });
 
 it.each<[string, ReplyPayload, string, string?]>([
   [
@@ -84,42 +95,27 @@ it.each<[string, ReplyPayload, string, string?]>([
   ],
   [
     "presentation-only text",
-    { presentation: { blocks: [{ type: "text", text: "Release finished" }] } },
+    present({ type: "text", text: "Release finished" }),
     "Release finished",
   ],
-  ["presentation-only native value button", { presentation: openPresentation() }, "- Open", "open"],
+  ["presentation-only native value button", openControls, "- Open", "open"],
   [
     "presentation-only URL button",
-    {
-      presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Docs", url: "https://example.com/docs" }],
-          },
-        ],
-      },
-    },
+    present({ type: "buttons", buttons: [{ label: "Docs", url: "https://example.com/docs" }] }),
     "- Docs: https://example.com/docs",
   ],
   [
     "presentation-only select",
-    {
-      presentation: {
-        blocks: [
-          {
-            type: "select",
-            placeholder: "Environment",
-            options: [{ label: "Production", value: "production" }],
-          },
-        ],
-      },
-    },
+    present({
+      type: "select",
+      placeholder: "Environment",
+      options: [{ label: "Production", value: "production" }],
+    }),
     "Environment:\n- Production",
   ],
   [
     "authored text with native buttons",
-    { text: "Deploy finished", presentation: openPresentation() },
+    { text: "Deploy finished", ...openControls },
     "Deploy finished\n\n- Open",
     "open",
   ],
@@ -128,27 +124,18 @@ it.each<[string, ReplyPayload, string, string?]>([
     {
       text: "Already formatted",
       presentationTextMode: "fallback",
-      presentation: { blocks: [{ type: "text", text: "Generated summary" }] },
+      ...present({ type: "text", text: "Generated summary" }),
     },
     "Already formatted",
   ],
   [
     "typed callback action stays text-only",
-    {
-      presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Inspect",
-                action: { type: "callback", value: "private-callback-token" },
-              },
-            ],
-          },
-        ],
-      },
-    },
+    present({
+      type: "buttons",
+      buttons: [
+        { label: "Inspect", action: { type: "callback", value: "private-callback-token" } },
+      ],
+    }),
     "- Inspect",
   ],
 ])(
@@ -184,7 +171,7 @@ it("attaches presentation controls only to the first visible text chunk", async 
   const result = await deliver({
     payload: {
       text: "alpha beta",
-      presentation: openPresentation(),
+      ...openControls,
     },
     textLimit: 6,
   });
@@ -207,7 +194,7 @@ it("keeps multiple-media presentations on the text/media fallback path", async (
   await deliver({
     payload: {
       mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
-      presentation: openPresentation(),
+      ...openControls,
     },
   });
 
@@ -276,8 +263,6 @@ it("passes agent-scoped mediaLocalRoots when sending media paths", async () => {
         cfg,
         accountId: "default",
         mediaUrl,
-        // Local (non-http) media must require a successful upload so a
-        // failure surfaces instead of silently posting the caption alone.
         requireMediaUpload: true,
         replyToId: "root-post",
         mediaLocalRoots: expect.arrayContaining([
@@ -296,19 +281,9 @@ it("passes agent-scoped mediaLocalRoots when sending media paths", async () => {
 });
 
 it("returns provider-finalized visible content instead of the requested text", async () => {
-  const finalizedSend = vi.fn(async (): Promise<MattermostSendResult> => ({
-    messageId: "post-final",
-    channelId: "channel-1",
-    content: "provider-finalized",
-    receipt: createMessageReceiptFromOutboundResults({
-      results: [{ channel: "mattermost", messageId: "post-final", channelId: "channel-1" }],
-      kind: "text",
-    }),
-  }));
-
   const result = await deliver({
     payload: { text: "requested text" },
-    sendMessage: finalizedSend,
+    sendMessage: vi.fn(async () => sendResult("post-final", "provider-finalized")),
   });
 
   expect(result).toMatchObject({
@@ -326,19 +301,12 @@ it("preserves the accepted post when a later chunk fails", async () => {
     .mockRejectedValueOnce(new Error("second chunk failed"));
   core.channel.text.chunkMarkdownTextWithMode = vi.fn(() => ["alpha", "beta"]);
 
-  let caught: unknown;
-  try {
-    await deliver({
-      payload: { text: "alpha beta" },
-      sendMessage: partialSend,
-      replyToId: "root-post",
-      textLimit: 6,
-    });
-  } catch (error: unknown) {
-    caught = error;
-  }
-
-  expect(isChannelPartialDeliveryError(caught)).toBe(true);
+  const caught: unknown = await deliver({
+    payload: { text: "alpha beta" },
+    sendMessage: partialSend,
+    replyToId: "root-post",
+    textLimit: 6,
+  }).catch((error: unknown) => error);
   if (!isChannelPartialDeliveryError(caught)) {
     throw new Error("expected a partial Mattermost delivery error");
   }

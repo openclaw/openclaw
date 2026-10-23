@@ -557,6 +557,13 @@ async function buildAndPublishUi(
             [
               {
                 ...toolCall,
+                options: {
+                  ...toolCall.options,
+                  env: {
+                    ...toolCall.options.env,
+                    OPENCLAW_CONTROL_UI_PREPARED_SETTINGS_ROOT: repoRoot,
+                  },
+                },
                 args: distArtifactEntryArgs(
                   toolCall.args[0]!,
                   [...toolCall.args.slice(1), "--outDir", staging],

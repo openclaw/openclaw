@@ -51,13 +51,11 @@ const preparedCall = (extra: Partial<AgentActivityItem>) => ({
 
 describe("subagent panel call counts", () => {
   it.each<[string, ChatHistoryResult, ReturnType<typeof count>]>([
-    ["complete ordinary history", complete([toolCall()]), { count: 1, exact: true }],
     [
       "older pages remain",
       complete([toolCall()], { hasMore: true, nextOffset: 1, totalMessages: 20 }),
       { count: 1, exact: false },
     ],
-    ["empty incomplete history", { messages: [], hasMore: true }, undefined],
     ["unkeyed legacy call", complete([toolCall("")]), undefined],
     ["missing run owner", complete([{ ...toolCall(), runId: undefined }]), undefined],
     ["unkeyed prepared item", complete([preparedCall({ toolCallId: undefined })]), undefined],

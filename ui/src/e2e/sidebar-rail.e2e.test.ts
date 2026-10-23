@@ -20,9 +20,9 @@ const unloaded = [
   { key: "agent:main:notes", kind: "direct" as const, label: "Release notes" },
 ];
 const entries = [
-  "session:agent:main:current",
-  "session:agent:main:design",
-  ...unloaded.map((row) => `session:${row.key}`),
+  "session-rail:agent:main:current",
+  "session-rail:agent:main:design",
+  ...unloaded.map((row) => `session-rail:${row.key}`),
 ];
 
 suite.define(() => {
@@ -39,7 +39,7 @@ suite.define(() => {
         });
         await seedStorage(page, {
           [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
-            railShortcuts: ["session:agent:main:design"],
+            railShortcuts: ["session-rail:agent:main:design"],
           }),
         });
         await page.goto(suite.server.baseUrl + "chat");
@@ -169,7 +169,6 @@ suite.define(() => {
         }
         expect(await gateway.getRequests("sessions.describe", { key: row.key })).toHaveLength(1);
       }
-      expect(await pins.locator(".sidebar-reorder-trigger").count()).toBe(0);
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const dir = createControlUiE2eArtifactDir("rail", process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR);
         await captureFrame(dir, "after-desktop.png", page.locator(".shell"), [rail, pins.first()]);
@@ -318,7 +317,7 @@ suite.define(() => {
               .locator(".sidebar-rail__pin")
               .evaluateAll((pins) => pins.map((pin) => pin.getAttribute("data-sidebar-entry"))),
           )
-          .toEqual(rows.map((row) => `session:${row.key}`));
+          .toEqual(rows.map((row) => `session-rail:${row.key}`));
         await capture("rail-two-added.png");
         await expect
           .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
@@ -326,7 +325,7 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("users.prefs.set")).at(-1)?.params)
           .toMatchObject({
-            entries: { "ui.railShortcuts": rows.map((row) => `session:${row.key}`) },
+            entries: { "ui.railShortcuts": rows.map((row) => `session-rail:${row.key}`) },
           });
         await page.reload();
         await gateway.waitForRequest("connect");

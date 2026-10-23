@@ -260,6 +260,8 @@ inter-session replies still use the bounded lifecycle preview.
 
 Sessions keep their addresses when execution moves between the Gateway, a paired device, and a cloud worker. An OpenClaw worker can send to an authorized parent, child, or sibling using its exact session key, including a target running on the Gateway. The Gateway validates the current session identities, visibility, and any per-agent send-only policy before admitting the target turn; target placement does not grant messaging access. Targets outside both the configured visibility scope and an authorized send-only rule, archived targets, and replaced targets remain denied.
 
+Raw `global` family keys resolve within the sending agent's store, or the configured fixed-store owner when agents share a store. A non-default agent's parent and siblings remain reachable under the same messaging policy.
+
 Children remain reachable when their parent rotates to a new session ID under the
 same key and its recorded predecessor chain still connects to their original
 parent. The current parent's communication policy applies. If that lineage no
@@ -318,10 +320,10 @@ only the exact unconsumed pending input can be re-admitted.
 
 - **Fire-and-forget:** set `timeoutSeconds: 0` to return after input admission without waiting for a reply.
 - **Wait for reply:** set a timeout and get the response inline.
-- **Guide your running child:** with no `mode` and `timeoutSeconds: 0`, a send to your own spawned child steers into its active run, like `mode: "steer"`. The tool acknowledges only after the input is saved in the target transcript. If the running backend cannot confirm durable steering, the input is queued as a separate durable turn. Use `mode: "followup"` to request that separate turn directly. An idle child or one whose run rejects the steer starts a new turn.
+- **Message a busy session:** ordinary peer sends and `mode: "followup"` start separately admitted turns with their existing correlated completion. A zero-wait send to the caller's own busy child or an eligible run-scoped target retains the existing active-delivery exception; explicit `mode: "steer"` still requests active input under its existing access checks. An idle recipient starts a new turn. An uncertain acceptance never replays the input. Default self-sends start a new turn; explicit `mode: "steer"` can steer the active self-session.
 - **Continue a paused child task:** send the continuation without `mode`. When the caller controls a native child paused by `sessions_yield` with task-owned completion, the runtime resumes that task automatically, preserving its identity and original completion recipient. Use `mode: "resume"` to require this behavior explicitly. An explicit `mode: "followup"` starts a separate turn and leaves the paused task intact.
 
-A separate follow-up to your native child starts only after Gateway admission
+A new turn for your native child starts only after Gateway admission
 and input preparation. If admission rejects the turn, the send returns an error
 and the turn does not start. A requested state watch is installed only after
 successful admission.
@@ -368,15 +370,13 @@ to keep the receiver's configured budget; bound the CLI wait separately with
 [`gateway call --timeout`](/cli/gateway/query#gateway-call-%3Cmethod%3E).
 
 An accepted result keeps target admission separate from reply delivery.
-`targetDisposition` is `queued` for a new turn or `steered` for an active turn, including default sends with no reply wait to your own running child;
+`targetDisposition` is `queued` for a new turn or `steered` for input accepted by an active turn;
 `delivery.status` describes only the later reply delivery as `pending` or `skipped`.
 An inline reply has `delivery.status: "skipped"` and starts no additional requester turn.
 Neither field is a target-completion receipt.
-New turns sent to a busy chat session wait for its active reply and delivery to
-finish. They keep their order behind other agent commands; cancellation or the
+Separately admitted turns wait for the active reply and delivery to finish. They keep their order behind other agent commands; cancellation or the
 receiver's execution deadline can withdraw a waiting turn before it runs.
-Default zero-wait sends to your own running child and `mode: "steer"` wait for
-transcript persistence before acknowledging. The existing two-minute steering
+Sends accepted by an active turn wait for transcript persistence before acknowledging. The existing two-minute steering
 deadline is independent of `timeoutSeconds`, which controls reply waiting. A
 deadline without confirmed persistence returns an error; it never acknowledges
 volatile input or replays input that might already have been consumed.
@@ -384,7 +384,8 @@ A persisted steer is part of the target's history; acknowledgment does not mean
 that the model has finished processing it. A backend without durable steering
 support uses a queued turn with startup delivery recovery instead, reported as
 `targetDisposition: "queued"`. Successful steering produces no separate
-completion turn; use `mode: "followup"` to request one explicitly.
+completion turn. `mode: "followup"` always starts a separately admitted turn with its own reply;
+it waits behind active work instead of joining that execution.
 
 If a retry with the same request ID finds that the original admission is still pending, the
 tool returns an error with `sentBeforeError: true` and the existing run ID, without
@@ -440,7 +441,7 @@ A child report also goes to its recipient once, without an automatic acknowledgm
 
 Isolated scheduled jobs can wait for an inline reply, but receive no detached reply turns or failure notifications. A send from such a job does not generate a target announcement either; separately registered task completion retains its own delivery owner.
 
-These reply deliveries apply to new or follow-up turns. Default sends with no reply wait to your own running child skip separate reply delivery and leave completion with the active run's owner. `mode: "steer"` returns after transcript persistence for guidance added to an active run and leaves completion with that run's existing owner. It uses the existing `sessions_send` access checks. Steering also requires the same authenticated requester and compatible permissions under the current destination configuration. If either check fails, the tool refuses the steer and directs the caller to `mode: "followup"` for a separately admitted turn. For the built-in runtime, a busy tool or model response can delay transcript persistence until the next steering boundary; the send's reply-wait deadline does not withdraw admitted guidance. Acknowledgment confirms transcript persistence, not model consumption. The receiving run retains source authority until the input settles or that exact run ends or aborts; a missing backend settlement callback cannot retain it past the run. Existing explicit cancellation, run-lifecycle, and authorization rules still apply. `mode: "notify"` queues context without starting a turn. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
+These reply deliveries apply to newly started turns. Messages accepted by an active turn skip separate reply delivery and leave completion with that turn’s owner. `mode: "steer"` returns after transcript persistence for guidance added to an active run and leaves completion with that run's existing owner. It uses the existing `sessions_send` access checks. Steering also requires the same authenticated requester and compatible permissions under the current destination configuration. If either check fails, the tool refuses the steer and directs the caller to `mode: "followup"` for a separately admitted turn. For the built-in runtime, a busy tool or model response can delay transcript persistence until the next steering boundary; the send's reply-wait deadline does not withdraw admitted guidance. Acknowledgment confirms transcript persistence, not model consumption. The receiving run retains source authority until the input settles or that exact run ends or aborts; a missing backend settlement callback cannot retain it past the run. Existing explicit cancellation, run-lifecycle, and authorization rules still apply. `mode: "notify"` queues context without starting a turn. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
 
 An operator with `operator.sessions.write` can use `mode: "steer"` or `mode: "notify"` for an authorized session they created, including an owned child. Shared visibility and membership do not grant this creator-bound access. Both modes retain the requester's current authority and target-session checks before queueing. Notifications remain in memory and do not start a run.
 
@@ -448,7 +449,7 @@ Child coordination stays in agent context and raw transcripts. The receiving cha
 
 Pass `watch: true` to also register the sender as a state-change watcher of the target. Watching additionally requires normal status visibility; a send-only rule does not authorize a subscription to otherwise hidden session state. Once registered, when another actor later sends the target a direct human message or changes its goal, the sender receives a system notice pointing at `session_status` `changesSince`. Registration happens after successful dispatch, targets the session that actually received the message, and starts at its current state version, so only later changes produce notices. The result reports `watched: true` when registration succeeded. See [Session state awareness](/concepts/session-state).
 
-Every nonblocking follow-up to your existing native child gives the current
+Every nonblocking send that starts a new turn for your existing native child gives the current
 requester turn a completion claim before the tool returns; `watch` is not required.
 Call `sessions_yield` after acceptance to wait for that completion, including
 when the follow-up is queued behind the child's active run. The normal child

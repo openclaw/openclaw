@@ -2,7 +2,6 @@ import { expect, it } from "vitest";
 import {
   annotateInterSessionPromptText,
   INTER_SESSION_PROMPT_PREFIX_BASE,
-  isAgentMediatedCompletionSourceTool,
   normalizeInputProvenance,
   readInterSessionPromptEnvelope,
   shouldPreserveUserFacingSessionStateForInputProvenance,
@@ -51,32 +50,26 @@ it.each(["decorated envelope", "foreign marker"])("rewraps a %s at the top", (ki
     expect(text).toContain("startup context");
   }
 });
-it("round-trips the body's own blank lines and code indentation", () => {
-  const body = "\n    first line\n      second line\n\n";
-  const marked = annotateInterSessionPromptText(body, interSession);
-  expect(stripInterSessionPromptPrefixForDisplay(marked)).toBe(body);
-});
-
 it("preserves body bytes when the generated explanation is absent", () => {
   expect(
     stripInterSessionPromptPrefixForDisplay(`${INTER_SESSION_PROMPT_PREFIX_BASE}    code`),
   ).toBe("    code");
 });
-it("reads source provenance from a generated envelope", () => {
+it("round-trips provenance and body bytes through a generated envelope", () => {
   const provenance = {
     kind: "inter_session" as const,
     sourceSessionKey: "agent:main:main",
     sourceChannel: "webchat",
     sourceTool: "sessions_send",
   };
-  const text = annotateInterSessionPromptText("body", provenance);
-
+  const body = "\n    first line\n      second line\n\n";
+  const text = annotateInterSessionPromptText(body, provenance);
   const envelope = readInterSessionPromptEnvelope(text);
-
   expect(text).toMatch(/^\[Inter-session message\]/);
   expect(text).toContain("isUser=false");
   expect(envelope?.provenance).toEqual(provenance);
-  expect(text.slice(envelope?.length)).toBe("body");
+  expect(text.slice(envelope?.length)).toBe(body);
+  expect(stripInterSessionPromptPrefixForDisplay(text)).toBe(body);
 });
 
 it("ignores headers without the generated explanation or with unknown fields", () => {
@@ -90,9 +83,6 @@ it("ignores headers without the generated explanation or with unknown fields", (
     ),
   ).toBeUndefined();
   expect(readInterSessionPromptEnvelope(`quoted ${generated}`)).toBeUndefined();
-});
-it("identifies video_generate as an agent-mediated completion source", () => {
-  expect(isAgentMediatedCompletionSourceTool("video_generate")).toBe(true);
 });
 it("does not preserve user-facing session state for external or user-directed handoffs", () => {
   expect(

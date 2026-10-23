@@ -397,7 +397,7 @@ export async function startSlackSocketAndWaitForDisconnect(params: {
     return value;
   });
   try {
-    await Promise.resolve(params.app.start());
+    await params.app.start();
     if (params.abortSignal?.aborted) {
       return null;
     }

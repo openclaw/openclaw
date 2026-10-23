@@ -4,10 +4,13 @@ import { en } from "./en.ts";
 // Analysis copy loads with Usage; shared labels and Settings search stay eager.
 const enUsage = {
   usage: {
-    lowerBound:
-      "≥ marks a lower bound: some responses ended before their final usage arrived, so their tokens and cost are partly counted.",
+    // The session time series still names a response that ended before its final usage.
     unavailable:
       "Token usage and cost are unknown because a response ended before final usage arrived. Select an unaffected session to view its usage.",
+    lowerBoundShort: "≥ Lower bound",
+    partialShort: "Partial results",
+    lowerBound:
+      "≥ marks a lower bound: some responses ended before their final usage arrived, so their tokens and cost are partly counted.",
     presets: {
       today: "Today",
       last7d: "7d",
@@ -73,6 +76,7 @@ const enUsage = {
       json: "JSON",
     },
     cacheStatus: {
+      checking: "Updating",
       warning: "Usage data may be incomplete. Checking for updated totals automatically.",
       paused:
         "Usage data may be incomplete. Automatic checks paused; select Refresh to check again.",
@@ -85,7 +89,12 @@ const enUsage = {
       select: "Filter by session creator",
       selected: "Selected identity",
       identity: "Identity",
-      unattributed: "Unattributed",
+      unattributed: "Not recorded",
+      unattributedHint:
+        "These sessions have no creator on record, usually because they started before OpenClaw recorded who starts each session.",
+      channelUser: "{channel} user {id}",
+      channelGroup: "{channel} group",
+      channelTopic: "{channel} group · topic {topic}",
       system: "System",
       empty: "No usage for these dates and filters.",
       more: "Show {count} more identities",
@@ -100,6 +109,9 @@ const enUsage = {
       title: "Daily Usage",
       total: "Total",
       byType: "By Type",
+      byProvider: "By Provider",
+      other: "Other",
+      pending: "not loaded yet",
       tokensTitle: "Daily Token Usage",
       costTitle: "Daily Cost",
       compressedScaleHint: "Square-root scale keeps low-usage days visible.",
@@ -165,6 +177,9 @@ const enUsage = {
     sessions: {
       title: "Sessions",
       shown: "{count} shown",
+      showAll: "Show all {count}",
+      details: "Session details",
+      showTop: "Show top {count}",
       total: "{count} total",
       avg: "avg",
       all: "All",

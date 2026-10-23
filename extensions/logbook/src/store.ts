@@ -89,24 +89,12 @@ export class LogbookStore {
     return path.join(this.framesDir, day, `${capturedAtMs}.jpg`);
   }
 
-  insertFrame(params: LogbookFrameInput) {
-    return this.execute("insertFrame", params);
-  }
-
-  lastFrame() {
-    return this.execute("lastFrame", undefined);
-  }
-
   unbatchedActiveFrames(limit: number) {
     return this.execute("unbatchedActiveFrames", { limit });
   }
 
   countUnbatchedActiveFrames() {
     return this.execute("countUnbatchedActiveFrames", undefined);
-  }
-
-  frameById(id: number) {
-    return this.execute("frameById", { id });
   }
 
   framesInRange(startMs: number, endMs: number) {

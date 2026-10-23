@@ -10,6 +10,8 @@ import {
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
 import "./chat-detail-panel.tsx";
+// Ownership tests start with preview code ready; chat-html-preview-loading.test.tsx covers cold imports.
+import "./chat-html-preview-element.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { setFileDraft } from "./chat-file-drafts.ts";
 import type { ChatHtmlPreviewElement } from "./chat-html-preview-element.tsx";
@@ -517,7 +519,7 @@ describe("markdown sidebar", () => {
     },
   );
 
-  it("releases pending preview requests when the source changes and the panel closes", async () => {
+  it("retains pending previews through notifications and retires replaced scopes", async () => {
     const requests: AbortSignal[] = [];
     vi.stubGlobal(
       "fetch",
@@ -533,12 +535,16 @@ describe("markdown sidebar", () => {
         });
       }),
     );
+    let sourceChanged!: () => void;
+    let resolutions = 0;
     const contentFor = (source: string): SidebarContent => ({
       kind: "attachment",
       attachmentKind: "image",
       title: "Pending preview",
       sourceIdentity: source,
       resolveSource: (onSourceChange, runtime) => {
+        sourceChanged = onSourceChange;
+        resolutions += 1;
         const availability = resolveAssistantAttachmentAvailability(source, {
           ...runtime,
           onMediaChange: onSourceChange,
@@ -553,12 +559,21 @@ describe("markdown sidebar", () => {
     panel.content = contentFor(`/tmp/sidebar-first-${crypto.randomUUID()}.png`);
     container.append(panel);
     await waitForSolid(() => expect(requests).toHaveLength(1));
+    const beforeNotification = resolutions;
+    sourceChanged();
+    await waitForSolid(() => expect(resolutions).toBeGreaterThan(beforeNotification));
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.aborted).toBe(false);
     panel.content = contentFor(`/tmp/sidebar-next-${crypto.randomUUID()}.png`);
     await waitForSolid(() => expect(requests).toHaveLength(2));
     expect(requests[0]!.aborted).toBe(true);
     expect(requests[1]!.aborted).toBe(false);
+    Object.assign(panel, { attachmentRuntime: { connectionEpoch: 1 } });
+    await waitForSolid(() => expect(requests).toHaveLength(3));
+    expect(requests[1]!.aborted).toBe(true);
+    expect(requests[2]!.aborted).toBe(false);
     panel.remove();
-    await waitForSolid(() => expect(requests[1]!.aborted).toBe(true));
+    await waitForSolid(() => expect(requests[2]!.aborted).toBe(true));
   });
 
   it.each(["error"] as const)(

@@ -19,7 +19,9 @@ import {
 } from "../node-wake-state.test-support.js";
 import { expectRecordFields, requireGatewayRecord } from "../test-helpers.assertions.js";
 import {
+  bindNodeRegistry,
   createNodeInvokeTestHarness,
+  invokeNodeRequest,
   createOperatorClient,
   firstRespondCall,
   mockArg,
@@ -307,6 +309,18 @@ function createNodeClient(nodeId: string, commands?: string[]) {
   };
 }
 
+function createRegisteredNodeClient(
+  nodeId: string,
+  commands: string[],
+  send: (raw: string) => void,
+) {
+  return {
+    ...createNodeClient(nodeId, commands),
+    usesSharedGatewayAuth: false,
+    socket: { readyState: WebSocket.OPEN, bufferedAmount: 0, close: vi.fn(), send },
+  };
+}
+
 function backgroundNode(params: { nodeId: string; commands?: string[]; platform?: string }) {
   return {
     get: vi.fn(() =>
@@ -335,19 +349,14 @@ async function rpc(
   client: GatewayRequestHandlerOptions["client"],
   context: GatewayRequestHandlerOptions["context"],
 ) {
-  const respond = vi.fn();
-  await expectDefined(
-    nodeHandlers[method],
-    method,
-  )({
-    req: { type: "req", id: "request", method },
-    params,
-    client,
+  return invokeNodeRequest(
+    expectDefined(nodeHandlers[method], method),
     context,
-    respond,
-    isWebchatConnect: () => false,
-  });
-  return respond;
+    client,
+    method,
+    params,
+    "request",
+  );
 }
 
 function mockNode(get: () => TestNodeSession | undefined, result: NodeInvokeResult = { ok: true }) {
@@ -552,23 +561,16 @@ describe("node.invoke APNs wake path", () => {
       connId = connection;
       registry.register(
         {
-          ...createNodeClient(nodeId, [command]),
+          ...createRegisteredNodeClient(nodeId, [command], (raw: string) => {
+            const frame = JSON.parse(raw) as {
+              event: string;
+              payload: { id: string; timeoutMs: number };
+            };
+            if (frame.event === "node.invoke.request") {
+              requests.push({ ...frame.payload, connId: connection });
+            }
+          }),
           connId,
-          usesSharedGatewayAuth: false,
-          socket: {
-            readyState: WebSocket.OPEN,
-            bufferedAmount: 0,
-            close: vi.fn(),
-            send(raw: string) {
-              const frame = JSON.parse(raw) as {
-                event: string;
-                payload: { id: string; timeoutMs: number };
-              };
-              if (frame.event === "node.invoke.request") {
-                requests.push({ ...frame.payload, connId: connection });
-              }
-            },
-          },
         } as never,
         { pairingIdentity: pairing.identity, pairingGeneration: pairing.generation },
       );
@@ -576,11 +578,7 @@ describe("node.invoke APNs wake path", () => {
 
     function start(requestParams: Partial<Record<string, unknown>> = {}, client?: unknown) {
       const invocation = invokeNode({
-        nodeRegistry: {
-          get: registry.get.bind(registry),
-          getForPairingGeneration: registry.getForPairingGeneration.bind(registry),
-          invoke: registry.invoke.bind(registry),
-        },
+        nodeRegistry: bindNodeRegistry(registry),
         requestParams: { nodeId, command, params: { bins: ["git"] }, ...requestParams },
         signal: controller.signal,
         client,
@@ -741,21 +739,17 @@ describe("node.invoke APNs wake path", () => {
       expectNodeError(await invocation, "TIMEOUT");
     });
 
-    it.each([-10_000])(
-      "keeps the invoke deadline stable across a %i ms wall-clock change",
-      async (clockChange) => {
-        const invocation = start({ timeoutMs: 500 });
-        await vi.advanceTimersByTimeAsync(0);
-        vi.setSystemTime(clockChange);
-        await vi.advanceTimersByTimeAsync(499);
-        expect(requests).toHaveLength(1);
-        vi.setSystemTime(clockChange + 1);
-        await vi.advanceTimersByTimeAsync(1);
-
-        expectNodeError(await invocation, "TIMEOUT");
-        expect(requests).toHaveLength(1);
-      },
-    );
+    it("keeps the invoke deadline stable across a backward wall-clock change", async () => {
+      const invocation = start({ timeoutMs: 500 });
+      await vi.advanceTimersByTimeAsync(0);
+      vi.setSystemTime(-10_000);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(requests).toHaveLength(1);
+      vi.setSystemTime(-9_999);
+      await vi.advanceTimersByTimeAsync(1);
+      expectNodeError(await invocation, "TIMEOUT");
+      expect(requests).toHaveLength(1);
+    });
 
     it("returns the final readiness rejection after exhausting bounded retries", async () => {
       const invocation = start({ timeoutMs: 0 });
@@ -847,16 +841,10 @@ describe("node.invoke APNs wake path", () => {
     "enforces browser.proxy admin scope for $owner ($scope)",
     async ({ scope, owner, allowed }) => {
       const command = "browser.proxy";
-      const nodeRegistry = {
-        get: vi.fn(() => ({
-          nodeId: "browser-node",
-          commands: [command],
-        })),
-        invoke: vi.fn().mockResolvedValue({
-          ok: true,
-          payloadJSON: '{"ok":true}',
-        }),
-      };
+      const nodeRegistry = mockNode(() => ({ nodeId: "browser-node", commands: [command] }), {
+        ok: true,
+        payloadJSON: '{"ok":true}',
+      });
 
       const respond = await invokeNode({
         nodeRegistry,
@@ -1222,26 +1210,13 @@ describe("node.invoke APNs wake path", () => {
         return { identity: "identity", generation: `generation:${nodeId}:1` };
       },
     });
-    registry.register(
-      {
-        ...createNodeClient(nodeId, ["system.which"]),
-        usesSharedGatewayAuth: false,
-        socket: {
-          readyState: WebSocket.OPEN,
-          bufferedAmount: 0,
-          close: vi.fn(),
-          send: dispatch,
-        },
-      } as never,
-      { pairingIdentity: "identity", pairingGeneration: `generation:${nodeId}:1` },
-    );
+    registry.register(createRegisteredNodeClient(nodeId, ["system.which"], dispatch) as never, {
+      pairingIdentity: "identity",
+      pairingGeneration: `generation:${nodeId}:1`,
+    });
     try {
       const invocation = invokeNode({
-        nodeRegistry: {
-          get: registry.get.bind(registry),
-          getForPairingGeneration: registry.getForPairingGeneration.bind(registry),
-          invoke: registry.invoke.bind(registry),
-        },
+        nodeRegistry: bindNodeRegistry(registry),
         requestParams: {
           nodeId,
           command: "system.which",
@@ -1265,33 +1240,29 @@ describe("node.invoke APNs wake path", () => {
     }
   });
 
-  it.each([-3_600_000])(
-    "keeps the reconnect wait interval across a %i ms wall-clock change",
-    async (clockChange) => {
-      useClock(10_000_000);
-      const nodeRegistry = {
-        get: vi.fn(() => undefined),
-        getForPairingGeneration: vi.fn(() => undefined),
-      };
-      let settled = false;
-      const reconnect = waitForNodeReconnect({
-        nodeId: "clock-node",
-        context: { nodeRegistry },
-        timeoutMs: 300,
-        pollMs: 50,
-      }).then((result) => {
-        settled = true;
-        return result;
-      });
-
-      vi.setSystemTime(10_000_000 + clockChange);
-      await vi.advanceTimersByTimeAsync(299);
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(settled).toBe(true);
-      await expect(reconnect).resolves.toBe(false);
-    },
-  );
+  it("keeps the reconnect wait interval across a backward wall-clock change", async () => {
+    useClock(10_000_000);
+    const nodeRegistry = {
+      get: vi.fn(() => undefined),
+      getForPairingGeneration: vi.fn(() => undefined),
+    };
+    let settled = false;
+    const reconnect = waitForNodeReconnect({
+      nodeId: "clock-node",
+      context: { nodeRegistry },
+      timeoutMs: 300,
+      pollMs: 50,
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+    vi.setSystemTime(6_400_000);
+    await vi.advanceTimersByTimeAsync(299);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    await expect(reconnect).resolves.toBe(false);
+  });
 
   it("broadcasts canonical Talk capture events for successful PTT node commands", async () => {
     const broadcast = vi.fn();
@@ -1335,56 +1306,41 @@ describe("node.invoke APNs wake path", () => {
       },
       { dropIfSlow: true },
     ]);
-    expect(mockArg(broadcast, 0, 2)).toEqual({ dropIfSlow: true });
   });
 
-  it("clears stale registrations after an invalid device token wake failure", async () => {
-    const registration = directRegistration("ios-node-stale");
-    mocks.loadApnsRegistration.mockResolvedValue(registration);
-    directWake("ios-node-stale", {
-      ok: false,
-      status: 400,
-      reason: "BadDeviceToken",
-    });
-    mocks.shouldClearStoredApnsRegistration.mockReturnValue(true);
-    const wake = await maybeWakeNodeWithApns("ios-node-stale", { force: true });
-
-    expectWakeSendError(wake, "BadDeviceToken", 400);
-    expect(mocks.clearApnsRegistrationIfCurrent).toHaveBeenCalledWith({
-      nodeId: "ios-node-stale",
-      registration,
-    });
-  });
-
-  it("does not clear relay registrations from wake failures", async () => {
-    const registration = relayRegistration("ios-node-relay");
-    relayWake("ios-node-relay", {
-      ok: false,
-      status: 410,
-      reason: "Unregistered",
-    });
-    mocks.shouldClearStoredApnsRegistration.mockReturnValue(false);
-    const wake = await maybeWakeNodeWithApns("ios-node-relay", { force: true });
-
-    expectWakeSendError(wake, "Unregistered", 410);
-    expect(mocks.resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(
-      process.env,
-      RELAY_GATEWAY_CONFIG,
-      { registrationRelayOrigin: undefined },
-    );
-    expect(mocks.shouldClearStoredApnsRegistration).toHaveBeenCalledWith({
-      registration,
-      result: {
-        ok: false,
-        status: 410,
-        reason: "Unregistered",
-        tokenSuffix: "abcd1234",
-        topic: "ai.openclaw.ios",
-        environment: "production",
-        transport: "relay",
-      },
-    });
-    expect(mocks.clearApnsRegistrationIfCurrent).not.toHaveBeenCalled();
+  it.each([
+    { transport: "direct", status: 400, reason: "BadDeviceToken", clear: true },
+    { transport: "relay", status: 410, reason: "Unregistered", clear: false },
+  ])("clears failed $transport wake registration only when eligible", async (failure) => {
+    const { transport, status, reason, clear } = failure;
+    const nodeId = `ios-node-${transport}`;
+    const registration =
+      transport === "direct" ? directRegistration(nodeId) : relayRegistration(nodeId);
+    (transport === "direct" ? directWake : relayWake)(nodeId, { ok: false, status, reason });
+    mocks.shouldClearStoredApnsRegistration.mockReturnValue(clear);
+    expectWakeSendError(await maybeWakeNodeWithApns(nodeId, { force: true }), reason, status);
+    if (clear) {
+      expect(mocks.clearApnsRegistrationIfCurrent).toHaveBeenCalledWith({ nodeId, registration });
+    } else {
+      expect(mocks.resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(
+        process.env,
+        RELAY_GATEWAY_CONFIG,
+        { registrationRelayOrigin: undefined },
+      );
+      expect(mocks.shouldClearStoredApnsRegistration).toHaveBeenCalledWith({
+        registration,
+        result: {
+          ok: false,
+          status,
+          reason,
+          tokenSuffix: "abcd1234",
+          topic: "ai.openclaw.ios",
+          environment: "production",
+          transport: "relay",
+        },
+      });
+      expect(mocks.clearApnsRegistrationIfCurrent).not.toHaveBeenCalled();
+    }
   });
 
   it.each(["removed", "lookup failure"])(
@@ -1601,19 +1557,17 @@ describe("node.invoke APNs wake path", () => {
     let pairingCurrent = true;
     mocks.isNodePairingGenerationCurrent.mockImplementation(async () => pairingCurrent);
     const session = makeNodeSession(nodeId, { connId: "revoked-conn" });
-    const nodeRegistry = {
-      get: vi.fn(() => session),
-      invoke: vi.fn(
-        (payload: { signal?: AbortSignal }) =>
-          new Promise<{ ok: false; error: { code: string; message: string } }>((resolve) => {
-            payload.signal?.addEventListener(
-              "abort",
-              () => resolve({ ok: false, error: { code: "ABORTED", message: "cancelled" } }),
-              { once: true },
-            );
-          }),
-      ),
-    };
+    const nodeRegistry = mockNode(() => session);
+    nodeRegistry.invoke.mockImplementation(
+      ({ signal }) =>
+        new Promise((resolve) => {
+          signal?.addEventListener(
+            "abort",
+            () => resolve({ ok: false, error: { code: "ABORTED", message: "cancelled" } }),
+            { once: true },
+          );
+        }),
+    );
 
     const pending = invokeAt(nodeRegistry, nodeId);
     await vi.waitFor(() => expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1));
@@ -1870,14 +1824,6 @@ describe("node.invoke APNs wake path", () => {
     expect(await pendingPayload(nodeId, commands)).toMatchObject({ nodeId, actions: [] });
   });
 
-  it("does not expose queued foreground actions to a replacement pairing generation", async () => {
-    const nodeId = "ios-node-replaced-before-pull";
-    mocks.loadApnsRegistration.mockResolvedValue(null);
-    await invokeForeground(nodeId);
-    mocks.captureNodePairingGeneration.mockResolvedValue({ nodeId, key: `generation:${nodeId}:2` });
-    expect(await pendingPayload(nodeId)).toMatchObject({ nodeId, actions: [] });
-  });
-
   it("does not let a prior-generation session pull or ack current-generation actions", async () => {
     const nodeId = "ios-node-prior-generation-pending";
     mocks.loadApnsRegistration.mockResolvedValue(null);
@@ -1896,11 +1842,12 @@ describe("node.invoke APNs wake path", () => {
     expect((await pendingPayload(nodeId)).actions).toHaveLength(1);
   });
 
-  it("does not let a stale foreground pull delete replacement-generation actions", async () => {
+  it("isolates foreground actions from replacement and stale-generation pulls", async () => {
     const nodeId = "ios-node-stale-pull";
     mocks.loadApnsRegistration.mockResolvedValue(null);
     await invokeForeground(nodeId);
     mocks.captureNodePairingGeneration.mockResolvedValue({ nodeId, key: `generation:${nodeId}:2` });
+    expect(await pendingPayload(nodeId)).toMatchObject({ nodeId, actions: [] });
     await invokeForeground(nodeId, { requestParams: { idempotencyKey: "replacement" } });
     mocks.captureNodePairingGeneration.mockResolvedValue({ nodeId, key: `generation:${nodeId}:1` });
     expect((await pendingPayload(nodeId)).actions).toHaveLength(1);

@@ -175,9 +175,7 @@ async function ensureSharedClientStarted(
     state.started = true;
   })();
   const guardedStart = startPromise.finally(() => {
-    if (state.startPromise === guardedStart) {
-      state.startPromise = null;
-    }
+    state.startPromise = null;
   });
   state.startPromise = guardedStart;
   await awaitMatrixStartupWithAbort(guardedStart, abortSignal);

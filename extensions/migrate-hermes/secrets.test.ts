@@ -11,6 +11,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import {
   HERMES_REASON_AUTH_PROFILE_EXISTS,
+  HERMES_REASON_INCLUDE_SECRETS,
   HERMES_REASON_SECRET_NO_LONGER_PRESENT,
 } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
@@ -93,6 +94,18 @@ describe("Hermes migration secret items", () => {
         entries: { custom: { agentDir: customAgentDir } },
       },
     } as OpenClawConfig;
+    const skipped = await provider.plan(secretContext({ config, includeSecrets: false }));
+    expect(skipped.items).toEqual([
+      expect.objectContaining({
+        id: "secret:openai",
+        sensitive: true,
+        status: "skipped",
+        reason: HERMES_REASON_INCLUDE_SECRETS,
+      }),
+    ]);
+    expect(skipped.warnings).toContain(
+      "Auth credentials were detected but skipped. Re-run interactively or pass --include-secrets to import supported credentials.",
+    );
     const plan = await provider.plan(secretContext({ config }));
 
     expect(plan.metadata?.agentDir).toBe(customAgentDir);

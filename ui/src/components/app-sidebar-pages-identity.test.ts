@@ -195,6 +195,29 @@ describe("Pages navigation identity", () => {
     expect(pageEntry(sidebar, "route:usage").link.getAttribute("aria-current")).toBe("page");
   });
 
+  it("updates a retained plugin row when its route placement changes", async () => {
+    const { sidebar, publishTab } = await fixture();
+    const navigate = vi.fn();
+    sidebar.onNavigate = navigate;
+    publishTab({ placement: "route:workboard" });
+    await settleLitElement(sidebar);
+    const before = pageEntry(sidebar, dailyKey);
+    expect(before.link.getAttribute("href")).toBe("/workboard");
+    expect(before.label.textContent).toBe("Workboard");
+    before.link.click();
+    expect(navigate).toHaveBeenLastCalledWith("workboard", undefined);
+
+    publishTab({ placement: "route:worktrees" });
+    await settleLitElement(sidebar);
+    const after = pageEntry(sidebar, dailyKey);
+    expect(after.row).toBe(before.row);
+    expect(after.link.getAttribute("href")).toBe("/worktrees");
+    expect(after.label.textContent).toBe("Worktrees");
+    after.link.click();
+    expect(navigate).toHaveBeenLastCalledWith("worktrees", undefined);
+    expect(navigate).toHaveBeenCalledTimes(2);
+  });
+
   it("updates plugin artwork and labels, handles registry removal and releases subscriptions", async () => {
     const state = await fixture();
     const { sidebar } = state;

@@ -34,9 +34,13 @@ function reference(fileName = "receipt.pdf") {
   };
 }
 
-function mediaParams(
-  overrides: Partial<Parameters<typeof resolveNextcloudTalkAuthenticatedMediaSource>[0]> = {},
-): Parameters<typeof resolveNextcloudTalkAuthenticatedMediaSource>[0] {
+type MediaParams = Parameters<typeof resolveNextcloudTalkAuthenticatedMediaSource>[0];
+function mediaParams({
+  attachment,
+  ...overrides
+}: Partial<Omit<MediaParams, "attachment">> & {
+  attachment?: Partial<MediaParams["attachment"]>;
+} = {}): MediaParams {
   return {
     baseUrl: "https://nextcloud.example",
     roomToken: "room-token",
@@ -49,6 +53,7 @@ function mediaParams(
       declaredSizeBytes: 2048,
       shareUrl: "https://nextcloud.example/s/redacted-token",
       hideDownload: false,
+      ...attachment,
     },
     accountConfig: { apiUser: "alice", apiPassword: "test-password" },
     reference: reference(),
@@ -107,27 +112,15 @@ describe("Nextcloud Talk inbound media policy", () => {
   });
 
   it.each([
-    { label: "malformed", shareUrl: "not a URL" },
-    { label: "non-HTTP", shareUrl: "ftp://nextcloud.example/s/redacted-token" },
-    {
-      label: "credential-bearing",
-      shareUrl: credentialedShareUrl(),
-    },
-    {
-      label: "query-bearing",
-      shareUrl: "https://nextcloud.example/s/redacted-token?download=1",
-    },
-    {
-      label: "fragment-bearing",
-      shareUrl: "https://nextcloud.example/s/redacted-token#fragment",
-    },
-    { label: "wrong path", shareUrl: "https://nextcloud.example/other/9001" },
-    { label: "extra short file path", shareUrl: "https://nextcloud.example/f/9001/extra" },
-    {
-      label: "extra share path",
-      shareUrl: "https://nextcloud.example/s/redacted-token/extra",
-    },
-  ])("rejects a $label share link as invalid", ({ shareUrl }) => {
+    ["malformed", "not a URL"],
+    ["non-HTTP", "ftp://nextcloud.example/s/redacted-token"],
+    ["credential-bearing", credentialedShareUrl()],
+    ["query-bearing", "https://nextcloud.example/s/redacted-token?download=1"],
+    ["fragment-bearing", "https://nextcloud.example/s/redacted-token#fragment"],
+    ["wrong path", "https://nextcloud.example/other/9001"],
+    ["extra short file path", "https://nextcloud.example/f/9001/extra"],
+    ["extra share path", "https://nextcloud.example/s/redacted-token/extra"],
+  ])("rejects a %s share link as invalid", (_label, shareUrl) => {
     expect(
       resolveNextcloudTalkAttachmentReference({
         baseUrl: "https://nextcloud.example",
@@ -184,12 +177,8 @@ describe("Nextcloud Talk inbound media policy", () => {
       mediaParams({
         baseUrl: "https://nextcloud.example/cloud/",
         attachment: {
-          fileId: "9001",
           name: "receipt 1.pdf",
-          mimeType: "application/pdf",
-          declaredSizeBytes: 2048,
           shareUrl: "https://nextcloud.example/cloud/s/redacted-token",
-          hideDownload: false,
         },
         accountConfig: {
           apiUser: "alice@example.com",
@@ -314,8 +303,6 @@ describe("Nextcloud Talk inbound media policy", () => {
             name: "voice-note.mp3",
             mimeType: declaredMimeType,
             declaredSizeBytes: 18_351,
-            shareUrl: "https://nextcloud.example/s/redacted-token",
-            hideDownload: false,
           },
           reference: reference("voice-note.mp3"),
         }),
@@ -361,28 +348,13 @@ describe("Nextcloud Talk inbound media policy", () => {
   });
 
   it.each([
-    { webDavId: "9001", status: 207, accepted: true, failure: undefined },
-    {
-      webDavId: "9002",
-      status: 207,
-      accepted: false,
-      failure: { ok: false, reason: "media_message_mismatch" },
-    },
-    {
-      webDavId: "9001",
-      status: 200,
-      accepted: false,
-      failure: { ok: false, reason: "media_fetch_failed", status: 200 },
-    },
-    {
-      webDavId: "9001",
-      status: 404,
-      accepted: false,
-      failure: { ok: false, reason: "media_unavailable", status: 404 },
-    },
-  ])(
-    "uses the recipient collision-renamed mount only with matching WebDAV identity ($webDavId/$status)",
-    async ({ webDavId, status, accepted, failure }) => {
+    ["9001", 207, undefined],
+    ["9002", 207, { ok: false, reason: "media_message_mismatch" }],
+    ["9001", 200, { ok: false, reason: "media_fetch_failed", status: 200 }],
+    ["9001", 404, { ok: false, reason: "media_unavailable", status: 404 }],
+  ] as const)(
+    "uses the recipient collision-renamed mount only with matching WebDAV identity (%s/%s)",
+    async (webDavId, status, failure) => {
       const fetchGuarded = mocks.fetchGuarded
         .mockReset()
         .mockResolvedValueOnce(ocsResponse({ id: "bob" }, userUrl))
@@ -407,7 +379,7 @@ describe("Nextcloud Talk inbound media policy", () => {
       expect(fetchGuarded.mock.calls[2]?.[0].url).toBe(
         "https://nextcloud.example/remote.php/dav/files/bob/Talk/receipt%20(2).pdf",
       );
-      if (accepted) {
+      if (!failure) {
         expect(result).toMatchObject({
           ok: true,
           url: "https://nextcloud.example/remote.php/dav/files/bob/Talk/receipt%20(2).pdf",

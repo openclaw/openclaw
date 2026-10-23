@@ -2,7 +2,6 @@ import { BROWSER_IMAGE_MIME_TYPES } from "../../../../../src/shared/browser-imag
 import { downloadArtifact } from "../../../api/artifact-download.ts";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import { downloadSessionFile } from "../../../api/session-file-download.ts";
-import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { t } from "../../../i18n/index.ts";
@@ -20,6 +19,8 @@ import {
   hasUniformLineEndings,
   loadArtifactSidebarContent,
   readWorkspaceFileText,
+  readSessionFileReference,
+  workspaceBrowserFilePath,
   unsupportedFileSidebarContent,
 } from "./chat-session-workspace-file-content.ts";
 import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
@@ -52,16 +53,6 @@ registerFilePreviewEnglish();
 export { retireSessionWorkspaceCheckout } from "./chat-session-workspace-state.ts";
 export type { SessionWorkspaceHost } from "./chat-session-workspace-types.ts";
 
-function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
-  if (!root || /^(?:\/|[a-z]:[\\/]|\\\\)/i.test(filePath)) {
-    return filePath;
-  }
-  const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
-  const base = root.replace(/[\\/]+$/, "");
-  const relative = filePath.replace(/^[\\/]+/, "").replaceAll(/[\\/]/g, separator);
-  return base ? `${base}${separator}${relative}` : `${separator}${relative}`;
-}
-
 export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFiles: boolean) {
   if (refreshSessionWorkspaceState(state, refreshFiles)) {
     state.sidebarContent = resolveSessionDiffSidebarContent(state);
@@ -79,6 +70,7 @@ function openFile(
     sessionKey?: string;
     disposition?: "pinned" | "preview";
     intent?: "navigate";
+    messageEntryId?: string;
   } = {},
 ) {
   const requestPath = opts.requestPath ?? path;
@@ -87,54 +79,31 @@ function openFile(
     ? parseAgentSessionKey(opts.sessionKey)?.agentId
     : workspace.agentId;
   const viewingSession = sessionKey === workspace.sessionKey;
+  // A message-qualified read selects that message's original files, read-only.
+  const messageFile = opts.messageEntryId ? { messageEntryId: opts.messageEntryId } : {};
   const draftScope = state.sessionWorkspaceDraftScope;
   const draftContext = state.sessionWorkspaceDraftContext;
   const gatewayUrl = state.settings?.gatewayUrl ?? "";
   return openWorkspaceItem(
     state,
     workspace,
-    viewingSession ? `file:${requestPath}` : JSON.stringify(["file", sessionKey, requestPath]),
-    async () => {
-      try {
-        return await state.sessions.getFile(sessionKey, requestPath, { agentId });
-      } catch (error) {
-        const details = error instanceof GatewayRequestError ? error.details : null;
-        if (
-          details &&
-          typeof details === "object" &&
-          "type" in details &&
-          details.type === "session_file_too_large" &&
-          "size" in details &&
-          typeof details.size === "number"
-        ) {
-          // The authorized read supplies metadata even when its preview bytes are unavailable.
-          const metadata: SessionWorkspaceGetResult = {
-            sessionKey,
-            file: {
-              path: requestPath,
-              name: pathDisplayName(path),
-              size: details.size,
-              kind: "read",
-              missing: false,
-              previewKind: "unsupported",
-            },
-          };
-          return metadata;
-        }
-        throw error;
-      }
-    },
-    (result) => {
+    viewingSession && !opts.messageEntryId
+      ? `file:${requestPath}`
+      : JSON.stringify(["file", sessionKey, requestPath, opts.messageEntryId]),
+    async () =>
+      await readSessionFileReference(state, sessionKey, agentId, requestPath, opts.messageEntryId),
+    (reference) => {
+      const { result, actionPath } = reference;
       const file = result.file;
       if (!file) {
         return null;
       }
-      const name = file.name || pathDisplayName(path);
-      const filePath = file.workspacePath || file.path || path;
+      const name = file.name || pathDisplayName(file.path || actionPath);
+      const filePath = file.workspacePath || file.path || actionPath;
       const download = (signal: AbortSignal) =>
         downloadSessionFile(
           state,
-          { sessionKey: result.sessionKey, agentId, path: requestPath },
+          { sessionKey: result.sessionKey, agentId, path: actionPath, ...messageFile },
           signal,
         );
       if (file.previewKind === "image") {
@@ -162,7 +131,7 @@ function openFile(
       }
       if (file.previewKind === "unsupported") {
         return {
-          ...unsupportedFileSidebarContent(file, path, download),
+          ...unsupportedFileSidebarContent(file, actionPath, download),
           fileLinkSessionKey: result.sessionKey,
           file: {
             path: filePath,
@@ -186,16 +155,11 @@ function openFile(
             hash: file.hash!,
             save: async ({ content, expectedHash }: { content: string; expectedHash: string }) => {
               try {
-                const saved = await state.sessions.setFile(
-                  result.sessionKey,
-                  requestPath,
-                  content,
-                  {
-                    agentId,
-                    expectedHash,
-                    ...(result.source ? { expectedSource: result.source } : {}),
-                  },
-                );
+                const saved = await state.sessions.setFile(result.sessionKey, actionPath, content, {
+                  agentId,
+                  expectedHash,
+                  ...(result.source ? { expectedSource: result.source } : {}),
+                });
                 const hash = saved?.file.hash;
                 if (
                   typeof hash === "string" &&
@@ -239,8 +203,9 @@ function openFile(
               }
             },
             fetchLatest: async () => {
-              const latest = await state.sessions.getFile(result.sessionKey, requestPath, {
+              const latest = await state.sessions.getFile(result.sessionKey, actionPath, {
                 agentId,
+                ...messageFile,
               });
               // A hash-conflict recovery still belongs to the file source that was opened.
               if (
@@ -279,7 +244,8 @@ function openFile(
         sessionFileSource: {
           sessionKey: result.sessionKey,
           agentId,
-          path: filePath,
+          path: actionPath,
+          ...messageFile,
         },
         draftKey: [
           gatewayUrl,
@@ -313,8 +279,8 @@ function openFile(
       intent: opts.intent,
       label: pathDisplayName(path),
       revalidate: true,
-      resolveLabel: (result) => result.file?.name,
-      resolveKey: (result) => {
+      resolveLabel: ({ result }) => result.file?.name,
+      resolveKey: ({ result }) => {
         const canonicalPath = result.file?.workspacePath || result.file?.path;
         return canonicalPath
           ? sessionWorkspaceFileKey(result.sessionKey, result.root, canonicalPath)
@@ -345,6 +311,7 @@ export function openSessionWorkspaceFile(
     line: target.line,
     sessionKey: target.sessionKey,
     disposition,
+    messageEntryId: target.messageEntryId,
   });
 }
 
@@ -470,8 +437,6 @@ export function createSessionWorkspaceProps(
     presentation?: "desktop" | "mobile";
     openIntent?: "navigate";
     transcriptAttachments?: TranscriptAttachments;
-    /** Mobile host owns persistent expansion on editable focus. */
-    onSearchFocus?: () => void;
     draftScope?: string;
     draftContext?: SessionWorkspaceHost["sessionWorkspaceDraftContext"];
     expanded?: boolean;
@@ -543,7 +508,6 @@ export function createSessionWorkspaceProps(
         mobile.scrollTop = top;
       }
     },
-    onSearchFocus: options?.onSearchFocus,
     directories: workspace.directories,
     onToggleDirectory: (path: string) => {
       const tree = workspace.tree!;
@@ -585,6 +549,8 @@ export function createSessionWorkspaceProps(
       }
     },
     sessionKey: state.sessionKey,
+    readState: workspace,
+    readResult: workspace.readResult,
     list: workspace.list?.sessionKey === state.sessionKey ? workspace.list : null,
     loading: workspace.loading,
     error: workspace.error ?? workspace.artifacts?.error ?? null,

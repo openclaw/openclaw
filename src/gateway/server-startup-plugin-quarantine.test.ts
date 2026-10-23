@@ -81,13 +81,20 @@ describe("Gateway startup plugin quarantine", () => {
 
   function fixturePlugin(
     id: string,
-    { main = "./index.cjs", peer = false, fails = false, payload = true } = {},
+    {
+      main = "./index.cjs",
+      peer = false,
+      fails = false,
+      payload = true,
+      additionalProperties = false,
+    } = {},
   ) {
     const root = tempDirs.make("openclaw-quarantine-");
     const write = (name: string, value: unknown) =>
       fs.writeFileSync(path.join(root, name), JSON.stringify(value), "utf8");
     write("package.json", {
       name: id,
+      version: "1.0.0",
       type: "commonjs",
       main,
       openclaw: { extensions: ["./index.cjs"] },
@@ -96,7 +103,7 @@ describe("Gateway startup plugin quarantine", () => {
     if (payload) {
       write("openclaw.plugin.json", {
         id,
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
+        configSchema: { type: "object", additionalProperties, properties: {} },
       });
       fs.writeFileSync(
         path.join(root, "index.cjs"),
@@ -264,28 +271,8 @@ module.exports = { id: '${id}', register() {} };`,
   it("keeps the core ready and authored state intact while a broken optional payload is repaired", async () => {
     const root = tempDirs.make("openclaw-plugin-degradation-");
     const pluginId = "optional-update-fixture";
-    const sourceDir = path.join(root, "source");
+    const sourceDir = fixturePlugin(pluginId, { additionalProperties: true });
     const extensionsDir = path.join(root, "extensions");
-    await fsPromises.mkdir(sourceDir);
-    const write = (name: string, contents: string) =>
-      fsPromises.writeFile(path.join(sourceDir, name), contents);
-    await write(
-      "package.json",
-      JSON.stringify({
-        name: pluginId,
-        version: "1.0.0",
-        type: "commonjs",
-        openclaw: { extensions: ["./index.cjs"] },
-      }),
-    );
-    await write(
-      "openclaw.plugin.json",
-      JSON.stringify({
-        id: pluginId,
-        configSchema: { type: "object", additionalProperties: true },
-      }),
-    );
-    await write("index.cjs", `module.exports = { id: '${pluginId}', register() {} };\n`);
     const archivePath = path.join(root, "fixture.tgz");
     await createTar({ gzip: true, file: archivePath, cwd: sourceDir }, ["."]);
     const installed = await installPluginFromPath({ path: archivePath, extensionsDir });

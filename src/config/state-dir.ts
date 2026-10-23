@@ -1,6 +1,7 @@
 // State-directory lookup without initializing process-wide config paths.
 import os from "node:os";
 import path from "node:path";
+import { normalizeProfileName, resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { LruCache } from "../infra/lru-cache.js";
 
@@ -17,7 +18,7 @@ export function resolveNewStateDir(homedir: () => string = resolveRequiredHomeDi
 /**
  * State directory for mutable data (sessions, logs, caches).
  * Can be overridden via OPENCLAW_STATE_DIR.
- * Default: ~/.openclaw
+ * Default: ~/.openclaw, or ~/.openclaw-<profile> for a named profile.
  */
 export function resolveStateDir(
   env: NodeJS.ProcessEnv = process.env,
@@ -43,8 +44,11 @@ export function resolveStateDir(
 
 /** Select a default state directory from the caller's already resolved home. */
 export function resolveStateDirFromHome(
-  _env: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv,
   effectiveHomedir: () => string,
 ): string {
-  return resolveNewStateDir(effectiveHomedir);
+  const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
+  return profile
+    ? resolveProfileStateDir(profile, env, effectiveHomedir)
+    : resolveNewStateDir(effectiveHomedir);
 }

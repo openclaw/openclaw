@@ -62,6 +62,10 @@ function expectRegistryLookup(name = "@openclaw/whatsapp") {
   expect(fetchClawHubPackageDetail).toHaveBeenCalledWith({ name, baseUrl: "https://clawhub.ai" });
 }
 
+function hubTarget<T extends object>(fields: T) {
+  return { packageName: hubPackage, requestedTarget: "2026.9.4", ...fields };
+}
+
 function expectNoRepair(entry: ReturnType<typeof firstDrift>) {
   expect(entry.targetResolution?.status).toBe("unresolved");
   expect(repairCommand(entry)).toBeUndefined();
@@ -205,12 +209,7 @@ describe("resolvePluginVersionDriftTargets for ClawHub installs", () => {
     {
       installed: "2026.9.3",
       latest: "2026.9.3",
-      resolution: {
-        status: "registry-current",
-        packageName: "@openclaw/whatsapp",
-        requestedTarget: "2026.9.4",
-        version: "2026.9.3",
-      },
+      resolution: hubTarget({ status: "registry-current", version: "2026.9.3" }),
       lag: { registryVersion: "2026.9.3", expectedVersion: "2026.9.4" },
     },
     {
@@ -302,12 +301,7 @@ describe("resolvePluginVersionDriftTargets for ClawHub installs", () => {
     );
     expectRegistryLookup();
     const entry = firstDrift(report);
-    expect(entry.targetResolution).toEqual({
-      status: "resolved",
-      packageName: "@openclaw/whatsapp",
-      requestedTarget: "2026.9.4",
-      version: "2026.9.3",
-    });
+    expect(entry.targetResolution).toEqual(hubTarget({ status: "resolved", version: "2026.9.3" }));
     const command = repairCommand(entry);
     expect(command).toBe("openclaw plugins update whatsapp");
     const rawId = expectDefined(command, "repair command").replace("openclaw plugins update ", "");
@@ -388,12 +382,9 @@ describe("resolvePluginVersionDriftTargets for ClawHub installs", () => {
   ])("keeps drift reported when $label", async ({ arrange, error }) => {
     arrange();
     const entry = await hubEntry();
-    expect(entry.targetResolution).toMatchObject({
-      status: "unresolved",
-      packageName: "@openclaw/whatsapp",
-      requestedTarget: "2026.9.4",
-      error: expect.stringContaining(error),
-    });
+    expect(entry.targetResolution).toMatchObject(
+      hubTarget({ status: "unresolved", error: expect.stringContaining(error) }),
+    );
   });
 });
 

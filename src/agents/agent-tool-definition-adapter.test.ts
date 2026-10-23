@@ -270,53 +270,35 @@ describe("agent tool definition adapter", () => {
     },
   );
 
-  it("preserves exec deny before prepared workdir failures", async () => {
-    const tool = createExecTool({
-      security: "deny",
-      ask: "off",
-    });
-    const missingWorkdir = path.join(os.tmpdir(), `openclaw-missing-denied-cwd-${Date.now()}`);
-    const [definition] = toToolDefinitions([tool]);
-    const existing = await executeDefinition(definition, "call-denied-existing-cwd", {
-      command: "echo denied",
-      workdir: process.cwd(),
-    });
-    const missing = await executeDefinition(definition, "call-denied-missing-cwd", {
-      command: "echo denied",
-      workdir: missingWorkdir,
-    });
-
-    const expected = {
-      status: "error",
-      error: "exec denied: host=gateway security=deny",
-    };
-    expect(existing.details).toMatchObject(expected);
-    expect(missing.details).toMatchObject(expected);
-    expect(JSON.stringify(missing)).not.toContain("unavailable or not a directory");
-  });
-
-  it("does not validate backend sandbox workdirs before exec deny", async () => {
-    const validateWorkdir = vi.fn(async (workdir: string) => workdir);
-    const result = await executeExec(
-      {
-        host: "sandbox",
-        security: "deny",
-        ask: "off",
-        sandbox: sandboxOptions(validateWorkdir),
-      },
-      "call-denied-backend-cwd",
-      {
-        command: "echo denied",
-        workdir: "/remote/workspace/generated",
-      },
-    );
-
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: "exec denied: host=sandbox security=deny",
-    });
-    expect(validateWorkdir).not.toHaveBeenCalled();
-  });
+  it.each(["existing", "missing", "backend"] as const)(
+    "denies exec before validating the %s workdir",
+    async (kind) => {
+      const validateWorkdir = vi.fn(async (workdir: string) => workdir);
+      const backend = kind === "backend";
+      const workdir = backend
+        ? "/remote/workspace/generated"
+        : kind === "existing"
+          ? process.cwd()
+          : path.join(os.tmpdir(), `openclaw-missing-denied-cwd-${Date.now()}`);
+      const result = await executeExec(
+        {
+          security: "deny",
+          ask: "off",
+          ...(backend
+            ? ({ host: "sandbox", sandbox: sandboxOptions(validateWorkdir) } as const)
+            : {}),
+        },
+        `call-denied-${kind}-cwd`,
+        { command: "echo denied", workdir },
+      );
+      expect(result.details).toMatchObject({
+        status: "error",
+        error: `exec denied: host=${backend ? "sandbox" : "gateway"} security=deny`,
+      });
+      expect(validateWorkdir).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain("unavailable or not a directory");
+    },
+  );
 
   it("preserves no-start evidence when presenting a script-preflight refusal", async () => {
     const parameters = Type.Object({ command: Type.String(), workdir: Type.String() });
@@ -399,16 +381,7 @@ describe("agent tool definition adapter", () => {
   it("does not re-run hook preparation for an already wrapped tool", async () => {
     const prepareBeforeToolCallParams = vi.fn((params: unknown) => params);
     const execute = vi.fn(async () => receipt("done"));
-    const tool = {
-      name: "wrapped_tool",
-      label: "Wrapped Tool",
-      description: "already owns hook execution",
-      parameters: Type.Object({}),
-      prepareBeforeToolCallParams,
-      execute,
-    } as AgentTool & {
-      prepareBeforeToolCallParams: typeof prepareBeforeToolCallParams;
-    };
+    const tool = { ...toolFixture("wrapped_tool", execute), prepareBeforeToolCallParams };
     const hookContext = { agentId: "agent-main", sessionId: "session-wrapped-tool" };
     const wrappedTool = wrapToolWithBeforeToolCallHook(tool, hookContext);
     await executeDefinition(toToolDefinitions([wrappedTool], hookContext)[0], "call-wrapped", {});
@@ -418,15 +391,11 @@ describe("agent tool definition adapter", () => {
   });
 });
 
-function makeClientTool(name: string, parameters = querySchema()): ClientToolDefinition {
-  return {
-    type: "function",
-    function: {
-      name,
-      description: `${name} tool`,
-      parameters,
-    },
-  };
+function makeClientTool(
+  name: string,
+  parameters: ClientToolDefinition["function"]["parameters"] = querySchema(),
+): ClientToolDefinition {
+  return { type: "function", function: { name, description: `${name} tool`, parameters } };
 }
 
 async function executeClientTool(params: unknown) {
@@ -488,8 +457,7 @@ describe("toClientToolDefinitions – param coercion", () => {
   });
 
   it("rejects missing required client arguments without completing the call", async () => {
-    const clientTool = makeClientTool("search");
-    clientTool.function.parameters = { ...querySchema(), required: ["query"] };
+    const clientTool = makeClientTool("search", { ...querySchema(), required: ["query"] });
     const reserve = vi.fn();
     const complete = vi.fn();
     const discard = vi.fn();
@@ -506,8 +474,7 @@ describe("toClientToolDefinitions – param coercion", () => {
   });
 
   it("keeps absent arguments valid for a parameterless client tool", async () => {
-    const clientTool = makeClientTool("ping");
-    clientTool.function.parameters = { type: "object", properties: {} };
+    const clientTool = makeClientTool("ping", { type: "object", properties: {} });
     const complete = vi.fn();
     const [definition] = toClientToolDefinitions([clientTool], { complete });
     const result = await executeDefinition(definition, "call-parameterless-client-tool");

@@ -495,5 +495,16 @@ async function runDoctorConfigPreflightOperation(
     ...(stateMigrationStepReceipts.length > 0 ? { stateMigrationStepReceipts } : {}),
     ...(postSessionPluginMigration ? { postSessionPluginMigration } : {}),
     ...(postSessionPluginMigrationPlanBound ? { postSessionPluginMigrationPlanBound: true } : {}),
+    ...(postSessionPluginMigrationPlanBound &&
+    deferredPluginMigrations.length === 0 &&
+    isDeepStrictEqual(stateMigrationInput?.cfg, baseConfig) &&
+    stateMigrationStepReceipts.every(
+      (receipt) =>
+        receipt.id === "plugin-doctor-post-session-state" ||
+        ((receipt.outcome === "completed" || receipt.outcome === "skipped") &&
+          receipt.warnings.length === 0),
+    )
+      ? { preflightLegacyStateConfig: baseConfig }
+      : {}),
   };
 }

@@ -34,6 +34,7 @@ let conn: DatabaseSync;
 function select(table: string, columns: string, suffix = "") {
   return conn.prepare(`SELECT ${columns} FROM memory_index_${table} ${suffix}`);
 }
+const all = (sql: string, ...params: SQLInputValue[]) => conn.prepare(sql).all(...params);
 const sourceTables = ["sources", "chunks", "chunks_fts", "paths_fts"];
 const metadataTables = ["chunk_recall_metadata", "chunk_provenance"];
 const derivedTables = [...metadataTables, "chunks_vec"];
@@ -101,22 +102,17 @@ function replacement(path: string, hash = "original", chunkCount = 1): Replaceme
 
 function write(value: Replacement) {
   return runSqliteImmediateTransactionSync(conn, () =>
-    new MemorySourceIndexKernel(conn, store).replaceRows(
-      value,
-      value.chunks.map((chunk, index) => ({ chunk, embedding: value.embeddings[index] ?? [] })),
-    ),
+    new MemorySourceIndexKernel(conn, store).replaceRows(value, replacementRows(value)),
   );
 }
-
+const replacementRows = (value: Replacement) =>
+  value.chunks.map((chunk, index) => ({ chunk, embedding: value.embeddings[index] ?? [] }));
 function writeGroup(values: Replacement[]) {
   return runSqliteImmediateTransactionSync(conn, () =>
     new MemorySourceIndexKernel(conn, store).replaceGroup(
       values.map((value) => ({
         header: value,
-        rows: value.chunks.map((chunk, index) => ({
-          chunk,
-          embedding: value.embeddings[index] ?? [],
-        })),
+        rows: replacementRows(value),
       })),
     ),
   );
@@ -428,17 +424,13 @@ describe("memory source index native kernel", () => {
     expect(inserts).toBe(3);
     expect(savepoints).toEqual([]);
     expect(
-      conn
-        .prepare(
-          `SELECT c.path, c.source, c.model, c.text, c.updated_at,
+      all(`SELECT c.path, c.source, c.model, c.text, c.updated_at,
                   r.importance, r.triggers, r.project_key,
                   p.origin_class, p.session_kind, p.observed_at
            FROM memory_index_chunks c
            JOIN memory_index_chunk_recall_metadata r ON r.chunk_id = c.id
            JOIN memory_index_chunk_provenance p ON p.chunk_id = c.id
-           ORDER BY c.path`,
-        )
-        .all(),
+           ORDER BY c.path`),
     ).toEqual(
       Array.from({ length: 8 }, (_, index) => ({
         path: `memory/group-${index}.md`,
@@ -455,18 +447,15 @@ describe("memory source index native kernel", () => {
       })),
     );
     expect(
-      conn
-        .prepare("SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
-        .all("topic3"),
+      select("chunks_fts", "path", "WHERE memory_index_chunks_fts MATCH ?").all("topic3"),
     ).toEqual([{ path: "memory/group-3.md" }]);
     expect(
-      conn
-        .prepare(
-          `SELECT c.path, v.distance FROM memory_index_chunks_vec v
+      all(
+        `SELECT c.path, v.distance FROM memory_index_chunks_vec v
            JOIN memory_index_chunks c ON c.id = v.id
            WHERE v.embedding MATCH ? AND k = 8 ORDER BY c.path`,
-        )
-        .all(Buffer.from(new Float32Array([1, 0, 0]).buffer)),
+        Buffer.from(new Float32Array([1, 0, 0]).buffer),
+      ),
     ).toEqual(
       Array.from({ length: 8 }, (_, index) => ({
         path: `memory/group-${index}.md`,
@@ -498,37 +487,28 @@ describe("memory source index native kernel", () => {
       ]),
     );
     expect(
-      conn
-        .prepare(
-          `SELECT c.text, c.updated_at, r.importance FROM memory_index_chunks c
+      all(
+        `SELECT c.text, c.updated_at, r.importance FROM memory_index_chunks c
            JOIN memory_index_chunk_recall_metadata r ON r.chunk_id = c.id
            WHERE c.path = ?`,
-        )
-        .all(initial.entry.path),
+        initial.entry.path,
+      ),
     ).toEqual([{ text: "searchable indexed text", updated_at: 300, importance: 9 }]);
     expect(
-      conn
-        .prepare("SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
-        .all("discarded OR original OR searchable"),
+      select("chunks_fts", "path", "WHERE memory_index_chunks_fts MATCH ?").all(
+        "discarded OR original OR searchable",
+      ),
     ).toEqual([{ path: initial.entry.path }]);
     expect(
-      conn
-        .prepare(
-          `SELECT c.path, hex(v.embedding) AS embedding FROM memory_index_chunks_vec v
-           JOIN memory_index_chunks c ON c.id = v.id ORDER BY c.path`,
-        )
-        .all(),
+      all(`SELECT c.path, hex(v.embedding) AS embedding FROM memory_index_chunks_vec v
+           JOIN memory_index_chunks c ON c.id = v.id ORDER BY c.path`),
     ).toEqual(
       [sibling.entry.path, initial.entry.path].map((path) => ({
         path,
-        embedding: Buffer.from(new Float32Array([0, 1, 0]).buffer)
-          .toString("hex")
-          .toUpperCase(),
+        embedding: embeddingHex([0, 1, 0]),
       })),
     );
-    expect(conn.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
-      count: 2,
-    });
+    expectCounts(["chunks_vec"], 2);
   });
 
   it("applies later removals to chunks published by an intermediate removal flush", async () => {
@@ -554,23 +534,13 @@ describe("memory source index native kernel", () => {
         { chunk: survivor, embedding: [0, 1, 0] },
       ]),
     );
-    expect(conn.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
-      { text: "survivor indexed text" },
-    ]);
+    expect(select("chunks", "text").all()).toEqual([{ text: "survivor indexed text" }]);
     expect(
-      conn
-        .prepare("SELECT text FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
-        .all("temporary OR obsolete OR survivor"),
+      select("chunks_fts", "text", "WHERE memory_index_chunks_fts MATCH ?").all(
+        "temporary OR obsolete OR survivor",
+      ),
     ).toEqual([{ text: "survivor indexed text" }]);
-    for (const table of [
-      "memory_index_chunk_recall_metadata",
-      "memory_index_chunk_provenance",
-      "memory_index_chunks_vec",
-    ]) {
-      expect(conn.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
-        count: 1,
-      });
-    }
+    expectCounts(derivedTables, 1);
   });
 
   it("rolls back grouped sources and vectors when a buffered provenance write fails", async () => {

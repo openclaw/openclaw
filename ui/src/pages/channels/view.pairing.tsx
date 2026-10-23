@@ -3,7 +3,7 @@ import { createMemo, Errored, For, Loading, Show } from "solid-js";
 // DM sender access request queue shared by the Channels hub and detail panels.
 import type { ChannelsPairingAccount, ChannelsPairingRequest } from "../../api/types.ts";
 import { Picker } from "../../components/select-picker.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { ChannelPicker } from "../../components/solid/channel-picker.tsx";
 import {
   SettingsEmpty,
@@ -11,7 +11,7 @@ import {
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
-import type { ChannelPairingRead, ChannelsState } from "../../lib/channels/index.ts";
+import type { ChannelRead, ChannelsState } from "../../lib/channels/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -145,7 +145,7 @@ function PairingRequest(props: ChannelsProps & { request: ChannelsPairingRequest
   );
 }
 
-function PairingReadSettled(props: { receipt: ChannelPairingRead; children: JSX.Element }) {
+function PairingReadSettled(props: { receipt: ChannelRead; children: JSX.Element }) {
   const ready = createMemo(async () => {
     const error = await props.receipt.completion;
     if (error !== null) {
@@ -353,7 +353,9 @@ function PairingPromptContent(params: {
   props: ChannelsProps;
 }) {
   const request = () => params.prompt.request;
-  const busy = () => params.props.channels.pairingBusyRequestId === request().requestId;
+  const busy = () =>
+    params.props.mutationBusy?.pairing ||
+    params.props.channels.pairingBusyRequestId === request().requestId;
   const approving = () => params.prompt.kind === "approve";
   const ownerMissing = () =>
     params.props.channels.pairingSnapshot?.commandOwnerConfigured === false;
@@ -405,19 +407,19 @@ function PairingPromptContent(params: {
         <openclaw-modal-actions class="channels-pairing-dialog__actions">
           <button
             type="button"
-            class={["btn", approving() ? "primary" : "danger"]}
-            disabled={!params.props.channels.connected || busy()}
-            onClick={() => params.props.onPairingPromptConfirm()}
-          >
-            {t(`channels.pairing.${params.prompt.kind}`)}
-          </button>
-          <button
-            type="button"
             class="btn"
             disabled={busy()}
             onClick={() => params.props.onPairingPromptCancel()}
           >
             {t("common.cancel")}
+          </button>
+          <button
+            type="button"
+            class={["btn", approving() ? "primary" : "danger"]}
+            disabled={!params.props.channels.connected || busy()}
+            onClick={() => params.props.onPairingPromptConfirm()}
+          >
+            {t(`channels.pairing.${params.prompt.kind}`)}
           </button>
         </openclaw-modal-actions>
       </div>

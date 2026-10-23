@@ -1,6 +1,7 @@
 import { Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
@@ -56,7 +57,12 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
             )
           }
         >
-          <span>{scopeTitle(value()?.result)}</span>
+          <span
+            ref={createTextOverflow(() => scopeTitle(value()?.result))}
+            title={scopeTitle(value()?.result)}
+          >
+            {scopeTitle(value()?.result)}
+          </span>
           <Icon name="chevronDown" />
         </button>
         <button
@@ -98,10 +104,20 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
               <Show
                 when={summary.result.baseRef && summary.result.baseRef !== summary.result.branch}
               >
-                <small title={summary.result.baseRef}>{summary.result.baseRef}</small>
+                <small
+                  ref={createTextOverflow(() => summary.result.baseRef)}
+                  title={summary.result.baseRef}
+                >
+                  {summary.result.baseRef}
+                </small>
               </Show>
               <Show when={summary.result.branch}>
-                <span title={summary.result.branch}>{summary.result.branch}</span>
+                <span
+                  ref={createTextOverflow(() => summary.result.branch)}
+                  title={summary.result.branch}
+                >
+                  {summary.result.branch}
+                </span>
               </Show>
             </span>
           </div>
@@ -285,7 +301,9 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
               )
             }
           >
-            <span>{scopeTitle(summary.result)}</span>
+            <span ref={createTextOverflow(() => scopeTitle(summary.result))}>
+              {scopeTitle(summary.result)}
+            </span>
             <Icon name="chevronDown" class="session-panel-rail__chevron" />
           </button>
           <Show when={!summary.result.unavailableReason}>
@@ -312,7 +330,9 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
           title={[branchLabel(), summary.result.root].filter(Boolean).join("\n")}
         >
           <Icon name="gitBranch" />
-          <span class="session-diff__branch-label">{branchLabel()}</span>
+          <span ref={createTextOverflow(branchLabel)} class="session-diff__branch-label">
+            {branchLabel()}
+          </span>
         </span>
         {summary.result.unavailableReason !== "workspace_stopped" && (
           <DiffStatChips stat={totalDiffStat(summary.result.files)} />

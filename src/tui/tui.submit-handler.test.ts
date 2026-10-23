@@ -208,12 +208,11 @@ describe("createEditorSubmitHandler", () => {
 describe("createSubmitBurstCoalescer", () => {
   it("coalesces rapid single-line submits into one multiline submit when enabled", () => {
     const submit = vi.fn();
-    let now = 1_000;
-    const submitBurst = bufferSubmit(submit, { now: () => now });
+    const submitBurst = bufferSubmit(submit);
     submitBurst("Line 1");
-    now += 10;
+    vi.advanceTimersByTime(10);
     submitBurst("Line 2");
-    now += 10;
+    vi.advanceTimersByTime(10);
     submitBurst("Line 3");
     expect(submit).not.toHaveBeenCalled();
     vi.advanceTimersByTime(50);

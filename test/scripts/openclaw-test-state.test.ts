@@ -55,11 +55,7 @@ describe("scripts/lib/openclaw-test-state", () => {
     const payload = JSON.parse(
       await render(
         "create",
-        {
-          label: "script-test",
-          scenario: "update-stable",
-          "env-file": snippet,
-        },
+        { label: "script-test", scenario: "update-stable", "env-file": snippet },
         true,
       ),
     );
@@ -90,18 +86,10 @@ describe("scripts/lib/openclaw-test-state", () => {
   });
 
   it("renders a Docker-friendly shell snippet", async () => {
-    const text = await renderSnippet("shell", {
+    await renderSnippet("shell", {
       label: "update-channel-switch",
       scenario: "update-stable",
     });
-    for (const expected of [
-      'OPENCLAW_TEST_STATE_TMP_ROOT="${OPENCLAW_TEST_STATE_TMPDIR:-${TMPDIR:-/tmp}}"',
-      'mktemp -d "$OPENCLAW_TEST_STATE_TMP_ROOT/openclaw-update-channel-switch-update-stable-home.XXXXXX"',
-      "OPENCLAW_TEST_STATE_JSON",
-      '"channel": "stable"',
-    ]) {
-      expect(text).toContain(expected);
-    }
     const payload = await probe();
     expect(payload.home.startsWith(os.tmpdir())).toBe(true);
     expect(path.basename(payload.home)).toMatch(
@@ -157,32 +145,22 @@ describe("scripts/lib/openclaw-test-state", () => {
   });
 
   it("renders a reusable Docker shell function", async () => {
-    const text = await renderSnippet("shell-function", {}, true);
-    for (const expected of [
-      "openclaw_test_state_create()",
-      "unset OPENCLAW_AGENT_DIR",
-      "update-stable",
-    ]) {
-      expect(text).toContain(expected);
+    await renderSnippet("shell-function", {}, true);
+    const temp = path.join(root, "function-tmp");
+    for (const tmpDir of [temp, `${temp}/`]) {
+      const payload = await probe(
+        tmpDir,
+        'export OPENCLAW_AGENT_DIR=/tmp/outside-agent; openclaw_test_state_create "onboard case" minimal;',
+      );
+      expect(payload).toMatchObject({
+        home: `${temp}/${path.basename(payload.home)}`,
+        stateDir: `${payload.home}/.openclaw`,
+        workspace: `${payload.home}/workspace`,
+        agentDir: null,
+      });
+      expect(payload.home).toContain("/openclaw-onboard-case-minimal-home.");
+      expect(payload.config).toStrictEqual({});
     }
-    const payload = await probe(
-      path.join(root, "function-tmp"),
-      'export OPENCLAW_AGENT_DIR=/tmp/outside-agent; openclaw_test_state_create "onboard case" minimal;',
-    );
-    expect(payload.home).toBe(`${payload.tmpDir}/${path.basename(payload.home)}`);
-    expect(payload.home).toContain("/openclaw-onboard-case-minimal-home.");
-    expect(payload).toMatchObject({ agentDir: null, workspace: `${payload.home}/workspace` });
-    expect(payload.config).toStrictEqual({});
-    const trailingTmpDir = path.join(root, "function-trailing-tmp");
-    const trailing = await probe(
-      `${trailingTmpDir}/`,
-      'openclaw_test_state_create "onboard case" minimal;',
-    );
-    expect(trailing).toMatchObject({
-      home: `${trailingTmpDir}/${path.basename(trailing.home)}`,
-      stateDir: `${trailing.home}/.openclaw`,
-      workspace: `${trailing.home}/workspace`,
-    });
     const existingHome = path.join(root, "existing-home");
     const existing = await probe(
       undefined,

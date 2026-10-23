@@ -4,6 +4,7 @@ import net from "node:net";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import * as containerEnvironment from "../infra/container-environment.js";
+import * as interfaces from "../infra/network-interfaces.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
   defaultGatewayBindMode,
@@ -121,11 +122,13 @@ describe("resolveLocalInterfaceAddressMatch", () => {
     ["10.42.0.60", false],
     [undefined, false],
   ] as const)("classifies %s as %s", (input, expected) => {
-    expect(resolveLocalInterfaceAddressMatch(input, snapshot)).toBe(expected);
+    using _ = vi.spyOn(interfaces, "safeNetworkInterfaces").mockReturnValue(snapshot);
+    expect(resolveLocalInterfaceAddressMatch(input)).toBe(expected);
   });
 
   it("reports an indeterminate match when interface discovery is unavailable", () => {
-    expect(resolveLocalInterfaceAddressMatch("10.42.0.59", undefined)).toBeUndefined();
+    using _ = vi.spyOn(interfaces, "safeNetworkInterfaces").mockReturnValue(undefined);
+    expect(resolveLocalInterfaceAddressMatch("10.42.0.59")).toBeUndefined();
   });
 });
 

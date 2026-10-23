@@ -203,7 +203,7 @@ describe("prepared model runtime scoped refresh", () => {
         identityKey: `profile:${profileId}`,
       });
       const readTier = (profileId: string) =>
-        accounts.readServiceTierObservation({
+        accounts.readServiceTierObservations({
           ...observation,
           identityKey: selected(profileId).identityKey,
         });
@@ -230,16 +230,16 @@ describe("prepared model runtime scoped refresh", () => {
         }
       };
       await refresh(authStore);
-      expect(readTier("demo:changed")).toEqual(tier);
+      expect(readTier("demo:changed")).toEqual([tier]);
       await refresh({
         version: 1,
         profiles: { "demo:changed": { ...credential, key: "synthetic-replacement" } },
       });
       for (const profileId of ["demo:changed", "demo:removed"]) {
-        expect(readTier(profileId)).toBeUndefined();
+        expect(readTier(profileId)).toEqual([]);
       }
       for (const profileId of ["other:retained", personalId]) {
-        expect(readTier(profileId)).toEqual(tier);
+        expect(readTier(profileId)).toEqual([tier]);
       }
       expect(recordChanged({ ...observation, modelId: "next-model" })).toBe(false);
       expect(owner.isCurrent()).toBe(true);

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import {
@@ -354,9 +355,9 @@ export async function probeGateway(opts: {
         timer = null;
       }
     };
-    const armProbeTimer = (onTimeout: () => void, timeoutMs = initialProbeTimeoutMs) => {
+    const armProbeTimer = (onTimeout: () => void) => {
       clearProbeTimer();
-      timer = setTimeout(onTimeout, resolveSafeTimeoutDelayMs(timeoutMs));
+      timer = setTimeout(onTimeout, resolveSafeTimeoutDelayMs(initialProbeTimeoutMs));
     };
     const settle = (
       result: Omit<GatewayProbeResult, "url" | "connectErrorDetails"> & {
@@ -491,9 +492,7 @@ export async function probeGateway(opts: {
           };
           auth = resolveProbeAuthSummary({
             role: typeof hello?.auth?.role === "string" ? hello.auth.role : null,
-            scopes: Array.isArray(hello?.auth?.scopes)
-              ? hello.auth.scopes.filter((scope): scope is string => typeof scope === "string")
-              : [],
+            scopes: filterStringEntries(hello?.auth?.scopes),
             authMetadataPresent,
           });
           if (detailLevel === "none") {

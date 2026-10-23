@@ -18,6 +18,7 @@ import {
   type OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { registerMemoryCoreCli } from "./cli-metadata.js";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
@@ -422,20 +423,6 @@ export default definePluginEntry({
       },
     });
 
-    api.registerCli(
-      async ({ program }) => {
-        const { registerMemoryCli } = await import("./cli.js");
-        registerMemoryCli(program, host);
-      },
-      {
-        descriptors: [
-          {
-            name: "memory",
-            description: "Search, inspect, and reindex memory files",
-            hasSubcommands: true,
-          },
-        ],
-      },
-    );
+    registerMemoryCoreCli(api, host);
   },
 });

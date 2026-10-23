@@ -257,7 +257,7 @@ export async function buildAgentSessionPatch(
     sessionId: patchSessionId,
     updatedAt: params.now,
     ...(reuse.isNewSession && !freshSessionRotatedSinceLoad
-      ? { sessionStartedAt: params.now }
+      ? { lifecycleRevision: randomUUID(), sessionStartedAt: params.now }
       : params.freshEntry?.sessionStartedAt === undefined &&
           patchSessionId === params.freshEntry?.sessionId &&
           reuse.lifecycleTimestamps?.sessionStartedAt !== undefined

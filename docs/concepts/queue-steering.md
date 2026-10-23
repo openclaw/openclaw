@@ -106,11 +106,21 @@ When `/followup` or unavailable steering actually enters the followup queue, the
 A queued or steered natural-language request to stop work does not confirm that the active turn stopped. Authorized stop commands use the separate cancellation path and report its actual outcome. Approval responses and explicit control commands retain their existing authorization; collaboration does not let another requester answer or cancel a pending question.
 
 Visible user turns started through the `agent` RPC can also receive compatible
-steering. Direct background turns with optional replies leave new human messages
-queued for a followup turn that can provide the required answer.
-This includes subagent completion and command announcements: when steering is
-rejected, the message runs automatically after the announcement and its cleanup
-finish. The input remains queued and can still be canceled while it waits.
+steering. A visible subagent announcement in a Control UI conversation requires a
+result (`result-required`), so compatible human input can join that announcement's
+active execution. The execution keeps its existing permissions and required result;
+steering does not cancel the announcement. The human input keeps its author and
+must be answered without duplicating the announcement. Use `/followup <message>`
+for a separate turn instead.
+
+Visible optional completion turns, including subagent completion and command
+announcements, can accept compatible human input in a supporting embedded runtime.
+Only runtime acceptance promotes that turn to require a visible reply. Hidden
+turns, unsupported backends, and input requiring a different execution route leave
+new human messages queued for a followup turn that can provide the required answer.
+When steering is unavailable, the message runs automatically after the announcement
+and its cleanup finish. The input remains queued and can still be canceled while
+it waits.
 
 The same signed-in person can steer after reconnecting when permissions and model access remain compatible. Browser connections and display names do not define a new requester. The turn keeps its original authority, tool bindings, and approval destination. With collaborative steering disabled, changes to role scopes, session access, sandbox requirements, allowed agents, model access, access grants, tool policy, workspace, or bound tools can require a followup.
 

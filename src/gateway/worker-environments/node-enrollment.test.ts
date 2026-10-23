@@ -292,11 +292,9 @@ describe("worker node enrollment", () => {
     const record = await createProvisioning();
     let transferNow = 0;
     let tarballBytes = 1;
-    const enrollmentNow = Date.now;
     vi.spyOn(Date, "now").mockImplementation(() => transferNow);
     transfer = createWorkerBootstrapArtifactTransferService();
     const manager = createManager({
-      now: enrollmentNow,
       prepareArtifact: async () => ({ ...artifact(), tarballBytes }),
     });
     for (const { bytes, enrollmentMs, runtimeMs } of [

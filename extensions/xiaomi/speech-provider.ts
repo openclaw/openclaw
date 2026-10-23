@@ -38,33 +38,25 @@ const XIAOMI_TTS_FORMATS = ["mp3", "wav"] as const;
 
 type XiaomiTtsFormat = (typeof XIAOMI_TTS_FORMATS)[number];
 
-function normalizeXiaomiTtsBaseUrl(baseUrl?: string): string {
-  return (baseUrl?.trim() || DEFAULT_XIAOMI_TTS_BASE_URL).replace(/\/+$/, "");
-}
-
 function normalizeXiaomiTtsFormat(value: unknown): XiaomiTtsFormat | undefined {
   const normalized = trimToUndefined(value)?.toLowerCase();
   return XIAOMI_TTS_FORMATS.find((format) => format === normalized);
 }
 
-function resolveXiaomiTtsConfigRecord(
-  rawConfig: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  const providers = asOptionalRecord(rawConfig.providers);
-  return asOptionalRecord(providers?.xiaomi) ?? asOptionalRecord(providers?.mimo);
-}
-
 function normalizeXiaomiTtsProviderConfig(rawConfig: Record<string, unknown>) {
-  const raw = resolveXiaomiTtsConfigRecord(rawConfig);
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw = asOptionalRecord(providers?.xiaomi) ?? asOptionalRecord(providers?.mimo);
   const options = readXiaomiTtsOptions(raw);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
       path: "tts.providers.xiaomi.apiKey",
     }),
-    baseUrl: normalizeXiaomiTtsBaseUrl(
-      trimToUndefined(raw?.baseUrl) ?? trimToUndefined(process.env.XIAOMI_BASE_URL),
-    ),
+    baseUrl: (
+      trimToUndefined(raw?.baseUrl) ??
+      trimToUndefined(process.env.XIAOMI_BASE_URL) ??
+      DEFAULT_XIAOMI_TTS_BASE_URL
+    ).replace(/\/+$/, ""),
     model:
       options.model ?? trimToUndefined(process.env.XIAOMI_TTS_MODEL) ?? DEFAULT_XIAOMI_TTS_MODEL,
     voice:

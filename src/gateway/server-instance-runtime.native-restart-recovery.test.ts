@@ -11,6 +11,7 @@ import { mainSessionRecoveryLog } from "../agents/main-session-recovery/main-ses
 import { recoverStore } from "../agents/main-session-recovery/main-session-restart-recovery-store.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
+import { admitTestReplyTurn } from "../auto-reply/reply/reply-turn-admission.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
@@ -25,6 +26,12 @@ import {
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createOwnershipRecord } from "../plugins/registry-ownership.test-support.js";
+import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
@@ -55,6 +62,7 @@ import {
   createCreatorTransportTools,
 } from "./server-methods/requester-cron-authority.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 const startTurn = vi.hoisted(() => vi.fn<ReturnType<typeof createAgentTurnService>["startTurn"]>());
 
@@ -71,9 +79,86 @@ afterEach(() => {
   startTurn.mockReset();
   vi.restoreAllMocks();
   resetAgentEventsForTest();
+  resetGlobalHookRunner();
+  resetTestPluginRegistry();
 });
 
 describe("cold restart recovery of native operator input", () => {
+  it("retires stale operator recovery once and admits new messages to the rotated session", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const context = createDirectChatContext({ trackExecution: trackAsyncWork });
+      const profile = ensureProfileForEmail("stale-recovery@example.test");
+      const fixture = await createOperatorRecoveryFixture({
+        stateDir: state.stateDir,
+        context,
+        profileId: profile.id,
+        config: {},
+      });
+      const target = { ...fixture.target, sessionId: "rotated-session" };
+      await replaceSessionEntry(target, {
+        ...fixture.entry,
+        sessionId: target.sessionId,
+        status: "failed",
+        abortedLastRun: true,
+        lifecycleRunId: target.sourceRunId,
+        mainRestartRecovery: { cycleId: "failed-recovery", revision: 1, chargedAttempts: 1 },
+        restartRecoveryRuns: [{ runId: target.sourceRunId, lifecycleGeneration: "before-restart" }],
+      });
+      await appendTranscriptMessage(target, {
+        message: { role: "user", content: "Continue the accepted task", timestamp: 1 },
+      });
+      await appendTranscriptMessage(target, {
+        message: { role: "assistant", content: [], stopReason: "aborted", timestamp: 2 },
+      });
+      const originalTranscript = await loadTranscriptEvents(target);
+      await cleanupSessionStateForTest({ stateDir: state.stateDir });
+      rotateAgentEventLifecycleGeneration();
+      const runtime = createGatewayInstanceRuntime({
+        getContext: () => context,
+        getMethodRegistry: () => createRequestGatewayMethodRegistry(),
+        isDispatchAvailable: () => true,
+      });
+      context.recoveryRuntime = runtime.recovery;
+      const admit = () =>
+        admitTestReplyTurn({
+          ...target,
+          expectedSessionId: target.sessionId,
+          resolveGatewayContext: () => context,
+        });
+      try {
+        const next = await admit();
+        expect(next.status).toBe("owned");
+        if (next.status === "owned") {
+          next.operation.complete();
+        }
+        const entry = await readSessionEntryReadOnlyInWorker(target);
+        expect(entry).toMatchObject({ sessionId: target.sessionId, abortedLastRun: false });
+        expect(entry?.mainRestartRecovery).toBeUndefined();
+        expect(entry?.restartRecoveryOperatorSource).toBeUndefined();
+        expect(entry?.restartRecoveryTerminalRunIds).toContain(target.sourceRunId);
+        const transcript = await loadTranscriptEvents(target);
+        expect(transcript).toHaveLength(originalTranscript.length + 1);
+        expect(transcript.slice(0, originalTranscript.length)).toEqual(originalTranscript);
+        expect(JSON.stringify(transcript)).toContain(
+          "Restart recovery operator source no longer owns this input",
+        );
+        expect(JSON.stringify(transcript)).toContain(
+          "Send a new authenticated message to continue.",
+        );
+        const later = await admit();
+        expect(later.status).toBe("owned");
+        if (later.status === "owned") {
+          later.operation.complete();
+        }
+        expect(await loadTranscriptEvents(target)).toEqual(transcript);
+        expect(startTurn).not.toHaveBeenCalled();
+      } finally {
+        runtime.close();
+      }
+    });
+  });
+
   it.each([
     "write operator",
     "trusted proxy",
@@ -195,6 +280,7 @@ describe("cold restart recovery of native operator input", () => {
 
   it.each([
     "native source",
+    "declaring plugin loaded",
     "native steering",
     "peer follow-up",
     "requester continuation after cohort settlement",
@@ -257,6 +343,25 @@ describe("cold restart recovery of native operator input", () => {
         ],
       });
       setRuntimeConfigSnapshot(config);
+      if (scenario === "declaring plugin loaded") {
+        // An additional plain-text recovery case proves compatibility with a
+        // declaring command present, not recovery/replay of a command handler.
+        const builder = createTestPluginRegistry();
+        const record = createOwnershipRecord("recovery-native-command", {
+          contracts: { commandRuntimeCapabilities: ["subagents"] },
+        });
+        builder.createApi(record, { config }).registerCommand({
+          name: "pstack-recovery-probe",
+          description: "Probe command presence during plain-text restart recovery",
+          requireAuth: true,
+          runtimeCapabilities: ["subagents"],
+          handler: () => ({ text: "Command handler is separate from agent recovery" }),
+        });
+        builder.registry.plugins.push(record);
+        expect(builder.registry.commands).toHaveLength(1);
+        setTestPluginRegistry(builder.registry);
+        initializeGlobalHookRunner(builder.registry);
+      }
       const cronStorePath = path.join(state.stateDir, "cron", "jobs.json");
       const cron = new CronService({
         scheduler: createTestGatewayScheduler(),
@@ -266,7 +371,6 @@ describe("cold restart recovery of native operator input", () => {
         defaultAgentId: "main",
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         listConfiguredChannels: async () => [],
       });
@@ -511,15 +615,15 @@ describe("cold restart recovery of native operator input", () => {
         } else if (sourceMismatch) {
           // Current Gateway restoration owns exact-claim validation, not the
           // transcript classifier. Refusal must precede turn/tool execution.
-          expect(result).toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
+          expect(result).toEqual({ started: 0, settled: 1, failed: 0, skipped: 0 });
           expect(startTurn).not.toHaveBeenCalled();
           const entry = await readSessionEntryReadOnlyInWorker(fixture.target);
-          expect(warnings.join("\n")).toContain(
+          expect(entry?.lastRunError).toBe(
             "Restart recovery operator source no longer owns this input.",
           );
-          expect(entry?.mainRestartRecovery?.tombstone).toBeUndefined();
-          expect(entry?.restartRecoveryOperatorSource).toEqual(savedSource);
-          expect(entry?.abortedLastRun).toBe(true);
+          expect(entry?.mainRestartRecovery).toBeUndefined();
+          expect(entry?.restartRecoveryOperatorSource).toBeUndefined();
+          expect(entry?.abortedLastRun).toBe(false);
         } else if (scenario.includes("after admission")) {
           const revoked = scenario === "role reassigned after admission";
           expect(result).toEqual({

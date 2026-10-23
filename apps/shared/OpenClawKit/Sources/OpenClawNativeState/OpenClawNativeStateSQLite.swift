@@ -47,7 +47,7 @@ public enum OpenClawNativeStateSQLiteValueType: Equatable, Sendable {
 public final class OpenClawNativeStateSQLite: @unchecked Sendable {
     // Keep aligned with OPENCLAW_STATE_SCHEMA_VERSION for backend-owned native surfaces.
     // Device credentials have a separate, exact table contract. Native clients never upgrade this database.
-    private static let maximumSupportedSchemaVersion: Int64 = 30
+    private static let maximumSupportedSchemaVersion: Int64 = 31
     private static let defaultBusyTimeoutMilliseconds: Int32 = 5000
 
     private struct SchemaObject: Hashable {

@@ -19,7 +19,6 @@ import {
   updateRunWarningMessages,
 } from "../../infra/update-run-step.js";
 import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
-import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import * as utils from "../../utils.js";
 import * as restartProbe from "../daemon-cli/restart-health-probe.js";
@@ -27,6 +26,7 @@ import { registerExecutionPhaseReceiptTests } from "./update-command-execution-p
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { admitSourceUpdateArtifacts } from "./update-command-git-admission.js";
+import { updateStep } from "./update-command-maintenance-fixtures.test-support.js";
 import * as readiness from "./update-command-readiness.js";
 import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import {
@@ -40,6 +40,8 @@ const {
   executionParams,
   inspectOrStopService,
   mocks,
+  packageCandidate,
+  readyCanary,
   schemaContext,
   successfulUpdate,
 } = await import("./update-command-execution.test-support.js");
@@ -47,20 +49,6 @@ const {
 const phaseAdmission = vi.hoisted(() => ({ active: false }));
 const execute = async (params = executionParams("git")) =>
   executeMutableUpdate(await bindExecutionGuards(params));
-const readyCanary = (steps: UpdateStepResult[], durationMs = 1, logTail: string[] = []) => ({
-  status: "ok" as const,
-  phase: "readiness" as const,
-  steps,
-  durationMs,
-  logTail,
-});
-const candidateStep = (name: string, durationMs: number): UpdateStepResult => ({
-  name,
-  durationMs,
-  exitCode: 0,
-  command: name,
-  cwd: "/candidate",
-});
 function gitCandidate(onValidated: (steps: unknown) => void = () => {}, gitMode = false) {
   mocks.runGitUpdate.mockImplementation(
     async ({
@@ -72,15 +60,6 @@ function gitCandidate(onValidated: (steps: unknown) => void = () => {}, gitMode 
     },
   );
 }
-const packageCandidate =
-  (root: string) =>
-  async (
-    params: Parameters<typeof import("./update-command-package.js").runPackageInstallUpdate>[0],
-  ) => {
-    await params.validateCandidate(root);
-    await params.beforeActivate();
-    return successfulUpdate;
-  };
 async function writeManifest(root: string, version: string, schemas = false) {
   await fs.writeFile(
     path.join(root, "package.json"),
@@ -207,18 +186,23 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
 it("continues the update with the recorded readiness warning instead of inference repair", async () => {
   const message =
     "Readiness probe http://127.0.0.1:18789/readyz failed: HTTP 502. Check the configured proxy.";
-  const step: UpdateStepResult = {
-    name: "candidate-gateway-startup",
+  const step = updateStep("candidate-gateway-startup", {
     command: "gateway run",
     cwd: "/candidate",
-    durationMs: 1,
+    durationMs: 308_123,
     exitCode: null,
     advisory: { kind: "candidate-runtime-unavailable", message },
     failureFacts: [{ check: "readyz", code: "candidate-readiness-probe-failed", message }],
-  };
+  });
+  const canarySteps = [
+    updateStep("candidate-state-snapshot", { cwd: "/candidate", durationMs: 1_200, exitCode: 0 }),
+    updateStep("candidate-doctor", { cwd: "/candidate", durationMs: 2_400, exitCode: 0 }),
+    step,
+    updateStep("candidate-state-cleanup", { cwd: "/candidate", durationMs: 900, exitCode: 0 }),
+  ];
   mocks.validateCanary.mockImplementation(async ({ onStep }) => {
     await onStep(step);
-    return readyCanary([step], 1, [message]);
+    return readyCanary(canarySteps, 312_623, [message]);
   });
   const repair = await import("../../infra/update-repair-agent.js");
   const runRepair = vi.spyOn(repair, "runUpdateRepairLoop");
@@ -230,7 +214,7 @@ it("continues the update with the recorded readiness warning instead of inferenc
   const execution = await execute({ ...executionParams("git"), progress: { onStepComplete } });
 
   expect(execution?.result.status).toBe("ok");
-  expect(accepted).toHaveBeenCalledOnce();
+  expect(accepted).toHaveBeenCalledExactlyOnceWith(canarySteps);
   expect(runRepair).not.toHaveBeenCalled();
   expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(step));
   const recorded = onStepComplete.mock.calls.flatMap(([completed]) =>
@@ -238,27 +222,6 @@ it("continues the update with the recorded readiness warning instead of inferenc
   );
   expect(updateRunWarningMessages(recorded)).toEqual([message]);
   expect(recorded.every((entry) => entry.status === "completed")).toBe(true);
-});
-
-it("reports Git candidate copy, startup and cleanup timing in the update result", async () => {
-  const canarySteps: UpdateStepResult[] = (
-    [
-      ["candidate-state-snapshot", 1_200],
-      ["candidate-doctor", 2_400],
-      ["candidate-gateway-startup", 308_123],
-      ["candidate-state-cleanup", 900],
-    ] as const
-  ).map(([name, durationMs]) => candidateStep(name, durationMs));
-  mocks.validateCanary.mockResolvedValue(readyCanary(canarySteps, 312_623));
-  let accepted: unknown;
-  gitCandidate((steps) => {
-    accepted = steps;
-  }, true);
-
-  const execution = await execute();
-
-  expect(execution?.result.status).toBe("ok");
-  expect(accepted).toEqual(canarySteps);
 });
 
 it("reports the post-stop activation checks as a timed step", async () => {
@@ -418,9 +381,10 @@ it.each([
           readyCanary(
             [
               {
-                ...candidateStep("candidate-gateway-startup", 70_000),
+                ...updateStep("candidate-gateway-startup", { durationMs: 70_000, exitCode: 0 }),
                 command: "gateway run",
                 cwd: root,
+                exitCode: 0,
               },
             ],
             70_000,
@@ -512,15 +476,13 @@ it("retains rejected Git canary findings in the terminal result", async () => {
     durationMs: 1,
     logTail: [fact.message],
     steps: [
-      {
-        name: "candidate-doctor",
+      updateStep("candidate-doctor", {
         command: "openclaw doctor",
         cwd: "/candidate",
-        durationMs: 1,
         exitCode: 1,
         stderrTail: fact.message,
         failureFacts: [fact],
-      },
+      }),
     ],
   });
   gitCandidate(undefined, true);

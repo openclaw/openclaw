@@ -1,7 +1,7 @@
 /** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -125,13 +125,13 @@ const runParams = {
 
 type ProductionRunCliAgent = typeof import("./cli-runner.js").runCliAgent;
 type TestRunCliAgent = (
-  params: Omit<Parameters<ProductionRunCliAgent>[0], "admittedRunContext">,
+  params?: Partial<Omit<Parameters<ProductionRunCliAgent>[0], "admittedRunContext">>,
 ) => ReturnType<ProductionRunCliAgent>;
 let runCliAgent: TestRunCliAgent;
 let authProfiles: typeof import("./auth-profiles.js");
 
 async function captureRejectedClaudeRun(
-  params: Parameters<typeof runCliAgent>[0],
+  params: NonNullable<Parameters<typeof runCliAgent>[0]>,
 ): Promise<{ error: unknown; events: DiagnosticEventPayload[] }> {
   const events: DiagnosticEventPayload[] = [];
   const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
@@ -212,7 +212,8 @@ beforeEach(() => {
 
 beforeAll(async () => {
   const cliRunner = await import("./cli-runner.js");
-  runCliAgent = wrapRunWithTestPreparedAdmission(cliRunner.runCliAgent);
+  const run = wrapRunWithTestPreparedAdmission(cliRunner.runCliAgent);
+  runCliAgent = (params) => run({ ...runParams, ...params });
   authProfiles = await import("./auth-profiles.js");
 });
 
@@ -226,6 +227,73 @@ afterEach(() => {
 });
 
 describe("runCliAgent before_agent_reply seam", () => {
+  it.each(["run abort", "caller revocation"] as const)(
+    "stops an in-flight reply hook from admitting work after %s",
+    async (reason) => {
+      await withOpenClawTestState({ label: "cli-hook-abort" }, async (state) => {
+        const target = {
+          agentId: "main",
+          sessionKey: "agent:main:cron:hook-abort",
+          sessionId: "hook-run",
+          storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+        };
+        const entry = {
+          sessionId: target.sessionId,
+          lifecycleRevision: "generation",
+          updatedAt: 1,
+        };
+        replaceSessionEntrySync(target, entry);
+        const entered = createDeferred();
+        const resume = createDeferred();
+        const abort = new AbortController();
+        const failure = new DOMException(reason, "AbortError");
+        let callerCurrent = true;
+        const nextWorkspace = vi.fn();
+        hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+        replyMock.mockImplementation(async (_event, context) => {
+          const admission = readClaimingHookAdmission(context);
+          admission?.assertCurrent?.();
+          entered.resolve();
+          await resume.promise;
+          admission?.assertCurrent?.();
+          nextWorkspace();
+          return { handled: true, reply: { text: "hook result" } };
+        });
+        const operation = runCliAgent({
+          ...target,
+          sessionTarget: target,
+          sessionEntry: entry,
+          workspaceDir: state.workspaceDir,
+          trigger: "cron",
+          abortSignal: abort.signal,
+          assertCurrent: () => {
+            if (!callerCurrent) {
+              throw failure;
+            }
+          },
+        });
+        const outcome = operation.catch((error: unknown) => error);
+        try {
+          await awaitGateBeforeSettlement(entered.promise, operation, "Hook did not start");
+          if (reason === "run abort") {
+            abort.abort(failure);
+          } else {
+            callerCurrent = false;
+          }
+          resume.resolve();
+          await outcome;
+          expect(nextWorkspace).not.toHaveBeenCalled();
+          await expect(operation).rejects.toBe(failure);
+          expect(prepareMock).not.toHaveBeenCalled();
+          expect(executeMock).not.toHaveBeenCalled();
+        } finally {
+          resume.resolve();
+          await outcome;
+        }
+      });
+    },
+  );
+
   it.each(["current root", "reassigned root", "ordinary session"] as const)(
     "holds early hook authority for %s and releases handled turns",
     async (scenario) => {
@@ -252,15 +320,10 @@ describe("runCliAgent before_agent_reply seam", () => {
         replyMock.mockImplementation(async (_event, context) => {
           heldRequest = captureGuardedFetchRequestAuthority();
           heldClaim = readClaimingHookAdmission(context)?.assertCurrent;
-          if (scenario === "ordinary session") {
-            expect(heldRequest).toBeUndefined();
-            expect(heldClaim).toBeUndefined();
-          } else if (scenario === "current root") {
-            expect(heldRequest).toBeTypeOf("function");
-            expect(heldClaim).toBeTypeOf("function");
-            heldRequest?.();
-            heldClaim?.();
-          }
+          expect(heldRequest).toBeTypeOf("function");
+          expect(heldClaim).toBeTypeOf("function");
+          heldRequest?.();
+          heldClaim?.();
           effect();
           return { handled: true, reply: { text: "hook result" } };
         });
@@ -279,7 +342,6 @@ describe("runCliAgent before_agent_reply seam", () => {
           },
           () =>
             runCliAgent({
-              ...runParams,
               ...target,
               sessionFile: target.sessionKey,
               sessionTarget: target,
@@ -298,10 +360,8 @@ describe("runCliAgent before_agent_reply seam", () => {
         } else {
           expect((await operation).payloads).toEqual([{ text: "hook result" }]);
           expect(effect).toHaveBeenCalledOnce();
-          if (scenario === "current root") {
-            expect(heldRequest).toThrow("no longer active");
-            expect(heldClaim).toThrow("no longer active");
-          }
+          expect(heldRequest).toThrow("no longer active");
+          expect(heldClaim).toThrow("no longer active");
         }
         expect(prepareMock).not.toHaveBeenCalled();
         expect(executeMock).not.toHaveBeenCalled();
@@ -324,7 +384,6 @@ describe("runCliAgent before_agent_reply seam", () => {
     });
     try {
       await runCliAgent({
-        ...runParams,
         sessionId: "owner-session",
         sessionKey: "agent:main:main",
         agentId: "worker",
@@ -355,7 +414,6 @@ describe("runCliAgent before_agent_reply seam", () => {
     const abort = new AbortController();
     const failure = new Error("run cancelled during execution-start work");
     const operation = runCliAgent({
-      ...runParams,
       abortSignal: abort.signal,
       onExecutionStarted: async () => {
         entered.resolve();
@@ -396,7 +454,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       }),
     );
 
-    await expect(runCliAgent({ ...runParams, provider })).rejects.toMatchObject({
+    await expect(runCliAgent({ provider })).rejects.toMatchObject({
       name: "CliAuthProfilePreparationError",
       reason: "auth",
       profileId,
@@ -443,9 +501,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       )
       .mockResolvedValueOnce({ text: "recovered" });
 
-    await expect(
-      runCliAgent({ ...runParams, provider: "google-gemini-cli" }),
-    ).resolves.toBeDefined();
+    await expect(runCliAgent({ provider: "google-gemini-cli" })).resolves.toBeDefined();
 
     expect(executeMock).toHaveBeenCalledTimes(2);
     expect(authFailureMock).not.toHaveBeenCalled();
@@ -477,9 +533,9 @@ describe("runCliAgent before_agent_reply seam", () => {
       decision: { outcome: "block", reason: "test policy", message: "Blocked by policy." },
     });
 
-    await expect(
-      runCliAgent({ ...runParams, userTurnTranscriptRecorder: recorder }),
-    ).resolves.toMatchObject({ meta: { livenessState: "blocked" } });
+    await expect(runCliAgent({ userTurnTranscriptRecorder: recorder })).resolves.toMatchObject({
+      meta: { livenessState: "blocked" },
+    });
 
     expect(executeMock).not.toHaveBeenCalled();
     expect(authFailureMock).not.toHaveBeenCalled();
@@ -500,7 +556,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     prepareProfile("claude-cli");
     executeMock.mockRejectedValueOnce(error);
 
-    await expect(runCliAgent({ ...runParams, provider: "claude-cli" })).rejects.toBe(error);
+    await expect(runCliAgent({ provider: "claude-cli" })).rejects.toBe(error);
     expect(authFailureMock).not.toHaveBeenCalled();
     expect(authSuccessMock).not.toHaveBeenCalled();
   });
@@ -519,7 +575,6 @@ describe("runCliAgent before_agent_reply seam", () => {
       }
     }
     const { error, events } = await captureRejectedClaudeRun({
-      ...runParams,
       provider: "claude-cli",
       modelProvider: "anthropic",
       model: "claude-opus-4-7",
@@ -547,12 +602,7 @@ describe("runCliAgent before_agent_reply seam", () => {
   });
 
   it("rejects stale lifecycle ownership before CLI preparation", async () => {
-    await expect(
-      runCliAgent({
-        ...runParams,
-        lifecycleGeneration: "stale-generation",
-      }),
-    ).rejects.toMatchObject({
+    await expect(runCliAgent({ lifecycleGeneration: "stale-generation" })).rejects.toMatchObject({
       name: "AbortError",
       message: "Agent run belongs to a stale gateway lifecycle",
     });
@@ -572,7 +622,6 @@ describe("runCliAgent before_agent_reply seam", () => {
 
     try {
       const result = await runCliAgent({
-        ...runParams,
         trigger: "cron",
         jobId: "cron-job-123",
         chatId: "native-chat-123",
@@ -618,7 +667,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     }
   });
 
-  it("passes the heartbeat queue and clears stateless CLI bindings when its hook claims", async () => {
+  it("clears stateless CLI bindings when a scheduled hook claims", async () => {
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
       resolveRuntimeCliBackends: () => [
@@ -639,31 +688,17 @@ describe("runCliAgent before_agent_reply seam", () => {
     replyMock.mockResolvedValue({ handled: true });
 
     const result = await runCliAgent({
-      ...runParams,
-      trigger: "heartbeat",
-      sessionKey: "agent:main:heartbeat:heartbeat",
-      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      trigger: "cron",
+      sessionKey: "agent:main:cron:scheduled",
       config: {},
     });
 
     expect(replyMock.mock.calls[0]?.[1]).toMatchObject({
-      sessionKey: "agent:main:heartbeat:heartbeat",
-      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      sessionKey: "agent:main:cron:scheduled",
     });
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
     expect(result.payloads).toEqual([]);
-    expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
-    expect(prepareMock).not.toHaveBeenCalled();
-    expect(executeMock).not.toHaveBeenCalled();
-  });
-
-  it("marks a hook-claimed turn as never reaching a provider so capture skips its silence", async () => {
-    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
-    replyMock.mockResolvedValue({ handled: true });
-
-    const result = await runCliAgent({ ...runParams, trigger: "cron" });
-
     expect(result.meta).toMatchObject({
       finalAssistantRawText: "",
       finalAssistantVisibleText: "",
@@ -683,9 +718,8 @@ describe("runCliAgent before_agent_reply seam", () => {
     const onExecutionPhase = vi.fn();
 
     await withAgentRunLifecycleGeneration(getAgentEventLifecycleGeneration(), async () => {
-      await runCliAgent({ ...runParams, trigger: "user", onExecutionPhase });
+      await runCliAgent({ trigger: "user", onExecutionPhase });
       await runCliAgent({
-        ...runParams,
         trigger: "user",
         model: "fallback-model",
         onExecutionPhase,
@@ -719,7 +753,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     });
     executeMock.mockResolvedValueOnce({ text: "later" });
 
-    const firstResult = await runCliAgent(runParams);
+    const firstResult = await runCliAgent();
     expect(firstResult.didSendViaMessagingTool).toBe(true);
     expect(firstResult.messagingToolSentTargets).toEqual([
       expect.objectContaining({
@@ -729,7 +763,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       }),
     ]);
 
-    const laterResult = await runCliAgent(runParams);
+    const laterResult = await runCliAgent();
     expect(laterResult.didSendViaMessagingTool).toBeUndefined();
     expect(laterResult.messagingToolSentTargets).toBeUndefined();
   });
@@ -766,7 +800,6 @@ describe("runCliAgent before_agent_reply seam", () => {
       expect(mcpTools.peekSessionMcpRuntime({ sessionKey })).toBe(successorRuntime);
 
       await runCliAgent({
-        ...runParams,
         sessionId: originalSessionId,
         sessionKey,
         cleanupBundleMcpOnRunEnd: true,
@@ -795,7 +828,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       onError?.(new Error("session mcp retire failed"));
       return false;
     });
-    const result = runCliAgent({ ...runParams, cleanupBundleMcpOnRunEnd: true });
+    const result = runCliAgent({ cleanupBundleMcpOnRunEnd: true });
     await expect(result).resolves.toMatchObject({ didSendViaMessagingTool: true });
   });
 });

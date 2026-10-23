@@ -21,12 +21,8 @@ function enterMessagePhase() {
 }
 
 it("forwards a complete VncAuth handshake byte-identically", () => {
-  const handshake = Buffer.concat([
-    VERSION,
-    Buffer.of(2),
-    Buffer.from(Array.from({ length: 16 }, (_, i) => i)),
-    Buffer.of(1),
-  ]);
+  const auth = Buffer.from(Array.from({ length: 16 }, (_, i) => i));
+  const handshake = Buffer.concat([VERSION, Buffer.of(2), auth, Buffer.of(1)]);
   expect(createRfbClientMessageFilter().filter(handshake)).toEqual({ forward: handshake });
 });
 
@@ -46,60 +42,53 @@ it("starts at ClientInit after server-side authentication without forwarding inp
   });
 });
 
-it("drops input messages while forwarding display configuration and update requests", () => {
-  const filter = enterMessagePhase();
-  const setEncodings = encodings(1);
-  const pointerEvent = Buffer.from([5, 1, 0, 10, 0, 20]);
-  const extendedPointerEvent = Buffer.from([5, 0x80, 0, 10, 0, 20, 1]);
-  const cutText = Buffer.concat([Buffer.from([6, 0, 0, 0, 0, 0, 0, 3]), Buffer.from("abc")]);
-
-  const result = filter.filter(
-    Buffer.concat([
+it.each([false, true])(
+  "filters input and preserves display/flow control (fragmented: %s)",
+  (fragmented) => {
+    const filter = enterMessagePhase();
+    const setEncodings = encodings(24);
+    const clientFence = Buffer.from([248, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
+    const enableContinuousUpdates = Buffer.from([150, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
+    const cutText = Buffer.alloc(16);
+    cutText[0] = 6;
+    cutText.writeInt32BE(-8, 4);
+    const display = [
+      PIXEL_FORMAT,
+      setEncodings,
+      FRAMEBUFFER_REQUEST,
+      clientFence,
+      enableContinuousUpdates,
+    ];
+    const capturedSequence = Buffer.concat([
       KEY_EVENT,
       PIXEL_FORMAT,
-      pointerEvent,
-      extendedPointerEvent,
+      Buffer.from([5, 1, 0, 10, 0, 20]),
+      Buffer.from([5, 0x80, 0, 10, 0, 20, 1]),
       setEncodings,
-      cutText,
+      Buffer.from([6, 0, 0, 0, 0, 0, 0, 3, 97, 98, 99]),
       Buffer.concat([Buffer.of(251), Buffer.alloc(23)]),
       Buffer.concat([Buffer.of(255), Buffer.alloc(11)]),
       FRAMEBUFFER_REQUEST,
-    ]),
-  );
-
-  expect(result).toEqual({
-    forward: Buffer.concat([PIXEL_FORMAT, setEncodings, FRAMEBUFFER_REQUEST]),
-  });
-});
-
-it("forwards the fragmented noVNC 1.7 display and flow-control sequence", () => {
-  const filter = enterMessagePhase();
-  const setEncodings = encodings(24);
-  const clientFence = Buffer.from([248, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
-  const enableContinuousUpdates = Buffer.from([150, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
-  const cutText = Buffer.alloc(16);
-  cutText[0] = 6;
-  cutText.writeInt32BE(-8, 4);
-  const display = [
-    PIXEL_FORMAT,
-    setEncodings,
-    FRAMEBUFFER_REQUEST,
-    clientFence,
-    enableContinuousUpdates,
-  ];
-  const capturedSequence = Buffer.concat([...display, cutText, enableContinuousUpdates]);
-  const forwarded: Buffer[] = [];
-
-  for (const byte of capturedSequence) {
-    const result = filter.filter(Buffer.of(byte));
-    if ("error" in result) {
-      throw new Error(result.error);
+      clientFence,
+      enableContinuousUpdates,
+      cutText,
+      enableContinuousUpdates,
+    ]);
+    const forwarded: Buffer[] = [];
+    const chunks = fragmented
+      ? Array.from(capturedSequence, (byte) => Buffer.of(byte))
+      : [capturedSequence];
+    for (const chunk of chunks) {
+      const result = filter.filter(chunk);
+      if ("error" in result) {
+        throw new Error(result.error);
+      }
+      forwarded.push(result.forward);
     }
-    forwarded.push(result.forward);
-  }
 
-  expect(Buffer.concat(forwarded)).toEqual(Buffer.concat([...display, enableContinuousUpdates]));
-});
+    expect(Buffer.concat(forwarded)).toEqual(Buffer.concat([...display, enableContinuousUpdates]));
+  },
+);
 
 it.each([
   [false, Buffer.concat([VERSION, Buffer.of(30)]), "unsupported RFB security type 30"],

@@ -193,9 +193,16 @@ export function assertGitHubPublicationSourceFacts(
 export function assertGitHubPublicationWorktreeSource(
   source: GitHubPublicationSourcePredicate,
   worktree: { id: string; repoFingerprint: string; branch: string },
+  allowExistingPullRequest = false,
 ): void {
   const { entry, worktree: current, ownerWorktree } = source.expected;
-  if (entry?.worktree?.githubPullRequest) {
+  const pullRequest = entry?.worktree?.githubPullRequest;
+  if (
+    pullRequest &&
+    (!allowExistingPullRequest ||
+      !pullRequest.preparedHeadCommit ||
+      pullRequest.preparedHeadCommit !== pullRequest.head.commit)
+  ) {
     throw new Error(
       "This workspace continues an existing PR; its original publication target must be handled explicitly.",
     );
@@ -208,7 +215,7 @@ export function assertGitHubPublicationWorktreeSource(
     current.ownerKind !== "session" ||
     current.ownerId !== source.selector.sessionKey ||
     current.repoFingerprint !== worktree.repoFingerprint ||
-    current.branch !== worktree.branch ||
+    (pullRequest?.head.branch ?? current.branch) !== worktree.branch ||
     entry?.worktree?.id !== worktree.id ||
     entry.worktree.branch !== current.branch ||
     entry.worktree.repoRoot !== current.repoRoot

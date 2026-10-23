@@ -33,30 +33,20 @@ describe("minimax image-generation provider", () => {
     vi.unstubAllEnvs();
   });
 
-  function mockMinimaxApiKey() {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "minimax-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-  }
-
   function mockMinimaxImageResponse(
     payload: unknown = {
       data: { image_base64: [Buffer.from("png-data").toString("base64")] },
       base_resp: { status_code: 0 },
     },
   ) {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "minimax-test-key",
+      source: "env",
+      mode: "api-key",
+    });
     const fetchMock = vi.fn().mockResolvedValue(Response.json(payload));
     vi.stubGlobal("fetch", fetchMock);
     return fetchMock;
-  }
-
-  function expectImageGenerationUrl(fetchMock: ReturnType<typeof vi.fn>, url: string) {
-    expect(fetchMock).toHaveBeenCalled();
-    const [actualUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
-    expect(actualUrl).toBe(url);
-    expect(init?.method).toBe("POST");
   }
 
   it("advertises minimax-portal image generation using its own config-only credential", async () => {
@@ -67,37 +57,25 @@ describe("minimax image-generation provider", () => {
     ).toBe(true);
   });
 
-  it("rejects malformed base64 image payloads", async () => {
-    mockMinimaxApiKey();
-    mockMinimaxImageResponse({
-      data: { image_base64: ["not-base64!"] },
-      base_resp: { status_code: 0 },
-    });
-
-    await expect(generateImage()).rejects.toThrow(
+  it.each([
+    [
+      { data: { image_base64: ["not-base64!"] }, base_resp: { status_code: 0 } },
       "MiniMax image generation returned malformed image base64",
-    );
-  });
-
-  it("preserves transient response envelope codes for caller retry policy", async () => {
-    mockMinimaxApiKey();
-    mockMinimaxImageResponse({
-      base_resp: { status_code: 1000, status_msg: "rpc timeout: timeout=1m0s" },
-    });
-
-    await expect(generateImage()).rejects.toThrow(
+    ],
+    [
+      { base_resp: { status_code: 1000, status_msg: "rpc timeout: timeout=1m0s" } },
       "MiniMax image generation API error (1000): rpc timeout: timeout=1m0s",
-    );
+    ],
+  ] as const)("rejects invalid image response %j", async (payload, message) => {
+    mockMinimaxImageResponse(payload);
+    await expect(generateImage()).rejects.toThrow(message);
   });
 
   it("passes request SSRF policy to the provider HTTP helper", async () => {
-    mockMinimaxApiKey();
     mockMinimaxImageResponse();
     const postJsonResponse = vi.spyOn(providerHttp, "postJsonResponse");
 
-    await generateImage({
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-    });
+    await generateImage({ ssrfPolicy: { allowRfc2544BenchmarkRange: true } });
 
     expect(postJsonResponse).toHaveBeenCalledOnce();
     const request = postJsonResponse.mock.calls[0]?.[0];
@@ -112,7 +90,6 @@ describe("minimax image-generation provider", () => {
   });
 
   it("passes portal image request policy through the provider HTTP helper", async () => {
-    mockMinimaxApiKey();
     mockMinimaxImageResponse();
     const postJsonResponse = vi.spyOn(providerHttp, "postJsonResponse");
     const requestOverrides = {
@@ -137,39 +114,24 @@ describe("minimax image-generation provider", () => {
     });
 
     const request = postJsonResponse.mock.calls[0]?.[0];
-    expect(request?.url).toBe("https://api.minimaxi.com/v1/image_generation");
-    expect(request?.allowPrivateNetwork).toBe(true);
+    expect(request).toMatchObject({
+      url: "https://api.minimaxi.com/v1/image_generation",
+      allowPrivateNetwork: true,
+    });
     expect(new Headers(request?.headers).get("x-minimax-image-policy")).toBe("enabled");
   });
 
-  it("ignores private custom text endpoints for image generation", async () => {
-    mockMinimaxApiKey();
+  it.each([
+    ["minimax", "http://127.0.0.1:8080/anthropic", "", "api.minimax.io"],
+    ["minimax", "", "https://api.minimaxi.com/anthropic", "api.minimaxi.com"],
+    ["minimax-portal", "api.minimaxi.com/anthropic", "", "api.minimaxi.com"],
+  ])("resolves image region for %s config=%s env=%s", async (provider, baseUrl, env, host) => {
+    vi.stubEnv("MINIMAX_API_HOST", env);
     const fetchMock = mockMinimaxImageResponse();
-
-    await generateImage({ cfg: imageConfig("minimax", "http://127.0.0.1:8080/anthropic") });
-
-    expectImageGenerationUrl(fetchMock, "https://api.minimax.io/v1/image_generation");
-  });
-
-  it("uses the dedicated CN image endpoint when CN API host is configured", async () => {
-    vi.stubEnv("MINIMAX_API_HOST", "https://api.minimaxi.com/anthropic");
-    mockMinimaxApiKey();
-    const fetchMock = mockMinimaxImageResponse();
-
-    await generateImage();
-
-    expectImageGenerationUrl(fetchMock, "https://api.minimaxi.com/v1/image_generation");
-  });
-
-  it("infers the dedicated CN image endpoint from MiniMax Portal provider config", async () => {
-    mockMinimaxApiKey();
-    const fetchMock = mockMinimaxImageResponse();
-
-    await generateImage({
-      provider: "minimax-portal",
-      cfg: imageConfig("minimax-portal", "api.minimaxi.com/anthropic"),
-    });
-
-    expectImageGenerationUrl(fetchMock, "https://api.minimaxi.com/v1/image_generation");
+    await generateImage({ provider, cfg: imageConfig(provider, baseUrl) });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://${host}/v1/image_generation`,
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 });

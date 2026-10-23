@@ -15,10 +15,6 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
-import {
-  reserveSessionControllerSource,
-  retireSessionControllerInput,
-} from "../../sessions/session-controller.mailbox.js";
 import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -30,7 +26,6 @@ import { prepareReplyConversation } from "./prompt-session-context.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
-import { bindReplySourceInput } from "./reply-source-binding.js";
 import { resolveFollowupRunToolAuthorityFingerprintAsync } from "./reply-tool-authority.test-support.js";
 import { createTypingController } from "./typing.js";
 
@@ -45,15 +40,11 @@ vi.mock("./queue/drain.js", async (importOriginal) => ({
   scheduleFollowupDrain: () => {
     throw new Error("Admission fixture must not start a drain");
   },
-  kickFollowupDrainIfIdle: () => {
-    throw new Error("Admission fixture must not start a drain");
-  },
 }));
 vi.mock("./get-reply-run-helpers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./get-reply-run-helpers.js")>()),
   loadAgentRunnerRuntime: async () => ({ runReplyAgent: vi.fn() }),
   loadEmbeddedAgentRuntime: async () => ({
-    preemptAndDrainEmbeddedHeartbeatRun: async () => "not-heartbeat",
     resolveActiveEmbeddedRunSessionIdBySessionFile: (
       await import("../../agents/embedded-agent-runner/runs.js")
     ).resolveActiveEmbeddedRunSessionIdBySessionFile,
@@ -141,6 +132,16 @@ async function createAdmissionFixture() {
   return { context, entry, sessionKey, sessionId, storePath };
 }
 
+function nativeRun(overrides: Partial<Parameters<typeof attachActiveEmbeddedRun>[1]> = {}) {
+  return {
+    queueMessage: vi.fn(async () => {}),
+    isStreaming: () => true,
+    isCompacting: () => false,
+    abort: vi.fn(),
+    ...overrides,
+  };
+}
+
 afterEach(() => vi.clearAllMocks());
 
 describe("prepared reply transcript identity", () => {
@@ -149,12 +150,7 @@ describe("prepared reply transcript identity", () => {
     async (mode, { signal }) => {
       const { context, sessionId, storePath } = await createAdmissionFixture();
       const sessionFile = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
-      const native = {
-        queueMessage: vi.fn(async () => {}),
-        isStreaming: () => true,
-        isCompacting: () => false,
-        abort: vi.fn(),
-      };
+      const native = nativeRun();
       const interrupted = createDeferred();
       const effect = await beginSessionEffect({
         scope: storePath,
@@ -241,70 +237,6 @@ describe("prepared reply transcript identity", () => {
     },
   );
 
-  it("waits for captured heartbeat cleanup after its controller admission retires", async ({
-    signal,
-  }) => {
-    const { context, sessionKey, sessionId, storePath } = await createAdmissionFixture();
-    vi.useFakeTimers();
-    const operation = createReplyOperation({
-      sessionKey,
-      sessionId,
-      target: captureSessionTarget({ storeScope: storePath, sessionKey, agentId: "main" }),
-      turnKind: "heartbeat",
-      resetTriggered: false,
-    });
-    const preempted = createDeferred();
-    const cleanup = createDeferred();
-    const native = {
-      queueMessage: vi.fn(async () => {}),
-      isStreaming: () => true,
-      isCompacting: () => false,
-      preemptByVisibleTurn: vi.fn(() => {
-        preempted.resolve();
-        return true;
-      }),
-      abort: vi.fn(),
-    };
-    const registration = attachActiveEmbeddedRun(
-      sessionId,
-      native,
-      sessionKey,
-      undefined,
-      "main",
-      operation,
-    );
-    if (!registration) {
-      throw new Error("Expected native heartbeat registration");
-    }
-    registration.runCleanupSettlement = cleanup.promise;
-    let admitted = false;
-    const pending = prepareReplyRunAdmission(context).then((prepared) => {
-      admitted = true;
-      return prepared;
-    });
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(preempted.promise, pending, "Heartbeat was not preempted"),
-        signal,
-      );
-      detachActiveEmbeddedRun(sessionId, native, sessionKey);
-      operation.complete();
-      await withinTest(operation.ownerSettlement, signal);
-      expect(isSessionRunActive(sessionId)).toBe(false);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(admitted).toBe(false);
-      cleanup.resolve();
-      expect(await withinTest(pending, signal)).toMatchObject({ kind: "ready", isActive: false });
-      expect(native.preemptByVisibleTurn).toHaveBeenCalledOnce();
-    } finally {
-      cleanup.resolve();
-      detachActiveEmbeddedRun(sessionId, native, sessionKey);
-      operation.complete();
-      await pending.catch(() => {});
-      vi.useRealTimers();
-    }
-  });
-
   it.for(["steer", "interrupt"] as const)(
     "keeps source-less %s admission on its physical store when session identities collide",
     async (mode, { signal }) => {
@@ -324,13 +256,9 @@ describe("prepared reply transcript identity", () => {
           routeThreadId: scope === storePath ? "selected-thread" : "foreign-thread",
           resetTriggered: false,
         });
-        const native = {
-          queueMessage: vi.fn(async () => {}),
-          isStreaming: () => true,
-          isCompacting: () => false,
-          preemptByVisibleTurn: vi.fn(() => false),
+        const native = nativeRun({
           abort: vi.fn(() => interrupted.resolve()),
-        };
+        });
         attachActiveEmbeddedRun(sessionId, native, sessionKey, undefined, "main", operation);
         return { operation, native, target };
       };
@@ -381,8 +309,6 @@ describe("prepared reply transcript identity", () => {
           shouldSteer: mode === "steer",
           hasQueuedFollowups: false,
         });
-        expect(selected.native.preemptByVisibleTurn).toHaveBeenCalledOnce();
-        expect(foreign.native.preemptByVisibleTurn).not.toHaveBeenCalled();
         if (prepared.kind !== "ready") {
           throw new Error("Expected a prepared reply");
         }
@@ -432,66 +358,6 @@ describe("prepared reply transcript identity", () => {
     expect(result).toMatchObject({ kind: "ready", resolvedThinkLevel: "high" });
     expect(entry.thinkingLevel).toBe("high");
   });
-
-  it.each(["steer", "followup"] as const)(
-    "preserves normal %s policy when the native heartbeat declines preemption",
-    async (mode) => {
-      const { context, sessionKey, sessionId, storePath } = await createAdmissionFixture();
-      const target = captureSessionTarget({
-        storeScope: storePath,
-        sessionKey,
-        incarnation: sessionId,
-        agentId: "main",
-      });
-      const operation = createReplyOperation({
-        sessionKey,
-        sessionId,
-        target,
-        turnKind: "heartbeat",
-        resetTriggered: false,
-      });
-      const preemptByVisibleTurn = vi.fn(() => false);
-      const abort = vi.fn();
-      const native = {
-        runId: `declined-heartbeat-${mode}`,
-        queueMessage: vi.fn(async () => {}),
-        isStreaming: () => true,
-        isCompacting: () => false,
-        preemptByVisibleTurn,
-        abort,
-      };
-      attachActiveEmbeddedRun(sessionId, native, sessionKey, undefined, "main", operation);
-      const input = reserveSessionControllerSource(sessionKey, { target, policy: { mode } });
-      try {
-        const prepared = await prepareReplyRunAdmission({
-          ...context,
-          effectiveQueueMode: mode,
-          params: {
-            ...context.params,
-            opts: bindReplySourceInput({}, input),
-          },
-        });
-        expect(preemptByVisibleTurn).toHaveBeenCalledOnce();
-        expect(prepared).toMatchObject({
-          kind: "ready",
-          isActive: true,
-          shouldSteer: mode === "steer",
-          shouldFollowup: true,
-          resolvedQueue: { mode },
-        });
-        expect(getActiveNativeAttempt(sessionId)).toBe(native);
-        expect(operation.result).toBeNull();
-        expect(operation.abortSignal.aborted).toBe(false);
-        expect(input.abortSignal.aborted).toBe(false);
-        expect(abort).not.toHaveBeenCalled();
-        expect(native.queueMessage).not.toHaveBeenCalled();
-      } finally {
-        retireSessionControllerInput(input);
-        detachActiveEmbeddedRun(sessionId, native, sessionKey);
-        operation.complete();
-      }
-    },
-  );
 
   it.each(["steer", "followup"] as const)(
     "preserves %s admission and transcript authority despite an older queued followup",

@@ -1,4 +1,4 @@
-import { Show, createMemo, merge, onSettled, type Element } from "solid-js";
+import { Show, createMemo, lazy, merge, onSettled, type Element } from "solid-js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
@@ -27,22 +27,31 @@ import {
   ChatDashboardMenu,
   ChatPaneLayoutMenu,
 } from "./chat-header-panel-actions.tsx";
-import { AgentCrumb, IdentityCrumbs, ProjectCrumb } from "./chat-pane-header-identity.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { AgentCrumb, IdentityCrumbs } from "./chat-pane-header-identity.tsx";
 import type { ChatPaneHeaderPresentation, ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 import { ChatPaneMobileComposition } from "./chat-pane-mobile-composition.tsx";
 import { ChatPanePlacement } from "./chat-pane-placement.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
-import { ChatSessionPublicIndicator, ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
-import { ContinueInTerminalDialog } from "./continue-in-terminal-dialog.tsx";
+import { ChatSessionPublicIndicator } from "./chat-session-sharing-shared.tsx";
+import { ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+const ContinueInTerminalDialog = lazy(() => import("./continue-in-terminal-dialog.tsx"), {
+  export: "ContinueInTerminalDialog",
+});
 
 export function PaneHeaderView(props: ChatPaneHeaderPresentation) {
   return (
     <>
       <ChatPaneHeader {...props.header} />
       <Show when={props.continueInTerminal}>
-        {(dialog) => <ContinueInTerminalDialog {...dialog()} />}
+        {(dialog) => (
+          <ChatLazyBoundary onClose={() => dialog().onClose()}>
+            <ContinueInTerminalDialog {...dialog()} />
+          </ChatLazyBoundary>
+        )}
       </Show>
     </>
   );
@@ -142,7 +151,6 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
           machineName={machineName()}
         />
       )}
-      project={!props.catalog && props.workspaceLabel ? <ProjectCrumb {...props} /> : undefined}
     />
   );
 }

@@ -332,6 +332,50 @@ describe("marketplace plugins", () => {
     });
   });
 
+  it.each([
+    ["install", "frontend-design"],
+    ["update", " frontend-design "],
+  ] as const)(
+    "rejects only ambiguous marketplace selections during %s",
+    async (mode, duplicateName) => {
+      await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+        const { pluginDir, manifestPath } = await writeLocalMarketplaceFixture(rootDir);
+        await writeMarketplaceManifest(rootDir, {
+          plugins: [
+            { name: pluginName, source: relativePlugin },
+            { name: duplicateName, source: "./plugins/other" },
+            { name: "Frontend-design", source: relativePlugin },
+          ],
+        });
+        mockSuccessfulMarketplaceInstall();
+
+        await expect(listMarketplacePlugins({ marketplace: manifestPath })).resolves.toMatchObject({
+          ok: true,
+          manifest: {
+            plugins: [{ name: pluginName }, { name: pluginName }, { name: "Frontend-design" }],
+          },
+        });
+        await expect(
+          installPluginFromMarketplace({ marketplace: manifestPath, plugin: pluginName, mode }),
+        ).resolves.toEqual({
+          ok: false,
+          error: `plugin "${pluginName}" is ambiguous in marketplace ${manifestPath}: 2 entries share this name; remove or rename the duplicate entries`,
+        });
+        expect(installPluginFromPathMock).not.toHaveBeenCalled();
+
+        await expect(
+          installPluginFromMarketplace({
+            marketplace: manifestPath,
+            plugin: "Frontend-design",
+            mode,
+          }),
+        ).resolves.toMatchObject({ ok: true, marketplacePlugin: "Frontend-design" });
+        expect(installPluginInput()).toMatchObject({ path: pluginDir, mode });
+        expectNoNetwork();
+      });
+    },
+  );
+
   it("does not publish a marketplace plugin after authority closes during artifact review", async () => {
     await withTempDir("openclaw-marketplace-guard-", async (rootDir) => {
       const { pluginDir, extensionsDir } = createBundleInstallFixtureFactory(() => rootDir)({
@@ -722,24 +766,31 @@ describe("marketplace archive downloads", () => {
     ["interrupted", "archive stream failed"],
   ] as const)("cancels and cleans up an %s archive stream", async (kind, error) => {
     const beforeTempDirs = await listMarketplaceDownloadTempDirs();
-    const { response, reader, arrayBuffer } = fakeResponse();
-    reader.read.mockResolvedValueOnce({
-      done: false,
-      value:
-        kind === "oversized"
-          ? new Uint8Array(256 * 1024 * 1024 + 1)
-          : Buffer.from("partial archive"),
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          kind === "oversized"
+            ? new Uint8Array(256 * 1024 * 1024 + 1)
+            : Buffer.from("partial archive"),
+        );
+      },
+      pull(controller) {
+        if (kind === "interrupted") {
+          controller.error(new Error(error));
+        }
+      },
+      cancel,
     });
-    if (kind === "interrupted") {
-      reader.read.mockRejectedValueOnce(new Error(error));
-    }
-    respond(response, "https://cdn.example.com/releases/frontend-design.tgz");
+    const response = new Response(body);
+    const arrayBuffer = vi.spyOn(response, "arrayBuffer");
+    const release = respond(response, "https://cdn.example.com/releases/frontend-design.tgz");
     expectDownloadFailure(await install(), error);
     expect(arrayBuffer).not.toHaveBeenCalled();
-    expect(reader.cancel).toHaveBeenCalledTimes(1);
-    expect(reader.releaseLock).toHaveBeenCalledTimes(1);
-    if (kind === "interrupted") {
-      expect(reader.read).toHaveBeenCalledTimes(2);
+    expect(body.locked).toBe(false);
+    expect(release).toHaveBeenCalledTimes(1);
+    if (kind === "oversized") {
+      expect(cancel).toHaveBeenCalledTimes(1);
     }
     expect(await listMarketplaceDownloadTempDirs()).toEqual(beforeTempDirs);
   });

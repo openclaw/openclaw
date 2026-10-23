@@ -349,7 +349,7 @@ openclaw-chat-detail-panel,
   flex: 1 1 auto;
   overflow: hidden;
   color: var(--text);
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 

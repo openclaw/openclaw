@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, For, Loading } from "solid-js";
+import { createMemo, Errored, For, latest, Loading } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import {
@@ -109,7 +109,6 @@ type MemoryAddonRow = ReturnType<typeof buildMemoryAddonRows>[number];
 function buildMemoryAddonRows(
   catalog: MemoryCatalogState,
   state: {
-    busy: Readonly<Partial<Record<string, true>>>;
     errors: Readonly<Partial<Record<string, string>>>;
     notices: Readonly<Partial<Record<string, { message: string }>>>;
     refreshWarnings: Readonly<Partial<Record<string, string>>>;
@@ -122,7 +121,6 @@ function buildMemoryAddonRows(
       label: t(addon.labelKey),
       description: entry?.description ?? addon.id,
       state: resolveMemoryPluginState(catalog, entry),
-      busy: state.busy[addon.id] === true,
       error: state.errors[addon.id] ?? null,
       notice:
         [state.notices[addon.id]?.message, state.refreshWarnings[addon.id]]
@@ -140,7 +138,11 @@ type MemoryViewProps = {
   catalog: MemoryCatalogState;
   catalogScope?: object | null;
   addonOutcomes: Parameters<typeof buildMemoryAddonRows>[1];
+  /** Read optimistic state at the control, outside held catalog and parent snapshots. */
+  readAddonExpected: (id: string) => boolean | undefined;
+  readAddonBusy: (id: string) => boolean;
   engineSelection: MemoryEngineSelection;
+  enginePending?: boolean;
   engineBusy: boolean;
   /** Distinguishes a rejected write from a committed write with a failed refresh. */
   engineOutcome: MemoryEngineOutcome | null;
@@ -272,7 +274,7 @@ function DisabledEngineRow(props: MemoryViewProps) {
     resolveMemoryPluginState(props.catalog, findMemoryCatalogPlugin(props.catalog, engineId()));
   return (
     <>
-      {engineId() !== null && state() === "disabled" && (
+      {!props.enginePending && engineId() !== null && state() === "disabled" && (
         <SettingsRow
           title={t("memoryPage.engine.disabledTitle")}
           description={t("memoryPage.engine.disabledHint")}
@@ -307,6 +309,9 @@ function AddonStatus(props: { state: MemoryPluginState }) {
 }
 
 function AddonRow(props: { addon: MemoryAddonRow; owner: MemoryViewProps }) {
+  // Read optimistic affordances at the control, outside the held catalog row snapshot.
+  // A retry dismisses the old error ahead of its action's held catalog update.
+  const error = () => (props.owner.readAddonBusy(props.addon.id) ? null : props.addon.error);
   return (
     <>
       {props.owner.canToggleAddons &&
@@ -317,8 +322,8 @@ function AddonRow(props: { addon: MemoryAddonRow; owner: MemoryViewProps }) {
           title={props.addon.label}
           ariaLabel={t("memoryPage.addons.toggleAriaLabel", { plugin: props.addon.label })}
           description={props.addon.description}
-          checked={props.addon.state === "enabled"}
-          disabled={props.addon.busy}
+          checked={props.owner.readAddonExpected(props.addon.id) ?? props.addon.state === "enabled"}
+          disabled={props.owner.readAddonBusy(props.addon.id)}
           onChange={(enabled) => props.owner.onAddonChange(props.addon.id, enabled)}
         />
       ) : (
@@ -328,10 +333,10 @@ function AddonRow(props: { addon: MemoryAddonRow; owner: MemoryViewProps }) {
           control={<AddonStatus state={props.addon.state} />}
         />
       )}
-      {props.addon.error === null ? undefined : (
+      {latest(error) === null ? undefined : (
         <SettingsRow
           title={t("memoryPage.addons.changeFailed", { plugin: props.addon.label })}
-          description={props.addon.error}
+          description={error()}
           control={<SettingsStatus kind="danger" label={t("common.failed")} />}
         />
       )}
@@ -431,7 +436,7 @@ export function Memory(props: MemoryViewProps) {
       <section class="memory-page">
         <section class="content-header content-header--settings content-header--page hub-page-header">
           <div class="hub-page-header__title">
-            <div class="page-title">{t("tabs.memory")}</div>
+            <h1 class="page-title">{t("tabs.memory")}</h1>
             <div class="page-subtitle">
               {t("memoryPage.intro")} <LearnMoreLink url={MEMORY_DOCS_URL} />
             </div>

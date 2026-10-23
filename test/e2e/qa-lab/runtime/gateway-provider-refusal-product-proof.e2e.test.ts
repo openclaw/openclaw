@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { closeHttpServer } from "../../../helpers/gateway-integration-fixtures.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { listenLoopback, sendChat } from "./gateway-recovery.test-support.js";
 
@@ -66,12 +67,7 @@ async function startRefusingAnthropicProvider() {
   return {
     baseUrl,
     requests,
-    stop: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
+    stop: () => closeHttpServer(server),
   };
 }
 

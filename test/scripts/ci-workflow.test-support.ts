@@ -237,6 +237,10 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
       ...context.steps,
     },
     needs: {
+      "build-artifacts": {
+        result: context.jobResults?.["build-artifacts"] ?? "success",
+        outputs: {},
+      },
       ...Object.fromEntries(
         Object.entries(context.additionalNeeds ?? {}).map(([name, need]) => [
           name,

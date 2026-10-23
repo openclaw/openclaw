@@ -26,8 +26,7 @@ import {
   retirePluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
-import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
-import { getPluginInstance } from "./plugin-instance-scope.js";
+import { getPluginInstance, getPluginInstanceOwner } from "./plugin-instance-scope.js";
 import { inheritPluginNativeAdmissions } from "./plugin-native-admission-state.js";
 import { createProviderAuthAvailability } from "./provider-auth-availability-core.js";
 import { createProviderExternalAuthResolver } from "./provider-external-auth-core.js";
@@ -226,11 +225,17 @@ async function acquireRegistryResources(
       }
     }
     // Inspections own disposal, not host cleanup notifications or persistent session state.
-    // Rollback completions were already consumed by the collector before this finalizer.
+    // Construction owns rollback diagnostics; final release still joins physical cleanup.
     const results = await Promise.allSettled(
       [...instances]
-        .filter((instance) => !rollbackInstances.has(instance))
-        .map((instance) => instance.dispose()),
+        .filter((instance) => {
+          const owner = getPluginInstanceOwner(instance);
+          return !owner || owner.registry === registry;
+        })
+        .map(async (instance) => {
+          const result = await instance.dispose(undefined, { waitForSettlement: true });
+          return rollbackInstances.has(instance) ? { errors: [] } : result;
+        }),
     );
     const failures: unknown[] = results.flatMap((result) =>
       result.status === "rejected"
@@ -241,17 +246,13 @@ async function acquireRegistryResources(
       releasePluginCacheInstance(instance, cache);
     }
     try {
-      const retired = await retirePluginCache(cache);
+      const retired = await retirePluginCache(cache, undefined, { waitForSettlement: true });
       failures.push(...retired.failures.map((failure) => failure.error));
     } catch (reason) {
       failures.push(new PluginRuntimeCloseRetainedError(reason));
     }
     if (failures.length) {
-      const error = new AggregateError(failures, "Plugin inspection instances failed to retire");
-      // Settled callback faults are diagnostics; timed-out disposal still owns physical cleanup.
-      throw failures.some((failure) => failure instanceof PluginInstanceDrainTimeoutError)
-        ? new PluginRuntimeCloseRetainedError(error)
-        : error;
+      throw new AggregateError(failures, "Plugin inspection instances failed to retire");
     }
   });
   try {

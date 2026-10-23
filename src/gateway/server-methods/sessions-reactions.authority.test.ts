@@ -8,7 +8,6 @@ import {
 } from "../../config/sessions/session-sharing-store.native.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import {
   bindSessionRowProjection,
   getSessionRowProjection,
@@ -23,6 +22,7 @@ import {
   client,
   context,
   roleConfig,
+  reactionGate,
   seedSession,
   sessionId,
   sessionKey,
@@ -34,21 +34,6 @@ afterEach(() => {
   resetSystemEventsForTest();
   vi.restoreAllMocks();
 });
-
-function readGate() {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    async hold<T>(reading: Promise<T>) {
-      const result = await reading;
-      entered.resolve();
-      await release.promise;
-      return result;
-    },
-  };
-}
 
 it("lists and commits member reactions without caller-thread SQL", () =>
   withReactionState(async () => {
@@ -85,13 +70,11 @@ it("awaits membership preparation and rejects failed or revoked preparations", (
     const prepare = projection.prepareMembership.bind(projection);
     for (const outcome of ["ready", "rejected", "profile-changed"] as const) {
       const reactor = client("alice");
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const gate = reactionGate();
       const preparation = vi
         .spyOn(projection, "prepareMembership")
         .mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
+          await gate.wait();
           if (outcome === "rejected") {
             throw new Error("membership reader unavailable");
           }
@@ -102,7 +85,7 @@ it("awaits membership preparation and rejects failed or revoked preparations", (
       const pending = setReaction(messageId, {}, reactor, requestContext);
       try {
         await awaitGateBeforeSettlement(
-          entered.promise,
+          gate.entered,
           pending,
           "reaction skipped membership preparation",
         );
@@ -111,7 +94,7 @@ it("awaits membership preparation and rejects failed or revoked preparations", (
           reactor.authenticatedUserProfile!.profileId = "bob";
         }
       } finally {
-        release.resolve();
+        gate.release();
       }
       const result = await pending;
       expect(result[0], outcome).toBe(outcome === "ready");
@@ -140,7 +123,7 @@ it("rechecks current membership, policy, source, and caller after message prepar
       const reactor = client("alice");
       await listReactions(reactor, requestContext, key);
       const projection = getSessionRowProjection(requestContext)!;
-      const gate = readGate();
+      const gate = reactionGate();
       const read = vi
         .spyOn(transcriptReaders, "readSessionMessageByIdAsync")
         .mockImplementationOnce((...args) => gate.hold(readMessage(...args)));
@@ -207,7 +190,7 @@ it.each(["private", "previously-absent"] as const)(
       } else {
         await listReactions(client("alice"), requestContext);
       }
-      const gate = readGate();
+      const gate = reactionGate();
       const readReactions = transcriptReaders.readSessionReactionsAsync;
       const read = vi.spyOn(transcriptReaders, "readSessionReactionsAsync");
       if (change === "private") {

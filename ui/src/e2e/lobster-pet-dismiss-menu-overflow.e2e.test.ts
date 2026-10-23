@@ -1,6 +1,7 @@
 // Force classic scrollbars to reproduce macOS "Always show scrollbars" overflow.
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { LobsterPetElement as BrowserLobsterPet } from "../components/lobster-pet.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installMockGateway } from "./new-session-page.test-support.ts";
 
@@ -12,14 +13,6 @@ const suite = createControlUiE2eSuite({
   },
   unavailableMessage: (executablePath) => `Playwright Chromium cannot start at ${executablePath}`,
 });
-
-type BrowserLobsterPet = HTMLElement & {
-  mode: "idle" | "busy" | "offline";
-  runOutcome: "ok" | "error" | "aborted";
-  seed: number;
-  visitsEnabled: boolean;
-  updateComplete: Promise<unknown>;
-};
 
 async function withDismissMenuPage(
   options: BrowserContextOptions,

@@ -1,12 +1,8 @@
-import { For, createSignal } from "solid-js";
+import { lazy } from "solid-js";
 import { withPromiseModalHost } from "../../../components/promise-modal-host.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
-import { downloadBlobFile } from "../../../lib/download.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { getChatAttachmentBlob } from "../attachment-payload-store.ts";
 
-type PrivateComposerDraft = {
+export type PrivateComposerDraft = {
   text: string;
   attachments: readonly ChatAttachment[];
   hasGoal: boolean;
@@ -15,102 +11,23 @@ type PrivateComposerDraft = {
   signal: AbortSignal;
 };
 
-function PrivateComposerRecoveryDialog(
-  props: PrivateComposerDraft & { finish: (discard: boolean) => void },
-) {
-  const [copied, setCopied] = createSignal(false);
-  let keepButton!: HTMLButtonElement;
-  const [error, setError] = createSignal<"copyFailed" | "attachmentUnavailable">();
-  const current = () => !props.signal.aborted && props.isCurrent();
-  const copyText = async () => {
-    if (!current()) {
-      props.finish(false);
-      return;
-    }
-    const didCopy = await copyToClipboard(props.text, current);
-    if (current()) {
-      setCopied(didCopy);
-      setError(didCopy ? undefined : "copyFailed");
-    }
-  };
-  return (
-    <openclaw-modal-dialog
-      prop:initialFocus={() => keepButton}
-      label={t("chat.privateDraftReload.title")}
-      description={t("chat.privateDraftReload.description")}
-      onModal-cancel={() => props.finish(false)}
-    >
-      <section class="exec-approval-card">
-        <div class="exec-approval-header">
-          <div>
-            <div class="exec-approval-title">{t("chat.privateDraftReload.title")}</div>
-            <div class="exec-approval-sub">{t("chat.privateDraftReload.description")}</div>
-          </div>
-        </div>
-        {props.text && (
-          <>
-            <label class="field">
-              <span>{t("chat.privateDraftReload.text")}</span>
-              <textarea readonly rows="6" value={props.text} />
-            </label>
-            <button type="button" class="btn" onClick={() => void copyText()}>
-              {copied() ? t("common.copied") : t("chat.privateDraftReload.copy")}
-            </button>
-          </>
-        )}
-        {props.hasGoal && <p>{t("chat.privateDraftReload.goal")}</p>}
-        {props.pendingReads > 0 && <p>{t("chat.privateDraftReload.reading")}</p>}
-        <For each={props.attachments} keyed={(attachment) => attachment.id}>
-          {(attachment) => (
-            <div class="field">
-              <span>{attachment().fileName ?? attachment().mimeType}</span>
-              <button
-                type="button"
-                class="btn"
-                onClick={() => {
-                  if (!current()) {
-                    props.finish(false);
-                    return;
-                  }
-                  const blob = getChatAttachmentBlob(attachment());
-                  if (blob) {
-                    downloadBlobFile(attachment().fileName ?? "attachment", blob);
-                  } else {
-                    setError("attachmentUnavailable");
-                  }
-                }}
-              >
-                {t("chat.privateDraftReload.download", {
-                  name: attachment().fileName ?? attachment().mimeType,
-                })}
-              </button>
-            </div>
-          )}
-        </For>
-        {error() && <p role="alert">{t(`chat.privateDraftReload.${error()}`)}</p>}
-        <openclaw-modal-actions class="exec-approval-actions">
-          <button type="button" class="btn danger" onClick={() => props.finish(current())}>
-            {t("chat.privateDraftReload.discard")}
-          </button>
-          <button
-            ref={(element) => {
-              keepButton = element;
-            }}
-            type="button"
-            class="btn"
-            autofocus
-            onClick={() => props.finish(false)}
-          >
-            {t("chat.privateDraftReload.keep")}
-          </button>
-        </openclaw-modal-actions>
-      </section>
-    </openclaw-modal-dialog>
-  );
-}
+const PrivateComposerRecoveryDialog = lazy(
+  () => import("./private-composer-recovery-content.tsx"),
+  {
+    export: "PrivateComposerRecoveryDialog",
+  },
+);
 
 export function reviewPrivateComposerDraft(params: PrivateComposerDraft): Promise<boolean> {
-  return withPromiseModalHost({ signal: params.signal, value: false }, ({ render, finish }) => {
-    render(() => <PrivateComposerRecoveryDialog {...params} finish={finish} />);
-  });
+  return withPromiseModalHost(
+    { signal: params.signal, value: false },
+    async ({ render, finish }) => {
+      await PrivateComposerRecoveryDialog.preload();
+      if (params.signal.aborted || !params.isCurrent()) {
+        finish(false);
+        return;
+      }
+      render(() => <PrivateComposerRecoveryDialog {...params} finish={finish} />);
+    },
+  );
 }

@@ -137,7 +137,6 @@ describe("cloud target menu", () => {
         },
       ],
       selectedId: "",
-      compact: true,
       submitting: false,
       onSelect,
       onSelectOs,
@@ -175,7 +174,6 @@ describe("cloud target menu", () => {
       {
         profiles: [{ id: "aws", providerId: "aws", machines: [machine] }],
         selectedId: "aws",
-        compact: true,
         selectedMachine: machine.id,
         submitting: false,
         onSelect: vi.fn(),
@@ -208,7 +206,6 @@ describe("cloud target menu", () => {
         },
       ],
       selectedId: "aws",
-      compact: true,
       selectedOs: "linux",
       selectedMachine: "small",
       submitting: false,
@@ -240,7 +237,6 @@ describe("cloud target menu", () => {
           },
         ],
         selectedId: "aws",
-        compact: true,
         selectedOs: "windows",
         submitting: false,
         onSelect: vi.fn(),
@@ -272,8 +268,10 @@ describe("cloud target menu", () => {
     );
 
     const button = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
-    expect(button?.disabled).toBe(true);
-    expect(button?.title).toBe("The acpx runtime does not support cloud workers.");
+    expect(button?.getAttribute("aria-disabled")).toBe("true");
+    expect(button?.getAttribute("aria-description")).toContain(
+      "The acpx runtime does not support cloud workers.",
+    );
   });
 
   it("disables only the cloud profile with a profile-specific reason", () => {
@@ -296,9 +294,9 @@ describe("cloud target menu", () => {
 
     const disabled = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
     const enabled = container.querySelector<HTMLButtonElement>('[data-value="cloud:ssh"]');
-    expect(disabled?.disabled).toBe(true);
-    expect(disabled?.title).toBe(reason);
+    expect(disabled?.getAttribute("aria-disabled")).toBe("true");
+    expect(disabled?.getAttribute("aria-description")).toContain(reason);
     expect(enabled?.disabled).toBe(false);
-    expect(enabled?.title).toBe("Cloud worker provider: static-ssh");
+    expect(enabled?.getAttribute("aria-description")).toBe("Cloud worker provider: static-ssh");
   });
 });
