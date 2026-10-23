@@ -37,7 +37,7 @@ it.each(["valid", "framed", "close", "mismatched", "unsafe", "malformed"])(
       };
       const actor: Pick<Actor, "id" | "closeReceipt" | "openDispatch"> = {
         id: 1,
-        openDispatch: { custody: new SqliteWorkerSlotCustody().createRequest() },
+        openDispatch: { dispatched: true },
       };
       const closeReceipt: SqliteWorkerCloseReceipt = {
         identity: { key: "fixture", canonicalPath: "/fixture/state.sqlite" },
