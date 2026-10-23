@@ -24,6 +24,7 @@ const performanceSources = [
     "check-limits.mts",
     "control-ui-i18n-config.ts",
     "control-ui-i18n-config.json",
+    "control-ui-module-attribution.mts",
     "record-shared.mjs",
     "regexp.mjs",
   ].map((name) => `scripts/lib/${name}`),
@@ -41,6 +42,7 @@ function compileFixture(root: string, entry: string[], options: Parameters<typeo
     dts: false,
     clean: false,
     treeshake: false,
+    deps: { neverBundle: ["pako"] },
     outExtensions: () => ({ js: ".js" }),
     outputOptions: { entryFileNames: "[name].js", chunkFileNames: "[name].js" },
     logLevel: "silent",
@@ -837,6 +839,9 @@ export default {
     const { output } = await repo.runComparison(repo.base, 1);
     expect(output).toContain(`head ${head}; base ${repo.base}; Node ${process.version}; Vite `);
     expect(output).toContain("Pako ");
+    expect(output).toMatch(
+      /startup JS gzip vs base: \d+ B -> \d+ B \([+-]\d+ B\); requests \d+ -> \d+/u,
+    );
     expect(output).toMatch(/startup CSS gzip vs base: \d+ B -> \d+ B \(\+\d+ B/u);
     expect(output).toContain("startup CSS gzip growth:");
     const identities = repo.readIdentities();

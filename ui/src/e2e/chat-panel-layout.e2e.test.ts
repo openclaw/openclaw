@@ -5,7 +5,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
   controlUiBundledSettingsStorageKey,
@@ -234,7 +234,8 @@ suite.define(() => {
         // The mobile dock keeps the conversation available and retains the saved desktop layout.
         await page.setViewportSize({ width: 390, height: 844 });
         const mobileHeader = page.locator(".agent-chat__header--mobile");
-        await mobileHeader.getByRole("button", { name: "Session dashboard", exact: true }).click();
+        await mobileHeader.locator(".chat-header-session-menu__trigger").click();
+        await page.getByRole("menuitem", { name: "Session dashboard", exact: true }).click();
         const host = page.locator(".chat-mobile-host");
         await input.waitFor();
         expect(await composer.isVisible()).toBe(true);
@@ -590,8 +591,7 @@ suite.define(() => {
           expect(await mountedCanvas?.evaluate((element) => element.isConnected)).toBe(true);
         }
         await page.setViewportSize({ width: 400, height: 900 });
-        const mobile = page.locator(".agent-chat__header--mobile");
-        await mobile.getByRole("button", { name: "Panels", exact: true }).click();
+        await openChatPanels(page);
         const host = page.locator(".chat-mobile-host");
         await host.getByRole("button", { name: "Panels", exact: true }).click();
         await side.locator('.tabstrip-tab[data-tab-value^="hosted:terminal:"]').click();

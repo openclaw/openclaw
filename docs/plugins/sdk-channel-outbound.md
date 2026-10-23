@@ -55,6 +55,25 @@ claim validation. Keep `inspect` as a synchronous fallback for older hosts, whic
 ignore the companion. Both callbacks must derive the same identity and lane.
 The standard raw-event convenience monitor retains its synchronous inspection contract.
 
+Optional `prepareAdmission(raw, { facts, receivedAt, signal })` runs inside the
+same admission order, after inspection and before payload serialization. Return
+`{ raw: replacement, assertCurrent }` to bind a prepared replacement to its live
+policy authority, or `undefined` for ordinary admission. The monitor reinspects
+the replacement and refuses changed event IDs or lanes. Policy-protected
+singletons use `queue.enqueueAuthorized`; batches require
+`queue.enqueueBatchAuthorized(events, { assertCurrent })`. The native queue
+checks this assertion at transaction and commit. Protected intake never falls
+back to an unguarded or fused append-and-claim method on an older external queue;
+unprotected queues retain their existing compatibility path.
+
+Channel plugins can await `prepareChannelIngressEvent(raw, context)` from
+`openclaw/plugin-sdk/channel-ingress-runtime` inside this callback to run
+`before_channel_ingress` policies, then validate its unknown replacement through
+their provider decoder. Pass `{ channelId, accountId, signal }`; an absent result
+means no registered handlers. A present result contains `{ event, assertCurrent }`.
+Preserve the host assertion through enqueue, and never log the unsanitized value
+or substitute the original payload after a policy error.
+
 Asynchronous inspection stays inside the existing admission order. Shutdown and `waitForIdle()` join
 accepted inspections and their durable appends, including pending claim inspection
 when the channel owns its separate delivery grace. Claim inspection rechecks shutdown

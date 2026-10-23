@@ -1,8 +1,19 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { Command } from "commander";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
-import { createTestRuntime } from "./test-runtime-config-helpers.js";
+import { registerDocsCli } from "./docs-cli.js";
 
+const runtime = vi.hoisted(() => ({
+  log: vi.fn(),
+  error: vi.fn(),
+  exit: vi.fn(),
+}));
 const fetchMock = vi.fn<typeof fetch>();
+
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  defaultRuntime: runtime,
+}));
 
 vi.mock("../../packages/terminal-core/src/theme.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../packages/terminal-core/src/theme.js")>();
@@ -19,14 +30,30 @@ vi.mock("../../packages/terminal-core/src/theme.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../packages/terminal-core/src/links.js", () => ({
+vi.mock("../../packages/terminal-core/src/links.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/terminal-core/src/links.js")>()),
   formatDocsLink: (path: string, label: string) => `${label}${path}`,
 }));
 
-const { docsSearchCommand } = await import("./docs.js");
-let runtime: ReturnType<typeof createTestRuntime>;
-const search = (query: string[], options: Parameters<typeof docsSearchCommand>[2] = {}) =>
-  docsSearchCommand(query, runtime, options);
+async function search(query: string[], options: { json?: boolean; limit?: number } = {}) {
+  const program = new Command().name("openclaw").exitOverride();
+  registerDocsCli(program);
+  const argv = [
+    "node",
+    "openclaw",
+    "docs",
+    ...query,
+    ...(options.json ? ["--json"] : []),
+    ...(options.limit !== undefined ? ["--limit", String(options.limit)] : []),
+  ];
+  const previousArgv = process.argv;
+  process.argv = argv;
+  try {
+    await program.parseAsync(argv);
+  } finally {
+    process.argv = previousArgv;
+  }
+}
 const respond = (results: unknown) =>
   fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ results })));
 const loggedJson = () => JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
@@ -35,8 +62,12 @@ beforeEach(() => {
   fetchMock.mockReset();
   vi.mocked(isRich).mockReturnValue(false);
   vi.stubGlobal("fetch", fetchMock);
-  runtime = createTestRuntime();
+  runtime.log.mockClear();
+  runtime.error.mockClear();
+  runtime.exit.mockClear();
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 it("calls the Cloudflare docs search API", async () => {
   respond([]);
@@ -75,6 +106,7 @@ it("emits one JSON object for the docs homepage", async () => {
 });
 
 it.each([
+  ["null root", "null", "malformed: expected results array"],
   [
     "non-array results",
     JSON.stringify({ results: "unavailable" }),
@@ -140,7 +172,7 @@ it("rejects oversized docs search responses", async () => {
     },
   });
   fetchMock.mockResolvedValueOnce(new Response(stream));
-  await expect(search(["oversized"])).rejects.toThrow(
+  await expect(search(["oversized"], { json: true })).rejects.toThrow(
     "Docs search failed: Docs search response exceeds 8388608 bytes",
   );
   expect(cancel).toHaveBeenCalledOnce();
@@ -167,7 +199,7 @@ it("settles a known HTTP error before a retained clone reaches EOF", async () =>
     );
     return response;
   });
-  const pending = search(["held-error"]).then(
+  const pending = search(["held-error"], { json: true }).then(
     () => ({ ok: true as const }),
     (error: unknown) => ({ ok: false as const, error }),
   );

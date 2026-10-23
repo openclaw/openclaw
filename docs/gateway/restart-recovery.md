@@ -114,6 +114,10 @@ readiness does not wait for replay.
 Before replaying queued inter-session updates, the Gateway resumes any interrupted
 main turn through its existing recovery owner, preserving the predecessor's order.
 The updates remain queued when that owner defers recovery.
+If the crash-loop breaker pauses the predecessor, startup replay waits for the
+existing boot owner to clear quarantine, then resumes the predecessor and saved
+inputs in order. Shutdown or another restart cancels that wait without replaying
+or discarding the saved inputs.
 
 Per-input replay diagnostics record the input kind, outcome, wait reason, attempt
 count, and elapsed milliseconds without message content or session/input IDs.

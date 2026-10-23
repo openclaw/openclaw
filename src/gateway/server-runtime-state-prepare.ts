@@ -266,6 +266,7 @@ export async function prepareGatewayKernelState(params: {
     bindNodeWorkspaceBindingResolver?.(workerPlacementRuntime.resolveNodeWorkspaceBinding);
     workerEnvironmentRuntime.bindWorkerSessionDispatch?.(
       workerPlacementRuntime.dispatchService.dispatch,
+      workerPlacementRuntime.dispatchService.waitForInitialPlacement,
     );
   }
   const bindDeviceNodeRuntime = bindDeviceNodeControl

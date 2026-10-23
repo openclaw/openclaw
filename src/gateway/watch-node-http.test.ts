@@ -73,6 +73,7 @@ afterEach(async () => {
   await tempDirs.cleanup();
   cleanups.length = 0;
   databasePaths.clear();
+  vi.unstubAllEnvs();
 });
 
 async function makeWatchNodeDir(prefix: string): Promise<string> {

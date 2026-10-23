@@ -75,6 +75,8 @@ or another person's sidebar.
 
 **Pin session** keeps a full session row in the **Pinned** section at the top of
 Sessions, in saved pin order. Existing personal session pins appear there too.
+Drag a row above or below another pin to change that order. Personal pinning,
+reordering, and rail shortcuts do not require shared-group write access.
 To add an icon to the rail, drag the session onto the rail explicitly. Sidebar
 pins and rail shortcuts are independent: removing one leaves the other intact.
 Archived pins leave Pinned until restored.

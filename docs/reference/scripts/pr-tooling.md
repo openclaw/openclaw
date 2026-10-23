@@ -195,8 +195,10 @@ branch for retry. Older abandoned clones can be inspected with
 including while the PR is open. This recovery requires no PR registration, no
 `.local` artifacts, and an intact backlink to a registered template under the
 same repository's `.worktrees/.templates`. It checks process working directories
-and preserves modified, untracked, and ignored files before revalidating the
-clone for removal. Missing template metadata and other
+and checks the clone against the PR's retained `temp/pr-<number>` seed using a
+temporary index, so later template refreshes cannot make a clean clone appear
+edited. Modified, untracked, and ignored files are preserved before revalidating
+the clone for removal. A missing seed, missing template metadata, and other
 ambiguous directories remain preserved; recovery never deletes their seed branches.
 
 ## Captured baseline evidence hashes
