@@ -1,4 +1,4 @@
-import { createMemo, lazy, Loading } from "solid-js";
+import { createMemo, lazy } from "solid-js";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
@@ -8,6 +8,7 @@ import type { ChatDetailSlotProps } from "../chat-pane-embedded-types.ts";
 import { ensureLazySidebarElement, lazySidebarElements } from "../chat-pane-sidebar-layout.ts";
 import { selectedChatSessionRow } from "../chat-state-route.ts";
 import { openSlot } from "../sidebar-layout.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import {
   getSessionWorkspace,
@@ -25,6 +26,15 @@ const ChatToolOutput = lazy(() => import("./chat-tool-output-view.tsx"), {
 });
 
 export function ChatDetailSlot(props: ChatDetailSlotProps) {
+  const attachmentRuntime = createMemo(() => ({
+    sessionKey: props.chat.sessionKey,
+    agentId: props.chat.currentAgentId ?? props.chat.fullMessageAgentId,
+    policyKey: assistantMediaPolicyKey(props.chat.selectedSession, props.chat.mediaPolicyEpoch),
+    authToken: props.chat.assistantAttachmentAuthToken,
+    connectionEpoch: props.chat.connectionEpoch,
+    resourceBasePath: props.chat.resourceBasePath,
+    resolveArtifactDownload: props.chat.resolveArtifactDownload,
+  }));
   const sourceContent = createMemo(() => props.content);
   const content = createMemo(() => {
     const value = sourceContent();
@@ -87,14 +97,16 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
           <span>{props.content.message}</span>
         </div>
       ) : props.content.kind === "tool-output" ? (
-        <Loading fallback={<PanelLoadingSkeleton variant="review" label={t("common.loading")} />}>
+        <ChatLazyBoundary
+          fallback={<PanelLoadingSkeleton variant="review" label={t("common.loading")} />}
+        >
           <ChatToolOutput
             class="chat-sidebar"
             content={props.content}
             loadFullMessage={props.chat.loadFullAssistantMessage ?? null}
             connectionEpoch={props.chat.connectionEpoch}
           />
-        </Loading>
+        </ChatLazyBoundary>
       ) : panelLoad() !== undefined ? (
         panelLoad() === null ? (
           <PanelLoadingSkeleton variant="review" label={t("common.loading")} />
@@ -105,6 +117,7 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
         <openclaw-chat-detail-panel
           class="chat-sidebar"
           prop:content={content()}
+          prop:attachmentChat={props.chat}
           prop:onScrollPortRef={props.chat.onScrollPortRef}
           prop:panelPresentation={props.presentation}
           prop:filePresentation={props.filePresentation ?? props.presentation}
@@ -118,26 +131,11 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
             props.content.kind === "file" ? (props.content.navigation ?? null) : null
           }
           prop:execNode={selectedChatSessionRow(props.host)?.execNode ?? null}
-          prop:attachmentRuntime={{
-            sessionKey: props.chat.sessionKey,
-            agentId: props.chat.currentAgentId ?? props.chat.fullMessageAgentId,
-            policyKey: assistantMediaPolicyKey(
-              props.chat.selectedSession,
-              props.chat.mediaPolicyEpoch,
-            ),
-            authToken: props.chat.assistantAttachmentAuthToken,
-            connectionEpoch: props.chat.connectionEpoch,
-            resourceBasePath: props.chat.resourceBasePath,
-            resolveArtifactDownload: props.chat.resolveArtifactDownload,
-          }}
+          prop:attachmentRuntime={attachmentRuntime()}
           prop:basePath={props.chat.basePath ?? ""}
           prop:canvasPluginSurfaceUrl={props.host.canvasPluginSurfaceUrl}
           prop:embedSandboxMode={props.host.embedSandboxMode}
           prop:allowExternalEmbedUrls={props.host.allowExternalEmbedUrls}
-          prop:githubContext={{
-            githubRepo: props.chat.githubRepo,
-            githubRepositories: props.chat.githubRepositories,
-          }}
           prop:onOpenWorkspaceFile={(target: MarkdownFileLinkTarget) => {
             void openSessionWorkspaceFile(
               props.host,

@@ -2,9 +2,11 @@ import type { Locator, Page } from "playwright";
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../pages/chat/sidebar-layout.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   createControlUiMockSameOriginGatewayScript,
+  waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
@@ -545,7 +547,17 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
 
   // Saved widths can consume the gutter even in a wide desktop pane.
   for (const width of ["100%", "none", "95%", "48rem"]) {
-    await page.goto(`${suite.server.baseUrl}settings/appearance#settings-appearance-chat`);
+    if (width === "100%") {
+      await page.goto(`${suite.server.baseUrl}settings/appearance#settings-appearance-chat`);
+    } else {
+      await evaluateControlUiContext(page, (context) =>
+        context.navigate("appearance", { hash: "#settings-appearance-chat" }),
+      );
+      await waitForControlUiRoute(page, {
+        routeId: "appearance",
+        hash: "#settings-appearance-chat",
+      });
+    }
     const widthInput = page.locator("[data-settings-chat-message-width]");
     await widthInput.fill(width);
     await widthInput.press("Tab");

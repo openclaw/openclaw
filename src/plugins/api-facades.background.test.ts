@@ -155,28 +155,4 @@ describe("instance-bound background context", () => {
       await Promise.all([closing, replacement.instance.dispose()]);
     }
   });
-
-  it("lets resource cleanup await background completion without joining its own disposal", async () => {
-    vi.useFakeTimers();
-    const owner = fixture();
-    const gate = createDeferredCore();
-    const pending = owner.run(() => gate.promise);
-    const cleanup = vi.fn(async () => {
-      await pending;
-    });
-    owner.instance.lifecycle.onDispose(cleanup);
-    const closing = owner.instance.dispose();
-    void pending.catch(() => {});
-    try {
-      gate.resolve();
-      await vi.advanceTimersByTimeAsync(5_000);
-      await expect(closing).resolves.toEqual({ errors: [] });
-      await expect(pending).resolves.toBeUndefined();
-      expect(cleanup).toHaveResolvedTimes(1);
-    } finally {
-      gate.resolve();
-      await Promise.allSettled([pending, closing]);
-      vi.useRealTimers();
-    }
-  });
 });

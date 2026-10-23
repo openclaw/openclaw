@@ -30,6 +30,7 @@ import {
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
+import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers/thinking.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
@@ -46,7 +47,6 @@ import { createAgentSession } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
 import { isSummaryTimeoutFailure, resolveCompactionFailure } from "./compact-reasons.js";
-import { containsRealConversationMessages } from "./compaction-diagnostics.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
 import {
   buildBeforeCompactionHookMetrics,
@@ -429,7 +429,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         const { messageCountOriginal, tokenCountBefore: limitedTranscriptTokensBefore } =
           beforeHookMetrics;
 
-        if (!containsRealConversationMessages(session.messages)) {
+        if (
+          !session.messages.some((message, index, allMessages) =>
+            isRealConversationMessage(message, allMessages, index),
+          )
+        ) {
           log.info(
             `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
           );

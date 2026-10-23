@@ -40,7 +40,6 @@ import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
-import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../heartbeat.js";
 import {
   markReplyPayloadForSourceSuppressionDelivery,
   type ReplyPayload,
@@ -80,11 +79,6 @@ import {
 } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createModelSelectionState, resolveTurnModelSelection } from "./model-selection.js";
-import {
-  classifyHeartbeatPendingFinalDelivery,
-  PENDING_FINAL_DELIVERY_CLEAR_PATCH,
-  sanitizePendingFinalDeliveryText,
-} from "./pending-final-delivery-state.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
@@ -202,7 +196,6 @@ async function resolveReplyFromConfig(
     const traceAttributes = resolverTiming.measureSync("reply.resolve_trace_context", () => ({
       surface: normalizeOptionalString(finalized.Surface ?? finalized.Provider) ?? "unknown",
       hasSessionKey: Boolean(agentSessionKey),
-      isHeartbeat: opts?.isHeartbeat === true,
       hasMedia: hasInboundMedia(finalized),
     }));
     const messageId = finalized.MessageSid ?? finalized.MessageSidFirst ?? finalized.MessageSidLast;
@@ -256,7 +249,6 @@ async function resolveReplyFromConfig(
       agentId,
       defaultProvider,
       aliasIndex,
-      configuredHeartbeatModel: agentCfg?.heartbeat?.model,
       options: opts,
     });
     let provider = turnModelOverride?.ref.provider ?? defaultProvider;
@@ -369,13 +361,12 @@ async function resolveReplyFromConfig(
       );
     } catch (error) {
       if (
-        opts?.isHeartbeat === true ||
         !(error instanceof WorkspaceAliasRepointedError || error instanceof WorkspaceVanishedError)
       ) {
         throw error;
       }
       // Permanent failures must finish ingress even in tool-only conversations.
-      // Keep host paths in operator logs; heartbeat failures retain their own owner.
+      // Keep host paths in operator logs.
       typing.cleanup();
       logVerbose(`workspace unavailable; replying with repair notice: ${error.message}`);
       const text =
@@ -609,37 +600,11 @@ async function resolveReplyFromConfig(
       storePath,
     });
 
-    // Heartbeats may safely clear ack-only pending state, but must not replay
-    // user-facing pending finals through a different delivery target.
-    if (opts?.isHeartbeat && sessionEntry.pendingFinalDelivery?.kind === "replayable") {
-      const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDelivery.text);
-      const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
-        text,
-        DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-      );
-      if (heartbeatPending.shouldClear) {
-        Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
-        sessionEntryHandle.replaceCurrent(sessionEntry);
-        if (sessionKey && storePath) {
-          const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
-          await updateSessionEntry(
-            { storePath, sessionKey },
-            () => ({ ...PENDING_FINAL_DELIVERY_CLEAR_PATCH }),
-            {
-              skipMaintenance: true,
-              takeCacheOwnership: true,
-            },
-          );
-        }
-      }
-    }
-
     if (resetTriggered && normalizeOptionalString(bodyStripped)) {
       const { applyResetModelOverride } = await import("./session-reset-model.js");
       try {
         await applyResetModelOverride({
           ...replyContext,
-          resetTriggered,
           bodyStripped,
           sessionCtx,
           sessionEntryHandle,
@@ -712,7 +677,6 @@ async function resolveReplyFromConfig(
       primaryModel,
       sessionModelSelectionLocked,
       hasResolvedTurnModelOverride,
-      isHeartbeat: opts?.isHeartbeat,
     });
     if (storedModelOverride) {
       provider = storedModelOverride.provider;
@@ -733,7 +697,6 @@ async function resolveReplyFromConfig(
         ctx: sessionCtx,
         sessionEntry: sessionStore[sessionKey] ?? sessionEntry,
         groupResolution,
-        isHeartbeat: opts?.isHeartbeat,
       });
 
     const directiveResult = await traceGetReplyPhase("reply.resolve_directives", () =>
@@ -755,8 +718,6 @@ async function resolveReplyFromConfig(
         aliasIndex,
         provider,
         model,
-        hasResolvedHeartbeatModelOverride:
-          opts?.isHeartbeat === true && hasResolvedTurnModelOverride,
         hasResolvedTurnModelOverride,
         typing,
         opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
@@ -894,10 +855,7 @@ async function resolveReplyFromConfig(
           model: runModel,
           hasModelDirective: false,
           skipStoredModelOverride: true,
-          hasResolvedHeartbeatModelOverride:
-            opts?.isHeartbeat === true && hasResolvedTurnModelOverride,
           hasResolvedTurnModelOverride,
-          isHeartbeat: opts?.isHeartbeat === true,
           preparedModelCatalog,
           operatorAuthority: resolvedOpts?.operatorAuthority,
         });

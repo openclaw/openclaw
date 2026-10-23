@@ -1,10 +1,9 @@
-import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
-import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import * as artifacts from "./update-managed-service-handoff-artifacts.test-support.js";
 import { createManagedServiceManagerBoundary } from "./update-managed-service-handoff-boundary.test-support.js";
+import { createManagedServiceChildMock } from "./update-managed-service-handoff-command.test-support.js";
 import { signalMockManagedUpdateHandoffReady as signalReady } from "./update-managed-service-handoff.test-support.js";
 
 const { kill, tmp, spawn } = vi.hoisted(() => ({
@@ -16,14 +15,7 @@ const { kill, tmp, spawn } = vi.hoisted(() => ({
 const mockedChildren = new Set<ReturnType<typeof createSpawnMock>>();
 
 export function createSpawnMock(params?: { pid?: number }) {
-  const child = Object.assign(new EventEmitter(), {
-    pid: params?.pid ?? process.pid,
-    exitCode: null,
-    signalCode: null,
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    unref: vi.fn(),
-  });
+  const child = createManagedServiceChildMock(params);
   mockedChildren.add(child);
   return child;
 }

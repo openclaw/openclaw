@@ -68,7 +68,7 @@ it.each(["off", "tokens"] as const)("hides cost-only usage in %s mode", (mode) =
   ).toBeUndefined();
 });
 
-it("preserves reply payload metadata when appending usage text", () => {
+it("decorates a completed source reply and keeps its private final separate", () => {
   const mirror = {
     sessionKey: "agent:main:telegram:direct:123",
     agentId: "main",
@@ -83,14 +83,35 @@ it("preserves reply payload metadata when appending usage text", () => {
     },
   );
 
-  const [updated] = appendUsageLine([payload], usageLine);
+  const privateFinal = { text: "private final" };
+  const [updated, untouchedPrivateFinal] = appendUsageLine([payload, privateFinal], usageLine, {
+    completedSourceReply: true,
+  });
 
   expect(updated).toEqual({ text: "message tool reply\nUsage: 12 in / 3 out" });
+  expect(untouchedPrivateFinal).toBe(privateFinal);
+  expect(getReplyPayloadMetadata(privateFinal)).toBeUndefined();
   expect(getReplyPayloadMetadata(expectDefined(updated, "updated test invariant"))).toMatchObject({
     deliverDespiteSourceReplySuppression: true,
     sourceReplyTranscriptMirror: {
       ...mirror,
       text: "message tool reply\nUsage: 12 in / 3 out",
     },
+  });
+});
+
+it("emits a suppression-authorized footer when no captured source payload exists", () => {
+  const result = appendUsageLine([{ text: "private final" }], usageLine, {
+    completedSourceReply: true,
+  });
+
+  expect(result).toHaveLength(2);
+  expect(result[0]).toEqual({ text: "private final" });
+  expect(result[1]).toMatchObject({ text: usageLine, isStatusNotice: true });
+  expect(
+    getReplyPayloadMetadata(expectDefined(result[1], "completed source footer")),
+  ).toMatchObject({
+    deliverDespiteSourceReplySuppression: true,
+    responseUsageLine: usageLine,
   });
 });

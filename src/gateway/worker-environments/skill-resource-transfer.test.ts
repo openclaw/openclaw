@@ -155,6 +155,25 @@ async function withResources(
   }
 }
 
+function resourceCatalog(
+  resources: NonNullable<Awaited<ReturnType<typeof transferSkillResources>>>,
+  containerWorkdir: string,
+) {
+  const sandbox = {
+    ...createAgentToolsSandboxContext({ workspaceDir: "/unreadable/gateway", containerWorkdir }),
+    backendId: "node" as const,
+    readOnlyResourceMounts: resources.mounts,
+  };
+  const catalogOptions = {
+    snapshot: resources.snapshot,
+    workspaceDir: sandbox.workspaceDir,
+    sandbox,
+    readable: true,
+    assertCurrent: () => {},
+  };
+  return { sandbox, catalogOptions, getCatalog: bindHostSkillCatalog(catalogOptions) };
+}
+
 async function createSource(binarySize = 150000) {
   const workspace = await fs.realpath(temps.make("remote-skill-source-"));
   const baseDir = path.join(workspace, "skills", "source");
@@ -260,28 +279,14 @@ it.each(["prompt", "discovery"])(
     try {
       await withSessionSkillResources(resources!, async () => {
         // Paired-node placement deliberately has no host filesystem bridge.
-        const sandbox = {
-          ...createAgentToolsSandboxContext({
-            workspaceDir: "/unreadable/gateway",
-            containerWorkdir: carrier.workspace,
-          }),
-          backendId: "node" as const,
-          readOnlyResourceMounts: resources!.mounts,
-        };
-        const getCatalog = bindHostSkillCatalog({
-          snapshot: resources!.snapshot,
-          workspaceDir: sandbox.workspaceDir,
-          sandbox,
-          readable: true,
-          assertCurrent: () => {},
-        });
+        const { sandbox, catalogOptions, getCatalog } = resourceCatalog(
+          resources!,
+          carrier.workspace,
+        );
         expect(
           bindHostSkillCatalog({
-            snapshot: resources!.snapshot,
-            workspaceDir: sandbox.workspaceDir,
+            ...catalogOptions,
             sandbox: { ...sandbox, readOnlyResourceMounts: [...resources!.mounts] },
-            readable: true,
-            assertCurrent: () => {},
           })(),
         ).toEqual([]);
         const inputs = resolveSandboxSkillRuntimeInputs({
@@ -346,21 +351,7 @@ it("keeps node-hosted discovery instructions when they are omitted from the prom
   const carrier = await createCarrier("node");
   await withResources(await transfer(carrier, snapshot), async (resources) => {
     await withSessionSkillResources(resources, async () => {
-      const sandbox = {
-        ...createAgentToolsSandboxContext({
-          workspaceDir: "/unreadable/gateway",
-          containerWorkdir: carrier.workspace,
-        }),
-        backendId: "node" as const,
-        readOnlyResourceMounts: resources.mounts,
-      };
-      const catalog = bindHostSkillCatalog({
-        snapshot: resources.snapshot,
-        workspaceDir: sandbox.workspaceDir,
-        sandbox,
-        readable: true,
-        assertCurrent: () => {},
-      })();
+      const catalog = resourceCatalog(resources, carrier.workspace).getCatalog();
       const tools = createInstalledSkillTools(catalog);
       finalizeAgentToolAvailability(tools);
       expect(
@@ -728,10 +719,10 @@ it.each(["cancelled", "retired"])(
     const [codeModeSkill] = resolveCodeModeSkills({
       skillsPrompt: resources!.snapshot.prompt,
       candidates: [selected],
-      reader: async () => {
-        throw new Error("Paired nodes have no Gateway filesystem bridge");
-      },
     });
+    codeModeSkill!.reader = async () => {
+      throw new Error("Paired nodes have no Gateway filesystem bridge");
+    };
     expect(await readCodeModeSkill(codeModeSkill!)).toBe(instructions);
     expect(await fs.readFile(selected.filePath, "utf8")).toBe(instructions);
     if (outcome === "cancelled") {

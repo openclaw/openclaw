@@ -44,6 +44,8 @@ suite.define(() =>
         });
 
         await page.goto(`${suite.server.baseUrl}chat`);
+        await chooseSidebarMenuOption(page, "Status", "All");
+        await closeSidebarMenu(page);
         const done = page.locator('[data-session-section="category:Done"]');
         const groups = page.locator('[data-session-section="groups"]');
         const row = done.locator(`[data-session-key="${key}"]`);

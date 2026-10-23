@@ -72,7 +72,7 @@ describe("subagents utils", () => {
   it("resolves subagent label with fallback", () => {
     expect(resolveSubagentLabel(makeRun({ label: "  runner " }))).toBe("runner");
     expect(resolveSubagentLabel(makeRun({ label: " ", task: "  task value " }))).toBe("task value");
-    expect(resolveSubagentLabel(makeRun({ label: " ", task: " " }), "fallback")).toBe("fallback");
+    expect(resolveSubagentLabel(makeRun({ label: " ", task: " " }))).toBe("subagent");
   });
 
   it("sorts by startedAt then createdAt descending", () => {

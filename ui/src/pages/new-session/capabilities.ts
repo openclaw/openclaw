@@ -80,8 +80,7 @@ export class NewSessionCapabilities {
       capabilityMenu: {
         basePath: context.basePath,
         skills: this.skillCatalog.rows(agentId, this.toolOverridesValue),
-        skillsLoading: this.skillCatalog.isLoading(agentId),
-        skillsError: this.skillCatalog.hasError(agentId),
+        skillsRead: this.skillCatalog.read(agentId),
         mcpServers: summarizeMcpServers(runtimeConfig) ?? [],
         toolsEffectiveResult: null,
         toolsEffectiveLoading: false,

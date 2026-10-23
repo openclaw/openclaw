@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -8,6 +10,7 @@ import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+import type { SandboxContext } from "./sandbox/types.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -105,6 +108,17 @@ describe("publication policy inherited by a managed child", () => {
   }>([
     { name: "permitted publication", tools: { allow: allowed }, expected: true },
     {
+      name: "preparation-only deployment policy",
+      tools: {
+        allow: allowed,
+        gatewayPolicy: {
+          allow: ["github_publish"],
+          actions: { github_publish: ["prepare_pr"] },
+        },
+      },
+      expected: true,
+    },
+    {
       name: "explicit denial",
       tools: { allow: allowed, deny: ["github_publish"] },
       expected: false,
@@ -199,10 +213,27 @@ describe("publication policy inherited by a managed child", () => {
         agents: config.agents,
         tools: { allow: allowed, gatewayPolicy: tools.gatewayPolicy },
       };
+      // PR preparation is offered only to a writable managed sandbox.
+      const childSandbox: SandboxContext = {
+        ...sandbox,
+        workspaceSource: "managed-worktree",
+        backend: {
+          id: "docker",
+          runtimeId: sandbox.runtimeId,
+          runtimeLabel: sandbox.runtimeLabel,
+          workdir: sandbox.containerWorkdir,
+          buildExecSpec: async () => {
+            throw new Error("Inheritance fixture does not execute commands");
+          },
+          runShellCommand: async () => {
+            throw new Error("Inheritance fixture does not execute commands");
+          },
+        },
+      };
       const child = createOpenClawCodingToolsInternal({
         config: childConfig,
         sessionKey: childKey,
-        sandbox,
+        sandbox: childSandbox,
         githubPublicationAvailable: true,
         toolConstructionPlan: plan,
         wrapBeforeToolCallHook: false,
@@ -222,6 +253,19 @@ describe("publication policy inherited by a managed child", () => {
         }),
       });
       expect(child.some((tool) => tool.name === "github_publish")).toBe(expected);
+      if (tools.gatewayPolicy?.actions?.github_publish?.includes("prepare_pr")) {
+        const publisher = expectDefined(
+          child.find((tool) => tool.name === "github_publish"),
+          "child preparation tool",
+        );
+        expect(
+          Value.Check(publisher.parameters, {
+            action: "prepare_pr",
+            pullRequestUrl: "https://github.com/example/repository/pull/1",
+          }),
+        ).toBe(true);
+        expect(Value.Check(publisher.parameters, { action: "publish" })).toBe(false);
+      }
     },
   );
 });

@@ -44,6 +44,7 @@ import {
   installEmbeddedRunnerBackoffE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
 } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
+import { withTestAdmission } from "./run-orchestrator.test-support.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
 
 vi.mock("node:worker_threads", async () =>
@@ -69,19 +70,11 @@ beforeAll(async () => {
   }));
   const { runEmbeddedAgent: run } = await import("./run.js");
   const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
-  runEmbeddedAgent = async (params) => {
-    const admission = prepareSystemAgentRunAdmission(
-      params.config ?? {},
-      params.runId,
-      params.agentId ?? "main",
-      "retry-projection-test",
-    );
-    try {
-      return await run({ ...params, preparedRunAdmission: admission });
-    } finally {
-      admission.close();
-    }
-  };
+  runEmbeddedAgent = withTestAdmission(
+    run,
+    prepareSystemAgentRunAdmission,
+    "retry-projection-test",
+  );
   // Preserve the embedded project's cold-import budget after moving to host-process tests.
 }, 600_000);
 

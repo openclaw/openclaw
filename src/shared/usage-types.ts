@@ -88,6 +88,7 @@ export type SessionsUsageAggregates = {
   costDaily?: CostUsageSummary["daily"];
   latency?: SessionLatencyStats;
   dailyLatency?: SessionDailyLatency[];
+  /** Provider attribution for the same calendar facet as costDaily, before selectedDays. */
   modelDaily?: SessionDailyModelUsage[];
   daily: Array<{
     date: string;

@@ -130,7 +130,7 @@ function stripMinimaxToolCallXml(text: string): string {
   return result;
 }
 
-export function stripLegacyBracketToolCallBlocks(text: string): string {
+function stripLegacyBracketToolCallBlocks(text: string): string {
   if (!text || !LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE.test(text)) {
     return text;
   }

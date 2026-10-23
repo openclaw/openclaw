@@ -7,6 +7,8 @@ import {
 } from "../../claws/gateway-add-apply.js";
 import { ClawGatewayConsentError } from "../../claws/gateway-plugin-consent.js";
 import { ClawSkillConsentError } from "../../claws/gateway-skill-consent.js";
+import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
+import type { CronJob } from "../../cron/types.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { clawsAddHandlers } from "./claws-add.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
@@ -288,14 +290,28 @@ describe("claws.add.apply Gateway method", () => {
   });
 
   it("exposes guarded scheduler reads and removal for Add rollback", async () => {
-    const job = { id: "job-1", agentId };
+    const job: CronJob = {
+      ...schedule,
+      id: "job-1",
+      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "Summarize new work" },
+      delivery: { mode: "none" },
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      state: {},
+    };
     const cron = makeCron({
       readJob: vi.fn().mockResolvedValue(job),
       remove: vi.fn().mockResolvedValue({ ok: true, removed: true }),
     });
     const commitGuard = vi.fn();
     applyAdd.mockImplementation(async (input) => {
-      expect(await input.cronGateway.get("job-1")).toEqual(job);
+      expect(await input.cronGateway.get("job-1")).toEqual({
+        ...job,
+        configRevision: resolveCronJobConfigRevision(job),
+      });
       await input.cronGateway.remove("job-1", {
         expectedConfigRevision: "revision-1",
         commitGuard,
@@ -326,9 +342,7 @@ describe("claws.add.apply Gateway method", () => {
     const request = await callAdd("apply", () => enabled, { cron });
 
     expect(removeAgentJobsTransactional).toHaveBeenCalledWith(agentId, expect.any(Function));
-    expect(deleteAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId, allowConfigSizeDrop: true }),
-    );
+    expect(deleteAgent).toHaveBeenCalledWith(expect.objectContaining({ agentId }));
     const { validate } = expectDefined(deleteAgent.mock.calls[0], "agent rollback attempt")[0];
     expect(() => validate(expectedAgentConfig)).not.toThrow();
     expect(() => validate({ ...expectedAgentConfig, name: "Edited" })).toThrow(
@@ -336,6 +350,43 @@ describe("claws.add.apply Gateway method", () => {
     );
     expect(request[0]?.[0]).toBe(true);
   });
+
+  it.each(["scratch", "enable"] as const)(
+    "rechecks live Add authority at the %s commit",
+    async (operation) => {
+      let authorized = true;
+      const persisted = vi.fn();
+      const cron = makeCron({
+        writeScratch: vi.fn(async (_id, options) => {
+          authorized = false;
+          options.commitGuard();
+          persisted();
+          return { ok: true };
+        }),
+        updateWithPrecondition: vi.fn(async (_id, _patch, _precondition, options) => {
+          authorized = false;
+          options.commitGuard();
+          persisted();
+        }),
+      });
+      applyAdd.mockImplementation(async (input) => {
+        if (operation === "scratch") {
+          await input.cronGateway.writeScratch("job-1", "Checklist", () => {});
+        } else {
+          await input.cronGateway.enable("job-1", "reviewed-revision", () => {});
+        }
+        return complete;
+      });
+
+      const request = await callAdd("apply", () => enabled, {
+        cron,
+        hasCurrentClientAuthority: () => authorized,
+      });
+
+      expect(persisted).not.toHaveBeenCalled();
+      expect(request[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+    },
+  );
 
   it("keeps the new agent when another automation appears before rollback", async () => {
     const cron = makeCron({

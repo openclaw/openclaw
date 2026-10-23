@@ -54,6 +54,24 @@ async function openSessionActions(pane: Locator): Promise<Locator> {
   return menu;
 }
 
+export async function openChatPanels(scope: Page | Locator): Promise<Locator> {
+  const pane = nativePane(scope);
+  if (await pane.locator(".agent-chat__header--mobile").isVisible()) {
+    const trigger = pane.locator(".agent-chat__header--mobile .chat-header-session-menu__trigger");
+    if (!(await pane.locator(".chat-mobile-host").isVisible())) {
+      await selectMenuItem(await openSessionActions(pane), "Panels");
+    }
+    return trigger;
+  }
+  const trigger = pane
+    .locator(".sidebar-region__panels-toggle")
+    .getByRole("button", { name: "Panels", exact: true });
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+    await trigger.click();
+  }
+  return trigger;
+}
+
 /** Desktop choices are menu checkboxes; mobile choices are pressed buttons in Advanced. */
 export async function openChatConversationOptions(scope: Page | Locator): Promise<Locator> {
   const pane = nativePane(scope);
@@ -85,13 +103,6 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
   const mobile = await pane.locator(".agent-chat__header--mobile").isVisible();
   const host = pane.locator(".chat-mobile-host");
   const side = pane.locator('[data-region-header="side"]');
-  const toggle = mobile
-    ? pane
-        .locator(".agent-chat__header--mobile")
-        .getByRole("button", { name: "Panels", exact: true })
-    : pane
-        .locator(".sidebar-region__panels-toggle")
-        .getByRole("button", { name: "Panels", exact: true });
 
   if (
     matches("Side panel") ||
@@ -103,8 +114,13 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
         .locator(".chat-mobile-host__header")
         .getByRole("button", { name: "Close", exact: true })
         .click();
+    } else if (mobile) {
+      await openChatPanels(pane);
     } else {
-      await toggle.click();
+      await pane
+        .locator(".sidebar-region__panels-toggle")
+        .getByRole("button", { name: "Panels", exact: true })
+        .click();
     }
     return;
   }
@@ -125,9 +141,7 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
   ] as const;
   const panel = panels.find(([, action]) => matches(action));
   if (panel) {
-    if ((await toggle.getAttribute("aria-expanded")) !== "true") {
-      await toggle.click();
-    }
+    await openChatPanels(pane);
     if (mobile) {
       await host.getByRole("button", { name: "Panels", exact: true }).click();
     }

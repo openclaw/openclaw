@@ -166,6 +166,6 @@ export function configureProgramHelp(
       return "";
     }
     const docs = formatDocsLink("/cli", "docs.openclaw.ai/cli");
-    return `\n${theme.heading("Examples:")}\n${fmtExamples}\n\n${theme.muted("Docs:")} ${docs}\n`;
+    return `\n${theme.heading("Examples:")}\n${fmtExamples}\n\n${theme.muted("Docs:")} ${docs}\n${theme.muted("Support:")} https://community.openclaw.ai/\n`;
   });
 }

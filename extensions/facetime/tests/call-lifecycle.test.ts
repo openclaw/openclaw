@@ -39,7 +39,7 @@ describe("FaceTime call lifecycle", () => {
           settle = resolve;
         }),
     );
-    const generation = call.captureGeneration();
+    const generation = call.generation;
     const command = call.runCarrierCommand({ generation, action: nativeAction });
     await vi.waitFor(() => expect(nativeAction).toHaveBeenCalledOnce());
     call.beginClosing();

@@ -439,14 +439,17 @@ export function createCurrentProcessFreshDoctorFixture(
             const actual = await vi.importActual<
               typeof import("../../daemon/gateway-entrypoint.js")
             >("../../daemon/gateway-entrypoint.js");
-            return actual.resolveGatewayInstallEntrypoint(root, async (candidate) => {
-              try {
-                await fs.access(candidate);
-                return true;
-              } catch {
-                return false;
-              }
-            });
+            return actual.findFirstAccessibleGatewayEntrypoint(
+              actual.buildGatewayInstallEntrypointCandidates(root),
+              async (candidate) => {
+                try {
+                  await fs.access(candidate);
+                  return true;
+                } catch {
+                  return false;
+                }
+              },
+            );
           }
           return installedEntrypoint(root);
         });

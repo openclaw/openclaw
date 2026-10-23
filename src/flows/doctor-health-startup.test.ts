@@ -47,12 +47,7 @@ it.each(["quick", "full"] as const)(
         incompatible: [],
         indeterminate: [],
         pendingMigrations: [
-          {
-            kind: "state",
-            path: "/state.sqlite",
-            foundVersion: 1,
-            supportedVersion: 2,
-          },
+          { kind: "state", path: "/state.sqlite", foundVersion: 1, supportedVersion: 2 },
         ],
       },
       true,

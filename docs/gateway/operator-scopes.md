@@ -42,6 +42,14 @@ require the `node` role.
 | `operator.talk`           | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                               |
 | `operator.talk.secrets`   | Reading Talk configuration with secrets included.                                                                                                             |
 
+Personal profile editing is a narrowly self-scoped exception to read-only
+behavior: `operator.read` or `operator.sessions.read` (including their implied
+write/admin scopes) allows an authenticated person to change their own display
+name, avatar, and credit preference. Avatar downloads under session-only scopes
+are restricted to that person's profile. Editing someone else's profile,
+assigning roles, linking identity aliases, and merging profiles still require
+`operator.admin`. These edits do not grant general write access.
+
 Personal GitHub connection management is a narrowly self-scoped exception to
 read-only behavior: `users.github.*` requires `operator.read` plus the exact
 authenticated durable profile. That person can connect, poll, cancel,

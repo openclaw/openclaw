@@ -1,22 +1,14 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
-import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  readPerformanceWorkflow,
+  runPerformanceShell as runShell,
+} from "./openclaw-performance-workflow.test-support.js";
 
-type Step = {
-  name: string;
-  if?: string;
-  run?: string;
-  env?: Record<string, string>;
-  with?: Record<string, unknown>;
-};
-type Job = { if?: string; env?: Record<string, string>; steps: Step[] };
-const workflow = parse(readFileSync(".github/workflows/openclaw-performance.yml", "utf8")) as {
-  jobs: Record<string, Job>;
-};
+const workflow = readPerformanceWorkflow();
 const job = workflow.jobs.gateway_concurrency!;
 const step = (name: string, owner = job) => {
   const found = owner.steps.find((item) => item.name === name);
@@ -24,9 +16,6 @@ const step = (name: string, owner = job) => {
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const posixIt = it.skipIf(process.platform === "win32");
-
-const runShell = (script: string, env: Record<string, string>) =>
-  spawnSync("bash", ["-c", script], { encoding: "utf8", env: { ...process.env, ...env } });
 
 it("keeps manual mock/live load isolated from scheduled Kova and report publication", () => {
   expect(job.if).toBe(

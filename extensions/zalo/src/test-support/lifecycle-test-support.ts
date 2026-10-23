@@ -5,8 +5,11 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { expect, vi } from "vitest";
 import type { ResolvedZaloAccount } from "../types.js";
+import { getUpdatesMock, loadCachedLifecycleMonitorModule } from "./monitor-mocks-test-support.js";
 
 type Channel = PluginRuntime["channel"];
 
@@ -262,4 +265,85 @@ export async function postWebhookReplay(
   await params.beforeReplay?.();
   const replay = await postWebhookUpdate(params);
   return { first, replay };
+}
+
+export async function replayLifecycleWebhook(
+  monitor: {
+    route: { handler: Parameters<typeof withServer>[0] };
+    waitForIdle: () => Promise<void>;
+  },
+  payload: Record<string, unknown>,
+  waitBeforeReplay = false,
+  settle = monitor.waitForIdle,
+) {
+  await withServer(
+    (req, res) => {
+      monitor.route.handler(req, res);
+    },
+    async (baseUrl) => {
+      const { first, replay } = await postWebhookReplay({
+        baseUrl,
+        path: "/hooks/zalo",
+        secret: "supersecret",
+        payload,
+        beforeReplay: waitBeforeReplay ? monitor.waitForIdle : undefined,
+      });
+      expect([first.status, replay.status]).toEqual([200, 200]);
+      await settle();
+    },
+  );
+}
+
+export async function withStoppedMonitor<T extends { stop: () => Promise<void> }>(
+  monitor: T,
+  run: (monitor: T) => Promise<void>,
+) {
+  try {
+    await run(monitor);
+  } finally {
+    await monitor.stop();
+  }
+}
+
+export function queueLifecycleUpdate(
+  result: ReturnType<typeof createImageUpdate> | ReturnType<typeof createTextUpdate>,
+) {
+  const processed = Promise.withResolvers<void>();
+  getUpdatesMock.mockResolvedValueOnce({ ok: true, result }).mockImplementation(() => {
+    processed.resolve();
+    return new Promise(() => {});
+  });
+  return processed.promise;
+}
+
+export async function startPollingLifecycleMonitor(
+  cacheKey: string,
+  setup: Partial<LifecycleMonitorSetupParams> = {},
+  options: Pick<
+    Parameters<
+      Awaited<ReturnType<typeof loadCachedLifecycleMonitorModule>>["monitorZaloProvider"]
+    >[0],
+    "token" | "fetcher" | "statusSink"
+  > = { token: "zalo-token" },
+) {
+  const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(cacheKey);
+  const abort = new AbortController();
+  const runtime = createRuntimeEnv();
+  const started = Date.now();
+  const run = monitorZaloProvider({
+    ...createLifecycleMonitorSetup({ accountId: "default", dmPolicy: "open", ...setup }),
+    runtime,
+    abortSignal: abort.signal,
+    ...options,
+  });
+  return {
+    abort,
+    run,
+    runtime,
+    started,
+    stop: async () => {
+      abort.abort();
+      await run;
+    },
+  };
 }

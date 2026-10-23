@@ -57,7 +57,7 @@ const catalog = {
       menu: {
         back: "Back",
         skills: "Skills",
-        connectors: "Connectors",
+        connectors: "Plugins",
         webSearch: "Web search",
         webSearchGloballyDisabled:
           "Web search is disabled in config (tools.web.search.enabled). Session overrides cannot turn it back on.",
@@ -78,7 +78,7 @@ const catalog = {
           label: "Tool access",
           loading: "Loading tools…",
           loadFailed: "Couldn’t load tools.",
-          noTools: "No tools available for this connector.",
+          noTools: "No tools available for this MCP server.",
           summary: "{enabled} of {total} tools on",
           summaryOne: "{enabled} of {total} tool on",
         },
@@ -91,7 +91,7 @@ const catalog = {
         skillBlocked: "not available for this agent",
         sessionTag: "session",
         offlineBlocked: "Connect to the gateway to change session capabilities.",
-        adminBlocked: "Admin access is required to manage connectors.",
+        adminBlocked: "Admin access is required to manage MCP servers.",
         savingBlocked: "Wait for the current session capability change to finish.",
       },
       overrides: {

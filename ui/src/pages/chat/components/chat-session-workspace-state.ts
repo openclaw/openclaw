@@ -23,10 +23,11 @@ type SessionWorkspaceOwner = {
   publish(): void;
 };
 
-const workspaceOwners = new WeakMap<SessionWorkspaceHost, SessionWorkspaceOwner>();
+type SessionWorkspaceSource = Pick<SessionWorkspaceHost, "sessionWorkspaceState">;
+const workspaceOwners = new WeakMap<SessionWorkspaceSource, SessionWorkspaceOwner>();
 
 /** Publishes workspace mutations without replacing the raw preview and editor identities. */
-export function sessionWorkspaceForHost(host: SessionWorkspaceHost): SessionWorkspaceOwner {
+export function sessionWorkspaceForHost(host: SessionWorkspaceSource): SessionWorkspaceOwner {
   let owner = workspaceOwners.get(host);
   if (!owner) {
     const listeners = createChangeListeners();
@@ -197,6 +198,7 @@ export function loadSessionWorkspaceArtifacts(
       }
     }
   })();
+  artifacts.readResult = request;
   artifactLoads.set(artifacts, request);
   sessionWorkspaceForHost(state).publish();
   return request;
@@ -222,7 +224,6 @@ export function retainSessionWorkspaceArtifacts(
 export function loadSessionWorkspaceDirectory(
   state: SessionWorkspaceHost,
   path: string,
-  force = false,
 ): Promise<void> {
   const workspace = getSessionWorkspace(state);
   const directories = (workspace.directories ??= Object.create(null));
@@ -235,7 +236,7 @@ export function loadSessionWorkspaceDirectory(
   if (pending) {
     return pending;
   }
-  if (!state.connected || !state.client || (directories[path]?.browser && !force)) {
+  if (!state.connected || !state.client || directories[path]?.browser) {
     return Promise.resolve();
   }
   const directory = (directories[path] ??= { loading: false, error: null });
@@ -263,6 +264,7 @@ export function loadSessionWorkspaceDirectory(
       }
     }
   })();
+  directory.readResult = request;
   requests.set(path, request);
   sessionWorkspaceForHost(state).publish();
   return request;
@@ -335,8 +337,7 @@ export function loadSessionWorkspace(
     workspace.directories === directories &&
     workspace.browserPath === browserPath &&
     workspace.browserSearch === browserSearch;
-  sessionWorkspaceForHost(state).publish();
-  void (async () => {
+  workspace.readResult = (async () => {
     try {
       const [files] = await Promise.all([
         requestWorkspaceFiles(state, workspace, browserSearch ? "" : browserPath, browserSearch),
@@ -377,6 +378,7 @@ export function loadSessionWorkspace(
       }
     }
   })();
+  sessionWorkspaceForHost(state).publish();
 }
 
 /** Refresh workspace facts after a run, which may have created a git checkout. */
@@ -627,16 +629,16 @@ export async function requestCloseSessionWorkspacePreview(
         return false;
       }
     } else {
-      const choice = await showConfirmChoiceDialog({
-        message: t("chat.sidePanel.closeFileChanges", { file: preview.label }),
-        confirmLabel: t("common.save"),
-        alternativeLabel: t("chat.detailPanel.discard"),
-        cancelLabel: t("common.cancel"),
-      });
-      if (!choice || !current()) {
-        return false;
-      }
       try {
+        const choice = await showConfirmChoiceDialog({
+          message: t("chat.sidePanel.closeFileChanges", { file: preview.label }),
+          confirmLabel: t("common.save"),
+          alternativeLabel: t("chat.detailPanel.discard"),
+          cancelLabel: t("common.cancel"),
+        });
+        if (!choice || !current()) {
+          return false;
+        }
         const settled = choice === "confirm" ? await draft.save() : draft.discard();
         if (!current()) {
           return false;

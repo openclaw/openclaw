@@ -53,11 +53,13 @@ import {
   sessionStorePathsMatch,
 } from "./state-migrations.session-store-paths.js";
 import {
+  isAmbiguousSharedStoreKey,
   isLegacyDefaultMainAliasKey,
   resolveCanonicalAgentSessionOwner,
   type PreparedLegacySessionSurfaces,
 } from "./state-migrations.session-surfaces.js";
 import type { MigrationMessages, SessionStoreAliasPlan } from "./state-migrations.types.js";
+import { decodeUtf8Input, Utf8InputError } from "./utf8-input.js";
 
 type SessionKeyCanonicalizationOptions = {
   agentId: string;
@@ -249,29 +251,6 @@ export function canonicalizeSessionStore({
   }
 
   return { store: canonical, legacyKeys };
-}
-
-export function isAmbiguousSharedStoreKey(
-  key: string,
-  mainKey: string,
-  scope?: SessionScope,
-): boolean {
-  const raw = key.trim();
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  if (!raw || lower === "global" || lower === "unknown") {
-    return false;
-  }
-  if (
-    scope === "global" &&
-    canonicalizeMainSessionAlias({
-      cfg: { session: { scope, mainKey } },
-      agentId: DEFAULT_AGENT_ID,
-      sessionKey: lower,
-    }) === "global"
-  ) {
-    return false;
-  }
-  return !resolveCanonicalAgentSessionOwner(raw) || isLegacyDefaultMainAliasKey(lower, mainKey);
 }
 
 export function aliasedSessionStoreMigrationWarning(params: {
@@ -505,9 +484,13 @@ export async function migrateOrphanedSessionKeys(params: {
     );
     let parsed: ReturnType<typeof parseSessionStoreJson5>;
     try {
-      parsed = parseSessionStoreJson5(fs.readFileSync(storePath, "utf-8"));
+      parsed = parseSessionStoreJson5(
+        decodeUtf8Input(fs.readFileSync(storePath), "Legacy session store"),
+      );
     } catch (err) {
-      warnings.push(`Could not read ${storePath}: ${String(err)}`);
+      (err instanceof Utf8InputError ? recoverableWarnings : warnings).push(
+        `Could not read ${storePath}: ${String(err)}`,
+      );
       continue;
     }
     if (

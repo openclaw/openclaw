@@ -83,19 +83,15 @@ describe("setup inference install options", () => {
     };
 
     const guided = { ...presentation, icon: "sparkles", website: "https://meta.example" };
-    expect(listSetupInferenceAuthOptions([choice])).toEqual([
-      { ...guided, groupLabel: "Meta", kind: "oauth", featured: false },
-    ]);
-    expect(listSetupInferenceEnableOptions([choice])[0]).toMatchObject({
-      ...guided,
-      groupLabel: "Meta",
+    expect({
+      auth: listSetupInferenceAuthOptions([choice]),
+      prepare: listSetupInferencePrepareOptions([choice]),
+    }).toEqual({
+      auth: [{ ...guided, groupLabel: "Meta", kind: "oauth", featured: false }],
+      prepare: [{ ...guided, actionLabel: "Connect Meta" }],
     });
-    expect(listSetupInferenceManualProviders([choice])[0]).toMatchObject({
-      ...guided,
-      groupLabel: "Meta",
-    });
-    expect(listSetupInferencePrepareOptions([choice])).toEqual([
-      { ...guided, actionLabel: "Connect Meta" },
-    ]);
+    for (const list of [listSetupInferenceEnableOptions, listSetupInferenceManualProviders]) {
+      expect(list([choice])[0]).toMatchObject({ ...guided, groupLabel: "Meta" });
+    }
   });
 });

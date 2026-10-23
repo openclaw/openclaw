@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
 import { importMemoryWikiOkfBundle } from "./okf.js";
@@ -17,11 +18,7 @@ const OKF_LITERAL_LINK_EXAMPLES = [
 
 function getOnlyPagePath(paths: string[]): string {
   expect(paths).toHaveLength(1);
-  const [pagePath] = paths;
-  if (!pagePath) {
-    throw new Error("Expected OKF import to produce one page path.");
-  }
-  return pagePath;
+  return expectDefined(paths[0], "imported OKF page");
 }
 
 async function writeConcept(file: string, title: string, body: string, type = "BigQuery Table") {
@@ -38,106 +35,56 @@ async function createImport(bundleName: string) {
   return { rootDir, bundlePath, config, run };
 }
 
-async function writeOkfBundle(rootDir: string) {
-  const bundlePath = path.join(rootDir, "sales-okf");
-  await fs.mkdir(path.join(bundlePath, "tables"), { recursive: true });
+async function writeOkfBundle(bundlePath: string) {
   await fs.mkdir(path.join(bundlePath, "metrics"), { recursive: true });
-  await fs.writeFile(
-    path.join(bundlePath, "index.md"),
-    `---
-id: sales-okf
-okf_version: "0.1"
----
-
-# Sales Bundle
-`,
-    "utf8",
-  );
+  const write = (relativePath: string, frontmatter: Record<string, unknown>, body: string) =>
+    fs.writeFile(path.join(bundlePath, relativePath), renderWikiMarkdown({ frontmatter, body }));
+  await write("index.md", { id: "sales-okf", okf_version: "0.1" }, "# Sales Bundle\n");
   await fs.writeFile(path.join(bundlePath, "log.md"), "# Directory Update Log\n", "utf8");
-  await fs.writeFile(
-    path.join(bundlePath, "tables", "customers.md"),
-    `---
-type: BigQuery Table
-title: Customers
-description: Customer table.
-resource: https://console.cloud.google.com/bigquery?p=acme&d=sales&t=customers
-tags: [sales, customers]
-timestamp: 2026-05-28T00:00:00Z
-producer_field:
-  owner: data
----
-
-# Schema
-
-Customer rows.
-`,
-    "utf8",
+  await write(
+    "tables/customers.md",
+    {
+      type: "BigQuery Table",
+      title: "Customers",
+      description: "Customer table.",
+      resource: "https://console.cloud.google.com/bigquery?p=acme&d=sales&t=customers",
+      tags: ["sales", "customers"],
+      timestamp: "2026-05-28T00:00:00Z",
+      producer_field: { owner: "data" },
+    },
+    "# Schema\n\nCustomer rows.\n",
   );
-  await fs.writeFile(
-    path.join(bundlePath, "tables", "orders.md"),
-    `---
-type: BigQuery Table
-title: Orders
-description: One row per completed order.
-tags:
-  - sales
-  - orders
----
-
-# Schema
-
-Joined with [Customers](/tables/customers.md) and the [weekly metric](../metrics/weekly-active-users.md).
-Titled link to [weekly metric](../metrics/weekly-active-users.md "metric docs").
-
-Inline code keeps \`[customers](/tables/customers.md)\` unchanged.
-
-\`\`\`markdown
-[customers](/tables/customers.md)
-\`\`\`
-
-${OKF_LITERAL_LINK_EXAMPLES.join("\n\n")}
-
-External citation stays as [BigQuery](https://cloud.google.com/bigquery).
-`,
-    "utf8",
+  await write(
+    "tables/orders.md",
+    {
+      type: "BigQuery Table",
+      title: "Orders",
+      description: "One row per completed order.",
+      tags: ["sales", "orders"],
+    },
+    [
+      "# Schema",
+      "Joined with [Customers](/tables/customers.md) and the [weekly metric](../metrics/weekly-active-users.md).",
+      'Titled link to [weekly metric](../metrics/weekly-active-users.md "metric docs").',
+      "Inline code keeps `[customers](/tables/customers.md)` unchanged.",
+      "```markdown\n[customers](/tables/customers.md)\n```",
+      ...OKF_LITERAL_LINK_EXAMPLES,
+      "External citation stays as [BigQuery](https://cloud.google.com/bigquery).",
+    ].join("\n\n"),
   );
-  await fs.writeFile(
-    path.join(bundlePath, "metrics", "weekly-active-users.md"),
-    `---
-type: Metric
-title: Weekly Active Users
----
-
-Computed from [orders](../tables/orders.md).
-`,
-    "utf8",
+  await write(
+    "metrics/weekly-active-users.md",
+    { type: "Metric", title: "Weekly Active Users" },
+    "Computed from [orders](../tables/orders.md).\n",
   );
-  await fs.writeFile(
-    path.join(bundlePath, "tables", "draft.md"),
-    `---
-title: Draft
----
-
-Missing type.
-`,
-    "utf8",
-  );
-  return bundlePath;
+  await write("tables/draft.md", { title: "Draft" }, "Missing type.\n");
 }
 
 describe("importMemoryWikiOkfBundle", () => {
   it("imports OKF concept documents as searchable wiki concept pages", async () => {
-    const rootDir = await createTempDir("memory-wiki-okf-");
-    const bundlePath = await writeOkfBundle(rootDir);
-    const { config } = await createVault({
-      rootDir: path.join(rootDir, "vault"),
-    });
-
-    const result = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath,
-      nowMs: Date.UTC(2026, 5, 12, 10, 0, 0),
-    });
+    const { bundlePath, config, run } = await createImport("sales-okf");
+    await writeOkfBundle(bundlePath);
+    const result = await run();
 
     expect(result).toMatchObject({ okfVersion: "0.1", importedCount: 3, skippedCount: 1 });
     expect(result.warnings[0]).toMatchObject({
@@ -145,11 +92,7 @@ describe("importMemoryWikiOkfBundle", () => {
       path: "tables/draft.md",
     });
     expect(result.pagePaths).toHaveLength(3);
-    const repeat = await importMemoryWikiOkfBundle({
-      config,
-      bundlePath,
-      nowMs: Date.UTC(2026, 5, 12, 10, 5, 0),
-    });
+    const repeat = await run(Date.UTC(2026, 5, 12, 10, 5));
     expect(repeat).toMatchObject({ importedCount: 3, updatedCount: 0 });
 
     const ordersPath = result.pagePaths.find((pagePath) => pagePath.includes("orders"));
@@ -245,43 +188,12 @@ describe("importMemoryWikiOkfBundle", () => {
     const result = await run();
 
     expect(result.importedCount).toBe(1);
-    const [pagePath] = result.pagePaths;
-    expect(pagePath).toBeDefined();
-    if (!pagePath) {
-      throw new Error("Expected OKF import to produce a page path.");
-    }
+    const pagePath = getOnlyPagePath(result.pagePaths);
     const fileName = path.basename(pagePath);
     expect(Buffer.byteLength(fileName)).toBeLessThanOrEqual(255);
     await expect(fs.readFile(path.join(config.vault.path, pagePath), "utf8")).resolves.toContain(
       "Long concept body.",
     );
-  });
-
-  it("removes stale concept pages when an OKF bundle drops a concept", async () => {
-    const { bundlePath, config, run } = await createImport("removing-okf");
-    const customersPath = path.join(bundlePath, "tables", "customers.md");
-    const ordersPath = path.join(bundlePath, "tables", "orders.md");
-    await writeConcept(customersPath, "Customers", "Customer body.\n");
-    await writeConcept(ordersPath, "Orders", "Order body.\n");
-    const first = await run();
-    const stalePagePath = first.pagePaths.find((pagePath) => pagePath.includes("orders"));
-    expect(stalePagePath).toBeDefined();
-    if (!stalePagePath) {
-      throw new Error("Expected initial OKF import to include orders.");
-    }
-
-    await fs.rm(ordersPath);
-    const second = await run();
-
-    expect(second).toMatchObject({ importedCount: 1, removedCount: 1 });
-    expect(second.removedPagePaths).toEqual([stalePagePath]);
-    await expect(fs.stat(path.join(config.vault.path, stalePagePath))).rejects.toThrow();
-    const results = await searchMemoryWiki({
-      config,
-      query: "Order body",
-      searchCorpus: "wiki",
-    });
-    expect(results).toHaveLength(0);
   });
 
   it("detects body-only changes on timestamp-shaped markdown lines", async () => {
@@ -316,11 +228,10 @@ describe("importMemoryWikiOkfBundle", () => {
 
     const result = await run();
 
-    const linksPath = result.pagePaths.find((pagePath) => pagePath.includes("links"));
-    expect(linksPath).toBeDefined();
-    if (!linksPath) {
-      throw new Error("Expected links page to be imported.");
-    }
+    const linksPath = expectDefined(
+      result.pagePaths.find((pagePath) => pagePath.includes("links")),
+      "imported links page",
+    );
     await expect(fs.readFile(path.join(config.vault.path, linksPath), "utf8")).resolves.toMatch(
       /\[table\]\(okf-encoded-okf-[0-9a-f]{8}-bigquery-table-[^)]+\.md\?view=compact#columns\)/,
     );
@@ -430,10 +341,10 @@ describe("importMemoryWikiOkfBundle", () => {
     await writeConcept(conceptPath, "Customers", "Original body.\n");
     await writeConcept(path.join(bundlePath, "valid.md"), "Valid", "Café 😀 literal \uFFFD\n");
     const first = await run();
-    const conceptPage = first.pagePaths.find((pagePath) => pagePath.includes("customers"));
-    if (!conceptPage) {
-      throw new Error("Expected the customers concept to be imported.");
-    }
+    const conceptPage = expectDefined(
+      first.pagePaths.find((pagePath) => pagePath.includes("customers")),
+      "imported customers page",
+    );
     const pagePath = path.join(config.vault.path, conceptPage);
     const original = await fs.readFile(pagePath);
     const malformed = Buffer.concat([

@@ -140,6 +140,23 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
     }
 
+    func testExternalRunShowsStatusAndToolsBeforeReplyText() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-external-run-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let waiting = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Waiting for a response…")).firstMatch
+        let showsWaiting = waiting.waitForExistence(timeout: 15)
+        self.attachScreenshot(named: "external-run-before-reply-status")
+        XCTAssertTrue(showsWaiting, "EXTERNAL_RUN_STATUS_MISSING: another client's run shows no startup status")
+        XCTAssertTrue(app.buttons["Stop response"].exists)
+        let tool = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "value CONTAINS %@", "external-fixture.txt")).firstMatch
+        XCTAssertTrue(tool.waitForExistence(timeout: 15), "EXTERNAL_RUN_TOOL_MISSING")
+        self.attachScreenshot(named: "external-run-before-reply-tool")
+    }
+
     func testStartupStatusShowsWaitingForResponse() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,

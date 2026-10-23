@@ -95,7 +95,7 @@ async function prepared(attempts: StreamTargetChunk[][]) {
 
 it("preserves positional header rewrites without publishing unused capacity", async () => {
   const file = await prepared([[writeChunk([0, 0, 3, 4]), writeChunk([1, 2])]]);
-  expect(file).toMatchObject({ name: "screen-compressed.mp4", type: "video/mp4" });
+  expect(file).toMatchObject({ name: "screen.mp4", type: "video/mp4" });
   expect([...new Uint8Array(await file.arrayBuffer())]).toEqual([1, 2, 3, 4]);
 });
 

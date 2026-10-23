@@ -29,6 +29,8 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
               );
             case "workspace.manifest.capture":
             case "workspace.manifest.snapshot":
+            case "workspace.manifest.document":
+            case "workspace.manifest.reference":
             case "workspace.manifest.parse":
             case "workspace.manifest.serialize":
             case "workspace.manifest.overlay":

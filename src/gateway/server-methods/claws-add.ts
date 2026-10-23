@@ -26,6 +26,10 @@ import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../../config/runtime-write-application.js";
+import {
+  CronJobConfigRevisionConflictError,
+  resolveCronJobConfigRevision,
+} from "../../cron/config-revision.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
 import { normalizeCronJobCreate } from "../../cron/normalize.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -206,7 +210,39 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
           }),
           get: async (jobId) => {
             assertCurrent();
-            return await context.cron.readJob(jobId);
+            const job = await context.cron.readJob(jobId);
+            return job ? { ...job, configRevision: resolveCronJobConfigRevision(job) } : undefined;
+          },
+          writeScratch: async (jobId, content, commitGuard) => {
+            const scratchResult = await context.cron.writeScratch(jobId, {
+              content,
+              expectedRevision: 0,
+              commitGuard: () => {
+                assertCurrent();
+                commitGuard();
+              },
+            });
+            if (!scratchResult.ok) {
+              throw new Error("Claw automation scratch changed before import.");
+            }
+          },
+          enable: async (jobId, expectedConfigRevision, commitGuard) => {
+            await context.cron.updateWithPrecondition(
+              jobId,
+              { enabled: true },
+              (job) => {
+                const actual = resolveCronJobConfigRevision(job);
+                if (actual !== expectedConfigRevision) {
+                  throw new CronJobConfigRevisionConflictError(expectedConfigRevision, actual);
+                }
+              },
+              {
+                commitGuard: () => {
+                  assertCurrent();
+                  commitGuard();
+                },
+              },
+            );
           },
           remove: async (jobId, options) => {
             const assertForwardCurrent = () => {
@@ -246,7 +282,6 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
             assertCurrent();
             await deleteAgentConfigEntry({
               agentId,
-              allowConfigSizeDrop: true,
               assertCurrent,
               validate: (agent) => {
                 if (!isDeepStrictEqual(agent, expectedAgentConfig)) {

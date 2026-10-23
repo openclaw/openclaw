@@ -1,6 +1,7 @@
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   getCachedLiveProviderModelRows,
+  loadBundledModelIdentityFactsResolver,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
@@ -47,34 +48,14 @@ type CatalogRoute = {
   methods: string[];
 };
 
-type CatalogPricing = {
-  inputMicrosPerMillion?: number;
-  outputMicrosPerMillion?: number;
-  cachedInputMicrosPerMillion?: number;
-  cacheWrite5mInputMicrosPerMillion?: number;
-  cacheWrite1hInputMicrosPerMillion?: number;
-  maxInputTokens?: number;
-  defaultMaxOutputTokens?: number;
-  serviceTiers?: string[];
-};
-
-type CatalogModel = {
-  id: string;
-  displayName?: string;
-  upstream: string;
-  capabilities: string[];
-  input?: Array<"text" | "image">;
-  supportedReasoningEfforts?: CatalogReasoningEffort[];
-  pricing?: CatalogPricing;
-};
-
 type CatalogProvider = {
   id: string;
   displayName: string;
   openaiCompatible: boolean;
   nativeBaseUrl: string;
   routes: CatalogRoute[];
-  models: CatalogModel[];
+  models: unknown[];
+  hostedWebSearchModels: Set<string>;
 };
 
 type RouteMetadata = {
@@ -82,6 +63,7 @@ type RouteMetadata = {
   baseUrl: string;
   upstreamModel?: string;
   serviceTiers?: string[];
+  hostedWebSearch?: true;
 };
 
 export function normalizeClawRouterReasoningEfforts(
@@ -119,54 +101,7 @@ function parseCatalogRoute(value: unknown): CatalogRoute | undefined {
   };
 }
 
-function parseCatalogPricing(value: unknown): CatalogPricing | undefined {
-  const row = asOptionalRecord(value);
-  if (!row) {
-    return undefined;
-  }
-  return {
-    inputMicrosPerMillion: asFiniteNumberInRange(row.inputMicrosPerMillion, { min: 0 }),
-    outputMicrosPerMillion: asFiniteNumberInRange(row.outputMicrosPerMillion, { min: 0 }),
-    cachedInputMicrosPerMillion: asFiniteNumberInRange(row.cachedInputMicrosPerMillion, { min: 0 }),
-    cacheWrite5mInputMicrosPerMillion: asFiniteNumberInRange(
-      row.cacheWrite5mInputMicrosPerMillion,
-      {
-        min: 0,
-      },
-    ),
-    cacheWrite1hInputMicrosPerMillion: asFiniteNumberInRange(
-      row.cacheWrite1hInputMicrosPerMillion,
-      {
-        min: 0,
-      },
-    ),
-    maxInputTokens: asPositiveSafeInteger(row.maxInputTokens),
-    defaultMaxOutputTokens: asPositiveSafeInteger(row.defaultMaxOutputTokens),
-    serviceTiers: Array.isArray(row.serviceTiers)
-      ? normalizeTrimmedStringList(row.serviceTiers.map((tier) => asOptionalRecord(tier)?.id))
-      : undefined,
-  };
-}
-
-function parseCatalogModel(value: unknown): CatalogModel | undefined {
-  const row = asOptionalRecord(value);
-  const id = normalizeOptionalString(row?.id);
-  const upstream = normalizeOptionalString(row?.upstream);
-  if (!id || !upstream) {
-    return undefined;
-  }
-  return {
-    id,
-    displayName: normalizeOptionalString(row?.displayName),
-    upstream,
-    capabilities: normalizeTrimmedStringList(row?.capabilities),
-    input: parseCatalogInput(row?.input),
-    supportedReasoningEfforts: normalizeClawRouterReasoningEfforts(row?.supportedReasoningEfforts),
-    pricing: parseCatalogPricing(row?.pricing),
-  };
-}
-
-function parseCatalogInput(value: unknown): CatalogModel["input"] {
+function parseCatalogInput(value: unknown): Array<"text" | "image"> | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -197,32 +132,24 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
     routes: Array.isArray(row?.routes)
       ? row.routes.map(parseCatalogRoute).filter((route): route is CatalogRoute => Boolean(route))
       : [],
-    models: Array.isArray(row?.models)
-      ? row.models.map(parseCatalogModel).filter((model): model is CatalogModel => Boolean(model))
-      : [],
+    models: Array.isArray(row?.models) ? row.models : [],
+    hostedWebSearchModels: new Set(
+      (Array.isArray(row?.offers) ? row.offers : []).flatMap((offerValue) => {
+        const offer = asOptionalRecord(offerValue);
+        const admission = asOptionalRecord(offer?.hostedToolAdmission);
+        return offer?.endpoint === "responses" &&
+          offer.transport === "http" &&
+          offer.routeKind === "unified" &&
+          offer.route === "/v1/responses" &&
+          offer.eligible === true &&
+          typeof offer.modelId === "string" &&
+          admission?.version === "clawrouter.hosted-tool-admission.v1" &&
+          admission.web_search === "admitted"
+          ? [offer.modelId]
+          : [];
+      }),
+    ),
   };
-}
-
-function findNativeRoute(
-  provider: CatalogProvider,
-  requestFormat: string,
-): CatalogRoute | undefined {
-  return provider.routes.find(
-    (route) => route.methods.includes("POST") && route.requestFormat === requestFormat,
-  );
-}
-
-function googleNativeBaseUrl(rootUrl: string, provider: CatalogProvider, route: CatalogRoute) {
-  const modelPathIndex = route.path.indexOf("/models/${model}");
-  if (modelPathIndex <= 0) {
-    return undefined;
-  }
-  return `${rootUrl}${provider.nativeBaseUrl}${route.path.slice(0, modelPathIndex)}`;
-}
-
-function inferReasoning(providerId: string, modelId: string): boolean {
-  const id = `${providerId}/${modelId}`.toLowerCase();
-  return /(?:claude-|gemini-|gpt-5|gpt-oss|deepseek-v|reasoner|glm-5|grok-4|minimax-m)/u.test(id);
 }
 
 // Older router catalogs omit input. Match exact native OpenAI identities, not a
@@ -236,120 +163,155 @@ const OPENAI_NATIVE_IMAGE_MODEL_IDS = new Set([
   "gpt-4.1-nano",
 ]);
 
-function inferInput(providerId: string, model: CatalogModel): Array<"text" | "image"> {
-  if (providerId === "openai" && OPENAI_NATIVE_IMAGE_MODEL_IDS.has(model.upstream)) {
-    return ["text", "image"];
-  }
-  const id = `${providerId}/${model.id}`.toLowerCase();
-  return /(?:claude-|gemini-|gpt-4o|gpt-5)/u.test(id) ? ["text", "image"] : ["text"];
-}
+type ResolveNativeModelFacts = Awaited<ReturnType<typeof loadBundledModelIdentityFactsResolver>>;
+
+// Upstream catalogs whose first-party model facts are qualified for routed rows. A row
+// inherits only when its upstream id and wire API match the bundled native row exactly.
+const NATIVE_MODEL_FACT_PROVIDERS = new Set(["openai", "anthropic"]);
 
 function microsPerMillionToCost(value: number | undefined): number {
   return value === undefined ? 0 : value / 1_000_000;
 }
 
-function modelCost(pricing: CatalogPricing | undefined): ModelDefinitionConfig["cost"] {
-  if (!pricing) {
-    return DEFAULT_COST;
-  }
-  return {
-    input: microsPerMillionToCost(pricing.inputMicrosPerMillion),
-    output: microsPerMillionToCost(pricing.outputMicrosPerMillion),
-    cacheRead: microsPerMillionToCost(pricing.cachedInputMicrosPerMillion),
-    cacheWrite: microsPerMillionToCost(
-      pricing.cacheWrite5mInputMicrosPerMillion ?? pricing.cacheWrite1hInputMicrosPerMillion,
-    ),
-  };
-}
-
-function buildThinkingLevelMap(
-  efforts: readonly CatalogReasoningEffort[],
-): NonNullable<ModelDefinitionConfig["thinkingLevelMap"]> {
-  const supported = new Set(efforts);
-  const levelMap: NonNullable<ModelDefinitionConfig["thinkingLevelMap"]> = {};
-  for (const [effort, level] of CLAWROUTER_REASONING_EFFORT_LEVELS) {
-    levelMap[level] = supported.has(effort) ? effort : null;
-  }
-  return levelMap;
-}
-
 function buildRoutedModel(
   rootUrl: string,
   provider: CatalogProvider,
-  model: CatalogModel,
+  value: unknown,
+  resolveNativeModelFacts: ResolveNativeModelFacts,
 ): ModelDefinitionConfig | undefined {
+  const row = asOptionalRecord(value);
+  const id = normalizeOptionalString(row?.id);
+  const upstream = normalizeOptionalString(row?.upstream);
+  if (!id || !upstream) {
+    return undefined;
+  }
+  const capabilities = normalizeTrimmedStringList(row?.capabilities);
+  const supportedReasoningEfforts = normalizeClawRouterReasoningEfforts(
+    row?.supportedReasoningEfforts,
+  );
+  const pricing = asOptionalRecord(row?.pricing);
+  const native = asOptionalRecord(row?.nativeCapabilities);
+  const responses = asOptionalRecord(asOptionalRecord(native?.endpoints)?.responses);
+  const supportsHostedWebSearch =
+    native?.version === "clawrouter.native-capabilities.v1" &&
+    Array.isArray(responses?.hostedTools) &&
+    responses.hostedTools.every((tool) => typeof tool === "string") &&
+    responses.hostedTools.includes("web_search");
   let api: NonNullable<ModelDefinitionConfig["api"]>;
   let baseUrl: string;
   let upstreamModel: string | undefined;
 
-  if (provider.openaiCompatible && model.capabilities.includes("llm.responses")) {
+  if (provider.openaiCompatible && capabilities.includes("llm.responses")) {
     api = "openai-responses";
     baseUrl = `${rootUrl}/v1`;
-  } else if (provider.openaiCompatible && model.capabilities.includes("llm.chat")) {
+  } else if (provider.openaiCompatible && capabilities.includes("llm.chat")) {
     api = "openai-completions";
     baseUrl = `${rootUrl}/v1`;
   } else if (
-    model.capabilities.includes("llm.messages") &&
-    findNativeRoute(provider, "anthropic.messages")
+    capabilities.includes("llm.messages") &&
+    provider.routes.some(
+      (route) => route.methods.includes("POST") && route.requestFormat === "anthropic.messages",
+    )
   ) {
     api = "anthropic-messages";
     baseUrl = `${rootUrl}${provider.nativeBaseUrl}`;
-    upstreamModel = model.upstream;
+    upstreamModel = upstream;
   } else {
     const googleRoute =
-      model.capabilities.includes("llm.stream") &&
+      capabilities.includes("llm.stream") &&
       provider.routes.find(
         (route) =>
           route.methods.includes("POST") &&
           route.requestFormat === "google.generate_content" &&
           route.path.includes(":streamGenerateContent"),
       );
-    const googleBaseUrl = googleRoute
-      ? googleNativeBaseUrl(rootUrl, provider, googleRoute)
-      : undefined;
-    if (!googleBaseUrl) {
+    const modelPathIndex = googleRoute ? googleRoute.path.indexOf("/models/${model}") : -1;
+    if (!googleRoute || modelPathIndex <= 0) {
       return undefined;
     }
     api = "google-generative-ai";
-    baseUrl = googleBaseUrl;
-    upstreamModel = model.upstream;
+    baseUrl = `${rootUrl}${provider.nativeBaseUrl}${googleRoute.path.slice(0, modelPathIndex)}`;
+    upstreamModel = upstream;
   }
 
   const providerPrefix = `${provider.id}/`;
-  const modelLabel = model.id.startsWith(providerPrefix)
-    ? model.id.slice(providerPrefix.length)
-    : model.id;
+  const modelLabel = id.startsWith(providerPrefix) ? id.slice(providerPrefix.length) : id;
+  const qualifiedId = `${provider.id}/${id}`.toLowerCase();
+  let thinkingLevelMap: ModelDefinitionConfig["thinkingLevelMap"];
+  if (supportedReasoningEfforts) {
+    thinkingLevelMap = {};
+    const supported = new Set(supportedReasoningEfforts);
+    for (const [effort, level] of CLAWROUTER_REASONING_EFFORT_LEVELS) {
+      thinkingLevelMap[level] = supported.has(effort) ? effort : null;
+    }
+  }
+  const serviceTiers = Array.isArray(pricing?.serviceTiers)
+    ? normalizeTrimmedStringList(pricing.serviceTiers.map((tier) => asOptionalRecord(tier)?.id))
+    : undefined;
+  const nativeFacts = NATIVE_MODEL_FACT_PROVIDERS.has(provider.id)
+    ? resolveNativeModelFacts({ provider: provider.id, api, modelId: upstream })
+    : undefined;
+  // Service catalog facts win over inherited native defaults.
+  const compat = {
+    ...nativeFacts?.compat,
+    ...(supportedReasoningEfforts
+      ? { supportsReasoningEffort: true, supportedReasoningEfforts }
+      : {}),
+  };
 
   return {
-    id: model.id,
-    name: model.displayName ?? `${provider.displayName} · ${modelLabel}`,
+    id,
+    name: normalizeOptionalString(row?.displayName) ?? `${provider.displayName} · ${modelLabel}`,
     api,
     baseUrl,
     reasoning:
-      model.supportedReasoningEfforts !== undefined || inferReasoning(provider.id, model.id),
-    ...(model.supportedReasoningEfforts
+      supportedReasoningEfforts !== undefined ||
+      /(?:claude-|gemini-|gpt-5|gpt-oss|deepseek-v|reasoner|glm-5|grok-4|minimax-m)/u.test(
+        qualifiedId,
+      ),
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+    ...(Object.keys(compat).length > 0 ? { compat } : {}),
+    ...(nativeFacts?.mediaInput ? { mediaInput: nativeFacts.mediaInput } : {}),
+    input:
+      parseCatalogInput(row?.input) ??
+      ((provider.id === "openai" && OPENAI_NATIVE_IMAGE_MODEL_IDS.has(upstream)) ||
+      /(?:claude-|gemini-|gpt-4o|gpt-5)/u.test(qualifiedId)
+        ? ["text", "image"]
+        : ["text"]),
+    cost: pricing
       ? {
-          thinkingLevelMap: buildThinkingLevelMap(model.supportedReasoningEfforts),
-          compat: {
-            supportsReasoningEffort: true,
-            supportedReasoningEfforts: model.supportedReasoningEfforts,
-          },
+          input: microsPerMillionToCost(
+            asFiniteNumberInRange(pricing.inputMicrosPerMillion, { min: 0 }),
+          ),
+          output: microsPerMillionToCost(
+            asFiniteNumberInRange(pricing.outputMicrosPerMillion, { min: 0 }),
+          ),
+          cacheRead: microsPerMillionToCost(
+            asFiniteNumberInRange(pricing.cachedInputMicrosPerMillion, { min: 0 }),
+          ),
+          cacheWrite: microsPerMillionToCost(
+            asFiniteNumberInRange(pricing.cacheWrite5mInputMicrosPerMillion, { min: 0 }) ??
+              asFiniteNumberInRange(pricing.cacheWrite1hInputMicrosPerMillion, { min: 0 }),
+          ),
         }
-      : {}),
-    input: model.input ?? inferInput(provider.id, model),
-    cost: modelCost(model.pricing),
-    contextWindow: model.pricing?.maxInputTokens ?? DEFAULT_CONTEXT_WINDOW,
-    maxTokens: model.pricing?.defaultMaxOutputTokens ?? DEFAULT_MAX_TOKENS,
+      : DEFAULT_COST,
+    contextWindow: asPositiveSafeInteger(pricing?.maxInputTokens) ?? DEFAULT_CONTEXT_WINDOW,
+    maxTokens: asPositiveSafeInteger(pricing?.defaultMaxOutputTokens) ?? DEFAULT_MAX_TOKENS,
     params: {
       [ROUTE_METADATA_KEY]: {
         api,
         baseUrl,
         ...(upstreamModel ? { upstreamModel } : {}),
-        // Only this catalog provider/transport owns OpenAI scheduling tiers.
+        // Support is not a grant: require this key's exact matching route admission.
         ...(provider.id === "openai" &&
         api === "openai-responses" &&
-        model.pricing?.serviceTiers?.length
-          ? { serviceTiers: model.pricing.serviceTiers }
+        supportsHostedWebSearch &&
+        provider.hostedWebSearchModels.has(id)
+          ? { hostedWebSearch: true }
+          : {}),
+        // Only this catalog provider/transport owns OpenAI scheduling tiers.
+        ...(provider.id === "openai" && api === "openai-responses" && serviceTiers?.length
+          ? { serviceTiers }
           : {}),
       } satisfies RouteMetadata,
     },
@@ -359,11 +321,12 @@ function buildRoutedModel(
 function buildDiscoveredModels(
   rootUrl: string,
   providers: CatalogProvider[],
+  resolveNativeModelFacts: ResolveNativeModelFacts,
 ): ModelDefinitionConfig[] {
   const models = new Map<string, ModelDefinitionConfig>();
   for (const provider of providers) {
     for (const model of provider.models) {
-      const routed = buildRoutedModel(rootUrl, provider, model);
+      const routed = buildRoutedModel(rootUrl, provider, model, resolveNativeModelFacts);
       if (!routed || models.has(routed.id)) {
         continue;
       }
@@ -397,7 +360,11 @@ export async function buildClawRouterProviderConfig(params: {
     baseUrl: `${rootUrl}/v1`,
     api: "openai-responses",
     apiKey: params.apiKey,
-    models: buildDiscoveredModels(rootUrl, providers),
+    models: buildDiscoveredModels(
+      rootUrl,
+      providers,
+      await loadBundledModelIdentityFactsResolver(),
+    ),
   };
 }
 

@@ -70,25 +70,11 @@ it.each([false, true])("routes prompt failures (mid-turn precheck: %s)", async (
   }
 });
 
-it("settles yield aborts, strips artifacts, and persists handoff context", async () => {
-  const settlePromise = Promise.resolve();
-  const input = createInput({
-    yieldAbortSettled: settlePromise,
-    yieldDetected: true,
-    yieldMessage: "wait for follow-up",
-  });
+it("persists yield handoff context without displaying it or triggering a turn", async () => {
   hoisted.isSessionsYieldAbortError.mockReturnValue(true);
-
-  await expect(handleError(input)).resolves.toEqual({});
-
-  expect(hoisted.markYieldAborted).toHaveBeenCalledOnce();
-  expect(hoisted.waitForEmbeddedAbortSettle).toHaveBeenCalledWith({
-    promise: settlePromise,
-    runId: "run-1",
-    sessionId: "session-1",
-    reason: "sessions_yield",
-  });
-  expect(hoisted.stripSessionsYieldArtifacts).toHaveBeenCalledWith(input.activeSession);
+  await expect(
+    handleError(createInput({ yieldDetected: true, yieldMessage: "wait for follow-up" })),
+  ).resolves.toEqual({});
   expect(hoisted.sendCustomMessage).toHaveBeenCalledWith(
     {
       customType: "openclaw.sessions_yield",

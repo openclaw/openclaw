@@ -1,5 +1,7 @@
 import type { SessionLogEntry, UsageFilterState } from "./usage-state-types.ts";
 
+export const DEFAULT_USAGE_SESSION_SORT = { sort: "cost", sortDirection: "desc" } as const;
+
 export function formatIsoDate(date: Date, timeZone: "local" | "utc" = "local"): string {
   const year = timeZone === "utc" ? date.getUTCFullYear() : date.getFullYear();
   const month = (timeZone === "utc" ? date.getUTCMonth() : date.getMonth()) + 1;

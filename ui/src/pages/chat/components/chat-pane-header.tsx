@@ -1,4 +1,4 @@
-import { Show, onSettled, type Element } from "solid-js";
+import { Show, createMemo, lazy, merge, onSettled, type Element } from "solid-js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
@@ -13,10 +13,11 @@ import { personActivityLink } from "../../../components/person-activity-link.ts"
 import { Icon } from "../../../components/solid/icon.tsx";
 import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
-import { redactLoginFailureError } from "../../../lib/connection-hints.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import "../../../components/tooltip.ts";
+import { redactLoginFailureError } from "../../../lib/connection-hints.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import { PaneHeaderPresence, PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
@@ -26,20 +27,31 @@ import {
   ChatDashboardMenu,
   ChatPaneLayoutMenu,
 } from "./chat-header-panel-actions.tsx";
-import { AgentCrumb, IdentityCrumbs, ProjectCrumb } from "./chat-pane-header-identity.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { AgentCrumb, IdentityCrumbs } from "./chat-pane-header-identity.tsx";
 import type { ChatPaneHeaderPresentation, ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 import { ChatPaneMobileComposition } from "./chat-pane-mobile-composition.tsx";
 import { ChatPanePlacement } from "./chat-pane-placement.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
-import { ChatSessionPublicIndicator, ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
-import { ContinueInTerminalDialog } from "./continue-in-terminal-dialog.tsx";
+import { ChatSessionPublicIndicator } from "./chat-session-sharing-shared.tsx";
+import { ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
+
+const ContinueInTerminalDialog = lazy(() => import("./continue-in-terminal-dialog.tsx"), {
+  export: "ContinueInTerminalDialog",
+});
 
 export function PaneHeaderView(props: ChatPaneHeaderPresentation) {
   return (
     <>
       <ChatPaneHeader {...props.header} />
       <Show when={props.continueInTerminal}>
-        {(dialog) => <ContinueInTerminalDialog {...dialog()} />}
+        {(dialog) => (
+          <ChatLazyBoundary onClose={() => dialog().onClose()}>
+            <ContinueInTerminalDialog {...dialog()} />
+          </ChatLazyBoundary>
+        )}
       </Show>
     </>
   );
@@ -76,37 +88,42 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
   const Details = (detailsProps: {
     placement: Parameters<typeof ChatPanePlacement>[0];
     onOpenMachine: () => void;
-  }) => (
-    <Show when={props.detailsControl !== undefined}>
-      <ChatDetails
-        {...props.detailsControl!}
-        chat={
-          props.detailsControl!.chat
-            ? {
-                ...props.detailsControl!.chat,
-                environment: {
-                  ...props.detailsControl!.chat.environment,
-                  placement: detailsProps.placement,
-                  onOpenMachine:
-                    props.detailsControl?.nativePresentation === "mobile"
-                      ? detailsProps.onOpenMachine
-                      : undefined,
-                },
-              }
-            : undefined
-        }
-        triggerContent={!props.mergedChrome ? detailsGlyph : undefined}
-        mobileBindings={
-          props.detailsControl?.mobileBindings
-            ? {
-                ...props.detailsControl.mobileBindings,
-                versions: props.mobileVersions,
-              }
-            : undefined
-        }
-      />
-    </Show>
-  );
+  }) => {
+    const chat = createMemo(() => {
+      const source = props.detailsControl?.chat;
+      return source
+        ? merge(source, {
+            environment: merge(
+              () => source.environment ?? {},
+              () => ({
+                placement: detailsProps.placement,
+                onOpenMachine:
+                  props.detailsControl?.nativePresentation === "mobile"
+                    ? detailsProps.onOpenMachine
+                    : undefined,
+              }),
+            ),
+          })
+        : undefined;
+    });
+    return (
+      <Show when={props.detailsControl !== undefined}>
+        <ChatDetails
+          {...props.detailsControl!}
+          chat={chat()}
+          triggerContent={!props.mergedChrome ? detailsGlyph : undefined}
+          mobileBindings={
+            props.detailsControl?.mobileBindings
+              ? {
+                  ...props.detailsControl.mobileBindings,
+                  versions: props.mobileVersions,
+                }
+              : undefined
+          }
+        />
+      </Show>
+    );
+  };
   const notice = (
     <Show when={incognito()}>
       <aside class="chat-pane__incognito-notice" aria-label={t("sessionsView.incognitoLabel")}>
@@ -134,7 +151,6 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
           machineName={machineName()}
         />
       )}
-      project={!props.catalog && props.workspaceLabel ? <ProjectCrumb {...props} /> : undefined}
     />
   );
 }

@@ -394,6 +394,11 @@ it("does not report a previous palette failure after a local theme switch", asyn
     patchSettings({ theme: replacement.id });
     await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe(replacement.id));
     expect(applicationTheme.settings.theme).toBe(replacement.id);
+    let currentReadSettled = false;
+    void applicationTheme.catalog?.read?.result.then(() => {
+      currentReadSettled = true;
+    });
+    await vi.waitFor(() => expect(currentReadSettled).toBe(true));
     expect(document.getElementById("openclaw-custom-theme")?.textContent).toContain(
       "--bg: #332211;",
     );
@@ -540,6 +545,8 @@ it.each([
           palette ? { id: personal.id } : {},
         ),
       );
+      const retiredRead = expectDefined(applicationTheme.catalog?.read, "retired catalog read");
+      expect(applicationTheme.catalog?.read).toBe(retiredRead);
       if (boundary === "client") {
         gateway.connect();
       }
@@ -574,6 +581,7 @@ it.each([
       } else {
         await vi.waitFor(() => expect(applicationTheme.catalog?.themes).toEqual(BUILTIN_THEMES));
       }
+      await expect(retiredRead.result).resolves.toBeUndefined();
       retired.resolve(palette ? { ...response, theme: personal, definition } : catalog());
       await retired.promise;
       if (palette) {

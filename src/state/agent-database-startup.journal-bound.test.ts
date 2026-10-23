@@ -4,6 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  AgentDatabaseSchemaAdmissionChangedError,
+  AgentDatabaseSchemaAdmissionInvalidError,
+} from "./agent-database-admission-error.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
 
@@ -58,7 +62,11 @@ afterEach(() => vi.useRealTimers());
 
 async function prepareAgents(
   count: number,
-  options: { isCurrent?: () => boolean; afterActivation?: () => Promise<void> } = {},
+  options: {
+    isCurrent?: () => boolean;
+    publishAgent?: () => Promise<void>;
+    afterActivation?: () => Promise<void>;
+  } = {},
 ) {
   const env = { OPENCLAW_STATE_DIR: tempDirTracker.make("journal-bound-") };
   const pathname = path.join(env.OPENCLAW_STATE_DIR, "openclaw-agent.sqlite");
@@ -80,7 +88,7 @@ async function prepareAgents(
         preparationReady: Promise.resolve(),
         openAgent: async () => {},
         migrateAgent: async () => {},
-        publishAgent: async () => {},
+        publishAgent: options.publishAgent ?? (async () => {}),
       });
       await options.afterActivation?.();
       // Four attempts, including jitter, finish before the progress interval fires.
@@ -121,6 +129,24 @@ it("retries shared-pool capacity rejections and prepares the agent", async () =>
   readJournal.mockRejectedValueOnce(overload()).mockRejectedValueOnce(overload());
   await prepareAgents(1);
   expectAdmission(["agent-0"], [], 4);
+});
+
+it.each([
+  [new AgentDatabaseSchemaAdmissionChangedError(), 4],
+  [new AgentDatabaseSchemaAdmissionInvalidError(), 1],
+] as const)("fails publication for %s after %i attempts", async (error, attempts) => {
+  const publish = vi.fn().mockRejectedValue(error);
+  await prepareAgents(1, { publishAgent: publish });
+  expect(publish).toHaveBeenCalledTimes(attempts);
+  expect(admissionState).toEqual({ prepared: [], failed: ["agent-0"] });
+});
+
+it("does not republish after the agent is deleted during an admission retry", async () => {
+  readJournal.mockResolvedValueOnce("absent").mockResolvedValue("pending");
+  const publish = vi.fn().mockRejectedValue(new AgentDatabaseSchemaAdmissionChangedError());
+  await prepareAgents(1, { publishAgent: publish });
+  expect(publish).toHaveBeenCalledOnce();
+  expect(admissionState).toEqual({ prepared: [], failed: ["agent-0"] });
 });
 
 it.each([

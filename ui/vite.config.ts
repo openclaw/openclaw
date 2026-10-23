@@ -97,7 +97,7 @@ export async function createControlUiPrecompressedAssetVariants(
     {
       fileName: `${fileName}.br`,
       source: await compressBrotli(body, {
-        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 9 },
+        params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 10 },
       }),
     },
     {
@@ -671,6 +671,8 @@ export default function controlUiViteConfig(
   options: { outDir?: string; command?: "serve" | "build"; buildInfo?: ControlUiBuildInfo } = {},
 ): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
+  const polling = process.env.CHOKIDAR_USEPOLLING?.toLowerCase();
+  const usePolling = Boolean(polling && polling !== "false" && polling !== "0");
   const base = envBase ? normalizeBase(envBase) : "./";
   const bootstrapConfigPath =
     base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
@@ -682,7 +684,7 @@ export default function controlUiViteConfig(
   const staticImports = new Map<string, readonly string[]>();
   const copiedInputs = new Set<string>();
   const resolveModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
-    _filename,
+    filename,
     deps,
     context,
   ) => {
@@ -699,7 +701,10 @@ export default function controlUiViteConfig(
         imports.push(...(staticImports.get(dependency) ?? []));
       }
     }
-    return deps.filter((dep) => !loaded.has(dep));
+    // Without stylesheet waits, import() immediately fetches its own target.
+    // Keep the target preload when CSS would otherwise delay that request.
+    const waitsForStyles = deps.some((dep) => dep.endsWith(".css"));
+    return deps.filter((dep) => !loaded.has(dep) && (waitsForStyles || dep !== filename));
   };
   return {
     base,
@@ -743,7 +748,8 @@ export default function controlUiViteConfig(
       // Source builds retain automatic debugger discovery.
       sourcemap: buildInfo.release ? "hidden" : true,
       modulePreload: {
-        polyfill: true,
+        // Every supported browser has native modulepreload (see docs/web/control-ui.md).
+        polyfill: false,
         resolveDependencies: resolveModulePreloadDependencies,
       },
       rolldownOptions: {
@@ -762,6 +768,8 @@ export default function controlUiViteConfig(
       host: devGateway ? "127.0.0.1" : true,
       port: 5173,
       strictPort: true,
+      // Chokidar selects FSEvents before reading its environment override on macOS.
+      ...(usePolling ? { watch: { usePolling: true } } : {}),
       ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [

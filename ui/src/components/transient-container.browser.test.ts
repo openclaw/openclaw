@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { copyToClipboard } from "../lib/clipboard.ts";
-import "./modal-dialog.ts";
-import { mountNativeLinkMenu } from "./native-link-menu.runtime.ts";
+import { item, mountMenu, openMenu, surface as menuSurface } from "../test-helpers/solid-menu.tsx";
+import "./modal-dialog.tsx";
+import { mountNativeLinkMenu } from "./native-link-menu.runtime.tsx";
 import { controlsForHovercard } from "./portaled-hovercard-focus.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
@@ -106,5 +107,34 @@ describe.runIf("__vitest_browser__" in globalThis)("native modal transient surfa
     expect(await copyToClipboard("Report URL")).toBe(true);
     expect(exec).toHaveBeenCalledOnce();
     expect(dialog.querySelector("textarea")).toBeNull();
+  });
+});
+
+describe.runIf("__vitest_browser__" in globalThis)("native menu clipboard fallback", () => {
+  it("keeps the menu open when rejected clipboard writes fall back to selection", async () => {
+    const { page } = await import("vitest/browser");
+    const copied = vi.fn();
+    vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("Permission denied"));
+    const exec = vi.spyOn(document, "execCommand").mockImplementation(() => {
+      expect(menuSurface().contains(document.activeElement)).toBe(true);
+      return false;
+    });
+    const view = mountMenu({
+      items: [{ id: "copy", label: "Copy link", closeOnSelect: false }],
+      onSelect: () => {
+        const result = copyToClipboard("https://example.com/pr/42");
+        item("Copy link").disabled = true;
+        void result.then(copied);
+      },
+    });
+    onTestFinished(() => view.unmount());
+    await openMenu();
+    await page.getByRole("menuitem", { name: "Copy link" }).click();
+    await expect.poll(() => copied.mock.calls).toEqual([[false]]);
+    expect(exec).toHaveBeenCalledOnce();
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    expect(view.handle.overlay.open).toBe(true);
   });
 });

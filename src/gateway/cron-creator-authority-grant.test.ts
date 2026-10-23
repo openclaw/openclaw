@@ -101,10 +101,7 @@ describe("cron creator authority grants", () => {
       capturesRuntimeAuthority: false,
       callerOrigin: { kind: "local" },
     });
-    const external = createScope("run-external", {
-      kind: "external",
-      channel: "discord",
-    });
+    const external = createScope("run-external", { kind: "external", channel: "discord" });
     expect(() => mint(external, undefined, undefined, undefined, "requester")).toThrow(
       "requires authenticated creator facts",
     );
@@ -219,11 +216,7 @@ describe("cron management authority grants", () => {
     clock.mockReturnValue(51_000);
     attachCronStreamExecPolicy(streamGrant, policy);
     clock.mockReturnValue(61_000);
-    const deniedEffect = vi.fn();
-    await expect(
-      withGrant(ordinaryGrant, fixture.identity, "cron.update", deniedEffect),
-    ).rejects.toThrow(denied);
-    expect(deniedEffect).not.toHaveBeenCalled();
+    await fixture.deny(ordinaryGrant, "cron.update");
 
     const effect = vi.fn();
     await withGrant(streamGrant, fixture.identity, "cron.update", async () => {
@@ -235,10 +228,7 @@ describe("cron management authority grants", () => {
       expect(assertActive).toThrow(denied);
     });
     expect(effect).toHaveBeenCalledOnce();
-    await expect(
-      withGrant(streamGrant, fixture.identity, "cron.update", deniedEffect),
-    ).rejects.toThrow(denied);
-    expect(deniedEffect).not.toHaveBeenCalled();
+    await fixture.deny(streamGrant, "cron.update");
   });
 
   it.each(["method", "run", "instance", "lifecycle", "claim"] as const)(
@@ -291,15 +281,9 @@ describe("cron management authority grants", () => {
         ),
     ],
     ["lifecycle rotation", () => rotateAgentRunRegistryLifecycleGeneration()],
-    [
-      "scope revocation",
-      (fixture: ReturnType<typeof createManagementFixture>) => revokeScope(fixture.scope),
-    ],
-    ["scope abort", (fixture: ReturnType<typeof createManagementFixture>) => fixture.scope.abort()],
-    [
-      "operation abort",
-      (fixture: ReturnType<typeof createManagementFixture>) => fixture.operation.abort(),
-    ],
+    ["scope revocation", (fixture: Fixture) => revokeScope(fixture.scope)],
+    ["scope abort", (fixture: Fixture) => fixture.scope.abort()],
+    ["operation abort", (fixture: Fixture) => fixture.operation.abort()],
     [
       "expiry",
       () =>

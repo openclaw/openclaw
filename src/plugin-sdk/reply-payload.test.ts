@@ -19,6 +19,9 @@ import {
   sendPayloadWithChunkedTextAndMedia,
 } from "./reply-payload.js";
 
+const sent = (messageId: string) => ({ channel: "test", messageId });
+const sendTextResult = () => vi.fn(async ({ text }: { text: string }) => sent(text));
+
 it("reads bounded owner order and matches presented values case-insensitively", () => {
   const questionId = "ask_0123456789abcdef0123456789abcdef";
   const questionOptionIndices = resolveAskUserQuestionOptionIndices({
@@ -67,14 +70,10 @@ it.each([
 ] as const)(
   "sendPayloadWithChunkedTextAndMedia: %s",
   async (kind, payload, lastId, texts, media) => {
-    const sendText = vi.fn(async ({ text }: { text: string }) => ({
-      channel: "test",
-      messageId: text,
-    }));
-    const sendMedia = vi.fn(async ({ mediaUrl }: { text: string; mediaUrl: string }) => ({
-      channel: "test",
-      messageId: mediaUrl,
-    }));
+    const sendText = sendTextResult();
+    const sendMedia = vi.fn(async ({ mediaUrl }: { text: string; mediaUrl: string }) =>
+      sent(mediaUrl),
+    );
     const onResult = vi.fn();
     const result = await sendPayloadWithChunkedTextAndMedia({
       ctx: { payload },
@@ -82,16 +81,16 @@ it.each([
       chunker: () => [],
       sendText,
       sendMedia,
-      emptyResult: { channel: "test", messageId: "" },
+      emptyResult: sent(""),
       ...(kind === "empty chunker" ? { onResult } : {}),
     });
-    expect(result).toEqual({ channel: "test", messageId: lastId });
+    expect(result).toEqual(sent(lastId));
     expect(sendText.mock.calls.map(([ctx]) => ctx.text)).toEqual(texts);
     expect(
       sendMedia.mock.calls.map(([ctx]) => ({ text: ctx.text, mediaUrl: ctx.mediaUrl })),
     ).toEqual(media);
     if (kind === "empty chunker") {
-      expect(onResult).toHaveBeenCalledWith({ channel: "test", messageId: "visible reply" });
+      expect(onResult).toHaveBeenCalledWith(sent("visible reply"));
     }
   },
 );
@@ -197,45 +196,31 @@ it("does not duplicate a caption when a media sender returns undefined", async (
   expect(sendText).not.toHaveBeenCalled();
 });
 
-it("falls back to text when every media URL is empty", async () => {
-  const sendMedia = vi.fn();
-  const sendText = vi.fn(async ({ text }) => ({ channel: "test", messageId: text }));
-
-  const result = await sendPayload(
-    { text: "caption", mediaUrls: ["", ""] },
-    { sendMedia, sendText },
-    { text: "caption" },
-  );
-
-  expect(sendMedia).not.toHaveBeenCalled();
-  expect(sendText).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: "caption" }));
-  expect(result).toEqual({ channel: "test", messageId: "caption" });
-});
-
-it("sends the full text when the adapter chunker returns no chunks", async () => {
-  const sendText = vi.fn(async ({ text }) => ({ channel: "test", messageId: text }));
-  const onDeliveryResult = vi.fn();
-
-  const result = await sendPayload(
-    { text: "visible reply" },
-    { textChunkLimit: 64, chunker: () => [], sendText },
-    { onDeliveryResult },
-  );
-
-  expect(sendText).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ text: "visible reply" }),
-  );
-  expect(onDeliveryResult).toHaveBeenCalledWith({
-    channel: "test",
-    messageId: "visible reply",
-  });
-  expect(result).toEqual({ channel: "test", messageId: "visible reply" });
-});
+it.each([
+  ["empty media URLs", { mediaUrls: ["", ""] }, {}],
+  ["empty chunker", {}, { textChunkLimit: 64, chunker: () => [] }],
+] satisfies Array<[string, Partial<Options["ctx"]["payload"]>, Partial<Options["adapter"]>]>)(
+  "falls back to the full text with %s",
+  async (_name, payload, adapter) => {
+    const sendMedia = vi.fn();
+    const sendText = sendTextResult();
+    const onDeliveryResult = vi.fn();
+    const result = await sendPayload(
+      { text: "caption", ...payload },
+      { sendMedia, sendText, ...adapter },
+      { text: "caption", onDeliveryResult },
+    );
+    expect(sendMedia).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: "caption" }));
+    expect(onDeliveryResult).toHaveBeenCalledWith(sent("caption"));
+    expect(result).toEqual(sent("caption"));
+  },
+);
 
 it("reports each completed text chunk before a later chunk fails", async () => {
   const sendText = vi
     .fn()
-    .mockResolvedValueOnce({ channel: "test", messageId: "ab" })
+    .mockResolvedValueOnce(sent("ab"))
     .mockRejectedValueOnce(new Error("second chunk failed"));
   const onDeliveryResult = vi.fn();
 
@@ -252,13 +237,13 @@ it("reports each completed text chunk before a later chunk fails", async () => {
     ),
   ).rejects.toThrow("second chunk failed");
 
-  expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith({ channel: "test", messageId: "ab" });
+  expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(sent("ab"));
   expect(sendText.mock.calls.map((call) => call[0].replyToId)).toEqual(["reply-1", undefined]);
 });
 
 it("does not report callback-aware media sends twice", async () => {
   const onDeliveryResult = vi.fn();
-  const result = { channel: "test", messageId: "m1" };
+  const result = sent("m1");
 
   await sendPayload(
     { mediaUrl: "https://example.com/a.png" },
@@ -277,7 +262,7 @@ it("does not report callback-aware media sends twice", async () => {
 it("preserves audioAsVoice on media fallback sends", async () => {
   const sendMedia = vi.fn<
     NonNullable<Parameters<typeof sendTextMediaPayload>[0]["adapter"]["sendMedia"]>
-  >(async () => ({ channel: "test", messageId: "media" }));
+  >(async () => sent("media"));
 
   await sendPayload(
     {

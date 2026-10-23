@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
+import { assertionSucceeds } from "../../shared/assertion.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { ExecApprovalDurableLookup } from "../exec-approval-manager.types.js";
@@ -129,14 +130,7 @@ export async function loadVisibleApproval(params: {
       },
     },
   };
-  const isLookupCurrent = () => {
-    try {
-      lookupAuthority.assertCurrent();
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const isLookupCurrent = () => assertionSucceeds(() => lookupAuthority.assertCurrent());
   const reconcile = async (
     manager:
       | typeof params.execApprovalManager

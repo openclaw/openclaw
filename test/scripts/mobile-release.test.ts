@@ -1,10 +1,11 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderAndroidVersionProperties } from "../../scripts/lib/android-version.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { commit, git, write } from "./mobile-release-git.test-support.js";
 
 const script = path.join(process.cwd(), "scripts/mobile-release.mjs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -41,18 +42,6 @@ function expectResult(result: ReturnType<typeof spawnSync>, status: number, erro
   }
 }
 
-function git(root: string, ...args: string[]): string {
-  return execFileSync("git", args, {
-    cwd: root,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
-}
-function write(root: string, relative: string, contents: string): void {
-  const target = path.join(root, relative);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, contents);
-}
 function writeFiles(root: string, files: Record<string, string>) {
   for (const [file, text] of Object.entries(files)) {
     write(root, file, text);
@@ -251,10 +240,8 @@ $lanes.fetch(:release_upload).call(destination: ARGV.fetch(0).delete_prefix("des
 `,
     });
   }
-  git(root, "add", ".");
-  git(root, "commit", "-m", "Initial source");
+  const base = commit(root, "Initial source");
   git(root, "push", "origin", "main");
-  const base = git(root, "rev-parse", "HEAD");
   const env = {
     ...process.env,
     FIXTURE_UPLOAD_AUDIT: uploadAudit,
@@ -307,9 +294,7 @@ $lanes.fetch(:release_upload).call(destination: ARGV.fetch(0).delete_prefix("des
 function advanceMain(f: ReturnType<typeof fixture>): string {
   git(f.root, "checkout", "-b", "advance-main", f.base);
   write(f.root, "README.md", "Application source advanced after planning.\n");
-  git(f.root, "add", ".");
-  git(f.root, "commit", "-m", "Advance main");
-  const sha = git(f.root, "rev-parse", "HEAD");
+  const sha = commit(f.root, "Advance main");
   git(f.root, "push", "origin", "HEAD:main");
   git(f.root, "checkout", "main");
   return sha;
@@ -543,9 +528,7 @@ describe("mobile release CLI", () => {
         "scripts/ios-release-upload.sh",
         'echo "Corrected staging tooling"\nexec node scripts/fixture-upload.mjs "$@"\n',
       );
-      git(f.root, "add", ".");
-      git(f.root, "commit", "-m", "Fix staging tooling after upload");
-      const toolingSha = git(f.root, "rev-parse", "HEAD");
+      const toolingSha = commit(f.root, "Fix staging tooling after upload");
       const source = path.join(f.recovery, "source");
       if (destination === "testflight") {
         // Downloaded recovery artifacts have no source checkout.

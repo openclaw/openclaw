@@ -17,7 +17,7 @@ function toolCallMessage(
     api: "openai-responses",
     provider: "opencode",
     model: "gpt-5.6-sol",
-    content: [{ type: "toolCall", id: "call_1", name, arguments: argumentsValue }],
+    content: [{ type: "toolCall", id: "call_1", name, arguments: structuredClone(argumentsValue) }],
     usage: {
       input: 1,
       output: 1,
@@ -59,6 +59,27 @@ function endToolCall(message: AssistantMessage): AssistantMessageEvent {
 }
 
 const messageContent = (block: Record<string, unknown>) => ({ content: [block] });
+const callContent = (name: string, argumentsValue?: Record<string, unknown>) =>
+  messageContent({ name, ...(argumentsValue ? { arguments: argumentsValue } : {}) });
+const envArguments = { command: "node app.js", env: [{ key: "NODE_ENV", value: "test" }] };
+const restoredEnv = { command: "node app.js", env: { NODE_ENV: "test" } };
+const jsonArguments = { label: "42", seed: 42, enabled: true, empty: null };
+const wireJson = [
+  { key: "label", value: '"42"' },
+  { key: "seed", value: "42" },
+  { key: "enabled", value: "true" },
+  { key: "empty", value: "null" },
+];
+const duplicateKeys = [
+  { key: "title", value: '"first"' },
+  { key: "title", value: '"second"' },
+];
+const invalidJson = [{ key: "broken", value: "not-json" }];
+
+async function capturePayload(model: Parameters<StreamFn>[0], options: Parameters<StreamFn>[2]) {
+  const initial = { model: model.id };
+  return ((await options?.onPayload?.(initial, model)) ?? initial) as Record<string, unknown>;
+}
 
 function recordTool(name: string, field: string, valueSchema: Record<string, unknown> = {}) {
   return {
@@ -76,6 +97,10 @@ describe("OpenCode stream adapter", () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const existingAlias = "openclaw_web_search";
     const wireAlias = "openclaw_web_search_2";
+    const wireArguments = { options: [{ key: "region", value: "us" }] };
+    const restoredArguments = { options: { region: "us" } };
+    const producerContent = callContent(wireAlias, wireArguments);
+    const restoredContent = callContent("web_search", restoredArguments);
     let producerPartial: AssistantMessage | undefined;
     let producerTerminal: AssistantMessage | undefined;
     let releaseTerminal = () => {};
@@ -83,11 +108,8 @@ describe("OpenCode stream adapter", () => {
       releaseTerminal = resolve;
     });
     const baseStreamFn: StreamFn = async (model, _context, options) => {
-      const initialPayload = { model: model.id };
-      const replacement = await options?.onPayload?.(initialPayload, model);
-      capturedPayload = (replacement ?? initialPayload) as Record<string, unknown>;
+      capturedPayload = await capturePayload(model, options);
       const stream = createAssistantMessageEventStream();
-      const wireArguments = { options: [{ key: "region", value: "us" }] };
       producerPartial = toolCallMessage(wireAlias, wireArguments);
       producerTerminal = toolCallMessage(wireAlias, wireArguments);
       queueMicrotask(() => {
@@ -97,12 +119,7 @@ describe("OpenCode stream adapter", () => {
           partial: producerPartial as AssistantMessage,
         });
         void allowTerminal.then(() => {
-          stream.push({
-            type: "toolcall_end",
-            contentIndex: 0,
-            toolCall: producerPartial?.content[0] as never,
-            partial: producerPartial as AssistantMessage,
-          });
+          stream.push(endToolCall(producerPartial as AssistantMessage));
           stream.push({
             type: "done",
             reason: "toolUse",
@@ -140,12 +157,9 @@ describe("OpenCode stream adapter", () => {
     const events = [first.value];
     expect(first.value).toMatchObject({
       type: "toolcall_start",
-      partial: messageContent({ name: "web_search", arguments: { options: { region: "us" } } }),
+      partial: restoredContent,
     });
-    expect([producerPartial, producerTerminal]).toMatchObject([
-      messageContent({ name: wireAlias, arguments: { options: [{ key: "region", value: "us" }] } }),
-      messageContent({ name: wireAlias, arguments: { options: [{ key: "region", value: "us" }] } }),
-    ]);
+    expect([producerPartial, producerTerminal]).toMatchObject([producerContent, producerContent]);
     releaseTerminal();
     for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
       events.push(next.value);
@@ -170,19 +184,14 @@ describe("OpenCode stream adapter", () => {
     expect(events[1]).toMatchObject({
       type: "toolcall_end",
       toolCall: { name: "web_search", arguments: { options: { region: "us" } } },
-      partial: messageContent({ name: "web_search", arguments: { options: { region: "us" } } }),
+      partial: restoredContent,
     });
     expect(events[2]).toMatchObject({
       type: "done",
       message: messageContent({ name: "web_search" }),
     });
-    await expect(stream.result()).resolves.toMatchObject(
-      messageContent({ name: "web_search", arguments: { options: { region: "us" } } }),
-    );
-    expect([producerPartial, producerTerminal]).toMatchObject([
-      messageContent({ name: wireAlias, arguments: { options: [{ key: "region", value: "us" }] } }),
-      messageContent({ name: wireAlias, arguments: { options: [{ key: "region", value: "us" }] } }),
-    ]);
+    await expect(stream.result()).resolves.toMatchObject(restoredContent);
+    expect([producerPartial, producerTerminal]).toMatchObject([producerContent, producerContent]);
   });
 
   it("does not restore an unaliased OpenCode Responses function name", async () => {
@@ -206,55 +215,30 @@ describe("OpenCode stream adapter", () => {
     let capturedPayload: Record<string, unknown> | undefined;
     let producerDelta: Extract<AssistantMessageEvent, { type: "toolcall_delta" }> | undefined;
     const baseStreamFn: StreamFn = async (model, _context, options) => {
-      const initialPayload = { model: model.id };
-      const replacement = await options?.onPayload?.(initialPayload, model);
-      capturedPayload = (replacement ?? initialPayload) as Record<string, unknown>;
+      capturedPayload = await capturePayload(model, options);
       const stream = createAssistantMessageEventStream();
       queueMicrotask(() => {
-        const execMessage = toolCallMessage("exec", {
-          command: "node app.js",
-          env: [{ key: "NODE_ENV", value: "test" }],
-        });
+        const execMessage = toolCallMessage("exec", envArguments);
         const streamingCall = {
           ...execMessage.content[0]!,
-          partialJson: JSON.stringify({
-            command: "node app.js",
-            env: [{ key: "NODE_ENV", value: "test" }],
-          }),
+          partialJson: JSON.stringify(envArguments),
         };
         producerDelta = {
           type: "toolcall_delta",
           contentIndex: 0,
-          delta: JSON.stringify({
-            command: "node app.js",
-            env: [{ key: "NODE_ENV", value: "test" }],
-          }),
+          delta: JSON.stringify(envArguments),
           partial: { ...execMessage, content: [streamingCall] },
         };
         stream.push(producerDelta);
         stream.push(endToolCall(execMessage));
-        const duplicateMessage = toolCallMessage("dashboard", {
-          props: [
-            { key: "title", value: '"first"' },
-            { key: "title", value: '"second"' },
-          ],
-        });
-        stream.push(endToolCall(duplicateMessage));
-        const malformedMessage = toolCallMessage("video_generate", {
-          providerOptions: [{ key: "broken", value: "not-json" }],
-        });
-        stream.push(endToolCall(malformedMessage));
+        stream.push(endToolCall(toolCallMessage("dashboard", { props: duplicateKeys })));
+        stream.push(
+          endToolCall(toolCallMessage("video_generate", { providerOptions: invalidJson })),
+        );
         stream.push({
           type: "done",
           reason: "toolUse",
-          message: toolCallMessage("video_generate", {
-            providerOptions: [
-              { key: "label", value: '"42"' },
-              { key: "seed", value: "42" },
-              { key: "enabled", value: "true" },
-              { key: "empty", value: "null" },
-            ],
-          }),
+          message: toolCallMessage("video_generate", { providerOptions: wireJson }),
         });
       });
       return stream;
@@ -272,14 +256,12 @@ describe("OpenCode stream adapter", () => {
           {
             type: "function_call",
             name: "exec",
-            arguments: JSON.stringify({ command: "node app.js", env: { NODE_ENV: "test" } }),
+            arguments: JSON.stringify(restoredEnv),
           },
           {
             type: "function_call",
             name: "video_generate",
-            arguments: {
-              providerOptions: { label: "42", seed: 42, enabled: true, empty: null },
-            },
+            arguments: { providerOptions: structuredClone(jsonArguments) },
           },
         ],
       }),
@@ -302,22 +284,12 @@ describe("OpenCode stream adapter", () => {
     });
     expect(JSON.stringify(execProperties.env)).not.toContain("patternProperties");
     const input = capturedPayload?.input as Array<Record<string, unknown>>;
-    expect(JSON.parse(input[0]?.arguments as string)).toEqual({
-      command: "node app.js",
-      env: [{ key: "NODE_ENV", value: "test" }],
-    });
-    expect(input[1]?.arguments).toEqual({
-      providerOptions: [
-        { key: "label", value: '"42"' },
-        { key: "seed", value: "42" },
-        { key: "enabled", value: "true" },
-        { key: "empty", value: "null" },
-      ],
-    });
+    expect(JSON.parse(input[0]?.arguments as string)).toEqual(envArguments);
+    expect(input[1]?.arguments).toEqual({ providerOptions: wireJson });
     expect(events[0]).toMatchObject({
       type: "toolcall_delta",
       delta: "",
-      partial: messageContent({ arguments: { command: "node app.js", env: { NODE_ENV: "test" } } }),
+      partial: messageContent({ arguments: restoredEnv }),
     });
     if (events[0]?.type === "toolcall_delta") {
       expect(events[0].partial.content[0]).not.toHaveProperty("partialJson");
@@ -325,47 +297,27 @@ describe("OpenCode stream adapter", () => {
     expect(producerDelta).toMatchObject({
       delta: '{"command":"node app.js","env":[{"key":"NODE_ENV","value":"test"}]}',
       partial: messageContent({
-        arguments: {
-          command: "node app.js",
-          env: [{ key: "NODE_ENV", value: "test" }],
-        },
+        arguments: envArguments,
       }),
     });
     expect(events[1]).toMatchObject({
       type: "toolcall_end",
-      toolCall: { arguments: { command: "node app.js", env: { NODE_ENV: "test" } } },
+      toolCall: { arguments: restoredEnv },
     });
     expect(events[2]).toMatchObject({
       type: "toolcall_end",
-      toolCall: {
-        arguments: {
-          props: [
-            { key: "title", value: '"first"' },
-            { key: "title", value: '"second"' },
-          ],
-        },
-      },
+      toolCall: { arguments: { props: duplicateKeys } },
     });
     expect(events[3]).toMatchObject({
       type: "toolcall_end",
-      toolCall: {
-        arguments: { providerOptions: [{ key: "broken", value: "not-json" }] },
-      },
+      toolCall: { arguments: { providerOptions: invalidJson } },
     });
     expect(events[4]).toMatchObject({
       type: "done",
-      message: messageContent({
-        arguments: {
-          providerOptions: { label: "42", seed: 42, enabled: true, empty: null },
-        },
-      }),
+      message: messageContent({ arguments: { providerOptions: jsonArguments } }),
     });
     await expect(stream.result()).resolves.toMatchObject(
-      messageContent({
-        arguments: {
-          providerOptions: { label: "42", seed: 42, enabled: true, empty: null },
-        },
-      }),
+      messageContent({ arguments: { providerOptions: jsonArguments } }),
     );
   });
 

@@ -13,25 +13,11 @@ vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
 }));
 
-vi.mock("../../hooks/internal-hooks.js", () => ({
-  createInternalHookEvent: vi.fn(),
-  triggerInternalHook: vi.fn(),
-}));
-
-vi.mock("./abort-cutoff.js", () => ({
-  resolveAbortCutoffFromContext: vi.fn(() => undefined),
-  shouldPersistAbortCutoff: vi.fn(() => false),
-}));
-
 vi.mock("./abort-operation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./abort-operation.js")>()),
   captureChannelSessionStop: vi.fn((params: { key?: string; sessionId?: string }) => params),
   abortSessionRunTargetWithOutcome: abortSessionRunTargetWithOutcomeMock,
   stopSubagentsForRequester: vi.fn(async () => ({ stopped: 0, failed: 0 })),
-}));
-
-vi.mock("./abort-trigger-text.js", () => ({
-  isAbortTrigger: vi.fn((raw: string) => raw === "stop"),
 }));
 
 vi.mock("./abort-primitives.js", () => ({
@@ -69,17 +55,11 @@ describe("handleAbortTrigger", () => {
     vi.clearAllMocks();
     abortSessionRunTargetWithOutcomeMock.mockImplementation((params) => {
       const outcome = {
-        aborted: false,
         alreadyFinalizing: true,
-        queuedCancelled: 0,
-        activeCancelled: 0,
         childrenStopped: 0,
         childFailures: 0,
-        failures: [],
-        settled: Promise.resolve(),
       };
       return {
-        ...outcome,
         completed: (async () => {
           await params.stopChildren?.(async () => true);
           return outcome;

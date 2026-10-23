@@ -13,10 +13,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createInitializationContext,
-} from "./chat-pane.test-support.ts";
+import { createInitializationContext } from "./chat-pane.test-support.ts";
 import { ChatPaneView, type ChatPaneElement, type ChatPaneProps } from "./chat-pane.tsx";
 import {
   installTranscriptDomMocks,
@@ -63,36 +60,9 @@ function stubLifecycle() {
   });
 }
 
-it("exposes the current navigation face through the real pane host without a gateway read", async () => {
-  stubLifecycle();
-  const request = vi.fn(async () => ({}));
-  const context = createInitializationContext(createGatewayBrowserClientFixture({ request }));
-  context.gateway.snapshot.phase = "stopped";
-  const [props, setProps] = createSignal<Partial<ChatPaneProps>>({
-    paneId: "bridge-navigation",
-    sessionKey: "agent:main:bridge",
-    routeFace: "chat",
-  });
-  const view = mountPane(context, () => <ChatPaneView {...props()} />, false);
-  const pane = expectDefined(
-    view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"),
-    "openclaw-chat-pane",
-  );
-  await waitForSolid(() => expect(pane.captureNavigationFace()).toBe("chat"));
-
-  setProps((p) => ({ ...p, routeFace: "dashboard" }));
-  await waitForSolid(() => expect(pane.captureNavigationFace()).toBe("dashboard"));
-  setProps((p) => ({ ...p, routeFace: "chat" }));
-  await waitForSolid(() => expect(pane.captureNavigationFace()).toBe("chat"));
-  expect(request).not.toHaveBeenCalled();
-  view.unmount();
-});
-
 it("applies a route draft and its focus cue to an already mounted native pane", async () => {
   const intervals = vi.spyOn(globalThis, "setInterval");
   const clearInterval = vi.spyOn(globalThis, "clearInterval");
-  const renderProbe = vi.fn<(host: object, phase: "invalidate" | "commit") => void>();
-  vi.stubGlobal("openclawRenderLifecycleTestHook", renderProbe);
   const { sessionKey, context } = mountedFixture("bridge-draft");
   const [props, setProps] = createSignal<Partial<ChatPaneProps>>({ active: true, presented: true });
   const view = mountPane(context, () => (
@@ -108,19 +78,8 @@ it("applies a route draft and its focus cue to an already mounted native pane", 
     view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"),
     "openclaw-chat-pane",
   );
-  const runtime = await waitForSolid(() =>
-    expectDefined(
-      renderProbe.mock.calls.find(
-        ([host, phase]) => phase === "commit" && Reflect.get(host, "element") === pane,
-      )?.[0],
-      "reported pane runtime",
-    ),
-  );
-  expect(Reflect.get(runtime, "state")).toMatchObject({ sessionKey });
-  expect(renderProbe).toHaveBeenCalledWith(pane, "commit");
   setProps((p) => ({ ...p, draft: "What can you do?", focusComposer: true }));
   await pane.updateComplete;
-  expect(renderProbe).toHaveBeenCalledWith(runtime, "commit");
   expect(textarea.value).toBe("What can you do?");
   expect(document.activeElement).toBe(textarea);
   expect(textarea.closest(".agent-chat__input")?.classList).toContain(

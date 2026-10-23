@@ -14,9 +14,10 @@ OpenClaw can run agent turns through a local AI CLI, such as Claude Code or Gemi
 - Sessions are supported, so follow-up turns stay coherent.
 - Images pass through if the CLI accepts image paths.
 
-With Claude CLI, a successful `sessions_yield` ends the current turn through the
-native interrupt control, suppresses later reply text, and keeps the Claude session
-available for the next child-completion turn.
+With Claude CLI, a successful `sessions_yield` closes the current subprocess after
+its tool result is consumed and suppresses later reply text. The next child-completion
+turn resumes the same saved Claude session in a new subprocess. This avoids recording
+the yield as a user interruption; it adds process startup time after a yield.
 
 A CLI backend can be an agent's primary runtime or a fallback. Choosing **Claude CLI** during onboarding keeps `anthropic/*` model refs and runs them through Claude Code. For ACP session controls, background tasks, thread/conversation binding, and persistent external coding sessions, use [ACP Agents](/tools/acp-agents) instead. CLI backends are not ACP.
 
@@ -224,6 +225,8 @@ Plugin tools such as remote SSH do not become background jobs automatically.
 
 When Claude Code moves a foreground Bash command to the background after its tool timeout,
 OpenClaw keeps the turn active until Claude processes the completion and returns its final answer.
+Stopping a native task releases that task's hold. Completions belonging to an earlier
+input do not hold or settle a newer input.
 Follow-up tools still require the current turn's host permissions. Commands started explicitly
 in the background do not hold the turn open. If the turn fails or is cancelled while one of these
 commands still needs a follow-up, OpenClaw closes that subprocess and starts a fresh one for the next turn.
@@ -404,6 +407,12 @@ sessions keep their account until you select another or remove its saved profile
 Explicit account selections and empty account orders remain authoritative. API keys saved
 for the `anthropic` provider require an explicit selection; they do not replace
 native subscription login automatically.
+
+Model catalog readiness honors the effective primary model's `@profile` pin,
+including inherited defaults and agent overrides. An explicit session account or
+personal provider default takes precedence. The pin applies only to that primary;
+other models retain their own account selection. An invalid pin remains unavailable
+even when native Claude login is ready.
 
 Fresh plugin completions, including Memory Dreaming, use the same account order.
 An explicit profile on the requested model stays authoritative; an empty account

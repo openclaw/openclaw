@@ -1,4 +1,4 @@
-import { expect as expectBrowser, type Locator, type Page } from "playwright/test";
+import { expect as expectBrowser, type Page } from "playwright/test";
 import { expect, it } from "vitest";
 import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
 import {
@@ -16,6 +16,7 @@ import {
   waitForRequests,
 } from "./chat-flow.test-support.ts";
 import { seedLegacyComposerDraft } from "./chat-outbox-legacy-draft.test-support.ts";
+import { outboxButton as button } from "./chat-outbox-payloads.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const pageOptions = { locale: "en-US", serviceWorkers: "block" as const };
@@ -23,20 +24,6 @@ const viewport = { width: 1280, height: 900 };
 const composerFor = (page: Page) => page.locator(".agent-chat__composer-combobox textarea");
 const userFor = (page: Page, text: string, exact = false) =>
   page.locator(".chat-group.user").getByText(text, { exact });
-const button = (target: Page | Locator, name: string) =>
-  target.getByRole("button", { name, exact: true });
-const deliveredMessage = (
-  content: string,
-  runId: string,
-  stamp: { id: string; seq: number; timestamp: number },
-) => ({
-  content,
-  role: "user",
-  timestamp: stamp.timestamp,
-  idempotencyKey: `${runId}:user`,
-  __openclaw: { id: stamp.id, seq: stamp.seq, idempotencyKey: `${runId}:user` },
-});
-
 const unconfirmedInput = (
   id: string,
   sessionKey: string,
@@ -44,14 +31,43 @@ const unconfirmedInput = (
   extra: Record<string, unknown>,
 ) => ({
   id,
-  text: "Please check the deployment notes",
-  createdAt: 1,
   sessionKey,
   sendRunId,
+  text: "Please check the deployment notes",
+  createdAt: 1,
   sendAttempts: 1,
   sendState: "unconfirmed",
   ...extra,
 });
+async function publishHistory(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  content: string,
+  runId: string,
+  id: string,
+  seq: number,
+  active = false,
+) {
+  const timestamp = Date.now();
+  await gateway.setHistoryMessages([
+    {
+      content,
+      role: "user",
+      timestamp,
+      idempotencyKey: `${runId}:user`,
+      __openclaw: { id, seq, idempotencyKey: `${runId}:user` },
+    },
+  ]);
+  await gateway.emitGatewayEvent("session.message", {
+    ...(active ? { clientRunId: runId } : {}),
+    hasActiveRun: active,
+    messageId: id,
+    messageSeq: seq,
+    sessionKey: "main",
+    status: active ? "running" : "done",
+  });
+  return timestamp;
+}
+
 async function seedComposer(
   page: Page,
   version: number,
@@ -291,21 +307,13 @@ suite.define(() => {
                 (element as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete,
             );
           };
-          const differentTimestamp = Date.now();
-          await gateway.setHistoryMessages([
-            deliveredMessage("different delivered turn", "different-run", {
-              id: "different-history-turn",
-              seq: 1,
-              timestamp: differentTimestamp,
-            }),
-          ]);
-          await gateway.emitGatewayEvent("session.message", {
-            hasActiveRun: false,
-            messageId: "different-history-turn",
-            messageSeq: 1,
-            sessionKey: "main",
-            status: "done",
-          });
+          const differentTimestamp = await publishHistory(
+            gateway,
+            "different delivered turn",
+            "different-run",
+            "different-history-turn",
+            1,
+          );
           await waitForHistoryCommit(differentTimestamp);
           await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
           expect(await gateway.getRequests("chat.send")).toHaveLength(1);
@@ -317,22 +325,14 @@ suite.define(() => {
           const receiptBefore = await historyCount(receiptMatch);
           const displayBefore = await historyCount(displayMatch);
           await gateway.deferNext("chat.history", receiptMatch);
-          const acceptedTimestamp = Date.now();
-          await gateway.setHistoryMessages([
-            deliveredMessage(prompt, runId, {
-              id: "accepted-history-turn",
-              seq: 2,
-              timestamp: acceptedTimestamp,
-            }),
-          ]);
-          await gateway.emitGatewayEvent("session.message", {
-            clientRunId: runId,
-            hasActiveRun: true,
-            messageId: "accepted-history-turn",
-            messageSeq: 2,
-            sessionKey: "main",
-            status: "running",
-          });
+          const acceptedTimestamp = await publishHistory(
+            gateway,
+            prompt,
+            runId,
+            "accepted-history-turn",
+            2,
+            true,
+          );
           await gateway.waitForRequest("chat.history", {
             after: receiptBefore,
             match: receiptMatch,
@@ -444,19 +444,16 @@ suite.define(() => {
         .getByText("Please check the deployment notes")
         .waitFor();
       await expectRequestCountStable(gateway, "chat.send", 0);
-
       await button(notice, "Restore").click();
       const dialog = page.locator("openclaw-modal-dialog");
       await dialog.getByText(/Add this saved copy to “Main/).waitFor();
       await dialog.getByText(/Check the original chat before sending it again/).waitFor();
-
       await button(dialog, "Restore").click();
       await userFor(page, "Please check the deployment notes").waitFor();
       await expectRequestCountStable(gateway, "chat.send", 0);
       await page.reload();
       await userFor(page, "Please check the deployment notes").waitFor();
       await expectRequestCountStable(gateway, "chat.send", 0);
-
       await page.locator(".chat-group.user").getByRole("button", { name: /Retry/i }).click();
       const request = await gateway.waitForRequest("chat.send");
       expect(requireRecord(request.params)).toMatchObject({
@@ -534,7 +531,10 @@ suite.define(() => {
 
   it("recovers an ambiguous IndexedDB attachment draft through rendered controls without sending", () =>
     suite.withPage({ ...pageOptions, viewport }, async ({ page }) => {
-      const gateway = await installMockGateway(page);
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.startup"],
+        historyMessages: [chatMessage("assistant", "Existing conversation is ready.")],
+      });
       const gatewayAddress = controlUiBundledGatewayUrl(suite.server.baseUrl);
       // Seed the legacy database before app boot can open the current version.
       await page.route("**/outbox-recovery-seed", (route) =>
@@ -555,6 +555,13 @@ suite.define(() => {
       await notice
         .locator(".chat-outbox-recovery-row")
         .getByText("Review the attached deployment note", { exact: true })
+        .waitFor();
+      await gateway.waitForRequest("chat.startup");
+      await gateway.resolveDeferred("chat.startup");
+      // Recovery can render before history establishes the destination's identity.
+      await page
+        .locator(".chat-group.assistant")
+        .getByText("Existing conversation is ready.", { exact: true })
         .waitFor();
       await button(notice, "Restore").click();
       await button(page.locator("openclaw-modal-dialog"), "Restore").click();

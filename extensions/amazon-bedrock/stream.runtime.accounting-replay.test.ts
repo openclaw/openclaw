@@ -1,17 +1,12 @@
 import { crc32 } from "node:zlib";
-import { BedrockRuntimeClient, CacheTTL, ConversationRole } from "@aws-sdk/client-bedrock-runtime";
+import { BedrockRuntimeClient, CacheTTL } from "@aws-sdk/client-bedrock-runtime";
 import {
   SYSTEM_PROMPT_CACHE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "@openclaw/ai/internal/shared";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type {
-  AssistantMessage,
-  AssistantMessageEvent,
-  Context,
-  ToolResultMessage,
-} from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage, AssistantMessageEvent, Context } from "openclaw/plugin-sdk/llm";
 import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { Type } from "typebox";
@@ -19,10 +14,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BedrockOptions } from "./bedrock-options.js";
 import {
   bedrockModel,
+  checkpoint,
   capturePayload,
   collectStream,
   expectDestroyedClient,
   mockResponse,
+  png,
+  replayAssistant,
   runtimeUser,
   mockStream,
   startEvent,
@@ -30,6 +28,10 @@ import {
   streamEvents,
   streamBedrockForTest,
   userContext,
+  textBlock,
+  toolResult,
+  wireText,
+  wireUser,
   toolStart as startToolEvent,
   toolDelta as toolDeltaEvent,
 } from "./bedrock.test-support.js";
@@ -41,20 +43,10 @@ function signedThinkingContext(
   thinkingSignature = "sig-1",
 ) {
   return {
-    messages: [
-      {
-        role: "assistant",
-        api: "bedrock-converse-stream",
-        provider: "amazon-bedrock",
-        model: modelId,
-        content: [{ type: "thinking", thinking, thinkingSignature }],
-      },
-    ],
+    messages: [replayAssistant(modelId, [{ type: "thinking", thinking, thinkingSignature }])],
   } as never;
 }
 
-const textBlock = (text: string) => ({ type: "text" as const, text });
-const checkpoint = { cachePoint: { type: "default" } };
 const cacheContext = () => ({
   ...userContext(),
   systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}Today: Monday`,
@@ -66,15 +58,6 @@ const retainedContext = (turn: string, count: string, timestamp: number, extras:
     ),
     timestamp,
   );
-function toolResult(
-  toolCallId: string,
-  content: ToolResultMessage["content"],
-  toolName = "inspect",
-  isError = false,
-  timestamp = 0,
-): ToolResultMessage {
-  return { role: "toolResult", toolCallId, toolName, content, isError, timestamp };
-}
 function wireToolResult(toolUseId: string, content: unknown[], status = "success") {
   return { toolResult: { toolUseId, status, content } };
 }
@@ -180,11 +163,11 @@ describe("Bedrock prompt cache ownership", () => {
       );
       if (supported && (cacheRetention === "short" || cacheRetention === "long")) {
         expect(payload.system).toEqual([
-          { text: "Stable workspace" },
+          wireText("Stable workspace"),
           checkpoint,
-          { text: "Today: Monday" },
+          wireText("Today: Monday"),
         ]);
-        expect(payload.messages?.[0]?.content).toEqual([{ text: "Hello" }, checkpoint]);
+        expect(payload.messages?.[0]?.content).toEqual([wireText("Hello"), checkpoint]);
       } else {
         expect(JSON.stringify(payload)).not.toContain("cachePoint");
         if (supported || cacheRetention === "none") {
@@ -213,11 +196,11 @@ describe("Bedrock prompt cache ownership", () => {
     );
     const longCheckpoint = { cachePoint: { type: "default", ...(ttl ? { ttl } : {}) } };
     expect(payload.system).toEqual([
-      { text: "Stable workspace" },
+      wireText("Stable workspace"),
       longCheckpoint,
-      { text: "Today: Monday" },
+      wireText("Today: Monday"),
     ]);
-    expect(payload.messages?.[0]?.content).toEqual([{ text: "Hello" }, longCheckpoint]);
+    expect(payload.messages?.[0]?.content).toEqual([wireText("Hello"), longCheckpoint]);
   });
 
   it("advances the retained-carrier checkpoint through a tool loop", async () => {
@@ -226,11 +209,7 @@ describe("Bedrock prompt cache ownership", () => {
       name: "Test deployment",
     });
     const previousAssistant = {
-      role: "assistant",
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      content: [{ type: "text", text: "First answer" }],
+      ...replayAssistant(model.id, [textBlock("First answer")]),
       stopReason: "stop",
       usage: {
         input: 0,
@@ -276,10 +255,9 @@ describe("Bedrock prompt cache ownership", () => {
     ]);
     expect(second[2]?.content).toEqual(first[2]?.content);
     expect(second[4]?.content?.at(-1)).toEqual(checkpoint);
-    expect(second[0]?.content).toEqual([
-      { text: "OpenClaw runtime context:\nFirst request" },
-      { text: "Retained context one" },
-    ]);
+    expect(second[0]?.content).toEqual(
+      ["OpenClaw runtime context:\nFirst request", "Retained context one"].map(wireText),
+    );
     expect(second[1]).toEqual(first[1]);
   });
 
@@ -296,8 +274,8 @@ describe("Bedrock prompt cache ownership", () => {
       { cacheRetention: "short" },
     );
 
-    expect(payload.system).toEqual([{ text: "Complete policy" }, checkpoint]);
-    expect(payload.messages?.[0]?.content).toEqual([{ text: "Hello" }, checkpoint]);
+    expect(payload.system).toEqual([wireText("Complete policy"), checkpoint]);
+    expect(payload.messages?.[0]?.content).toEqual([wireText("Hello"), checkpoint]);
   });
 
   it("never includes a v2026.9.7 runtime-context carrier in a later cached prefix", async () => {
@@ -372,8 +350,6 @@ it("prices one-hour cache writes from the provider's authoritative TTL breakdown
 });
 
 it("lifts tool images into user content for OpenAI while preserving result associations", async () => {
-  const png =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
   const image = { type: "image" as const, mimeType: "image/png", data: png };
   const context = {
     messages: [
@@ -394,32 +370,26 @@ it("lifts tool images into user content for OpenAI while preserving result assoc
     text: `(see attached images labeled "Images from tool result ${toolCallId}")`,
   });
   expect(input.messages).toEqual([
-    {
-      role: ConversationRole.USER,
-      content: [
-        wireToolResult("call_first", [{ text: "first result" }, placeholder("call_first")]),
-        wireToolResult("call_second", [placeholder("call_second")], "error"),
-        wireToolResult("call_text", [{ text: "plain result" }]),
-        { text: "Images from tool result call_first:" },
-        expectedImage,
-        expectedImage,
-        { text: "Images from tool result call_second:" },
-        expectedImage,
-      ],
-    },
+    wireUser(
+      wireToolResult("call_first", [{ text: "first result" }, placeholder("call_first")]),
+      wireToolResult("call_second", [placeholder("call_second")], "error"),
+      wireToolResult("call_text", [{ text: "plain result" }]),
+      { text: "Images from tool result call_first:" },
+      expectedImage,
+      expectedImage,
+      { text: "Images from tool result call_second:" },
+      expectedImage,
+    ),
   ]);
   expect(context).toEqual(before);
 
   const unaffected = await capturePayload(bedrockModel({ input: ["text", "image"] }), context);
   expect(unaffected.messages).toEqual([
-    {
-      role: ConversationRole.USER,
-      content: [
-        wireToolResult("call_first", [{ text: "first result" }, expectedImage, expectedImage]),
-        wireToolResult("call_second", [expectedImage], "error"),
-        wireToolResult("call_text", [{ text: "plain result" }]),
-      ],
-    },
+    wireUser(
+      wireToolResult("call_first", [{ text: "first result" }, expectedImage, expectedImage]),
+      wireToolResult("call_second", [expectedImage], "error"),
+      wireToolResult("call_text", [{ text: "plain result" }]),
+    ),
   ]);
 });
 

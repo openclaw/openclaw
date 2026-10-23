@@ -10,8 +10,10 @@ import {
   type MenuHandle,
   type MenuItem,
 } from "../../../components/solid/menu.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../../../lib/editor-links.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import type { SessionDiffScope, SessionDiffFileView } from "./chat-sidebar-content-types.ts";
 import { CopyRow, desktopCopyPath } from "./session-diff-copy.tsx";
@@ -23,6 +25,8 @@ import {
   SessionDiffCollapseIcon,
 } from "./session-diff-icons.tsx";
 import type { SessionDiffMode } from "./session-diff-preferences.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 export { SessionDiffActionIcon } from "./session-diff-icons.tsx";
 
 export type SessionDiffMenuDraft =
@@ -243,7 +247,9 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
               path === menu.selected,
               <span class="session-diff-menu__jump-path">
                 <span>{path.slice(slash + 1)}</span>
-                <small>{path.slice(0, Math.max(0, slash))}</small>
+                <small ref={createTextOverflow(() => path)} title={path}>
+                  {path.slice(0, Math.max(0, slash))}
+                </small>
               </span>,
             ),
             icon: <AttachmentFileIcon filename={path} mode="preview-with-favicon" />,
@@ -391,7 +397,13 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
                       menu.active.scope === "commit" && menu.active.commit === commit.sha,
                       <>
                         <span class="session-diff-menu__sha">{commit.sha}</span>
-                        <span class="session-diff-menu__subject">{commit.subject}</span>
+                        <span
+                          ref={createTextOverflow(() => commit.subject)}
+                          class="session-diff-menu__subject"
+                          title={commit.subject}
+                        >
+                          {commit.subject}
+                        </span>
                         {index === 0 && (
                           <span class="session-diff-menu__head">{t("chat.sessionDiff.head")}</span>
                         )}
@@ -410,7 +422,13 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
                   <div class="session-diff-menu__merge-base">
                     <span>{t("chat.sessionDiff.mergeBase")}</span>
                     <span class="session-diff-menu__sha">{menu.result.mergeBase.sha}</span>
-                    <span class="session-diff-menu__subject">{menu.result.mergeBase.subject}</span>
+                    <span
+                      ref={createTextOverflow(() => menu.result?.mergeBase?.subject)}
+                      class="session-diff-menu__subject"
+                      title={menu.result.mergeBase.subject}
+                    >
+                      {menu.result.mergeBase.subject}
+                    </span>
                   </div>
                 ),
               },

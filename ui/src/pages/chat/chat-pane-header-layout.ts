@@ -2,8 +2,8 @@ import { merge, type Element } from "solid-js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
-import { detailsOutputsIcons } from "./chat-details-output-icons.tsx";
 import { chatGoalPresentation } from "./chat-goals.ts";
 import {
   canLoadChatBranches,
@@ -18,7 +18,7 @@ import type { ChatProps } from "./chat-view.tsx";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import type { ChatDetailsElements, ChatDetailsViewProps } from "./components/chat-details.tsx";
 import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
-import { chatPullRequestId } from "./components/chat-pull-requests.ts";
+import { chatPullRequestId, retainedPublication } from "./components/chat-pull-requests.ts";
 import {
   getSessionWorkspace,
   isCurrentSessionWorkspace,
@@ -33,6 +33,8 @@ import {
   isSidebarNewTabActive,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
+
+registerChatSessionEnglish();
 
 export type PaneDetailsActions = Pick<
   ChatDetailsProps,
@@ -93,7 +95,10 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
         openDetailsPage({ kind: "pull-request", id: chatPullRequestId(request) }, request.title),
       publication: chatProps.githubPublication
         ? {
-            eligible: true,
+            eligible: Boolean(
+              (!chatProps.pullRequestsBranchDismissed && chatProps.pullRequestsBranch) ||
+              retainedPublication(chatProps.githubPublication),
+            ),
             onOpen: (source) =>
               openDetailsPage(
                 { kind: "publication" },
@@ -155,9 +160,8 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
         (!sidebarLayout.expanded || sidebarLayout.expandedSide === true) &&
         !isSidebarNewTabActive(sidebarLayout) &&
         Boolean(side),
-      dashboard: false,
     };
-    destinations.dashboard =
+    const showDashboardControls =
       this.dashboardControls !== undefined &&
       ((destinations.main && main?.slot === "dashboard") ||
         (destinations.side && side?.slot === "dashboard") ||
@@ -165,7 +169,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
     nativeHeader.panelActionDestinations = destinations;
     nativeHeader.setDashboardControls = this.setDashboardControls;
     const dashboard = panelDefinitions.find((definition) => definition.slot === "dashboard");
-    if (dashboard?.view?.dashboard && destinations.dashboard) {
+    if (dashboard?.view?.dashboard && showDashboardControls) {
       dashboard.view.dashboard.controls = this.dashboardControls;
     }
     if (headerDetails?.mobileBindings) {
@@ -198,7 +202,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
     chatProps: ChatProps;
     paneChatProps: ChatProps;
     detailsActions: PaneDetailsActions;
-    subagentStop: { onAbort: () => void } | undefined;
+    subagentStop: { target: string; onAbort: () => void } | undefined;
     ownsSubagentsPanel: boolean;
     mobileHost: ChatMobileHost | undefined;
     sidebarLayout: SidebarLayout;
@@ -221,7 +225,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
       panePresentation,
       conversationVisible,
     } = input;
-    const detailsOutputs = this.captureDetailsOutputs(detailsOutputsIcons);
+    const detailsOutputs = this.captureDetailsOutputs();
     const diffWorkspace = getSessionWorkspace(state);
     const diffContent = resolveSessionDiffSidebarContent(state);
     const environment =
@@ -258,6 +262,8 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           }
         : undefined;
     const detailsProgress = this.detailsProgressCardPresentation;
+    const conversationMain =
+      (sidebarMainPanel(sidebarLayout)?.slot ?? "conversation") === "conversation";
     const headerDetails: ChatDetailsViewProps | undefined = ownsSubagentsPanel
       ? {
           elements,
@@ -275,6 +281,9 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
                     });
                   },
                   onViewAll: () => {
+                    if (this.sessionPresentation === "desktop") {
+                      this.headerDetailsRef.value?.close();
+                    }
                     detailsOutputs.outputs?.onViewAll();
                     this.navigateMobileHost({
                       area: "panels",
@@ -367,8 +376,8 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           presentation:
             this.sessionPresentation === "desktop" ? headerPresentation : panePresentation,
           conversationVisible,
-          externalTrigger:
-            (sidebarMainPanel(sidebarLayout)?.slot ?? "conversation") !== "conversation",
+          conversationMain,
+          externalTrigger: !conversationMain,
           setRef: (details) => {
             this.headerDetailsRef.value = details;
           },

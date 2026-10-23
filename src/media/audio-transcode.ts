@@ -12,20 +12,6 @@ const DEFAULT_OPUS_CHANNELS = 1;
 const DEFAULT_TEMP_PREFIX = "audio-opus-";
 const DEFAULT_OUTPUT_FILE_NAME = "voice.opus";
 
-function normalizeAudioExtension(params: {
-  inputExtension?: string;
-  inputFileName?: string;
-}): string {
-  const fromExtension = params.inputExtension?.trim();
-  const candidate = fromExtension
-    ? fromExtension.startsWith(".")
-      ? fromExtension
-      : `.${fromExtension}`
-    : path.extname(params.inputFileName ?? "");
-  const normalized = candidate.toLowerCase();
-  return /^\.[a-z0-9]{1,12}$/.test(normalized) ? normalized : ".audio";
-}
-
 function normalizeTempPrefix(value?: string): string {
   const sanitized = value?.trim().replace(/[^a-zA-Z0-9._-]/g, "-");
   if (!sanitized || sanitized === "." || sanitized === "..") {
@@ -73,10 +59,15 @@ export async function transcodeAudioBufferToOpus(params: {
       prefix: normalizeTempPrefix(params.tempPrefix),
     },
     async (workspace) => {
-      const inputPath = await workspace.write(
-        `input${normalizeAudioExtension(params)}`,
-        params.audioBuffer,
-      );
+      const fromExtension = params.inputExtension?.trim();
+      const candidate = fromExtension
+        ? fromExtension.startsWith(".")
+          ? fromExtension
+          : `.${fromExtension}`
+        : path.extname(params.inputFileName ?? "");
+      const normalized = candidate.toLowerCase();
+      const inputExtension = /^\.[a-z0-9]{1,12}$/.test(normalized) ? normalized : ".audio";
+      const inputPath = await workspace.write(`input${inputExtension}`, params.audioBuffer);
       const outputFileName = normalizeOutputFileName(params.outputFileName);
       await writeExternalFileWithinRoot({
         rootDir: workspace.dir,

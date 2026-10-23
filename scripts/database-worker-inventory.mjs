@@ -360,14 +360,6 @@ const reviewed = new Map([
     },
   ],
   [
-    "src/config/sessions/session-accessor.sqlite-compaction.ts",
-    {
-      priority: 99,
-      evidence:
-        "Gateway sessions.compact uses session-accessor.transcript.ts, which dispatches ordinary trimming to its worker but retains trimTranscriptForManualCompact for nativeSource/hasOpaqueCheck authority. session-mutation-guards.ts preserves opaque requester commit guards; the destructive trim cannot discard that authority contract.",
-    },
-  ],
-  [
     "src/config/sessions/session-accessor.sqlite-deletion.ts",
     {
       priority: 99,
@@ -784,13 +776,13 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/config/sessions/session-accessor.sqlite-transcript-reports.kernel.ts",
+    "src/config/sessions/session-transcript-report-read.ts",
     [
       {
         tier: "W",
-        operations: ["readReportEvent"],
+        operations: ["readTranscriptReportEvent"],
         evidence:
-          "Only session-accessor.sqlite-transcript-reports.worker.ts invokes prepareTranscriptReportSelection and appendAbortedSessionTranscriptPartialInTransaction, the two callers of this reader. The host report facade uses only prepareCustomTranscriptReport serialization.",
+          "The report kernel calls this reader only through prepareTranscriptReportSelection and appendAbortedSessionTranscriptPartialInTransaction, invoked by session-accessor.sqlite-transcript-reports.worker.ts. The other caller is readSessionTranscriptMaintenance, invoked only by session-transcript-hydration-read.worker.ts. The host report facade uses only prepareCustomTranscriptReport serialization.",
       },
     ],
   ],
@@ -1408,17 +1400,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/config/sessions/session-accessor.sqlite-compaction.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["persistCompactionBoundary"],
-        evidence:
-          "agent-runner-memory.ts:489 uses the async compaction facade, which dispatches session.transcript.compactionBoundary via withSessionMetadataWorker to session-manager-metadata.worker.ts:141. The native Sync wrapper has no production value caller: accessor barrels only re-export it and session-accessor.sqlite-compaction-runtime.ts:17,37-38 uses its type. No SDK value export. Worker initialization uses ensureSessionEntryInTransaction; the unused native branch is not a new entry exemption.",
-      },
-    ],
-  ],
-  [
     "src/config/sessions/session-accessor.sqlite-transcript-anchor.ts",
     [
       {
@@ -1458,6 +1439,17 @@ const reviewedOperations = new Map([
         ],
         evidence:
           "The sole production value callers are session-message-rewrite.ts:160,193, each dominated by !isMainThread at :159,191. Main-thread callers take rewritePreparedTranscriptMessage at :176,208. Neither native helper has a plugin-SDK value export; the surrounding mixed module is not exempted.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-transcript-store.ts",
+    [
+      {
+        tier: "W",
+        operations: ["replaceSqliteTranscriptEventsInTransaction"],
+        evidence:
+          "Full replacement runs only inside worker write transactions: session-manual-compact-mutation.worker.ts:43, session-message-rewrite.worker.ts:371, session-manager-maintenance.worker.ts:46 through session-accessor.sqlite-transcript-write.ts:131, and runNativeTranscriptWriteLock.replaceEvents (reviewed W); doctor-session-transcript-headers.ts:195 is a Doctor one-shot. Append and other operations in this mixed module stay T1.",
       },
     ],
   ],
@@ -2372,7 +2364,7 @@ const reviewedOperations = new Map([
           "readSandboxRegistryRowInDatabase",
         ],
         evidence:
-          "Registry mutations, including reservation and removal-intent selection, run only through sandboxRegistryOperations in registry-write.worker.ts; insertIfMissing delegates to registry-import.worker.ts. Read helpers run through openclaw-state-read-registry.ts in the read worker. Synchronous sandbox effect checks consume registry-currentness.ts facts maintained by committed receipts.",
+          "Registry mutations, including reservation and removal-intent selection, run only through sandboxRegistryOperations in registry-write.worker.ts; insertIfMissing delegates to registry-import.worker.ts. Read helpers run through openclaw-state-read-handlers.ts in the read worker. Synchronous sandbox effect checks consume registry-currentness.ts facts maintained by committed receipts.",
       },
     ],
   ],
@@ -2434,7 +2426,7 @@ const reviewedOperations = new Map([
           "getRegistryWorktreeProvisionedChunkInDatabase",
         ],
         evidence:
-          "Runtime reads and exact-row predicates use worktrees/dispatch.worker.ts and registry-run-end.worker.ts through the shared-state worker registry. Cleanup inventory uses openclaw-state-read-registry.ts in the read worker. Live-path discovery is private to worktreeReadOperations, loaded by openclaw-state-read-operation-registry.ts and executed by openclaw-state-read.worker.ts. Native fixture readers live only in registry.test-support.ts; Doctor migration lists keep their separate registry.ts queries.",
+          "Runtime reads and exact-row predicates use worktrees/dispatch.worker.ts and registry-run-end.worker.ts through the shared-state worker registry. Cleanup inventory uses openclaw-state-read-handlers.ts in the read worker. Live-path discovery is private to worktreeReadOperations, loaded by openclaw-state-read-operation-registry.ts and executed by openclaw-state-read.worker.ts. Native fixture readers live only in registry.test-support.ts; Doctor migration lists keep their separate registry.ts queries.",
       },
     ],
   ],
@@ -2478,7 +2470,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["readWorktreeRunLeaseStateInDatabase", "assertRegistryMutationCustody"],
         evidence:
-          "Run-lease inventory is dispatched by openclaw-state-read-registry.ts in the read worker. Registry mutation custody is called only by registry-run-end.worker.ts. The actual lease read/reap primitives remain synchronous exemptions.",
+          "Run-lease inventory is dispatched by openclaw-state-read-handlers.ts in the read worker. Registry mutation custody is called only by registry-run-end.worker.ts. The actual lease read/reap primitives remain synchronous exemptions.",
       },
     ],
   ],
@@ -2676,18 +2668,7 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: ["readScratchStateFromDatabase", "readHeartbeatMonitorScratchFromDatabase"],
         evidence:
-          "Doctor-only native reads: src/commands/doctor-heartbeat-scratch-migration.ts:516,567,588 and doctor-heartbeat-task-migration.ts:94,411 → scratch-store.ts:33,42,52. Worker sibling src/cron/store/read-command.ts:54.",
-      },
-    ],
-  ],
-  [
-    "src/cron/scratch-store.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["deleteCronJobScratch"],
-        evidence:
-          "Sole native caller src/commands/doctor-heartbeat-scratch-migration.ts:625: revision-guarded migration compensation.",
+          "Native maintenance reads: Doctor scratch migration, task scratch, and scratch preflight call readScratchStateFromDatabase, directly or through scratch-store.ts. Worker snapshots, including the private legacy-heartbeat selector, enter through src/cron/store/read-command.ts.",
       },
     ],
   ],
@@ -2696,9 +2677,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["writeCronJobScratchInDatabase", "writeCronJobScratchForMaintenance"],
+        operations: ["writeCronJobScratchInDatabase"],
         evidence:
-          "Doctor migration/compensation at src/commands/doctor-heartbeat-scratch-migration.ts:570,617; worker sibling src/cron/store/scratch.worker.ts:28.",
+          "Doctor scratch migration calls writeCronJobScratchInDatabase inside its existing transaction; runtime writes enter through src/cron/store/scratch.worker.ts. Synchronous fixture maintenance lives in test/helpers/cron/scratch-store.ts.",
       },
     ],
   ],
@@ -2802,7 +2783,7 @@ const reviewedOperations = new Map([
           "insertStoredDeviceIdentityIfAbsent",
         ],
         evidence:
-          "Live callers use device-identity-async.ts through openclaw-state.worker.ts. Native callers are startup-local-cli-pairing.ts (server-runtime-state-prepare boot), node-host/runner.ts and startup-state-readiness.ts (node boot/connect CLI), config-preflight-snapshot.ts, doctor-device-pairing.ts, heartbeat-schedule.ts (Doctor cadence migration only), and state-migrations.device-identity*.ts (Doctor).",
+          "Live callers use device-identity-async.ts through openclaw-state.worker.ts. Native callers are startup-local-cli-pairing.ts (server-runtime-state-prepare boot), node-host/runner.ts and startup-state-readiness.ts (node boot/connect CLI), config-preflight-snapshot.ts, doctor-device-pairing.ts, doctor-heartbeat-schedule.ts (Doctor cadence migration only), and state-migrations.device-identity*.ts (Doctor).",
       },
       {
         tier: "T2",
@@ -3123,7 +3104,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["readAgentDeletionJournalStatusInDatabase"],
         evidence:
-          "src/state/openclaw-state-read-registry.ts:65 under read worker :679; other executor src/state/openclaw-agent-execution.worker.ts:190.",
+          "src/state/openclaw-state-read-handlers.ts under read worker; other executor src/state/openclaw-agent-execution.worker.ts:190.",
       },
     ],
   ],
@@ -3445,6 +3426,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/config/sessions/session-accessor.sqlite-compaction.ts", // Only session-manager-metadata.worker.ts calls the required-worker entry point; the async facade imports its type only.
   "src/agents/sandbox/persistent-exec-store.kernel.ts", // Mutations and registry removal checks run in persistent-exec-store.worker.ts and registry-write.worker.ts; reads dispatch through openclaw-state-read-operation-registry.ts in the read worker.
   "src/state/openclaw-agent-execution-maintenance.ts", // Only openclaw-agent-execution.worker.ts constructs this owner; admission invokes its startup repair callback solely inside that worker.
   "src/config/sessions/session-accessor.sqlite-entry-identity.ts", // Only reaction (agent execution worker), suggestion (sharing/transcript workers), and sharing native (sharing worker; host imports are types) kernels call this reader.
@@ -3460,7 +3442,6 @@ const workerModules = new Set([
   "src/config/sessions/session-sharing-store.native.ts", // Membership mutations run only in session-sharing-store.worker.ts; host imports are type-only.
   "src/config/sessions/session-accessor.sqlite-participants.native.ts", // Participant mutation SQL runs only through the sharing worker; host imports are type-only.
   "src/config/sessions/session-group-categories.read.ts", // Category enumeration runs only in session-sharing-store.worker.ts.
-  "src/infra/heartbeat-outcome-store.kernel.ts", // Outcome mutations run only in heartbeat-outcome-store.worker.ts.
   "src/config/sessions/session-pending-input-history.kernel.ts", // History-read worker owns all remaining callers.
   "src/config/sessions/session-pending-input-history-reconcile.ts", // Pending-input execution registry dispatches only in openclaw-agent-execution.worker.ts.
   "src/infra/session-cost-usage-cache-read.ts", // Usage-cache reads run only in session-transcript.worker.ts.
@@ -3479,6 +3460,7 @@ const workerModules = new Set([
   "src/gateway/worker-environments/placement-move-intent.ts", // Move reads and mutations run only in placement lifecycle, turn-claim, and projection workers.
   "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
+  "src/gateway/worker-environments/local-workspace-manifest-scan.ts", // Only openclaw-state-read.worker.ts executes its row snapshot and filesystem scan; host imports are types.
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
   "src/skills/library/read.kernel.ts", // Only openclaw-state-read-operation-registry.ts imports this worker operation table.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
@@ -3560,7 +3542,6 @@ const workerModules = new Set([
   "src/infra/push-apns-store-transaction.ts", // APNs worker cleanup and pairing worker clearApnsNodeIds only.
   "src/infra/push-apns-store.ts", // SQL read kernels are called only by the APNs worker dispatcher.
   "src/infra/session-cost-usage-worker.ts",
-  "src/infra/telemetry-store.kernel.ts", // Telemetry SQL executes through the shared-state worker runtime.
   "src/infra/update-candidate-exec-approvals.ts", // Approval projections run in the update-candidate-state worker.
   "src/infra/update-candidate-plugins.ts", // Plugin inventory and copying run in the update-candidate-state worker.
   "src/infra/update-run-interruption-store.ts", // Interruption writes use the shared-state worker; host imports are pure.

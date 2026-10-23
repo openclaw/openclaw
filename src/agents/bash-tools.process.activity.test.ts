@@ -4,7 +4,7 @@ import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import { createStubChildAdapter } from "../process/supervisor/supervisor.test-support.js";
 import { getFinishedSession, markBackgrounded } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { runExecProcess } from "./bash-tools.exec-runtime.js";
+import { runExecFixture } from "./bash-tools.exec-fixture.test-support.js";
 
 const createChildAdapterMock = vi.hoisted(() => vi.fn());
 // mock-isolation: Controlled adapters expose finalization and extinction without spawning children.
@@ -43,16 +43,9 @@ it("retains output time through finalization after 2,000 other processes complet
       other.settle(0);
       return { adapter: other, ready: Promise.resolve() };
     });
-  const run = await runExecProcess({
+  const run = await runExecFixture({
     command: "interactive-command",
     workdir: process.cwd(),
-    env: {},
-    usePty: false,
-    warnings: [],
-    maxOutput: 1_000,
-    pendingMaxOutput: 1_000,
-    notifyOnExit: false,
-    timeoutSec: null,
     sandbox: {
       containerName: "activity-fixture",
       workspaceDir: process.cwd(),

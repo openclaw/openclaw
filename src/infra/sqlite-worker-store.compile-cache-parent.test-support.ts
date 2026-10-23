@@ -36,6 +36,8 @@ const installRoot = path.join(root, "installed");
 fs.mkdirSync(installRoot);
 fs.writeFileSync(path.join(installRoot, "package.json"), '{"version":"2026.9.6"}');
 assert.equal(getCompileCacheDir(), undefined, "fixture must start without a native cache");
+const cacheDir = path.join(root, owner === "failed" ? "not-a-directory" : "native-cache");
+process.env.NODE_COMPILE_CACHE = cacheDir;
 const initialEnv = { ...process.env };
 const currentFile = path.join(installRoot, owner === "source" ? "src/entry.ts" : "dist/entry.js");
 if (owner === "foreign") {
@@ -44,18 +46,17 @@ if (owner === "foreign") {
   assert.equal(enabled.status, constants.compileCacheStatus.ENABLED);
 }
 if (owner === "failed") {
-  const blocked = path.join(root, "not-a-directory");
-  fs.writeFileSync(blocked, "fixture");
-  enableOpenClawCompileCache({ currentFile, installRoot, env: { NODE_COMPILE_CACHE: blocked } });
+  fs.writeFileSync(cacheDir, "fixture");
+  enableOpenClawCompileCache({ currentFile, installRoot });
 } else {
   // Positive control goes through the real OpenClaw entry enable owner.
   enableOpenClawCompileCache({
     currentFile,
     installRoot,
-    env: { ...process.env, NODE_COMPILE_CACHE: path.join(root, "native-cache") },
   });
 }
 assert.deepEqual({ ...process.env }, initialEnv, "enable must not mutate the environment");
+delete process.env.NODE_COMPILE_CACHE;
 const parentDirectory = getCompileCacheDir() ?? null;
 const owned = owner === "openclaw";
 assert.equal(parentDirectory !== null, owned || owner === "foreign");

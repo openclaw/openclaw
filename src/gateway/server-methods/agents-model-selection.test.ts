@@ -3,6 +3,7 @@ import type { preparePublishedModelRuntimeChoice } from "../../agents/model-runt
 import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
 
 const fixture = vi.hoisted(() => {
   const config: OpenClawConfig = {};
@@ -36,17 +37,10 @@ vi.mock("../../agents/model-runtime-choice.js", () => ({
 }));
 
 const { agentsHandlers } = await import("./agents.js");
-async function update(params: Record<string, unknown>) {
-  const respond = vi.fn();
-  await agentsHandlers["agents.update"]!({
-    req: { type: "req", id: "native-selection", method: "agents.update" },
-    params,
-    respond,
+function update(params: Record<string, unknown>) {
+  return callAgentHandler(agentsHandlers["agents.update"]!, "agents.update", params, {
     context: createDirectChatContext({ getRuntimeConfig: () => fixture.config }),
-    client: null,
-    isWebchatConnect: () => false,
   });
-  return respond;
 }
 
 beforeEach(() => {

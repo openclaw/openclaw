@@ -21,7 +21,13 @@ import {
   createUniqueId,
   onSettled,
 } from "solid-js";
-import { CatalogDialog, catalogAlignment, catalogInputValue } from "./catalog-primitives.jsx";
+import {
+  CatalogBoundary,
+  CatalogDialog,
+  catalogAlignment,
+  catalogInputValue,
+  observeSource,
+} from "./catalog-primitives.jsx";
 import { catalogStyles } from "./catalog-v0.9-styles.js";
 
 // Only the headless schemas/functions reach the bundle. No universal element is registered.
@@ -63,9 +69,12 @@ const unwrap = (value) => (value instanceof ResolvedBinding ? value.value : valu
 
 // Bridge the processor's synchronous signal owner without replacing its implementation.
 export function observeValue(read) {
-  const [value, setValue] = createSignal(read());
-  onSettled(() => effect(() => setValue(() => read())));
-  return value;
+  return observeSource(read, (notify) =>
+    effect(() => {
+      read();
+      notify();
+    }),
+  ).read;
 }
 
 export function CatalogStyles() {
@@ -130,12 +139,13 @@ function ChoicePicker(props) {
   };
   const multi = () => props.data.variant === "multipleSelection";
   const chips = () => props.data.displayStyle === "chips";
-  const options = () =>
+  const options = createMemo(() =>
     (props.data.options ?? []).filter(
       (option) =>
         !props.data.filterable ||
         String(unwrap(option.label)).toLowerCase().includes(filter().toLowerCase()),
-    );
+    ),
+  );
   const toggle = (value) =>
     props.write(
       "value",
@@ -356,7 +366,9 @@ export function CatalogNode(props) {
             </div>
           }
         >
-          <CatalogElement node={node} />
+          <CatalogBoundary>
+            <CatalogElement node={node} />
+          </CatalogBoundary>
         </Show>
       )}
     </Show>

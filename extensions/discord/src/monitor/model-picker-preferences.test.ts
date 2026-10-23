@@ -20,9 +20,9 @@ type DiscordRuntime = Parameters<typeof setDiscordRuntime>[0];
 let stateDir: string;
 let env: NodeJS.ProcessEnv;
 const scope = { userId: "456" };
-const record = (modelRef: string) => recordDiscordModelPickerRecentModel({ env, scope, modelRef });
+const record = (modelRef: string) => recordDiscordModelPickerRecentModel({ scope, modelRef });
 const read = (options: { allowedModelRefs?: Set<string> } = {}) =>
-  readDiscordModelPickerRecentModels({ env, scope, ...options });
+  readDiscordModelPickerRecentModels({ scope, ...options });
 const openStore = (namespace = "model-picker-preferences", maxEntries = 2_000) =>
   createPluginStateKeyedStoreForTests("discord", { namespace, maxEntries, env });
 
@@ -50,15 +50,14 @@ describe("discord model picker preferences", () => {
   it("records recent models in recency order without duplicates", async () => {
     const userScope = { userId: "123" };
 
-    await recordDiscordModelPickerRecentModel({ env, scope: userScope, modelRef: "openai/gpt-4o" });
+    await recordDiscordModelPickerRecentModel({ scope: userScope, modelRef: "openai/gpt-4o" });
     await recordDiscordModelPickerRecentModel({
-      env,
       scope: userScope,
       modelRef: "openai/gpt-4.1",
     });
-    await recordDiscordModelPickerRecentModel({ env, scope: userScope, modelRef: "openai/gpt-4o" });
+    await recordDiscordModelPickerRecentModel({ scope: userScope, modelRef: "openai/gpt-4o" });
 
-    const recent = await readDiscordModelPickerRecentModels({ env, scope: userScope });
+    const recent = await readDiscordModelPickerRecentModels({ scope: userScope });
     expect(recent).toEqual(["openai/gpt-4o", "openai/gpt-4.1"]);
   });
 
@@ -79,10 +78,10 @@ describe("discord model picker preferences", () => {
       "openai/e",
       "openai/f",
     ]) {
-      await recordDiscordModelPickerRecentModel({ env, scope: userScope, modelRef });
+      await recordDiscordModelPickerRecentModel({ scope: userScope, modelRef });
     }
 
-    await expect(readDiscordModelPickerRecentModels({ env, scope: userScope })).resolves.toEqual([
+    await expect(readDiscordModelPickerRecentModels({ scope: userScope })).resolves.toEqual([
       "openai/f",
       "openai/e",
       "openai/d",

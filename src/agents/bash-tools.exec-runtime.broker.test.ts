@@ -10,7 +10,8 @@ import { supportsSpawnBrokerCommandTransport } from "../process/spawn-broker/pip
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { runExecProcess } from "./bash-tools.exec-runtime.js";
+import { runExecFixture } from "./bash-tools.exec-fixture.test-support.js";
+import type { runExecProcess } from "./bash-tools.exec-runtime.js";
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -31,15 +32,10 @@ beforeEach(() => {
 });
 
 function exec(command: string, options: Partial<Parameters<typeof runExecProcess>[0]> = {}) {
-  return runExecProcess({
+  return runExecFixture({
     command,
     workdir: home,
     env: { HOME: home, PATH: "/usr/bin:/bin" },
-    usePty: false,
-    warnings: [],
-    maxOutput: 1000,
-    pendingMaxOutput: 1000,
-    notifyOnExit: false,
     timeoutSec: 10,
     ...options,
   });

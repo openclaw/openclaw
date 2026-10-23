@@ -10,7 +10,9 @@ import {
 
 it.each([
   [{ id: "gateway-owner" }, "Shared owner", true],
-  [{ id: "gateway-owner", name: "Saved owner name" }, "Shared owner", true],
+  [{ id: "gateway-owner", name: "Saved owner name" }, "Saved owner name · Shared owner", true],
+  [{ id: "gateway-owner", name: "  " }, "Shared owner", true],
+  [{ id: "gateway-owner", email: "shared@example.test" }, "Shared owner", true],
   [{ id: "person", name: "Example person", email: "person@example.test" }, "Example person", false],
   [{ id: "person", email: "person@example.test" }, "person@example.test", false],
   [{ id: "person" }, "person", false],

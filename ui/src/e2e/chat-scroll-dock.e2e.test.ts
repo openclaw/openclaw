@@ -306,8 +306,7 @@ suite.define(() => {
       await closeChatDetails(page);
       // The hidden sheet's grid row still animates the transcript viewport.
       await waitForChatScrollIdle(page);
-      const thread = page.locator(".chat-thread");
-      await thread.press("Home");
+      await scrollChatThreadToTop(page);
       await waitForChatScrollIdle(page);
       await button.press("Enter");
       await openChatTaskProgress(page);
@@ -317,7 +316,7 @@ suite.define(() => {
         .press("Escape");
       await page.locator(".chat-mobile-host").waitFor({ state: "hidden" });
       await waitForChatScrollIdle(page);
-      await thread.press("Home");
+      await scrollChatThreadToTop(page);
       await button.press("Enter");
       await waitForChatScrollIdle(page);
       expect(await page.locator(".chat-mobile-host").isVisible()).toBe(false);

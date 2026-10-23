@@ -5,7 +5,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds } from "../agents/agent-scope-config.js";
-import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   discardLegacyRegistryWorktrees,
   rewriteRegistryWorktreePathsForMigration,
@@ -171,6 +170,7 @@ import {
 } from "./state-migrations.session-store.js";
 import {
   detectSharedAuthStoreMigration,
+  resolveSharedAuthMigrationSources,
   migrateSharedAuthStore,
 } from "./state-migrations.shared-auth-store.js";
 import {
@@ -399,6 +399,7 @@ export async function detectLegacyStateMigrations(params: {
   const sharedAuthStore = detectSharedAuthStoreMigration({
     stateDir,
     env,
+    config: params.sourceConfigBeforeMigrations ?? params.cfg,
     doctorOnlyStateMigrations:
       stateSchemaMigrations.length === 0 && params.doctorOnlyStateMigrations === true,
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
@@ -1499,6 +1500,7 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
         env,
         mode: params.mode,
         requiredness: detected.stateSchema.hasLegacy ? "required" : "conditional",
+        integrityCheck: params.integrityCheck,
       }),
       createRetiredCoreStateStep({
         stateDir,
@@ -1666,12 +1668,10 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   const outsideSharedAuthSources =
     params.mode === "doctor"
       ? listMigrationEndpointsOutsideRoot(
-          [
-            {
-              kind: "sqlite",
-              path: path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite"),
-            },
-          ],
+          resolveSharedAuthMigrationSources(configBefore.config, env).map(({ sourcePath }) => ({
+            kind: "sqlite" as const,
+            path: sourcePath,
+          })),
           snapshot.stateDir,
         )
       : [];
@@ -2052,7 +2052,6 @@ export async function runLegacyStateMigrations(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
-  doctorOnlyStateMigrations?: boolean;
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
   legacySessionSurfaces: PreparedLegacySessionSurfaces;
 }): Promise<
@@ -2071,7 +2070,6 @@ export async function runLegacyStateMigrations(params: {
   const detected = params.detected;
   const env = params.env ?? process.env;
   const config = params.config ?? ({} as OpenClawConfig);
-  const legacySessionSurfaces = params.legacySessionSurfaces;
   const buildSteps = (pluginStateMigrationInventory?: PluginDoctorStateMigrationInventory) =>
     buildLegacyStateMigrationSteps({
       mode: "doctor",
@@ -2084,7 +2082,7 @@ export async function runLegacyStateMigrations(params: {
       // The health contribution's later session repair consumes preflight's handoff.
       // This migration pass does not own that separate phase.
       deferPostSessionPluginMigrations: false,
-      legacySessionSurfaces,
+      legacySessionSurfaces: params.legacySessionSurfaces,
     });
   const { preparation: preparationSteps, remaining: remainingSteps } = buildSteps();
   const preparation = await runLegacyStateMigrationSteps(

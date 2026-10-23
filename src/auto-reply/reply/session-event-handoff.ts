@@ -29,8 +29,10 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 import {
   prepareCronRunContinuationCleanup,
+  prepareScheduledAutomationStart,
   resolveScheduledSessionReplyOptions,
   settleSessionAutomationTurn,
+  type ScheduledAutomationAdmission,
 } from "./session-event-automation.js";
 import {
   buildSessionEventContext,
@@ -53,11 +55,8 @@ import {
   prepareSessionEventTargetForHost,
 } from "./session-event-target.js";
 
-export {
-  assertSessionEventTargetCurrent,
-  captureSessionEventTargetForHost,
-  combineSessionEventTargetsForHost,
-} from "./session-event-target.js";
+export { assertSessionEventTargetCurrent, captureSessionEventTargetForHost };
+export { combineSessionEventTargetsForHost } from "./session-event-target.js";
 export type { SessionEventReceipt, SessionEventTarget } from "./session-event-contract.js";
 
 const log = createSubsystemLogger("session-events");
@@ -123,7 +122,8 @@ export function enqueueSessionEventForHost(
           ),
           execRequestOwners,
         ),
-        { allowDuplicate: true },
+        // Refuse matching keyed plugin retries; unkeyed and host occurrences stay distinct.
+        { allowDuplicate: options.source !== "plugin" || !options.contextKey?.trim() },
       );
   const occurrences = options.occurrences
     ? [...options.occurrences]
@@ -159,6 +159,7 @@ export function enqueueSessionEventForHost(
   let started = false;
   let admissionStarted = false;
   let deferred = false;
+  const automationAdmission: ScheduledAutomationAdmission = { admissionDeferred: false };
   let adopted = false;
   // A policy publication rejected this occurrence's stale-config execution; finish()
   // re-admits it under the current policy when it never started.
@@ -181,7 +182,7 @@ export function enqueueSessionEventForHost(
   let automationResult: SessionEventOutcome["automationResult"];
   let settlement: "settling" | "finished" | undefined;
   let settings = options.expectedTarget?.settings;
-  let settingsAdmitted = false;
+  let checkedSettings: typeof settings | null = null;
   const jobTools = options.scheduledAutomation
     ? resolveCronRunToolsAllow(options.scheduledAutomation.job)
     : undefined;
@@ -213,9 +214,14 @@ export function enqueueSessionEventForHost(
   };
   const assertCurrent = () => {
     assertOwnerCurrent();
-    generationLease?.assertCurrent();
-    if (settingsAdmitted && generationLease) {
-      assertSessionEventSettingsCurrent(settings, generationLease.readSessionSettings());
+    if (checkedSettings !== null && generationLease) {
+      const currentSettings = generationLease.readSessionSettings();
+      if (currentSettings !== checkedSettings) {
+        assertSessionEventSettingsCurrent(settings, currentSettings);
+        checkedSettings = currentSettings;
+      }
+    } else {
+      generationLease?.assertCurrent();
     }
   };
   const assertEffectCurrent = () => {
@@ -271,15 +277,25 @@ export function enqueueSessionEventForHost(
     if (started) {
       return;
     }
+    options.scheduledAutomation?.onStarted?.();
     ownership.start();
     started = true;
     accept();
   };
   const prepareStart = async (runId?: string) => {
     await prepareCurrent();
-    if (runId) {
-      start();
+    if (started) {
+      return;
     }
+    const startSignal = operation ? AbortSignal.any([signal, operation.abortSignal]) : signal;
+    await prepareScheduledAutomationStart({
+      automation: options.scheduledAutomation,
+      operation: () => operation,
+      signal: startSignal,
+      prepareCurrent,
+      admission: automationAdmission,
+      onReady: runId ? start : undefined,
+    });
   };
   const finish = () => {
     if (settlement) {
@@ -323,11 +339,8 @@ export function enqueueSessionEventForHost(
           options.preserveOccurrenceOnRejection && !adopted ? true : undefined;
         ownership.release();
         try {
-          // A fresh dispatch binds the current policy for admission, execution and
-          // delivery. The captured target, producer assertions, cancellation and
-          // delivery opt-out carry over, so a moved destination or retired producer
-          // still rejects. Only an occurrence that was already a passive notice keeps
-          // passive custody on rejection; producer-owned text never becomes passive.
+          // Re-admit under current policy with original target, producer checks, cancellation
+          // and delivery opt-out; only previously passive notices keep custody on rejection.
           readmittedReceipt = enqueueSessionEventForHost(eventText, {
             ...options,
             agentId,
@@ -387,10 +400,12 @@ export function enqueueSessionEventForHost(
         deliveryAmbiguous,
         deliveryError,
         deliverySuppressionReason,
+        admissionDeferredReason: !started ? automationAdmission.admissionDeferredReason : undefined,
         admissionDeferred:
           !started &&
-          operation?.result?.kind === "aborted" &&
-          operation.result.code === "aborted_for_supersession",
+          (automationAdmission.admissionDeferred ||
+            (operation?.result?.kind === "aborted" &&
+              operation.result.code === "aborted_for_supersession")),
         summary,
         nextCheckMs,
         sourceDeliveryOutcome,
@@ -430,6 +445,10 @@ export function enqueueSessionEventForHost(
     }
     const deliverReply = await prepareSessionEventDelivery(route, assertCurrent);
     deliveryAttempted = true;
+    const assertDeliveryCurrent = () => {
+      assertEffectCurrent();
+      options.scheduledAutomation?.assertDeliveryCurrent?.();
+    };
     const result = await deliverReply({
       cfg: getSessionEventRuntimeConfig(),
       agentId,
@@ -439,9 +458,9 @@ export function enqueueSessionEventForHost(
       abortSignal: signal,
       beforeDeliver: async () => {
         await options.scheduledAutomation?.beforeDeliver?.();
-        assertEffectCurrent();
+        assertDeliveryCurrent();
       },
-      assertCurrent: assertEffectCurrent,
+      assertCurrent: assertDeliveryCurrent,
     });
     delivered ||= result.delivered;
     deliveryAmbiguous ||= result.ambiguous === true;
@@ -481,8 +500,8 @@ export function enqueueSessionEventForHost(
       settings ??= target.settings;
       route ??= structuredClone(target.deliveryContext);
       await prepareCurrent();
-      settings = narrowSessionEventSettings(settings, generationLease.readSessionSettings());
-      settingsAdmitted = true;
+      checkedSettings = generationLease.readSessionSettings();
+      settings = narrowSessionEventSettings(settings, checkedSettings);
       const promptText = options.scheduledAutomation?.preparePrompt
         ? await options.scheduledAutomation.preparePrompt(cfg)
         : eventText;
@@ -556,9 +575,12 @@ export function enqueueSessionEventForHost(
                       throw new Error("Session event lost its original generation owner");
                     }
                     const assertCreationCurrent = generationLease.bindCreation(creation);
+                    const assertNoticeCreationCurrent =
+                      options.scheduledAutomation?.bindSessionCreation?.(creation);
                     return () => {
                       assertOwnerCurrent();
                       assertCreationCurrent();
+                      assertNoticeCreationCurrent?.();
                     };
                   },
                 }
@@ -590,9 +612,15 @@ export function enqueueSessionEventForHost(
                   automation: options.scheduledAutomation,
                   runId,
                   deliveryEvidence,
+                  cfg,
+                  scope: preparedBinding
+                    ? { agentId, sessionKey, storePath, ...preparedBinding }
+                    : undefined,
+                  assertCurrent,
                   prepareCurrent,
                   outcome,
                 });
+                summary = automationOutcome.summary ?? summary;
                 nextCheckMs = automationOutcome.nextCheckMs;
                 sourceDeliveryOutcome = automationOutcome.sourceDeliveryOutcome;
                 automationResult = automationOutcome.automationResult;

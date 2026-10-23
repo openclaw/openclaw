@@ -58,160 +58,6 @@ function attachmentUrlDisplayName(url: string): string | undefined {
   }
 }
 
-async function classifyFileAttachment(params: {
-  attachment: MediaAttachment;
-  cache: ReturnType<typeof createMediaAttachmentCache>;
-  cfg: OpenClawConfig;
-  limits: FileExtractionLimits;
-  skipAttachmentIndexes?: Set<number>;
-  assertCurrent?: () => void;
-}): Promise<ClassifiedFileAttachment> {
-  const { attachment, cache, cfg, limits, skipAttachmentIndexes } = params;
-  params.assertCurrent?.();
-  const attachmentFilename =
-    attachment.path ?? (attachment.url ? attachmentUrlDisplayName(attachment.url) : undefined);
-  // The staged copy is written under a generated name, so its basename cannot
-  // answer a question that names the attachment. Prefer the sender's own name
-  // for anything the model reads; classification below deliberately stays on the
-  // staged path, because a sender-controlled name must not steer format detection.
-  const displayFilename = attachment.fileName ?? attachmentFilename;
-  if (skipAttachmentIndexes?.has(attachment.index)) {
-    return { outcome: { kind: "claimed-elsewhere" } };
-  }
-  const extensionMime = mimeTypeFromFilePath(attachmentFilename);
-  const forcedTextMime =
-    attachmentClassFromMime(extensionMime) === "text" ? extensionMime : undefined;
-  const kind = forcedTextMime ? "document" : resolveAttachmentKind(attachment);
-  if (!forcedTextMime && (kind === "image" || kind === "video" || kind === "audio")) {
-    return { outcome: { kind: "claimed-elsewhere" } };
-  }
-  if (
-    !limits.allowUrl &&
-    attachment.url &&
-    !attachment.path &&
-    !classifyMediaReferenceSource(attachment.url).isMediaStoreUrl
-  ) {
-    if (shouldLogVerbose()) {
-      logVerbose(`media: file attachment skipped (url disabled) index=${attachment.index}`);
-    }
-    return { outcome: { kind: "url-sources-disabled" }, filename: displayFilename };
-  }
-  let bufferResult: Awaited<ReturnType<typeof cache.getBuffer>>;
-  try {
-    bufferResult = await cache.getBuffer({
-      attachmentIndex: attachment.index,
-      maxBytes: limits.maxBytes,
-      timeoutMs: limits.timeoutMs,
-    });
-  } catch (err) {
-    if (shouldLogVerbose()) {
-      logVerbose(`media: file attachment skipped (buffer): ${String(err)}`);
-    }
-    return { outcome: { kind: "read-failure" }, filename: displayFilename };
-  }
-  params.assertCurrent?.();
-  const filename = attachment.fileName ?? bufferResult.fileName;
-  const classification: AttachmentClassification = bufferResult.classification;
-  // Marker mime prefers the sender-declared type; never the name-forced text mime,
-  // which would mislabel binary bytes inside a text-named file as a text format.
-  // Both candidates pass strict token validation so raw header text never
-  // reaches model context; undefined drops the mime from block and marker.
-  const mimeType = sanitizeMimeType(classification.mime);
-  const binaryMime = sanitizeMimeType(normalizeMimeType(attachment.mime)) ?? mimeType;
-  // Preserve only the cache's root-approved local read. Rendering still waits
-  // for the reply runtime's final filesystem capability (#122411).
-  const selfServeLocalPath = bufferResult.localPath;
-  if (
-    classification.class !== "text" &&
-    !(classification.class === "document" && classification.mime === "application/pdf")
-  ) {
-    // An operator-pinned allowlist that excludes this type is a policy "no";
-    // it must win before any self-serve directive can name the file.
-    if (limits.allowedMimesConfigured && !(mimeType && limits.allowedMimes.has(mimeType))) {
-      return {
-        outcome: { kind: "policy-rejected", mime: mimeType ?? binaryMime },
-        filename,
-        mimeType: mimeType ?? binaryMime,
-      };
-    }
-    return {
-      outcome: {
-        kind: "unsupported-format",
-        mime: binaryMime,
-        ...(selfServeLocalPath ? { localPath: selfServeLocalPath } : {}),
-      },
-      filename,
-      mimeType: binaryMime,
-    };
-  }
-  if (
-    classification.class === "text" &&
-    attachment.mime &&
-    normalizeMimeType(attachment.mime) !== classification.mime
-  ) {
-    logVerbose(
-      `media: MIME override from "${attachment.mime}" to "${classification.mime}" for index=${attachment.index}`,
-    );
-  }
-  if (!mimeType) {
-    if (shouldLogVerbose()) {
-      logVerbose(`media: file attachment skipped (unknown mime) index=${attachment.index}`);
-    }
-    return { outcome: { kind: "unsupported-format" }, filename };
-  }
-  const allowedMimes = new Set(limits.allowedMimes);
-  if (!limits.allowedMimesConfigured && classification.class === "text") {
-    allowedMimes.add(mimeType);
-  }
-  if (!allowedMimes.has(mimeType)) {
-    if (shouldLogVerbose()) {
-      logVerbose(
-        `media: file attachment skipped (unsupported mime ${mimeType}) index=${attachment.index}`,
-      );
-    }
-    // Operator-pinned allowlists reject as policy; the default allowlist
-    // rejects as a capability gap. The markers differ so the prompt never
-    // claims support the active configuration disables.
-    const outcome: FileAttachmentOutcome = limits.allowedMimesConfigured
-      ? { kind: "policy-rejected", mime: mimeType }
-      : {
-          kind: "unsupported-format",
-          mime: mimeType,
-          ...(selfServeLocalPath ? { localPath: selfServeLocalPath } : {}),
-        };
-    return { outcome, filename, mimeType };
-  }
-  let extracted: Awaited<ReturnType<typeof extractFileContentFromBuffer>>;
-  try {
-    const { allowedMimesConfigured: _allowedMimesConfigured, ...baseLimits } = limits;
-    extracted = await extractFileContentFromBuffer({
-      // Text decoding is read-only; PDF extractor plugins still receive owned mutable bytes.
-      buffer:
-        mimeType === "application/pdf" ? Buffer.from(bufferResult.buffer) : bufferResult.buffer,
-      filename: bufferResult.fileName,
-      limits: { ...baseLimits, allowedMimes },
-      config: cfg,
-      classification,
-      mimeType: attachment.mime,
-    });
-  } catch (err) {
-    if (shouldLogVerbose()) {
-      logVerbose(`media: file attachment skipped (extract): ${String(err)}`);
-    }
-    return { outcome: { kind: "read-failure" }, filename, mimeType };
-  }
-  params.assertCurrent?.();
-  return {
-    outcome: resolveFileExtractionOutcome({
-      text: extracted?.text?.trim(),
-      images: extracted?.images,
-      metadata: extracted?.metadata,
-    }),
-    filename,
-    mimeType,
-  };
-}
-
 export async function extractFileContext(params: {
   attachments: ReturnType<typeof normalizeMediaAttachments>;
   cache: ReturnType<typeof createMediaAttachmentCache>;
@@ -222,18 +68,162 @@ export async function extractFileContext(params: {
   selfServePathsEnabled: boolean;
 }) {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
+  async function classifyFileAttachment(
+    attachment: MediaAttachment,
+  ): Promise<ClassifiedFileAttachment> {
+    const assertCurrent = params.assertCurrent;
+    assertCurrent?.();
+    const attachmentFilename =
+      attachment.path ?? (attachment.url ? attachmentUrlDisplayName(attachment.url) : undefined);
+    // The staged copy is written under a generated name, so its basename cannot
+    // answer a question that names the attachment. Prefer the sender's own name
+    // for anything the model reads; classification below deliberately stays on the
+    // staged path, because a sender-controlled name must not steer format detection.
+    const displayFilename = attachment.fileName ?? attachmentFilename;
+    if (skipAttachmentIndexes?.has(attachment.index)) {
+      return { outcome: { kind: "claimed-elsewhere" } };
+    }
+    const extensionMime = mimeTypeFromFilePath(attachmentFilename);
+    const forcedTextMime =
+      attachmentClassFromMime(extensionMime) === "text" ? extensionMime : undefined;
+    const kind = forcedTextMime ? "document" : resolveAttachmentKind(attachment);
+    if (!forcedTextMime && (kind === "image" || kind === "video" || kind === "audio")) {
+      return { outcome: { kind: "claimed-elsewhere" } };
+    }
+    if (
+      !limits.allowUrl &&
+      attachment.url &&
+      !attachment.path &&
+      !classifyMediaReferenceSource(attachment.url).isMediaStoreUrl
+    ) {
+      if (shouldLogVerbose()) {
+        logVerbose(`media: file attachment skipped (url disabled) index=${attachment.index}`);
+      }
+      return { outcome: { kind: "url-sources-disabled" }, filename: displayFilename };
+    }
+    let bufferResult: Awaited<ReturnType<typeof cache.getBuffer>>;
+    try {
+      bufferResult = await cache.getBuffer({
+        attachmentIndex: attachment.index,
+        maxBytes: limits.maxBytes,
+        timeoutMs: limits.timeoutMs,
+      });
+    } catch (err) {
+      if (shouldLogVerbose()) {
+        logVerbose(`media: file attachment skipped (buffer): ${String(err)}`);
+      }
+      return { outcome: { kind: "read-failure" }, filename: displayFilename };
+    }
+    assertCurrent?.();
+    const filename = attachment.fileName ?? bufferResult.fileName;
+    const classification: AttachmentClassification = bufferResult.classification;
+    // Marker mime prefers the sender-declared type; never the name-forced text mime,
+    // which would mislabel binary bytes inside a text-named file as a text format.
+    // Both candidates pass strict token validation so raw header text never
+    // reaches model context; undefined drops the mime from block and marker.
+    const mimeType = sanitizeMimeType(classification.mime);
+    const binaryMime = sanitizeMimeType(normalizeMimeType(attachment.mime)) ?? mimeType;
+    // Preserve only the cache's root-approved local read. Rendering still waits
+    // for the reply runtime's final filesystem capability (#122411).
+    const selfServeLocalPath = bufferResult.localPath;
+    if (
+      classification.class !== "text" &&
+      !(classification.class === "document" && classification.mime === "application/pdf")
+    ) {
+      // An operator-pinned allowlist that excludes this type is a policy "no";
+      // it must win before any self-serve directive can name the file.
+      if (limits.allowedMimesConfigured && !(mimeType && limits.allowedMimes.has(mimeType))) {
+        return {
+          outcome: { kind: "policy-rejected", mime: mimeType ?? binaryMime },
+          filename,
+          mimeType: mimeType ?? binaryMime,
+        };
+      }
+      return {
+        outcome: {
+          kind: "unsupported-format",
+          mime: binaryMime,
+          ...(selfServeLocalPath ? { localPath: selfServeLocalPath } : {}),
+        },
+        filename,
+        mimeType: binaryMime,
+      };
+    }
+    if (
+      classification.class === "text" &&
+      attachment.mime &&
+      normalizeMimeType(attachment.mime) !== classification.mime
+    ) {
+      logVerbose(
+        `media: MIME override from "${attachment.mime}" to "${classification.mime}" for index=${attachment.index}`,
+      );
+    }
+    if (!mimeType) {
+      if (shouldLogVerbose()) {
+        logVerbose(`media: file attachment skipped (unknown mime) index=${attachment.index}`);
+      }
+      return { outcome: { kind: "unsupported-format" }, filename };
+    }
+    const allowedMimes = new Set(limits.allowedMimes);
+    if (!limits.allowedMimesConfigured && classification.class === "text") {
+      allowedMimes.add(mimeType);
+    }
+    if (!allowedMimes.has(mimeType)) {
+      if (shouldLogVerbose()) {
+        logVerbose(
+          `media: file attachment skipped (unsupported mime ${mimeType}) index=${attachment.index}`,
+        );
+      }
+      // Operator-pinned allowlists reject as policy; the default allowlist
+      // rejects as a capability gap. The markers differ so the prompt never
+      // claims support the active configuration disables.
+      const outcome: FileAttachmentOutcome = limits.allowedMimesConfigured
+        ? { kind: "policy-rejected", mime: mimeType }
+        : {
+            kind: "unsupported-format",
+            mime: mimeType,
+            ...(selfServeLocalPath ? { localPath: selfServeLocalPath } : {}),
+          };
+      return { outcome, filename, mimeType };
+    }
+    let extracted: Awaited<ReturnType<typeof extractFileContentFromBuffer>>;
+    try {
+      const { allowedMimesConfigured: _allowedMimesConfigured, ...baseLimits } = limits;
+      extracted = await extractFileContentFromBuffer({
+        // Text decoding is read-only; PDF extractor plugins still receive owned mutable bytes.
+        buffer:
+          mimeType === "application/pdf" ? Buffer.from(bufferResult.buffer) : bufferResult.buffer,
+        filename: bufferResult.fileName,
+        limits: { ...baseLimits, allowedMimes },
+        config: cfg,
+        classification,
+        mimeType: attachment.mime,
+      });
+    } catch (err) {
+      if (shouldLogVerbose()) {
+        logVerbose(`media: file attachment skipped (extract): ${String(err)}`);
+      }
+      return { outcome: { kind: "read-failure" }, filename, mimeType };
+    }
+    assertCurrent?.();
+    return {
+      outcome: resolveFileExtractionOutcome({
+        text: extracted?.text?.trim(),
+        images: extracted?.images,
+        metadata: extracted?.metadata,
+      }),
+      filename,
+      mimeType,
+    };
+  }
+
   const blocks: AttachmentContextBlock[] = [];
   const images: ExtractedFileImage[] = [];
   const localPathSelfServeUpgrades: LocalPathSelfServeUpgrade[] = [];
   for (const attachment of attachments) {
-    const { outcome, filename, mimeType } = await classifyFileAttachment({
-      attachment,
-      cache,
-      cfg,
-      limits,
-      skipAttachmentIndexes,
-      assertCurrent: params.assertCurrent,
-    }).finally(() => cache.releaseBuffer(attachment.index));
+    const { outcome, filename, mimeType } = await classifyFileAttachment(attachment).finally(() =>
+      cache.releaseBuffer(attachment.index),
+    );
     params.assertCurrent?.();
     if (outcome.kind === "extracted" || outcome.kind === "rendered-to-images") {
       images.push(

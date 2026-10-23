@@ -402,7 +402,6 @@ export function BrowserPanelChrome(
       ) : null}
       <BrowserToolbar
         controller={props.controller}
-        embedded={props.embedded}
         mobilePresentation={props.mobilePresentation}
         fetchFavicon={props.fetchFavicon}
       />

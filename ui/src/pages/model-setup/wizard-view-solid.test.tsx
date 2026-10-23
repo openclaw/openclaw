@@ -27,13 +27,15 @@ function stepState(step: StepState["step"], busy = false): StepState {
   return { phase: "step", authChoice: "synthetic-provider", step, busy, validationError: null };
 }
 
-it("keeps the wizard and focused input mounted while typing a draft", async () => {
+it("keeps the wizard draft mounted while typing and presenting a pending save", async () => {
   const [draft, setDraft] = createSignal("initial");
+  const [saving, setSaving] = createSignal(false);
   const answer = vi.fn();
   const { container } = mountSolid(() => (
     <ModelSetupWizard
       {...wizardDefaults}
       state={stepState({ id: "access-code", type: "text", message: "Access code" })}
+      busy={saving()}
       value={draft()}
       onValueChange={(value) => setDraft(String(value))}
       onAnswer={answer}
@@ -52,6 +54,22 @@ it("keeps the wizard and focused input mounted while typing a draft", async () =
   expect(container.querySelector("#model-setup-wizard-text-input")).toBe(input);
   expect(document.activeElement).toBe(input);
   expect([input.value, untrack(draft)]).toEqual(["initial typed", "initial typed"]);
+
+  setSaving(true);
+  flush();
+  expect(container.querySelector("#model-setup-wizard-text-input")).toBe(input);
+  expect(input.value).toBe("initial typed");
+  expect(input.disabled).toBe(true);
+  expect(container.querySelector('[role="status"][aria-busy="true"]')?.textContent).toContain(
+    "Working",
+  );
+  const cancel = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent?.trim() === "Cancel",
+  );
+  expect(cancel?.disabled).toBe(false);
+  setSaving(false);
+  flush();
+  expect(input.disabled).toBe(false);
 
   input.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   expect(answer).toHaveBeenCalledExactlyOnceWith("initial typed");

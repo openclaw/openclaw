@@ -81,6 +81,8 @@ type InventoryState = NodesRequestState & {
   devicesQueuedRefresh: QueuedRefresh;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
+  // Device and node pairing requestIds with an approve or reject in flight.
+  devicesDeciding: readonly { requestId: string }[];
 };
 
 type ExecApprovalsState = NodesRequestState & {
@@ -110,6 +112,7 @@ export function createInitialDevicesState(
     devicesQueuedRefresh: "none",
     devicesError: null,
     devicesList: null,
+    devicesDeciding: [],
     execApprovalsLoading: false,
     execApprovalsSaving: false,
     execApprovalsDirty: false,
@@ -209,12 +212,36 @@ async function runDeviceMutation<T>(
   }
 }
 
+// One decision per request: the Gateway answers a repeat with "unknown requestId",
+// which would replace the accepted outcome with an error.
+async function decidePairing(
+  state: InventoryState,
+  requestId: string,
+  decide: () => Promise<unknown>,
+) {
+  if (state.devicesDeciding.some((decision) => decision.requestId === requestId)) {
+    return;
+  }
+  const decision = { requestId };
+  state.devicesDeciding = [...state.devicesDeciding, decision];
+  try {
+    await decide();
+  } finally {
+    // A retired decision must not release a replacement for the same request.
+    state.devicesDeciding = state.devicesDeciding.filter((pending) => pending !== decision);
+  }
+}
+
 export async function approveDevicePairing(state: InventoryState, requestId: string) {
-  await runDeviceMutation(state, (client) => client.request("device.pair.approve", { requestId }));
+  await decidePairing(state, requestId, () =>
+    runDeviceMutation(state, (client) => client.request("device.pair.approve", { requestId })),
+  );
 }
 
 export async function rejectDevicePairing(state: InventoryState, requestId: string) {
-  await runDeviceMutation(state, (client) => client.request("device.pair.reject", { requestId }));
+  await decidePairing(state, requestId, () =>
+    runDeviceMutation(state, (client) => client.request("device.pair.reject", { requestId })),
+  );
 }
 
 export type InventoryRemovalRequest = {
@@ -324,13 +351,15 @@ export async function renameDevice(
 }
 
 export function approveNodePairingRequest(state: InventoryState, requestId: string) {
-  return runInventoryMutation(state, (client) =>
-    client.request("node.pair.approve", { requestId }),
+  return decidePairing(state, requestId, () =>
+    runInventoryMutation(state, (client) => client.request("node.pair.approve", { requestId })),
   );
 }
 
 export function rejectNodePairingRequest(state: InventoryState, requestId: string) {
-  return runInventoryMutation(state, (client) => client.request("node.pair.reject", { requestId }));
+  return decidePairing(state, requestId, () =>
+    runInventoryMutation(state, (client) => client.request("node.pair.reject", { requestId })),
+  );
 }
 
 /**
@@ -338,7 +367,7 @@ export function rejectNodePairingRequest(state: InventoryState, requestId: strin
  * token only to a device rotating its own token, so a cross-device rotation is a real
  * outcome with no secret to show rather than a failure.
  */
-type RotatedDeviceTokenOutcome =
+export type RotatedDeviceTokenOutcome =
   | { delivery: "in-band"; token: string }
   | { delivery: "withheld-cross-device" };
 

@@ -135,9 +135,6 @@ function setMSTeamsTeamsAllowlist(
   const teams: Record<string, MSTeamsTeamConfig> = { ...baseTeams };
   for (const entry of entries) {
     const teamKey = entry.teamKey;
-    if (!teamKey) {
-      continue;
-    }
     const existing = teams[teamKey] ?? {};
     if (entry.channelKey) {
       const channels = { ...existing.channels };

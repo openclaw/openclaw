@@ -9,9 +9,12 @@ import * as overviewModule from "./overview.js";
 import { runSystemAgent, type RunSystemAgentOptions } from "./system-agent.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
+import { runSystemAgentTui as runInteractiveTui } from "./tui-backend.js";
 import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 const plannerMock = vi.hoisted(() => vi.fn());
+// mock-isolation: Runner admission tests must not launch an interactive terminal.
+vi.mock("./tui-backend.js", () => ({ runSystemAgentTui: vi.fn() }));
 vi.mock("./assistant.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./assistant.js")>()),
   planSystemAgentCommand: plannerMock,
@@ -100,6 +103,7 @@ describe("runSystemAgent", () => {
       .mockResolvedValue(overview);
     onTestFinished(() => overviewReader.mockRestore());
     plannerMock.mockReset();
+    vi.mocked(runInteractiveTui).mockReset().mockResolvedValue(undefined);
     const formatter = vi
       .spyOn(overviewModule, "formatSystemAgentOverview")
       .mockReturnValue("Default model: openai/gpt-5.5");
@@ -115,9 +119,7 @@ describe("runSystemAgent", () => {
     const { runtime } = createSystemAgentTestRuntime();
     const loadOverview = vi.mocked(overviewModule.loadSystemAgentOverview);
     const planWithAssistant = plannerMock.mockResolvedValue({ command: "restart gateway" });
-    const runInteractiveTui = vi.fn(async () => {});
     const common = {
-      runInteractiveTui,
       input: { isTTY: true } as unknown as NodeJS.ReadableStream,
       output: { isTTY: true } as unknown as NodeJS.WritableStream,
     };
@@ -283,13 +285,11 @@ describe("runSystemAgent", () => {
 
   it.each([true, false])("admits the TUI only with stdout TTY=%s", async (isTTY) => {
     const { runtime, lines } = createSystemAgentTestRuntime();
-    const runInteractiveTui = vi.fn(async () => {});
     const onReady = vi.fn();
     const run = runner(runtime)({
       input: { isTTY: true } as unknown as NodeJS.ReadableStream,
       output: { isTTY } as unknown as NodeJS.WritableStream,
       ...(isTTY ? {} : { interactive: true }),
-      runInteractiveTui,
       onReady,
     });
     if (isTTY) {
@@ -310,11 +310,9 @@ describe("runSystemAgent", () => {
     async (options) => {
       const { runtime, lines } = createSystemAgentTestRuntime();
       const loadOverview = vi.mocked(overviewModule.loadSystemAgentOverview);
-      const runInteractiveTui = vi.fn(async () => {});
       vi.mocked(overviewModule.formatSystemAgentOverview).mockReturnValue("formatted overview");
       await runner(runtime)({
         ...options,
-        runInteractiveTui,
       });
 
       expect(loadOverview).toHaveBeenCalledOnce();

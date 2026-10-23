@@ -86,12 +86,11 @@ it.each(["recurring retry", "pacing"])(
       atMs: ENDED_AT,
       consecutiveErrors: 1,
     });
-    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+    expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
     expect(deferredNotifications).toHaveLength(1);
     await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
-    expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
-    expect(state.deps.requestHeartbeat).toHaveBeenCalledOnce();
+    expect(state.deps.enqueueSessionEvent).toHaveBeenCalledOnce();
+    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
   },
 );
 

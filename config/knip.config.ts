@@ -46,6 +46,8 @@ const repositoryScriptEntries = [
   "scripts/annotate-proof-image.mts!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
+  // The scheduled-run execution context design invokes this development replay by path.
+  "scripts/dev/cron-context-replay.mts!",
   // db:postgres:gen/check invoke this generator through the source loader.
   "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
@@ -70,10 +72,16 @@ const repositoryScriptEntries = [
   // setup-pnpm-store-cache invokes this helper from composite-action YAML.
   ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
+  // scripts/README.md invokes this warm-interaction benchmark CLI by path.
+  "scripts/bench-control-ui-interactions.ts!",
+  // #180983 invokes this isolated plugin-registration benchmark CLI by path.
+  "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-cold-load.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
   "scripts/bench-control-ui-dev-loop.mts!",
+  // #179449 documents this document-handler benchmark CLI by path.
+  "scripts/bench-control-ui-document.ts!",
   // The channel-turn benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-channel-turn.mts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
@@ -82,6 +90,22 @@ const repositoryScriptEntries = [
   "scripts/build-decision-transport-bench.mts!",
   // scripts/perf/README.md invokes this shared-writer benchmark by path.
   "scripts/bench-channel-ingress-writer.ts!",
+  // The performance guide invokes these measurement commands by path.
+  "scripts/perf/codex-process-inspection-measure.ts!",
+  "scripts/perf/diagnostic-profile-measure.ts!",
+  "scripts/perf/session-pr-subscriptions-measure.ts!",
+  "scripts/perf/tool-schema-preparation-measure.ts!",
+  // The performance guide and transcript driver invoke these tools and preloads by path.
+  "scripts/lib/gateway-bench-transport-preload.ts!",
+  "scripts/perf/async-store-measure.mjs!",
+  "scripts/perf/code-mode-store-measure.ts!",
+  "scripts/perf/gateway-agent-event-measure.ts!",
+  "scripts/perf/transcript-hydration-counts-preload.ts!",
+  // The performance guide and retained package-integrity rerun invoke these benchmarks by path.
+  "scripts/bench-package-integrity.ts!",
+  "scripts/perf/provider-request-prepare-measure.ts!",
+  "scripts/perf/session-profile-reference-measure.ts!",
+  "scripts/perf/worker-task-metrics-measure.ts!",
   // scripts/perf/README.md invokes this cold usage-cache measurement CLI by path.
   "scripts/perf/chat-metadata-burst-measure.ts!",
   // scripts/perf/README.md invokes this synthetic reload fixture by path.
@@ -94,10 +118,18 @@ const repositoryScriptEntries = [
   "scripts/perf/workboard-read-measure.ts!",
   "scripts/perf/transcript-hydration-headroom.ts!",
   "scripts/perf/transcript-worker-memory-preload.ts!",
+  // transcript-broadcast-measure.ts preloads this stage probe with --import.
+  "scripts/perf/github-options-measure-preload.ts!",
+  // scripts/perf/README.md invokes this prompt-history fingerprint benchmark by path.
+  "scripts/perf/prompt-cache-history-measure.ts!",
   // scripts/perf/README.md invokes this synthetic authority allocation probe by path.
   "scripts/perf/operator-authority-measure.ts!",
   // #179149 invokes this synthetic event-dispatch allocation probe by path.
   "scripts/perf/agent-event-dispatch-measure.ts!",
+  // scripts/perf/README.md invokes this WebSocket diagnostic accounting benchmark.
+  "scripts/perf/ws-event-diagnostics-measure.ts!",
+  // scripts/perf/README.md invokes this database-path allocation probe by path.
+  "scripts/perf/state-path-resolution-measure.ts!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.
@@ -116,6 +148,11 @@ const repositoryScriptEntries = [
   "scripts/perf/seal-version-restart.ts!",
   // #178599 documents: node --expose-gc scripts/perf/heap-headroom.ts.
   "scripts/perf/heap-headroom.ts!",
+  // Maintainers invoke this isolated Doctor metadata-retention benchmark by path.
+  "scripts/perf/doctor-metadata-retention.ts!",
+  // The connected-idle benchmark runs by path and loads its instrumentation with --import.
+  "scripts/perf/idle-gateway-measure.ts!",
+  "scripts/perf/idle-gateway-measure-preload.mjs!",
   // Worker-environment shutdown proof invokes this measurement CLI by path.
   "scripts/perf/worker-environment-shutdown-measure.ts!",
   // The branch-rotation guide invokes the driver, which loads its IPC preload by path.
@@ -630,7 +667,6 @@ const rootEntries = [
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
-  "src/hooks/llm-slug-generator.ts!",
   // Local-only test-state consumers are modeled by the full-tree test scan.
   "src/plugin-sdk/!(test-state).ts!",
 ] as const;
@@ -902,6 +938,10 @@ const config = {
     "src/infra/database-engine/physical-facts.ts": ["exports"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
+    // Native-command tests exercise requester authorization and cancellation at this runtime gate.
+    "src/auto-reply/reply/request-native-subagent.ts": ["exports"],
+    // Scheduled-command tests exercise registry replacement and persisted-job validation at the owner.
+    "src/gateway/plugin-command-scheduled-run.ts": ["exports"],
     // Diagnostic fixtures reset owner-private state; the full-tree audit checks these consumers.
     "src/logging/diagnostic-memory.ts": ["exports"],
     "src/logging/diagnostic-phase.ts": ["exports"],
@@ -933,7 +973,6 @@ const config = {
     "ui/src/pages/chat/composer-persistence.{ts,tsx}": ["exports"],
     // The presentation fixture and focused UI tests consume these seams;
     // the full-tree companion scan continues to audit their actual consumers.
-    "ui/src/components/provider-icon.ts": ["exports"],
     "ui/src/components/terminal/terminal-panel.ts": ["types"],
     "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
     "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],
@@ -1171,7 +1210,11 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/clawrouter`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cohere`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/comfy`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot`]: bundledPluginWorkspace([
+      // The plugin README invokes this benchmark and its NODE_OPTIONS preload by path.
+      "test/bench-attempt-transcript-journal.ts!",
+      "test/journal-allocation-probe.mjs!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot-proxy`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/codex`]: bundledPluginWorkspace([
       // Provider runtime and harness surfaces are reached through plugin

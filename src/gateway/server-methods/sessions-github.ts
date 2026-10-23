@@ -16,6 +16,7 @@ import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
 import { createControlUiSessionPrRead } from "../control-ui-session-pr-read.js";
+import { performSessionGitHubPreparation } from "../github-pr-workspace-preparation.js";
 import { performSessionGitHubAction } from "../github-publication-actions.js";
 import {
   prepareCurrentGitHubPublicationIdentity,
@@ -168,6 +169,10 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
     "sessions.github.action",
     validateSessionGitHubActionParams,
     async (options) => {
+      if (options.params.action === "prepare_pr") {
+        await performSessionGitHubPreparation({ ...options, params: options.params });
+        return;
+      }
       if (options.params.action === "inspect_pr") {
         await performSessionGitHubInspection({ ...options, params: options.params });
         return;
@@ -198,6 +203,11 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       const loaded = selected.readCurrent();
       if (!loaded.entry?.sessionId) {
         throw new Error("The base refresh session is unavailable.");
+      }
+      if (loaded.entry.worktree?.githubPullRequest) {
+        throw new Error(
+          "This workspace continues an existing PR. Use prepare_pr with its URL to prepare its current source and review base.",
+        );
       }
       const session = { agentId: loaded.agentId, sessionKey: loaded.canonicalKey };
       const admitted = await prepareGitHubPublicationRequesterV2(options, session);

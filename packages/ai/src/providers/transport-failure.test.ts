@@ -6,13 +6,12 @@ import type { Context, Model } from "../types.js";
 import { streamAnthropic } from "./anthropic.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
+import { frame, serializeSse } from "./provider-stream.test-support.js";
 
 const initialHost = getAiTransportHost();
 afterEach(() => configureAiTransportHost(initialHost));
 
-const context: Context = {
-  messages: [{ role: "user", content: "Hello", timestamp: 1 }],
-};
+const context: Context = { messages: [{ role: "user", content: "Hello", timestamp: 1 }] };
 const model = makeProviderModel("openai-completions", "openai", "gpt-5.6-luna", {
   baseUrl: "https://provider.test/v1",
 });
@@ -32,9 +31,6 @@ const implementations = [
   ["Anthropic SDK", anthropic.api, streamAnthropic.bind(null, anthropic, context)],
   ["Anthropic transport", anthropic.api, anthropicTransport.bind(null, anthropic, context)],
 ] as const;
-function frame(type: string, fields: Record<string, unknown>) {
-  return { type, ...fields };
-}
 const socketError = (code = "ECONNRESET") => Object.assign(new Error("socket closed"), { code });
 
 describe.each(implementations)("%s transport failures", (_name, api, stream) => {
@@ -85,17 +81,9 @@ describe.each(implementations)("%s transport failures", (_name, api, stream) => 
     "does not mark a socket drop after a %s delta",
     async (kind) => {
       const isTool = kind === "toolCall";
+      const toolFunction = { name: "lookup", arguments: '{"value":' };
       const openAiDelta = isTool
-        ? {
-            tool_calls: [
-              {
-                index: 0,
-                id: "call_1",
-                type: "function",
-                function: { name: "lookup", arguments: '{"value":' },
-              },
-            ],
-          }
+        ? { tool_calls: [{ index: 0, id: "call_1", type: "function", function: toolFunction }] }
         : { [kind === "text" ? "content" : "reasoning_content"]: "Partial" };
       const anthropicBlock = isTool
         ? { type: "tool_use", id: "call_1", name: "lookup", input: {} }
@@ -113,12 +101,7 @@ describe.each(implementations)("%s transport failures", (_name, api, stream) => 
               frame("content_block_delta", { index: 0, delta: anthropicDelta }),
             ]
           : [{ choices: [{ index: 0, delta: openAiDelta, finish_reason: null }] }];
-      const body = events
-        .map(
-          (event) =>
-            `${"type" in event ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`,
-        )
-        .join("");
+      const body = serializeSse(events);
       let failBody: (() => void) | undefined;
       const fetchStream: typeof fetch = async () =>
         new Response(

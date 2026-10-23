@@ -27,7 +27,6 @@ import { resolveSelectedModelCredential } from "./model-auth-selected-credential
 import {
   projectModelCatalogEntryForRoute,
   createConfiguredModelCatalogOverridesResolver,
-  type ModelCatalogRoutePolicy,
   type ModelCatalogRouteProjection,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -39,10 +38,7 @@ import {
   createModelVisibilityPolicy,
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
 } from "./model-visibility-policy.js";
-import {
-  createModelCatalogIdentityKeyResolver,
-  openAIModelCatalogRoutePolicy,
-} from "./openai-model-routes.js";
+import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 
 type ModelCatalogBrowseView = "default" | "configured" | "provider-config" | "all";
 
@@ -83,7 +79,6 @@ export function createModelCatalogView(params: {
   cfg: OpenClawConfig;
   catalog: ModelCatalogEntry[];
   routeVariants?: readonly ModelCatalogEntry[];
-  routePolicy?: ModelCatalogRoutePolicy;
   keyOf?: ReturnType<typeof createModelCatalogIdentityKeyResolver>;
 }) {
   const keyOf = params.keyOf ?? createModelCatalogIdentityKeyResolver();
@@ -91,10 +86,8 @@ export function createModelCatalogView(params: {
   // Identity lookups use the same captured policy as this view's physical index.
   const variantsOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">, key = keyOf(entry)) =>
     variantsByKey.get(key);
-  const routePolicy = params.routePolicy ?? openAIModelCatalogRoutePolicy;
   const resolveOverrides = createConfiguredModelCatalogOverridesResolver({
     cfg: params.cfg,
-    policy: routePolicy,
   });
   const projectRoute = (
     entry: ModelCatalogEntry,
@@ -158,9 +151,8 @@ export function createModelCatalogView(params: {
             ? {
                 kind: "selected",
                 route: evaluation.selectedRoute,
-                policy: routePolicy,
               }
-            : { kind: "unresolved", policy: routePolicy };
+            : { kind: "unresolved" };
       // Runtime selection can narrow donors without rebuilding the configured-row index.
       return projectRoute(
         entry,

@@ -328,7 +328,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "nodeHost.workerRuns.isolation":
     'Select the worker-session process boundary: "none" runs directly on the node host (default); "container" requires a working Docker-compatible engine and never falls back to host execution.',
   "nodeHost.workerRuns.containerImage":
-    'Optional Node 24.16+ or 26.1+ image for container-isolated workers (default: "node:24.21.0-slim"). Use a digest-pinned, private-registry, or preloaded image when needed; missing images are pulled on first use.',
+    'Optional Node 24.22.1+ or 26.12.1+ image for container-isolated workers (default: "node:24.22.1-slim"). Use a digest-pinned, private-registry, or preloaded image when needed; missing images are pulled on first use.',
   "nodeHost.browserProxy":
     "Groups browser-proxy settings for exposing local browser control through node routing. Enable only when remote node workflows need your local browser profiles.",
   "nodeHost.browserProxy.enabled":
@@ -446,7 +446,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.loopDetection.enabled":
     "Controls rolling-history tool-loop detection and the post-compaction guard. Omit to keep rolling detection off and post-compaction protection on. Set true to enable both, or false to disable both.",
   "tools.exec.notifyOnExit":
-    "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
+    "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a follow-up for the originating session.",
   "tools.exec.notifyOnExitEmptySuccess":
     "When true, successful backgrounded exec exits with empty output still enqueue a completion system event (default: false).",
   "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",

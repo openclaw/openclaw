@@ -504,10 +504,6 @@ vi.mock("../runtime.js", () => ({
   },
 }));
 
-vi.mock("../sessions/level-overrides.js", () => ({
-  applyVerboseOverride: vi.fn(),
-}));
-
 vi.mock("../sessions/model-overrides.js", () => ({
   applyModelOverrideToSessionEntry: (params: unknown) =>
     state.applyModelOverrideToSessionEntryMock(params),

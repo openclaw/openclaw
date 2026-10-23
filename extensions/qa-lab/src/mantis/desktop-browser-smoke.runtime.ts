@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import { ensureRepoBoundDirectory, resolveTimestampedQaOutputDir } from "../cli-paths.js";
 import {
   copyCrabboxArtifacts,
   type CommandRunner,
@@ -44,11 +44,6 @@ const DEFAULT_BROWSER_URL = "https://openclaw.ai";
 const BROWSER_PROFILE_ARCHIVE_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_TGZ_B64";
 const BROWSER_PROFILE_DIR_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_DIR";
 const DEFAULT_VIDEO_DURATION_SECONDS = 10;
-
-function defaultOutputDir(repoRoot: string, startedAt: Date) {
-  const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
-  return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `desktop-browser-${stamp}`);
-}
 
 function assertSafeEnvName(value: string, label: string) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(value)) {
@@ -189,7 +184,7 @@ export async function runMantisDesktopBrowserSmoke(
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const outputDir = await ensureRepoBoundDirectory(
     repoRoot,
-    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ?? defaultOutputDir(repoRoot, startedAt),
+    resolveTimestampedQaOutputDir(repoRoot, opts.outputDir, startedAt, "mantis/desktop-browser"),
     "Mantis desktop browser smoke output directory",
     { mode: 0o755 },
   );

@@ -1,8 +1,9 @@
 import type { ControlUiFocusTarget } from "@openclaw/session-url-contract";
-import { createMemo } from "@solidjs/signals";
+import { createMemo, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { ConnectingSplash } from "../solid/loading-skeleton.tsx";
@@ -18,48 +19,49 @@ export type BrowserDocumentViewProps = {
 export type BrowserDocumentProps = BrowserDocumentViewProps;
 
 export function BrowserDocumentContent(props: { value: BrowserDocumentViewProps | null }) {
-  const snapshot = createMemo(() => props.value?.context.gateway.snapshot);
-  const connected = createMemo(() => snapshot()?.phase === "connected");
-  const tab = createMemo(() => props.value && readBrowserTabTarget(props.value.target.tab));
-  const available = createMemo(() =>
-    Boolean(tab() && snapshot() && isBrowserPanelAvailable(snapshot()!)),
-  );
   return (
-    <>
-      {props.value ? (
-        <>
-          <BrowserPanelHost
-            embedded
-            style={available() ? "height: 100dvh;" : "display: none;"}
-            client={connected() ? snapshot()!.client : null}
-            available={available()}
-            remoteAvailable={available()}
-            presented={true}
-            sessionKey={props.value.target.sessionKey}
-            fixedTab={tab() ?? undefined}
-            resourceBasePath={props.value.context.resourceBasePath}
-            authToken={resolveControlUiAuthToken({
-              hello: snapshot()!.hello,
-              settings: { token: props.value.context.gateway.connection.token },
-              password: props.value.context.gateway.connection.password,
-            })}
-          />
-          {!connected() && snapshot()!.lastError === null ? (
-            <ConnectingSplash
-              status={snapshot()?.phase === "starting" ? t("common.gatewayStarting") : undefined}
+    <Show when={props.value} keyed>
+      {(value) => {
+        const gateway = projectGateway(value.context.gateway);
+        const snapshot = () => gateway.read().snapshot;
+        const connected = () => snapshot().phase === "connected";
+        const tab = createMemo(() => readBrowserTabTarget(value.target.tab));
+        const available = () => Boolean(tab() && isBrowserPanelAvailable(snapshot()));
+        return (
+          <>
+            <BrowserPanelHost
+              embedded
+              style={available() ? "height: 100dvh;" : "display: none;"}
+              client={connected() ? snapshot().client : null}
+              available={available()}
+              remoteAvailable={available()}
+              presented={true}
+              sessionKey={value.target.sessionKey}
+              fixedTab={tab() ?? undefined}
+              resourceBasePath={value.context.resourceBasePath}
+              authToken={resolveControlUiAuthToken({
+                hello: snapshot().hello,
+                settings: { token: gateway.read().connection.token },
+                password: gateway.read().connection.password,
+              })}
             />
-          ) : null}
-          {!available() && (connected() || snapshot()!.lastError) ? (
-            <main class="connect-splash" role="status">
-              <div class="stack">
-                <span>{t(tab() ? "browser.unavailable" : "focus.unsupported")}</span>
-                {props.value!.renderEscape(t("common.back"))}
-              </div>
-            </main>
-          ) : null}
-        </>
-      ) : null}
-    </>
+            {!connected() && snapshot().lastError === null ? (
+              <ConnectingSplash
+                status={snapshot().phase === "starting" ? t("common.gatewayStarting") : undefined}
+              />
+            ) : null}
+            {!available() && (connected() || snapshot().lastError) ? (
+              <main class="connect-splash" role="status">
+                <div class="stack">
+                  <span>{t(tab() ? "browser.unavailable" : "focus.unsupported")}</span>
+                  {value.renderEscape(t("common.back"))}
+                </div>
+              </main>
+            ) : null}
+          </>
+        );
+      }}
+    </Show>
   );
 }
 

@@ -3,15 +3,10 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { delegation, turn } from "./realtime-quicksilver-events.test-support.js";
 import {
-  createAudioPeer,
   createGatewayHarness,
   type GatewayConfig,
 } from "./realtime-quicksilver-gateway.test-support.js";
-import {
-  createCallResponse,
-  emitSideband,
-  parseSent,
-} from "./realtime-quicksilver.test-helpers.js";
+import { emitSideband, parseSent } from "./realtime-quicksilver.test-helpers.js";
 
 function createBridge(
   params: Pick<
@@ -19,16 +14,11 @@ function createBridge(
     "runAgentConsult" | "onError" | "onTranscript" | "handleDelegationInput"
   >,
 ) {
-  const fetchImpl = vi.fn<typeof fetch>(async () =>
-    createCallResponse("v=answer\r\n", "rtc_lifecycle"),
-  );
-  const createPeer = vi.fn(async () => createAudioPeer());
+  const fetchImpl = vi.fn<NonNullable<GatewayConfig["fetchImpl"]>>();
+  const createPeer = vi.fn<NonNullable<GatewayConfig["createPeer"]>>();
   const harness = createGatewayHarness({
     model: "gpt-live-test",
-    voice: "marin",
-    audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
     ...params,
-    resolveAuth: async () => ({ type: "api-key", token: "platform-key" }),
     createPeer,
     fetchImpl,
     startSession: { expires_at: Math.floor(Date.now() / 1000) + 60 },

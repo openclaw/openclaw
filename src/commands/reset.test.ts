@@ -19,9 +19,7 @@ describe("resetCommand", () => {
     resetCommand(runtime, { scope, yes: true, nonInteractive: true, dryRun });
   const expectIncomplete = async (scope?: Parameters<typeof resetCommand>[1]["scope"]) => {
     await expect(run(scope)).rejects.toMatchObject({ name: "ExitError", code: 1 });
-    expect(cleanupCommandLogMessages(runtime).some((message) => message.startsWith("Next:"))).toBe(
-      false,
-    );
+    expect(cleanupCommandLogMessages(runtime).join("\n")).not.toMatch(/^Next:/m);
   };
 
   beforeAll(async () => {
@@ -33,23 +31,17 @@ describe("resetCommand", () => {
     silenceCleanupCommandRuntime(runtime);
   });
 
-  it.each([
-    {
-      failure: "inspection fails",
-      arrange: () => gatewayService.isLoaded.mockRejectedValue(new Error("inspection failed")),
-    },
-    {
-      failure: "stop fails",
-      arrange: () => gatewayService.stop.mockRejectedValue(new Error("stop failed")),
-    },
-  ])("preserves user data when gateway $failure", async ({ arrange }) => {
-    arrange();
+  it.each(["isLoaded", "stop"] as const)(
+    "preserves user data when gateway %s fails",
+    async (method) => {
+      gatewayService[method].mockRejectedValue(new Error(`${method} failed`));
 
-    await expect(run()).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      await expect(run()).rejects.toMatchObject({ name: "ExitError", code: 1 });
 
-    expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
-    expect(removeWorkspaceDirs).not.toHaveBeenCalled();
-  });
+      expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
+      expect(removeWorkspaceDirs).not.toHaveBeenCalled();
+    },
+  );
 
   it("stops the managed Gateway before loading the destructive cleanup plan", async () => {
     gatewayService.stop.mockImplementation(async () => {
