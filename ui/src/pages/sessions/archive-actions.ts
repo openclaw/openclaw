@@ -111,6 +111,7 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
       if (!connection) {
         return;
       }
+      const undoPins = operations.captureSessionArchivePins(mutationScope, [key]);
       // Confirmation and Undo outlive the page, but keep the admitted connection and incarnation.
       const onConfirmed = (result: SessionPatchResult) => {
         if (
@@ -131,17 +132,20 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
             if (!archiveSessions.isConnectionScopeCurrent(connection)) {
               return;
             }
-            void archiveSessions
-              .patch(
+            void undoPins(async () => {
+              const restored = await archiveSessions.patch(
                 key,
                 { archived: false, ...(pinned === true ? { pinned: true } : {}) },
                 { agentId: archiveAgentId, expectedSessionId: sessionId },
-              )
-              .catch((error: unknown) => {
-                if (archiveSessions.isConnectionScopeCurrent(connection)) {
-                  showToast({ message: formatUiError(error) });
-                }
-              });
+              );
+              return restored && !("queued" in restored) && restored.entry.sessionId === sessionId
+                ? [key]
+                : [];
+            }).catch((error: unknown) => {
+              if (archiveSessions.isConnectionScopeCurrent(connection)) {
+                showToast({ message: formatUiError(error) });
+              }
+            });
           },
         });
       };

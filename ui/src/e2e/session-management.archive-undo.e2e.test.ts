@@ -215,9 +215,10 @@ suite.define(() => {
     { surface: "header", restore: "undo" },
     { surface: "list", restore: "undo" },
   ] as const)(
-    "keeps a personal pin removed after $surface archive and $restore",
+    "restores the personal pin only for explicit Undo ($surface, $restore)",
     async ({ surface, restore }) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        await page.clock.install();
         const key = "agent:main:archive-personal-pin";
         const target = sessionRow(key, "Release checklist", 20, { pinned: false });
         const other = sessionRow("agent:main:notes", "Research notes", 10);
@@ -251,13 +252,23 @@ suite.define(() => {
         await ui.sessionPatch(gateway, key, { archived: true });
         const undo = ui.button(page, "Undo");
         await undo.waitFor();
+        await expect.poll(readEntries).not.toContain(`session:${key}`);
         if (restore === "undo") {
           await undo.click();
         } else {
+          await page.mouse.move(600, 200);
+          await page.clock.fastForward(6500);
+          await undo.waitFor({ state: "detached" });
+          await evaluateControlUiContext(page, (context) => context.navigate("sessions"));
+          await page.getByRole("button", { name: "Filters", exact: true }).click();
           await page
-            .locator(".agent-chat__disabled-banner")
-            .getByRole("button", { name: "Unarchive", exact: true })
+            .locator(".sessions-view-segment label")
+            .filter({ has: page.locator('input[value="archived"]') })
             .click();
+          await page.keyboard.press("Escape");
+          const archivedRow = page.locator(".session-data-row").filter({ hasText: target.label });
+          await archivedRow.getByRole("button", { name: "Open session menu" }).click();
+          await ui.menuItem(page.locator("openclaw-session-menu"), "Restore session").click();
         }
         await ui.sessionPatch(gateway, key, { archived: false });
         await row.waitFor();
@@ -265,8 +276,15 @@ suite.define(() => {
           const dir = createControlUiE2eArtifactDir("archive-personal-pin");
           await captureFrame(dir, `${surface}-${restore}.png`, page.locator(".shell"), [row]);
         }
-        expect(await readEntries()).not.toContain(`session:${key}`);
-        await row.getByRole("button", { name: "Pin session", exact: true }).waitFor();
+        await expect
+          .poll(async () => (await readEntries()).includes(`session:${key}`))
+          .toBe(restore === "undo");
+        await row
+          .getByRole("button", {
+            name: restore === "undo" ? "Unpin session" : "Pin session",
+            exact: true,
+          })
+          .waitFor();
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
       });
     },
