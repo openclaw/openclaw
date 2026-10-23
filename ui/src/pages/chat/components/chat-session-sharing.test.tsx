@@ -1,9 +1,10 @@
-import { createSignal, flush } from "solid-js";
+import { flush } from "solid-js";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { ChatSessionSharing, type ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
+import type { ChatSessionSharingProps } from "./chat-session-sharing-shared.tsx";
+import { ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
 
 function renderSharing(props: Partial<ChatSessionSharingProps>) {
   return {
@@ -71,28 +72,19 @@ afterEach(() => {
   container = undefined;
 });
 
-const updates = new WeakMap<HTMLElement, (props: ChatSessionSharingProps) => void>();
+const updates = new WeakMap<HTMLElement, ReturnType<typeof mountSolid<ChatSessionSharingProps>>>();
 const part = (root: HTMLElement, name: string) =>
   root.querySelector<HTMLElement>(`.chat-pane__${name}`);
 const item = (root: HTMLElement, value: string) =>
   root.querySelector<HTMLButtonElement>(`button[data-value="${value}"]`);
 
 function render(props: ChatSessionSharingProps, root: HTMLElement) {
-  const update = updates.get(root);
-  if (update) {
-    update(props);
-    flush();
-    return;
+  const view = updates.get(root);
+  if (view) {
+    view.update(props);
+  } else {
+    updates.set(root, mountSolid(ChatSessionSharing, props, root));
   }
-  mountSolid(
-    () => {
-      const [current, setCurrent] = createSignal(props);
-      updates.set(root, setCurrent);
-      return <ChatSessionSharing {...current()} />;
-    },
-    { container: root },
-  );
-  flush();
 }
 
 async function openMenu(root: HTMLElement) {
@@ -100,7 +92,10 @@ async function openMenu(root: HTMLElement) {
   const trigger = root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger");
   if (panel && trigger && !trigger.disabled && !panel.matches(":popover-open")) {
     trigger.click();
-    await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(true));
+    await waitForSolid(() => {
+      expect(panel.matches(":popover-open")).toBe(true);
+      expect(panel.querySelector('[data-value="access"]')).not.toBeNull();
+    });
   }
   return panel;
 }
@@ -561,6 +556,35 @@ describe("chat session sharing menu", () => {
 
     expect(onOpen).toHaveBeenCalledOnce();
     expect(onVisibilityChange).toHaveBeenCalledWith("read-only");
+  });
+
+  it("retains the access controls through a rejected command and held retry", async () => {
+    const failed = createDeferred();
+    const retry = createDeferred();
+    const change = vi.fn().mockReturnValueOnce(failed.promise).mockReturnValueOnce(retry.promise);
+    const root = await mount({
+      allowedVisibilities: ["shared", "read-only"],
+      onVisibilityChange: change,
+    });
+    await select(root, "visibility:read-only");
+    const button = item(root, "visibility:read-only");
+    expect(button?.disabled).toBe(true);
+    failed.reject(new Error("Sharing command rejected"));
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain(
+        "Sharing command rejected",
+      );
+      expect(button?.disabled).toBe(false);
+    });
+    button!.click();
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')).toBeNull();
+      expect(item(root, "visibility:read-only")).toBe(button);
+      expect(button?.disabled).toBe(true);
+    });
+    retry.resolve();
+    await waitForSolid(() => expect(button?.disabled).toBe(false));
+    expect(item(root, "visibility:read-only")).toBe(button);
   });
 
   it("shows rejected sharing changes for visibility-only Gateways", async () => {

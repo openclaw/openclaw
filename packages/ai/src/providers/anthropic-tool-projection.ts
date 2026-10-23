@@ -1,5 +1,5 @@
 import type { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/messages.js";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { AnthropicOptions } from "../provider-options.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { SCHEMA_ARRAY_KEYS, SCHEMA_MAP_KEYS, SCHEMA_OBJECT_KEYS } from "./schema-walk.js";
@@ -162,9 +162,7 @@ export function prepareAnthropicInputSchema(
   const required = normalized.required;
   if (
     (properties !== undefined && properties !== null && !isRecord(properties)) ||
-    (required !== undefined &&
-      required !== null &&
-      (!Array.isArray(required) || required.some((entry) => typeof entry !== "string")))
+    (required !== undefined && required !== null && !isStringArray(required))
   ) {
     if (published) {
       publishedAnthropicSchemas.set(schema, null);
@@ -174,8 +172,8 @@ export function prepareAnthropicInputSchema(
   const inputSchema: AnthropicProjectedTool["inputSchema"] = {
     ...normalized,
     type: "object",
-    properties: (properties ?? {}) as Record<string, unknown>,
-    required: (required ?? []) as string[],
+    properties: properties ?? {},
+    required: required ?? [],
   };
   inheritToolSchemaTruncation(schema, inputSchema);
   if (!published) {

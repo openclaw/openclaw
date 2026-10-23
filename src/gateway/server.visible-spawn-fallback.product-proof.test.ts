@@ -626,15 +626,17 @@ describe("CLI model inheritance through MCP", () => {
               timeoutMs: 240_000,
             } satisfies RunCliAgentParams;
             const grant = mintMcpLoopbackClientGrant({
-              context: buildCliMcpGrantContext({
-                run,
-                config: cfg,
-                requireExplicitMessageTarget: false,
-                agentId: "main",
-                modelProvider: "proof-primary",
-                modelId: nativeModel,
+              context: {
+                ...buildCliMcpGrantContext({
+                  run,
+                  config: cfg,
+                  requireExplicitMessageTarget: false,
+                  agentId: "main",
+                  modelProvider: "proof-primary",
+                  modelId: nativeModel,
+                }),
                 toolsAllow: ["read", "sessions_spawn"],
-              }),
+              },
               runtimeOwnerToken: runId,
               admittedRunContext,
             });

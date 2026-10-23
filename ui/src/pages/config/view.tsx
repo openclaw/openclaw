@@ -24,6 +24,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
+import { omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
 import { NotificationsSection } from "./notifications-section.tsx";
 import { SetupSection } from "./setup.tsx";
 import { AppearanceSection } from "./view-appearance.tsx";
@@ -171,7 +172,7 @@ export function Config(props: ConfigProps) {
           }
         : analysis.schema;
     const setupSchema = formSchema?.properties?.wizard;
-    const editorSchema = setupSchema
+    const editorSchemaBase = setupSchema
       ? {
           ...formSchema,
           properties: Object.fromEntries(
@@ -179,6 +180,9 @@ export function Config(props: ConfigProps) {
           ),
         }
       : formSchema;
+    const editorSchema = editorSchemaBase
+      ? omitCuratedOwnedConfigLeaves(editorSchemaBase)
+      : editorSchemaBase;
     const topTabs: Array<{ key: string | null; label: string }> = [
       ...((props.showRootTab ?? true)
         ? [{ key: null, label: props.navRootLabel ?? t("nav.settings") }]
@@ -259,14 +263,16 @@ export function Config(props: ConfigProps) {
   const schemaReady = createMemo(readSchema);
   const readSchemaReady = () => (hasSchema() ? latest(schemaReady) : schemaReady());
   function RawEditor() {
-    const [pending, setPending] = createOptimistic<"save" | "discard" | "open" | null>(null);
+    const [commandPending, setCommandPending] = createOptimistic(false);
+    const [savePending, setSavePending] = createOptimistic(false);
     const presentCommand = action(function* (
       operation: "save" | "discard" | "open",
       result: void | Promise<unknown>,
       retired: Promise<void>,
     ) {
       if (retired === props.presentationRetired()) {
-        setPending(operation);
+        setCommandPending(true);
+        setSavePending(operation === "save");
       }
       yield Promise.race([result, retired]);
     });
@@ -281,12 +287,11 @@ export function Config(props: ConfigProps) {
       await Promise.resolve();
       return presentCommand(operation, result, retired);
     };
-    const busy = () => pending() !== null || state().configBusy;
-    const saving = () => pending() === "save" || props.saving;
-    const rawRef = createLiveValue(() => props.raw);
+    const busy = () => commandPending() || state().configBusy;
+    const saving = () => savePending() || props.saving;
     // Resolve the raw branch once; a dynamic children factory recreates the textarea on each edit.
-    const editor = (
-      <>
+    return (
+      <SettingsPage>
         {state().hasRawChanges ? (
           <details
             class="config-diff"
@@ -433,7 +438,7 @@ export function Config(props: ConfigProps) {
                 <textarea
                   aria-label={t("configView.rawConfig")}
                   placeholder={t("configView.rawConfig")}
-                  ref={rawRef}
+                  ref={createLiveValue(() => props.raw)}
                   disabled={busy() || !state().mutationAllowed}
                   onInput={(event) => props.onRawChange(event.currentTarget.value)}
                 />
@@ -441,9 +446,8 @@ export function Config(props: ConfigProps) {
             </div>
           </div>
         </div>
-      </>
+      </SettingsPage>
     );
-    return <SettingsPage>{editor}</SettingsPage>;
   }
   function FormEditor() {
     const editor = (

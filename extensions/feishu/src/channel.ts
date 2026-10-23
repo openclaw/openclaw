@@ -1005,7 +1005,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const mediaUrl = resolveFeishuSendAttachmentMedia(ctx.params);
             const audioAsVoice = readBooleanParam(ctx.params, ["asVoice", "audioAsVoice"]);
             if (textCard && !presentation) {
-              assertFeishuCardWithinEnvelope(textCard, "Feishu native card");
+              assertFeishuCardWithinEnvelope(textCard);
             }
             const generatedCard = presentation
               ? buildFeishuPresentationCard({

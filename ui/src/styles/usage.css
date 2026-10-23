@@ -478,13 +478,6 @@
 }
 
 /* Active day, hour and session filters read as removable chips above the totals. */
-.active-filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-
 .filter-chip {
   display: inline-flex;
   align-items: center;
@@ -966,13 +959,6 @@
   padding: 10px 0;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
   font-size: 13px;
-}
-
-.usage-list-label {
-  overflow: hidden;
-  color: var(--text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .usage-list-bar {

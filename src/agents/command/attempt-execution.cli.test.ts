@@ -91,6 +91,7 @@ import {
   restrictedCompletionCases,
   type RestrictedCompletion,
 } from "./attempt-execution.restricted-completion.test-fixtures.js";
+import { registerSandboxedDelegatedCliTests } from "./attempt-execution.sandbox-cli.test-support.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import { resolveEmbeddedModelSelection } from "./model-selection.js";
 import { persistAcpTurnTranscript, persistCliTurnTranscript } from "./transcript-persistence.js";
@@ -830,8 +831,8 @@ describe("CLI attempt execution", () => {
         agentId: "main",
         modelProvider: expectDefined(run.modelProvider, "CLI model provider"),
         modelId: expectDefined(run.model, "CLI model"),
-        toolsAllow: ["read"],
       });
+      context.toolsAllow = ["read"];
       const scoped = await resolveMcpLoopbackScopedTools({
         cfg,
         context,
@@ -2008,6 +2009,14 @@ describe("CLI attempt execution", () => {
   });
 
   registerCommandReplyPolicyTests({
+    runStoredAttempt,
+    seedSessionStore,
+    runEmbeddedAgentMock,
+    runCliAgentMock,
+    executePreparedCliRunMock,
+  });
+
+  registerSandboxedDelegatedCliTests({
     runStoredAttempt,
     seedSessionStore,
     runEmbeddedAgentMock,

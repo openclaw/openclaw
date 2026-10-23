@@ -540,20 +540,29 @@ suite.define(() => {
             expect(followUp.params).not.toHaveProperty("attachments");
           }
 
-          // Both held-history continuations enqueue synchronously before their
-          // next await. Cross a committed render boundary, not a transient count=1.
+          // Draft retirement can render before the admitted turn. Wait for both
+          // presentation owners before inspecting their final combined count.
           await waitForCommittedState(
             page,
-            () => {
+            ({ messageId, followUpContent, queuedTurns }) => {
               const active = document.querySelector('openclaw-chat-pane[aria-hidden="false"]');
               const input = active?.querySelector(".agent-chat__composer-combobox textarea");
               return (
                 input instanceof HTMLTextAreaElement &&
                 input.value === "" &&
-                active?.querySelectorAll(".chat-attachment-thumb").length === 0
+                active?.querySelectorAll(".chat-attachment-thumb").length === 0 &&
+                active
+                  .querySelector(`.chat-group.user .chat-bubble[data-message-id="${messageId}"]`)
+                  ?.textContent?.includes(followUpContent) === true &&
+                active.querySelectorAll(".agent-chat__composer-shell .chat-queue__item").length ===
+                  queuedTurns
               );
             },
-            {},
+            {
+              messageId: `msg:send:${followUpRunId}:0`,
+              followUpContent: attachment ? fileName : followUpText,
+              queuedTurns: expectedTurns - 1,
+            },
           );
           // The held ACK keeps the first turn in the transcript; later
           // waiting turns remain in the composer queue. Read both together.

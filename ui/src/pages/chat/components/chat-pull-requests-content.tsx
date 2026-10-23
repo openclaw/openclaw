@@ -36,8 +36,8 @@ import {
   retainedPublication,
   showWorkRow,
 } from "./chat-pull-requests.ts";
-import "./chat-ci-details.ts";
-import "./chat-ci-automation-control.ts";
+import "./chat-ci-details.tsx";
+import "./chat-ci-automation-control.tsx";
 import "./chat-pull-request-presenters.css";
 
 registerGitHubEnglish();
@@ -50,7 +50,6 @@ const CHECK_LABEL_KEYS = {
 
 function Checks(props: {
   pullRequest: ControlUiSessionPullRequest;
-  compact?: boolean;
   gateway?: ApplicationGateway;
   sessionKey?: string;
   sessionId?: string;
@@ -106,7 +105,6 @@ function Checks(props: {
   return (
     <ChatPullRequestChecks
       label={label()}
-      showLabel={props.compact}
       checksState={checks()?.state ?? "none"}
       presented={presented()}
       dismissed={props.dismissed}
@@ -166,6 +164,7 @@ function WorkRow(props: {
                   target="_blank"
                   rel="noopener noreferrer"
                   aria-label={t("chat.pullRequests.createPrLabel", {
+                    label: t("chat.pullRequests.createPr"),
                     branch: props.branch?.branch ?? "",
                   })}
                 >

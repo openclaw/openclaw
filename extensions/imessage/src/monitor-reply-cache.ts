@@ -300,7 +300,7 @@ export async function resolveIMessageMessageId(
   return messageId;
 }
 
-export async function isKnownFromMeIMessageMessageId(
+async function isKnownFromMeIMessageMessageId(
   messageId: string | undefined,
   ctx: IMessageChatContext & { accountId?: string },
 ): Promise<boolean> {

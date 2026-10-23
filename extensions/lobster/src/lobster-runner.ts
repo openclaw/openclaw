@@ -185,14 +185,11 @@ async function loadEmbeddedToolRuntimeFromPackage(): Promise<EmbeddedToolRuntime
   return (await import(coreSpecifier)) as EmbeddedToolRuntime;
 }
 
-export function createEmbeddedLobsterRunner(options?: {
-  loadRuntime?: () => Promise<EmbeddedToolRuntime>;
-}) {
-  const loadRuntime = options?.loadRuntime ?? loadEmbeddedToolRuntimeFromPackage;
+export function createEmbeddedLobsterRunner() {
   let runtimePromise: Promise<EmbeddedToolRuntime> | undefined;
   return {
     async run(params: LobsterRunnerParams) {
-      runtimePromise ??= loadRuntime();
+      runtimePromise ??= loadEmbeddedToolRuntimeFromPackage();
       const runtime = await runtimePromise;
       const controller = new AbortController();
       return await raceWithTimeout(

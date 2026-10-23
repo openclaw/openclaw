@@ -6,6 +6,7 @@ import {
   modelProviderErrorMessage,
   runModelProviderApiKeyMutation,
   runModelProviderDefaultsMutation,
+  type ModelDefaultsSaveField,
   type ModelProviderRowMessage,
 } from "./config-mutation.ts";
 import type { ModelProvidersState } from "./page-state.ts";
@@ -59,7 +60,6 @@ export function createModelProviderConfigActions(deps: {
     clearProbe(provider);
     const result = await mutations.run(
       "apiKey",
-      key,
       () =>
         runModelProviderApiKeyMutation(
           {
@@ -118,21 +118,25 @@ export function createModelProviderConfigActions(deps: {
     }
   }
 
-  async function saveDefaults() {
+  async function saveDefaults(field: ModelDefaultsSaveField) {
     const defaults = state.defaultsDraft;
     if (!defaults) {
       return;
     }
     const capturedAgentEpoch = getAgentEpoch();
     const settled = await mutations.run(
-      "defaults",
-      "defaults",
-      () =>
+      field,
+      (onAdmitted) =>
         runModelProviderDefaultsMutation(context, gateway, {
           defaults,
           busy: Boolean(state.busy.defaults),
           isCurrentAgent: () => getAgentEpoch() === capturedAgentEpoch,
-          setBusy: (busy) => setBusy("defaults", busy),
+          setBusy: (busy) => {
+            if (busy) {
+              onAdmitted();
+            }
+            setBusy("defaults", busy);
+          },
           setMessage: (message) => setMessage("defaults", message),
         }),
       (error) => setMessage("defaults", { kind: "error", text: modelProviderErrorMessage(error) }),

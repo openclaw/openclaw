@@ -225,7 +225,7 @@ describe("MemoryOverview", () => {
     }
   });
 
-  it("offers an inline embedding test before readiness has been checked", () => {
+  it("explains readiness freshness and offers an inline test when no recent check is available", () => {
     const payload = fixturePayload();
     payload.embedding = {
       ok: false,
@@ -237,7 +237,10 @@ describe("MemoryOverview", () => {
       onProbeEmbeddings,
     });
 
-    expect(container.textContent).toContain("Embedding readiness has not been checked yet.");
+    expect(container.textContent).toContain("No recent check");
+    expect(container.textContent).toContain(
+      "Results expire after 30 seconds. Click Test to check readiness.",
+    );
     expect(container.textContent).not.toContain("openclaw memory status --deep");
     const testButton = findButton(container, /^Test$/);
     expect(testButton?.disabled).toBe(false);

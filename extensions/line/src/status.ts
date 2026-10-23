@@ -1,8 +1,4 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import type {
-  ChannelAccountSnapshot,
-  ChannelStatusIssue,
-} from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   buildTokenChannelStatusSummary,
@@ -65,32 +61,28 @@ export function describeLineWebhookDelivery(params: {
       };
 }
 
-// LINE sends webhook events only while the console switch is on, and no API can turn
-// it on, so a channel with a healthy token and dead inbound looks entirely fine.
-// This is deliberately not `ingressUnavailable`: that flag means our own durable
-// queue failed and is remedied by a restart, which cannot change a console setting.
-function collectLineWebhookIssues(accounts: ChannelAccountSnapshot[]): ChannelStatusIssue[] {
-  return collectIssuesForEnabledAccounts({
-    accounts,
-    readAccount: (account) => (account.configured === false ? null : account),
-    collectIssues: ({ account, accountId, issues }) => {
-      const delivery = describeLineWebhookDelivery({
-        webhook: readProbeWebhookState(account.probe),
-      });
-      if (delivery) {
-        issues.push({ channel: "line", accountId, kind: "config", ...delivery });
-      }
-    },
-  });
-}
-
 export const lineStatusAdapter: NonNullable<
   ChannelPlugin<ResolvedLineAccount, LineProbeResult>["status"]
 > = createComputedAccountStatusAdapter<ResolvedLineAccount, LineProbeResult>({
   defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
   collectStatusIssues: (accounts) => [
     ...collectLineCredentialIssues(accounts),
-    ...collectLineWebhookIssues(accounts),
+    // LINE sends webhook events only while the console switch is on, and no API can turn
+    // it on, so a channel with a healthy token and dead inbound looks entirely fine.
+    // This is deliberately not `ingressUnavailable`: that flag means our own durable
+    // queue failed and is remedied by a restart, which cannot change a console setting.
+    ...collectIssuesForEnabledAccounts({
+      accounts,
+      readAccount: (account) => (account.configured === false ? null : account),
+      collectIssues: ({ account, accountId, issues }) => {
+        const delivery = describeLineWebhookDelivery({
+          webhook: readProbeWebhookState(account.probe),
+        });
+        if (delivery) {
+          issues.push({ channel: "line", accountId, kind: "config", ...delivery });
+        }
+      },
+    }),
   ],
   buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
   probeAccount: async ({ account, timeoutMs }) =>

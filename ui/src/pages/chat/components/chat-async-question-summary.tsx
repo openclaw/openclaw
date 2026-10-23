@@ -1,11 +1,14 @@
 import { createMemo, For, Show } from "solid-js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import type { AsyncQuestionPresentation, AsyncQuestions } from "./chat-async-question.types.ts";
 import { questionDraftValues } from "./chat-question-answer-controls.ts";
+
+registerEnglishCatalog(registerChatQuestionsEnglish);
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -177,7 +180,9 @@ export function AsyncQuestionSummary(props: {
           type="button"
           class="btn btn--sm"
           disabled={state().reopening}
-          onClick={() => props.presentation.reopen(props.questions.itemId)}
+          onClick={() => {
+            void props.presentation.reopen(props.questions.itemId);
+          }}
         >
           {t("chat.questions.answer")}
         </button>

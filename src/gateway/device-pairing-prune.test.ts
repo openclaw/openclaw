@@ -240,7 +240,9 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     await expect(listNodePairing(baseDir)).resolves.toMatchObject({ paired: [] });
     expect(getNodeWakeStateSnapshot("node-stale")).toBeUndefined();
     expect(wakeLifecycle.aborted).toBe(true);
-    expect(drainNodePendingWork("node-stale", { includeDefaultStatus: false }).items).toEqual([]);
+    expect(drainNodePendingWork("node-stale")).toMatchObject({
+      items: [{ id: "baseline-status" }],
+    });
     expect(listPendingNodeActions({ nodeId: "node-stale", ttlMs: 60_000 })).toEqual([]);
     await expect(loadApnsRegistration("node-stale", baseDir)).resolves.toBeNull();
     expect(context.order).toEqual([
@@ -263,9 +265,11 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     const baseDir = await makeStateDir();
     await pairSilentDevice(baseDir, "cli-stale", ["operator", "node"]);
     await registerApns(baseDir, "cli-stale");
-    await expect(
-      removePairedDeviceRole({ deviceId: "cli-stale", role: "node", baseDir }),
-    ).resolves.toEqual({ deviceId: "cli-stale", role: "node", removedDevice: false });
+    await expect(removePairedDeviceRole({ deviceId: "cli-stale", baseDir })).resolves.toEqual({
+      deviceId: "cli-stale",
+      role: "node",
+      removedDevice: false,
+    });
     await expect(loadApnsRegistration("cli-stale", baseDir)).resolves.toMatchObject({
       nodeId: "cli-stale",
     });

@@ -23,11 +23,7 @@ import { loadAcpBindingRuntime, loadSessionBindingRuntime } from "./handler-runt
 import type { MatrixHandlerRuntimeConfig } from "./handler-types.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
-import {
-  isMatrixAudioContent,
-  resolveMatrixPreflightAudioTranscript,
-  matrixPreflightAudio,
-} from "./preflight-audio.js";
+import { isMatrixAudioContent, matrixPreflightAudio } from "./preflight-audio.js";
 import { createRoomHistoryTracker, type HistoryEntry } from "./room-history.js";
 import { resolveMatrixInboundRouteAsync } from "./route.js";
 import type { MatrixRawEvent } from "./types.js";
@@ -217,15 +213,21 @@ export async function resolveMatrixIngressContent(config: {
   if (shouldRunMatrixAudioPreflight) {
     preflightMedia = await downloadMedia(preflightAudioMediaUrl);
     if (preflightMedia) {
-      preflightAudioTranscript = await resolveMatrixPreflightAudioTranscript({
-        mediaPath: preflightMedia.path,
-        mediaContentType: preflightMedia.contentType,
-        cfg,
-        accountId,
-        chatType: isDirectMessage ? "direct" : "channel",
-        originatingTo: `room:${roomId}`,
-        messageThreadId: thread.threadId,
-        sessionKey: _route.sessionKey,
+      preflightAudioTranscript = await matrixPreflightAudio.resolve({
+        request: {
+          ctx: {
+            media: [{ path: preflightMedia.path, contentType: preflightMedia.contentType }],
+            Provider: "matrix",
+            Surface: "matrix",
+            OriginatingChannel: "matrix",
+            OriginatingTo: `room:${roomId}`,
+            AccountId: accountId,
+            MessageThreadId: thread.threadId,
+            ChatType: isDirectMessage ? "direct" : "channel",
+            SessionKey: _route.sessionKey,
+          },
+          cfg,
+        },
       });
     }
   }
@@ -268,7 +270,6 @@ export async function resolveMatrixIngressContent(config: {
   });
   const hasControlCommandInMessage = core.channel.text.hasControlCommand(commandCheckText, cfg);
   const commandAccess = await resolveMatrixMonitorCommandAccess(accessState, {
-    useAccessGroups: true,
     allowTextCommands,
     hasControlCommand: hasControlCommandInMessage,
   });

@@ -63,6 +63,14 @@ export function isPluginNativeExecutable(source: string, boundary: string): bool
   return withPluginSourceFile(source, boundary, isPluginNativeDescriptor);
 }
 
+export function isPluginWasmModule(source: string, boundary: string): boolean {
+  return withPluginSourceFile(
+    source,
+    boundary,
+    (fd) => fs.readSync(fd, scratch, 0, 4, 0) === 4 && scratch.readUInt32BE(0) === 0x0061736d,
+  );
+}
+
 function isPluginNativeDescriptor(fd: number): boolean {
   if (fs.readSync(fd, scratch, 0, 4, 0) !== 4) {
     return false;

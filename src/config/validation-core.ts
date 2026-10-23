@@ -16,7 +16,6 @@ import { isPathInside } from "../infra/path-guards.js";
 import { LINEAR_MATCHER_SOURCES } from "../logging/redact-linear-matchers.js";
 import { parseRedactPatternSource } from "../logging/redact-pattern-runtime.js";
 import { PEM_REDACT_PATTERN_SOURCE } from "../logging/redact-pem.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import {
   isAvatarDataUrl,
@@ -481,7 +480,6 @@ export function validateConfigObjectRaw(
 export function validateConfigObject(
   raw: unknown,
   opts?: {
-    manifestRegistry?: Pick<PluginMetadataSnapshot, "manifestRegistry">["manifestRegistry"];
     sourceRaw?: unknown;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
@@ -491,10 +489,6 @@ export function validateConfigObject(
   }
   return {
     ok: true,
-    config: attachAgentListProjection(
-      materializeRuntimeConfig(result.config, {
-        manifestRegistry: opts?.manifestRegistry,
-      }),
-    ),
+    config: attachAgentListProjection(materializeRuntimeConfig(result.config)),
   };
 }

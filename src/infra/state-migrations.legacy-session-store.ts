@@ -18,13 +18,8 @@ import { stripRuntimeOnlySessionSkillsFields } from "../config/sessions/store-en
 import { applyFileBackedSessionStoreMaintenance } from "../config/sessions/store-maintenance-operations.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { assertSupportedSessionStoreEntry } from "../config/sessions/supported-session-store.js";
-import {
-  normalizeSessionRuntimeModelFields,
-  type SessionEntry,
-  type SessionOrigin,
-} from "../config/sessions/types.js";
+import { normalizeSessionRuntimeModelFields, type SessionEntry } from "../config/sessions/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../plugins/host-hook-json.js";
 import { normalizeSessionEntrySlotKey } from "../plugins/session-entry-slot-keys.js";
 import {
@@ -43,6 +38,7 @@ import {
   normalizeDeliveryChannelRoute,
   normalizeDeliveryContext,
   normalizeSessionDeliveryState,
+  type SessionDeliveryProjection,
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { writeTextAtomic } from "./json-files.js";
@@ -238,8 +234,6 @@ async function archiveRemovedSessionTranscripts(params: {
   removedSessionFiles: Iterable<[string, string | undefined]>;
   referencedSessionIds: ReadonlySet<string>;
   storePath: string;
-  reason: "deleted";
-  restrictToStoreDir: true;
 }): Promise<Set<string>> {
   const { archiveSessionTranscriptsDetailed } = await loadSessionArchiveRuntime();
   const archivedDirs = new Set<string>();
@@ -251,8 +245,8 @@ async function archiveRemovedSessionTranscripts(params: {
       sessionId,
       storePath: params.storePath,
       sessionFile,
-      reason: params.reason,
-      restrictToStoreDir: params.restrictToStoreDir,
+      reason: "deleted",
+      restrictToStoreDir: true,
     });
     for (const { archivedPath } of archived) {
       archivedDirs.add(path.dirname(archivedPath));
@@ -341,16 +335,7 @@ export async function updateLegacySessionStore<T>(
   });
 }
 
-type LegacySessionDeliveryEntry = SessionEntry & {
-  route?: ChannelRouteRef;
-  deliveryContext?: DeliveryContext;
-  origin?: SessionOrigin;
-  channel?: string;
-  lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
-};
+type LegacySessionDeliveryEntry = SessionEntry & SessionDeliveryProjection;
 
 const LEGACY_SESSION_DELIVERY_KEYS = [
   "route",

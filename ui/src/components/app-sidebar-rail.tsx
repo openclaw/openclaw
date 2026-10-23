@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, onSettled, untrack } from "solid-js";
+import { createMemo, For, Show, onSettled } from "solid-js";
 import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
@@ -56,8 +56,8 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   const newSessionAccess = createMemo(() => host.readNewSessionAccess());
   const zone = createMemo(() => host.reconciledSidebarZone());
   const pins = createMemo(() =>
-    (normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []).map(
-      (entry) => parseSidebarEntry(entry)!,
+    (normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []).filter(
+      (entry) => !entry.startsWith("session:"),
     ),
   );
   const views = ["pages", "sessions", "online"] as const;
@@ -189,13 +189,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         onDragLeave={(event) => host.sessionOrganizer.handleSidebarZoneDragLeave(event)}
         onDrop={(event) => host.sessionOrganizer.handleSidebarZoneDrop(event)}
       >
-        <For each={pins()} keyed={serializeSidebarEntry}>
-          {(entry) => {
-            // The serialized entry is this pin's key; its live row facts come from zone.
-            const initialEntry = untrack(entry);
-            return renderRailPin(host, initialEntry, zone);
-          }}
-        </For>
+        <For each={pins()}>{(key) => renderRailPin(host, parseSidebarEntry(key)!, zone)}</For>
       </div>
       <div class="sidebar-rail__bottom">{renderAppSidebarFooterBar(host)}</div>
     </nav>
@@ -501,19 +495,17 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
     return result;
   });
   const entries = createMemo(() => {
-    const result: SidebarZoneEntry[] = SIDEBAR_NAV_ROUTES.filter((route) =>
-      host.sidebarMenus.isRouteEnabled(route),
-    )
+    const result = SIDEBAR_NAV_ROUTES.filter((route) => host.sidebarMenus.isRouteEnabled(route))
       .toSorted((left, right) => titleForRoute(left).localeCompare(titleForRoute(right)))
-      .map((route) => ({ type: "route", route }));
+      .map((route) => serializeSidebarEntry({ type: "route", route }));
     for (const key of new Set([
       ...zone().pluginTabs.keys(),
       ...host.pluginNavigation().map((entry) => entry.key),
     ])) {
-      result.push({ type: "plugin", key });
+      result.push(serializeSidebarEntry({ type: "plugin", key }));
     }
     for (const row of dashboardRows()) {
-      result.push({ type: "session", key: row.key });
+      result.push(serializeSidebarEntry({ type: "session", key: row.key }));
     }
     return result;
   });
@@ -529,15 +521,12 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
         <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
       </div>
       <McpAppCatalog surface="sidebar" />
-      <For each={entries()} keyed={serializeSidebarEntry}>
-        {(entry) => {
-          // The For key is the complete serialized identity; labels stay live in the renderer.
-          const initialEntry = untrack(entry);
-          const key = serializeSidebarEntry(initialEntry);
+      <For each={entries()}>
+        {(key) => {
           // Allocate once per entry; the rendered link owns its reactive fields.
           const content = renderAppSidebarPageEntry(
             host,
-            initialEntry,
+            parseSidebarEntry(key)!,
             rows,
             () => zone().pluginTabs,
           );

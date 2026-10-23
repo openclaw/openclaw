@@ -347,6 +347,7 @@ export function resolveSettledToolTerminalContinuation(
     allToolsProvenSettled,
     parkedCodeModeRun,
     failedToolNames,
+    hasStaleToolError,
     hasUnsettledToolError,
     intentionalTermination,
   } = resolveSettledToolBatchEvidence(attempt);
@@ -412,8 +413,10 @@ export function resolveSettledToolTerminalContinuation(
         isSettledTurnCutOffByOutputLimit(attempt) ? ` ${OUTPUT_LIMIT_FINALIZATION_INSTRUCTION}` : ""
       }`;
   return {
+    // An earlier failure the turn never recovered from may not block the summary,
+    // but the summary must still account for it.
     instruction:
-      allToolsProvenSettled && failedToolNames.size > 0
+      allToolsProvenSettled && (failedToolNames.size > 0 || hasStaleToolError)
         ? `${instruction} ${TOOL_FAILURE_INSTRUCTION}`
         : instruction,
     disableTools: !keepTools,

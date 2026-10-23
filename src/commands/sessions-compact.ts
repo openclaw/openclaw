@@ -6,17 +6,6 @@ import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
-type SessionsCompactCliOptions = {
-  key: string;
-  agent?: string;
-  maxLines?: number;
-  timeout?: string;
-  url?: string;
-  token?: string;
-  password?: string;
-  json?: boolean;
-};
-
 type SessionsCompactResult = {
   ok?: boolean;
   key?: string;
@@ -39,8 +28,6 @@ type SessionsCompactResult = {
     };
   };
 };
-
-type SessionsCompactRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
 function describeCompaction(result: SessionsCompactResult, fallbackKey: string): string {
   const sessionKey = sanitizeTerminalText(result.key ?? fallbackKey);
@@ -68,14 +55,23 @@ function describeCompaction(result: SessionsCompactResult, fallbackKey: string):
 }
 
 export async function sessionsCompactCommand(
-  opts: SessionsCompactCliOptions,
+  opts: {
+    key: string;
+    agent?: string;
+    maxLines?: number;
+    timeout?: string;
+    url?: string;
+    token?: string;
+    password?: string;
+    json?: boolean;
+  },
   runtime: RuntimeEnv,
 ): Promise<void> {
   const agent = opts.agent?.trim();
   if (opts.agent !== undefined && !agent) {
     throw new Error("--agent must not be blank");
   }
-  const rpcOpts: SessionsCompactRpcOpts = {
+  const rpcOpts: Parameters<typeof callGatewayFromCliWithTransport>[1] = {
     url: opts.url,
     token: opts.token,
     password: opts.password,

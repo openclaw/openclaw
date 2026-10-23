@@ -456,6 +456,22 @@ it("activates rich mention patterns without activating non-text rich placeholder
   expect(agentInput()?.BodyForAgent).toBe("telegram please read this");
 });
 
+it("uses the mixed-case account mention policy for inbound text", async () => {
+  const cfg = mentionConfig(["\\baccount\\b"]);
+  cfg.channels!.telegram!.mentionPatterns = { mode: "deny" };
+  cfg.channels!.telegram!.accounts = {
+    Work: {
+      botToken: "123:work",
+      mentionPatterns: { mode: "allow", allowIn: ["-10042001"] },
+    },
+  };
+  const bot = await inputBot(cfg, true, "work");
+
+  await receive(bot, textMessage("account policy"));
+
+  expect(agentInput()?.BodyForAgent).toBe("account policy");
+});
+
 it.each([
   { pattern: ".*", admitted: true },
   { pattern: "\\bassistant\\b", admitted: false },

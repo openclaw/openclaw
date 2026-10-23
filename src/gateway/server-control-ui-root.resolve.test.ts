@@ -41,7 +41,7 @@ function readyAssets(root = "/repo/dist/control-ui", publicAssetBuildId?: string
   return { kind: "ready", indexPath: `${root}/index.html`, publicAssetBuildId };
 }
 
-const builtAssets = () => ({ ok: true as const, built: true, assets: readyAssets() });
+const builtAssets = () => ({ ok: true as const, assets: readyAssets() });
 const iconSnapshot = (body?: string, mtimeMs = 1): ControlUiFileSnapshot => ({
   path: "/repo/dist/control-ui/icon.png",
   size: body?.length ?? 0,
@@ -56,7 +56,6 @@ describe("createGatewayControlUiRootLifecycle", () => {
     vi.spyOn(fs, "realpathSync").mockImplementation((rootPath) => String(rootPath));
     controlUiAssetsMocks.ensureControlUiAssetsBuilt.mockResolvedValue({
       ok: true,
-      built: false,
       assets: readyAssets(),
     });
     controlUiAssetsMocks.isPackageProvenControlUiRootSync.mockReturnValue(false);

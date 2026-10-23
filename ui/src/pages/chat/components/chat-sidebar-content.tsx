@@ -23,6 +23,7 @@ import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { McpAppPanel } from "../../../components/solid/mcp-app-panel.tsx";
 import "../../../components/tooltip.ts";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import {
@@ -52,6 +53,8 @@ import {
 import { SidebarFile } from "./chat-sidebar-file-view.tsx";
 import { SidebarImage, SidebarSvgFile, SidebarFileFallback } from "./chat-sidebar-image-view.tsx";
 import { SessionDiffPanel } from "./session-diff-panel.tsx";
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 

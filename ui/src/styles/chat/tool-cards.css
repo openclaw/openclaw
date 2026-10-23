@@ -127,14 +127,7 @@
 }
 
 .chat-tool-row__chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 14px;
-  width: 14px;
-  height: 14px;
   margin-inline-start: -3px;
-  color: var(--muted);
   opacity: 0.55;
   transition:
     opacity 150ms ease-out,

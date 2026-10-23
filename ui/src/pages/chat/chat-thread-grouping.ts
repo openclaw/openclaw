@@ -1,6 +1,10 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
+import {
+  readChatThreadMessageIdentity,
+  userTurnRunId,
+} from "../../lib/chat/history-message-identity.ts";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { extractThinkingCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
@@ -17,7 +21,6 @@ import {
   createChatItemsGroupingCache,
   rowsAfterHiddenTurns,
 } from "./chat-thread-grouping-cache.ts";
-import { readChatThreadMessageIdentity, userTurnRunId } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsIndependentBoundary,

@@ -29,11 +29,6 @@ export type RequestBodyLimitErrorCode =
   | "REQUEST_BODY_TIMEOUT"
   | "CONNECTION_CLOSED";
 
-type RequestBodyLimitErrorInit = {
-  code: RequestBodyLimitErrorCode;
-  message?: string;
-};
-
 const REQUEST_BODY_LIMIT_ERRORS = {
   PAYLOAD_TOO_LARGE: { message: "PayloadTooLarge", status: 413, text: "Payload too large" },
   REQUEST_BODY_TIMEOUT: {
@@ -52,8 +47,8 @@ export class RequestBodyLimitError extends Error {
   readonly code: RequestBodyLimitErrorCode;
   readonly statusCode: number;
 
-  constructor(init: RequestBodyLimitErrorInit) {
-    super(init.message ?? REQUEST_BODY_LIMIT_ERRORS[init.code].message);
+  constructor(init: { code: RequestBodyLimitErrorCode }) {
+    super(REQUEST_BODY_LIMIT_ERRORS[init.code].message);
     this.name = "RequestBodyLimitError";
     this.code = init.code;
     this.statusCode = REQUEST_BODY_LIMIT_ERRORS[init.code].status;
@@ -259,24 +254,20 @@ export async function readJsonBodyWithLimit(
   }
 }
 
-type RequestBodyLimitGuard = {
-  dispose: () => void;
-  isTripped: () => boolean;
-  code: () => RequestBodyLimitErrorCode | null;
-};
-
-type RequestBodyLimitGuardOptions = {
-  maxBytes: number;
-  timeoutMs?: number;
-  responseFormat?: "json" | "text";
-  responseText?: Partial<Record<RequestBodyLimitErrorCode, string>>;
-};
-
 export function installRequestBodyLimitGuard(
   req: IncomingMessage,
   res: ServerResponse,
-  options: RequestBodyLimitGuardOptions,
-): RequestBodyLimitGuard {
+  options: {
+    maxBytes: number;
+    timeoutMs?: number;
+    responseFormat?: "json" | "text";
+    responseText?: Partial<Record<RequestBodyLimitErrorCode, string>>;
+  },
+): {
+  dispose: () => void;
+  isTripped: () => boolean;
+  code: () => RequestBodyLimitErrorCode | null;
+} {
   const { maxBytes, timeoutMs } = resolveRequestBodyLimitValues(options);
   const responseFormat = options.responseFormat ?? "json";
   const customText = options.responseText ?? {};

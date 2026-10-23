@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -78,6 +78,7 @@ export function SessionRailComposer(props: {
   const emojiMenu = createComposerEmojiMenu();
   const inputHandle = createChatAttachmentInputHandle();
   const [plusMenuOpen, setPlusMenuOpen] = createSignal(false);
+  const [settled, setSettled] = createSignal(false);
   const dictationControl = new DirectDictationControl({
     textarea: createDirectDictationTextarea(() => textarea ?? null),
     getClient: () => props.client,
@@ -89,13 +90,19 @@ export function SessionRailComposer(props: {
     onSubmit: () => props.submit(),
   });
   const dictation = projectOwner(dictationControl, (owner) => owner);
-  onCleanup(() => {
-    emojiMenu.dispose();
-    dictation.dispose();
-    dictationControl.dispose();
+  onSettled(() => {
     if (textarea) {
-      disconnectTextareaOverflowObserver(textarea);
+      observeTextareaOverflow(textarea);
+      scheduleTextareaHeightAdjustment(textarea);
     }
+    setSettled(true);
+    return () => {
+      emojiMenu.dispose();
+      dictationControl.dispose();
+      if (textarea) {
+        disconnectTextareaOverflowObserver(textarea);
+      }
+    };
   });
   const dictationActive = createMemo(() => dictation.read().active);
   // Dictation admission reads these inputs synchronously; a changed input re-prepares it.
@@ -241,8 +248,6 @@ export function SessionRailComposer(props: {
               (element) => {
                 textarea = element;
                 props.textareaRef(element);
-                observeTextareaOverflow(element);
-                scheduleTextareaHeightAdjustment(element);
               },
             ]}
           />
@@ -277,12 +282,15 @@ export function SessionRailComposer(props: {
             )}
           </Show>
           <div class="agent-chat__composer-actions">
-            <DirectDictationView
-              control={dictationControl}
-              ownerKey={props.sessionKey}
-              inputDeviceId={props.inputDeviceId}
-              renderRevision={dictationRevision()}
-            />
+            {/* Preparing dictation starts capability reads and follows the settled rail. */}
+            <Show when={settled()}>
+              <DirectDictationView
+                control={dictationControl}
+                ownerKey={props.sessionKey}
+                inputDeviceId={props.inputDeviceId}
+                renderRevision={dictationRevision()}
+              />
+            </Show>
             <Show when={!dictationActive()}>
               <button
                 class="chat-send-btn"

@@ -75,6 +75,7 @@ import * as mcpClientLifecycle from "./mcp-client-lifecycle.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
 import { fetchMcpAppView, getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
+import { isRecordedModelFallbackStop } from "./model-fallback-stop.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 
 vi.mock("./embedded-agent-mcp.js", async (importOriginal) => {
@@ -1509,13 +1510,12 @@ describe("session MCP runtime", () => {
     });
     const materialized = await materializeTools({ runtime });
     expect(runtime.activeLeases).toBe(1);
-    await expect(
-      retireSessionMcpRuntimeForSessionKey({
-        sessionKey,
-        reason: "subagent-run-cleanup",
-        preserveActiveLeases: true,
-      }),
-    ).resolves.toBe(true);
+    const retired = await retireSessionMcpRuntimeForSessionKey({
+      sessionKey,
+      reason: "subagent-run-cleanup",
+      preserveActiveLeases: true,
+    });
+    expect(retired).toBe(true);
     expect(currentManager().listSessionIds()).toContain(sessionId);
     const followUp = await materializeTools({ runtime });
     expect(runtime.activeLeases).toBe(2);
@@ -2332,7 +2332,9 @@ describe("disposeSession timeout", () => {
       expect(manager.listRuntimeKeys()).toEqual([]);
       const cleanupScope = createAgentCleanupScope();
       await cleanupScope.run(async () => {
-        await expect(materialized.dispose()).rejects.toThrow("could not confirm closure");
+        const failure: unknown = await materialized.dispose().catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(Error);
+        expect(isRecordedModelFallbackStop(failure)).toBe(true);
         await expect(materialized.dispose()).rejects.toThrow("could not confirm closure");
       });
       expect(cleanupScope.outcome).toBe("uncertain");

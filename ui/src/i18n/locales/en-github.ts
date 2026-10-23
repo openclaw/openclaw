@@ -4,7 +4,7 @@ import { en } from "./en.ts";
 const enGitHub = {
   sessionHovercard: {
     ariaLabel: en.sessionHovercard.ariaLabel,
-    agentNotepad: "Agent Notepad",
+    agentNotepad: "Task progress",
     linkedChannel: en.sessionHovercard.linkedChannel,
     viaAccount: "Via {account}",
     topicNumber: "Topic {id}",
@@ -66,7 +66,7 @@ const enGitHub = {
     pullRequests: {
       linkLabel: "Pull request {reference}: {title}",
       createPr: "Create PR",
-      createPrLabel: "Create a pull request for {branch}",
+      createPrLabel: "{label} for {branch}",
       publishPr: "Publish PR",
       publishing: "Publishing…",
       creating: "Creating…",

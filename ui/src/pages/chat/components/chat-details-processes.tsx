@@ -170,10 +170,6 @@ export function ChatDetailsProcesses(props: Props) {
     </>
   );
   const retry = () => void props.processes()?.refresh();
-  const consumeRead = () => {
-    latest(presentation.read);
-    return null;
-  };
   const ReadContent = () => (
     <Errored
       fallback={(_error, reset) => (
@@ -187,7 +183,7 @@ export function ChatDetailsProcesses(props: Props) {
       )}
     >
       <Loading on={presentation.scope()} fallback={<Content loading retry={retry} />}>
-        {consumeRead()}
+        {(latest(presentation.read), null)}
         <Content loading={isPending(presentation.read)} retry={retry} />
       </Loading>
     </Errored>

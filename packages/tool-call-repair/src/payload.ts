@@ -39,6 +39,9 @@ export type PlainTextToolCallBlock = {
 const DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES = 256_000;
 const MAX_PLAIN_TEXT_TOOL_NAME_CHARS = 120;
 const HARMONY_CHANNELS = ["commentary", "analysis", "final"] as const;
+// Case folding only admits candidates; the canonical Harmony scanner retains its case rules.
+const PLAIN_TEXT_TOOL_CALL_CANDIDATE_RE =
+  /(?:^|[\r\n])[^\S\r\n]*(?:\[(?:tool:)?[A-Za-z0-9_-]+\]\s*(?:\{|<parameter=)|(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=|<function=)/i;
 
 export type PlainTextJsonToolCallSpan = { end: number; start: number };
 export type PlainTextJsonToolCallSyntax = "harmony" | "named-bracket" | "tool-bracket";
@@ -504,11 +507,7 @@ export function stripPlainTextToolCallBlocks(
   text: string,
   options: { resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver } = {},
 ): string {
-  if (
-    !/(?:^|[\r\n])[^\S\r\n]*\[(?:tool:)?[A-Za-z0-9_-]+\]\s*(?:\{|<parameter=)/i.test(text) &&
-    !/(?:^|[\r\n])[^\S\r\n]*(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=/.test(text) &&
-    !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text)
-  ) {
+  if (!PLAIN_TEXT_TOOL_CALL_CANDIDATE_RE.test(text)) {
     return text;
   }
   return projectPlainTextToolCallBlocks(text, options).text;

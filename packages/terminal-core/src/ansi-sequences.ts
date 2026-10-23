@@ -22,8 +22,6 @@ type AnsiCsiScan = {
   value: string;
 };
 
-type AnsiStripState = "text" | "escape" | "osc" | "osc-escape" | "csi" | "compat";
-
 function isCompatPrefixCode(code: number): boolean {
   return (
     code === 0x5b ||
@@ -65,7 +63,7 @@ function isCompatFinalCode(code: number): boolean {
  * or accumulate outside the caller's output limits.
  */
 export class AnsiSequenceStripper {
-  private state: AnsiStripState = "text";
+  private state: "text" | "escape" | "osc" | "osc-escape" | "csi" | "compat" = "text";
   private csiCompatPrefixOnly = false;
   private compatParameterDigits: number | undefined;
   private csi: string | undefined;
@@ -151,11 +149,7 @@ export class AnsiSequenceStripper {
           this.state = "text";
           continue;
         }
-        index += 1;
-        continue;
-      }
-
-      if (this.state === "escape") {
+      } else if (this.state === "escape") {
         if (code === 0x5d) {
           this.state = "osc";
         } else if (code === 0x5b) {
@@ -172,11 +166,7 @@ export class AnsiSequenceStripper {
           this.state = "text";
           continue;
         }
-        index += 1;
-        continue;
-      }
-
-      if (code === 0x18 || code === 0x1a) {
+      } else if (code === 0x18 || code === 0x1a) {
         this.state = "text";
       } else if (this.compatParameterDigits === undefined && isCompatPrefixCode(code)) {
         index += 1;

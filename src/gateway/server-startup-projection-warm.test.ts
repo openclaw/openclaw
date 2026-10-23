@@ -85,7 +85,7 @@ async function createStartupState({ ui = false, anonymous = false } = {}) {
   return port;
 }
 
-it("overlaps startup orphan marking with projection preparation and joins both before readiness", async ({
+it("completes startup and projection preparation before marking while retaining readiness gates", async ({
   signal,
 }) => {
   const port = await createStartupState({ ui: true });
@@ -214,26 +214,28 @@ it("overlaps startup orphan marking with projection preparation and joins both b
     const secondEntryResponse = await waitFor(secondEntryReceived.promise, entryRequest);
     expect(secondEntryResponse.writableEnded).toBe(false);
     releaseListening.resolve();
-    await waitFor(Promise.all([earlyRuntimeEntered.promise, markingEntered.promise]), startup);
+    await waitFor(earlyRuntimeEntered.promise, startup);
     expect(secondEntryResponse.writableEnded).toBe(false);
     releaseProjection.resolve();
     expect((await entryRequest).status).toBe(204);
     expect(readResidentGatewayOwnerProfile(resolveOpenClawStateSqlitePath())?.displayName).toBe(
       "Startup Owner",
     );
+    expect(startupFinished).toBe(false);
+    releaseEarlyRuntime.resolve();
+    const server = await startup;
+    await server.startupSettled;
+    await withinTest(markingEntered.promise, signal);
+    await projection?.ensureMaterialized();
     expect(
       projection?.describe({ agentId: "main", key: "agent:main:orphan" })?.entry
         .mainRestartRecovery,
     ).toBeDefined();
-    expect(startupFinished).toBe(false);
-    releaseEarlyRuntime.resolve();
     const pendingReadiness = await read("/readyz");
     expect(pendingReadiness.status).toBe(503);
     await pendingReadiness.arrayBuffer();
-    expect(startupFinished).toBe(false);
+    expect(startupFinished).toBe(true);
     releaseMarking.resolve();
-    const server = await startup;
-    await server.startupSettled;
     const unauthorized = await fetch(`http://127.0.0.1:${port}${entryPath}`, {
       signal: requestSignal,
     });

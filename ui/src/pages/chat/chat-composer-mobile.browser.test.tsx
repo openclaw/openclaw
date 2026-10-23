@@ -61,7 +61,16 @@ it("keeps mobile editing, field and caret while the native composer menu owns fo
   const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea")!;
   const input = view.container.querySelector<HTMLElement>(".agent-chat__input")!;
   const shell = view.container.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
+  let focusedDuringPointerDown = false;
+  textarea.addEventListener(
+    "pointerdown",
+    () => {
+      focusedDuringPointerDown = document.activeElement === textarea;
+    },
+    { once: true },
+  );
   await page.elementLocator(textarea).click();
+  expect(focusedDuringPointerDown).toBe(true);
   await expect.element(page.elementLocator(shell)).toHaveAttribute("data-composer-editing", "true");
   await Promise.all(input.getAnimations().map((animation) => animation.finished));
   renderComposerInto(view.container, { ...props, mobileKeyboardVisible: true });
@@ -208,5 +217,23 @@ it.each(["iPhone", "Android"])(
       button.click();
       expect(submit).toHaveBeenCalledOnce();
     }
+  },
+);
+
+it.each(["chat", "new-session"] as const)(
+  "keeps reverse Tab native with slash suggestions in %s",
+  async (surface) => {
+    const view = surface === "chat" ? renderComposerFixture() : renderNewSession();
+    const before = document.createElement("button");
+    before.textContent = "Before composer";
+    document.body.append(before, view.container);
+    onTestFinished(() => before.remove());
+    const textarea = view.container.querySelector("textarea")!;
+    await userEvent.fill(textarea, "/to");
+    await expect.element(page.getByRole("listbox")).toBeVisible();
+    await userEvent.tab({ shift: true });
+    expect(textarea.value).toBe("/to");
+    expect(document.activeElement).not.toBe(textarea);
+    expect(document.activeElement).not.toBe(document.body);
   },
 );

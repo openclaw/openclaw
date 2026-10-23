@@ -71,14 +71,12 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
   getTransport: () => NodeWorkerSupervisorTransport | undefined;
   transfer: NodeWorkerBundleTransferService;
   log: { info: (message: string) => void; warn: (message: string) => void };
-  now?: () => number;
   onObservationChange?: (nodeId: string, environmentIds: readonly string[]) => void;
 }) {
-  const now = options.now ?? Date.now;
   const active = new Map<string, ActiveInstall>();
   let version = 0;
   const publish = (entry: ActiveInstall, environmentIds = entry.observation.environmentIds) => {
-    entry.lastPublicationAtMs = now();
+    entry.lastPublicationAtMs = Date.now();
     try {
       options.onObservationChange?.(entry.observation.nodeId, environmentIds);
     } catch {
@@ -87,9 +85,9 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
     notifyListeners(entry.progressListeners, undefined);
   };
   const install: GatewayNodeWorkerBundleInstall = async (params) => {
-    let startedAtMs = now();
+    let startedAtMs = Date.now();
     const prefix = `worker runtime install: node=${params.deviceId} bundle=${params.artifact.bundleHash.slice(0, 12)}`;
-    const elapsedSeconds = () => Math.max(0, (now() - startedAtMs) / 1_000);
+    const elapsedSeconds = () => Math.max(0, (Date.now() - startedAtMs) / 1_000);
     try {
       params.signal?.throwIfAborted();
       const transport = options.getTransport();
@@ -123,7 +121,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
       const key = `${node.nodeId}:${artifact.bundleHash}`;
       let entry = active.get(key);
       if (!entry) {
-        startedAtMs = now();
+        startedAtMs = Date.now();
         entry = {
           observation: {
             nodeId: node.nodeId,
@@ -175,7 +173,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
           isAuthorized,
           signal: params.signal,
           onProgress: (servedBytes) => {
-            const updatedAtMs = now();
+            const updatedAtMs = Date.now();
             if (serve?.interrupted) {
               serve = undefined;
             } else if (serve && currentEntry.serve !== serve) {
@@ -230,7 +228,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
             if (serve?.interrupted) {
               return;
             }
-            serve ??= { startedAtMs: now(), interrupted: false };
+            serve ??= { startedAtMs: Date.now(), interrupted: false };
             serve.interrupted = true;
             currentEntry.serve ??= serve;
             options.log.warn(

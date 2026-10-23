@@ -20,6 +20,7 @@ artifact when package or Docker-facing stages need it.
 | Package artifact         | **Job:** `Prepare release package artifact`<br />**Backing workflow:** none<br />**Tests:** validates the umbrella's immutable package tuple, or packs one candidate tarball for a direct/focused Release Checks dispatch, then exposes it to downstream package-facing checks.<br />**Rerun:** the affected package, cross-OS, or live/E2E group.                                                                                                                                                                                                                                                         |
 | Install smoke            | **Job:** `Run install smoke`<br />**Backing workflow:** `Install Smoke`<br />**Tests:** full install path with root Dockerfile smoke image reuse, QR package install, root and gateway Docker smokes, installer Docker tests, and Bun global install plus CLI/local-agent/Gateway runtime smoke and the advisory Bun-only runtime smoke (except frozen targets).<br />**Rerun:** `rerun_group=install-smoke`.                                                                                                                                                                                              |
 | Cross-OS                 | **Job:** `cross_os_release_checks`<br />**Backing workflow:** `OpenClaw Cross-OS Release Checks (Reusable)`<br />**Tests:** fresh and upgrade lanes on Linux, Windows, and macOS for the selected provider and mode, using the candidate tarball plus a baseline package. Linux, Windows, and macOS Gateway install and upgrade suites gate beta, stable, and full publication, with recorded pass/fail conclusions.<br />**Rerun:** `rerun_group=cross-os`.                                                                                                                                               |
+| Windows node             | **Jobs:** stable, prerelease, and main E2E<br />**Backing workflow:** pinned `openclaw-windows-node` reusable workflow<br />**Tests:** setup/connect against the same immutable OpenClaw candidate; newest stable must pass; prerelease and main are advisory.<br />**Rerun:** `rerun_group=windows-node`.                                                                                                                                                                                                                                                                                                 |
 | Repo and live E2E        | **Job:** `Run repo/live E2E validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** repository E2E, live cache, OpenAI websocket streaming, native live provider and plugin shards, and Docker-backed live model/backend/gateway harnesses selected by `release_profile`.<br />**Runs:** `run_release_soak=true`, `release_profile=full`, or focused `rerun_group=live-e2e`.<br />**Rerun:** `rerun_group=live-e2e`, optionally with `live_suite_filter`.                                                                                                         |
 | Docker release path      | **Job:** `Run Docker release-path validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** release-path Docker chunks against the shared package artifact.<br />**Runs:** `run_release_soak=true`, `release_profile=full`, or focused `rerun_group=live-e2e`.<br />**Rerun:** `rerun_group=live-e2e`.                                                                                                                                                                                                                                                              |
 | Package Acceptance       | **Job:** `Run package acceptance`<br />**Backing workflow:** `Package Acceptance`<br />**Tests:** offline plugin package fixtures, plugin update, and published-upgrade survivor checks against the same tarball. The standard mock-OpenAI Telegram package E2E is deferred for beta `all` without soak; explicit `package` and soak select it by default. Blocking release checks use the default latest published baseline; soak checks (`run_release_soak=true`) resolve the latest stable baseline once and run the reported-issue upgrade fixtures against it.<br />**Rerun:** `rerun_group=package`. |
@@ -34,6 +35,46 @@ artifact when package or Docker-facing stages need it.
 | QA live WhatsApp         | **Job:** `Run QA Lab live WhatsApp lane`<br />**Backing workflow:** direct job with recorded status enforced by the release verifier<br />**Tests:** live WhatsApp QA with Convex CI credential leases when `OPENCLAW_RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED` is enabled.<br />**Rerun:** `rerun_group=qa-live` with `live_suite_filter=qa-live-whatsapp`.                                                                                                                                                                                                                                                    |
 | QA live Slack            | **Job:** `Run QA Lab live Slack lane`<br />**Backing workflow:** direct job with recorded status enforced by the release verifier<br />**Tests:** live Slack QA with Convex CI credential leases when `OPENCLAW_RELEASE_QA_SLACK_LIVE_CI_ENABLED` is enabled.<br />**Rerun:** `rerun_group=qa-live` with `live_suite_filter=qa-live-slack`.                                                                                                                                                                                                                                                                |
 | Release verifier         | **Job:** `Verify release checks`<br />**Backing workflow:** none<br />**Tests:** required release-check jobs for the selected rerun group.<br />**Rerun:** rerun after focused child jobs pass.                                                                                                                                                                                                                                                                                                                                                                                                            |
+
+## Windows-node candidate lanes
+
+Windows-node checks run only in the candidate phase, after package preparation,
+not in the independent phase. The shared release planner selects them for `all`
+and `windows-node`. The newest stable node must pass setup, connection, and a
+Gateway-mediated invocation for every selected Gateway candidate, including
+betas. Stable failures, protocol mismatches, and skips block release. Alpha and
+main still run, but failures or unavailable coverage are advisory.
+
+The release resolver selects the latest published canonical stable (`vX.Y.Z`
+or correction `vX.Y.Z-N`) and production alpha (`vX.Y.Z-alpha.N`), requires a
+hashed x64 Tray ZIP (or MSIX when no ZIP exists), and records the tag, source
+commit, asset name, and digest. Missing, unresolvable, artifact-less, or superseded
+alpha coverage is reported without blocking stable validation. The
+main lane resolves `main` once to a commit and never substitutes for release
+artifact coverage. The callee verifies downloaded bytes against these digests.
+
+The immutable reusable workflow revision is separate from the app source
+revision and also pins the maintained setup/test harness. Release lanes use the
+published app bytes; main builds its separately checked-out source commit. The
+harness installs the exact candidate (including beta versions), connects the app,
+and invokes `system.which` through the real Gateway. It does not require old
+apps to advertise the current harness's full capability inventory.
+
+Evidence names distinguish the app source kind and release tag or source SHA.
+No lane accepts a protocol mismatch as a passing test. Preview failures retain
+their raw GitHub job conclusions; Release Checks can therefore appear red while
+Full Release Validation passes with explicit advisory evidence. The release
+policy admits only the named preview jobs and main-source resolver, and only
+when stable E2E succeeds and the release-check verifier passes the existing
+trusted-tooling policy. Independently approved provider waivers retain their
+aggregate-log checks. Unrelated unwaived failures and whole-workflow cancellation
+still block. Automatic child reuse remains limited
+to green runs; advisory-red children run again rather than reusing red evidence.
+
+The harness OIDC check binds the called workflow, not the caller's authority.
+The workflow receives caller-scoped read permissions, no inherited secrets,
+and runs on GitHub-hosted Windows; it does not publish releases. This is
+setup/connect coverage, not MXC/AppContainer containment proof.
 
 ## Docker release-path chunks
 

@@ -416,11 +416,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
     ]);
 
     function ReadDetails() {
-      const consume = () => {
-        latest(props.detailsRead);
-        return null;
-      };
-      return <>{consume()}</>;
+      return <>{(latest(props.detailsRead), null)}</>;
     }
 
     function DetailFields(fields: { pending: boolean }) {

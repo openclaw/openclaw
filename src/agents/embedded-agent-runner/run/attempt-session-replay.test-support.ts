@@ -404,7 +404,6 @@ export async function withReplaySession(
         images: options.images ?? [],
         modelPrompt: attempt.prompt,
         onFinalPromptText: () => {},
-        onSteeringAcknowledged: () => {},
         persistToolResultProjections: async () => {},
         runtimeOnly: false,
         systemPrompt: "",

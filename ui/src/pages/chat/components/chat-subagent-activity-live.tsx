@@ -15,7 +15,7 @@ import {
 } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { ChatSubagentActivity as ChatSubagentActivityRow } from "../chat-subagent-wait.ts";
-import { SubagentActivity, type SubagentActivityProps } from "./chat-subagent-activity.ts";
+import { SubagentActivity, type SubagentActivityProps } from "./chat-subagent-activity.tsx";
 
 const inputHandlers = new WeakMap<HTMLElement, () => void>();
 

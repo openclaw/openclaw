@@ -1259,8 +1259,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               });
             } else {
               setStoppedRuntime(channelId, id, stoppedPatch);
-              recoveryStopTimedOut.add(rKey);
             }
+            recoveryStopTimedOut.add(rKey);
             return outcome;
           }
           recoveryStopTimedOut.delete(rKey);

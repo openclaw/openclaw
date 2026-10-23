@@ -3,8 +3,9 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
 
@@ -16,13 +17,24 @@ const trustedTsxLoader = pathToFileURL(requireFromHere.resolve("tsx", { paths: [
 const sourceEnv = { TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json") };
 const commandArgs = ["sessions", "export-trajectory"];
 type Invocation = ReturnType<typeof resolveCurrentOpenClawCliInvocation>;
-type Options = Parameters<typeof resolveCurrentOpenClawCliInvocation>[1];
-const invoke = (options: Options) =>
-  resolveCurrentOpenClawCliInvocation(commandArgs, {
-    cwd: repoRoot,
-    execPath: "/usr/bin/node",
-    ...options,
-  });
+type Options = {
+  argv1?: string;
+  cwd?: string;
+  execArgv?: readonly string[];
+  execPath?: string;
+  moduleUrl?: string;
+};
+afterEach(() => vi.restoreAllMocks());
+const invoke = (options: Options, args = commandArgs) => {
+  const versions = { ...process.versions };
+  versions.bun = isBunRuntime(options.execPath ?? "/usr/bin/node") ? "fixture" : undefined;
+  vi.spyOn(process, "versions", "get").mockReturnValue(versions);
+  vi.spyOn(process, "execPath", "get").mockReturnValue(options.execPath ?? "/usr/bin/node");
+  vi.spyOn(process, "argv", "get").mockReturnValue([process.execPath, options.argv1 ?? ""]);
+  vi.spyOn(process, "execArgv", "get").mockReturnValue([...(options.execArgv ?? [])]);
+  vi.spyOn(process, "cwd").mockReturnValue(options.cwd ?? repoRoot);
+  return resolveCurrentOpenClawCliInvocation(args, { moduleUrl: options.moduleUrl });
+};
 function expectInvocation(options: Options, expected: Partial<Invocation>) {
   expect(invoke(options)).toEqual({ command: "/usr/bin/node", cwd: repoRoot, ...expected });
 }
@@ -100,7 +112,7 @@ it.each(["openclaw.mjs", path.join("dist", "index.js")])(
       execPath: resolveTestNodeExecPath(),
       execArgv: [],
     };
-    const prepared = resolveCurrentOpenClawCliInvocation(["--version"], options);
+    const prepared = invoke(options, ["--version"]);
 
     await unlink(current);
     await symlink(releaseB, current, "junction");
@@ -110,7 +122,7 @@ it.each(["openclaw.mjs", path.join("dist", "index.js")])(
       expect([entry, invocation.cwd]).toEqual([path.join(release, entryName), release]);
     };
     await expectRelease(prepared, releaseA);
-    await expectRelease(resolveCurrentOpenClawCliInvocation(["--version"], options), releaseB);
+    await expectRelease(invoke(options, ["--version"]), releaseB);
   },
 );
 

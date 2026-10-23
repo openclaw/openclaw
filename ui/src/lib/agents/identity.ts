@@ -14,13 +14,6 @@ type AgentIdentityGatewaySnapshot = Pick<
 > &
   Partial<Pick<ApplicationGatewaySnapshot, "hello" | "selfUser">>;
 
-type AgentIdentityGateway = {
-  readonly snapshot: AgentIdentityGatewaySnapshot;
-  readonly connectionRevision?: number;
-  subscribe: (listener: (snapshot: AgentIdentityGatewaySnapshot) => void) => () => void;
-  subscribeEvents?: (listener: (event: { event: string; payload?: unknown }) => void) => () => void;
-};
-
 type AgentIdentityCacheEntry = {
   pending: Promise<AgentIdentityResult | null>;
   result?: { identity: AgentIdentityResult | null };
@@ -102,7 +95,12 @@ export function fetchAgentIdentity(
 
 export type AgentIdentityCapability = ReturnType<typeof createAgentIdentityCapability>;
 
-export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
+export function createAgentIdentityCapability(gateway: {
+  readonly snapshot: AgentIdentityGatewaySnapshot;
+  readonly connectionRevision?: number;
+  subscribe: (listener: (snapshot: AgentIdentityGatewaySnapshot) => void) => () => void;
+  subscribeEvents?: (listener: (event: { event: string; payload?: unknown }) => void) => () => void;
+}) {
   let cachedClient: GatewayBrowserClient | null = gateway.snapshot.client;
   let cachedConnected = gateway.snapshot.phase === "connected";
   let presentationKey = gatewayPresentationScope(gateway).key;

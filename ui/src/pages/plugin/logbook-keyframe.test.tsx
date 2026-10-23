@@ -26,6 +26,7 @@ function frameModel(frame: Promise<Frame>) {
     disposals.push(dispose);
     return Object.assign(createLogbook(createTestGatewayClient(request)), { dispose });
   });
+  flush();
   return { model, request };
 }
 

@@ -112,6 +112,7 @@ describe("AppSidebar agent menu scope", () => {
       const onNavigate = vi.fn();
       sidebar.connected = true;
       sidebar.onNavigate = onNavigate;
+      sidebar.activeRouteId = "skills";
       context.agentSelection.set("main");
       context.agentSelection.setScope(null);
       sidebar.sidebarAgentsMode = mode;
@@ -126,6 +127,7 @@ describe("AppSidebar agent menu scope", () => {
         '[data-value="agent:research"] .sidebar-agent-menu__settings',
       );
       expect(gear?.getAttribute("aria-label")).toBe("research settings");
+      expect(gear?.hasAttribute("title")).toBe(false);
       gear?.click();
       await sidebar.updateComplete;
       expect(onNavigate).toHaveBeenCalledExactlyOnceWith("agents", {

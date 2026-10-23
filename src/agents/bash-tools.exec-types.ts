@@ -205,6 +205,20 @@ export type ExecElevatedDefaults = {
   fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
 };
 
+export function cloneExecElevatedDefaults(value: ExecElevatedDefaults): ExecElevatedDefaults {
+  return {
+    enabled: value.enabled,
+    allowed: value.allowed,
+    defaultLevel: value.defaultLevel,
+    ...(value.fullAccessAvailable !== undefined
+      ? { fullAccessAvailable: value.fullAccessAvailable }
+      : {}),
+    ...(value.fullAccessBlockedReason !== undefined
+      ? { fullAccessBlockedReason: value.fullAccessBlockedReason }
+      : {}),
+  };
+}
+
 /** One model-backed approval review recorded on an exec tool call. */
 export type ExecToolApprovalReview = Omit<ToolApprovalReview, "userAuthorization">;
 

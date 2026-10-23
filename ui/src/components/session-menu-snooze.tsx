@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, Show } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatTimeMs } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -50,14 +50,9 @@ export function useSessionSnoozeEntries(
     if (!popover?.overlay.open) {
       return false;
     }
-    // Keep focus inside this child dialog while the parent menu stays open.
+    // Let the browser visit native date/time segments; focus guards own only the dialog edges.
     if (event.key === "Tab") {
-      const controls = [input, cancelButton, submitButton].filter((control) => !control.disabled);
-      const index = controls.findIndex((control) => control === document.activeElement);
-      const next = (index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
-      event.preventDefault();
       event.stopPropagation();
-      controls[next]?.focus();
       return true;
     }
     // The nested popover, not the parent menu, owns Escape and form key input.
@@ -67,15 +62,17 @@ export function useSessionSnoozeEntries(
   const cancel = nativeListener("click", () => popover?.overlay.request(false, "return"));
   const stopClick = nativeListener("click", (event) => event.stopPropagation());
   const stopKeydown = nativeListener("keydown", (event) => event.stopPropagation());
-  actions.openCustomSnooze = open;
-  actions.customSnoozeKeydown = keydown;
-  onCleanup(() => {
-    if (actions.openCustomSnooze === open) {
-      actions.openCustomSnooze = undefined;
-    }
-    if (actions.customSnoozeKeydown === keydown) {
-      actions.customSnoozeKeydown = undefined;
-    }
+  onSettled(() => {
+    actions.openCustomSnooze = open;
+    actions.customSnoozeKeydown = keydown;
+    return () => {
+      if (actions.openCustomSnooze === open) {
+        actions.openCustomSnooze = undefined;
+      }
+      if (actions.customSnoozeKeydown === keydown) {
+        actions.customSnoozeKeydown = undefined;
+      }
+    };
   });
   const customLabel = (
     <span
@@ -121,6 +118,10 @@ export function useSessionSnoozeEntries(
           actions.runAction({ kind: "snooze", snoozedUntil, rememberCustom: true });
         }}
       >
+        <span
+          tabindex={0}
+          onFocus={() => (submitButton.disabled ? cancelButton : submitButton).focus()}
+        />
         <label class="field">
           <span>{t("sessionsView.snoozeDateTime")}</span>
           <input
@@ -156,6 +157,7 @@ export function useSessionSnoozeEntries(
             {t("sessionsView.snooze")}
           </button>
         </div>
+        <span tabindex={0} onFocus={() => input.focus()} />
       </form>
     </Popover>
   );

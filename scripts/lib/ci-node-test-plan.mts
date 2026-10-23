@@ -100,6 +100,7 @@ import {
   readCompleteSplitGenerationSeconds,
   readRuntimePlacementTimings,
   readToolingFileTimings,
+  readUiE2eFileTimings,
   resolveRuntimePlacementSeconds,
 } from "./ci-test-timings.mts";
 import { UI_E2E_OWNER_WATCHES, UI_E2E_SMOKE_TEST_FILES } from "./ci-ui-e2e-owner-inventory.mts";
@@ -1584,6 +1585,7 @@ export function createUiTestShardGroups(
 
 export function createUiRealGatewayTestShards(
   e2eGroups: ReturnType<typeof createUiTestShardGroups>["e2e"],
+  env: Readonly<Record<string, string | undefined>> = process.env,
 ) {
   const selected = new Set(
     e2eGroups.flatMap((group) => group.includePatterns ?? uiE2eRealGatewayTestFiles),
@@ -1591,7 +1593,50 @@ export function createUiRealGatewayTestShards(
   const parallelFiles = new Set(uiE2ePrebuiltParallelTestFiles);
   const desktop = resolveUiTypeScriptPath("ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts");
   const files = uiE2eRealGatewayTestFiles.filter((file) => selected.has(file) && file !== desktop);
-  // Desktop transport proof owns its file separately, alongside the serial phase.
+  const timings = readUiE2eFileTimings();
+  // Disabled proofs still collect. An enabled DeepSeek flag retains full pricing
+  // without requiring preflight to receive the test job's credentials.
+  const optInEnabled = new Map([
+    [
+      resolveUiTypeScriptPath("ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts"),
+      env.OPENCLAW_DEEPSEEK_UI_LIVE === "1",
+    ],
+    [
+      resolveUiTypeScriptPath("ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts"),
+      env.OPENCLAW_PEER_RESTART_LIVE === "1",
+    ],
+    [
+      resolveUiTypeScriptPath("ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts"),
+      Boolean(env.OPENCLAW_STEER_CUSTODY_PROOF),
+    ],
+  ]);
+  // Cold Gateway files use the observed roughly 30s file cost until two CI samples exist.
+  const seconds = (file: string) =>
+    (optInEnabled.get(file) === false ? 0 : (timings.fileSeconds[file] ?? 30)) +
+    timings.perFileOverheadSeconds;
+  const serial = files.filter((file) => !parallelFiles.has(file));
+  const serialSeconds = serial.reduce((sum, file) => sum + seconds(file), 0);
+  // The desktop driver runs outside Vitest: scheduled run 39872214487 took 120s.
+  const desktopSeconds = selected.has(desktop) ? (timings.fileSeconds[desktop] ?? 120) : 0;
+  const initialSeconds = Math.max(serialSeconds, desktopSeconds);
+  // Keep unqualified fixtures together. Qualified fixtures can use either job's
+  // existing two workers after its overlapping serial and desktop work joins.
+  const buckets: { workerSeconds: [number, number]; files: string[] }[] = [
+    { workerSeconds: [initialSeconds, initialSeconds], files: serial },
+    { workerSeconds: [0, 0], files: [] },
+  ];
+  for (const file of files
+    .filter((candidate) => parallelFiles.has(candidate))
+    .toSorted((left, right) => seconds(right) - seconds(left) || left.localeCompare(right))) {
+    const bucket = buckets.reduce((earliest, candidate) =>
+      Math.min(...candidate.workerSeconds) < Math.min(...earliest.workerSeconds)
+        ? candidate
+        : earliest,
+    );
+    const worker = bucket.workerSeconds[0] <= bucket.workerSeconds[1] ? 0 : 1;
+    bucket.files.push(file);
+    bucket.workerSeconds[worker] += seconds(file);
+  }
   return ([1, 2] as const).map((shard) => ({
     shard,
     shard_count: 2 as const,
@@ -1600,7 +1645,7 @@ export function createUiRealGatewayTestShards(
       {
         configs: ["test/vitest/vitest.ui-e2e-prebuilt.config.ts"],
         shard_name: `ui-e2e-real-gateway-${shard === 1 ? "desktop" : "parallel"}`,
-        includePatterns: files.filter((file) => parallelFiles.has(file) === (shard === 2)),
+        includePatterns: buckets[shard - 1]!.files.toSorted(),
       },
     ],
   }));

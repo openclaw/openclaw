@@ -47,9 +47,10 @@ it("loads Settings English only when cold search opens, before the config page",
   const configView = en.configView;
   const updates = en.updates;
   const campaign = (updates as Record<string, unknown>).campaign;
-  const sharedKeys = ["configView.autoSaveSaving", "updates.confirm.message"];
+  const sharedKeys = ["configView.adminRequired", "updates.confirm.message"];
   const sharedCopy = sharedKeys.map((key) => runtime.t(key));
   const lazyKeys = [
+    "configView.autoSaveSaving",
     "configPage.themeImported",
     "configView.chatPrefs.title",
     "updates.page.intro",
@@ -120,6 +121,33 @@ it("opens every Memory schema match on the merged Settings tab", () => {
     find("memory").filter((block) => block.routeId === "memory"),
     { ...destination, hash: "#config-section-memory" },
   );
+});
+
+it("hides the curated locale search leaf without mutating the source schema or sibling hits", () => {
+  const schema = section("ui", {
+    seamColor: field("Seam color"),
+    prefs: object({
+      locale: field("Interface language"),
+      chatShowToolCalls: { type: "boolean", title: "Chat show tool calls" },
+    }),
+  });
+  const original = JSON.stringify(schema);
+  const uiHints = {
+    "ui.seamColor": { advanced: false },
+    "ui.prefs.locale": { advanced: false },
+    "ui.prefs.chatShowToolCalls": { advanced: false },
+  };
+  const params = { schema, value: { ui: { prefs: { locale: "en" } } }, uiHints };
+
+  expect(
+    search("interface language", params).some((block) => block.hash === "#config-section-ui"),
+  ).toBe(false);
+  for (const query of ["chat show tool calls", "seam color"]) {
+    expect(search(query, params)).toContainEqual(
+      expect.objectContaining({ hash: "#config-section-ui" }),
+    );
+  }
+  expect(JSON.stringify(schema)).toBe(original);
 });
 
 it("refreshes prepared schema tiers while searching current draft keys and access", () => {

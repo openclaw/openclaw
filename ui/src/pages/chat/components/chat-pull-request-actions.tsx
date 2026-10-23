@@ -1,4 +1,12 @@
-import { createMemo, createSignal, createUniqueId, Show, useContext } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  createUniqueId,
+  Errored,
+  latest,
+  Show,
+  useContext,
+} from "solid-js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import { GitDiffValues } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -21,8 +29,8 @@ import {
   STATE_LABEL_KEYS,
   type ChatPullRequestsProps,
 } from "./chat-pull-request-shared.tsx";
-import "./chat-ci-details.ts";
-import "./chat-ci-automation-control.ts";
+import "./chat-ci-details.tsx";
+import "./chat-ci-automation-control.tsx";
 
 const CHECK_ROLLUP = {
   failing: ["failed", "chat.pullRequests.checksFailed", "circleX"],
@@ -296,10 +304,16 @@ export function PullRequestActions(props: {
                 kind: "content",
                 id: "copy-error",
                 content: (
-                  <Show when={clipboard.failed()}>
-                    <p class="chat-pr-menu__error" role="alert">
-                      {t("chat.pullRequests.copyFailed")}
-                    </p>
+                  <Show when={!clipboard.copying()}>
+                    <Errored
+                      fallback={
+                        <p class="chat-pr-menu__error" role="alert">
+                          {t("chat.pullRequests.copyFailed")}
+                        </p>
+                      }
+                    >
+                      {latest(clipboard.outcome)}
+                    </Errored>
                   </Show>
                 ),
               },

@@ -173,6 +173,35 @@ describe("lintMemoryWikiVault", () => {
     ).toEqual(broken.map((target) => `Broken wikilink target \`${target}\`.`));
   });
 
+  it("resolves CommonMark link destinations for lint and generated backlinks", async () => {
+    const { config, page, rootDir } = await createLintVault();
+    const targets = ["plan.md", "plan(v2).md", "plan notes.md"];
+    for (const [index, target] of targets.entries()) {
+      await page(`entities/${target}`, {
+        pageType: "entity",
+        id: `entity.plan-${index}`,
+        title: `Plan ${index}`,
+      });
+    }
+    await page(
+      "sources/links.md",
+      { pageType: "source", id: "source.links", title: "Links" },
+      '# Links\n\n[Plan](../entities/plan.md "Project plan")\n' +
+        "[Revision](../entities/plan(v2).md)\n" +
+        "[Notes](<../entities/plan notes.md>)\n",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(result.issues.filter((issue) => issue.code === "broken-wikilink")).toEqual([]);
+    for (const target of targets) {
+      const raw = await fs.readFile(path.join(rootDir, "entities", target), "utf8");
+      const related = raw.split(WIKI_RELATED_START_MARKER)[1]?.split(WIKI_RELATED_END_MARKER)[0];
+      expect(related).toContain("Referenced By");
+      expect(related).toContain("Links");
+    }
+  });
+
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {
     const { config, page, write } = await createLintVault({
       config: { vault: { renderMode: "obsidian" } },

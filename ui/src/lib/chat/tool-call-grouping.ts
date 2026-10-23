@@ -2,7 +2,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { summarizeAgentActivity } from "../../../../src/agents/agent-activity-presentation.js";
 import { t } from "../../i18n/index.ts";
+import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
 import { isAgentActivityItem } from "../protocol-validators.generated/activity.js";
+
+registerChatToolLabelsEnglish();
 
 export function readPreparedActivity(message: unknown): AgentActivityItem[] {
   const activity = asOptionalRecord(message)?.activity;

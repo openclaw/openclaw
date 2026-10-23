@@ -33,9 +33,7 @@ export function createWorkerPlacementIdleSweep(options: {
       "resolveGatewaySessionStoreTargetInWorker"
     >
   >;
-  now?: () => number;
 }) {
-  const now = options.now ?? Date.now;
   const loadSessionRuntime = options.loadSessionRuntime;
   const getSessionWorkAdmissionCheck =
     options.getSessionWorkAdmissionCheck ??
@@ -105,7 +103,7 @@ export function createWorkerPlacementIdleSweep(options: {
             continue;
           }
           // Placement activation and every turn-claim admission/release durably refresh this fact.
-          if (now() - placement.updatedAtMs < parseDurationMs(suspendAfter)) {
+          if (Date.now() - placement.updatedAtMs < parseDurationMs(suspendAfter)) {
             continue;
           }
           if (

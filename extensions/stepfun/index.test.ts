@@ -1,25 +1,81 @@
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import type { ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import * as plugins from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { assert, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import stepfunPlugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import * as catalog from "./provider-catalog.js";
 
 function registerStepFun() {
   return plugins.registerProviderPlugin({ plugin: stepfunPlugin, id: "stepfun", name: "StepFun" });
 }
 
-it("adds Step 3.7 Flash without changing existing defaults", () => {
-  const standard = catalog.buildStepFunProvider();
-  const plan = catalog.buildStepFunPlanProvider();
+describe.each([
+  ["stepfun", "standard-api-key-intl", undefined, ["step-3.7-flash", "step-3.5-flash"]],
+  [
+    "stepfun-plan",
+    "plan-api-key-cn",
+    "merge",
+    ["step-3.7-flash", "step-3.5-flash", "step-3.5-flash-2603"],
+  ],
+] as const)("%s setup", (providerId, methodId, mode, rows) => {
+  async function apply(config: OpenClawConfig) {
+    const { providers } = await registerStepFun();
+    const provider = plugins.requireRegisteredProvider(providers, providerId);
+    const method = provider.auth.find((entry) => entry.id === methodId);
+    assert(method?.runNonInteractive && method.wizard?.choiceId, `Missing auth method ${methodId}`);
+    const result = await method.runNonInteractive({
+      authChoice: method.wizard.choiceId,
+      config,
+      baseConfig: config,
+      opts: {},
+      runtime: createRuntimeSpies(),
+      resolveApiKey: async () => ({ key: "fixture-value", source: "profile" as const }),
+      toApiKeyCredential: () => null,
+    });
+    assert(result, "StepFun setup did not return a configuration");
+    return result;
+  }
+
+  it("leaves ordinary rows runtime-owned and retains aliases", async () => {
+    const config = await apply({ models: { mode } });
+
+    expect(config.models?.providers?.[providerId]?.models).toEqual([]);
+    expect(config.agents?.defaults?.models?.[`${providerId}/step-3.7-flash`]).toEqual({});
+    expect(config.agents?.defaults?.models?.[`${providerId}/step-3.5-flash`]?.alias).toBeDefined();
+    expect(await apply(config)).toEqual(config);
+  });
+
+  it("retains the shipped replace catalog", async () => {
+    const config = await apply({ models: { mode: "replace" } });
+    expect(config.models?.providers?.[providerId]?.models.map((model) => model.id)).toEqual(rows);
+  });
+});
+
+it("adds Step 3.7 Flash without changing existing defaults", async () => {
+  const { providers } = await registerStepFun();
+  const standardRegistration = plugins.requireRegisteredProvider(providers, "stepfun");
+  const planRegistration = plugins.requireRegisteredProvider(providers, "stepfun-plan");
+  const ctx: ProviderCatalogContext = {
+    config: {},
+    env: {},
+    resolveProviderApiKey: () => ({ apiKey: undefined }),
+    resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+  };
+  const standardResult = await standardRegistration.staticCatalog?.run(ctx);
+  const planResult = await planRegistration.staticCatalog?.run(ctx);
+  assert(standardResult && "provider" in standardResult, "Missing StepFun Standard catalog");
+  assert(planResult && "provider" in planResult, "Missing StepFun Plan catalog");
+  const standard = standardResult.provider;
+  const plan = planResult.provider;
   const standardModel = standard.models?.find((model) => model.id === "step-3.7-flash");
   const planModel = plan.models?.find((model) => model.id === "step-3.7-flash");
   assert(standardModel, "StepFun Standard catalog did not provide Step 3.7 Flash");
 
-  expect(catalog.STEPFUN_DEFAULT_MODEL_REF).toBe("stepfun/step-3.5-flash");
-  expect(catalog.STEPFUN_PLAN_DEFAULT_MODEL_REF).toBe("stepfun-plan/step-3.5-flash");
+  expect(standardRegistration.auth[0]?.starterModel).toBe("stepfun/step-3.5-flash");
+  expect(planRegistration.auth[0]?.starterModel).toBe("stepfun-plan/step-3.5-flash");
   const standard35 = standard.models?.find((model) => model.id === "step-3.5-flash");
   expect(standard35?.compat?.supportsReasoningEffort).not.toBe(true);
   expect(standard35?.cost).toEqual({ input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0 });

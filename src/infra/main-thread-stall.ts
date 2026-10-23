@@ -5,9 +5,8 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 const STALL_MS = 250;
 const MAX_PENDING_STALLS = 8;
 
-type Stall = { elapsedMs: number; task: string; taskMs: number };
 type TaskObserver = {
-  enter(name: string, phase?: string): () => void;
+  run<T>(name: string, run: () => T, phase?: string): T;
   currentName(): string | undefined;
   stop(): void;
 };
@@ -23,24 +22,19 @@ export function getMainThreadTaskName(): string | undefined {
   return taskState.observer?.currentName() ?? taskState.context.getStore();
 }
 
-/** Name code-owned work only; request text, paths, and identifiers do not belong in labels. */
+/**
+ * Name code-owned work only; request text, paths, and identifiers do not belong in labels.
+ * Phases label synchronous segments; only task boundaries establish an inherited async name.
+ */
 export function runWithMainThreadTask<T>(name: string, run: () => T, phase?: string): T {
   const observer = taskState.observer;
-  if (!observer) {
-    return run();
-  }
-  const exit = observer.enter(name, phase);
-  try {
-    return taskState.context.run(name, run);
-  } finally {
-    exit();
-  }
+  return observer ? observer.run(name, run, phase) : run();
 }
 
 /** Measure explicit synchronous scopes; unscoped stalls rely on best-effort loop sampling. */
 export function createMainThreadStallMonitor(now: () => number = () => performance.now()) {
   taskState.observer?.stop();
-  const pending: Stall[] = [];
+  const pending: { elapsedMs: number; task: string; taskMs: number }[] = [];
   let stopped = false;
   let dropped = 0;
   let delayMaxMs = 0;
@@ -76,7 +70,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       dropped = 0;
       delayMaxMs = 0;
     },
-    enter(name, taskPhase) {
+    run(name, run, taskPhase) {
       const enteredAt = now();
       const ownsTurn = !active;
       if (ownsTurn) {
@@ -92,7 +86,9 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       const previousPhase = phase;
       task = name;
       phase = taskPhase;
-      return () => {
+      try {
+        return taskPhase === undefined ? taskState.context.run(name, run) : run();
+      } finally {
         const at = now();
         segment(at);
         task = previous;
@@ -113,7 +109,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
             }
           }
         }
-      };
+      }
     },
   };
   taskState.observer = observer;

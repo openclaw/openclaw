@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { shouldPreferProviderRuntimeResolvedModel } from "../../plugins/provider-runtime.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
@@ -240,12 +241,7 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
           () => {
             // FIFO bounds retained metadata for a long-lived generation. The
             // shared promise helper evicts only its own rejection, even after churn.
-            if (memo.size >= ROUTE_MODEL_MEMO_MAX_ENTRIES) {
-              const oldest = memo.keys().next().value;
-              if (oldest !== undefined) {
-                memo.delete(oldest);
-              }
-            }
+            pruneMapToMaxSize(memo, ROUTE_MODEL_MEMO_MAX_ENTRIES - 1);
             return materializeUncached(plan);
           },
           { cacheRejections: false },

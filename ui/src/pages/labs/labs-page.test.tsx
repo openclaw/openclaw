@@ -276,13 +276,24 @@ describe("LabsPage", () => {
 
     await waitForSolid(() => {
       expect(toggle.checked).toBe(true);
-      expect(toggle.hasAttribute("disabled")).toBe(true);
+      expect(toggle.hasAttribute("aria-disabled")).toBe(true);
+      expect(toggle.disabled).toBe(false);
+      expect(labToggle(page, "Composer predictions").disabled).toBe(true);
     });
+    runtimeConfig.state.configLoading = true;
+    runtimeConfig.notify();
+    await waitForSolid(() => expect(toggle.disabled).toBe(true));
+    runtimeConfig.state.configLoading = false;
+    runtimeConfig.notify();
+    await waitForSolid(() => expect(toggle.disabled).toBe(false));
+    toggle.click();
+    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
     gateway.setPhase("reconnecting");
     gateway.setPhase("connected");
     await waitForSolid(() => {
       expect(toggle.checked).toBe(false);
-      expect(toggle.hasAttribute("disabled")).toBe(false);
+      expect(toggle.hasAttribute("aria-disabled")).toBe(false);
+      expect(labToggle(page, "Composer predictions").disabled).toBe(false);
     });
     pendingPatch.resolve(false);
     await pendingPatch.promise;
@@ -494,7 +505,7 @@ describe("LabsPage Decision assistance", () => {
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     await waitForSolid(() => {
       expect(toggle.checked).toBe(true);
-      expect(toggle.hasAttribute("disabled")).toBe(true);
+      expect(toggle.hasAttribute("aria-disabled")).toBe(true);
     });
     expect(labRow(page, "Decision assistance").textContent).not.toContain("Preference saved.");
     pending.resolve(false);

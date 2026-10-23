@@ -156,9 +156,11 @@ function VoiceWriteStatus(props: {
           {t("common.saving")}
         </span>
       </Show>
-      <Errored fallback={voiceControlErrorFallback(() => props.edit.retry())}>
-        <Loading>{latest(props.edit.outcome)}</Loading>
-      </Errored>
+      <Show when={!props.edit.saving()}>
+        <Errored fallback={voiceControlErrorFallback(() => props.edit.retry())}>
+          <Loading>{latest(props.edit.outcome)}</Loading>
+        </Errored>
+      </Show>
     </>
   );
 }

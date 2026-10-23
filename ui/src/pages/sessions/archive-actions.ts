@@ -1,14 +1,19 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionPatch, SessionPatchResult } from "../../lib/sessions/patch.ts";
 import {
   resolveUiDefaultAgentId,
   resolveUiSessionRowAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { prepareArchiveOutcome } from "./archive-outcome.ts";
+import { showToast } from "../../lib/toast.ts";
 import type { SessionsPageMutationResult } from "./mutation-runner.ts";
 import type { SessionsPageRequestScope } from "./request-scope.ts";
+
+registerSessionOrganizationEnglish();
 
 type SessionPageArchiveHost = {
   captureScope: () => SessionsPageRequestScope | null;
@@ -99,14 +104,42 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
           mutationScope,
         );
       }
-      const onConfirmed = prepareArchiveOutcome(
-        scope.sessions,
-        row,
-        host.agentId(row.key, scope.context),
-      );
-      if (!onConfirmed) {
+      const archiveSessions = scope.sessions;
+      const archiveAgentId = host.agentId(row.key, scope.context);
+      const { key, sessionId, pinned } = row;
+      const connection = archiveSessions.captureConnectionScope();
+      if (!connection) {
         return;
       }
+      // Confirmation and Undo outlive the page, but keep the admitted connection and incarnation.
+      const onConfirmed = (result: SessionPatchResult) => {
+        if (
+          !archiveSessions.isConnectionScopeCurrent(connection) ||
+          result.entry.sessionId !== sessionId
+        ) {
+          return;
+        }
+        showToast({
+          message: t("sessionsView.sessionArchived"),
+          actionLabel: t("common.undo"),
+          onAction: () => {
+            if (!archiveSessions.isConnectionScopeCurrent(connection)) {
+              return;
+            }
+            void archiveSessions
+              .patch(
+                key,
+                { archived: false, ...(pinned === true ? { pinned: true } : {}) },
+                { agentId: archiveAgentId, expectedSessionId: sessionId },
+              )
+              .catch((error: unknown) => {
+                if (archiveSessions.isConnectionScopeCurrent(connection)) {
+                  showToast({ message: formatUiError(error) });
+                }
+              });
+          },
+        });
+      };
       const finishArchive = scope.sessions.beginArchive(row.key, row.sessionId);
       if (!finishArchive) {
         return;

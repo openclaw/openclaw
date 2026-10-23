@@ -1834,7 +1834,6 @@ describe("doctor health contributions", () => {
     expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
       detected,
       config: cfg,
-      doctorOnlyStateMigrations: true,
       integrityCheck: "quick",
       legacySessionSurfaces,
     });

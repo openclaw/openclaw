@@ -611,9 +611,6 @@ function createGatewayRootWorkAdmissionContinuationScope(
   };
   return {
     release: () => {
-      if (released) {
-        return;
-      }
       released = true;
       releaseAdmission?.();
     },

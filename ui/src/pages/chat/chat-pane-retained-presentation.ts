@@ -46,7 +46,6 @@ import { refreshChatMetadata } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import type { ChatDetailsOutputsIcons } from "./components/chat-details-types.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation-view.tsx";
 import {
   clearSessionWorkspacePreviews,
@@ -63,6 +62,17 @@ import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-mes
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 600;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
+type RetainedProgressCard = {
+  gatewayScope: object;
+  client: ChatPageHost["client"];
+  sessionKey: string;
+  sessionId: ChatPageHost["currentSessionId"];
+  agentId: string | undefined;
+  card: ProgressCard;
+  lifetime: object | undefined;
+  identity: string;
+};
+
 /** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   readonly activeSessionResources = new ChatPaneActiveResources();
@@ -70,7 +80,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   private detailsOutputsBinding?: DetailsOutputsBinding;
 
   /** The Details host consumes this binding; native workspace/board projections already subscribe the pane. */
-  protected captureDetailsOutputs(icons: ChatDetailsOutputsIcons) {
+  protected captureDetailsOutputs() {
     const state = this.state;
     if (!state || !this.presented || !this.isConnected) {
       this.detailsOutputsBinding?.stop();
@@ -111,7 +121,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         boardReady,
       );
     }
-    return projectDetailsOutputs(binding, workspace, board, icons);
+    return projectDetailsOutputs(binding, workspace, board);
   }
 
   override dispose(): void {
@@ -282,24 +292,9 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   readonly progressVisibility = {
     hiddenCards: new Map<string, { lifetime: object | undefined; revision: number }>(),
   };
-  private retainedProgressCard:
-    | {
-        gatewayScope: object;
-        client: ChatPageHost["client"];
-        sessionKey: string;
-        sessionId: ChatPageHost["currentSessionId"];
-        agentId: string | undefined;
-        card: ProgressCard;
-        lifetime: object | undefined;
-        identity: string;
-      }
-    | undefined;
+  private retainedProgressCard: RetainedProgressCard | undefined;
 
-  protected get detailsProgressCardPresentation(): {
-    card: ProgressCard;
-    lifetime: object | undefined;
-    identity: string;
-  } | null {
+  protected get detailsProgressCardPresentation(): RetainedProgressCard | null {
     const state = this.state;
     if (
       !state ||
@@ -392,9 +387,19 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       .catch(() => showToast({ message: t("sessionProgressCard.clearFailed") }));
   };
 
-  protected hideProgressCard(card: ProgressCard): void {
+  protected hideProgressCard(rendered: RetainedProgressCard, card: ProgressCard): void {
     const presented = this.progressCardPresentation;
-    if (!presented || presented.card !== card) {
+    // Refreshes replace the card object without retiring its displayed lifetime.
+    if (
+      !presented ||
+      rendered.card !== card ||
+      presented.gatewayScope !== rendered.gatewayScope ||
+      presented.client !== rendered.client ||
+      presented.identity !== rendered.identity ||
+      presented.sessionId !== rendered.sessionId ||
+      presented.lifetime !== rendered.lifetime ||
+      presented.card.revision !== card.revision
+    ) {
       return;
     }
     this.progressVisibility.hiddenCards = new Map(this.progressVisibility.hiddenCards).set(

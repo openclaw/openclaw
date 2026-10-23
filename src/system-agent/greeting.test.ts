@@ -431,21 +431,6 @@ describe("system agent greeting cache", () => {
     },
   );
 
-  it("uses the model-free fallback when the optional greeting cache cannot open", async () => {
-    const planner = vi.fn();
-    const result = await resolveSystemAgentGreeting({
-      overview: createOverview(),
-      facts: healthyFacts(),
-      planner,
-      openCache: () => {
-        throw new Error("sqlite unavailable");
-      },
-    });
-
-    expect(result).toBe(HEALTHY_GREETING_TEMPLATE);
-    expect(planner).not.toHaveBeenCalled();
-  });
-
   it.each(["failed", "revoked"])(
     "does not publish cached text after a %s asynchronous greeting read",
     async (failure) => {

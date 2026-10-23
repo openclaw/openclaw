@@ -1,10 +1,12 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Match, Show, Switch, createMemo, onCleanup, refresh } from "solid-js";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import "./chat-audio-player.tsx";
 import "./chat-svg-attachment.tsx";
 import "./chat-video-player.tsx";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import {
   isCrossOriginHttpSource,
   safeAttachmentHref,
@@ -38,6 +40,10 @@ import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import { SentCommentAttachments } from "./chat-sent-comments.tsx";
 import type { AttachmentSidebarState, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { videoLightboxItem } from "./chat-video-lightbox-source.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 type CustomElementProps<T extends HTMLElement> = SolidJSX.HTMLAttributes<T> & {
   [K in keyof T as `prop:${Extract<K, string>}`]?: T[K];
@@ -116,6 +122,7 @@ export function AssistantAttachments(
     () => new Map(comments().map((item) => [item, resolveComment(item)])),
     { lazy: true },
   );
+  // Comment resolution can acquire resources during rendering, before settled setup runs.
   onCleanup(() => releaseChatMediaResourceOwner(refreshComments));
   return (
     <Show when={props.attachments.length}>
@@ -330,6 +337,23 @@ function prepareAttachment(
   };
 }
 
+function createAttachmentPresentation(
+  props: Parameters<typeof prepareAttachment>[0],
+  fallback?: "card",
+) {
+  const refreshAttachment = () => void refresh(model);
+  const model = createMemo(() => {
+    observeChatMediaResourceSubscriber(props.options.mediaOwner, refreshAttachment);
+    return prepareAttachment({
+      ...props,
+      presentation: props.presentation ?? fallback,
+      options: { ...props.options, onMediaChange: refreshAttachment },
+    });
+  });
+  onCleanup(() => releaseChatMediaResourceOwner(refreshAttachment));
+  return model;
+}
+
 function AttachmentContent(
   props: AttachmentProps & {
     item: AttachmentItem;
@@ -337,15 +361,7 @@ function AttachmentContent(
     admission?: AttachmentAdmission;
   },
 ): SolidJSX.Element {
-  const refreshAttachment = () => void refresh(model);
-  const model = createMemo(() => {
-    observeChatMediaResourceSubscriber(props.options.mediaOwner, refreshAttachment);
-    return prepareAttachment({
-      ...props,
-      options: { ...props.options, onMediaChange: refreshAttachment },
-    });
-  });
-  onCleanup(() => releaseChatMediaResourceOwner(refreshAttachment));
+  const model = createAttachmentPresentation(props);
   const attachment = () => model().attachment;
   const unavailable = () =>
     !model().pastedText &&
@@ -558,16 +574,7 @@ function AttachmentActionContent(
     render: (action: () => MessageMediaAction) => SolidJSX.Element;
   },
 ): SolidJSX.Element {
-  const refreshAttachment = () => void refresh(model);
-  const model = createMemo(() => {
-    observeChatMediaResourceSubscriber(props.options.mediaOwner, refreshAttachment);
-    return prepareAttachment({
-      ...props,
-      presentation: "card",
-      options: { ...props.options, onMediaChange: refreshAttachment },
-    });
-  });
-  onCleanup(() => releaseChatMediaResourceOwner(refreshAttachment));
+  const model = createAttachmentPresentation(props, "card");
   const action = createMemo<MessageMediaAction>(() => ({
     pending: !model().resolved || model().resolved?.status === "checking",
     reason:

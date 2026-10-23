@@ -29,6 +29,7 @@ import {
   stageOutboxAttachment as stage,
   outboxChatUrl as chatUrl,
 } from "./chat-outbox-payloads.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 
 const plainHttpHost = "plain-http.test";
 const suite = createChatFlowE2eSuite({
@@ -146,8 +147,18 @@ suite.define(() => {
       expect((await readQueue(page))[0]?.sendRunId).toBe(queued.sendRunId);
     }));
 
-  it("queues complete attachment bytes while the browser and Gateway are offline", () =>
+  it("retains offline attachment bytes through cold queue recovery and reconnect", () =>
     suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
+      const queueModule = controlUiE2eBuiltModuleRequest(
+        "ui/src/pages/chat/components/chat-composer-queue.tsx",
+      );
+      await page.addInitScript(() => {
+        window.addEventListener("vite:preloadError", (event) => {
+          console.debug(
+            "outbox-preload-error: " + String((event as Event & { payload?: unknown }).payload),
+          );
+        });
+      });
       const gateway = await installGateway(page, true);
       await openChat(page);
       await waitForControlUiGatewayReady(page);
@@ -155,7 +166,17 @@ suite.define(() => {
       await stage(page, message);
       await context.setOffline(true);
       await disconnect(page, gateway);
-      await send(page);
+      const [failedQueueRequest] = await Promise.all([
+        page.waitForEvent("requestfailed", (request) => queueModule.test(request.url())),
+        page.waitForEvent(
+          "console",
+          (consoleMessage) =>
+            consoleMessage.text().startsWith("outbox-preload-error: ") &&
+            queueModule.test(consoleMessage.text()),
+        ),
+        send(page),
+      ]);
+      expect(failedQueueRequest.failure()?.errorText).toBe("net::ERR_INTERNET_DISCONNECTED");
       await expect.poll(async () => (await readQueue(page)).length).toBe(1);
       const queued = (await readQueue(page))[0]!;
       expect(queued.attachmentPayload).toBeDefined();
@@ -163,7 +184,9 @@ suite.define(() => {
       await expect.poll(() => payloadCount(page)).toBe(1);
       await expect.poll(() => composerFor(page).inputValue()).toBe("");
       await expectRequestCountStable(gateway, "chat.send", 0);
+      const reloaded = page.waitForEvent("domcontentloaded");
       await context.setOffline(false);
+      await reloaded;
       await gateway.setOnline(true);
       const recordReconnectFacts = (afterWait: boolean) =>
         withTimeout(

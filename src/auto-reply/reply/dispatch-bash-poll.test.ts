@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
   addSession,
+  appendOutput,
   deleteSession,
   markExited,
   recordNotifyOnExitRemoval,
@@ -63,7 +64,7 @@ function fixture(alias = "!poll") {
   const process = createProcessSessionFixture({ id, backgrounded: true });
   process.scopeKey = "chat:bash";
   process.sessionKey = sessionKey;
-  process.aggregated = "Completed synthetic work";
+  appendOutput(process, "stdout", "Completed synthetic work");
   addSession(process);
   markExited(process, 0, null, "completed");
   const eventOptions = { sessionKey, contextKey: `exec:${id}` };

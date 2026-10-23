@@ -224,9 +224,9 @@ suite.define(() => {
         await pane
           .getByRole("menu", { name: `Actions for ${label}` })
           .waitFor({ state: "visible" });
-        expect(
-          await pane.locator('openclaw-chat-header-session-menu [role^="menuitem"]').count(),
-        ).toBeGreaterThan(10);
+        await expect
+          .poll(() => pane.locator('openclaw-chat-header-session-menu [role^="menuitem"]').count())
+          .toBeGreaterThan(10);
         await page.keyboard.press("Escape");
         await pane.getByRole("button", { name: "Session sharing", exact: true }).click();
         const sharing = pane.locator(".chat-pane__sharing-menu");

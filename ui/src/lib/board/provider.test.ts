@@ -11,6 +11,7 @@ import {
   boardExists,
   boardProviderForSession,
   canvasWidgetNameForDocument,
+  createNullBoardProvider,
   mcpAppWidgetNameForViewId,
 } from "./provider.ts";
 import type { BoardProvider } from "./provider.ts";
@@ -153,14 +154,20 @@ describe("board leases", () => {
     expect(afterDenial).toHaveBeenCalledExactlyOnceWith(null, 4000);
   });
   it("keeps null providers chat-only", () => {
-    const p = boardProviderForSession({ sessionKey: KEY });
+    const p = createNullBoardProvider(KEY);
     expect(boardExists(p.snapshot$.value)).toBe(false);
     expect(p.snapshot$.value).toEqual(snapshot(0, { tabs: [] }));
   });
-  it("aliases the main session", () => {
-    expect(boardProviderForSession({ sessionKey: "main" })).toBe(
-      boardProviderForSession({ sessionKey: "agent:main:main" }),
-    );
+  it("looks up only leased providers and aliases the main session", () => {
+    expect(boardProviderForSession({ sessionKey: "main" })).toBeUndefined();
+    const lease = acquireBoardProviderForSession({ sessionKey: "main" }, boardClient(), false);
+    onTestFinished(() => lease.release());
+    const cached = boardProviderForSession({ sessionKey: "main" });
+    expect(cached?.snapshot$).toBe(lease.provider.snapshot$);
+    expect(cached).toBe(boardProviderForSession({ sessionKey: "agent:main:main" }));
+    expect(boardProviderForSession({ sessionKey: "main" }, false)).toBeUndefined();
+    lease.release();
+    expect(boardProviderForSession({ sessionKey: "main" })).toBeUndefined();
   });
   it("keeps normalized and truncated canvas names distinct and valid", () => {
     const long = "x".repeat(80);

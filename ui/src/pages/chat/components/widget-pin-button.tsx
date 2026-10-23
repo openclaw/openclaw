@@ -1,10 +1,13 @@
 import { createErrorBoundary } from "@solidjs/signals";
 import { action, createMemo, createOptimistic, createSignal, refresh } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
 import { showToast } from "../../../lib/toast.ts";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 export type WidgetPinTarget = {
   board: BoardProvider;
@@ -24,7 +27,11 @@ export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string
   );
   const [pinned, setPinned] = createOptimistic(() => ownerPinned().read());
   const [saving, setSaving] = createOptimistic(false);
-  const [attempt, setAttempt] = createSignal<Promise<void>>();
+  const [attempt, setAttempt] = createSignal<Promise<void> | undefined>(() => {
+    // Authoritative pin changes retire feedback from an earlier attempt.
+    ownerPinned().read();
+    return undefined;
+  });
   let admitted = false;
   let button!: HTMLButtonElement;
   const present = action(function* (completion: Promise<void>) {

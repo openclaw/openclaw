@@ -8,14 +8,10 @@ import type { SynologyIngressLifecycle } from "./webhook-ingress.js";
 
 const CHANNEL_ID = "synology-chat";
 
-type SynologyChannelLog = {
-  info?: (...args: unknown[]) => void;
-};
-
 export async function dispatchSynologyChatInboundEvent(params: {
   account: ResolvedSynologyChatAccount;
   msg: SynologyInboundMessage;
-  log?: SynologyChannelLog;
+  log?: { info?: (...args: unknown[]) => void };
   turnAdoptionLifecycle?: SynologyIngressLifecycle;
 }): Promise<null> {
   const rt = getSynologyRuntime();

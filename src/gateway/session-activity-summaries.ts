@@ -106,6 +106,7 @@ type Tracked = ActivitySummaryTarget & {
 class ActivitySummaryCancelledError extends Error {
   constructor() {
     super("Activity recap lifecycle or utility model changed");
+    this.name = "AbortError";
   }
 }
 

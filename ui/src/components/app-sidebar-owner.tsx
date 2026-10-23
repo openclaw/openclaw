@@ -189,10 +189,11 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     return snapshot && Array.isArray(snapshot.gateways) ? snapshot : null;
   }
 
-  // Catalog rows retain their idle prewarm and only render at their keyed section.
-  readonly catalogRendererImport = createSidebarRendererLoader(
-    () => import("./app-sidebar-session-catalog-render.tsx"),
-  );
+  // Catalog rows load when their keyed section needs them.
+  private readonly Catalog = lazy(() => import("./app-sidebar-session-catalog-render.tsx"), {
+    export: "renderSessionCatalogGroups",
+  });
+  readonly catalogRendererImport = createSidebarRendererLoader(this.Catalog.preload);
   catalogProjectGrouping: CatalogProjectGrouping = loadStoredSidebarCatalogGrouping();
 
   override dismissTransientMenus(): boolean {
@@ -317,6 +318,49 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     }
   }
 
+  async loadMoreSidebarSessions(): Promise<void> {
+    if (this.sessionData.sessionsLoading) {
+      return;
+    }
+    const sessions = this.context.sessions;
+    const scope = sessions.captureConnectionScope();
+    if (!scope) {
+      return;
+    }
+    const query = () => JSON.stringify(this.sessionData.sessionListQuery(this.expandedAgentId()));
+    const initialQuery = query();
+    const mode = this.sidebarAgentsMode;
+    const readRows = () => this.selectedAgentSessionRows(this.getSessionNavigationState());
+    const previousKeys = new Set(readRows().map((row) => row.key));
+    // Server pages include workers and scheduled/system sessions hidden by the
+    // sidebar projection. One activation must get past a hidden-only page.
+    for (;;) {
+      const previous = this.sessionData.sessionsResult;
+      const offset = previous?.nextOffset ?? previous?.sessions.length;
+      await this.sessionData.loadMoreSidebarSessions();
+      if (
+        this.context.sessions !== sessions ||
+        this.sidebarAgentsMode !== mode ||
+        !sessions.isConnectionScopeCurrent(scope) ||
+        query() !== initialQuery
+      ) {
+        return;
+      }
+      const result = this.sessionData.sessionsResult;
+      if (
+        !result?.hasMore ||
+        (result.nextOffset ?? result.sessions.length) === offset ||
+        readRows().some((row) => !previousKeys.has(row.key))
+      ) {
+        break;
+      }
+    }
+    // Fresh rows must not land behind the section's local Show more cap.
+    for (const section of this.zonedVisibleSections(readRows()).sections) {
+      this.setVisibleSessionLimit(section.id, section.visibleLimit + SIDEBAR_SESSION_PAGE_SIZE);
+    }
+  }
+
   setCatalogProjectGrouping(next: CatalogProjectGrouping): void {
     storeSidebarCatalogGrouping(next);
     this.catalogProjectGrouping = next;
@@ -362,9 +406,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       });
       return null;
     };
-    const LazyCatalog = lazy(this.catalogRendererImport.load, {
-      export: "renderSessionCatalogGroups",
-    });
+    const LazyCatalog = this.Catalog;
     const Boundary = this.catalogRendererImport.Boundary;
     const Catalog: SessionCatalogGroupsRenderer = (props) => (
       <Boundary>

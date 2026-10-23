@@ -8,8 +8,6 @@ import {
 } from "./translator.bridge-test-helpers.js";
 import { createPromptScenario } from "./translator.scenario.test-support.js";
 
-vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
-
 async function createHarness(
   eventLedger: AcpEventLedger,
   options: { load?: string; rejectSend?: boolean } = {},

@@ -24,6 +24,9 @@ export type SessionHovercardAutomation = {
 };
 
 function instructions(job: CronJob): string {
+  if (job.payloadSource) {
+    return formatCronPayload(job);
+  }
   switch (job.payload.kind) {
     case "agentTurn":
       return job.payload.message;

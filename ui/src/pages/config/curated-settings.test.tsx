@@ -131,7 +131,9 @@ it("locks every global dreaming control when config mutation is unavailable", ()
   const container = renderInto(null, vi.fn(), true);
 
   expect(
-    [...container.querySelectorAll<HTMLInputElement>("input")].every((input) => input.disabled),
+    [...container.querySelectorAll<HTMLInputElement>("input")].every((input) =>
+      input.matches(":disabled"),
+    ),
   ).toBe(true);
 });
 

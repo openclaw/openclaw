@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { SESSION_ROW_DELTA_MAX_ENTRIES } from "../../packages/gateway-protocol/src/session-row-deltas.js";
-import { ConnectionSessionRows } from "./session-ancestor-references.js";
+import { ConnectionSessionRows, prepareSessionAncestor } from "./session-ancestor-references.js";
 import { observeSessionEventRowRetention } from "./session-event-row-retention.test-support.js";
 import { createSessionRowDeltaDiffer } from "./session-row-delta-fields.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
@@ -120,6 +120,35 @@ it("sends retain:false without disturbing the LRU when vectors exceed the byte c
       full: rejected,
       retain: false,
     });
+  } finally {
+    await close();
+  }
+});
+
+it("resends an unchanged ancestor after its socket row baseline is evicted", async () => {
+  const { owner, diff, close } = await fixture();
+  const parent = row("agent:main:parent", { snapshotAt: 1 });
+  const prepared = [prepareSessionAncestor(parent)];
+  const recoveryRevision = "00000000-0000-4000-8000-000000000001";
+  try {
+    const first = owner.prepare(prepared, undefined, true);
+    owner.prepareRows(first.ancestorSessions, diff).delivered();
+    first.delivered();
+    expect(owner.prepare(prepared, undefined, true).ancestorSessionRefs).toHaveLength(1);
+    owner
+      .prepareRows(
+        Array.from({ length: SESSION_ROW_DELTA_MAX_ENTRIES }, (_, index) =>
+          row(`agent:main:leaf-${index}`),
+        ),
+        diff,
+      )
+      .delivered();
+    const recovered = owner.prepare(prepared, recoveryRevision, true);
+    expect(recovered.ancestorSessions).toEqual([{ ...parent, ancestorRevision: recoveryRevision }]);
+    expect(recovered.ancestorSessionRefs).toBeUndefined();
+    owner.prepareRows(recovered.ancestorSessions, diff).delivered();
+    recovered.delivered();
+    expect(owner.prepare(prepared, undefined, true).ancestorSessionRefs).toHaveLength(1);
   } finally {
     await close();
   }

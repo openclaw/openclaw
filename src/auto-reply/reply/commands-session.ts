@@ -29,8 +29,8 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewayRestart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { formatFastModeConfirmation } from "../../shared/fast-mode.js";
+import { normalizeCommandBody } from "../commands-registry.js";
 import { parseActivationCommand } from "../group-activation.js";
-import { parseSendPolicyCommand } from "../send-policy.js";
 import {
   isSessionDefaultDirectiveValue,
   normalizeFastMode,
@@ -50,8 +50,10 @@ import {
   persistCommandSession,
   sessionEntryPersistenceConflictReply,
 } from "./commands-session-store.js";
+import { parseSendPolicyCommandBody } from "./commands-slash-parse.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "./conversation-binding-input.js";
+import { stripInboundMetadata } from "./strip-inbound-meta.js";
 
 const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
@@ -171,7 +173,13 @@ export const handleSendPolicyCommand: CommandHandler = defineAuthorizedTextComma
   {
     label: "/send",
     match: (body) => {
-      const command = parseSendPolicyCommand(body);
+      const trimmed = body.trim();
+      if (!trimmed) {
+        return null;
+      }
+      const command = parseSendPolicyCommandBody(
+        normalizeCommandBody(stripInboundMetadata(trimmed)),
+      );
       return command.hasCommand ? command : null;
     },
     ownerOnly: true,

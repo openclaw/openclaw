@@ -22,7 +22,7 @@ async function loadApi(options?: { preservePersistentState?: boolean }) {
     resolve: api.resolveIMessageMessageId,
     latest: api.findLatestIMessageEntryForChat,
     current: api.isIMessageCurrentMessageInChatAsync,
-    isOwn: api.isKnownFromMeIMessageMessageId,
+    isOwn: api.isKnownFromMeIMessageTarget,
     binding: api.resolveIMessageCachedResourceBinding,
   };
 }
@@ -95,10 +95,11 @@ describe("imessage short message id resolution", () => {
     await remember("outbound-guid", { ...chat, isFromMe: true });
     await remember("inbound-guid", { ...chat, isFromMe: false });
 
-    expect(await cache.isOwn("outbound-guid", chat)).toBe(true);
-    expect(await cache.isOwn("inbound-guid", chat)).toBe(false);
+    expect(await cache.isOwn({ ...chat, messageIds: ["outbound-guid"] })).toBe(true);
+    expect(await cache.isOwn({ ...chat, messageIds: ["inbound-guid"] })).toBe(false);
     expect(
-      await cache.isOwn("outbound-guid", {
+      await cache.isOwn({
+        messageIds: ["outbound-guid"],
         accountId: "default",
         chatGuid: "any;-;+12069106514",
         chatIdentifier: "+12069106514",

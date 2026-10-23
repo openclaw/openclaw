@@ -1,14 +1,8 @@
 import Panzoom, { type PanzoomObject } from "@panzoom/panzoom";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  Show,
-  useContext,
-} from "solid-js";
-import { t } from "../lib/reactive/i18n.ts";
+import { createEffect, createMemo, createSignal, onSettled, Show, useContext } from "solid-js";
+import { registerChatMediaEnglish } from "../i18n/locales/en-chat-media.ts";
+import { elementRef } from "../lib/reactive/element-ref.ts";
+import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { ImageLightboxHost } from "./image-lightbox-context.ts";
@@ -24,11 +18,18 @@ import {
   trapLightboxTabFocus,
 } from "./image-lightbox-gallery.ts";
 import { panImageWithKeyboard } from "./image-lightbox-keyboard.ts";
-import { LightboxAction, LightboxChrome, lightboxImageStyle } from "./image-lightbox-view.tsx";
+import {
+  LightboxAction,
+  LightboxChrome,
+  LightboxImage,
+  lightboxImageStyle,
+} from "./image-lightbox-view.tsx";
 import type { ImageLightboxProps } from "./image-lightbox.types.ts";
+import "./modal-dialog.tsx";
 import { Icon } from "./solid/icon.tsx";
 import imageLightboxStyles from "./image-lightbox.css?inline";
-import "./modal-dialog.tsx";
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 const MAX_SCALE = 4;
 const DOUBLE_TAP_SCALE = 2.5;
@@ -49,11 +50,11 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
   const [scale, setScale] = createSignal(1, { ownedWrite: true });
   const [canZoom, setCanZoom] = createSignal(false, { ownedWrite: true });
   const focusables = new Set<HTMLElement>();
-  const focusableRef = () => {
-    let element: HTMLElement;
-    onCleanup(() => focusables.delete(element));
-    return (node: HTMLElement) => focusables.add((element = node));
-  };
+  const focusableRef = () =>
+    elementRef((element: HTMLElement) => {
+      focusables.add(element);
+      return () => focusables.delete(element);
+    });
   let imageElement: HTMLImageElement | undefined;
   let stageElement: HTMLDivElement | undefined;
   let slideElement: HTMLDivElement | undefined;
@@ -397,7 +398,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
           : event.key === "0"
             ? resetZoom
             : undefined;
-    if (panzoom && zoom) {
+    if (panzoom && zoom && !event.ctrlKey && !event.metaKey && !event.altKey) {
       event.preventDefault();
       zoom();
       return;
@@ -514,6 +515,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
     };
   });
 
+  const description = () => (props.gallery ? undefined : props.imageDescription);
   const title = () =>
     (hasGallery() ? (currentImage()?.title ?? props.imageTitle) : props.imageTitle).trim() ||
     t("chat.imageLightbox.untitled");
@@ -591,7 +593,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
                     slideElement = element;
                   }}
                 >
-                  <img
+                  <LightboxImage
                     class={["image", { zoomed: scale() > 1 }]}
                     ref={(element) => {
                       imageElement = element;
@@ -599,6 +601,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
                     style={lightboxImageStyle(currentImage())}
                     src={currentImage()?.src ?? props.src}
                     alt={title()}
+                    description={description()}
                     referrerpolicy="no-referrer"
                     decoding="async"
                     onLoad={handleImageLoad}

@@ -605,7 +605,6 @@ it.each(["assistant append", "empty append", "bookkeeping"] as const)(
         phase: "completeTurn",
         beforeVersion: initial.version,
         afterVersion: { epoch: initial.version.epoch, sequence: initial.version.sequence + 1 },
-        pendingFinalDelivery: pending,
         reducers: [
           { index: 0, kind: "activity", changed: true },
           { index: 1, kind: "live-model", changed: true },

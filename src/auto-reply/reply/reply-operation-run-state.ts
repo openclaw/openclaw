@@ -6,7 +6,6 @@ import type {
   ReplyPreRunRejectionCode,
 } from "../../sessions/session-controller.contracts.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
-import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
 export type {
   ReplyOperationRunState,
@@ -104,8 +103,4 @@ export function recordReplyPreRunRejection(
   if (state && rejection) {
     state.preRunRejection ??= rejection;
   }
-}
-
-export function resolveReplyOperationAgentTurn(state: ReplyOperationRunState | undefined) {
-  return isReplyOperationSuperseded(state?.agentTurnOwner) ? "superseded" : state?.agentTurn;
 }

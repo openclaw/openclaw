@@ -574,15 +574,14 @@ export function transcriptEventModelNavigationSql(
 export function transcriptEventModelBytesSql(
   database: EngineConnection,
   omitCheckpoint: Expression<number>,
-  alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<number> {
   const metadata =
     /* kysely-allow-raw: closed transcript aliases select native projection accounting. */ sql.ref(
-      `${alias}.navigation_json`,
+      "transcript_events.navigation_json",
     );
   const identity =
     /* kysely-allow-raw: closed transcript aliases select the native identity fallback. */ sql.ref<string>(
-      `${alias}.event_json`,
+      "transcript_events.event_json",
     );
   return /* kysely-allow-raw: native fallback preserves UTF-16 byte units; metadata excludes the JSONL separator. */ sql<number>`CASE WHEN ${metadata} IS NULL
     THEN octet_length(${projectModelContextEventSql(database, identity, omitCheckpoint)})

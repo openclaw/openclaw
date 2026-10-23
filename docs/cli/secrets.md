@@ -249,7 +249,7 @@ openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --json
 
 `--dry-run` validates preflight without writing files. Exec SecretRef checks are skipped by default in dry-run. Write mode rejects plans containing exec SecretRefs/providers unless `--allow-exec`. Use `--allow-exec` to opt in to exec provider checks/execution in either mode.
 
-`--from` must point to a regular file no larger than 16 MiB (16,777,216 bytes). The byte limit applies to the complete serialized file, including whitespace.
+`--from` must point to a regular file containing valid UTF-8 no larger than 16 MiB (16,777,216 bytes). The byte limit applies to the complete serialized file, including whitespace.
 
 What `apply` may update:
 

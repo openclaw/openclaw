@@ -17,7 +17,7 @@ const markup = [
   '<antml:invoke name="exec"><antml:parameter name="command">echo hidden</antml:parameter></antml:invoke>',
   '<mm:function_calls><mm:invoke name="exec"><mm:parameter name="command">echo hidden</mm:parameter></mm:invoke></mm:function_calls>',
   "<tool_call>exec<arg_key>command</arg_key><arg_value>[[reply_to:hidden]]\nMEDIA:/tmp/hidden.png</arg_value></tool_call>",
-];
+] as const;
 const textPart = (text: string) => ({ type: "text" as const, text });
 
 describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-responses"] as const)(
@@ -28,6 +28,7 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
     beforeEach(() => {
       events = vi.fn();
       ctx = createMessageUpdateContext({ onAgentEvent: events });
+      ctx.params.onBlockReply = vi.fn();
     });
     function message(content: string | AssistantMessage["content"]) {
       return makeAgentAssistantMessage({
@@ -49,6 +50,28 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
         assistantMessageEvent: { type, ...chunk, partial, contentIndex: 0 },
       });
     }
+
+    it("bounds unused block-delivery work after unfenced XML", async () => {
+      ctx.params.onBlockReply = undefined;
+      const source =
+        `Visible\n${markup[2]}\n` +
+        Array.from(
+          { length: 100 },
+          (_, index) => `Paragraph ${index}: the reply continues.\n`,
+        ).join("");
+      const regions = vi.spyOn(codeRegions, "findCodeRegions");
+      onTestFinished(() => regions.mockRestore());
+      let text = "";
+      for (let offset = 0; offset < source.length; offset += 4) {
+        const delta = source.slice(offset, offset + 4);
+        text += delta;
+        await update(text, "text_delta", delta);
+      }
+      expect(ctx.state.assistantStream?.text).toBe(source.replace(markup[2], "").trimEnd());
+      expect(regions.mock.calls.reduce((total, [parsed]) => total + parsed.length, 0)).toBeLessThan(
+        source.length * 8,
+      );
+    });
 
     it("bounds Markdown parse work after quoted tool XML in token-sized deltas", async () => {
       const example = `\`\`\`xml\n${markup[2]}\n\`\`\`\n\n`;

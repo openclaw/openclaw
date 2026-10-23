@@ -16,7 +16,7 @@ Use optional `api.runtime.subagent.native` inside an eligible `reply_dispatch` h
 
 `spawn` returns native accepted IDs and always uses collector completion. Reuse a nonempty `requestId` within the same plugin and parent turn to replay the same request. Reusing it with different arguments fails instead of creating another child. Normal tool hooks still run; incompatible rewrites of the native runtime, run mode, collector completion, or replay identity are rejected before creating a child.
 
-`collect({ ids, timeoutSeconds: 0 })` reads current status. A bounded wait returns when a result is available or the timeout expires. `collect({ ids, awaitResults: true })` joins all requested results without polling; do not combine it with `timeoutSeconds`. Pending IDs are not failures. Completion states are `done`, `failed`, `killed`, or `timeout`, with native result, structured output, and error fields when available.
+`collect({ ids, timeoutSeconds: 0 })` reads current status. A bounded wait returns when a result is available or the timeout expires. `collect({ ids, awaitResults: true })` joins all requested results without polling; do not combine it with `timeoutSeconds`. Pending IDs are not failures. Completion states are `done`, `failed`, `killed`, or `timeout`, with native result, structured output, and error fields when available. `result` is the child's complete final answer up to 100 KB, not the 4,096-character lifecycle preview; `resultTruncated: true` marks a result that exceeded that bound or whose complete answer was no longer available. Native children are one-shot: they accept no follow-up input, so spawn another child to continue the work.
 
 `model`, `thinking`, and `fastMode` select native child overrides, subject to the existing model and requester policies. `context` selects `fork` or `isolated`; native defaults apply when omitted. No ACP runtime is exposed by this facade.
 
@@ -40,6 +40,88 @@ Supported ingress is the Gateway's normal reply-dispatch path with an existing a
 Both calls recheck the invoking plugin's full-runtime lifetime and request authority after asynchronous preparation and at effect. The requester's effective native tool policy must allow both `sessions_spawn` and a callable native `agents_wait` for spawn, and `agents_wait` for collection; disabled Swarm/collector support, denied tools, revoked authority, or a retired hook cannot fall back to an administrator or system actor. Collection checks the exact parent session incarnation and native ownership; unrelated or reset parents cannot read a result.
 
 A handler owns its calls only until it settles or times out. Accepted children transfer to native execution custody and do not automatically send a chat reply. A controller can await results while its handler remains active, or retain accepted IDs in its existing plugin store and collect during a later eligible invocation for the same parent incarnation. Persist controller decisions in the plugin's own store; this facade does not add a task engine, scheduler, or model-memory protocol. Existing `subagent.run`, `complete`, and `waitForRun` behavior is unchanged.
+
+## Plugin-local subagent profiles
+
+A profile adds package-owned instructions and can **only remove tools** from a
+native child's inherited policy. It cannot select a model, identity, credentials,
+authentication, or sandbox. Declare local profile IDs in the plugin manifest:
+
+```json
+{
+  "contracts": {
+    "subagentProfiles": ["reviewer"],
+    "commandRuntimeCapabilities": ["subagents"]
+  }
+}
+```
+
+Probe both the optional registration method and the string capability before
+registering. Undeclared plugins do not receive either surface; older hosts do not
+advertise support. Existing spawns without a profile are unchanged.
+
+```typescript
+if (
+  api.runtime.capabilities?.includes("native-subagent-profiles-v1") &&
+  api.agent.registerSubagentProfile
+) {
+  api.agent.registerSubagentProfile({
+    id: "reviewer",
+    description: "Review a change without editing files",
+    instructionsFile: "agents/reviewer.md",
+    tools: { deny: ["group:fs", "group:runtime"] },
+    outputSchema: {
+      type: "object",
+      properties: { findings: { type: "array", items: { type: "string" } } },
+      required: ["findings"],
+      additionalProperties: false,
+    },
+  });
+}
+
+// Inside an eligible command or reply_dispatch invocation:
+const child = await native.spawn({
+  requestId: "review-change",
+  task: "Review the requested change.",
+  profile: "reviewer",
+});
+```
+
+Use the deny list appropriate to the tools the reviewer needs; the example
+removes file reads as well as writes. Tool policy names, aliases, and groups have
+the same meaning as ordinary tool denies. An omitted or empty deny list grants
+nothing: the requester ceiling and current host policy still apply. A read-only
+reviewer should deny **every** write-capable tool it could inherit, including
+plugin tools. A profile is not a sandbox for trusted in-process plugin code.
+
+`id` is a local lowercase identifier (letter first, then letters, digits, `_` or
+`-`, at most 64 characters). `description` and `instructionsFile` are required.
+`instructionsFile` must be relative to the plugin package; missing files,
+traversal, symlink escapes, hard links, invalid UTF-8, and files larger than
+256 KiB are rejected. The host captures the whole file at registration. Edits on
+disk do not change already registered instructions; reload the plugin to adopt
+new bytes. Each child run records `subagentProfile` with `pluginId`, `id`,
+`instructionsFile`, and the hex SHA-256 `instructionsSha256` of those exact bytes.
+Existing queued-launch persistence retains the captured instructions.
+
+`tools` accepts only `{ deny: string[] }`; `allow` and other widening fields are
+rejected. Profiles are scoped to their registering plugin and invocation's
+registry generation. Another plugin cannot select a profile by its local ID or
+by prefixing the owner's ID. Every spawn retains the native requester's binding,
+parent incarnation, and per-call authority rechecks; profile capture adds no
+fallback authority.
+
+`outputSchema`, when present, uses the existing native collector's structured
+output enforcement. A caller cannot replace a profile schema with a spawn
+`outputSchema`, and a tool hook cannot remove it. Without a profile schema, the
+ordinary optional spawn `outputSchema` still works. Collection reports schema
+failures normally; text alone is not a successful structured result.
+
+Profiles are available only through the plugin's requester-bound native runtime,
+including command-scoped native children. The model-facing `sessions_spawn`
+schema does not expose `profile`: it has no registering-plugin identity. The
+host carries the selected profile privately through that same native spawn path,
+so model arguments or tool hooks cannot forge or replace its restrictions.
 
 ## Recover plugin-owned native children
 
@@ -111,9 +193,22 @@ requester under `auto-reply.plugin-command`. Children inherit that requester’s
 lineage and effective tool ceiling. No new hook is registered, so Goal
 start/resume and restart-safe chat admission keep their existing rules.
 
-Channel messages without explicit provenance use the channel’s ordinary sender
-authorization; an authorized non-owner can spend child-model budget only under
-that requester’s tool ceiling. A native slash surface targeting a different
+Gateway chat and channel text commands are both eligible. Messages without explicit
+provenance use the ingress's ordinary sender authorization. On Gateway chat, an
+authorized operator who is not an owner can spend child-model budget only under
+that requester's tool ceiling. A channel message carries operator authority only
+when its verified sender has a
+[channel identity link](/concepts/user-model#channel-identity-links) to a
+person whose current role grants `operator.admin`. That sender must also pass the
+channel's command authorization. Unlinked, unverified, or demoted senders see
+`undefined`, even when the channel lets them run the command, and every native
+call rechecks the link and role. Demoting that person, removing their role, or
+unlinking the identity revokes the requester's retained work as it does for a
+Gateway operator: a child still waiting for a Swarm slot fails at once with a
+visible error, and work that missed the change refuses at its next admission
+check. The host records the channel command text once,
+as that message's input: a reply adds only the response, and a continuing agent
+turn reuses the same input. A native slash surface targeting a different
 `CommandTargetSessionKey` than the current dispatch session gets no capability.
 The deprecated direct command registrar cannot grant runtime capabilities; use
 the managed `api.registerCommand` path with its reviewed manifest declaration.
@@ -172,7 +267,12 @@ const accepted = await schedules.schedule({
   deadlineAtMs: Date.now() + 30 * 60_000,
   maxRuns: 10,
 });
-return { text: "Continuation scheduled: " + accepted.jobId };
+return {
+  text:
+    "Continuation scheduled: " +
+    accepted.jobId +
+    (accepted.survivesRestart ? "" : " (ends if the Gateway restarts)"),
+};
 ```
 
 Use an `at` schedule with an ISO `at` value for a single occurrence, or
@@ -184,12 +284,13 @@ and capacity deferral do not. Restart recovery never refunds attempts.
 
 The schedule is retired (disabled, with no next run) in the same scheduler
 transaction that launches its final allowed attempt, or that finds its deadline
-passed, its attempts exhausted, or its Gateway process gone. A retired schedule
-never wakes again and stays visible for inspection. One invocation can create
-at most 4 schedules, and each loaded plugin instance can keep at most 8 active
-schedules per parent session. Only enabled schedules created by the same
-plugin instance in the current Gateway process count toward that cap.
-Schedules left by an earlier Gateway process or a replaced plugin instance can
+passed, its attempts exhausted, or, after a Gateway restart, no matching loaded
+plugin. A retired schedule never wakes again, including after later restarts,
+and stays visible for inspection. One invocation can create at most 4
+schedules, and each plugin can keep at most 8 active schedules per parent
+session. Enabled schedules bound to the loaded plugin instance count toward that
+cap, as do unexpired schedules of the same plugin code that a restart can
+re-arm. Schedules bound to a replaced plugin instance or to different code can
 never run plugin code again, so they do not block re-enrollment; each one
 retires at its next occurrence.
 
@@ -207,29 +308,69 @@ also refuses manual force runs, so a disabled schedule cannot spend attempts.
 Each run restores the original requester and revalidates current operator,
 provider-account, session, plugin, and native tool authority. It reuses the
 command-scoped native-child eligibility producer. Reset, deletion, revocation,
-expired budgets, and unloaded plugins fail closed. Stored source facts are not
-execution authority. No caller can choose a different parent or delivery route.
+expired budgets, and unloaded plugins fail closed. Revoking a channel requester
+also fails a child that an earlier occurrence queued, without waiting for its
+Swarm slot. Stored source facts are not execution authority. No caller can
+choose a different parent or delivery route.
 
-Schedules bind the exact managed plugin instance, not just its ID, version, or
-source path. Registry adoption of that same instance preserves the binding.
-Plugin replacement/reload or a Gateway process restart cannot inherit old
-schedules; a fresh eligible requester command must enroll a new schedule.
-Persisted jobs do not establish instance continuity or restore execution authority.
+Within one Gateway process, schedules bind the exact managed plugin instance,
+not just its ID, version, or source path. Registry adoption of that same
+instance preserves the binding. After an in-process plugin reload, the first
+occurrence that finds another live instance of the plugin is refused without
+running plugin code and retires the schedule; it does not wait for generic
+repeated-failure auto-disable. That refusal spends one attempt. A transient gap,
+such as a registry swap that keeps the same instance or a plugin that is still
+unloading, is an ordinary refusal that retries at the next occurrence.
 
-Schedules are therefore restart-scoped. After a Gateway restart or update, each
-old schedule is retired at its next occurrence without spending an attempt. A
-plugin that needs to continue across restarts must re-enroll from a later
-eligible requester command, such as an explicit resume command. After an
-in-process plugin reload, the first occurrence that finds another live instance
-of the plugin is refused without running plugin code and retires the schedule;
-it does not wait for generic repeated-failure auto-disable. That refusal spends
-one attempt. A transient gap, such as a registry swap that keeps the same
-instance or a plugin that is still unloading, is an ordinary refusal that
-retries at the next occurrence.
+Accepted schedules survive a Gateway restart on hosts advertising
+`command-scheduled-turns-restart-v1` in `api.runtime.capabilities`. The accepted
+result's `survivesRestart` reports this for each schedule; when it is true, do
+not re-enroll that schedule after a restart. When it is false, or absent on
+hosts without the capability, the schedule ends with the Gateway process and a
+plugin must re-enroll from a later eligible requester command. That happens only
+when the loaded plugin code has no sound identity, described below. After a
+restart, each schedule keeps its original deadline, `maxRuns` and spent attempts, and a missed
+occurrence follows the scheduler's normal startup deferral. Its next
+occurrence re-arms it onto the newly loaded instance of the same plugin code, in
+the same scheduler transaction that claims the occurrence. Matching metadata is
+not enough: the instance must have the same plugin ID, source, root and version,
+must still register the target command, and must have loaded exactly the code
+identity captured when the schedule was accepted. That
+occurrence then restores the original requester and rechecks it, the parent
+session and the plugin exactly as any other occurrence does. A demoted or
+removed requester is refused before the command runs. If the plugin is disabled,
+uninstalled, or its code changed, the occurrence retires the schedule without
+running plugin code or spending an attempt; re-enabling or restoring the plugin
+later does not revive it. An expired or exhausted schedule is never re-armed. Disabled,
+removed and completed schedules stay ended. An occurrence interrupted by the
+restart is not replayed once its command may have started, so a restart never
+runs one occurrence twice. Neither persisted jobs nor restart continuity restore
+execution authority on their own.
+
+The code identity of an installed or configured plugin is the digest of its
+captured source. A core-bundled plugin loads host-owned modules instead, so its
+identity is the exact OpenClaw build the Gateway process loaded: the record in
+that build's `dist/build-info.json` (build ID, version, commit and build time),
+read once when the process starts, together with the plugin's ID and the real
+paths of its root and entry inside that build's own `dist` or `dist-runtime`
+extensions. Every build records a new build time, even under an explicit build
+ID, so after a host upgrade, downgrade or rebuild a bundled plugin's schedule
+ends exactly as a changed installed plugin's does, even at the same paths and
+plugin version, and returning to the original build later does not revive it. A Gateway run from
+source has no build record, and a bundled plugin loaded from outside its build's
+output (a source checkout or an override directory) has no identity, so those
+schedules report `survivesRestart: false` and end with the process.
 
 Schedules are stored under a dedicated `pluginCommand` payload kind. An older
 Gateway that does not support scheduled command turns treats that row as an
-invalid job and never runs it as an ordinary model prompt.
+invalid job and never runs it as an ordinary model prompt. Restart continuity is
+stored privately in the job's runtime state and leaves the stored schedule
+unchanged. After a rollback, a Gateway that supports scheduled turns but not
+restart continuity ignores it and ends each schedule at its next occurrence, as
+it ends its own schedules after a restart. A Gateway with restart continuity
+that predates bundled-plugin build identities finds no matching code for a
+bundled plugin's schedule and ends it the same way. That ended schedule stays
+ended after upgrading again.
 
 Scheduled invocations expose native spawn/collect, not another scheduling
 capability. Direct command `llm.complete` and `continueAgent` are refused:

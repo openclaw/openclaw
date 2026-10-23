@@ -266,6 +266,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/run-attempt.native-background-outcome.test.ts",
   "extensions/codex/src/app-server/run-attempt.native-config.test.ts",
   "extensions/codex/src/app-server/run-attempt.native-followup-custody.test.ts",
+  "extensions/codex/src/app-server/run-attempt.native-observation.test.ts",
   "extensions/codex/src/app-server/run-attempt.subscription.test.ts",
   "extensions/codex/src/app-server/run-attempt.test.ts",
   "extensions/codex/src/app-server/run-attempt.skills.test.ts",

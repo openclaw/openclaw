@@ -205,7 +205,11 @@ export class ConnectionSessionRows {
     };
   }
 
-  prepare(rows: ReturnType<typeof prepareSessionAncestor>[], revision = randomUUID()) {
+  prepare(
+    rows: ReturnType<typeof prepareSessionAncestor>[],
+    revision = randomUUID(),
+    requireWireBaseline = false,
+  ) {
     const ancestorSessions: SessionRow[] = [];
     const ancestorSessionRefs: SessionAncestorRef[] = [];
     const deliveryKeys: string[] = [];
@@ -213,7 +217,11 @@ export class ConnectionSessionRows {
     for (const { row, identity, content, chars } of rows) {
       const snapshotAt = row.snapshotAt;
       const previous = this.#rows.get(identity);
-      if (previous?.content === content && snapshotAt !== undefined) {
+      if (
+        previous?.content === content &&
+        snapshotAt !== undefined &&
+        (!requireWireBaseline || this.#wireRows.has(identity))
+      ) {
         deliveryKeys.push(previous.revision);
         ancestorSessionRefs.push({
           key: row.key,

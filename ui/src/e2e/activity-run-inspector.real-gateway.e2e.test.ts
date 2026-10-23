@@ -98,16 +98,18 @@ const suite = createControlUiE2eSuite({
   },
 });
 
-async function runCli(args: string[]): Promise<string> {
-  const result = await instance.cli(args);
-  expect(result.code, result.stderr).toBe(0);
+async function runCli(args: string[], timeoutMs?: number): Promise<string> {
+  const result = await instance.cli(args, { timeoutMs });
+  expect(result.code, `${result.stderr}\n${result.stdout}`).toBe(0);
   return result.stdout;
 }
 
-async function rpc(method: string, params: Record<string, unknown>) {
-  return JSON.parse(
-    await runCli(["gateway", "call", method, "--params", JSON.stringify(params), "--json"]),
-  );
+async function rpc(method: string, params: Record<string, unknown>, timeoutMs?: number) {
+  const args = ["gateway", "call", method, "--params", JSON.stringify(params), "--json"];
+  if (timeoutMs !== undefined) {
+    args.push("--timeout", String(timeoutMs));
+  }
+  return JSON.parse(await runCli(args, timeoutMs === undefined ? undefined : timeoutMs + 10_000));
 }
 
 suite.define(() => {
@@ -123,7 +125,8 @@ suite.define(() => {
           message: "Complete the fixture.",
           idempotencyKey: runId,
         });
-        expect(await rpc("agent.wait", { runId, timeoutMs: 30_000 })).toMatchObject({
+        // Let the requested server wait finish before either CLI deadline expires.
+        expect(await rpc("agent.wait", { runId, timeoutMs: 30_000 }, 40_000)).toMatchObject({
           status: "ok",
           terminalReply: { disposition: "visible", text: replyText },
         });

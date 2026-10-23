@@ -1,7 +1,5 @@
-import { dynamic } from "@solidjs/web";
 import { Match, Show, Switch, createMemo, isPending, onSettled } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
-import type { SessionPlacementPresentation } from "../../../components/session-placement-move-dialog.tsx";
 import { StepMarker } from "../../../components/session-progress-card-content.tsx";
 import {
   progressCardNoteSummary,
@@ -10,6 +8,7 @@ import {
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { listSubagents } from "../chat-subagent-wait.ts";
 import {
   SessionAutomationMobileList,
@@ -17,10 +16,7 @@ import {
 } from "./chat-automation-mobile.tsx";
 import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
 import { ChatDetailsContextContent, ChatDetailsContextSummary } from "./chat-details-context.tsx";
-import {
-  ChatDetailsEnvironmentMobile,
-  type ChatDetailsEnvironmentMobileProps,
-} from "./chat-details-environment-mobile.tsx";
+import { ChatDetailsEnvironmentMobile } from "./chat-details-environment-mobile.tsx";
 import { ChatDetailsGoal, type ChatDetailsGoalProps } from "./chat-details-goal.tsx";
 import {
   ChatDetailsMobileProcesses,
@@ -41,7 +37,6 @@ import {
   GitHubPublicationMobile,
   type GitHubPublicationMobileProps,
 } from "./chat-github-publication-mobile.tsx";
-import { ChatMachine, type ChatMachineProps } from "./chat-machine.tsx";
 import { ChatMobilePeopleBody, type ChatMobilePeopleBodyProps } from "./chat-mobile-people.tsx";
 import { ChatOutputsMobile, getChatOutputsCount } from "./chat-outputs.tsx";
 import {
@@ -94,10 +89,8 @@ type ChatDetailsMobileRootContent = {
     | "taskProgressNotice"
     | "automations"
   >;
-  /** Review's Uncommitted snapshot and the host's actual navigation callbacks. */
-  environment?: Omit<ChatDetailsEnvironmentMobileProps, "details" | "presented">;
   /** Labels only; facts/actions/demand come from the native details.outputs binding. */
-  outputs?: { label: string; accessibleLabel?: string };
+  outputs?: { label: string };
   /** The native Sharing adapter, constructed under the retained session host. */
   sharing?: ChatSessionSharingMobileAdapter;
   /** The publication owner supplies the review entry, including retained publication/recovery states. */
@@ -118,13 +111,9 @@ type ChatDetailsMobilePeopleContent = Omit<ChatMobilePeopleBodyProps, "sharingOp
   sharing?: ChatSessionSharingMobileAdapter;
 };
 
-type ChatDetailsMobileMoveRequest = Parameters<SessionPlacementPresentation>[0];
-
 /** Only supplied mobile bodies belong here. Missing peer bodies stay with their owners. */
 export type ChatDetailsMobilePage =
   | { kind: "root"; content: ChatDetailsMobileRootContent }
-  | { kind: "machine"; content: Omit<ChatMachineProps, "session"> }
-  | { kind: "move"; content: ChatDetailsMobileMoveRequest }
   | { kind: "people"; content: ChatDetailsMobilePeopleContent }
   | { kind: "task-progress"; content: ChatDetailsMobileProgressPreference }
   | { kind: "pull-requests"; content: ChatPullRequestMobileCollectionProps }
@@ -166,7 +155,6 @@ function MobileRoot(
     const count = getChatOutputsCount(data);
     return {
       label: props.content.outputs?.label ?? props.content.entries.labels.generatedFiles,
-      accessibleLabel: props.content.outputs?.accessibleLabel,
       metadata: count === null ? undefined : count,
     };
   };
@@ -258,6 +246,10 @@ function MobileRoot(
     <ChatDetailsMobileRoot
       {...props.content.entries}
       presented={props.presented}
+      sessionTitle={resolveSessionDisplayName(
+        props.details.selectedSession?.key ?? "",
+        props.details.selectedSession,
+      )}
       taskProgress={
         progress()?.counts || progressNote()
           ? {
@@ -292,7 +284,7 @@ function MobileRoot(
       automations={automations()}
       environment={
         <ChatDetailsEnvironmentMobile
-          {...(props.content.environment ?? props.details.environment)}
+          {...props.details.environment}
           details={props.details}
           presented={props.presented}
         />
@@ -371,12 +363,6 @@ export function ChatDetailsMobileContent(props: ChatDetailsMobileContentProps) {
             content={page().content}
           />
         )}
-      </Match>
-      <Match when={props.page.kind === "machine" && props.page}>
-        {(page) => <ChatMachine {...page().content} session={props.details.selectedSession} />}
-      </Match>
-      <Match when={props.page.kind === "move" && props.page}>
-        {(page) => <MobileMove request={page().content} />}
       </Match>
       <Match when={props.page.kind === "people" && props.page}>
         {(page) => (
@@ -490,10 +476,4 @@ export function ChatDetailsMobileControls(props: ChatDetailsMobileContentProps) 
       )}
     </Show>
   );
-}
-
-/** The factory identity belongs to the native request, not the changing placement snapshot. */
-function MobileMove(props: { request: ChatDetailsMobileMoveRequest }) {
-  const Picker = dynamic(() => props.request.render);
-  return <Picker />;
 }

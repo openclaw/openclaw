@@ -1,11 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
-import type {
-  GatewaySessionRow,
-  GatewayThinkingLevelOption,
-  ModelCatalogEntry,
-  SessionsListResult,
-} from "../../api/types.ts";
+import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveModelRuntimeEntry, type ModelRuntimeEntry } from "../model-runtime-choice.ts";
 import { areUiSessionKeysEquivalent } from "../sessions/session-key.ts";
@@ -172,22 +167,6 @@ export function resolveCurrentThinkingLevel(
   return profile?.thinkingDefault ?? t("common.unknown");
 }
 
-function buildThinkingOptions(
-  levels: readonly GatewayThinkingLevelOption[],
-): Array<{ value: string; label: string }> {
-  const seen = new Set<string>();
-  const options: Array<{ value: string; label: string }> = [];
-  for (const level of levels) {
-    const value = normalizeThinkingOptionValue(level.id);
-    if (!value || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    options.push({ value, label: formatThinkingOverrideLabel(value, level.label) });
-  }
-  return options;
-}
-
 function resolveThinkingCatalogEntry(
   catalog: readonly ModelCatalogEntry[],
   provider: string | null,
@@ -241,7 +220,16 @@ export function resolveChatThinkingSelectState(params: {
   const levels = nonReasoningOffOnly ? [] : supportedLevels;
   const defaultLevel = profile?.thinkingDefault ?? "";
   const effectiveOverride = nonReasoningOffOnly && currentOverride === "off" ? "" : currentOverride;
-  const options = buildThinkingOptions(levels);
+  const seen = new Set<string>();
+  const options: Array<{ value: string; label: string }> = [];
+  for (const level of levels) {
+    const value = normalizeThinkingOptionValue(level.id);
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    options.push({ value, label: formatThinkingOverrideLabel(value, level.label) });
+  }
   const defaultValue = normalizeThinkingOptionValue(defaultLevel);
   const inherited = {
     value: defaultValue,

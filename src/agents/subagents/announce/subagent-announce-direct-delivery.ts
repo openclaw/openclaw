@@ -9,7 +9,6 @@ import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
 } from "../../../sessions/input-provenance.js";
-import { retireSessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
 import {
   submitSessionControllerSteer,
   type SessionControllerSteerResult,
@@ -371,34 +370,6 @@ async function sendSubagentAnnounceDirectlyBound(
       if (!isCompletionAdmissionAllowed()) {
         return sourceOwnerChangedResult();
       }
-      if (
-        steer.reason === "injection_unavailable" &&
-        requesterAbandonment === "recovering_timeout" &&
-        !params.controllerInput.custody.rpcAdopted &&
-        resolveEmbeddedRunAbandonment({
-          sessionKey: canonicalRequesterSessionKey,
-          sessionId: requesterActivity.sessionId,
-          target: requesterActivity.target,
-        }) === "recovering_timeout"
-      ) {
-        // The recovery retry leases the durable outbox. Settle this rejected,
-        // unadopted reservation first so it cannot dispatch the completion again.
-        retireSessionControllerInput(params.controllerInput);
-        await params.controllerInput.settlement.promise;
-        if (!isCompletionDeliveryAllowed()) {
-          return sourceOwnerChangedResult();
-        }
-        if (params.signal?.aborted) {
-          return { delivered: false, path: "none" };
-        }
-        return {
-          delivered: false,
-          path: "none",
-          reason: "completion_handoff_pending",
-          error: "requester timeout recovery is still settling",
-          disposition: "retryable",
-        };
-      }
     }
     if (
       params.expectsCompletionMessage &&
@@ -419,16 +390,24 @@ async function sendSubagentAnnounceDirectlyBound(
       : sessionOnlyOriginChannel
         ? sessionOnlyOrigin
         : undefined;
-    const replyExpectation = resolveCommandReplyExpectation({
-      cfg,
-      sessionKey: canonicalRequesterSessionKey,
-      sessionEntry: requesterEntry,
-      messageChannel: shouldDeliverAgentFinal ? deliveryTarget.channel : sessionOnlyOriginChannel,
-      opts: {
-        ...(parentOnly ? { privateCompletion: true as const } : {}),
-        inputProvenance: { kind: "inter_session" },
-      },
-    });
+    const inputReplyExpectation =
+      params.expectsCompletionMessage || params.requireVisibleReply ? "required" : "optional";
+    // Settle execution and receipt classification share the owner's reply obligation.
+    const replyExpectation =
+      sourceToolId === "subagent_settle"
+        ? inputReplyExpectation
+        : resolveCommandReplyExpectation({
+            cfg,
+            sessionKey: canonicalRequesterSessionKey,
+            sessionEntry: requesterEntry,
+            messageChannel: shouldDeliverAgentFinal
+              ? deliveryTarget.channel
+              : sessionOnlyOriginChannel,
+            opts: {
+              ...(parentOnly ? { privateCompletion: true as const } : {}),
+              inputProvenance: { kind: "inter_session" },
+            },
+          });
     // A private completion gets its own serialized turn. Steering into a public
     // turn would inherit that turn's delivery policy and expose child output.
     let directAgentParams: Record<string, unknown> = {
@@ -499,11 +478,7 @@ async function sendSubagentAnnounceDirectlyBound(
             return await runAnnounceAgentCall({
               agentParams: directAgentParams,
               controllerInput: params.controllerInput,
-              // The input owner decides whether this handoff owes another reply.
-              replyExpectation:
-                params.expectsCompletionMessage || params.requireVisibleReply
-                  ? "required"
-                  : "optional",
+              replyExpectation: inputReplyExpectation,
               // A resumed parent has no inbound channel dispatcher to keep activity visible.
               typing:
                 sourceToolId === "subagent_settle" &&

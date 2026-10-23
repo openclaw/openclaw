@@ -23,10 +23,6 @@ import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import {
-  leasePendingAgentSteeringItems,
-  prependAgentSteeringPrompt,
-} from "../../subagents/registry/subagent-registry.js";
-import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,
 } from "../../system-prompt.js";
@@ -70,12 +66,6 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 type OrphanRepairPlan = ReturnType<typeof resolveOrphanRepairPlan>;
 
-export type EmbeddedAttemptSteeringLease = {
-  leaseId: string;
-  runIds: string[];
-  isCurrent: () => boolean;
-};
-
 export async function prepareEmbeddedAttemptPromptAssembly(input: {
   attempt: Omit<
     EmbeddedRunAttemptParams,
@@ -106,7 +96,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   ) => string[];
   prepareSystemPrompt?: (currentSystemPrompt: string) => Promise<string>;
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
-  setLeasedSteering: (lease: EmbeddedAttemptSteeringLease) => void;
 }) {
   const { attempt } = input;
   // Capture runtime ownership before hook/steering awaits; explicit scopes stay pinned.
@@ -168,27 +157,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         hookRunner: input.hookRunner,
       });
 
-  let leasedSteering: EmbeddedAttemptSteeringLease | undefined;
-  let leasedSteeringPrompt: string | undefined;
-  if (attempt.sessionKey && !preserveExactPrompt) {
-    const leaseId = `${attempt.runId}:agent-steering`;
-    const leased = await leasePendingAgentSteeringItems({
-      requesterSessionKey: attempt.sessionKey,
-      leaseId,
-    });
-    if (leased) {
-      leasedSteering = { leaseId, runIds: leased.runIds, isCurrent: leased.isCurrent };
-      // Transfer cleanup ownership before any prompt mutation can throw.
-      input.setLeasedSteering(leasedSteering);
-      if (!leased.isCurrent()) {
-        throw new Error(
-          "The queued child results lost authority before requester prompt injection.",
-        );
-      }
-      leasedSteeringPrompt = leased.prompt;
-    }
-  }
-
   const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
     attempt.admittedRunContext,
     activeAbortSignal,
@@ -204,8 +172,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     // Authorized enrichment runs after policy; do not pre-empt its required actions.
     input.hookRunner?.hasAuthorizedPromptBuildHooks(hookCtx) ||
     hookResult?.hasPendingNonPromptBuildContext ||
-    input.orphanRepair?.messageEntry ||
-    leasedSteering,
+    input.orphanRepair?.messageEntry,
   );
 
   const effectiveToolsAllow = hookResult?.toolsAllow;
@@ -349,17 +316,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     log[shouldWarnOnOrphanedUserRepair(attempt.trigger) ? "warn" : "debug"](message);
   }
 
-  if (leasedSteering && leasedSteeringPrompt) {
-    effectivePrompt = prependAgentSteeringPrompt({
-      steeringPrompt: leasedSteeringPrompt,
-      prompt: effectivePrompt,
-    });
-    effectiveTranscriptPrompt = prependAgentSteeringPrompt({
-      steeringPrompt: leasedSteeringPrompt,
-      prompt: effectiveTranscriptPrompt,
-    });
-  }
-
   const currentUserAdmission =
     !preserveExactPrompt && !attempt.skipPreparedUserTurnMessage
       ? attempt.userTurnTranscriptRecorder?.getAdmissionReceipt()
@@ -379,7 +335,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     effectiveTranscriptPrompt,
     originContext,
     transcriptLeafId,
-    leasedSteering,
   };
 }
 

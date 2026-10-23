@@ -1,25 +1,15 @@
-import {
-  action,
-  affects,
-  createMemo,
-  createOptimistic,
-  createSignal,
-  For,
-  latest,
-  Loading,
-  onCleanup,
-  onSettled,
-  refresh,
-} from "solid-js";
+import { createMemo, createSignal, For, latest, Loading, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { resolvePaletteSessionSettings, type SettingsOptions } from "./palette-session-settings.ts";
+import { createPresentationAction } from "./submission-action.ts";
 import { repositoryIssueText } from "./submit-gates.ts";
 import { AgentSelect, RequiredSessionPlacement } from "./target-controls-view.tsx";
 
@@ -50,15 +40,11 @@ export function PaletteSessionSettingsView(properties: {
   let focusTarget: FocusTarget | undefined;
   const focusTargets: Partial<Record<FocusTarget, HTMLElement>> = {};
   const focusControls = new Set<HTMLElement>();
-  const controlRef = () => {
-    let control: HTMLElement;
-    // Each conditional control owns its registration, including removal before the panel settles.
-    onCleanup(() => focusControls.delete(control));
-    return (element: HTMLElement) => {
-      focusControls.delete(control);
-      focusControls.add((control = element));
-    };
-  };
+  const controlRef = () =>
+    elementRef((element: HTMLElement) => {
+      focusControls.add(element);
+      return () => focusControls.delete(element);
+    });
   let readAgentControls: (() => readonly HTMLElement[]) | undefined;
   let popover!: PopoverHandle;
   const close = (preferences: SettingsOptions["preferences"]) => {
@@ -152,53 +138,15 @@ export function PaletteSessionSettingsView(properties: {
       (current + (event.key === "ArrowDown" ? 1 : -1) + controls.length) % controls.length
     ]?.focus();
   });
-  const lifetime = createMemo(
-    () => {
-      open();
-      return {
-        owner: properties.options.preferences,
-        retired: properties.options.preferences.presentationLifetime,
-      };
-    },
-    {
-      equals: (previous, next) =>
-        previous.owner === next.owner && previous.retired === next.retired,
-    },
-  );
-  const presentation = createMemo(() => {
-    const scope = lifetime();
-    const [saving, setSaving] = createOptimistic(false);
-    return { ...scope, saving, setSaving };
-  });
   const failed = createMemo(() => properties.options.preferences.failed);
-  const isCurrent = (pendingView: ReturnType<typeof presentation>) =>
-    properties.options.preferences === pendingView.owner &&
-    pendingView.owner.presentationLifetime === pendingView.retired;
-  const present = action(function* (
-    pendingView: ReturnType<typeof presentation>,
-    pending: Promise<void> | undefined,
-  ) {
-    if (isCurrent(pendingView)) {
-      pendingView.setSaving(true);
-      affects(failed);
-    }
-    yield Promise.race([pending, pendingView.retired]);
-    if (isCurrent(pendingView)) {
-      yield refresh(failed);
-    }
-  });
-  const save = async (operation: () => Promise<void> | undefined) => {
-    const pendingView = presentation();
-    const pending = operation();
-    // Publish the synchronous owner intent before its temporary saving presentation.
-    await Promise.resolve();
-    void present(pendingView, pending).catch(() => {
-      if (isCurrent(pendingView)) {
-        pendingView.owner.reportFailure();
-      }
-    });
-    return pending;
-  };
+  const { saving, submit } = createPresentationAction(
+    () => properties.options.preferences,
+    (owner) => owner.presentationLifetime,
+    open,
+    failed,
+    (owner) => owner.reportFailure(),
+  );
+  const save = async (operation: () => Promise<void> | undefined) => submit(operation);
   const retry = nativeListener(
     "click",
     () => void save(() => properties.options.preferences.retry()),
@@ -479,10 +427,7 @@ export function PaletteSessionSettingsView(properties: {
       <div class="palette-session-settings__content" ref={keydown}>
         {places() ? <SettingsPlaces /> : <SettingsSummary />}
         {!places() || latest(failed) ? (
-          <div
-            class="palette-session-settings__footer"
-            aria-busy={presentation().saving() ? "true" : "false"}
-          >
+          <div class="palette-session-settings__footer" aria-busy={saving() ? "true" : "false"}>
             {!places() ? (
               <label
                 class="palette-session-settings__remember"
@@ -494,7 +439,7 @@ export function PaletteSessionSettingsView(properties: {
               >
                 <input
                   type="checkbox"
-                  ref={controlRef()}
+                  ref={[controlRef()]}
                   checked={properties.options.preferences.remember}
                   disabled={view().locked || !properties.options.preferences.available}
                   onChange={(event) =>

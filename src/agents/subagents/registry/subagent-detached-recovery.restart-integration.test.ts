@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
@@ -5,7 +6,10 @@ import {
   makeRestartRecoveryRun as makeRunRecord,
   useSubagentRestartRecoveryFixture,
 } from "./subagent-restart-recovery.test-support.js";
+import { createRecoveryControllerFixture } from "../../../auto-reply/reply/recovery-controller.fixture.test-support.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
+  loadSessionEntry,
   appendTranscriptMessage,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
@@ -19,6 +23,7 @@ import {
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
+import { readSessionMessagesAsync } from "../../../gateway/session-transcript-readers.js";
 import {
   getAgentEventLifecycleGeneration,
   onAgentEvent,
@@ -84,7 +89,7 @@ describe("detached subagent restart recovery", () => {
       vi.mocked(onAgentEvent).mockImplementation(events.onAgentEvent);
       const now = Date.now();
       const runId = "warm-restart-child";
-      const childSessionKey = "agent:main:subagent:warm-restart-child";
+      const childSessionKey = `agent:main:${sourceKind === "channel" || missingSource ? "dashboard" : "subagent"}:warm-restart-child`;
       const requesterSessionKey = "agent:main:main";
       const requesterSessionId = "warm-restart-parent-session";
       const requesterLifecycleRevision = "warm-restart-parent-lifecycle";
@@ -104,6 +109,10 @@ describe("detached subagent restart recovery", () => {
           sessionId: "warm-restart-child-session",
           updatedAt: now,
           abortedLastRun: true,
+          createdVia: "spawn",
+          spawnedBy: requesterSessionKey,
+          parentSessionKey: requesterSessionKey,
+          spawnDepth: 1,
           ...(verified
             ? {
                 lifecycleRevision: "child-revision",
@@ -111,7 +120,7 @@ describe("detached subagent restart recovery", () => {
                 lastRunId: runId,
               }
             : {}),
-          ...(channelSource && sourceKind !== "missing-channel"
+          ...(channelSource && sourceKind !== "channel" && sourceKind !== "missing-channel"
             ? {
                 restartRecoveryRequesterSource: createRestartRecoveryRequesterSource({
                   agentId: "main",
@@ -128,6 +137,40 @@ describe("detached subagent restart recovery", () => {
             : {}),
         },
       );
+      if (sourceKind === "channel") {
+        const scope = {
+          agentId: "main",
+          sessionKey: childSessionKey,
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        };
+        await using claim = await createRecoveryControllerFixture(
+          scope,
+          {
+            ...loadSessionEntry(scope)!,
+            status: undefined,
+            abortedLastRun: false,
+            lastRunId: undefined,
+          },
+          {
+            admissionRunId: runId,
+            sourceTurnId: runId,
+            requesterOrigin,
+            inputProvenance: {
+              kind: "inter_session",
+              sourceSessionKey: requesterSessionKey,
+              sourceTool: "sessions_spawn",
+            },
+          },
+        );
+        await claim.controller().admitUserTurn();
+        await replaceSessionEntry(scope, {
+          ...claim.entry,
+          status: "interrupted",
+          abortedLastRun: true,
+          lifecycleRunId: undefined,
+          lastRunId: runId,
+        });
+      }
       if (transcript) {
         await appendTranscriptMessage(
           { agentId: "main", sessionKey: childSessionKey, sessionId: "warm-restart-child-session" },
@@ -337,6 +380,23 @@ describe("detached subagent restart recovery", () => {
           runId,
           execution: { status: "terminal", outcome: { status: "error" } },
         });
+        await testing.sweepOnceForTests();
+        const messages = await readSessionMessagesAsync(
+          { agentId: "main", sessionKey: childSessionKey, sessionId: "warm-restart-child-session" },
+          { mode: "recent", maxMessages: 20, maxBytes: 256 * 1024 },
+        );
+        expect(
+          messages.filter((message) => isRecord(message) && message.role === "assistant"),
+        ).toEqual([
+          expect.objectContaining({
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                type: "text",
+                text: expect.stringContaining("Send a new authenticated message to continue"),
+              }),
+            ]),
+          }),
+        ]);
         replacementOpen = false;
         return;
       }

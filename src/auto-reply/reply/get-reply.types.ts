@@ -54,7 +54,13 @@ export type ReplyRunVerbosity = {
 type InternalReplySessionOptions = {
   /** Dispatch-owned command requester binding; never part of the public plugin API. */
   withCommandNativeSubagents?: <T>(
-    binding: { agentId: string; sessionKey: string; entry: SessionEntry },
+    binding: {
+      agentId: string;
+      sessionKey: string;
+      entry: SessionEntry;
+      storePath?: string;
+      commandBody?: string;
+    },
     run: (
       create:
         | import("../../plugins/runtime/native-subagent-context.js").NativeSubagentCommandFactory

@@ -6,7 +6,7 @@ import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
@@ -306,12 +306,9 @@ export function SidebarAgentRoster(props: RosterProps) {
                           href={card().target.href}
                           aria-label={card().name}
                           aria-current={active() ? "page" : undefined}
-                          onClick={(event: MouseEvent) => {
-                            if (shouldHandleNavigationClick(event)) {
-                              event.preventDefault();
-                              host().openMainSession(card().id);
-                            }
-                          }}
+                          onClick={(event: MouseEvent) =>
+                            handleNavigationClick(event, () => host().openMainSession(card().id))
+                          }
                         >
                           <span class="sidebar-pinned-agent__avatar" aria-hidden="true">
                             <SessionGlyph
@@ -393,12 +390,9 @@ export function SidebarAgentRoster(props: RosterProps) {
                       data-agent-id={card().id}
                       href={card().target.href}
                       aria-current={active() ? "page" : undefined}
-                      onClick={(event: MouseEvent) => {
-                        if (shouldHandleNavigationClick(event)) {
-                          event.preventDefault();
-                          host().openMainSession(card().id);
-                        }
-                      }}
+                      onClick={(event: MouseEvent) =>
+                        handleNavigationClick(event, () => host().openMainSession(card().id))
+                      }
                     >
                       <span class="sidebar-agent-roster__avatar" aria-hidden="true">
                         <SessionGlyph

@@ -566,7 +566,6 @@ src/config/config-write-guard.ts
 src/config/config.ts
 src/config/defaults.ts
 src/config/deferred-plugin-migration-config.ts
-src/config/env-preserve-authored.ts
 src/config/env-preserve.ts
 src/config/env-substitution.ts
 src/config/env-vars.ts
@@ -589,6 +588,7 @@ src/config/io.health-state.ts
 src/config/io.invalid-config.ts
 src/config/io.load.ts
 src/config/io.meta.ts
+src/config/io.observe-promotion.ts
 src/config/io.observe-recovery-effects.ts
 src/config/io.observe-recovery.ts
 src/config/io.observe-state.ts
@@ -639,7 +639,6 @@ src/config/mutate.snapshot.ts
 src/config/mutate.ts
 src/config/mutation-conflict.ts
 src/config/normalize-exec-safe-bin.ts
-src/config/normalize-paths.ts
 src/config/official-external-channel-secret-schema.ts
 src/config/patch-replace-paths.ts
 src/config/paths.ts
@@ -1095,6 +1094,7 @@ src/infra/restart-stale-pids.ts
 src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
 src/infra/root-walk.ts
+src/infra/runtime-dependency-ownership.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-manifest.ts
 src/infra/runtime-process-url.ts
@@ -1313,7 +1313,6 @@ src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
 src/infra/worker-native-lifecycle.worker.ts
 src/infra/worker-native-port.ts
-src/infra/worker-native-resource.ts
 src/infra/worker-native-task-port.ts
 src/infra/worker-pool-sizing.ts
 src/infra/worker-request-diagnostics.ts
@@ -1472,7 +1471,6 @@ src/plugins/installed-plugin-index-facts.ts
 src/plugins/installed-plugin-index-hash.ts
 src/plugins/installed-plugin-index-install-owner.ts
 src/plugins/installed-plugin-index-install-records.ts
-src/plugins/installed-plugin-index-invalidation.ts
 src/plugins/installed-plugin-index-manifest.ts
 src/plugins/installed-plugin-index-policy.ts
 src/plugins/installed-plugin-index-record-builder.ts
@@ -1555,6 +1553,7 @@ src/plugins/provider-thinking.ts
 src/plugins/registry-runtime-binding.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
+src/plugins/plugin-bundled-reload.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-state-operation-module-loader.ts
 src/plugins/plugin-state-operation-source.ts
@@ -1805,6 +1804,7 @@ src/shared/settle-within.ts
 src/shared/store-writer-acquisitions.ts
 src/shared/store-writer-queue.ts
 src/shared/tool-block-contract.ts
+src/shared/update-outcome-classification.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
 src/skills/discovery/chat-command-invocation.ts
@@ -1900,7 +1900,6 @@ src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
 src/state/openclaw-agent-memory-revision-migration.ts
-src/state/openclaw-agent-message-tool-outcome-schema.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
 src/state/openclaw-agent-pending-inputs-schema.ts
@@ -2353,8 +2352,10 @@ packages/gateway-protocol/src/schema/users.ts
 packages/gateway-protocol/src/schema/wizard.ts
 packages/markdown-core/src/fences.ts
 packages/markdown-core/src/image-code-retention.ts
+packages/markdown-core/src/reference-definition-retention.ts
 packages/markdown-core/src/reasoning-tag-parser.ts
 packages/markdown-core/src/reasoning-tags.ts
+packages/markdown-core/src/table-code-retention.ts
 packages/media-core/src/base64.ts
 packages/media-core/src/inline-image-data-url.ts
 packages/memory-host-sdk/src/host/session-entry-projection.ts
@@ -2611,7 +2612,6 @@ src/shared/channel-read-authority.ts
 src/shared/tool-approval-reviews.ts
 src/agents/agent-lifecycle-parent-state.ts
 src/agents/agent-run-terminal-error.ts
-src/agents/agent-run-terminal-outcome-merge.ts
 src/agents/agent-run-terminal-outcome.ts
 src/agents/main-session-recovery/main-session-recovery-lifecycle.ts
 src/agents/run-termination.ts
@@ -2662,3 +2662,14 @@ src/plugins/service-scheduler-binding.ts
 src/plugins/setup-registry.ts
 src/shared/map-nested-strings.ts
 src/status/utility-model-warnings.ts
+src/infra/sqlite-integrity.worker.ts
+src/infra/sqlite-readonly-inspection.ts
+src/infra/sqlite-readonly-native-resource.ts
+src/infra/sqlite-snapshot-staging-runtime.ts
+src/infra/sqlite-snapshot-staging.worker.ts
+src/process/spawn-broker/execa-worker.ts
+src/process/spawn-broker/resource-server.ts
+src/process/spawn-broker/worker-sender.ts
+src/process/spawn-broker/worker.ts
+src/state/openclaw-agent-schema-inspection.worker.ts
+src/state/openclaw-state-ownership.worker.ts

@@ -185,7 +185,6 @@ describe("install security scan official bypass", () => {
       requestedSpecifier: "@openclaw/matrix@latest",
       source: officialSource,
       sourcePath: "/tmp/openclaw-official-npm",
-      sourcePathKind: "directory",
     });
   it.each([
     ["bundled skill", () => scanSkill(true), false, true],

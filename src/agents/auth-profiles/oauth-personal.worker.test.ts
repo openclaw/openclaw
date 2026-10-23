@@ -15,6 +15,8 @@ import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOAuthRefreshError } from "../../shared/oauth-refresh-outcome.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as workerStore from "../../state/openclaw-state-worker-store.js";
 import { withPersonalCredentialPublication } from "../../state/user-model-account-authority.js";
@@ -49,6 +51,8 @@ import {
 import { isOAuthRefreshFence, isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { withPersonalAuthProfileStore } from "./personal-store.js";
+import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
+import { inspectAuthProfileJsonCell } from "./sqlite-json.js";
 import type { OAuthCredential, ProfileUsageStats, UserModelAuthProfile } from "./types.js";
 import { reconcileWhamBlock, type WhamCooldownProbeResult } from "./usage-reduction.js";
 
@@ -840,5 +844,46 @@ it("does not persist a refresh claim when personal authority capture fails", asy
     );
     expect(readUserModelAuthProfile(profileId)?.credential).toEqual(credential);
     expect(refreshCredential).not.toHaveBeenCalled();
+  });
+});
+
+it("leaves the writer free while the host decides auth authorization enrollment", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const profileId = "synthetic:enrollment";
+    const context = captureOpenClawStateWorkerContext();
+    const expected = runOpenClawStateWriteTransaction(({ db }) => {
+      writeAuthProfileJsonCell(db, "store", "shared-state", {
+        version: 1,
+        profiles: {
+          [profileId]: { type: "token", provider: "synthetic", token: "synthetic-token" },
+        },
+      });
+      return inspectAuthProfileJsonCell(db, "store", "shared-state");
+    }, {});
+    const databasePath = resolveOpenClawStateSqlitePath();
+    using contention = probe.writerLock(databasePath);
+    probe.admission(operationAdmission, (request, grant, admit) => {
+      contention.observe(request.stage);
+      admit(request, grant);
+    });
+    const enrolled = await workerStore.runOpenClawStateWorkerOperation(
+      context,
+      (scope) =>
+        scope.execute({ type: "authProfiles.enrollAuthorization", input: { profileId, expected } }),
+      {
+        assertCurrent: () => {},
+        createAdmission: createSqliteWorkerWriteAdmission(() => {}, [databasePath]),
+      },
+    );
+    expect(contention.observed).toEqual(["transaction:free", "commit:held"]);
+    expect(enrolled.raw).toMatchObject({
+      authorizationLifetimes: { [profileId]: expect.any(String) },
+    });
+    expect(
+      runOpenClawStateWriteTransaction(
+        ({ db }) => inspectAuthProfileJsonCell(db, "store", "shared-state"),
+        {},
+      ),
+    ).toEqual({ status: "readable", raw: enrolled.raw });
   });
 });

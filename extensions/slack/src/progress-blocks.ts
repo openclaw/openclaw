@@ -194,7 +194,6 @@ function formatProgressAttentionTitle(
 }
 
 export function buildSlackProgressStreamChunks(params: {
-  label?: string;
   title?: string;
   lines: readonly ChannelProgressDraftLine[];
   plan?: readonly AgentPlanStep[];
@@ -256,7 +255,7 @@ export function buildSlackProgressStreamChunks(params: {
       });
     }
   }
-  const headline = params.title?.trim() || params.label?.trim();
+  const headline = params.title?.trim();
   const summaryTitle =
     params.finalInProgressStatus === "error"
       ? "Failed"

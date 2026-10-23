@@ -11,6 +11,7 @@ import {
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import {
   activePlacementSession,
@@ -115,18 +116,20 @@ describe("chat pane header", () => {
   });
 
   it.each(["openclaw", null])(
-    "preserves workspace identity alongside mobile connection status for %s",
+    "preserves session identity alongside mobile connection status for %s",
     (workspaceLabel) => {
       const retry = vi.fn();
       const { container, update } = mountHeader({ mergedChrome: true, workspaceLabel });
       const title = container.querySelector(".chat-pane__session-title");
-      const workspace = container.querySelector(".chat-pane__workspace-chip");
+      expect(container.querySelector(".chat-pane__workspace-chip") !== null).toBe(
+        Boolean(workspaceLabel),
+      );
       const drawer = container.querySelector<HTMLButtonElement>(".chat-pane__nav-toggle")!;
       update({ gatewayStatus: { kind: "offline", queuedCount: 2, onRetry: retry } });
       const line = container.querySelector(".mobile-connection-status")!;
       expect(line.textContent).toBe("Disconnected · 2 queued");
       expect(line.querySelector('[role="status"]')).toBeNull();
-      expect(container.querySelector(".chat-pane__workspace-chip")).toBe(workspace);
+      expect(container.querySelector(".chat-pane__workspace-chip")).toBeNull();
       expect(container.querySelector(".chat-pane__session-title")).toBe(title);
       expect(drawer.dataset.connectionStatus).toBe("offline");
       line.querySelector<HTMLButtonElement>("button")!.click();
@@ -898,26 +901,7 @@ it("publishes the active header while retaining mobile chrome across desktop tra
     false,
     null,
   ).header;
-  const mobileHost: ChatMobileHost = {
-    scopeKey: "header-registration",
-    open: false,
-    suspended: false,
-    mode: "dock",
-    height: undefined,
-    reservedHeight: 0,
-    destination: { area: "panels" },
-    detailsMount: null,
-    setDetailsMount: vi.fn(),
-    navigate: vi.fn(),
-    reveal: vi.fn(),
-    close: vi.fn(),
-    back: vi.fn(),
-    toggleExpanded: vi.fn(),
-    resize: vi.fn(),
-    keyboardVisible: false,
-    onComposerEditingChange: vi.fn(),
-    onViewportChange: vi.fn(),
-  };
+  const mobileHost: ChatMobileHost = createChatMobileHostFixture("header-registration");
   const mounted = mountHeader({
     mergedChrome: false,
     onHeaderRef: nativeHeader.onHeaderRef,

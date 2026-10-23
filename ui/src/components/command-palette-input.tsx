@@ -17,7 +17,7 @@ type CommandPaletteInputProps = {
   onCompositionEnd?: () => void;
   actions?: JSX.Element;
   onPaste?: (event: ClipboardEvent) => void;
-  disabled?: boolean;
+  busy?: boolean;
   readOnly?: boolean;
   controls?: string;
   activeDescendant?: string;
@@ -121,7 +121,7 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
           aria-activedescendant={props.activeDescendant}
           aria-describedby={props.describedBy}
           placeholder={committedPlaceholder()}
-          disabled={props.disabled}
+          aria-busy={props.busy ? "true" : undefined}
           readonly={props.readOnly}
           onScroll={() => textarea.isConnected && updateOverflow()}
           onPaste={(event) => props.onPaste?.(event)}

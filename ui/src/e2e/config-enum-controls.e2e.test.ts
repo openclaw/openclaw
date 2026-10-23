@@ -90,10 +90,7 @@ suite.define(() => {
     await withPage(async ({ page }) => {
       const gateway = await installMockGateway(page, { methodResponses: enumMocks() });
       await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`);
-      await page
-        .locator(".settings-row__title")
-        .getByText("Required mode", { exact: true })
-        .waitFor();
+      await page.getByRole("combobox", { name: "Required mode", exact: true }).waitFor();
 
       for (const [name, key] of [
         ["Required mode", "requiredMode"],

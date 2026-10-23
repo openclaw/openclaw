@@ -256,7 +256,7 @@ async function readyTalk(options: TalkMutationHarnessOptions = {}) {
 
 it("locks every curated picker while config is saving", async () => {
   const { page } = await readyTalk({ configSaving: true, speakerVoice: "marin" });
-  expect(page.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled).toBe(true);
+  expect(page.querySelector(".settings-segmented__input")?.hasAttribute("disabled")).toBe(true);
   expect([...page.querySelectorAll("select")]).toMatchObject([{ disabled: true }]);
   expect(page.querySelector<HTMLButtonElement>("openclaw-select-picker button")?.disabled).toBe(
     true,
@@ -751,7 +751,7 @@ describe("Talk device and voice wake settings", () => {
       )!;
     const expectWakeDisabled = (disabled: boolean) =>
       expect(
-        row("Voice Wake").querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled,
+        row("Voice Wake").querySelector(".settings-toggle__input")?.hasAttribute("disabled"),
       ).toBe(disabled);
     expect(page.textContent).toContain("This Mac");
     expectWakeDisabled(true);

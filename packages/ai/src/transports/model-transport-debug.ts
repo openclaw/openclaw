@@ -45,19 +45,15 @@ export function resolveModelSseDebugMode(
   return isTruthyEnv(normalized) ? "events" : "off";
 }
 
-/** Returns whether any model transport debug channel is enabled. */
-function isModelTransportDebugEnabled(env: ModelTransportDebugEnv = process.env): boolean {
-  return (
+/** Emits transport diagnostics at debug, promoted to info by explicit debug flags. */
+export function emitModelTransportDebug(log: SubsystemLogger, message: string): void {
+  const env = process.env;
+  if (
     isTruthyEnv(env.OPENCLAW_DEBUG_MODEL_TRANSPORT) ||
     resolveModelPayloadDebugMode(env) !== "off" ||
     resolveModelSseDebugMode(env) !== "off" ||
     isTruthyEnv(env.OPENCLAW_DEBUG_CODE_MODE)
-  );
-}
-
-/** Emits transport diagnostics at debug, promoted to info by explicit debug flags. */
-export function emitModelTransportDebug(log: SubsystemLogger, message: string): void {
-  if (isModelTransportDebugEnabled()) {
+  ) {
     log.info(message);
     return;
   }

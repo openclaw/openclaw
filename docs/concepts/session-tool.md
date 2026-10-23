@@ -258,7 +258,14 @@ target for the missing section or a file containing the full reply; `sessions_hi
 also caps individual messages and cannot always recover their tail. Delayed
 inter-session replies still use the bounded lifecycle preview.
 
+[Swarm collector children](/tools/swarm#how-collector-children-behave) (spawned with
+`collect: true`) are one-shot and do not accept `sessions_send`, including after they
+finish or time out. The send fails with an error explaining how to collect the result
+with `agents_wait` or start a new child, and no run starts.
+
 Sessions keep their addresses when execution moves between the Gateway, a paired device, and a cloud worker. An OpenClaw worker can send to an authorized parent, child, or sibling using its exact session key, including a target running on the Gateway. The Gateway validates the current session identities, visibility, and any per-agent send-only policy before admitting the target turn; target placement does not grant messaging access. Targets outside both the configured visibility scope and an authorized send-only rule, archived targets, and replaced targets remain denied.
+
+Raw `global` family keys resolve within the sending agent's store, or the configured fixed-store owner when agents share a store. A non-default agent's parent and siblings remain reachable under the same messaging policy.
 
 Children remain reachable when their parent rotates to a new session ID under the
 same key and its recorded predecessor chain still connects to their original

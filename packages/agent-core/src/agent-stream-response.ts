@@ -56,10 +56,8 @@ export type ExecutedToolCallBatch = {
   fatal?: { error: unknown };
 };
 
-type AssistantMessageUpdateEvent = Extract<AssistantMessageEvent, { contentIndex: number }>;
-
 function resolveAssistantMessageUpdate(
-  event: AssistantMessageUpdateEvent,
+  event: Extract<AssistantMessageEvent, { contentIndex: number }>,
   currentMessage: AssistantMessage,
 ): AssistantMessage {
   if ("partial" in event && event.partial) {

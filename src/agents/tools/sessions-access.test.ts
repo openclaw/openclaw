@@ -150,6 +150,8 @@ it("resolves the canonical global main key from its explicit store owner", () =>
 it.each([
   { pattern: "Ops", accepted: "Ops", rejected: "ops" },
   { pattern: "ops.[prod]*", accepted: "OPS.[PROD]-worker", rejected: "opsXprod-worker" },
+  { pattern: "ab*bc", accepted: "abbc", rejected: "abc" },
+  { pattern: "a*bc*c", accepted: "abcc", rejected: "abc" },
 ])("matches $pattern without reinterpreting literal text", ({ pattern, accepted, rejected }) => {
   const policy = allowAgents([pattern]);
   expect([policy.matchesAllow(accepted), policy.matchesAllow(rejected)]).toEqual([true, false]);

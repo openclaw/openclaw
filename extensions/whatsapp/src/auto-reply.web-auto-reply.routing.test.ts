@@ -107,7 +107,6 @@ describe("web auto-reply routing", () => {
     expect(routeParams).toEqual({
       storeAgentId: "main",
       sessionKey: `${groupSessionKey}:thread:whatsapp-account-work`,
-      channel: "whatsapp",
       to: "123@g.us",
       accountId: "work",
     });

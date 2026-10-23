@@ -74,7 +74,6 @@ import {
   setMatrixThreadBindingMaxAgeBySessionKeyAsync,
 } from "./matrix/thread-bindings-shared.js";
 import { matrixPresentationCapabilities } from "./presentation-capabilities.js";
-import { matrixResolverAdapter } from "./resolver.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 import {
@@ -94,6 +93,11 @@ const loadMatrixMonitorModule = createLazyRuntimeModule(() =>
     loadMatrixMonitorModule.clear();
     throw error;
   }),
+);
+
+const loadMatrixResolver = createLazyRuntimeNamedExport(
+  () => import("./resolve-targets.js"),
+  "resolveMatrixTargets",
 );
 
 const matrixDoctor: ChannelDoctorAdapter = {
@@ -424,7 +428,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           listGroupsLive: (runtime) => runtime.listMatrixDirectoryGroupsLive,
         }),
       }),
-      resolver: matrixResolverAdapter,
+      resolver: {
+        resolveTargets: async (params) => (await loadMatrixResolver())(params),
+      },
       actions: matrixMessageActions,
       message: matrixMessageAdapter,
       secrets: {

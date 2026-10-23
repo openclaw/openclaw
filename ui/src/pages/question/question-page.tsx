@@ -17,6 +17,7 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
+import { registerChatQuestionsEnglish } from "../../i18n/locales/en-chat-questions.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -26,6 +27,8 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-brid
 import { ChatQuestionCard } from "../chat/components/chat-question-card-view.tsx";
 import { createGatewayQuestionPanelProps } from "../chat/components/chat-question-card.ts";
 import { terminalAnswer } from "../chat/components/chat-question-summary.tsx";
+
+registerEnglishCatalog(registerChatQuestionsEnglish);
 
 registerEnglishCatalog(registerApprovalsEnglish);
 
@@ -415,7 +418,7 @@ function QuestionPageContent(
   );
 }
 
-defineSolidBridge<QuestionPageProps>(
+export const QuestionPage = defineSolidBridge<QuestionPageProps>(
   "openclaw-question-page",
   (props, host) => QuestionPageContent(props, host),
   {
