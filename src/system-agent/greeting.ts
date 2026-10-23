@@ -324,9 +324,8 @@ async function resolveUncachedSystemAgentGreeting(params: {
   factsHash: string;
   cacheKey: object;
   at: number;
-  timeoutMs?: number;
 }): Promise<string> {
-  const timeoutMs = params.timeoutMs ?? SYSTEM_AGENT_GREETING_TIMEOUT_MS;
+  const timeoutMs = SYSTEM_AGENT_GREETING_TIMEOUT_MS;
   let plan: SystemAgentGreetingPlan | null;
   try {
     // This is the only metered greeting turn. The single-slot hash keeps unchanged
@@ -384,7 +383,6 @@ type ResolveSystemAgentGreetingParams = {
   /** The Gateway session owner retains flight/backoff identity across captured reads. */
   cacheOwner?: object;
   now?: () => number;
-  timeoutMs?: number;
 };
 
 export async function resolveSystemAgentGreeting(
