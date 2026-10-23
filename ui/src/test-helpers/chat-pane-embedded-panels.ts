@@ -1,6 +1,9 @@
+import { createComponent } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../api/types.ts";
+import type { ApplicationContext } from "../app/context.ts";
+import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { sidebarPanelDefinitions } from "../pages/chat/chat-pane-embedded-panels.ts";
 import type { SidebarPanelDefinitionParams } from "../pages/chat/chat-pane-embedded-types.ts";
 import { createChatPaneRails } from "../pages/chat/chat-pane-rails.ts";
@@ -46,6 +49,7 @@ export async function renderPanelFixture(
   layout: SidebarLayout,
   definitions: ReturnType<typeof sidebarPanelDefinitions>,
   closePanelSlot: (slot: SidebarSlotId) => void = vi.fn(),
+  context: ApplicationContext = createInitializationContext(),
 ) {
   installResizeObserverStub();
   const existing = panelViews.get(mount);
@@ -71,7 +75,18 @@ export async function renderPanelFixture(
   if (existing) {
     existing.update(props);
   } else {
-    const view = mountSolid(SidebarRegionView, props, mount);
+    const view = mountSolid(
+      (regionProps: ReturnType<typeof renderSidebarRegion>) =>
+        createComponent(ApplicationProvider, {
+          value: context,
+          host: mount,
+          get children() {
+            return createComponent(SidebarRegionView, regionProps);
+          },
+        }),
+      props,
+      mount,
+    );
     panelViews.set(mount, { primary, update: (next) => view.update(next) });
     onTestFinished(() => {
       panelViews.delete(mount);
@@ -203,7 +218,7 @@ export function createReviewFixture() {
   const renderPanels = async () => {
     const { closePanelSlot } = rails();
     const definitions = sidebarPanelDefinitions(sidebarPanelFixtureParams(state));
-    await renderPanelFixture(mount, state.sidebarLayout, definitions, closePanelSlot);
+    await renderPanelFixture(mount, state.sidebarLayout, definitions, closePanelSlot, context);
   };
   return { context, file, list, mount, preview, rails, renderPanels, sessions, state };
 }

@@ -429,7 +429,13 @@ function WidgetContent(props: {
                   <div
                     style={{
                       display: "block",
-                      "min-height": `${props.preview.preferredHeight ?? 420}px`,
+                      "min-height": `${
+                        props.options?.widgetLayout?.read(
+                          `canvas:${props.preview.viewId!.trim()}`,
+                        ) ??
+                        props.preview.preferredHeight ??
+                        420
+                      }px`,
                     }}
                   />
                 }

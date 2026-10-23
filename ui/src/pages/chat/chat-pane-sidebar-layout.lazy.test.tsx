@@ -36,7 +36,9 @@ vi.mock("./components/chat-files-panel.tsx", () => {
   lazyMocks.workspaceImportAttempts += 1;
   return {
     ChatFilesPanel: () => {
-      if (lazyMocks.failWorkspace) throw new Error("File renderer unavailable");
+      if (lazyMocks.failWorkspace) {
+        throw new Error("File renderer unavailable");
+      }
       return (
         <openclaw-chat-files-panel>
           <input aria-label="Files draft" />

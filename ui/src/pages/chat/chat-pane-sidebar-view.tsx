@@ -41,6 +41,18 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
   let header!: HTMLDivElement;
   let primary!: HTMLDivElement;
   let outlet!: HTMLDivElement;
+  // Ref setup belongs to this region, not Loading's reactive child calculation.
+  const regionRefs = [
+    elementRef((element: HTMLElementTagNameMap["openclaw-chat-sidebar-region"]) =>
+      props.onRegionViewRef?.(element),
+    ),
+    elementRef((element: HTMLElementTagNameMap["openclaw-chat-sidebar-region"]) => {
+      regionView = element;
+      return () => {
+        regionView = undefined;
+      };
+    }),
+  ];
   // The lazy native region mounts after this caller's refs have attached.
   const elements: NonNullable<RegionProps["elements"]> = {
     get shell() {
@@ -650,15 +662,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         <Errored fallback={(error, reset) => <RegionPlaceholder error={error()} retry={reset} />}>
           <Loading fallback={<RegionPlaceholder />}>
             <ChatSidebarRegion
-              ref={[
-                elementRef(props.onRegionViewRef),
-                elementRef((element) => {
-                  regionView = element;
-                  return () => {
-                    regionView = undefined;
-                  };
-                }),
-              ]}
+              ref={regionRefs}
               elements={elements}
               panelIdPrefix={props.panelIdPrefix}
               mobileHost={props.mobileHost}

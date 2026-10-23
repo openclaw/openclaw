@@ -30,6 +30,9 @@ export type BoardSessionSurfaceProps = {
 
 export function BoardSessionSurface(props: BoardSessionSurfaceProps) {
   const active = usePanePresentation(() => props.active);
+  const boardRef = elementRef((element: HTMLElementTagNameMap["openclaw-board-view"]) =>
+    props.onViewRef?.(element),
+  );
   return (
     <div class="board-session-surface" hidden={!active()} inert={!active()}>
       {props.controls}
@@ -38,7 +41,7 @@ export function BoardSessionSurface(props: BoardSessionSurfaceProps) {
           fallback={<PanelLoadingSkeleton variant="board" label={t("common.loading")} overlay />}
         >
           <BoardView
-            ref={[elementRef(props.onViewRef)]}
+            ref={[boardRef]}
             active={active()}
             session={props.session}
             snapshot={props.snapshot}
