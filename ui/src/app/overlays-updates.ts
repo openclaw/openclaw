@@ -91,7 +91,6 @@ export function createApplicationUpdateOverlays(
   let updateRequestRunning = false;
   let updateStatusRevision = 0;
   let updateRunGeneration = 0;
-  let updateReadGeneration = 0;
   let updateHoldInFlight = false;
   let runId: string | null = null;
   let updateHistory: UpdateHistory = { kind: "unknown" };
@@ -272,13 +271,8 @@ export function createApplicationUpdateOverlays(
     if (!client || !id || !isCurrentClient(client)) {
       return;
     }
-    const generation = ++updateReadGeneration;
     const epoch = connectedEpoch;
-    const isCurrent = () =>
-      generation === updateReadGeneration &&
-      epoch === connectedEpoch &&
-      id === runId &&
-      isCurrentClient(client);
+    const isCurrent = () => epoch === connectedEpoch && id === runId && isCurrentClient(client);
     try {
       const response = await client.request<{ run: UpdateRunRecord | null }>("update.runs.get", {
         runId: id,
@@ -423,7 +417,6 @@ export function createApplicationUpdateOverlays(
     if (scopeChanged) {
       updateFailureReporter.invalidate();
       updateRunGeneration++;
-      updateReadGeneration++;
       updateStatusRevision++;
       runId = null;
       updateHistory = { kind: "unknown" };
@@ -464,7 +457,6 @@ export function createApplicationUpdateOverlays(
         snapshot = { ...snapshot, updateStatusBanner: resolveUnknownUpdateOutcomeBanner() };
       }
       connectedEpoch++;
-      updateReadGeneration++;
       updateStatusRevision++;
       updateRunGeneration++;
       updateRequestRunning = false;
@@ -588,7 +580,6 @@ export function createApplicationUpdateOverlays(
       const generation = ++updateRunGeneration;
       const sessionKey = hooks.getActiveSessionKey?.();
       updateStatusRevision++;
-      updateReadGeneration++;
       const attempt: UpdateAdmissionAttempt = {
         history: snapshot.updateRun
           ? { kind: "known", runId: snapshot.updateRun.runId }
@@ -718,7 +709,6 @@ export function createApplicationUpdateOverlays(
       disposed = true;
       updateFailureReporter.invalidate();
       updateRunGeneration++;
-      updateReadGeneration++;
       updateCampaignPoller.stop();
     },
   };

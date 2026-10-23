@@ -224,8 +224,7 @@ suite.define(() => {
         });
         await gateway.waitForRequest("update.runs.get", { after: finalReads });
         const headline = "✅ OpenClaw updated to 2.0.0 (from 1.0.0); 3 warnings need attention.";
-        const completedHeadline = runView.getByText(headline, { exact: true }).first();
-        await completedHeadline.waitFor({ state: "attached" });
+        await runView.getByText(headline, { exact: true }).first().waitFor();
         await runView.getByText("Gateway downtime: 1s.", { exact: false }).waitFor();
         expect(await runView.locator('[data-oracle][data-state="pass"]').count()).toBe(4);
         expect(await runView.locator('[data-step="repairing"]').getAttribute("data-status")).toBe(
