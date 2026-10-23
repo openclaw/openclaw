@@ -252,6 +252,21 @@ candidates require stable/full evidence with soak and blocking performance.
 The embedded preflight enforces these requirements; no publication waiver can
 bypass them.
 
+Planning flags can change while saved checklist state is still `validated` with
+no run IDs and no retained `frv-request.json`. The P tooling pin is not part of
+that identity: a repaired P resumes the same `--output-dir` at any phase, keeps
+bound FRV/npm runs, and gets its own publication tag; the helper reuses a saved
+tag only for the same P SHA. Once qualification is bound, keep the original
+flags and request; do not delete dispatch state to force a retry. The default
+output directory includes the resolved candidate SHA, so changing C starts a
+separate state namespace automatically while another launch for the same C
+resumes its retained state. Supply `--output-dir` only to resume a legacy or
+explicitly named request, or to start another deliberate request for the same C.
+If FRV was admitted without Windows, omit `--windows-node-tag` when consuming it
+and attach Windows afterward with `windows-node-release.yml`, or obtain new FRV
+evidence with Windows selected. A fresh checklist launch already admits the
+selected Windows tag and installer digests through FRV.
+
 For a prepare-only request, stop with the candidate, evidence, limitations, and
 printed next command. Do not create/push the final tag or publish/announce.
 With publication authority and candidate success, create and push the signed

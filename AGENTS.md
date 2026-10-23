@@ -37,6 +37,7 @@ Update instructions at their owner instead of adding competing rules here.
 - Check mergeability first; don't rebase or merge `main` just because it advanced. Integrate for conflicts, a named failing gate, or material base risk, then rerun affected checks. Prior-head CI stays prior-head evidence; admin exceptions belong to the native landing workflow ([landing](.agents/skills/openclaw-pr-maintainer/references/landing.md)).
 - Time pressure never waives gates. Report concrete blockers.
 - Visual change: inspected before/after screenshots. Behavior-only fix: direct boundary proof. No checkbox demos.
+- Don't mix shell dialects (for example, zsh `${name:r}` in bash).
 
 ## One owner, complete cutover
 
