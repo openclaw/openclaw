@@ -41,22 +41,32 @@ export async function markGatewayStartupMainSessionOrphans(
         "sidecars.main-session-recovery-load",
         loadMainSessionRestartRecoveryMarkingModule,
       );
-      if (params.scheduler.signal.aborted || params.isRestartRecoverySuppressed()) {
-        return;
+      while (!params.scheduler.signal.aborted && !params.isRestartRecoverySuppressed()) {
+        const cfg = params.getConfig();
+        try {
+          await measureStartup(params.startupTrace, "sidecars.main-session-recovery-scan", () =>
+            markStartupOrphanedMainSessionsForRecovery({
+              cfg,
+              startupCheckedStorePaths,
+              assertCommitAllowed: () => {
+                params.scheduler.signal.throwIfAborted();
+                if (params.isRestartRecoverySuppressed() || params.getConfig() !== cfg) {
+                  throw new Error("Gateway restart recovery state changed before orphan marking");
+                }
+              },
+            }),
+          );
+        } catch (err) {
+          if (params.getConfig() === cfg) {
+            throw err;
+          }
+        }
+        // A store can return a failed target instead of throwing after invalidation.
+        // Keep admission held; the checked set skips stores that already committed.
+        if (params.getConfig() === cfg) {
+          return;
+        }
       }
-      const cfg = params.getConfig();
-      await measureStartup(params.startupTrace, "sidecars.main-session-recovery-scan", () =>
-        markStartupOrphanedMainSessionsForRecovery({
-          cfg,
-          startupCheckedStorePaths,
-          assertCommitAllowed: () => {
-            params.scheduler.signal.throwIfAborted();
-            if (params.isRestartRecoverySuppressed() || params.getConfig() !== cfg) {
-              throw new Error("Gateway restart recovery state changed before orphan marking");
-            }
-          },
-        }),
-      );
     } catch (err) {
       params.log.warn(`main-session startup orphan marking failed: ${String(err)}`);
     }
