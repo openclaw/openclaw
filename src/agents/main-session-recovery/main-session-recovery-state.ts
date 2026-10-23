@@ -165,10 +165,13 @@ export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: st
   );
 }
 
-/** Failed foreground admission can leave an unfinished recovery cycle behind. */
+/** Reconcile failed admission and terminal residue before a new input adds recovery custody. */
 export function isMainSessionRecoveryReconciliationCandidate(entry: SessionEntry): boolean {
   return (
-    (entry.status === undefined || entry.status === "running" || entry.status === "failed") &&
+    (entry.status === undefined ||
+      entry.status === "running" ||
+      entry.status === "failed" ||
+      isMainRestartRecoveryAggregateTerminalOnly(entry)) &&
     entry.abortedLastRun !== true &&
     entry.mainRestartRecovery !== undefined &&
     !entry.mainRestartRecovery.tombstone
