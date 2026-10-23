@@ -190,30 +190,25 @@ enum PostAppUpdateReceiptStore {
         return receipt
     }
 
+    @discardableResult
     static func recordSetupRecovery(
         fromVersion: String,
         toVersion: String,
         runtimeBuildID: String? = nil,
         defaults: UserDefaults = AppDefaults.standard,
-        now: Date = Date()) throws
+        now: Date = Date()) throws -> PostAppUpdateReceipt
     {
-        if let current = self.load(defaults: defaults), current.toVersion != toVersion {
-            guard !current.coreUpdatePending || current.coreUpdate == .gateway,
-                  CLIInstallPrompter.isManagedUpgrade(found: current.toVersion, required: toVersion)
-            else {
-                throw GatewayHostingError(message: "The recorded update must finish in its target app before setup.")
-            }
-            // Setup explicitly advances its target; delayed dispatch callbacks cannot retarget it.
-            self.record(fromVersion: current.toVersion, toVersion: toVersion, defaults: defaults, now: now)
-        }
-        let previous = self.pendingSetupRecovery(defaults: defaults)
-        let receipt = self.pending(currentVersion: toVersion, defaults: defaults) ?? PostAppUpdateReceipt(
-            fromVersion: previous?.fromVersion ?? fromVersion,
+        let pending = self.pending(currentVersion: toVersion, defaults: defaults)
+        let receipt = pending?.coreUpdatePending != true || pending?.coreUpdate == .gateway ||
+            pending?.coreUpdate == .legacyCanonical
+            ? pending : nil
+        let checkpoint = receipt ?? PostAppUpdateReceipt(
+            fromVersion: fromVersion,
             toVersion: toVersion,
-            recordedAt: previous?.recordedAt ?? now,
+            recordedAt: now,
             runtimeBuildID: runtimeBuildID,
             setupRecovery: true)
-        try self.recordCoreUpdateDispatch(receipt: receipt, owner: .gateway, defaults: defaults)
+        return try self.recordCoreUpdateDispatch(receipt: checkpoint, owner: .gateway, defaults: defaults)
     }
 
     static func completeSetupRecovery(
@@ -230,20 +225,11 @@ enum PostAppUpdateReceiptStore {
         owner: PostAppUpdateCoreUpdate,
         defaults: UserDefaults = AppDefaults.standard) throws -> PostAppUpdateReceipt
     {
-        // The caller may have awaited a probe since reading its receipt. Admission belongs to the store.
-        let current = self.load(defaults: defaults)
-        guard current == nil || current?.toVersion == receipt.toVersion else {
-            throw GatewayHostingError(message: "Another app update replaced this target; its recovery was preserved.")
-        }
-        guard owner != .complete,
-              current?.coreUpdatePending != true || current?.coreUpdate == owner
-        else {
-            throw GatewayHostingError(
-                message: "Another managed runtime update is incomplete. Finish it before updating this installation.")
-        }
-        let latest = current ?? receipt
-        let updated = self.setUpdateState(
-            incomplete: true, coreUpdate: owner, receipt: latest, defaults: defaults)
+        guard owner != .complete else { return receipt }
+        var updated = receipt
+        updated.gatewayUpdateIncomplete = true
+        updated.coreUpdate = owner
+        self.persistCheckpoint(updated, replacing: receipt, defaults: defaults)
         defaults.synchronize()
         return updated
     }
@@ -262,6 +248,20 @@ enum PostAppUpdateReceiptStore {
             coreUpdate: .complete,
             receipt: receipt,
             defaults: defaults)
+    }
+
+    @discardableResult
+    static func completeCoreRepair(
+        receipt: PostAppUpdateReceipt,
+        owner: PostAppUpdateCoreUpdate,
+        defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt
+    {
+        guard receipt.coreUpdate == owner else { return receipt }
+        var updated = receipt
+        updated.gatewayUpdateIncomplete = !receipt.setupRecovery && owner != .legacyCanonical
+        updated.coreUpdate = .complete
+        self.persistCheckpoint(updated, replacing: receipt, defaults: defaults)
+        return updated
     }
 
     @discardableResult
@@ -370,5 +370,17 @@ enum PostAppUpdateReceiptStore {
     private static func persist(_ receipt: PostAppUpdateReceipt, defaults: UserDefaults) {
         guard let data = try? JSONEncoder().encode(receipt) else { return }
         defaults.set(data, forKey: postAppUpdateReceiptKey)
+    }
+
+    private static func persistCheckpoint(
+        _ updated: PostAppUpdateReceipt,
+        replacing receipt: PostAppUpdateReceipt,
+        defaults: UserDefaults)
+    {
+        guard self.load(defaults: defaults).map({
+            $0 == receipt && (!$0.coreUpdatePending || !updated.coreUpdatePending ||
+                $0.coreUpdate == .legacyCanonical || $0.coreUpdate == updated.coreUpdate)
+        }) ?? true else { return }
+        self.persist(updated, defaults: defaults)
     }
 }

@@ -17,9 +17,9 @@ struct PostUpdateBundledRuntimeTests {
             try PostAppUpdateReceiptStore.recordCoreUpdateDispatch(receipt: newer, owner: owner, defaults: defaults)
         }
         let before = defaults.data(forKey: postAppUpdateReceiptKey)
-        #expect(throws: GatewayHostingError.self) {
-            try PostAppUpdateReceiptStore.recordCoreUpdateDispatch(receipt: stale, owner: .gateway, defaults: defaults)
-        }
+        let independent = try PostAppUpdateReceiptStore.recordCoreUpdateDispatch(
+            receipt: stale, owner: .gateway, defaults: defaults)
+        #expect(independent.coreUpdate == .gateway)
         #expect(defaults.data(forKey: postAppUpdateReceiptKey) == before)
     }
 
