@@ -7,12 +7,12 @@ const { serve, unavailable } = vi.hoisted(() => ({
 }));
 // mock-isolation: Capture the worker handler without opening a real worker message port.
 vi.mock("openclaw/plugin-sdk/worker-task-server", () => ({ serveWorkerTasks: serve }));
-// mock-isolation: Throw on storage import so this test detects eager session-storage loading.
+// mock-isolation: Inventory and rendering are unavailable in the indexing worker.
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", () => {
   throw unavailable;
 });
 
-it("prepares chunks without loading session storage, which only transcript stats need", async () => {
+it("prepares chunks and reads statistics without loading session inventory or rendering", async () => {
   await import("./manager-index.worker.js");
   const handle = serve.mock.calls[0]?.[0];
   if (!handle) {
@@ -37,5 +37,5 @@ it("prepares chunks without loading session storage, which only transcript stats
   });
   await expect(
     handle({ kind: "transcript-stats", scopes: [], env: { OPENCLAW_STATE_DIR: "/unused" } }),
-  ).rejects.toThrow();
+  ).resolves.toEqual({ kind: "transcript-stats", stats: [] });
 });

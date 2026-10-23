@@ -4,7 +4,10 @@ import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readTranscriptStatsBatchReadOnlySync } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import * as memoryStorage from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import * as cpuRuntime from "./manager-cpu-worker-runtime.js";
@@ -132,6 +135,29 @@ describe("memory manager retained worker reads", () => {
     expect(actual.at(-2)).toEqual(actual[0]);
     expect(actual.at(-1)).toBeNull();
     expect(observed.queries).toEqual([]);
+  });
+
+  it("refuses a mixed incognito statistics batch before native reads", async () => {
+    await seedSession("stats-private", "Persistent statistics must not be partially read.");
+    const scopes = [
+      { agentId: "main", sessionId: "stats-private" },
+      {
+        agentId: "main",
+        sessionId: "missing-private",
+        storePath: path.join(
+          path.dirname(resolveOpenClawAgentSqlitePath({ agentId: "main" })),
+          "incognito-openclaw-agent.sqlite",
+        ),
+      },
+    ];
+    using observed = observeSql();
+    expect(() => readTranscriptStatsBatchReadOnlySync(scopes)).toThrow(
+      "cannot access an incognito session synchronously",
+    );
+    expect(observed.queries).toEqual([]);
+    await expect(cpuRuntime.readMemoryTranscriptStatsInWorker(scopes)).rejects.toThrow(
+      "cannot access an incognito session synchronously",
+    );
   });
 
   it("joins a startup statistics read before closing without scheduling late sync", async () => {

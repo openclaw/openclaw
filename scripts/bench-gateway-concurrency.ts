@@ -86,6 +86,11 @@ import {
   writeGatewayBenchConfig,
   writePluginFixtures,
 } from "./lib/gateway-bench-runtime.ts";
+import {
+  probeGatewayMemorySearch,
+  readIndexWorkerResources,
+  seedGatewaySessions,
+} from "./lib/gateway-bench-session-setup.ts";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 import { inspectManagedProcessGroup } from "./lib/managed-child-process.mts";
 
@@ -174,6 +179,11 @@ type BenchmarkRun = {
   };
   heapProfile?: GatewayHeapProfile & MainProfileArtifacts;
   loadCpuProfile?: GatewayCpuProfile & MainProfileArtifacts;
+  memorySearch?: Awaited<ReturnType<typeof probeGatewayMemorySearch>>;
+  indexWorkerLoad?: {
+    before: Awaited<ReturnType<typeof readIndexWorkerResources>>;
+    after?: Awaited<ReturnType<typeof readIndexWorkerResources>>;
+  };
   controlPlane: Array<TimedProbe & { method: string }>;
   controlUi: ControlUiProbe[];
   cpuUsage: GatewayCpuUsage;
@@ -293,6 +303,7 @@ type CliOptions = GatewayBenchRuntimeOptions & {
   json: boolean;
   maxControlMs?: number;
   maxHandshakeMs?: number;
+  memorySearch: boolean;
   output?: string;
   pluginCount: number;
   probeRounds?: number;
@@ -325,7 +336,6 @@ const MAX_TURNS_PER_SESSION = 100;
 const MAX_PLUGIN_COUNT = 100;
 const MAX_SESSION_COUNT = 10_000;
 const MAX_SESSION_UPDATES = 100_000;
-const MAX_SESSION_SEED_CONCURRENCY = 16;
 const MAX_RUNS = 20;
 const MAX_WARMUP = 10;
 const MAX_SAMPLES_PER_RUN = 2_048;
@@ -357,6 +367,7 @@ const BOOLEAN_FLAGS = new Set([
   "--tool-events",
   "--visible-observer",
   "--workspace-fanout",
+  "--memory-search",
 ]);
 const VALUE_FLAGS = new Set([
   "--control-ui-clients",
@@ -421,6 +432,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     cadenceMs: boundedInt("--cadence-ms", DEFAULT_CADENCE_MS, 5_000),
     concurrency: boundedInt("--concurrency", DEFAULT_CONCURRENCY, MAX_CONCURRENCY),
     controlPlane: flags.has("--control-plane"),
+    memorySearch: flags.has("--memory-search"),
     cpuProfDir: resolveOutputPath(flags.get("--cpu-prof-dir")?.[0]),
     loadCpuProfDir: resolveOutputPath(flags.get("--load-cpu-prof-dir")?.[0]),
     heapProfDir: resolveOutputPath(flags.get("--heap-prof-dir")?.[0]),
@@ -521,6 +533,14 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     throw new CliArgumentError("--activity-summary-diagnostics requires the mock provider");
   }
   if (
+    options.memorySearch &&
+    (provider !== "mock" || options.agentCount !== 1 || options.historyMessages === 0)
+  ) {
+    throw new CliArgumentError(
+      "--memory-search requires the mock provider, one agent, and seeded history",
+    );
+  }
+  if (
     provider === "openai" &&
     (options.runs !== 1 ||
       options.warmup !== 0 ||
@@ -592,6 +612,7 @@ Options:
   --agent-warmup-turns <n> Verified turns per active session in the same Gateway before load (default: 0, max: ${MAX_WARMUP})
   --turns-per-session <n> Serial turns per session (default: 1, max: ${MAX_TURNS_PER_SESSION})
   --control-plane   Also probe cron.list and cron.status during load
+  --memory-search   Inspect seeded transcripts through the owner-routed memory CLI before load
   --history-messages <n> Inject up to 500 synthetic messages per seeded session
   --history-message-chars <n> Synthetic message size (default: 1024, max: 65536)
   --cpu-prof-dir <p> Write Gateway V8 CPU profiles to this directory
@@ -2158,50 +2179,32 @@ async function runGatewaySample(
       );
       const sessionSeedStartedAt = performance.now();
       if (prepareSessions) {
-        let nextSessionIndex = 0;
-        let seededSessionCount = 0;
         await concurrently(
-          Array.from({ length: Math.min(MAX_SESSION_SEED_CONCURRENCY, sessionCount) }, async () => {
-            for (;;) {
-              const index = nextSessionIndex++;
-              const sessionKey = sessionKeys[index];
-              if (!sessionKey || probesStopped) {
-                return;
-              }
-              const workspaceDir = options.workspaceFanout
-                ? path.join(fixtureRoot, `workspace-${index + 1}`)
-                : undefined;
-              if (workspaceDir) {
-                mkdirSync(workspaceDir, { recursive: true });
-              }
-              await rpc("sessions.create", {
-                key: sessionKey,
-                agentId: sessionAgents[index],
-                ...(workspaceDir ? { cwd: workspaceDir } : {}),
-              });
-              for (
-                let messageIndex = 0;
-                messageIndex < options.historyMessages;
-                messageIndex += 1
-              ) {
-                const marker = `Synthetic history ${index + 1}/${messageIndex + 1}. `;
-                const message = marker
-                  .repeat(Math.ceil(options.historyMessageChars / marker.length))
-                  .slice(0, options.historyMessageChars);
-                await rpc("chat.inject", { sessionKey, message });
-              }
-              seededSessionCount += 1;
-              if (sessionCount >= 250 && seededSessionCount % 250 === 0) {
-                console.error(
-                  `[bench-gateway-concurrency] seeded ${seededSessionCount}/${sessionCount} sessions`,
-                );
-              }
-            }
+          seedGatewaySessions({
+            ...options,
+            rpc,
+            sessionKeys,
+            sessionAgents,
+            fixtureRoot,
+            stopped: () => probesStopped,
           }),
         );
       }
       const sessionSeedDurationMs = performance.now() - sessionSeedStartedAt;
       partialRun.sessionSeedDurationMs = sessionSeedDurationMs;
+      if (options.memorySearch) {
+        partialRun.memorySearch = await probeGatewayMemorySearch({
+          gateway,
+          runtime: options.gatewayRuntime,
+          entry: options.entry,
+          timeoutMs: options.timeoutMs,
+          signal: options.signal,
+          onChild: (child) => spawnedChildren.push(child),
+          env: createGatewayBenchEnv(fixtureRoot, configPath, {
+            caseEnv: { OPENAI_API_KEY: "gateway-concurrency-benchmark" },
+          }),
+        });
+      }
       const browserTargets: BrowserSessionTarget[] = [];
       const browserHistoryMessages = options.browserHistoryMessages;
       if (options.browserSessionClicks > 0) {
@@ -2407,6 +2410,11 @@ async function runGatewaySample(
       // Warm turns exercise this Gateway's runtime; they do not prove background queues drained.
       const memoryBefore = await readGatewayMemory(rpc, runStartedAt);
       partialRun.memory.before = memoryBefore;
+      if (options.memorySearch) {
+        partialRun.indexWorkerLoad = {
+          before: await readIndexWorkerResources(gateway, partialRun.memorySearch!.after),
+        };
+      }
       if (!live) {
         mockCheckpoints.push(await readMockRequests(mockPort, preparedDeadlineAt));
       }
@@ -2698,6 +2706,12 @@ async function runGatewaySample(
       }
       const memoryAfter = await readGatewayMemory(rpc, runStartedAt);
       partialRun.memory.after = memoryAfter;
+      if (partialRun.indexWorkerLoad) {
+        partialRun.indexWorkerLoad.after = await readIndexWorkerResources(
+          gateway,
+          partialRun.indexWorkerLoad.before,
+        );
+      }
       timelineWindow = { from: timelineFrom, through: Date.now() };
       timelineWindowComplete = true;
       let loadCpuProfile: BenchmarkRun["loadCpuProfile"];
@@ -2741,6 +2755,9 @@ async function runGatewaySample(
         }));
       }
       result = {
+        ...(partialRun.memorySearch
+          ? { memorySearch: partialRun.memorySearch, indexWorkerLoad: partialRun.indexWorkerLoad }
+          : {}),
         ...(agentCoverage ? { agentCoverage } : {}),
         ...(browserProbe && browserInventory
           ? {
@@ -3410,6 +3427,7 @@ async function main(): Promise<void> {
     cadenceMs: options.cadenceMs,
     concurrency: options.concurrency,
     controlPlane: options.controlPlane,
+    memorySearch: options.memorySearch,
     historyMessages: options.historyMessages,
     historyMessageChars: options.historyMessageChars,
     diagnosticsTimeline: options.diagnosticsTimeline,

@@ -298,6 +298,7 @@
   "memory-core-host-engine-sessions",
   "memory-core-host-engine-schema",
   "memory-core-host-engine-storage",
+  "memory-core-host-engine-transcript-stats",
   "memory-core-host-secret",
   "memory-core-host-status",
   "memory-core-host-runtime-cli",

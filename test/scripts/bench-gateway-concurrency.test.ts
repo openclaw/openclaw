@@ -95,6 +95,17 @@ function createBenchmarkRun(overrides: Partial<BenchmarkRun> = {}): BenchmarkRun
 }
 
 describe("gateway concurrency benchmark script", () => {
+  it("requires a single mock agent and seeded history for memory-search attribution", () => {
+    expect(testing.parseOptions([]).memorySearch).toBe(false);
+    expect(testing.parseOptions(["--memory-search", "--history-messages", "1"]).memorySearch).toBe(
+      true,
+    );
+    for (const args of [[], ["--agent-count", "2"], ["--provider", "openai"]]) {
+      expect(() => testing.parseOptions(["--memory-search", ...args])).toThrow(
+        "requires the mock provider, one agent, and seeded history",
+      );
+    }
+  });
   it.skipIf(process.platform !== "linux")(
     "caps Control UI defaults to the requested cohort",
     () => {
