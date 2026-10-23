@@ -49,10 +49,6 @@ it("retires the source's processing state when a queued operation moves to an ex
 
 it("shows input waiting behind retained cleanup instead of resurrecting processing", async () => {
   const ref = { sessionKey: "agent:main:cleanup", sessionId: "cleanup-session" };
-  const operation = createReplyOperation({ ...ref, resetTriggered: false });
-  expect(getDiagnosticSessionState(ref).state).toBe("processing");
-  const cleanup = createDeferredCore();
-  operation.completeWithAfterClearBarrier(cleanup.promise);
   const message = createDiagnosticMessageLifecycle({
     ...ref,
     enabled: true,
@@ -60,6 +56,12 @@ it("shows input waiting behind retained cleanup instead of resurrecting processi
     source: "dispatch",
     trackSessionState: true,
   });
+  message.markProcessing();
+  const operation = createReplyOperation({ ...ref, resetTriggered: false });
+  expect(getDiagnosticSessionState(ref).state).toBe("processing");
+  message.markIdle();
+  const cleanup = createDeferredCore();
+  operation.completeWithAfterClearBarrier(cleanup.promise);
   try {
     message.markProcessing();
     expect(getDiagnosticSessionState(ref)).toMatchObject({ state: "waiting", queueDepth: 1 });

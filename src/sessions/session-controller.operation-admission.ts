@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { logSessionStateChange } from "../logging/diagnostic-runtime.js";
+import { peekDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -91,12 +92,15 @@ export function installReplyOperationAdmission(
   if (mailboxClaim) {
     mailboxClaim.operation = operation;
   }
-  logSessionStateChange({
-    sessionKey: operation.key,
-    sessionId,
-    state: "processing",
-    reason: "reply_operation_started",
-  });
+  // Cron admits before enqueueing; its message lifecycle must count the active input first.
+  if (peekDiagnosticSessionState({ sessionKey: operation.key, sessionId })?.state === "waiting") {
+    logSessionStateChange({
+      sessionKey: operation.key,
+      sessionId,
+      state: "processing",
+      reason: "reply_operation_started",
+    });
+  }
   notify(owner);
 }
 
