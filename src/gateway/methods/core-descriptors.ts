@@ -743,4 +743,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["skills.files.get", "skills", "operator.read", "2026.10"],
   ["agents.avatar.generate", "agents", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["exec.approvals.native.commit", "exec-approvals", "operator.admin", "2026.10"],
+  ["chat.pendingInputs.dismiss", "chat", "operator.write", "2026.10", OWN_SESSION_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

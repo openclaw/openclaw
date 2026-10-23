@@ -141,6 +141,7 @@ export type ChatThreadProps = Omit<
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
     failureActionsRunId?: string;
+    onDismissPendingInput?: (inputId: string) => void;
     waitingApproval?: boolean;
     questionPrompts?: readonly QuestionPrompt[];
     sessions: SessionsListResult | null;

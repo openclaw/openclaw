@@ -240,6 +240,8 @@ export type ChatItem =
       skillChanges?: SkillWorkshopChangeNotice;
       runError?: RunFailureNotice;
       permissionMissing?: NodePermissionRequest;
+      /** Retained input that ended interrupted or cancelled and may be dismissed. */
+      retiredPendingInput?: { id: string; status: "interrupted" | "cancelled"; preview: string };
     }
   | {
       kind: "divider";

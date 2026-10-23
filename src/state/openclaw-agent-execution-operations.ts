@@ -358,6 +358,7 @@ async function loadAgentReactionOperations() {
 async function loadAgentPendingInputOperations() {
   const pending = await import("../config/sessions/session-pending-input-operations.kernel.js");
   const kernel = await import("../config/sessions/session-pending-input-withdrawal.worker.js");
+  const dismissal = await import("../config/sessions/session-pending-input-dismissal.worker.js");
   const history = await import("../config/sessions/session-pending-input-history-reconcile.js");
   return {
     "session.pendingInputs.read": (
@@ -385,6 +386,10 @@ async function loadAgentPendingInputOperations() {
       input: Parameters<typeof kernel.discardSessionPendingInputInWorker>[2],
       { open, options, admit },
     ) => kernel.discardSessionPendingInputInWorker(open(), options, input, admit),
+    "session.pendingInputs.dismissRetired": (
+      input: Parameters<typeof dismissal.dismissRetiredSessionPendingInputsInWorker>[2],
+      { open, options, admit },
+    ) => dismissal.dismissRetiredSessionPendingInputsInWorker(open(), options, input, admit),
   } satisfies Handlers;
 }
 
@@ -558,6 +563,7 @@ export function createAgentWorkerOperationLoaders(
     "conversation.authority": loadConversationRegistryOperations,
     "conversation.delivery.transition": loadConversationDeliveryOperations,
     "session.pendingInputs.withdraw": loadAgentPendingInputOperations,
+    "session.pendingInputs.dismissRetired": loadAgentPendingInputOperations,
     "session.pendingInputs.read": loadAgentPendingInputOperations,
     "session.pendingInputs.mutate": loadAgentPendingInputOperations,
     "session.pendingInputs.interruptHistory": loadAgentPendingInputOperations,

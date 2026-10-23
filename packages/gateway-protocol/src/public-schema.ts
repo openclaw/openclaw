@@ -637,6 +637,8 @@ export {
   ChatToolTitlesResultSchema,
   ChatPredictParamsSchema,
   ChatPredictResultSchema,
+  ChatPendingInputsDismissParamsSchema,
+  ChatPendingInputsDismissResultSchema,
   UpdateRunParamsSchema,
   UpdateRunRecordSchema,
   UpdateRunResultSchema,

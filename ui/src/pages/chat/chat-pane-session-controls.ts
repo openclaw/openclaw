@@ -90,7 +90,25 @@ export function readChatPaneMutationAccess(
     }),
     permission: scopedPatchAccess({ permissionMode: "guarded" }),
     unarchive: scopedPatchAccess({ archived: false }),
+    pendingInputDismiss: readSessionMethodAccess(snapshot, {
+      method: "chat.pendingInputs.dismiss",
+      requiredScope: "operator.sessions.write",
+      session,
+    }),
   };
+}
+
+export function canDismissChatPendingInputs(
+  access: ReturnType<typeof readChatPaneMutationAccess>,
+  session: Pick<GatewaySessionRow, "sharingRole"> | undefined,
+  options: { nativeConversation: boolean; participationBlocked: boolean },
+): boolean {
+  return (
+    access.pendingInputDismiss.allowed &&
+    session?.sharingRole !== "viewer" &&
+    options.nativeConversation &&
+    !options.participationBlocked
+  );
 }
 
 export function renderChatPaneComposerControls(params: {

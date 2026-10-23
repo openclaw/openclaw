@@ -18,7 +18,7 @@ import { orderSessionPullRequests } from "../../lib/session-pull-request-present
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
+import { listDismissablePendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import { listSubagents } from "./chat-subagent-wait.ts";
@@ -103,6 +103,12 @@ function ChatFooterContent(
       : undefined;
   });
   const pendingInputs = () => input.frame.pendingInputs;
+  const dismissableInputIds = () => {
+    const view = pendingInputs();
+    return input.frame.dismissPendingInputs && view
+      ? listDismissablePendingInputs(view).map((pending) => pending.id)
+      : [];
+  };
   const pendingButton = (page: "earlier" | "latest") => (
     <button
       class="btn btn--sm"
@@ -127,7 +133,8 @@ function ChatFooterContent(
           pendingInputs() &&
           (pendingInputs()?.error ||
             pendingInputs()?.page.nextBefore !== undefined ||
-            pendingInputs()?.before !== undefined)
+            pendingInputs()?.before !== undefined ||
+            dismissableInputIds().length)
         }
       >
         <div class="chat-pending-inputs" role="status">
@@ -138,6 +145,16 @@ function ChatFooterContent(
             {pendingButton("earlier")}
           </Show>
           <Show when={pendingInputs()?.before !== undefined}>{pendingButton("latest")}</Show>
+          <Show when={dismissableInputIds().length}>
+            <button
+              class="btn btn--sm"
+              type="button"
+              aria-label={t("chat.pendingInputs.dismissAllLabel")}
+              onClick={() => input.frame.dismissPendingInputs?.(dismissableInputIds())}
+            >
+              {t("chat.pendingInputs.dismissAll")}
+            </button>
+          </Show>
         </div>
       </Show>
       <Show
