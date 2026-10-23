@@ -93,7 +93,6 @@ async function checkSetup(cfg: Config, expected: Expected = {}, options?: Option
   });
   expect(resolved.payload).not.toHaveProperty("setupId");
   expect(issueToken).toHaveBeenCalledWith({
-    baseDir: undefined,
     profile: profile ?? {
       roles: ["node", "operator"],
       scopes: [

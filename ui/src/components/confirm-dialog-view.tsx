@@ -1,4 +1,4 @@
-import { createSignal, For } from "solid-js";
+import { createSignal, For, untrack } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import { createMediaQuery } from "../lib/reactive/platform.ts";
@@ -7,40 +7,24 @@ import type {
   ConfirmDialogChoiceOptions,
   ConfirmDialogOptions,
 } from "./confirm-dialog-types.ts";
-import { withPromiseModalHost } from "./promise-modal-host.ts";
 
-type ConfirmDialogViewOptions = ConfirmDialogOptions & Partial<ConfirmDialogChoiceOptions>;
+export type ConfirmDialogViewOptions = ConfirmDialogOptions & Partial<ConfirmDialogChoiceOptions>;
 
-let confirmationActive = false;
-
-export function presentConfirmDialog(
-  options: ConfirmDialogViewOptions,
-): Promise<ConfirmDialogChoice> {
-  if (confirmationActive) {
-    return Promise.resolve(null);
-  }
-  confirmationActive = true;
-  return withPromiseModalHost<ConfirmDialogChoice>(
-    { signal: options.signal, value: null },
-    ({ render, finish }) => render(() => renderConfirmDialog(options, finish)),
-  ).finally(() => {
-    confirmationActive = false;
-  });
-}
-
-function renderConfirmDialog(
-  options: ConfirmDialogViewOptions,
-  finish: (value: ConfirmDialogChoice) => void,
-) {
-  const title = () => options.title ?? t("common.confirm");
+export function ConfirmDialogView(props: {
+  options: ConfirmDialogViewOptions;
+  finish(value: ConfirmDialogChoice): void;
+}) {
+  // A confirmation keeps the request it opened for until it settles.
+  const initialOptions = untrack(() => props.options);
+  const title = () => initialOptions.title ?? t("common.confirm");
   let skipRequested = false;
   let cancelButton!: HTMLButtonElement;
   let actions!: HTMLElement;
-  const [acknowledged, setAcknowledged] = createSignal(!options.requiredAcknowledgement);
-  const mobileChoices = options.groupChoicesOnMobile
+  const [acknowledged, setAcknowledged] = createSignal(!initialOptions.requiredAcknowledgement);
+  const mobileChoices = initialOptions.groupChoicesOnMobile
     ? createMediaQuery("(max-width: 640px)")
     : () => false;
-  if (options.groupChoicesOnMobile) {
+  if (initialOptions.groupChoicesOnMobile) {
     createPendingFocus(
       () => ({ mobile: mobileChoices(), focused: actions?.ownerDocument.activeElement }),
       {
@@ -71,42 +55,42 @@ function renderConfirmDialog(
       type="button"
       class="btn"
       autofocus
-      onClick={() => finish(null)}
+      onClick={() => props.finish(null)}
     >
-      {options.cancelLabel ?? t("common.cancel")}
+      {initialOptions.cancelLabel ?? t("common.cancel")}
     </button>
   );
   const choiceActions = (
     <>
-      {options.alternativeLabel ? (
+      {initialOptions.alternativeLabel ? (
         <button
           type="button"
           class="btn"
-          disabled={!acknowledged() || options.canConfirm?.() === false}
+          disabled={!acknowledged() || initialOptions.canConfirm?.() === false}
           onClick={() => {
-            if (acknowledged() && options.canConfirm?.() !== false) {
-              finish("alternative");
+            if (acknowledged() && initialOptions.canConfirm?.() !== false) {
+              props.finish("alternative");
             }
           }}
         >
-          {options.alternativeLabel}
+          {initialOptions.alternativeLabel}
         </button>
       ) : undefined}
       <button
         type="button"
-        class={["btn", options.danger ? "danger" : "primary"]}
-        disabled={!acknowledged() || options.canConfirm?.() === false}
+        class={["btn", initialOptions.danger ? "danger" : "primary"]}
+        disabled={!acknowledged() || initialOptions.canConfirm?.() === false}
         onClick={() => {
-          if (!acknowledged() || options.canConfirm?.() === false) {
+          if (!acknowledged() || initialOptions.canConfirm?.() === false) {
             return;
           }
           if (skipRequested) {
-            options.skipPreference?.remember();
+            initialOptions.skipPreference?.remember();
           }
-          finish("confirm");
+          props.finish("confirm");
         }}
       >
-        {options.confirmLabel ?? t("common.confirm")}
+        {initialOptions.confirmLabel ?? t("common.confirm")}
       </button>
     </>
   );
@@ -115,32 +99,32 @@ function renderConfirmDialog(
     <openclaw-modal-dialog
       prop:initialFocus={() => cancelButton}
       label={title()}
-      description={options.message}
-      onModal-cancel={() => finish(null)}
+      description={initialOptions.message}
+      onModal-cancel={() => props.finish(null)}
     >
       <div class="exec-approval-card">
         <div class="exec-approval-header">
           <div>
             <div class="exec-approval-title">{title()}</div>
             <div class="exec-approval-sub" style={{ "white-space": "pre-line" }}>
-              {options.message}
+              {initialOptions.message}
             </div>
           </div>
         </div>
-        {options.details ? (
-          <div class="exec-approval-command mono">{options.details}</div>
+        {initialOptions.details ? (
+          <div class="exec-approval-command mono">{initialOptions.details}</div>
         ) : undefined}
-        {options.requiredAcknowledgement ? (
+        {initialOptions.requiredAcknowledgement ? (
           <label class="field checkbox">
             <input
               type="checkbox"
               checked={acknowledged()}
               onChange={(event) => setAcknowledged(event.currentTarget.checked)}
             />
-            <span>{options.requiredAcknowledgement}</span>
+            <span>{initialOptions.requiredAcknowledgement}</span>
           </label>
         ) : undefined}
-        {options.skipPreference && !options.requiredAcknowledgement ? (
+        {initialOptions.skipPreference && !initialOptions.requiredAcknowledgement ? (
           <label class="field checkbox exec-approval-skip">
             <input
               type="checkbox"
@@ -157,7 +141,7 @@ function renderConfirmDialog(
           }}
           class={["exec-approval-actions", { "confirm-dialog-actions--stacked": mobileChoices() }]}
         >
-          {options.groupChoicesOnMobile ? (
+          {initialOptions.groupChoicesOnMobile ? (
             <For each={mobileChoices() ? ["choices", "cancel"] : ["cancel", "choices"]}>
               {(kind) =>
                 kind === "cancel" ? (

@@ -3422,6 +3422,12 @@ missing store; idle agents still have no durable database until their first writ
 Session event capture retains the physical source reported by the worker after
 cold admission. A first writer that finishes before the read can supply that
 source; a file created after an absent read or replaced after capture is refused.
+Retained generation checks consume published session facts and the physical identity
+captured at admission. Existing files need one identity probe without rediscovering
+their canonical path; this still fences external tool effects after file replacement.
+Same-generation settings keep their published identity until permission mode or tool
+overrides change, so event guards compare policy once per settings revision. Every
+check still observes pending publications and current execution authority.
 No schema, durability, configuration, or update migration changes are required.
 
 Accepted chat input prepares fresh sharing and exact-row facts again before

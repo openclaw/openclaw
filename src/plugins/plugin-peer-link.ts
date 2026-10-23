@@ -317,11 +317,15 @@ async function linkOpenClawPeerDependency(params: {
     return "skipped";
   };
   let existing: Stats | null;
+  let previousTarget = currentTarget;
   try {
     existing = await fs.lstat(linkPath).catch((error: unknown) => {
       ignoreMissingPath(error);
       return null;
     });
+    if (existing?.isSymbolicLink()) {
+      previousTarget = path.resolve(nodeModulesDir, await fs.readlink(linkPath));
+    }
     if (
       existing &&
       !existing.isSymbolicLink() &&
@@ -354,6 +358,11 @@ async function linkOpenClawPeerDependency(params: {
   params.beforePersistentApply?.();
   try {
     symlinkSync(params.hostRoot, linkPath, "junction");
+    if (previousTarget) {
+      params.logger.warn?.(
+        `Repaired OpenClaw host link at ${linkPath}: ${previousTarget} -> ${expectedTarget}`,
+      );
+    }
     params.logger.info?.(`Linked peerDependency "openclaw" -> ${params.hostRoot}`);
     return "linked";
   } catch (error) {

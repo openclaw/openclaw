@@ -1,5 +1,4 @@
-import { For, createSignal, createStore } from "solid-js";
-import { withPromiseModalHost } from "../../../components/promise-modal-host.ts";
+import { For, createSignal, createStore, untrack } from "solid-js";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { downloadTextFile } from "../../../lib/download.ts";
@@ -8,7 +7,7 @@ import type { FileSidebarContent } from "./chat-sidebar-content-types.ts";
 
 registerFilePreviewEnglish();
 
-type FileDraft = {
+export type FileDraft = {
   name: string;
   path: string;
   context: FileSidebarContent["draftContext"];
@@ -17,23 +16,19 @@ type FileDraft = {
   discard: () => boolean;
 };
 
-export function reviewFileDrafts(drafts: readonly FileDraft[]): Promise<void> {
-  return withPromiseModalHost<void>(undefined, (modal) => {
-    modal.render(() => renderFileDraftRecoveryDialog(drafts, modal));
-  });
-}
-
-function renderFileDraftRecoveryDialog(
-  drafts: readonly FileDraft[],
-  modal: { readonly settled: boolean; finish: () => void },
-) {
+export function FileDraftRecoveryDialog(props: {
+  drafts: readonly FileDraft[];
+  settled: () => boolean;
+  finish: () => void;
+}) {
   // Review the opening batch; successful discards remove entries from this dialog.
+  const initialDrafts = untrack(() => [...props.drafts]);
   let keepButton!: HTMLButtonElement;
-  const [remaining, setRemaining] = createStore([...drafts], { shallow: true });
+  const [remaining, setRemaining] = createStore(initialDrafts, { shallow: true });
   const [error, setError] = createSignal("");
   const [copied, setCopied] = createSignal<FileDraft>();
   const current = (draft: FileDraft) => {
-    if (modal.settled) {
+    if (props.settled()) {
       return false;
     }
     if (!remaining.includes(draft) || !draft.isCurrent()) {
@@ -57,7 +52,7 @@ function renderFileDraftRecoveryDialog(
       prop:initialFocus={() => keepButton}
       label={t("chat.detailPanel.draftRecovery.review")}
       description={t("chat.detailPanel.draftRecovery.description")}
-      onModal-cancel={() => modal.finish()}
+      onModal-cancel={() => props.finish()}
     >
       <section class="exec-approval-card exec-approval-modal-stack">
         <div class="exec-approval-header">
@@ -116,12 +111,12 @@ function renderFileDraftRecoveryDialog(
                       return;
                     }
                     const last = remaining.length === 1;
-                    setRemaining((remainingDrafts) => {
-                      remainingDrafts.splice(remainingDrafts.indexOf(entry), 1);
+                    setRemaining((drafts) => {
+                      drafts.splice(drafts.indexOf(entry), 1);
                     });
                     setError("");
                     if (last) {
-                      modal.finish();
+                      props.finish();
                     }
                   }}
                 >
@@ -140,7 +135,7 @@ function renderFileDraftRecoveryDialog(
             type="button"
             class="btn"
             autofocus
-            onClick={() => modal.finish()}
+            onClick={() => props.finish()}
           >
             {t("chat.detailPanel.draftRecovery.keep")}
           </button>
