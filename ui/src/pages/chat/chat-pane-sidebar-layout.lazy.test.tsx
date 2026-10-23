@@ -51,7 +51,7 @@ vi.mock("./components/chat-files-panel.tsx", () => {
 // mock-isolation: the failed lazy-import fixture must throw before registering or exporting the real region.
 vi.mock("./components/chat-sidebar-region.runtime.tsx", () => {
   lazyMocks.importAttempts += 1;
-  throw new Error("Failed to fetch dynamically imported module: sidebar-region.js");
+  throw new SyntaxError("Synthetic sidebar module export failure");
 });
 
 vi.mock("../../app/stale-chunk-reload.ts", async (importOriginal) => ({
@@ -198,10 +198,10 @@ describe("chat pane lazy sidebar failures", () => {
     expect(container.querySelectorAll('[role="alert"]')).toHaveLength(2);
     expect(container.querySelector("[data-primary]")?.textContent).toContain("Primary chat");
     expect(container.querySelector(".lazy-view-error__detail")?.textContent).toContain(
-      "sidebar-region.js",
+      "Synthetic sidebar module export failure",
     );
     const action = container.querySelector<HTMLButtonElement>(".lazy-view-error__action");
-    expect(action?.textContent).toContain("Reload");
+    expect(action?.textContent).toContain("Retry");
     action?.click();
     await vi.waitFor(() => expect(lazyMocks.retryDocument).toHaveBeenCalledOnce());
     expect(lazyMocks.importAttempts).toBe(1);

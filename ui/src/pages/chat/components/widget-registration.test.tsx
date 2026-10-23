@@ -19,7 +19,7 @@ vi.mock("./canvas-widget-mount.tsx", async () => {
       if (modules.canvasError) {
         throw new Error("Synthetic widget renderer failed");
       }
-      return <openclaw-canvas-widget-view />;
+      return document.createElement("openclaw-canvas-widget-view");
     },
   };
 });
