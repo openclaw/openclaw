@@ -26,10 +26,7 @@ type ApprovalPageView = {
   resolveApproval: (decision: ApprovalDecision) => Promise<void>;
 };
 
-export function decisionLabel(
-  decision: ApprovalDecision,
-  presentation: ApprovalPresentation,
-): string {
+function decisionLabel(decision: ApprovalDecision, presentation: ApprovalPresentation): string {
   const proposal = presentation.kind === "exec" ? presentation.streamProposal : undefined;
   if (proposal && decision !== "allow-always") {
     return t(
@@ -49,7 +46,7 @@ export function decisionLabel(
   );
 }
 
-export function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
+function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
   if (origin === "elsewhere" && (approval.status === "allowed" || approval.status === "denied")) {
     return t("approvalPage.resolvedElsewhere");
   }
@@ -70,7 +67,7 @@ export function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrig
   );
 }
 
-export function terminalDescription(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
+function terminalDescription(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
   if (approval.presentation.kind === "exec" && approval.presentation.streamProposal) {
     const outcome = t(
       approval.status === "allowed"
@@ -135,7 +132,7 @@ function renderMetaRow(label: string, value?: string | null) {
   ) : null;
 }
 
-export function renderApprovalPresentation(presentation: ApprovalPresentation) {
+function renderApprovalPresentation(presentation: ApprovalPresentation) {
   const scopeLabel =
     presentation.kind !== "system-agent" && presentation.scope
       ? summarizeApprovalScopeLabel(presentation.scope)
