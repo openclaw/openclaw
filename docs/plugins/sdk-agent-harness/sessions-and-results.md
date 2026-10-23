@@ -338,7 +338,10 @@ not a substitute for removing the native capability surface.
 
 A projection-backed harness must capture the active branch after the settled
 turn is mirrored and prove that the current prompt and every current tool
-call/result are present through that boundary. Put the frozen evidence on
+call/result are present through that boundary. A turn whose prompt was never
+persisted (an internal system turn with `suppressNextUserMessagePersistence`
+and no `userTurnTranscriptRecorder`) has no prompt row to prove; its evidence
+starts at the turn's first mirrored row. Put the frozen evidence on
 `settledAttempt.settledTurnFinalizationContext` as one of:
 
 - `source: "openclaw-transcript"` with `messages`: the complete application

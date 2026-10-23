@@ -675,6 +675,11 @@ export async function finalizeCodexAttempt(
                 mirroredMessages: mirrorOutcome.mirroredMessages,
                 settledMessages: result.messagesSnapshot,
                 turnId: activeTurnId,
+                // A stranded-reply retry suppresses its system prompt and carries no
+                // recorder, so no prompt row exists for this turn anywhere.
+                promptSuppressed:
+                  params.suppressNextUserMessagePersistence === true &&
+                  !params.userTurnTranscriptRecorder,
                 signal: params.abortSignal,
                 assertActive: connection.assertCurrent,
                 withCurrent: connection.withCurrent,

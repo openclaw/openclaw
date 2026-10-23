@@ -161,6 +161,51 @@ it("captures source selection and the exact settled branch", async () => {
   });
 });
 
+it("captures a turn whose internal prompt was never mirrored, anchored at its first tool call", async () => {
+  // A stranded-reply retry suppresses its system prompt and carries no recorder, so the
+  // transcript holds no `turn-2:prompt` row; the turn's evidence starts at its tool call.
+  const prior = [
+    user("Send the update to Alice.", "turn-1:prompt"),
+    message(
+      { role: "assistant", content: [{ type: "text", text: "Update: shipped." }] },
+      "turn-1:final",
+    ),
+  ];
+  const settledMessages = settledTurn().slice(1);
+  const historyMessages = [...prior, ...settledMessages];
+
+  const rejected = await captureContext(settledMessages, historyMessages);
+  expect(rejected).toBeUndefined();
+
+  const context = await captureContext(settledMessages, historyMessages, {
+    promptSuppressed: true,
+  });
+  expect(context?.data).toEqual([
+    userItem("Send the update to Alice."),
+    {
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: "Update: shipped." }],
+    },
+    ...settledItems().slice(1),
+  ]);
+});
+
+it("still rejects a suppressed-prompt turn whose evidence carries a prompt row", async () => {
+  const settledMessages = settledTurn();
+  const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+  try {
+    await expect(
+      captureContext(settledMessages, settledMessages, { promptSuppressed: true }),
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith("codex settled-turn finalization context capture failed", {
+      reason: "provenance_rejected",
+    });
+  } finally {
+    warn.mockRestore();
+  }
+});
+
 it.each([
   { budget: "items", overflow: 1 },
   { budget: "bytes", overflow: 0 },
