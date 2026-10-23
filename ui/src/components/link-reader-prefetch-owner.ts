@@ -176,13 +176,15 @@ export class LinkReaderPrefetchOwner {
       });
       this.observer = observer;
       this.mutations = new MutationObserver((records) => {
-        // Text-only streaming edits cannot change link membership or hrefs.
+        // Streaming text and formatting edits cannot change link membership or hrefs.
         if (
           records.some(
             (record) =>
               record.type === "attributes" ||
               [...record.addedNodes, ...record.removedNodes].some(
-                (node) => node.nodeType === Node.ELEMENT_NODE,
+                (node) =>
+                  node instanceof Element &&
+                  (node.localName === "a" || node.getElementsByTagName("a").length > 0),
               ),
           )
         ) {

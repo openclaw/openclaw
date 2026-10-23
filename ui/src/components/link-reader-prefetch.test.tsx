@@ -158,6 +158,18 @@ describe("GitHub preview warming", () => {
     flushIdleScans();
     expect(scan).not.toHaveBeenCalled();
     expect(observer().targets.has(links[0]!)).toBe(true);
+
+    const emphasis = document.createElement("strong");
+    emphasis.textContent = "formatted label";
+    links[0]!.append(emphasis);
+    await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
+    expect(scan).not.toHaveBeenCalled();
+    emphasis.remove();
+    await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
+    expect(scan).not.toHaveBeenCalled();
+    expect(observer().targets.has(links[0]!)).toBe(true);
   });
 
   it.each(["session", "capabilities"])(

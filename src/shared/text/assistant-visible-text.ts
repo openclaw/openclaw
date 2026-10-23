@@ -69,8 +69,10 @@ const traceLineHeads = traceLineRules.flatMap(({ heads }) =>
   heads.flatMap((parts) => [parts, [">", ...parts]]),
 );
 const INTERNAL_TRACE_HEAD_RE = new RegExp(
-  traceLineHeads.map((parts) => parts.map(escapeRegExp).join("\\s*")).join("|"),
-  "i",
+  `^[^\\S\\r\\n]*(?:${traceLineHeads
+    .map((parts) => parts.map(escapeRegExp).join("\\s*"))
+    .join("|")})`,
+  "im",
 );
 
 /**
