@@ -48,18 +48,12 @@ export function baseEvent(): Pick<DiagnosticEventPayload, "seq" | "ts"> {
 export function scrapeMetrics(handler: OpenClawPluginHttpRouteHandler): string {
   const response = createMockServerResponse();
   response.flushHeaders = () => {};
-  response.cork = () => {};
-  const chunks: Buffer[] = [];
-  response.write = (chunk: Buffer) => {
-    chunks.push(chunk);
-    return true;
-  };
   response.req.method = "GET";
   response.req.url = "/api/diagnostics/prometheus";
   expect(handler(response.req, response)).toBe(true);
   expect(response.statusCode).toBe(200);
   expect(response.headersSent).toBe(true);
-  return Buffer.concat(chunks).toString();
+  return response.body?.toString() ?? "";
 }
 
 export function createMetricsHarness(

@@ -580,16 +580,14 @@ function createMetricsHandler(store: PrometheusMetricStore): OpenClawPluginHttpR
     res.statusCode = 200;
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
-    res.setHeader("Content-Length", String(body.reduce((bytes, part) => bytes + part.length, 0)));
+    res.setHeader("Content-Length", String(body.length));
     res.flushHeaders();
-    if (req.method === "GET") {
-      // Queue one immutable snapshot without joining a second copy of its bytes.
-      res.cork();
-      for (const part of body) {
-        res.write(part);
+    res.end(req.method === "HEAD" ? undefined : body, (error?: Error | null) => {
+      // Only the completed response owns this backing store; prefixes stay in the metric store.
+      if (!error) {
+        body.buffer.transfer(0);
       }
-    }
-    res.end();
+    });
     return true;
   };
 }

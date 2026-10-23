@@ -41,7 +41,9 @@ Add `--http --http-port <port>` to measure rendering through a real loopback Nod
 HTTP server after the owner phases, or use `--http-only --http-port <port>` to
 run only the HTTP phases. Each paired side needs a distinct port in 40000–65535.
 The server mirrors the authorized metrics GET response: render, set its content
-type and byte length, and `res.end(body)`. The client runs in a child process so
+type and byte length, and `res.end(body, callback)`. On successful completion, the
+callback releases the response's private backing store. Failed writes leave
+reclamation to GC. Static metric prefixes never share response backing storage. The client runs in a child process so
 its CPU and heap allocation do not enter the server measurements. It makes ten
 warmup requests, then sequential requests with a keep-alive agent, consuming all
 response bytes without concatenation. Each phase verifies one render per request
@@ -76,19 +78,19 @@ emits a JSON object after each `ms: GC:` prefix. Parse that JSON and sum its
 `promoted` field only between matching `benchmarkPhase` start/end markers in the
 combined log, then divide by operations. Forced collections, fixture generation,
 and profiler startup/teardown are outside these markers. Keep unprofiled and
-profiled promotion separate. The synchronous owner phases omit HTTP transport
-copying; use the HTTP phases to include it. Neither mode measures Gateway
+profiled promotion separate. The synchronous owner phases omit HTTP transport; use the HTTP phases to
+include it. Neither mode measures Gateway
 event-loop delay.
 
-Chunked store output is sent with its exact aggregate `Content-Length`, using
-one corked response and the immutable per-series buffers. It does not allocate
-a joined response buffer. `scrape.chunks` counts the returned fragments;
-`bufferByteLength` remains zero when no joined backing buffer is allocated.
-The retained external-memory measurement includes cached series buffers.
-Account for this storage separately from sampled heap allocation and response
-bytes. The 1 ms event-loop monitor reports sample counts and tails for each
-phase; synchronous owner loops normally have no samples, while HTTP phases
-can provide transport-level event-loop evidence.
+The store encodes its fixed prefixes as UTF-8 once and copies them into a fresh
+response buffer with ASCII-formatted numbers. `scrape.bufferByteLength` records
+that transient allocation; it is not included in sampled V8 heap allocation.
+There is no rendered-series cache. After consuming a render in an owner phase,
+the benchmark releases its private backing store, matching the successful HTTP
+completion lifetime. Owner CPU includes release; the render-latency timer ends
+before release. The HTTP phase releases only after Node's completion callback.
+The 1 ms event-loop monitor reports sample counts and tails for each phase;
+synchronous owner loops normally have no samples.
 
 Use `--updates-per-render <count>` with `--shape` to rotate through that many
 existing series before each measured render and each HTTP request. Histogram
@@ -139,7 +141,9 @@ side; total GC time remains relevant. When collection counts fall by at least
 20% and total GC time does not rise, per-collection GC p95/p99 are context, unless
 the candidate's maximum single pause exceeds the larger of 50 ms and twice the
 baseline maximum. Always report both maximum pauses. Flat or rising collection
-counts leave an adequately sampled per-pause p95 eligible to gate.
+counts leave an adequately sampled per-pause p95 eligible to gate. Per-collection
+p95/p99 changes with an absolute paired-mean delta below 1 ms are context only;
+total GC time, promotion, and event-loop p99 retain their gates.
 
 When paired baselines differ by more than 5x, or paired deltas have opposite
 signs, report absolute and relative deltas and label that metric inconclusive.

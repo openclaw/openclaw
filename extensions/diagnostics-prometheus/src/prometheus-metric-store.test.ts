@@ -12,7 +12,7 @@ it("keeps earlier scrape bytes stable across value changes, gauge removal, and r
   store.counterValue("openclaw_run_completed_total", "Runs.", {}, 2);
   store.gauge("openclaw_worker_queue_depth", "Depth.", {}, 3);
   const first = store.render();
-  const before = Buffer.concat(first).toString();
+  const before = first.toString();
   expect(before).toContain(
     'openclaw_run_duration_seconds_bucket{a="first",le="1",z="雪\\"\\\\\\n"} 1\n',
   );
@@ -24,7 +24,7 @@ it("keeps earlier scrape bytes stable across value changes, gauge removal, and r
   store.counterValue("openclaw_run_completed_total", "Runs.", {}, 1);
   store.counter("openclaw_run_completed_total", "Runs.", {}, 4);
   store.gauge("openclaw_worker_queue_depth", "Depth.", {}, 0);
-  const updated = Buffer.concat(store.render()).toString();
+  const updated = store.render().toString();
   expect(updated).toContain("openclaw_run_completed_total 6\n");
   expect(updated).toContain("openclaw_worker_queue_depth 0\n");
   expect(updated).toContain(
@@ -37,10 +37,10 @@ it("keeps earlier scrape bytes stable across value changes, gauge removal, and r
     'openclaw_run_duration_seconds_sum{a="first",le="replaced",z="雪\\"\\\\\\n"} 2.5\n',
   );
   store.clearGauges("openclaw_worker_queue_depth");
-  expect(Buffer.concat(store.render()).toString()).not.toContain("openclaw_worker_queue_depth");
+  expect(store.render().toString()).not.toContain("openclaw_worker_queue_depth");
   store.reset();
   expect(store.render().length).toBe(0);
-  expect(Buffer.concat(first).toString()).toBe(before);
+  expect(first.toString()).toBe(before);
 });
 
 it("preserves label identity across property order, label shapes, and separator values", () => {
@@ -54,7 +54,8 @@ it("preserves label identity across property order, label shapes, and separator 
   store.counter("openclaw_run_completed_total", "Requests.", {}, 17);
   labels.a = "changed";
 
-  const samples = Buffer.concat(store.render())
+  const samples = store
+    .render()
     .toString()
     .split("\n")
     .filter((line) => line.startsWith("openclaw_run_completed_total"));
@@ -78,7 +79,8 @@ it("bounds retained entries while reserving every family and releasing cleared g
       store.gauge(name, "Synthetic admission pressure.", { index: String(index) }, index);
     }
   }
-  const samples = Buffer.concat(store.render())
+  const samples = store
+    .render()
     .toString()
     .split("\n")
     .filter((line) => line.includes('{index="'));
@@ -106,17 +108,18 @@ it("bounds retained entries while reserving every family and releasing cleared g
   for (let index = 0; index < 32; index++) {
     store.gauge(late, "Rebuilt gauges.", { index: String(index) }, 2);
   }
-  const rebuilt = Buffer.concat(store.render()).toString();
+  const rebuilt = store.render().toString();
   expect(rebuilt).not.toContain(`${competing}{index="late"}`);
   expect(rebuilt.split("\n").filter((line) => line.startsWith(`${late}{`))).toHaveLength(32);
   expect(rebuilt.split("\n").filter((line) => line.includes('{index="'))).toHaveLength(16384);
   store.reset();
-  expect(Buffer.concat(store.render()).toString()).toBe("");
+  expect(store.render().toString()).toBe("");
   for (let index = 0; index < 128; index++) {
     store.counter(late, "After reset.", { index: String(index) });
   }
   expect(
-    Buffer.concat(store.render())
+    store
+      .render()
       .toString()
       .split("\n")
       .filter((line) => line.startsWith(`${late}{`)),

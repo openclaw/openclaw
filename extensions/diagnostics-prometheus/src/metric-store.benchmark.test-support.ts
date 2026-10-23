@@ -401,27 +401,21 @@ function populateCapacity(store: PrometheusMetricStore) {
   };
 }
 
-type Scrape = string | Buffer | Buffer[];
+type Scrape = string | Buffer<ArrayBuffer>;
 
-function scrapeBytes(scrape: Scrape) {
-  return Array.isArray(scrape)
-    ? scrape.reduce((bytes, part) => bytes + part.length, 0)
-    : Buffer.byteLength(scrape);
-}
-
-function scrapeData(scrape: Scrape) {
-  return Array.isArray(scrape) ? Buffer.concat(scrape) : scrape;
+function releaseScrape(scrape: Scrape) {
+  if (Buffer.isBuffer(scrape)) {
+    scrape.buffer.transfer(0);
+  }
 }
 
 function scrapeInfo(scrape: Scrape) {
-  const data = scrapeData(scrape);
   return {
-    sha256: createHash("sha256").update(data).digest("hex"),
-    bytes: scrapeBytes(scrape),
+    sha256: createHash("sha256").update(scrape).digest("hex"),
+    bytes: Buffer.byteLength(scrape),
     bufferByteLength: Buffer.isBuffer(scrape) ? scrape.buffer.byteLength : 0,
-    outputType: Array.isArray(scrape) ? "chunks" : Buffer.isBuffer(scrape) ? "buffer" : "string",
-    chunks: Array.isArray(scrape) ? scrape.length : 1,
-    renderedRows: data
+    outputType: Buffer.isBuffer(scrape) ? "buffer" : "string",
+    renderedRows: scrape
       .toString()
       .split("\n")
       .filter((line) => line && !line.startsWith("#")).length,
@@ -443,19 +437,15 @@ async function measureHttp(
     res.statusCode = 200;
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
-    res.setHeader("Content-Length", String(scrapeBytes(body)));
+    res.setHeader("Content-Length", String(Buffer.byteLength(body)));
     if (values["flush-headers"]) {
       res.flushHeaders();
     }
-    if (Array.isArray(body)) {
-      res.cork();
-      for (const part of body) {
-        res.write(part);
+    res.end(body, (error?: Error | null) => {
+      if (!error) {
+        releaseScrape(body);
       }
-      res.end();
-    } else {
-      res.end(body);
-    }
+    });
   });
   server.listen(port, "127.0.0.1");
   await once(server, "listening");
@@ -606,12 +596,12 @@ try {
     fixed.histogram("openclaw_run_duration_seconds", "Duration", labels, 0.015);
   }
   const fixedScrape = scrapeInfo(fixed.render());
-  await writeFile(`${values.output}.fixed.prom`, scrapeData(fixed.render()));
+  await writeFile(`${values.output}.fixed.prom`, fixed.render());
   if (!values["render-only"] && !values["http-only"]) {
     const renders = Math.max(1000, Math.floor(iterations / 10));
     await measure("prometheus.render", renders, () => {
       for (let index = 0; index < renders; index++) {
-        fixed.render();
+        releaseScrape(fixed.render());
       }
     });
   }
@@ -627,10 +617,10 @@ try {
   // Full-byte verification and file writes are deliberately outside measured phases.
   const fullScrape = scrapeInfo(retainedStore.render());
   assert(
-    !scrapeData(retainedStore.render()).includes("openclaw_prometheus_series_dropped_total"),
+    !retainedStore.render().includes("openclaw_prometheus_series_dropped_total"),
     "Fixture unexpectedly dropped series",
   );
-  await writeFile(`${values.output}.prom`, scrapeData(retainedStore.render()));
+  await writeFile(`${values.output}.prom`, retainedStore.render());
   for (let index = 0; index < 10; index++) {
     retainedStore.render();
   }
@@ -648,6 +638,7 @@ try {
           const rendered = retainedStore.render();
           durations[index] = performance.now() - before;
           consumedUnits += rendered.length;
+          releaseScrape(rendered);
         }
       },
       false,
@@ -656,7 +647,9 @@ try {
     await measure("prometheus.render-allocation", allocationRenders, () => {
       for (let index = 0; index < allocationRenders; index++) {
         update();
-        consumedUnits += retainedStore.render().length;
+        const rendered = retainedStore.render();
+        consumedUnits += rendered.length;
+        releaseScrape(rendered);
       }
     });
   }
@@ -670,7 +663,7 @@ try {
   if (!updatesPerRender) {
     assert.equal(finalScrape.sha256, fullScrape.sha256, "Measured renders changed the scrape");
   }
-  await writeFile(`${values.output}.final.prom`, scrapeData(retainedStore.render()));
+  await writeFile(`${values.output}.final.prom`, retainedStore.render());
   retainedStore.reset();
   const afterResetMemory = await retainedMemory();
   assert.equal(retainedStore.render().length, 0);
