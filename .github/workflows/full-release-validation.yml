@@ -2469,7 +2469,6 @@ jobs:
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
           COVERAGE_POLICY: ${{ needs.resolve_target.outputs.coverage_policy }}
-          TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
           CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
           FULL_RELEASE_RESTORE_PLAN: ${{ github.run_attempt != 1 && (steps.plan_cache.outputs.cache-hit == 'true' || steps.plan_restore.outcome == 'success') }}
           FULL_RELEASE_PRESEAL_RECOVERY: ${{ github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' && steps.plan_restore.outcome != 'success' && steps.plan_inputs_restore.outcome == 'success' }}

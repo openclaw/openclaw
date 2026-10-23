@@ -1037,8 +1037,9 @@ function executionPlanDigestPayload(plan) {
         publicationAdmission: plan.publicationAdmission,
       }
     : {};
+  // JSON insertion order is part of the sealed coverage-plan digest.
   const coverage = Object.hasOwn(plan, "coveragePolicy")
-    ? { coveragePolicy: plan.coveragePolicy }
+    ? { targetVersion: plan.targetVersion, coveragePolicy: plan.coveragePolicy }
     : {};
   const attemptAware = Object.hasOwn(plan, "attemptEvidenceVersion");
   return {

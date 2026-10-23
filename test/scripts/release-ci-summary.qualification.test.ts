@@ -91,9 +91,18 @@ function npmProducer(f: ReturnType<typeof candidatePublicationFixture>) {
 }
 
 describe("candidate-owned publish consumer chain", () => {
-  it.each(["success", "failure", "cancelled"])(
-    "requires a successful FRV even with a checked-in leaf waiver: parent %s",
-    async (parentConclusion) => {
+  it.each([
+    { scenario: "matching grant", parentConclusion: "success" },
+    { scenario: "failed parent", parentConclusion: "failure" },
+    { scenario: "cancelled parent", parentConclusion: "cancelled" },
+    { scenario: "missing grant", parentConclusion: "success" },
+    { scenario: "different version", parentConclusion: "success" },
+    { scenario: "different role", parentConclusion: "success" },
+    { scenario: "different job", parentConclusion: "success" },
+    { scenario: "tooling revoked after verification", parentConclusion: "success" },
+  ])(
+    "authenticates waived FRV at npm and Docker admission: $scenario",
+    async ({ scenario, parentConclusion }) => {
       const f = candidatePublicationFixture();
       const role = "releaseChecksIndependent";
       const planned = f.plan.children.find((entry) => entry.key === role);
@@ -107,7 +116,14 @@ describe("candidate-owned publish consumer chain", () => {
           "Run repo/live E2E validation / Native live suites (Native live gateway profiles OpenAI)",
         reason: "Synthetic checked-in provider outage grant.",
       };
-      RELEASE_VALIDATION_WAIVERS.push(grant);
+      if (scenario !== "missing grant") {
+        RELEASE_VALIDATION_WAIVERS.push({
+          ...grant,
+          ...(scenario === "different version" ? { targetVersion: "2026.8.29-beta.1" } : {}),
+          ...(scenario === "different role" ? { childRole: "releaseChecksCandidate" } : {}),
+          ...(scenario === "different job" ? { jobName: `${grant.jobName} extra` } : {}),
+        });
+      }
       const [aggregate] = await f.client.getRunAttemptJobs(planned.runId);
       assert(aggregate);
       const jobs = [
@@ -149,8 +165,20 @@ describe("candidate-owned publish consumer chain", () => {
         await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow(
           "parent run is not completed/success",
         );
-        await expect(consumers(f, client).npm()).rejects.toThrow();
-        await expect(consumers(f, client).docker()).rejects.toThrow();
+        await expect(consumers(f, client).npm()).rejects.toThrow(
+          "parent run is not completed/success",
+        );
+        await expect(consumers(f, client).docker()).rejects.toThrow(
+          "Docker producer is neither active nor successfully completed",
+        );
+        return;
+      }
+      if (scenario === "missing grant" || scenario.startsWith("different ")) {
+        await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow(
+          "does not pass release policy",
+        );
+        await expect(consumers(f, client).npm()).rejects.toThrow("does not pass release policy");
+        await expect(consumers(f, client).docker()).rejects.toThrow("does not pass release policy");
         return;
       }
       const evidence = await validateReleaseRunEvidence(verifier(f), client);
@@ -159,6 +187,12 @@ describe("candidate-owned publish consumer chain", () => {
         conclusion: "failure",
         waivers: [grant],
       });
+      if (scenario === "tooling revoked after verification") {
+        f.admission.authority.permission = "read";
+        await expect(consumers(f, client).npm()).rejects.toThrow("qualification authority");
+        await expect(consumers(f, client).docker()).rejects.toThrow("qualification authority");
+        return;
+      }
       await expect(consumers(f, client).npm()).resolves.toEqual(f.npmQualified);
       await expect(consumers(f, client).docker()).resolves.toBeDefined();
     },

@@ -273,79 +273,101 @@ describe("full release execution plan", () => {
     expect(affectedActiveRunIds([reused], [{ runId: "101" }])).toEqual([]);
   });
 
-  it.each([false, true])("reads strict retained plans with targetVersion=%s", (includeVersion) => {
-    const current = executionPlan(
-      { childPhaseVersion: 3, rerunGroup: "ci" },
-      {
-        attemptEvidenceVersion: 3,
-        candidateRequest: canonicalCandidateRequest(),
-        candidate: candidateBinding(),
-      },
-    );
-    const recorded = { ...current };
-    if (!includeVersion) {
-      delete recorded.targetVersion;
-    }
-    // Empty retired retry metadata is part of the recorded wire shape, not a grant.
-    const digestPayload = {
-      knownFlakyJobs: [],
-      ...Object.fromEntries(
-        [
-          "attemptEvidenceVersion",
-          "blockers",
-          "candidate",
-          "candidateRequest",
-          "children",
-          "errors",
-          "evidenceReuse",
-          "gates",
-          "kind",
-          "parentRunAttempt",
-          "parentRunId",
-          "releaseProfile",
-          "repository",
-          "rerunGroup",
-          "targetSha",
-          ...(includeVersion ? ["targetVersion"] : []),
-          "trustedWorkflow",
-          "version",
-          "workflowRef",
-          "workflowSha",
-        ].map((key) => [key, recorded[key]]),
-      ),
-    };
-    const retained = {
-      ...recorded,
-      knownFlakyJobs: [],
-      sha256: createHash("sha256").update(JSON.stringify(digestPayload)).digest("hex"),
-    };
-    const before = serializeReleaseArtifact(retained);
-    const root = tempDirs.make("frv-retained-plan-");
-    const output = join(root, "plan.json");
-    writeFileSync(output, before);
-    const restored = runCollector("plan", {
-      FULL_RELEASE_EXECUTION_PLAN_PATH: output,
-      FULL_RELEASE_RESTORE_PLAN: "true",
-      FULL_RELEASE_PLAN_INPUTS_JSON: "must-not-be-read",
-      CANDIDATE_REQUEST_JSON: JSON.stringify(current.candidateRequest),
-    });
-    expect(restored.status, restored.stderr).toBe(0);
-    expect(readFileSync(output, "utf8")).toBe(before);
-    expect(validateReleaseExecutionPlanArtifact(retained)).toEqual(retained);
-    expect(serializeReleaseArtifact(retained)).toBe(before);
-    expect(retained.sha256).not.toBe(current.sha256);
-    expect(() =>
-      validateReleaseExecutionPlanArtifact({ ...retained, knownFlakyJobs: ["normalCi:test"] }),
-    ).toThrow("knownFlakyJobs must be empty");
-    expect(() =>
-      validateReleaseExecutionPlanArtifact({ ...retained, knownFlakyJobs: undefined }),
-    ).toThrow("knownFlakyJobs must be empty");
-    const wrongVersion = { ...retained, targetVersion: "2026.8.2" };
-    wrongVersion.sha256 = releaseExecutionPlanSha256(wrongVersion);
-    expect(() => validateReleaseExecutionPlanArtifact(wrongVersion)).toThrow(
-      "release candidate binding request differs from the execution plan",
-    );
-  });
+  it.each([
+    { includeVersion: false, coveragePolicy: undefined },
+    { includeVersion: true, coveragePolicy: undefined },
+    { includeVersion: true, coveragePolicy: "npm-beta-v1" },
+    { includeVersion: true, coveragePolicy: "npm-stable-v1" },
+  ])(
+    "reads retained $coveragePolicy plans with targetVersion=$includeVersion",
+    ({ includeVersion, coveragePolicy }) => {
+      const coverage = coveragePolicy
+        ? coveragePolicy === "npm-beta-v1"
+          ? betaCoverage
+          : stableCoverage
+        : undefined;
+      const current = coverage
+        ? coveragePlan(coverage)
+        : executionPlan(
+            { childPhaseVersion: 3, rerunGroup: "ci" },
+            {
+              attemptEvidenceVersion: 3,
+              candidateRequest: canonicalCandidateRequest(),
+              candidate: candidateBinding(),
+            },
+          );
+      const recorded = { ...current };
+      if (!includeVersion) {
+        delete recorded.targetVersion;
+      }
+      // Reproduce the shipped wire ordering, not the current writer's digest.
+      // Empty retired retry metadata is part of the recorded wire shape, not a grant.
+      const digestPayload = {
+        ...(coveragePolicy ? { targetVersion: recorded.targetVersion, coveragePolicy } : {}),
+        knownFlakyJobs: [],
+        ...Object.fromEntries(
+          [
+            "attemptEvidenceVersion",
+            "blockers",
+            "candidate",
+            "candidateRequest",
+            "children",
+            "errors",
+            "evidenceReuse",
+            "gates",
+            "kind",
+            "parentRunAttempt",
+            "parentRunId",
+            "releaseProfile",
+            "repository",
+            "rerunGroup",
+            "targetSha",
+            ...(includeVersion && !coveragePolicy ? ["targetVersion"] : []),
+            "trustedWorkflow",
+            "version",
+            "workflowRef",
+            "workflowSha",
+          ].map((key) => [key, recorded[key]]),
+        ),
+      };
+      const retained = {
+        ...recorded,
+        knownFlakyJobs: [],
+        sha256: createHash("sha256").update(JSON.stringify(digestPayload)).digest("hex"),
+      };
+      const before = serializeReleaseArtifact(retained);
+      const root = tempDirs.make("frv-retained-plan-");
+      const output = join(root, "plan.json");
+      writeFileSync(output, before);
+      const restored = runCollector("plan", {
+        FULL_RELEASE_EXECUTION_PLAN_PATH: output,
+        FULL_RELEASE_RESTORE_PLAN: "true",
+        FULL_RELEASE_PLAN_INPUTS_JSON: "must-not-be-read",
+        CANDIDATE_REQUEST_JSON: JSON.stringify(current.candidateRequest),
+        RELEASE_PROFILE: coverage?.releaseProfile ?? "stable",
+        RERUN_GROUP: coverage?.rerunGroup ?? "ci",
+        ...(coveragePolicy ? { COVERAGE_POLICY: coveragePolicy } : {}),
+      });
+      expect(restored.status, restored.stderr).toBe(0);
+      expect(readFileSync(output, "utf8")).toBe(before);
+      expect(validateReleaseExecutionPlanArtifact(retained)).toEqual(retained);
+      expect(serializeReleaseArtifact(retained)).toBe(before);
+      expect(retained.sha256).not.toBe(current.sha256);
+      expect(() =>
+        validateReleaseExecutionPlanArtifact({ ...retained, knownFlakyJobs: ["normalCi:test"] }),
+      ).toThrow("knownFlakyJobs must be empty");
+      expect(() =>
+        validateReleaseExecutionPlanArtifact({ ...retained, knownFlakyJobs: undefined }),
+      ).toThrow("knownFlakyJobs must be empty");
+      const wrongVersion = { ...retained, targetVersion: "2026.8.2" };
+      wrongVersion.sha256 = releaseExecutionPlanSha256(wrongVersion);
+      expect(() => validateReleaseExecutionPlanArtifact(wrongVersion)).toThrow(
+        coveragePolicy
+          ? "release coverage policy"
+          : "release candidate binding request differs from the execution plan",
+      );
+    },
+  );
 
   it("retains B observations and post-upload binding through completed plan sealing", () => {
     const record = registryRecord();
