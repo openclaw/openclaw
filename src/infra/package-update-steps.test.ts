@@ -309,9 +309,15 @@ describe("runGlobalPackageUpdateSteps", () => {
     { name: "extra execute bits", mode: 0o755, changed: false, warning: true },
     { name: "restored 0644", mode: 0o644, changed: false, warning: false },
     { name: "changed bytes", mode: 0o644, changed: true, warning: false },
+    { name: "world-writable 0777", mode: 0o777, rejected: true },
+    { name: "group-writable executable 0775", mode: 0o775, rejected: true },
+    { name: "setuid 4755", mode: 0o4755, rejected: true },
+    { name: "missing executable bits", inventoryMode: 0o755, mode: 0o644, rejected: true },
+    { name: "owner-only 0600", mode: 0o600 },
+    { name: "non-executable 0664", mode: 0o664 },
   ])(
     "verifies staged npm content with $name",
-    async ({ name: caseName, mode, changed, warning }) => {
+    async ({ name: caseName, mode, inventoryMode, changed, warning, rejected }) => {
       const { globalRoot, packageRoot } = await npmPackage(base);
       const result = await runGlobalPackageUpdateSteps({
         ...createNpmUpdateOptions(globalRoot),
@@ -321,7 +327,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           const stagedRoot = path.join(layout.globalRoot, "openclaw");
           await writePackageRoot(stagedRoot, "2.0.0");
           const entry = path.join(stagedRoot, "dist/index.js");
-          await fs.chmod(entry, 0o644);
+          await fs.chmod(entry, inventoryMode ?? 0o644);
           await writePackageDistInventory(stagedRoot);
           if (caseName === "restored 0644") {
             await fs.chmod(entry, 0o755);
@@ -334,10 +340,11 @@ describe("runGlobalPackageUpdateSteps", () => {
         },
       });
 
-      expect(result.failedStep?.name ?? null).toBe(changed ? "package-verify" : null);
-      expect(result.afterVersion).toBe(changed ? "1.0.0" : "2.0.0");
+      const failsVerification = changed || rejected;
+      expect(result.failedStep?.name ?? null).toBe(failsVerification ? "package-verify" : null);
+      expect(result.afterVersion).toBe(failsVerification ? "1.0.0" : "2.0.0");
       await expectText(packageRoot, "package.json").toContain(
-        changed ? '"version":"1.0.0"' : '"version":"2.0.0"',
+        failsVerification ? '"version":"1.0.0"' : '"version":"2.0.0"',
       );
       const warnings = updateRunWarningMessages(result.steps.flatMap(updateRunStepsFromResultStep));
       expect(warnings).toEqual(

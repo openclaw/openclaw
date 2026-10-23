@@ -48,7 +48,8 @@ export function createPackageDistContentInventoryEntry(
   return {
     path: relativePath.replace(/\\/g, "/"),
     sha256: hash.digest,
-    mode: mode & 0o777,
+    // Preserve special bits for the extra-execute safety check.
+    mode: mode & 0o7777,
     size: hash.bytes,
   };
 }
@@ -103,10 +104,15 @@ export function comparePackageDistContentInventory(
     JSON.stringify(expected.map(format).toSorted()) !==
       JSON.stringify(actual.map(format).toSorted()) ||
     (process.platform !== "win32" &&
-      expected.some((entry) => entry.mode & 0o111 && !(actualByPath.get(entry.path)!.mode & 0o111)))
+      expected.some((entry) => {
+        const mode = actualByPath.get(entry.path)!.mode;
+        return entry.mode & 0o111
+          ? !(mode & 0o111)
+          : Boolean(mode & 0o111) && Boolean(mode & 0o7022);
+      }))
   ) {
     return [
-      `Invalid package dist content inventory at ${PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH}: expected packaged file hashes, sizes, and required executable bits to match current dist files.`,
+      `Invalid package dist content inventory at ${PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH}: expected packaged file hashes, sizes, and safe executable permissions to match current dist files.`,
     ];
   }
   // ACL-backed filesystems can add execute bits without changing packaged content.
