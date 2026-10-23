@@ -244,6 +244,8 @@ ownerSuite.define(() => {
           await confirmation
             .getByRole("button", { name: `Switch to 127.0.0.1:${ownerPort}`, exact: true })
             .click();
+          // The dismissed dialog can leave the pointer over a row and lift its title.
+          await page.mouse.move(0, 0);
 
           const otherRow = page.locator(
             `.session-bar-row[title="agent:opus:${scenario.sessionId}"]`,
