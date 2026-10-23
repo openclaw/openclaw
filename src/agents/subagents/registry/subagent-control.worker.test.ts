@@ -619,11 +619,11 @@ describe("subagent progress drafts", () => {
 
   it.each([
     ["a visible answer", [DONE], true],
-    ["intentional external silence", ["NO_REPLY"], true],
+    ["external NO_REPLY with undelivered findings", ["NO_REPLY"], false],
     ["required internal result", ["NO_REPLY"], false],
   ] as const)("settles the progress card according to %s", async (name, replies, retired) => {
     const requesterOrigin =
-      name === "intentional external silence"
+      name === "external NO_REPLY with undelivered findings"
         ? { channel: "telegram", to: "12345", accountId: "default" }
         : undefined;
     if (requesterOrigin) {
@@ -650,6 +650,12 @@ describe("subagent progress drafts", () => {
     await endRun("b");
     expect(wakes.map(({ retiredBefore }) => retiredBefore)).toEqual(replies.map(() => 0));
     expectCard(draft, retired ? 1 : 0);
+    if (name === "external NO_REPLY with undelivered findings") {
+      expect(subagentRuns.get("b")?.requesterSettleWake).toMatchObject({
+        status: "pending",
+        attemptCount: 1,
+      });
+    }
     expect(draft.push).toHaveBeenCalledWith(
       expect.objectContaining({ itemId: "b", kind: "subagent", status: "completed" }),
     );

@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -377,6 +376,7 @@ export async function ensureHeartbeatMonitorJobs(
             job.id,
             nowMs,
             "pending",
+            job.enabled,
           );
           result.set(item.agentId, job);
         } else {
@@ -458,32 +458,5 @@ export async function collectHeartbeatCadenceMigrationFindings(
         fixHint: "Resolve the state error and rerun openclaw doctor --fix.",
       },
     ];
-  }
-}
-
-export async function maybeMigrateHeartbeatCadenceToCron(params: {
-  cfg: OpenClawConfig;
-  shouldRepair: boolean;
-  env?: NodeJS.ProcessEnv;
-}): Promise<{ changes: string[]; warnings: string[] }> {
-  const findings = await collectHeartbeatCadenceMigrationFindings(params.cfg, params.env);
-  if (!params.shouldRepair || !findings.length) {
-    return { changes: [], warnings: findings.map((finding) => finding.message) };
-  }
-  try {
-    await ensureHeartbeatMonitorJobs(
-      params.cfg,
-      resolveCronJobsStorePathFromConfig(params.cfg, params.env),
-      params.env,
-    );
-    const changes = [
-      "Converted legacy heartbeat cadence to ordinary editable automations; recorded one-way provisioning receipts.",
-    ];
-    note(changes.join("\n"), "Doctor changes");
-    return { changes, warnings: [] };
-  } catch (error) {
-    const warnings = [formatErrorMessage(error)];
-    note(warnings.join("\n"), "Doctor warnings");
-    return { changes: [], warnings };
   }
 }

@@ -94,3 +94,20 @@ it.each(["legacy", "stale", "unverified"] as const)(
     }
   },
 );
+
+it("logs an ineligible root at info with its session so memory tool failures are traceable", async () => {
+  mocks.native = true;
+  const root = entry();
+  fakeSessionOwner.rows.set(ROOT_KEY, root);
+  const resolved = await resolveEmbeddedAttemptMemoryAudience({
+    ...attempt,
+    sessionKey: ROOT_KEY,
+    sessionId: root.sessionId,
+    admission: { entry: root, storePath: STORE_PATH },
+  });
+  expect(resolved.memoryAudience).toBeUndefined();
+  expect(mocks.info).toHaveBeenCalledWith(
+    expect.stringContaining("has no durable chat type"),
+    expect.objectContaining({ kind: "ineligible", sessionKey: ROOT_KEY }),
+  );
+});

@@ -7,12 +7,6 @@ import { areUiSessionKeysEquivalent } from "../sessions/session-key.ts";
 
 type ThinkingSessionDefaults = SessionsListResult["defaults"] | undefined;
 
-type ChatThinkingSelection = {
-  source: "override" | "default";
-  value: string;
-  displayLabel: string;
-} & ({ kind: "anchored"; index: number } | { kind: "unanchored" });
-
 export type ChatThinkingTarget = Pick<
   GatewaySessionRow,
   | "agentRuntime"
@@ -25,23 +19,24 @@ export type ChatThinkingTarget = Pick<
 >;
 
 export type ChatThinkingSelectState = {
-  selection: ChatThinkingSelection;
+  selection: {
+    source: "override" | "default";
+    value: string;
+    displayLabel: string;
+  } & ({ kind: "anchored"; index: number } | { kind: "unanchored" });
   inherited: { value: string; displayLabel: string };
   options: Array<{ value: string; label: string }>;
-};
-
-type ThinkingProfile = Pick<
-  ChatThinkingTarget,
-  "agentRuntime" | "thinkingLevels" | "thinkingDefault"
-> & {
-  reasoning?: boolean;
 };
 
 export function resolveThinkingProfileForSession(
   session: ChatThinkingTarget | undefined,
   defaults: ThinkingSessionDefaults,
   catalog: readonly ModelCatalogEntry[],
-): ThinkingProfile | undefined {
+):
+  | (Pick<ChatThinkingTarget, "agentRuntime" | "thinkingLevels" | "thinkingDefault"> & {
+      reasoning?: boolean;
+    })
+  | undefined {
   // A partial session identity cannot borrow its missing half from defaults.
   const target = session?.model || session?.modelProvider ? session : defaults;
   const catalogEntry = resolveThinkingCatalogEntry(

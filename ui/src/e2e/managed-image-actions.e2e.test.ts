@@ -124,32 +124,48 @@ suite.define(() => {
 
       const imageFrame = page.locator(".chat-image-frame--managed").filter({ has: image });
       const imageActions = imageFrame.locator(".chat-image-actions");
-      if (failures > 0) {
+      const openImage = page.getByRole("button", { name: `Open image ${imageTitle}` });
+      let downloadButton;
+      if (failures === 0) {
+        expect(await imageActions.isVisible()).toBe(false);
+        await screenshot("image-actions-overlay.png");
+        await openImage.tap();
+        const lightbox = page.getByRole("dialog", { name: `Image preview: ${imageTitle}` });
+        await lightbox.waitFor({ state: "visible" });
+        downloadButton = lightbox.getByRole("button", { name: "Download image", exact: true });
+        await downloadButton.waitFor({ state: "visible" });
+      } else {
         await page.mouse.move(0, 0);
         expect(await imageActions.evaluate((element) => getComputedStyle(element).opacity)).toBe(
           "0",
         );
         await imageFrame.hover();
+        expect(await imageActions.evaluate((element) => getComputedStyle(element).opacity)).toBe(
+          "1",
+        );
+        downloadButton = imageActions.getByRole("button", { name: "Download image" });
+        const imageBox = await image.boundingBox();
+        const actionsBox = await imageActions.boundingBox();
+        expect(actionsBox!.x).toBeGreaterThanOrEqual(imageBox!.x);
+        expect(actionsBox!.x + actionsBox!.width).toBeLessThanOrEqual(
+          imageBox!.x + imageBox!.width,
+        );
+        expect(actionsBox!.y + actionsBox!.height).toBeLessThanOrEqual(
+          imageBox!.y + imageBox!.height,
+        );
+        await screenshot("image-actions-overlay.png");
+        await page.mouse.move(0, 0);
+        await downloadButton.focus();
+        expect(await imageActions.evaluate((element) => getComputedStyle(element).opacity)).toBe(
+          "1",
+        );
+        await page.keyboard.press("Tab");
+        expect(
+          await imageActions
+            .getByRole("button", { name: "Copy image" })
+            .evaluate((button) => button === document.activeElement),
+        ).toBe(true);
       }
-      expect(await imageActions.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
-      const downloadButton = imageActions.getByRole("button", { name: "Download image" });
-      const imageBox = await image.boundingBox();
-      const actionsBox = await imageActions.boundingBox();
-      expect(actionsBox!.x).toBeGreaterThanOrEqual(imageBox!.x);
-      expect(actionsBox!.x + actionsBox!.width).toBeLessThanOrEqual(imageBox!.x + imageBox!.width);
-      expect(actionsBox!.y + actionsBox!.height).toBeLessThanOrEqual(
-        imageBox!.y + imageBox!.height,
-      );
-      await screenshot("image-actions-overlay.png");
-      await page.mouse.move(0, 0);
-      await downloadButton.focus();
-      expect(await imageActions.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
-      await page.keyboard.press("Tab");
-      expect(
-        await imageActions
-          .getByRole("button", { name: "Copy image" })
-          .evaluate((button) => button === document.activeElement),
-      ).toBe(true);
       for (let attempt = 0; attempt < failures; attempt += 1) {
         await downloadButton.click();
         const error = page.getByText("Could not download this image. Try again.", {
@@ -172,10 +188,7 @@ suite.define(() => {
       );
       expect(await readFile(downloadedPath)).toEqual(imageBytes);
 
-      const openImage = page.getByRole("button", { name: `Open image ${imageTitle}` });
-      if (failures === 0) {
-        await openImage.tap();
-      } else {
+      if (failures > 0) {
         await openImage.click();
       }
       await page
@@ -187,8 +200,12 @@ suite.define(() => {
         .evaluate(finishElementAnimations);
       const viewer = await page.locator("openclaw-image-lightbox .lightbox").boundingBox();
       expect(viewer).toMatchObject({ x: 0, y: 0, ...page.viewportSize() });
-      expect(requestedVariants).toEqual(["thumbnail", ...Array(failures + 1).fill("full")]);
-      expect(await gateway.getRequests("artifacts.download")).toHaveLength(failures + 2);
+      // Mobile opens the viewer before downloading, so it first loads a larger preview.
+      const previews = failures === 0 ? ["thumbnail", "thumbnail"] : ["thumbnail"];
+      expect(requestedVariants).toEqual([...previews, ...Array(failures + 1).fill("full")]);
+      expect(await gateway.getRequests("artifacts.download")).toHaveLength(
+        previews.length + failures + 1,
+      );
     } finally {
       await suite.closeBrowserContext(context);
     }

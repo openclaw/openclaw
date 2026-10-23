@@ -19,7 +19,6 @@ import { startMatrixQaRecordingProxy, type MatrixQaRecordingProxy } from "./reco
 
 type MatrixQaHarness = MatrixQaHarnessFiles & {
   baseUrl: string;
-  homeserverPort: number;
   recording: MatrixQaRecordingProxy;
   restartService(): Promise<void>;
   stopCommand: string;
@@ -83,7 +82,6 @@ export async function startMatrixQaHarness(params: {
 
     return {
       ...files,
-      homeserverPort,
       baseUrl: recording.baseUrl,
       recording,
       async restartService() {

@@ -4,11 +4,13 @@ import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { CloudProfileMenuItems, SessionMenuItem } from "./cloud-target-view.tsx";
-import { requestPlaceCatalog, type CloudProfileMenuItemsOptions } from "./cloud-target.ts";
+import { requestPlaceCatalog } from "./cloud-target.ts";
 import {
   projectDevicePlacements,
   resolveAutomaticDevicePlacementDisabledReason,
 } from "./device-placement.ts";
+
+type CloudProfileMenuItemsOptions = Parameters<typeof CloudProfileMenuItems>[0]["params"];
 
 function mountSessionItem(
   item: Parameters<typeof SessionMenuItem>[0]["item"],

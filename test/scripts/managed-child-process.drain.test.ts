@@ -325,3 +325,59 @@ describe("managed child natural process-group drainage", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+it.each([false, true])(
+  "observes exit, actual pipe close and output before timeout cancellation (observer throws: %s)",
+  async (observerThrows) => {
+    const fixture = createChild(true);
+    const stderr = new PassThrough();
+    fixture.child.stderr = stderr;
+    const group = observeGroup();
+    const observations: unknown[] = [];
+    const signalsAtObservation: unknown[] = [];
+    const observe = vi.fn((snapshot: unknown) => {
+      observations.push(snapshot);
+      signalsAtObservation.push([...group.signals], fixture.kill.mock.calls.length);
+      if (observerThrows) {
+        throw new Error("observer failed");
+      }
+    });
+    group.onSignal.mockImplementation(() => {
+      group.setState("gone");
+      fixture.child.stdout?.emit("data", Buffer.from("after timeout"));
+      fixture.child.stdout?.emit("close");
+    });
+    const command = runChild(fixture, {
+      timeoutMs: 100,
+      onReady() {
+        // A true property is not an observed native close callback.
+        Object.defineProperty(fixture.child.stdout, "closed", { get: () => true });
+      },
+      onTimeout: observe,
+    });
+    setTimeout(() => {
+      fixture.child.stdout?.emit("data", Buffer.from("abc"));
+      stderr.emit("data", Buffer.from("de"));
+      stderr.emit("close");
+      fixture.exit();
+    }, 25);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(await command).toMatchObject({ error: { code: "ETIMEDOUT" } });
+    expect(observe).toHaveBeenCalledTimes(1);
+    expect(signalsAtObservation).toEqual([[], 0]);
+    expect(observations).toEqual([
+      {
+        elapsedMs: 100,
+        exit: { code: 0, signal: null, elapsedMs: 25 },
+        stdout: { bytes: 3, lastDataElapsedMs: 25, closed: false },
+        stderr: { bytes: 2, lastDataElapsedMs: 25, closed: true },
+      },
+    ]);
+    expect(group.signals).toEqual([{ signal: "SIGTERM", at: 100 }]);
+    expect(vi.getTimerCount()).toBe(0);
+    fixture.child.stdout?.destroy();
+    stderr.destroy();
+  },
+);

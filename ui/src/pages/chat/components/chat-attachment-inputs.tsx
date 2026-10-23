@@ -6,7 +6,8 @@ import {
   handleChatAttachmentFileSelect,
 } from "./chat-attachment-inputs.ts";
 import { appendChatAttachmentFiles } from "./chat-attachments.ts";
-import { ChatCameraCapture, type OpenClawChatCameraCapture } from "./chat-camera-capture.tsx";
+import type { OpenClawChatCameraCapture } from "./chat-camera-capture.tsx";
+import "./chat-camera-capture.css";
 
 export function ChatAttachmentInputs(
   props: ChatAttachmentControlsProps & { inputHandle: ChatAttachmentInputHandle },
@@ -24,19 +25,21 @@ export function ChatAttachmentInputs(
         onSettled(() => props.inputHandle.bindInputs({ inputs, camera }));
         return (
           <>
-            <ChatCameraCapture
+            {/* The lazy plus menu registers this retained host before camera activation. */}
+            <openclaw-chat-camera-capture
               ref={(element) => {
                 camera = element;
               }}
-              disabled={Boolean(props.disabled) || props.cameraActive === false}
-              readSignal={props.readSignal ?? props.attachmentReads?.readSignal}
-              onCapture={(file: File) => {
+              style={{ display: "contents" }}
+              prop:disabled={Boolean(props.disabled) || props.cameraActive === false}
+              prop:readSignal={props.readSignal ?? props.attachmentReads?.readSignal}
+              prop:onCapture={(file: File) => {
                 if (!props.disabled) {
                   appendChatAttachmentFiles([file], props);
                 }
               }}
-              onNativeCapture={openInput("camera")}
-              onUpload={openInput("photo")}
+              prop:onNativeCapture={openInput("camera")}
+              prop:onUpload={openInput("photo")}
             />
             <For each={["file", "photo", "camera"] as const}>
               {(kind) => (

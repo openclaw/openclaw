@@ -14,12 +14,12 @@ import {
   waitForControlUiTerminalReady,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
-  buildProductionControlUiE2e,
   createControlUiMockBootstrapConfig,
   canRunPlaywrightChromium,
   captureControlUiE2eFailureDiagnostics,
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
+  refreshProductionControlUiE2e,
   resolvePlaywrightChromiumExecutablePath,
   startProductionControlUiE2eServer,
   type ControlUiE2eProductionServer,
@@ -53,16 +53,13 @@ type InstallGate = {
 let browser: Browser;
 let outDir: string;
 let server: ControlUiE2eProductionServer;
-let buildBPromise: Promise<void> | undefined;
 
 async function stageBuildB(destination: string): Promise<void> {
-  const pristineDir = `${outDir}-build-b`;
-  buildBPromise ??= buildProductionControlUiE2e(pristineDir, buildB);
-  await buildBPromise;
   await rm(destination, { force: true, recursive: true });
   try {
     // Each deployment owns its bytes; the terminal case modifies its worker.
-    await cp(pristineDir, destination, { recursive: true, dereference: true });
+    await cp(outDir, destination, { recursive: true, dereference: true });
+    await refreshProductionControlUiE2e(destination, buildB);
   } catch (error) {
     await rm(destination, { force: true, recursive: true });
     throw error;
@@ -367,7 +364,7 @@ describe("Control UI service-worker production update E2E", () => {
       } finally {
         if (outDir) {
           await Promise.all(
-            ["", "-build-b", "-next", "-previous", "-foreground", "-sleeping"].map((suffix) =>
+            ["", "-next", "-previous", "-foreground", "-sleeping"].map((suffix) =>
               rm(`${outDir}${suffix}`, { force: true, recursive: true }),
             ),
           );

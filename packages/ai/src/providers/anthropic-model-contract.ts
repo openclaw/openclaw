@@ -261,15 +261,13 @@ export function prepareClaudeNoPrefillRequestContext(model: Model, context: Cont
     : { ...context, messages: context.messages.slice(0, end) };
 }
 
-type ClaudeSamplingRequestParams = {
-  temperature?: unknown;
-  top_p?: unknown;
-  top_k?: unknown;
-  service_tier?: unknown;
-};
-
 export function applyClaudeRequestContract(
-  params: ClaudeSamplingRequestParams,
+  params: {
+    temperature?: unknown;
+    top_p?: unknown;
+    top_k?: unknown;
+    service_tier?: unknown;
+  },
   model: {
     id?: string;
     params?: Record<string, unknown>;

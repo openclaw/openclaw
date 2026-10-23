@@ -8,6 +8,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type TestContext } from "vitest";
 import {
   createManagedCommandSpawnSpec,
+  type ManagedCommandTimeoutObservation,
   inspectManagedProcessGroup,
   runManagedCommand,
   signalExitCode,
@@ -1372,12 +1373,24 @@ setInterval(() => {}, 1_000);
 
   it("uses a wall timeout even while the child emits progress", async () => {
     const startedAt = Date.now();
+    let observation: ManagedCommandTimeoutObservation | undefined;
     await expect(
       runNodeCommand({
         args: ["-e", "setInterval(() => process.stderr.write('retrying\\n'), 20)"],
         timeoutMs: 200,
+        stdio: ["ignore", "pipe", "pipe"],
+        onTimeout(snapshot) {
+          observation = snapshot;
+        },
       }),
     ).rejects.toMatchObject({ code: "ETIMEDOUT" });
+    expect(observation).toMatchObject({
+      exit: null,
+      stdout: { bytes: 0, lastDataElapsedMs: null, closed: false },
+      stderr: { closed: false },
+    });
+    expect(observation?.stderr?.bytes).toBeGreaterThan(0);
+    expect(observation?.stderr?.lastDataElapsedMs).toBeLessThanOrEqual(observation!.elapsedMs);
     expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 

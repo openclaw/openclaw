@@ -80,13 +80,10 @@ function fakeManagedDesktop(
   return { acquire, acquireComputer, managed, stop };
 }
 
-function hostService(
-  getConfig: () => DesktopHostConfig,
-  options: Omit<Parameters<typeof createHostDesktopService>[0], "getConfig" | "registry"> = {},
-) {
+function hostService(getConfig: () => DesktopHostConfig) {
   const registry = createDesktopSessionRegistry();
   cleanups.push(() => registry.stopAll());
-  const service = createHostDesktopService({ getConfig, registry, ...options });
+  const service = createHostDesktopService({ getConfig, registry });
   return { service, registry };
 }
 
@@ -94,8 +91,9 @@ function managedService(
   managedDesktop: ManagedLinuxDesktop,
   getConfig = (): DesktopHostConfig => ({ enabled: true, managed: true }),
 ) {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   vi.spyOn(managedLinux, "createManagedLinuxDesktop").mockReturnValue(managedDesktop);
-  return hostService(getConfig, { platform: "linux" });
+  return hostService(getConfig);
 }
 
 describe("gateway host desktop source", () => {
@@ -224,7 +222,7 @@ describe("gateway host desktop source", () => {
 
   it("attaches ARD and keeps account credentials only in the observer token", async () => {
     const port = await listenRfb({ banner: "RFB 003.889\n", securityTypes: [30] });
-    const { service } = hostService(() => ({ enabled: true, port }), { platform: "darwin" });
+    const { service } = hostService(() => ({ enabled: true, port }));
     await expect(service.observe({ control: false })).rejects.toThrow(
       "macOS account credentials are required",
     );

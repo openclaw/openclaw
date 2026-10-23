@@ -12,7 +12,6 @@ import {
 } from "../../agents/sessions/session-manager.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
-import type { SessionEntry as StoredSessionEntry } from "../../config/sessions/types.js";
 import { FsSafeError, isPathInside, root, type Root } from "../../infra/fs-safe.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -64,21 +63,6 @@ function normalizeWorkspaceAliasPath(workspaceRoot: Root, requestedPath: string)
     return requestedPath;
   }
   return path.relative(workspaceRoot.rootDir, normalizedRequest) || requestedPath;
-}
-
-async function hasPersistedAcpSession(params: {
-  cfg: HandleCommandsParams["cfg"];
-  sessionKey: string;
-  entry: StoredSessionEntry;
-}): Promise<boolean> {
-  if (params.entry.acp) {
-    return true;
-  }
-  try {
-    return Boolean(await readAcpSessionMetaForEntryAsync(params));
-  } catch {
-    return false;
-  }
 }
 
 type SessionExportWarningSummary = {
@@ -159,11 +143,19 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     sessionEntry: entry,
   });
 
-  const hasStoredAcpSession = await hasPersistedAcpSession({
+  const acpRead = {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     entry,
-  });
+  };
+  let hasStoredAcpSession = Boolean(acpRead.entry.acp);
+  if (!hasStoredAcpSession) {
+    try {
+      hasStoredAcpSession = Boolean(await readAcpSessionMetaForEntryAsync(acpRead));
+    } catch {
+      hasStoredAcpSession = false;
+    }
+  }
   const hasBackendSession =
     hasStoredAcpSession ||
     hasNonEmptyString(entry.claudeCliSessionId) ||

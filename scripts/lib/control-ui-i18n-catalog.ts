@@ -17,6 +17,7 @@ import { registerChatCameraEnglish } from "../../ui/src/i18n/locales/en-chat-cam
 import { registerChatCiEnglish } from "../../ui/src/i18n/locales/en-chat-ci.ts";
 import { registerChatCommandResultsEnglish } from "../../ui/src/i18n/locales/en-chat-command-results.ts";
 import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-composer.ts";
+import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMediaEnglish } from "../../ui/src/i18n/locales/en-chat-media.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
@@ -110,6 +111,7 @@ const sourceFiles = [
   "en-chat-ci.ts",
   "en-chat-command-results.ts",
   "en-chat-composer.ts",
+  "en-chat-details.ts",
   "en-chat-goals.ts",
   "en-chat-message-metadata.ts",
   "en-chat-media.ts",
@@ -203,6 +205,15 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       Object.assign(sessionsView, registerSessionPeopleEnglish.catalog.sessionsView);
     }
   }
+  const sessionDetails: TranslationMap = {};
+  for (const [key, value] of Object.entries(
+    registerChatSessionEnglish.catalog.chat.sessionDetails,
+  )) {
+    sessionDetails[key] = value;
+    if (key === "close") {
+      Object.assign(sessionDetails, registerChatDetailsEnglish.catalog.chat.sessionDetails);
+    }
+  }
   const toolCards: TranslationMap = {};
   const toolContent = registerChatToolContentEnglish.catalog.chat.toolCards;
   for (const [key, value] of Object.entries(registerChatToolLabelsEnglish.catalog.chat.toolCards)) {
@@ -268,6 +279,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         ...en.chat,
         ...registerChatSessionEnglish.catalog.chat,
         ...registerSessionNavigationEnglish.catalog.chat,
+        sessionDetails,
         sessionSuggestions: {
           ...registerSessionNavigationEnglish.catalog.chat.sessionSuggestions,
           ...registerChatSessionEnglish.catalog.chat.sessionSuggestions,
