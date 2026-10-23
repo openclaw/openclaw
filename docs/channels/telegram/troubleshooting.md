@@ -51,7 +51,7 @@ Symptom-first checks for a Telegram bot that is not behaving.
     OpenClaw tries to rebuild an agent's failed model runtime when the next
     message arrives. After a failed recovery, the inbound message waits until
     the runtime is eligible to retry. Waiting does not consume a recovery
-    attempt or keep typing active. If two actual recovery attempts fail, the
+    attempt or keep typing active. If two actual recovery attempts fail in the same process, the
     message remains in the failed ingress queue with the reason
     `runtime-recovery-failed`. Ordinary network failures keep their normal
     retry policy.

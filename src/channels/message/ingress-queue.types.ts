@@ -1,11 +1,6 @@
 import type { Selectable } from "kysely";
 import type { ChannelIngressEvents } from "../../state/openclaw-state-db.generated.js";
 
-export type ChannelIngressRetryState = {
-  recoveryFailures: number;
-  nextEligibleAt?: number;
-};
-
 export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = ChannelIngressScope & {
   id: string;
   payload: TPayload;
@@ -16,7 +11,6 @@ export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = ChannelIn
   attempts: number;
   lastAttemptAt?: number;
   lastError?: string;
-  retry?: ChannelIngressRetryState;
 };
 
 export type ChannelIngressQueueClaim<TPayload, TMetadata = unknown> = ChannelIngressQueueRecord<

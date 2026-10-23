@@ -10,13 +10,17 @@ import {
 import { PreparedModelRuntimeRecoveryError } from "../../agents/prepared-model-runtime-admission-errors.js";
 import { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE } from "../../config/sessions/work-start-error.js";
 import { computeBackoff } from "../../infra/backoff.js";
-import { decodeIngressRetryError } from "./ingress-queue.codec.js";
-import type { ChannelIngressRetryState } from "./ingress-queue.types.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 
 export const DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS = 8;
 export const DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_INGRESS_RETRY_BASE_MS = 1_000;
 export const DEFAULT_INGRESS_RETRY_MAX_MS = 3 * 60_000;
+const MAX_RECOVERY_RETRIES = 4_096;
+
+type IngressRecoveryRetry = { recoveryFailures: number; nextEligibleAt?: number };
+// Budgets reset on process restart because runtime owners re-publish on startup.
+const recoveryRetries = new WeakMap<object, Map<string, IngressRecoveryRetry>>();
 
 export type IngressRetryPolicyConfig = {
   maxAttempts?: number;
@@ -30,7 +34,7 @@ type IngressRetryEventFacts = {
   attempts?: number;
   lastAttemptAt?: number;
   lastError?: string;
-  retry?: ChannelIngressRetryState;
+  retry?: IngressRecoveryRetry;
 };
 
 export type IngressNonRetryableFailure = {
@@ -50,7 +54,7 @@ type IngressFailureDisposition =
       attempt: number;
       message: string;
       recordAttempt?: boolean;
-      retry?: ChannelIngressRetryState;
+      retry?: IngressRecoveryRetry;
     };
 
 /** Remaining backoff delay before a released event may be claimed again. */
@@ -59,7 +63,7 @@ export function resolveIngressRetryDelayMs(
   config?: IngressRetryPolicyConfig,
   now = Date.now(),
 ): number {
-  const retry = event.retry ?? decodeIngressRetryError(event.lastError).retry;
+  const retry = event.retry;
   if (retry?.nextEligibleAt !== undefined) {
     return Math.max(0, retry.nextEligibleAt - now);
   }
@@ -114,7 +118,7 @@ export function resolveIngressFailureDisposition(params: {
     };
   }
   const errors = collectNestedErrorCandidates(params.err);
-  const previousRetry = params.event.retry ?? decodeIngressRetryError(params.event.lastError).retry;
+  const previousRetry = params.event.retry;
   const recovery = errors.find(
     (error): error is PreparedModelRuntimeRecoveryError =>
       error instanceof PreparedModelRuntimeRecoveryError,
@@ -148,4 +152,36 @@ export function resolveIngressFailureDisposition(params: {
         message,
         ...(previousRetry ? { retry: { recoveryFailures: previousRetry.recoveryFailures } } : {}),
       };
+}
+
+/** Keep recovery facts with the live queue owner, outside durable error text. */
+export function createIngressRetryPolicy(owner: object) {
+  const retries = recoveryRetries.get(owner) ?? new Map<string, IngressRecoveryRetry>();
+  recoveryRetries.set(owner, retries);
+  type Event = IngressRetryEventFacts & { id: string };
+  return {
+    clear: (id: string) => retries.delete(id),
+    delay: (event: Event, config?: IngressRetryPolicyConfig, now = Date.now()) =>
+      resolveIngressRetryDelayMs({ ...event, retry: retries.get(event.id) }, config, now),
+    failure: (
+      params: Parameters<typeof resolveIngressFailureDisposition>[0] & { event: Event },
+    ) => {
+      const disposition = resolveIngressFailureDisposition({
+        ...params,
+        event: { ...params.event, retry: retries.get(params.event.id) },
+      });
+      if (disposition.kind === "fail") {
+        return disposition;
+      }
+      const { retry, ...release } = disposition;
+      if (retry) {
+        retries.delete(params.event.id);
+        retries.set(params.event.id, retry);
+        pruneMapToMaxSize(retries, MAX_RECOVERY_RETRIES);
+      } else {
+        retries.delete(params.event.id);
+      }
+      return release;
+    },
+  };
 }

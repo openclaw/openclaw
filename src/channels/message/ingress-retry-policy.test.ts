@@ -2,6 +2,7 @@ import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion"
 import { describe, expect, it } from "vitest";
 import { PreparedModelRuntimeRecoveryError } from "../../agents/prepared-model-runtime-admission-errors.js";
 import {
+  createIngressRetryPolicy,
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
   resolveIngressFailureDisposition,
@@ -31,56 +32,62 @@ function disposition(
 
 describe("ingress retry policy", () => {
   it("counts real recovery failures independently of other dispatch attempts", () => {
+    const policy = createIngressRetryPolicy({});
     const error = wrapError(new PreparedModelRuntimeRecoveryError("main", "attempt-failed", 7_000));
-    expect(disposition(error, 8)).toMatchObject({
+    const event = { id: "input", receivedAt: 1_000, attempts: 8 };
+    const fail = (err: unknown) =>
+      policy.failure({ err, event, formatError: coerceErrorMessage, now: 2_000 });
+    expect(fail(error)).toMatchObject({
       kind: "release",
       attempt: 9,
       recordAttempt: true,
-      retry: { recoveryFailures: 1, nextEligibleAt: 7_000 },
     });
-    expect(
-      disposition(error, 8, {
-        event: { receivedAt: 1_000, attempts: 8, retry: { recoveryFailures: 1 } },
-      }),
-    ).toMatchObject({
+    expect(fail(new Error("transient dispatch failure"))).toMatchObject({ kind: "release" });
+    expect(fail(error)).toMatchObject({
       kind: "fail",
       reason: "runtime-recovery-failed",
     });
-    expect(
-      disposition(codedError("unavailable", "PREPARED_MODEL_RUNTIME_RECOVERY_FAILED"), 1),
-    ).toMatchObject({ kind: "release" });
+    policy.clear(event.id);
+    expect(fail(error)).toMatchObject({ kind: "release" });
   });
 
-  it.each(["projected", "opaque"])(
-    "preserves backoff and recovery budget in %s queue records",
-    (format) => {
-      const retry = { recoveryFailures: 1, nextEligibleAt: 7_000 };
-      const event = {
-        receivedAt: 1_000,
-        attempts: 1,
-        lastError: "failed",
-        lastAttemptAt: 1_000,
-        ...(format === "projected"
-          ? { retry }
-          : {
-              lastError:
-                'OPENCLAW_CHANNEL_INGRESS_RETRY_V1:{"message":"failed","recoveryFailures":1,"nextEligibleAt":7000}',
-            }),
-      };
-      expect(
-        disposition(new PreparedModelRuntimeRecoveryError("main", "backoff", 7_000), 1, {
-          event,
-        }),
-      ).toMatchObject({ kind: "release", attempt: 1, recordAttempt: false, retry });
-      expect(resolveIngressRetryDelayMs(event, undefined, 2_000)).toBe(5_000);
-      expect(resolveIngressRetryDelayMs(event, undefined, 7_000)).toBe(0);
-      expect(
-        disposition(new PreparedModelRuntimeRecoveryError("main", "attempt-failed", 12_000), 1, {
-          event,
-        }),
-      ).toMatchObject({ kind: "fail", reason: "runtime-recovery-failed" });
-    },
-  );
+  it("preserves backoff across drains of the same live queue without spending an attempt", () => {
+    const queue = {};
+    const policy = createIngressRetryPolicy(queue);
+    const event = { id: "input", receivedAt: 1_000, attempts: 1 };
+    const fail = (reason: "attempt-failed" | "backoff") =>
+      policy.failure({
+        err: new PreparedModelRuntimeRecoveryError("main", reason, 7_000),
+        event,
+        formatError: coerceErrorMessage,
+      });
+    expect(fail("attempt-failed")).toMatchObject({ kind: "release" });
+    expect(fail("backoff")).toMatchObject({ kind: "release", attempt: 1, recordAttempt: false });
+    const nextDrain = createIngressRetryPolicy(queue);
+    expect(nextDrain.delay(event, undefined, 2_000)).toBe(5_000);
+    expect(nextDrain.delay(event, undefined, 7_000)).toBe(0);
+    expect(fail("attempt-failed")).toMatchObject({
+      kind: "fail",
+      reason: "runtime-recovery-failed",
+    });
+  });
+
+  it("isolates queue owners and clears recovery state for completed rows", () => {
+    const policy = createIngressRetryPolicy({});
+    const event = { id: "input", receivedAt: 1_000 };
+    const params = {
+      err: new PreparedModelRuntimeRecoveryError("main", "attempt-failed", 7_000),
+      event,
+      formatError: coerceErrorMessage,
+    };
+    policy.failure(params);
+    expect(createIngressRetryPolicy({}).delay(event, undefined, 2_000)).toBe(0);
+    policy.clear(event.id);
+    expect(policy.delay(event, undefined, 2_000)).toBe(0);
+    expect(policy.failure(params)).toMatchObject({ kind: "release" });
+    policy.clear(event.id);
+    expect(policy.delay(event, undefined, 2_000)).toBe(0);
+  });
 
   it.each([
     {

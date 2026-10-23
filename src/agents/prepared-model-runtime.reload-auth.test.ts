@@ -150,12 +150,11 @@ describe("prepared model runtime reload auth adoption", () => {
             expect(pending).toMatchObject({
               id: "unavailable",
               attempts: 1,
-              retry: { recoveryFailures: 1, nextEligibleAt: 15_000 },
             });
             drain.dispose();
             drain = createDrain();
             expect(await drain.drainOnce()).toEqual({ started: 0 });
-            now = pending!.retry!.nextEligibleAt!;
+            now = 15_000;
             if (outcome === "recovers") {
               mocks.resolveAmbientCredentials.mockReturnValue({});
             }

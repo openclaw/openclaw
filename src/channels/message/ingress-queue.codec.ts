@@ -8,7 +8,6 @@ import type {
   ChannelIngressQueueCorruptClaim,
   ChannelIngressQueueCompletedRecord,
   ChannelIngressQueueDeadLetterRecord,
-  ChannelIngressRetryState,
 } from "./ingress-queue.types.js";
 
 // Failed rows need to distinguish a retained JSON null payload from the "null"
@@ -23,54 +22,6 @@ function parseJson(value: string): ParseJsonResult {
   } catch {
     return { ok: false };
   }
-}
-
-const RETRY_ERROR_PREFIX = "OPENCLAW_CHANNEL_INGRESS_RETRY_V1:";
-
-/** Keep scheduling facts with the existing SQLite error record, preserving plain legacy errors. */
-export function encodeIngressRetryError(
-  message: string | undefined,
-  retry?: ChannelIngressRetryState,
-): string | undefined {
-  return message !== undefined && retry
-    ? RETRY_ERROR_PREFIX + JSON.stringify({ message, ...retry })
-    : message;
-}
-
-export function decodeIngressRetryError(value: string | undefined): {
-  lastError?: string;
-  retry?: ChannelIngressRetryState;
-} {
-  if (value === undefined) {
-    return {};
-  }
-  const parsed = value.startsWith(RETRY_ERROR_PREFIX)
-    ? parseJson(value.slice(RETRY_ERROR_PREFIX.length))
-    : undefined;
-  const record = parsed?.ok ? parsed.value : undefined;
-  if (
-    record &&
-    typeof record === "object" &&
-    "message" in record &&
-    typeof record.message === "string" &&
-    "recoveryFailures" in record &&
-    typeof record.recoveryFailures === "number" &&
-    Number.isSafeInteger(record.recoveryFailures) &&
-    record.recoveryFailures >= 0 &&
-    (!("nextEligibleAt" in record) ||
-      (typeof record.nextEligibleAt === "number" && Number.isFinite(record.nextEligibleAt)))
-  ) {
-    return {
-      lastError: record.message,
-      retry: {
-        recoveryFailures: record.recoveryFailures,
-        ...("nextEligibleAt" in record && typeof record.nextEligibleAt === "number"
-          ? { nextEligibleAt: record.nextEligibleAt }
-          : {}),
-      },
-    };
-  }
-  return { lastError: value };
 }
 
 export function parseFailedPayload(value: string): ParseJsonResult {
@@ -109,7 +60,7 @@ export function baseRecord<TPayload, TMetadata>(
     ...(row.lane_key === null ? {} : { laneKey: row.lane_key }),
     attempts: row.attempts,
     ...(row.last_attempt_at === null ? {} : { lastAttemptAt: row.last_attempt_at }),
-    ...(row.last_error === null ? {} : decodeIngressRetryError(row.last_error)),
+    ...(row.last_error === null ? {} : { lastError: row.last_error }),
   };
 }
 
