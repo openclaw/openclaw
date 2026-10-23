@@ -1,7 +1,8 @@
 import type { Question } from "@openclaw/gateway-protocol";
 import { createEffect, createMemo, createSignal, createUniqueId, For, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import {
   adjustTextareaHeight,
   handleTextareaOverflowInteraction,
@@ -9,6 +10,8 @@ import {
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
 } from "./chat-composer-dom.ts";
+
+registerEnglishCatalog(registerChatQuestionsEnglish);
 
 type QuestionOptionsProps = {
   question: Question;

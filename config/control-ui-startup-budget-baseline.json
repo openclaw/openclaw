@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 311358,
-  "reason": "Panel header imports and Labs/Usage copy: matched 721d124 build 311566 to 311358 B startup, 1333529 to 1324362 B Chat and 816308 to 814674 B New Session; seven startup JS requests.",
+  "startupJsGzipBytes": 294961,
+  "reason": "Startup leaf icons, update classification, and lazy English: matched b5b24cf15c2 build 310773 to 294961 B gzip with 7 JS and 1 CSS request.",
   "updatedAt": "2026-10-23"
 }

@@ -1,9 +1,12 @@
 import { Show, createMemo } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { resolveToolApprovalReviewOutcome } from "../../../lib/chat/tool-approval-reviews.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { summarizeToolCardOutcomes } from "./chat-tool-render-model.ts";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 export type ToolOutcomeSummaryProps = {
   cards: readonly ToolCard[];

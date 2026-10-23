@@ -49,11 +49,6 @@ type GatewayAssistantIdentity = {
   emoji?: string;
 };
 
-type GatewayAssistantAvatarProjection = {
-  avatar: string;
-  resolution: AgentAvatarResolution | null;
-};
-
 type PreparedGatewayAssistantAvatarProjection = {
   resolution: AgentAvatarResolution | null;
   file?: PreparedLocalAgentAvatarFile;
@@ -130,7 +125,7 @@ export async function resolveGatewayAssistantAvatar(params: {
   identity: GatewayAssistantIdentity;
   /** Browser clients use authenticated images; native/CLI RPC retains inline avatars. */
   httpBasePath?: string;
-}): Promise<GatewayAssistantAvatarProjection> {
+}): Promise<{ avatar: string; resolution: AgentAvatarResolution | null }> {
   const { cfg, identity } = params;
   const source = identity.avatar;
   const sameOriginAvatarUrl = resolveSameOriginAvatarUrl(

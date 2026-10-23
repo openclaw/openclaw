@@ -2,6 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { For, Show, createMemo } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
@@ -12,6 +13,8 @@ import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { MarkdownContent } from "./chat-message-text-view.tsx";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import { POSITION_RAIL_MARKER_HEIGHT } from "./chat-transcript-geometry.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 registerEnglishCatalog(registerChatSessionEnglish);
 

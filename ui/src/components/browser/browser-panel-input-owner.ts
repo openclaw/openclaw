@@ -1,4 +1,5 @@
 import { t } from "../../i18n/index.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
 import type { BrowserRequestClient, BrowserInspectedNode } from "./browser-client.ts";
 import {
@@ -21,6 +22,8 @@ import {
   dispatchCompositedBrowserAnnotation,
   paintBrowserPanelOverlay,
 } from "./browser-panel-surface.ts";
+
+registerBrowserEnglish();
 
 const INSPECT_THROTTLE_MS = 120;
 const STREAM_WHEEL_INTERVAL_MS = 50;

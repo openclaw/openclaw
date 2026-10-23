@@ -1804,6 +1804,7 @@ src/shared/settle-within.ts
 src/shared/store-writer-acquisitions.ts
 src/shared/store-writer-queue.ts
 src/shared/tool-block-contract.ts
+src/shared/update-outcome-classification.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
 src/skills/discovery/chat-command-invocation.ts

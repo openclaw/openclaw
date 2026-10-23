@@ -1,6 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, For, Loading, onCleanup, Show } from "solid-js";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import { parseCommentAttachment, type CommentPreview } from "./chat-comment-preview.ts";
 import { CommentPreviewChip, CommentPreviewRow } from "./chat-comment-preview.tsx";
@@ -10,6 +11,8 @@ import {
 } from "./chat-message-attachment-admission-model.ts";
 import { ChatAttachmentAdmission } from "./chat-message-attachment-admission-solid.tsx";
 import type { AttachmentItem, ImageRenderOptions } from "./chat-message-media.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 type SentCommentSource = {
   identity: string;

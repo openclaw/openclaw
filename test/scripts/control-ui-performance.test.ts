@@ -120,6 +120,12 @@ describe("Control UI performance budgets", () => {
 
   function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
     const rootDir = tempDirs.make("openclaw-control-ui-budget-cli-");
+    fs.mkdirSync(path.join(rootDir, "node_modules"));
+    fs.symlinkSync(
+      fs.realpathSync(path.resolve("ui/node_modules/pako")),
+      path.join(rootDir, "node_modules/pako"),
+      "junction",
+    );
     const baselinePath = path.join(rootDir, baselineName);
     fs.mkdirSync(path.dirname(baselinePath), { recursive: true });
     const { distDir, writeAsset, writeHtml } = createDistFixture(
@@ -169,6 +175,16 @@ describe("Control UI performance budgets", () => {
     expect(result.status, result.stderr).toBe(exitCode);
     return JSON.parse(result.stdout);
   }
+
+  it("attributes startup without requiring route preload templates", () => {
+    const fixture = createCliFixture();
+    const result = jsonCli(fixture, ["--module-attribution"]);
+    expect(result.moduleAttribution.startup).toMatchObject({
+      shippedGzipBytes: 65,
+      missingSourceMaps: ["assets/index-a.js"],
+    });
+    expect(Object.keys(result.moduleAttribution)).toEqual(["startup"]);
+  });
 
   beforeAll(async () => {
     const { rootDir } = createCliFixture();
