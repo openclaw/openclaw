@@ -28,6 +28,8 @@ const MAX_OUTPUT_LIMIT_RETRIES = 1;
 const MAX_TRANSIENT_RETRY_TIME_MS = 90_000;
 const TRANSIENT_RETRY_BASE_DELAY_MS = 1_000;
 const TRANSIENT_RETRY_MAX_DELAY_MS = 30_000;
+/** Retry-After beyond this is a long-window rate limit (matches classifyRateLimitWindow). */
+const LONG_WINDOW_RETRY_AFTER_MS = 60_000;
 
 function resolveTransientRetryDelayMs(params: {
   retryNumber: number;
@@ -342,7 +344,13 @@ export function createEmbeddedRunFailoverRetryController(input: {
         return false;
       }
       const rateLimit = retry.reason === "rate_limit";
-      if (rateLimit && hasLongWindowRateLimitEvidence(retry.message)) {
+      if (
+        rateLimit &&
+        (hasLongWindowRateLimitEvidence(retry.message) ||
+          (retry.retryAfterMs !== undefined &&
+            Number.isFinite(retry.retryAfterMs) &&
+            retry.retryAfterMs > LONG_WINDOW_RETRY_AFTER_MS))
+      ) {
         recordDecision("rejected", "long_window_rate_limit");
         return false;
       }
