@@ -151,8 +151,9 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
     - `deleteMessage` (`chatId`, `messageId`)
     - `editMessage` (`chatId`, `messageId`, `content` or `caption`, optional `presentation` inline buttons; button-only edits update reply markup)
     - `createForumTopic` (`chatId`, `name`, optional `iconColor`, `iconCustomEmojiId`)
+    - `deleteForumTopic` (`chatId`, `threadId`; deletes the topic and all its messages, refuses the General topic, needs the bot's `can_delete_messages` right; requires both `editForumTopic` and `deleteMessage`; conflicting `target`/`chatId` values are rejected)
 
-    Ergonomic aliases: `send`, `react`, `delete`, `edit`, `sticker`, `sticker-search`, `topic-create`.
+    Ergonomic aliases: `send`, `react`, `delete`, `edit`, `sticker`, `sticker-search`, `topic-create`, `topic-delete`.
 
     Gating: `channels.telegram.actions.sendMessage`, `poll`, `deleteMessage`, `reactions`, `editMessage`, `createForumTopic`, and `editForumTopic` are enabled by default; set one to `false` to disable it. Poll creation requires both `sendMessage` and `poll`. `sticker` is disabled by default and must be enabled explicitly. `reactions` controls both `react` and `emoji-list`.
     Runtime sends use the active config/secrets snapshot from startup/reload, so action paths do not re-resolve `SecretRef` values per send.
