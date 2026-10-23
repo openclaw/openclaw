@@ -432,13 +432,16 @@ export async function evaluateAgentDatabaseAdmissions(
   const { resolveConfiguredAgentDatabaseCandidatePaths } =
     await import("../config/sessions/targets.js");
   const env = options.env ?? process.env;
-  const result = await preflightOpenClawDatabaseSchemas({
-    env,
-    configuredAgentDatabaseTargets: [],
-    configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(config, {
+  const result = await preflightOpenClawDatabaseSchemas(
+    {
       env,
-    }),
-    agentAdmissionConfig: config,
-  });
+      configuredAgentDatabaseTargets: [],
+      configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(config, {
+        env,
+      }),
+      agentAdmissionConfig: config,
+    },
+    "runtime",
+  );
   return result.agentRefusals ?? [];
 }

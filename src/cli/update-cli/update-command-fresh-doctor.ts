@@ -147,9 +147,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   try {
     const commandOptions: CommandOptions = {
       cwd: params.root,
-      // Normal updates also carry a default step allowance. Only operator opts
-      // may impose a Doctor deadline; standalone finalization supplies its own.
-      timeoutMs: params.opts ? parseUpdateTimeoutMs(params.opts.timeout) : params.timeoutMs,
+      timeoutMs: parseUpdateTimeoutMs(params.opts?.timeout) ?? params.timeoutMs,
       maxOutputBytes: 4 * 1024 * 1024,
       terminateOnOutputLimit: true,
       onOutputChunk: captureUpdateFinalizationDoctorOutput(params.phase),

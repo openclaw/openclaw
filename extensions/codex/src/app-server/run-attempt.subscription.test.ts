@@ -44,12 +44,14 @@ describe("Codex attempt subscription recovery", () => {
     const sessionFile = path.join(tempDir, "interrupted.jsonl");
     const abort = new AbortController();
     const params = createParams(sessionFile, workspaceDir);
+    params.timeoutMs = 60_000;
     params.abortSignal = abort.signal;
     const siblingParams = createParams(path.join(tempDir, "sibling.jsonl"), workspaceDir, {
       sessionId: "session-sibling",
       sessionKey: "agent:main:sibling",
       runId: "run-sibling",
     });
+    siblingParams.timeoutMs = 60_000;
     await seedRunSessionOwnerForTest(siblingParams.sessionId, siblingParams.sessionKey!);
     let starts = 0;
     let turns = 0;
@@ -92,9 +94,9 @@ describe("Codex attempt subscription recovery", () => {
       expect(getCurrentSharedClientEntry(harness.client)).toBeDefined();
       expect(siblingSettled).not.toHaveBeenCalled();
 
-      next = runCodexAppServerAttempt(
-        createParams(sessionFile, workspaceDir, { runId: "run-next" }),
-      );
+      const nextParams = createParams(sessionFile, workspaceDir, { runId: "run-next" });
+      nextParams.timeoutMs = 60_000;
+      next = runCodexAppServerAttempt(nextParams);
       await next.waitForTurnAccepted();
       expect(siblingSettled).not.toHaveBeenCalled();
       expect(starts).toBe(2);

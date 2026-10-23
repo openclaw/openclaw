@@ -126,8 +126,12 @@ function readPackageActivationContinuation(installKey: string, dryRun?: boolean)
       packageActivationIdentity(installKey, true),
     ) &&
     (inspectPackageActivationLease(record.descriptor.authority).changed ||
-      (record.phase === "publication-complete" &&
-        packageActivationIdentity(installKey, true) === record.descriptor.candidate.identity))
+      packageActivationIdentity(installKey, true) === record.descriptor.candidate.identity ||
+      (packageActivationIdentity(installKey, true) === record.descriptor.previous.identity &&
+        ((record.phase === "prepared" &&
+          record.intent === null &&
+          record.publications.length === 0) ||
+          record.phase === "aborted")))
   ) {
     return undefined;
   }
@@ -257,7 +261,7 @@ export async function settlePendingPackageActivation(
   installKey: string,
   onSettled?: (settlement: PackageActivationSettlement) => void,
   expectedCompleted?: PackageActivationRecord,
-  options?: { onlyStaleLease?: boolean; dryRun?: boolean; operationId?: string },
+  options?: { automatic?: boolean; dryRun?: boolean; operationId?: string },
 ) {
   const anchor = resolvePackageActivationAnchor(installKey);
   if (!expectedCompleted && !fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
@@ -294,13 +298,13 @@ export async function settlePendingPackageActivation(
           detail: priorSettlement?.detail,
         }
       : undefined;
-  if (options?.onlyStaleLease && complete) {
+  if (options?.automatic && complete) {
     return options.dryRun ? receipt : undefined;
   }
   const originalAuthority = initial.descriptor.authority;
   const replacementIdentity = packageActivationIdentity(installKey, true);
   if (
-    options?.onlyStaleLease &&
+    options?.automatic &&
     ![initial.descriptor.previous.identity, initial.descriptor.candidate.identity].includes(
       replacementIdentity,
     )
@@ -312,17 +316,6 @@ export async function settlePendingPackageActivation(
     !lease.current ||
     (initial.phase === "superseded" && initial.intent?.kind === "recovery-lease-missing");
   const leaseIdentityChanged = leaseWasMissing || lease.changed;
-  // A completed publication can settle through the same verified repair owner even on this lease.
-  if (
-    options?.onlyStaleLease &&
-    !leaseIdentityChanged &&
-    !(
-      initial.phase === "publication-complete" &&
-      replacementIdentity === initial.descriptor.candidate.identity
-    )
-  ) {
-    return undefined;
-  }
   const previousIdentity =
     identities?.currentIdentity(initial.descriptor.previous.identity) ??
     initial.descriptor.previous.identity;
@@ -352,6 +345,16 @@ export async function settlePendingPackageActivation(
       initial.publications.length === 0) ||
       initial.phase === "aborted");
   const publicationNotStarted = !identities && !leaseIdentityChanged && unusedPreparation;
+  // Repair can verify an installed candidate or untouched preparation without
+  // republishing files beneath a running Gateway, even when the lease is intact.
+  if (
+    options?.automatic &&
+    !leaseIdentityChanged &&
+    !externalPublication &&
+    !publicationNotStarted
+  ) {
+    return undefined;
+  }
   if (
     !complete &&
     !publicationNotStarted &&
@@ -380,7 +383,11 @@ export async function settlePendingPackageActivation(
     }
     return {
       operationId: initial.descriptor.operationId,
-      reason,
+      reason: unusedPreparation
+        ? "publication-not-started"
+        : externalPublication
+          ? "publication-settled-external-change"
+          : reason,
       retained: `${anchor}.superseded-${initial.descriptor.operationId}`,
       detail: undefined,
       warning: undefined,

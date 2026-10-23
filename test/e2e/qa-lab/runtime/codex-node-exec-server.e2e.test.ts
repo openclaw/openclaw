@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -56,6 +57,7 @@ const DISCONNECT_MARKER = "CODEX_NODE_EXEC_DISCONNECT_PROOF";
 const RECOVERY_MARKER = "CODEX_NODE_EXEC_FRESH_ATTEMPT_PROOF";
 const REQUEST_TIMEOUT_MS = 120_000;
 const WAIT_OPTIONS = { timeout: 60_000, interval: 100 };
+const PROGRESS_INTERVAL_MS = 60_000;
 const WORKER_COMMAND_ARGS = new Set(["worker", "--internal-worker-session"]);
 const WORKER_OR_CODEX_COMMAND_ARGS = new Set([...WORKER_COMMAND_ARGS, "codex"]);
 let receipts: FixtureReceiptChannel;
@@ -533,6 +535,14 @@ describe("Codex paired-device exec-server carrier", () => {
     "keeps approved native execution on the real node, reconciles files, and never resumes a disconnect",
     { timeout: 360_000 },
     async ({ signal }) => {
+      const proofStartedAt = Date.now();
+      const progress = setInterval(() => {
+        writeSync(
+          2,
+          `[codex-node-exec-server] proof still running (${Date.now() - proofStartedAt}ms)\n`,
+        );
+      }, PROGRESS_INTERVAL_MS);
+      progress.unref();
       const root = tempDirs.make("openclaw-codex-node-exec-server-");
       const nodeRoot = path.join(root, "node");
       const nodeHome = path.join(nodeRoot, "home");
@@ -1022,24 +1032,28 @@ describe("Codex paired-device exec-server carrier", () => {
           }),
         );
       };
-      await runQaGatewayFixture(runProof, async () => {
-        const connectionCleanup = await Promise.allSettled([
-          stopChild(node),
-          requester?.stopAndWait({ timeoutMs: 5_000 }) ?? Promise.resolve(),
-          reviewer?.stopAndWait({ timeoutMs: 5_000 }) ?? Promise.resolve(),
-        ]);
-        const resourceCleanup = await Promise.allSettled([
-          stopQaGatewayFixture(gatewayOwner),
-          published ? closeWireServer(published.server) : Promise.resolve(),
-          provider?.stop() ?? Promise.resolve(),
-        ]);
-        const failures = [...connectionCleanup, ...resourceCleanup].flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length) {
-          throw new AggregateError(failures, "Codex paired-node proof cleanup failed");
-        }
-      });
+      try {
+        await runQaGatewayFixture(runProof, async () => {
+          const connectionCleanup = await Promise.allSettled([
+            stopChild(node),
+            requester?.stopAndWait({ timeoutMs: 5_000 }) ?? Promise.resolve(),
+            reviewer?.stopAndWait({ timeoutMs: 5_000 }) ?? Promise.resolve(),
+          ]);
+          const resourceCleanup = await Promise.allSettled([
+            stopQaGatewayFixture(gatewayOwner),
+            published ? closeWireServer(published.server) : Promise.resolve(),
+            provider?.stop() ?? Promise.resolve(),
+          ]);
+          const failures = [...connectionCleanup, ...resourceCleanup].flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : [],
+          );
+          if (failures.length) {
+            throw new AggregateError(failures, "Codex paired-node proof cleanup failed");
+          }
+        });
+      } finally {
+        clearInterval(progress);
+      }
     },
   );
 });

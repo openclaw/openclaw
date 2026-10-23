@@ -219,7 +219,9 @@ describe("foreground update through the prepared managed helper", () => {
             { name: "gateway verification", command: "gateway verification", cwd: root, durationMs: 1, exitCode: 0 },
           ] } : {}),
           ...(mode === "pending-sibling-unsafe" ? { recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" } } : {}),
-          ...(failed ? { reason: "fixture-recovery", recovery: { serviceRestartSafe: mode === "safe-recovery", version: "1.0.0" } } : {}),
+          ...(failed ? { reason: "fixture-recovery", recovery: mode === "safe-recovery"
+            ? { serviceRestartSafe: true, version: "1.0.0" }
+            : { serviceRestartSafe: false, reason: "runtime-verification-failed" } } : {}),
           after: { version: "1.0.0" } }), resolve));
         if (failed) process.exitCode = mode === "safe-recovery" ? 1 : 79;
         if (mode === "pending-sibling-failed-exit") process.exitCode = 1;

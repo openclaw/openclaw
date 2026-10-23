@@ -511,6 +511,7 @@ src/config/io.invalid-config.ts
 src/config/io.load.ts
 src/config/io.meta.ts
 src/config/io.observe-recovery-effects.ts
+src/config/io.observe-recovery-commit.ts
 src/config/io.observe-recovery.ts
 src/config/io.observe-state.ts
 src/config/io.observe-suspicious.ts
@@ -757,6 +758,7 @@ src/gateway/worker-environments/placement-workspace-result.ts
 src/gateway/worker-environments/session-attachment.ts
 src/gateway/worker-environments/state.ts
 src/gateway/worker-environments/store-commit-authority.ts
+src/gateway/worker-environments/store-errors.ts
 src/gateway/worker-environments/store-native-publication.ts
 src/gateway/worker-environments/store-projection.ts
 src/gateway/worker-environments/store-validation.ts
@@ -1378,6 +1380,7 @@ src/plugins/plugin-cache-artifacts.ts
 src/plugins/plugin-cache-files.ts
 src/plugins/plugin-cache-sdk.ts
 src/plugins/plugin-cache.ts
+src/plugins/plugin-capture-resolution.ts
 src/plugins/plugin-catalog-source.ts
 src/plugins/plugin-config-trust.ts
 src/plugins/plugin-control-plane-context.ts
@@ -1660,6 +1663,7 @@ src/state/openclaw-agent-db-lifecycle.ts
 src/state/openclaw-agent-db-metadata-write.ts
 src/state/openclaw-agent-db-metadata.ts
 src/state/openclaw-agent-db-migration-required.ts
+src/state/openclaw-agent-db-opening-refusal.ts
 src/state/openclaw-agent-db-permissions.ts
 src/state/openclaw-agent-db-read-error.ts
 src/state/openclaw-agent-db-opening-refusal.ts

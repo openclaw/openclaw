@@ -28,6 +28,21 @@ import { FailoverError } from "./failover-error.js";
 
 const ordinaryPolicyHash = "3ae4a9801e78dd74aa01b3ccad9fb6ab5628c39000b88276f651ed7fb9bdb555";
 const explicitFalsePolicyHash = "92a8de91722cbb4fe1a7fd6892245e359c339d96cafe8db3a08738ffda913d71";
+const fingerprint = {
+  authProfileId: "anthropic:work",
+  authEpoch: "auth-epoch-a",
+  authEpochVersion: 2,
+  extraSystemPromptHash: "prompt-a",
+  mcpConfigHash: "mcp-config-a",
+  mcpResumeHash: "mcp-resume-a",
+};
+function reuseBinding(binding: CliSessionBinding | undefined) {
+  return (current: Partial<Omit<Parameters<typeof resolveCliSessionReuse>[0], "binding">> = {}) =>
+    resolveCliSessionReuse({ binding, authEpochVersion: 2, ...current });
+}
+function invalidated(invalidatedReason: string) {
+  return { mode: "invalidate", invalidatedReason };
+}
 
 describe("cli-session helpers", () => {
   it("persists binding metadata without recreating the retired Claude field", () => {

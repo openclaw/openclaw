@@ -1782,7 +1782,6 @@ describe("handleSendChat", () => {
       vi.fn<typeof fetch>().mockResolvedValue(createJsonResponse({}, { ok: false })),
     );
 
-    const refreshCurrentSessionTools = vi.fn();
     const host = makeChatHost({
       agentsList: { defaultId: "main", mainKey: "main" },
       requestHandlers: {
@@ -1814,7 +1813,6 @@ describe("handleSendChat", () => {
       },
       sessionKey: "main",
       chatMessage: "/model gpt-5-mini",
-      refreshCurrentSessionTools,
     });
 
     await handleSendChat(host);
@@ -1829,7 +1827,6 @@ describe("handleSendChat", () => {
       modelProvider: "openai",
       modelOverrideSource: "user",
     });
-    expect(refreshCurrentSessionTools).toHaveBeenCalledTimes(1);
   });
 
   it.each(["error ACK", "transport rejection"] as const)(

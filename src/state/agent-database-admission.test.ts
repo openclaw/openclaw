@@ -27,6 +27,7 @@ import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
@@ -56,6 +57,79 @@ afterEach(async () => {
 });
 
 describe("agent database admission", () => {
+  it.each([
+    [21, "per-agent"],
+    [OPENCLAW_AGENT_SCHEMA_VERSION + 1, "per-agent"],
+    [21, "fixed"],
+    [OPENCLAW_AGENT_SCHEMA_VERSION + 1, "fixed"],
+  ] as const)(
+    "isolates secondary schema %s with %s stores across restart and startup without touching retained data",
+    async (version, layout) => {
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-schema-isolation-") };
+      const storePath = path.join(env.OPENCLAW_STATE_DIR, "shared", "sessions.json");
+      const config: OpenClawConfig = {
+        ...(layout === "fixed" ? { session: { store: storePath } } : {}),
+        agents: {
+          entries: { main: {}, worker: {} },
+          defaults: { systemAgent: { agentId: "main" } },
+        },
+      };
+      const mainPath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
+      const workerPath = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
+      const retainedPath = openOpenClawAgentDatabase({
+        agentId: "retained",
+        env,
+        ...(layout === "fixed"
+          ? { path: path.join(path.dirname(storePath), "openclaw-agent.retained.sqlite") }
+          : {}),
+      }).path;
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawStateDatabaseForTest();
+      for (const pathname of [workerPath, retainedPath]) {
+        const database = new (requireNodeSqlite().DatabaseSync)(pathname);
+        try {
+          database.exec(`PRAGMA journal_mode=DELETE; PRAGMA user_version=${version};`);
+        } finally {
+          database.close();
+        }
+      }
+      const workerBytes = fs.readFileSync(workerPath);
+      const retainedBytes = fs.readFileSync(retainedPath);
+      await expect(
+        assertOpenClawDatabasesReady({ env, config, operation: "gateway-restart" }),
+      ).resolves.toBeUndefined();
+      await withAgentDatabaseStartupAdmission(
+        async () => {
+          await expect(
+            assertOpenClawDatabasesReady({ env, config, operation: "gateway-startup" }),
+          ).resolves.toBeUndefined();
+          expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
+          expect(readAgentDatabaseAdmissionRefusal("retained", { env })).toBeUndefined();
+          expect(readAgentDatabaseAdmissionRefusal("worker", { env })).toMatchObject({
+            code: "agent-database-inspection-failed",
+            paths: [workerPath],
+            repairHint: expect.stringContaining("openclaw doctor --fix"),
+          });
+          expect(() => openOpenClawAgentDatabase({ agentId: "worker", env })).toThrow(
+            "openclaw doctor --fix",
+          );
+          expect(openOpenClawAgentDatabase({ agentId: "main", env }).path).toBe(mainPath);
+        },
+        { deferInspections: false },
+      );
+      await expect(
+        assertOpenClawDatabasesReady({
+          env,
+          config,
+          operation: "doctor",
+          configuredAgentDatabaseTargets: [],
+        }),
+      ).rejects.toThrow();
+      expect(fs.readFileSync(workerPath)).toEqual(workerBytes);
+      expect(fs.readFileSync(retainedPath)).toEqual(retainedBytes);
+    },
+  );
+
   it("does not let an unavailable required agent hide a newer required database", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-admission-mixed-") };
     const config: OpenClawConfig = {

@@ -56,6 +56,8 @@ type SlashCommandResult = {
   trackRunId?: string;
   /** The command did not complete and a durable queued invocation may be retried. */
   failed?: boolean;
+  /** A successful soft injection is still executing in the selected session's current run. */
+  pendingCurrentRun?: boolean;
 };
 
 type SlashCommandContext = {
@@ -597,6 +599,9 @@ async function executeRunCommand(
       };
     }
     const result: SlashCommandResult = { content: t(`chat.commandResults.${command}.succeeded`) };
+    if (command === "steer" && (ackStatus === "started" || ackStatus === "in_flight")) {
+      result.pendingCurrentRun = true;
+    }
     if (command === "redirect" && (ackStatus === "started" || ackStatus === "in_flight")) {
       result.trackRunId = typeof response?.runId === "string" ? response.runId : undefined;
     }

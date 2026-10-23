@@ -9,7 +9,58 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
-import type { PendingSystemRunEvent } from "./node-registry.invoke-stream.js";
+import type { PendingInvoke, PendingSystemRunEvent } from "./node-registry.invoke-stream.js";
+
+/** Authorized system.run event window bound to one node connection. */
+export type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
+  nodeId: string;
+  connId: string;
+  expiresAtMs: number | null;
+};
+
+export type AuthorizedSystemRunEventState = Pick<
+  PendingSystemRunEvent,
+  "invocationDeliveryContext"
+> & {
+  holdNotice?: (notify: () => void) => void;
+};
+
+export function finalizeAuthorizedSystemRunEvent(params: {
+  event: PendingSystemRunEvent | undefined;
+  terminal: boolean;
+  consume: () => void;
+  pendingInvokes: Iterable<PendingInvoke>;
+  nodeId: string;
+  connId: string;
+}): AuthorizedSystemRunEventState {
+  const source = params.event?.invocationDeliveryContext;
+  if (!params.terminal) {
+    return source ? { invocationDeliveryContext: { ...source } } : {};
+  }
+  params.consume();
+  const waiting = [...params.pendingInvokes].find(
+    (pending) =>
+      pending.nodeId === params.nodeId &&
+      pending.connId === params.connId &&
+      pending.systemRunEvent?.runId === params.event?.runId,
+  );
+  if (!waiting) {
+    return source ? { invocationDeliveryContext: { ...source } } : {};
+  }
+  const holdNotice = (notify: () => void) => {
+    const resolve = waiting.resolve;
+    waiting.resolve = (value) => {
+      resolve(value);
+      if (!value.ok) {
+        notify();
+      }
+    };
+  };
+  return {
+    ...(source ? { invocationDeliveryContext: { ...source } } : {}),
+    holdNotice,
+  };
+}
 
 export function resolvePendingSystemRunEvent(params: {
   command: string;

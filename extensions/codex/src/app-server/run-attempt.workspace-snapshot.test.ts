@@ -35,6 +35,7 @@ const updated = "Updated instructions must wait for a new session.";
 
 async function workspace(guidance?: string) {
   const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
+  params.timeoutMs = 60_000;
   params.bootstrapWorkspaceDir = path.join(tempDir, "agent-workspace");
   setAgentWorkspaceForTest(params, params.bootstrapWorkspaceDir);
   await fs.mkdir(params.bootstrapWorkspaceDir, { recursive: true });

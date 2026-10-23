@@ -9,6 +9,8 @@ import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 
 const MAX_CHILD_COMPLETION_FIELD_CHARS = 256;
+const MAX_CHILD_COMPLETION_FINDINGS_CHARS = 160_000;
+const MIN_CHILD_COMPLETION_RESULT_CHARS = 64;
 
 type OutputRuntime = typeof import("./subagent-announce.runtime.js");
 type SubagentAnnounceResultDeps = Pick<
@@ -164,10 +166,8 @@ export function buildChildCompletionFindings(
     if (a.createdAt !== b.createdAt) {
       return a.createdAt - b.createdAt;
     }
-    const aEnded =
-      typeof a.execution.endedAt === "number" ? a.execution.endedAt : Number.MAX_SAFE_INTEGER;
-    const bEnded =
-      typeof b.execution.endedAt === "number" ? b.execution.endedAt : Number.MAX_SAFE_INTEGER;
+    const aEnded = a.execution.endedAt ?? Number.MAX_SAFE_INTEGER;
+    const bEnded = b.execution.endedAt ?? Number.MAX_SAFE_INTEGER;
     if (aEnded !== bEnded) {
       return aEnded - bEnded;
     }
@@ -180,7 +180,8 @@ export function buildChildCompletionFindings(
         : 0;
   });
 
-  const sections: string[] = [];
+  const resultFrameChars = wrapPromptDataBlock({ label: "Child result", text: "x" }).length - 1;
+  const sections = [];
   for (const [index, child] of sorted.entries()) {
     const resultText = child.announceResult ?? resolveSubagentCompletionResultText(child);
     const outcome = describeSubagentOutcome(child);
@@ -201,9 +202,27 @@ export function buildChildCompletionFindings(
       child.task.trim() ||
       child.childSessionKey.trim() ||
       `child ${index + 1}`;
-    const displayIndex = sections.length + 1;
-    sections.push(
-      [
+    const displayIndex: number = sections.length + 1;
+    const result = {
+      label: "Child result",
+      text: resultText?.trim() || "(no output)",
+      truncationMarker: `[result truncated; sessions_history sessionKey=${JSON.stringify(child.childSessionKey)} (text fields truncated to 4,000 characters)]`,
+    };
+    const resultBlock = wrapPromptDataBlock(result) || "Child result: (no output)";
+    sections.push({
+      result,
+      childSessionKey: child.childSessionKey,
+      resultBlock,
+      minimumChars: (
+        wrapPromptDataBlock({
+          ...result,
+          maxEscapedChars:
+            wrapPromptDataBlock({ ...result, text: result.truncationMarker }).length -
+            resultFrameChars +
+            MIN_CHILD_COMPLETION_RESULT_CHARS,
+        }) || resultBlock
+      ).length,
+      header: [
         wrapPromptDataBlock({
           label: `${displayIndex}. Child task`,
           text: title,
@@ -211,17 +230,58 @@ export function buildChildCompletionFindings(
           truncationMarker: "…",
         }),
         `status: ${truncateUtf16WithEllipsis(outcome, MAX_CHILD_COMPLETION_FIELD_CHARS)}`,
-        wrapPromptDataBlock({
-          label: "Child result",
-          text: resultText?.trim() || "(no output)",
-        }) || "Child result: (no output)",
       ].join("\n"),
-    );
+    });
   }
 
   if (sections.length === 0) {
     return undefined;
   }
 
-  return ["Child completion results:", "", ...sections].join("\n\n");
+  const heading = "Child completion results:\n\n";
+  const available = MAX_CHILD_COMPLETION_FINDINGS_CHARS - heading.length;
+  let minimumChars = sections.reduce(
+    (total, section) => total + section.header.length + section.minimumChars + 3,
+    0,
+  );
+  let included = sections.length;
+  let summary = "";
+  // Keep a stable prefix at the result-head floor, reserving the actual overflow line.
+  for (const omitted of sections.toReversed()) {
+    if (minimumChars + (summary ? summary.length + 2 : 0) <= available) {
+      break;
+    }
+    included -= 1;
+    minimumChars -= omitted.header.length + omitted.minimumChars + 3;
+    const keys = wrapPromptDataBlock({
+      label: "First child session keys",
+      text: JSON.stringify(
+        sections.slice(included, included + 3).map((row) => row.childSessionKey),
+      ),
+      maxEscapedChars: MAX_CHILD_COMPLETION_FIELD_CHARS,
+      truncationMarker: "…",
+    }).replaceAll("\n", " ");
+    summary = `${sections.length - included} additional child results omitted; ${keys}. Inspect remaining children with the session tools available to you.`;
+  }
+  let remaining = available - minimumChars - (summary ? summary.length + 2 : 0);
+  const visible = sections.slice(0, included);
+  // Allocate small outstanding answers first, then share the rest above each child's floor.
+  const bySize = visible.toSorted(
+    (a, b) => a.resultBlock.length - a.minimumChars - (b.resultBlock.length - b.minimumChars),
+  );
+  for (const [index, section] of bySize.entries()) {
+    const share = section.minimumChars + Math.floor(remaining / (bySize.length - index));
+    if (section.resultBlock.length > share) {
+      section.resultBlock = wrapPromptDataBlock({
+        ...section.result,
+        maxEscapedChars: share - resultFrameChars,
+      });
+    }
+    remaining -= section.resultBlock.length - section.minimumChars;
+  }
+  return [
+    heading,
+    ...visible.map(({ header, resultBlock }) => `${header}\n${resultBlock}`),
+    ...(summary ? [summary] : []),
+  ].join("\n\n");
 }

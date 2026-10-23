@@ -5255,7 +5255,6 @@
 ["src/cli/update-cli/update-command-rollback-report.test.ts","../../infra/update-failure-report.js","7918c5aa4597351d21051b64c91b19b916365e4472813bc93bf37002a3143498",1]
 ["src/cli/update-cli/update-command-rollback-report.test.ts","../../infra/update-triage.js","5b881890abf2747081cdc3a16976f77923f9759bffc7ac15500effb8074f0a84",1]
 ["src/cli/update-cli/update-command-rollback.test.ts","./update-command-service.js","a714470ab48a923e4a797b2721b3a93567914f0b21d4f3522769e04dacd397a7",1]
-["src/cli/update-cli/update-command-runtime-channel.test.ts","../../infra/container-environment.js","49f6790d3c5aa8463780d2b9a2aac56849437f14e4f295958e53c7ddf409424b",1]
 ["src/cli/update-cli/update-command-runtime-destination.test.ts","../../infra/container-environment.js","49f6790d3c5aa8463780d2b9a2aac56849437f14e4f295958e53c7ddf409424b",1]
 ["src/cli/update-cli/update-command-runtime-preview.test.ts","../../infra/container-environment.js","49f6790d3c5aa8463780d2b9a2aac56849437f14e4f295958e53c7ddf409424b",1]
 ["src/cli/update-cli/update-command-schema-cleanup.test.ts","./update-command-database-context.js","413597544201895618d37644146a9c468615b1dc1e80749d25ba47a3ef88606e",1]

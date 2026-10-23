@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveBundleMcpServerInstructions } from "../agents/agent-bundle-mcp-instructions.js";
 import { runWithSessionMcpToolCallAuthority } from "../agents/agent-bundle-mcp-request-context.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
+import { acknowledgeInternalToolResult } from "../agents/runtime/internal-hooks.js";
 import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import {
@@ -485,9 +486,15 @@ async function startMcpLoopbackServer(
             return;
           }
           const payload = JSON.stringify(Array.isArray(parsed) ? responses : responses[0]);
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(payload);
-          return;
+          if (!res.headersSent) {
+            res.writeHead(200, { "Content-Type": "application/json" });
+          }
+          res.end(payload, () => {
+            // Ending queues bytes; only a completed write owns result delivery.
+            if (res.writableFinished) {
+              responses.forEach(acknowledgeInternalToolResult);
+            }
+          });
         }
       } catch (error) {
         const message = isRequestBodyLimitError(error)

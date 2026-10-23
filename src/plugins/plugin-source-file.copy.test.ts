@@ -134,3 +134,22 @@ it("preserves disk-full diagnostics and does not retry descriptor transfer", () 
   expect(subject.copy).toThrow(expect.objectContaining({ code: "already-exists" }));
   expect(transfer).toHaveBeenCalledOnce();
 });
+
+it("admits Windows copies through the native spelling of an aliased root", () => {
+  const subject = fixture(Buffer.alloc(128 * 1024, 1));
+  const alias = `${subject.root}-alias`;
+  fs.symlinkSync(subject.root, alias, "dir");
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  const copyFile = vi.fn<typeof fsSafe.copyRootFileSync>(() => {
+    throw new FsSafeError("path-mismatch", "fixture stop");
+  });
+
+  expect(() =>
+    copyPluginSourceFile(path.join(alias, "input.js"), alias, subject.target, { copyFile }),
+  ).toThrow("fixture stop");
+  expect(copyFile.mock.calls[0]?.[0].source).toEqual({
+    rootPath: subject.root,
+    absolutePath: subject.source,
+  });
+  fs.unlinkSync(alias);
+});

@@ -585,6 +585,7 @@ export function resolveConfiguredAgentDatabaseCandidatePaths(
       listConfiguredSessionStoreAgentIds(cfg).flatMap((agentId) =>
         listSqliteTargetCandidatePathsForSessionStorePath(
           resolveSessionStorePathCore(cfg.session?.store, { agentId, env: params.env }),
+          agentId,
         ).concat(path.join(resolveAgentDir(cfg, agentId, params.env), "openclaw-agent.sqlite")),
       ),
     ),

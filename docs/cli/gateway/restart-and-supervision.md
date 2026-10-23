@@ -47,6 +47,10 @@ Queued heartbeat wakes settle as `gateway-draining` when shutdown closes admissi
 including wakes waiting to retry. They cannot start another turn in the draining runtime.
 Already-running wakes and pending final reply writes retain their drain grace.
 
+If the worker inventory has already retired when shutdown starts, the Gateway
+still drains its retained worker tunnels and workspace transfers. Inventory
+retirement alone does not fail shutdown; other cleanup failures still do.
+
 If work still ignores cancellation at the shutdown deadline under systemd or launchd,
 a native service stop or supervisor-owned restart logs
 the remaining work categories and pending owners (including command lanes and

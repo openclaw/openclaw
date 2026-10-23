@@ -53,6 +53,48 @@ function outcome(storeKey: string, receipt: string): CronRunHistoryWrite {
   };
 }
 
+it("projects only maintenance identities before loading selected reconciliation payloads", async () => {
+  await withOpenClawTestState(
+    { layout: "state-only", prefix: "cron-history-planning-projection-" },
+    async (state) => {
+      const storeKey = cronStoreKey(state.statePath("cron/jobs.json"));
+      runOpenClawStateWriteTransaction(({ db }) => {
+        recordCronRunInDatabase(db, {
+          ...outcome(storeKey, "large"),
+          summary: "summary-payload",
+          detail: {
+            kind: "cron-run",
+            storeKey,
+            retainedPayload: "payload-body",
+          },
+        });
+        const full = readCronRunRecordsInDatabase(db);
+        const planning = readCronRunRecordsInDatabase(db, undefined, undefined, {
+          planningOnly: true,
+        });
+        const fullRow = full[0];
+        expect(fullRow).toBeDefined();
+        if (!fullRow) {
+          throw new Error("Expected the recorded Cron history row");
+        }
+        expect(fullRow).toMatchObject({
+          summary: "summary-payload",
+          detail: { kind: "cron-run", storeKey, retainedPayload: "payload-body" },
+        });
+        expect(planning[0]).toMatchObject({
+          id: fullRow.id,
+          summary: undefined,
+          detail: { kind: "cron-run", storeKey },
+        });
+        expect(planning[0]?.detail).not.toHaveProperty("retainedPayload");
+        expect(
+          readCronRunRecordsInDatabase(db, undefined, undefined, { taskIds: [fullRow.id] }),
+        ).toEqual(full);
+      });
+    },
+  );
+});
+
 it.each(["asc", "desc"] as const)("orders history timestamps and ties %s", (sortDir) => {
   const run = (
     id: string,

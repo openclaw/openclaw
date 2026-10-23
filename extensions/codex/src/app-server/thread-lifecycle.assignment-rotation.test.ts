@@ -349,6 +349,30 @@ describe("native assignment custody across ordinary parent rotation", () => {
     await vi.waitFor(() => expect(f.releasePredecessor).toHaveBeenCalledTimes(1));
   });
 
+  it("refreshes context while background cleanup retains the predecessor", async () => {
+    const f = await fixture(true);
+    const claim = await claimCodexAppServerLiveThread(f.client, f.parent.threadId);
+    assert(claim);
+    const releaseProtection = protectCodexAppServerLiveThread(f.client, f.parent.threadId);
+    await claim.release(f.parent.threadId);
+    try {
+      const next = await f.rotate({
+        mcpServersFingerprint: "mcp-before",
+        contextEngineProjection: { mode: "thread_bootstrap", epoch: "after", fingerprint: "after" },
+      });
+      expect(next.threadId).toBe("parent-2");
+      const stored = f.readState();
+      assert(stored?.state === "active");
+      expect(stored.binding.threadId).toBe(next.threadId);
+      expect(next.contextEngine?.projection?.epoch).toBe("after");
+      expect(f.releasePredecessor).not.toHaveBeenCalled();
+      expect(f.readAssignments(next.threadId)).toEqual(f.assignments);
+    } finally {
+      releaseProtection();
+    }
+    await vi.waitFor(() => expect(f.releasePredecessor).toHaveBeenCalledTimes(1));
+  });
+
   it("refuses a claimed predecessor before starting or committing a successor", async () => {
     const f = await fixture();
     const before = f.readState();

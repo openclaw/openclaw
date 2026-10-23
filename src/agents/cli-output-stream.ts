@@ -28,6 +28,7 @@ import {
 import * as cliOutputLifecycle from "./cli-output-lifecycle.js";
 import {
   decodeCliRecords,
+  isClaudeStopHookFeedbackRecord,
   isClaudeStreamJsonDialect,
   isClaudeSyntheticNoResponse,
   isClaudeSubagentRecord,
@@ -272,6 +273,17 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     return true;
   };
 
+  // Committed or rejected text cannot join the next reply through a tool split.
+  const resetReplySegment = () => {
+    segmentStart = assistantText.length;
+    currentMessageStart = segmentStart;
+    preserveFrom = segmentStart;
+    pendingMessageSeparator = false;
+    sawToolUseSinceText = false;
+    currentMessageHadToolUse = false;
+    previousMessageHadToolUse = false;
+  };
+
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
     if (parseErrorText) {
       return;
@@ -355,11 +367,17 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       return;
     }
 
-    if (parsed.type === "result") {
+    const stopHookFeedback =
+      claudeStreamJson && !isClaudeSubagentRecord(parsed) && isClaudeStopHookFeedbackRecord(parsed);
+    if (parsed.type === "result" || stopHookFeedback) {
       finishTaggedReasoningMessage();
       if (classifyClaudeCommentary) {
         flushPendingClaudeText("assistant");
       }
+    }
+
+    if (stopHookFeedback) {
+      resetReplySegment();
     }
 
     let result = parseClaudeCliJsonlResult({
@@ -457,13 +475,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       }
       // An interim result commits its segment. Rebase boundary state so later
       // text is judged on its own, while delta snapshots stay cumulative.
-      segmentStart = assistantText.length;
-      currentMessageStart = segmentStart;
-      preserveFrom = segmentStart;
-      pendingMessageSeparator = false;
-      sawToolUseSinceText = false;
-      currentMessageHadToolUse = false;
-      previousMessageHadToolUse = false;
+      resetReplySegment();
       return;
     }
 

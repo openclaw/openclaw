@@ -167,7 +167,7 @@ test.each([
           .mockImplementation((options, custody) =>
             openStore(options, {
               ...custody,
-              onNativeStopped(stopped, readReceipt) {
+              onNativeStopped(stopped, readReceipt, readOpenRefused) {
                 custody.onNativeStopped?.(
                   sqliteReaderDatabasePathKey(options.databasePath) === databasePathKey
                     ? stopped.then(async () => {
@@ -176,6 +176,7 @@ test.each([
                       })
                     : stopped,
                   readReceipt,
+                  readOpenRefused,
                 );
               },
             }),

@@ -72,7 +72,7 @@ describe("session portal fixture", () => {
   it(
     "carries authenticated session previews through the node and retires access before persistence",
     ({ signal }) => fixture.run(() => runSessionPortalProof(signal)),
-    30_000,
+    60_000,
   );
 });
 

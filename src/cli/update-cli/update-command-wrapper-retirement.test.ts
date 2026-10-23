@@ -55,11 +55,13 @@ describe("retireStandaloneGitWrapper", () => {
               return contents;
             });
       try {
-        const result = await withMockedPlatform(
-          stage === "pkg inspection" ? "freebsd" : "linux",
-          () =>
-            retireStandaloneGitWrapper({ previousRoot: root, searchDirs: [base], assertCurrent }),
+        const retiring = withMockedPlatform(stage === "pkg inspection" ? "freebsd" : "linux", () =>
+          retireStandaloneGitWrapper({ previousRoot: root, searchDirs: [base], assertCurrent }),
         );
+        const result =
+          change === "revoked finalizer"
+            ? await expect(retiring).rejects.toThrow("finalizer revoked")
+            : await retiring;
         if (change === "directory") {
           expect((await fs.lstat(wrapper)).isDirectory()).toBe(true);
         } else {
@@ -71,7 +73,9 @@ describe("retireStandaloneGitWrapper", () => {
                 : original,
           );
         }
-        expect(result).toMatchObject({ error: expect.stringContaining("Could not retire") });
+        if (change !== "revoked finalizer") {
+          expect(result).toMatchObject({ error: expect.stringContaining("Could not retire") });
+        }
         expect(assertCurrent).toHaveBeenCalledTimes(change === "revoked finalizer" ? 1 : 0);
       } finally {
         observation.mockRestore();
@@ -89,11 +93,11 @@ describe("retireStandaloneGitWrapper", () => {
         .spyOn(exec, "runCommandBuffered")
         .mockResolvedValue(pkgQueryResult(`${wrapper}\n`));
       try {
-        await withMockedPlatform("freebsd", async () => {
-          await expect(
+        await withMockedPlatform("freebsd", () =>
+          expect(
             retireStandaloneGitWrapper({ previousRoot: root, searchDirs: [base] }),
-          ).resolves.toMatchObject({ error: expect.stringContaining("installed by FreeBSD pkg") });
-        });
+          ).rejects.toThrow("installed by FreeBSD pkg"),
+        );
         await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(contents);
       } finally {
         query.mockRestore();

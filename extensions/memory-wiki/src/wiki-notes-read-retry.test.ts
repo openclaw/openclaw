@@ -53,7 +53,15 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
 
-async function createChatGptImportFixture(prefix: string) {
+async function addNotes(pagePath: string, note: string) {
+  const page = (await fs.readFile(pagePath, "utf8")).replace(
+    "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+    () => `<!-- openclaw:human:start -->\n${note}\n<!-- openclaw:human:end -->`,
+  );
+  await fs.writeFile(pagePath, page, "utf8");
+}
+
+async function createChatGptImportFixture(prefix = "memory-wiki-chatgpt-retry-") {
   const { rootDir, config } = await createVault({ prefix });
   const exportDir = path.join(rootDir, "chatgpt-export");
   await fs.mkdir(exportDir, { recursive: true });
@@ -456,11 +464,7 @@ describe("memory-wiki existing-page read retry", () => {
       "Example marker: <!-- openclaw:human:end -->",
       "Keep this trailing handwritten note.",
     ].join("\n");
-    const edited = (await fs.readFile(pagePath, "utf8")).replace(
-      "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-      () => noteBlock,
-    );
-    await fs.writeFile(pagePath, edited, "utf8");
+    await addNotes(pagePath, userNote);
 
     const second = await importChatGptConversations({
       config,
@@ -469,9 +473,7 @@ describe("memory-wiki existing-page read retry", () => {
     });
 
     const after = await fs.readFile(pagePath, "utf8");
-    expect(second.createdCount).toBe(0);
-    expect(second.updatedCount).toBe(0);
-    expect(second.skippedCount).toBe(1);
+    expect(second).toMatchObject({ createdCount: 0, updatedCount: 0, skippedCount: 1 });
     expect(after).toContain(userNote);
   });
 

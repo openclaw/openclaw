@@ -21,6 +21,9 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { executeSlashCommand as executeSlashCommandImpl } from "./chat-command-executor.ts";
 
+const resultText = (key: string, values?: Record<string, string>) =>
+  t(`chat.commandResults.${key}`, values);
+
 function mockRequests(responses: Record<string, () => unknown>) {
   const handlers = new Map(Object.entries(responses));
   return vi.fn(async (method: string) => {
@@ -72,6 +75,15 @@ function executeSlashCommand(
     ...rest,
     sessionAccessSnapshot,
   });
+}
+
+function runCommand(
+  request: Parameters<typeof createTestGatewayClient>[0],
+  command: string,
+  args = "",
+  sessionKey = "agent:main:main",
+) {
+  return executeSlashCommand(createTestGatewayClient(request), sessionKey, command, args);
 }
 
 function restrictedSnapshot(

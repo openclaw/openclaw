@@ -539,7 +539,7 @@ export function resolveAutomaticUpdateTriage(
       result.recovery?.serviceRestartSafe === false &&
       result.recovery.reason === "rollback-checkout-dirty"
     ) &&
-    !result.postUpdate?.plugins?.npm.outcomes.some(
+    !result.postUpdate?.plugins?.npm?.outcomes.some(
       (outcome) => outcome.code === PLUGIN_CAPABILITY_CONSENT_REQUIRED,
     ) &&
     params.preManagedServiceStop?.serviceMutationAllowed !== false &&

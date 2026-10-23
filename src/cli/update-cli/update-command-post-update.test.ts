@@ -30,6 +30,7 @@ import {
   taskRecovery,
   validConfigSnapshot,
 } from "./update-command-post-update.test-support.js";
+import { registerVerifiedActivationFailureTests } from "./update-command-verified-activation.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const mocks = vi.hoisted(() => ({
@@ -133,12 +134,10 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
 import { registerMaintenanceContentionTests } from "./update-command-maintenance-contention.test-support.js";
 import * as postCoreModule from "./update-command-post-core.js";
 import { registerBoundaryFinalizationControls } from "./update-command-post-update-boundary.test-support.js";
-import { finishUpdate } from "./update-command-post-update.js";
 import * as rollbackModule from "./update-command-rollback.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
 import { registerStaleSessionReceiptUpdateTest } from "./update-command-stale-session-receipt.test-support.js";
 
-type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
 const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 
 afterEach(() => {
@@ -525,75 +524,7 @@ describe("successful update finalization ordering", () => {
     );
   });
 
-  it.each([
-    { name: "retires the wrapper before persisting and printing success", denied: false },
-    {
-      name: "recovers and retains the package before reporting failed wrapper retirement",
-      denied: true,
-    },
-  ])("$name", async ({ denied }) => {
-    const home = tempDirs.make("openclaw-finalize-wrapper-");
-    const previousRoot = path.join(home, "old-root");
-    const wrapper = path.join(home, ".local", "bin", "openclaw");
-    await fs.mkdir(path.dirname(wrapper), { recursive: true });
-    await fs.writeFile(
-      wrapper,
-      `#!/usr/bin/env bash\nset -euo pipefail\nexec /usr/bin/node ${previousRoot}/dist/entry.js "$@"\n`,
-      { mode: 0o755 },
-    );
-    vi.stubEnv("PATH", path.dirname(wrapper));
-    const unlink = vi.spyOn(fs, "unlink");
-    if (denied) {
-      unlink.mockRejectedValueOnce(new Error("unlink denied"));
-    }
-    const rollback = vi
-      .spyOn(rollbackModule, "rollbackFailedUpdate")
-      .mockImplementationOnce(async ({ result }) => ({ result, rolledBack: false }));
-    const retained = {
-      name: "package backup retained",
-      command: "openclaw update",
-      cwd: previousRoot,
-      durationMs: 0,
-      exitCode: 0,
-      stderrTail: "Retained previous package for recovery.",
-    };
-    const complete = vi.fn<NonNullable<FinishUpdateParams["packageTransaction"]>["complete"]>(
-      async ({ activationVerified }) => (activationVerified ? undefined : retained),
-    );
-    const finishing = finishSuccessfulPackageSwitch(
-      { previousRoot, packageRoot: path.join(home, "package") },
-      { packageTransaction: { backupRoot: previousRoot, rollback: vi.fn(), complete } },
-    );
-    if (denied) {
-      await expectUpdateFailure(finishing, "wrapper-retirement-failed", {
-        detail: expect.stringContaining("unlink denied"),
-      });
-      expect(rollback).toHaveBeenCalledOnce();
-      expect(complete).toHaveBeenCalledExactlyOnceWith(
-        { activationVerified: false },
-        expect.any(Function),
-      );
-      expect(mocks.printResult).toHaveBeenCalledOnce();
-      expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
-        status: "error",
-        steps: expect.arrayContaining([retained]),
-      });
-      expect(mocks.writeSentinel).toHaveBeenCalledOnce();
-      expectFailureReport(mocks.printResult, "wrapper-retirement-failed");
-      expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "wrapper-retirement-failed" }),
-      );
-    } else {
-      await finishing;
-      expect(mocks.writeSentinel).toHaveBeenCalledTimes(2);
-      expect(unlink.mock.invocationCallOrder[0]).toBeLessThan(
-        mocks.writeSentinel.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
-      );
-      expect(mocks.writeSentinel.mock.invocationCallOrder[1]).toBeLessThan(
-        mocks.printResult.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-      );
-    }
-  });
+  registerVerifiedActivationFailureTests({ tempDirs, mocks });
 
   it("releases the plugin lifecycle lease before fresh doctor completion", async () => {
     const pluginInstallRecords = {

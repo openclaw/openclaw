@@ -48,7 +48,6 @@ import {
   fetchNpmPackageTargetStatus,
   runCommandWithTimeout,
 } from "./update-cli-modules.test-support.js";
-import { registerForegroundFailureRecoveryTests } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import {
   writeGitUpdateResultFixture,
   packageTargetStatus,
@@ -252,17 +251,6 @@ describe("update-cli", () => {
     expect(result.pluginUpdate.warnings?.at(-1)?.message).toContain("doctor diagnostic output");
     expect(result.pluginUpdate.warnings?.at(-1)?.message).not.toContain("long-argv-prefix");
   });
-
-  registerForegroundFailureRecoveryTests({
-    setupUpdatedRootRefresh,
-    spawn,
-    updateCommand,
-    defaultRuntime,
-    ExitError,
-    spawnCall,
-    lastWriteJsonCall,
-    updateNpmInstalledPlugins,
-  });
 });
 
 describe("update-cli", () => {
@@ -428,30 +416,20 @@ describe("update-cli", () => {
         onGatewayInstall: (argv) =>
           primeServiceCommand([requireValue(argv[0], "Node"), fixture.entrypoint, "gateway"]),
       });
-      if (capability !== "writable") {
-        await expect(updateCommand({ yes: true, json: true, restart: true })).rejects.toEqual(
-          new ExitError(1),
-        );
-        expect(lastWriteJsonCall()).toMatchObject({
-          status: "error",
-          reason: "node-runtime-preflight",
-        });
-        expect(
-          commandCalls().find(([argv]) => argv[1] === "i" && argv[2] === "-g"),
-        ).toBeUndefined();
-        expect(recoverNode).not.toHaveBeenCalled();
-        expect(serviceStop).not.toHaveBeenCalled();
-        expect((await serviceReadCommand(process.env)).programArguments[0]).toBe(serviceNode);
-        expect(
-          JSON.parse(await fs.readFile(path.join(fixture.root, "package.json"), "utf8")).version,
-        ).toBe("2026.5.18");
-      } else {
-        await updateCommand({ yes: true, json: true, restart: true });
-        expect(commandCalls().find(([argv]) => argv[1] === "i" && argv[2] === "-g")).toBeDefined();
-        expect(lastWriteJsonCall()).toMatchObject({ status: "ok" });
-        expect((await serviceReadCommand(process.env)).programArguments[0]).toBe(replacementNode);
-        expect(recoverNode).toHaveBeenCalledOnce();
-      }
+      await expect(updateCommand({ yes: true, json: true, restart: true })).rejects.toEqual(
+        new ExitError(1),
+      );
+      expect(lastWriteJsonCall()).toMatchObject({
+        status: "error",
+        reason: "preflight-node-runtime-incompatible",
+      });
+      expect(commandCalls().find(([argv]) => argv[1] === "i" && argv[2] === "-g")).toBeUndefined();
+      expect(recoverNode).not.toHaveBeenCalled();
+      expect(serviceStop).not.toHaveBeenCalled();
+      expect((await serviceReadCommand(process.env)).programArguments[0]).toBe(serviceNode);
+      expect(
+        JSON.parse(await fs.readFile(path.join(fixture.root, "package.json"), "utf8")).version,
+      ).toBe("2026.5.18");
     },
   );
 });

@@ -24,6 +24,18 @@ import {
 } from "./update.test-harness.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const startHandoff = startManagedServiceUpdateHandoffMock;
+const transferHandoff = transferManagedServiceUpdateHandoffMock;
+const scheduleRestart = scheduleGatewayRestartMock;
+
+function readRun(payload: Awaited<ReturnType<typeof captureUpdateRunPayload>>) {
+  return expectDefined(getUpdateRun(expectDefined(payload, "update response").runId), "update run");
+}
+
+function expectServing() {
+  expect(scheduleRestart).not.toHaveBeenCalled();
+  expect(transferHandoff).not.toHaveBeenCalled();
+}
 
 describe("update.run handoff refusal diagnostics", () => {
   it("retains a handoff cause after the helper has finalized the failed run", async () => {

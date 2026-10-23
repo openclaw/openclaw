@@ -1,6 +1,8 @@
+import type { DatabaseSync } from "node:sqlite";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { cronRunRecordStoreKey } from "../run-history-detail.js";
 import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
@@ -9,6 +11,7 @@ import {
   readCronRunRecordsInDatabase,
   reconcileCronRunHistoryInDatabase,
 } from "./run-history.kernel.js";
+import type { CronRunRecord } from "./run-history.types.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
 import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
@@ -31,10 +34,12 @@ export function maintainCronRunHistoryInWorker(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const schema = prepareCronRunReceiptWriteSchema(db);
-      const records = readCronRunRecordsInDatabase(db);
+      const planningRecords = readCronRunRecordsInDatabase(db, undefined, undefined, {
+        planningOnly: true,
+      });
       const jobIds = [
         ...new Set(
-          records.flatMap((row) =>
+          planningRecords.flatMap((row) =>
             (row.status === "queued" ||
               row.status === "running" ||
               (row.status === "lost" &&
@@ -52,6 +57,11 @@ export function maintainCronRunHistoryInWorker(
         jobIds,
         receipts,
       });
+      const records = withReconciliationPayloads(
+        db,
+        planningRecords,
+        new Set(preparation.protectedJobIds),
+      );
       const reconciled = reconcileCronRunHistoryInDatabase(
         db,
         records,
@@ -73,6 +83,47 @@ export function maintainCronRunHistoryInWorker(
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.history-maintenance" },
   );
+}
+
+function withReconciliationPayloads(
+  db: DatabaseSync,
+  records: readonly CronRunRecord[],
+  protectedJobIds: ReadonlySet<string>,
+): readonly CronRunRecord[] {
+  const runKey = (row: CronRunRecord) =>
+    JSON.stringify([cronRunRecordStoreKey(row), row.jobId, row.runId]);
+  const candidateIds = new Set<string>();
+  const candidateRuns = new Set<string>();
+  for (const row of records) {
+    const active = row.status === "queued" || row.status === "running";
+    const recoverableLost =
+      row.status === "lost" && row.error?.trim().toLowerCase().includes("backing session missing");
+    if ((!active && !recoverableLost) || protectedJobIds.has(row.jobId?.trim() ?? "")) {
+      continue;
+    }
+    candidateIds.add(row.id);
+    if (row.jobId?.trim() && row.runId?.trim()) {
+      candidateRuns.add(runKey(row));
+    }
+  }
+  for (const row of records) {
+    if (candidateRuns.has(runKey(row))) {
+      candidateIds.add(row.id);
+    }
+  }
+  if (candidateIds.size === 0) {
+    return records;
+  }
+  const ids = [...candidateIds];
+  const payloads = new Map<string, CronRunRecord>();
+  for (let offset = 0; offset < ids.length; offset += 500) {
+    for (const row of readCronRunRecordsInDatabase(db, undefined, undefined, {
+      taskIds: ids.slice(offset, offset + 500),
+    })) {
+      payloads.set(row.id, row);
+    }
+  }
+  return records.map((row) => payloads.get(row.id) ?? row);
 }
 
 export function scheduleUnownedCronJobsInWorker(

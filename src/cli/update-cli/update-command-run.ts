@@ -632,7 +632,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
         resolveUpdateInstallRoot(root),
         undefined,
         undefined,
-        { onlyStaleLease: true, dryRun: opts.dryRun },
+        { automatic: true, dryRun: opts.dryRun },
       ).catch((cause: unknown) => {
         throw new UpdateCommandPendingRecoveryFailure(
           { status: "error", mode: "unknown", root, steps: [], durationMs: 0 },

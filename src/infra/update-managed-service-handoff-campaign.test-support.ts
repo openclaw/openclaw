@@ -13,9 +13,13 @@ export function registerManagedCampaignFailureTests(
   ) => Promise<ManagedServiceManagerBoundaryResult>,
   itUnix: ReturnType<typeof import("vitest").it.runIf>,
 ): void {
-  itUnix.each([undefined, "consumed-before-exit"] as const)(
-    "records the child's early refusal without its notification (%s)",
-    async (updaterNotification) => {
+  itUnix.each([
+    { updaterNotification: undefined, gatewayHealth: "ready" },
+    { updaterNotification: "consumed-before-exit", gatewayHealth: "exited" },
+    { updaterNotification: undefined, gatewayHealth: "throw" },
+  ] as const)(
+    "records the child's early refusal without its notification ($updaterNotification, $gatewayHealth)",
+    async ({ updaterNotification, gatewayHealth }) => {
       const reason = "update-recovery-pending";
       const repair =
         "Retained package activation is prepared. Run openclaw update repair before retrying.";
@@ -33,7 +37,9 @@ export function registerManagedCampaignFailureTests(
           controlDisconnect: "transferred",
           validationResult: "child-result",
           helperExitCode: 7,
+          recoveryTimeoutMs: 30 * 60_000,
           updaterNotification,
+          gatewayHealth,
           updaterResult: {
             status: "error",
             mode: "npm",
@@ -58,6 +64,7 @@ export function registerManagedCampaignFailureTests(
       expect(parentSignal).toBeNull();
       expect(state.parked).toBeUndefined();
       expect(state.restored).toBeUndefined();
+      expect(state).toMatchObject({ healthProbeCount: 1, recoveryProbeTimeoutMs: 3_000 });
       expect(sentinel).toBeNull();
       expect(sensitiveFilesRemoved).toBe(true);
       const recorded = expectDefined(run, "closed campaign run");
@@ -80,6 +87,12 @@ export function registerManagedCampaignFailureTests(
       const report = renderUpdateRunReport(recorded).markdown;
       expect(report).toContain(reason);
       expect(report).toContain("Package publication is incomplete.");
+      expect(recorded.verification.recovery).toMatchObject({ serviceRestartSafe: false });
+      expect(state.triageInput).toMatchObject({
+        error: expect.stringContaining(
+          gatewayHealth === "ready" ? "Service recovery succeeded." : "Service recovery failed.",
+        ),
+      });
     },
   );
 

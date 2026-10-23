@@ -14,7 +14,44 @@ import {
 import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
 import { createPublicationOwner } from "../../infra/package-update-publication-owner.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery-types.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+
+export function withPublicationFence<T>(
+  root: string,
+  body: (fence: UpdateRecoveryFence) => Promise<T>,
+) {
+  return withUpdateCommandExecutor(randomUUID(), async (executor) =>
+    body(await executor.enter(root)),
+  );
+}
+
+export const publicationActivation = (fence: UpdateRecoveryFence) => ({
+  fence,
+  runtime: packageActivationRuntimeForTest(),
+  onPrepared: () => {},
+});
+
+export async function preparePackagePublication(
+  f: Awaited<ReturnType<typeof createPackageSwapFixture>>,
+  options: Parameters<typeof preparePackageActivationJournal>[0]["options"],
+) {
+  const reader = createPackageIntegrityReader();
+  return preparePackageActivationJournal({
+    options,
+    liveRoot: f.packageRoot,
+    stageRoot: f.params.stage.packageRoot,
+    launcherRoot: f.params.stage.layout.binDir,
+    binDir: path.dirname(f.launcher),
+    previous: await reader.tree(f.packageRoot),
+    launchers: [
+      {
+        name: "openclaw",
+        previous: encodePackageActivationLauncher(await reader.launcher(f.launcher)),
+      },
+    ],
+  });
+}
 
 export async function createInterruptedPackagePublication(
   fixtureRoot: string,

@@ -149,6 +149,19 @@ function copySmallPluginSourceFile(
     : undefined;
 }
 
+/** Rebase Windows 8.3 aliases onto the root spelling fs-safe admits. */
+function resolveNativeCopySource(boundary: string, source: string) {
+  if (process.platform !== "win32") {
+    return { rootPath: boundary, absolutePath: source };
+  }
+  const rootPath = fs.realpathSync.native(boundary);
+  const relative = path.relative(boundary, source);
+  if (rootPath === boundary || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return { rootPath: boundary, absolutePath: source };
+  }
+  return { rootPath, absolutePath: path.join(rootPath, relative) };
+}
+
 export function copyPluginSourceFile(
   source: string,
   boundary: string,
@@ -185,7 +198,7 @@ export function copyPluginSourceFile(
       }
       // Keep our pin alive; fs-safe binds its own admitted open to this exact inode.
       using copied = (options.copyFile ?? copyRootFileSync)({
-        source: { rootPath: boundary, absolutePath: source },
+        source: resolveNativeCopySource(boundary, source),
         destination: { rootPath: path.dirname(target), absolutePath: target },
         expectedSourceIdentity: { dev: admitted.dev, ino: admitted.ino },
         clone: "auto",

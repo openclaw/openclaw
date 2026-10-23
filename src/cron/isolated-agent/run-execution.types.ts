@@ -28,6 +28,7 @@ export type CronRunExecutionParams = Pick<
   | "deliverySystemPrompt"
   | "messageToolFormatPrompt"
   | "sourceDelivery"
+  | "cliSessionBindingFacts"
   | "skillsSnapshot"
   | "agentPayload"
   | "useSubagentFallbacks"

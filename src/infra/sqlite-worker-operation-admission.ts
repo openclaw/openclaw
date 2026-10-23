@@ -266,8 +266,15 @@ export function createSqliteWorkerOperationAdmission(
       return;
     }
     const decision = new Int32Array(message.decision);
+    // Bun starts process.hrtime at zero in each thread, so a worker-computed
+    // deadline instant cannot cross threads. Measure the relative budget again
+    // on the host; the worker still enforces its own copy through the shared word.
+    const hostDeadlineNs =
+      typeof message.deadlineMs === "number" && Number.isFinite(message.deadlineMs)
+        ? process.hrtime.bigint() + BigInt(Math.max(0, Math.ceil(message.deadlineMs))) * 1_000_000n
+        : undefined;
     const expired = () => {
-      if (typeof message.deadlineNs === "bigint" && process.hrtime.bigint() >= message.deadlineNs) {
+      if (hostDeadlineNs !== undefined && process.hrtime.bigint() >= hostDeadlineNs) {
         if (Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT) === REQUESTED) {
           Atomics.notify(decision, 0);
         }
@@ -635,7 +642,6 @@ export function requestSqliteWorkerOperationAdmission(
     {
       ...request,
       decision: decision.buffer,
-      deadlineNs,
       ports: transferList.filter((value) => value instanceof MessagePort),
     },
     transferList,

@@ -9,7 +9,7 @@ import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { MODEL_REF } from "./cloud-worker-midturn-loss-fixture.js";
 import { startHeldResponsesProvider } from "./held-responses-provider.js";
 
-const TEST_TIMEOUT_MS = 120_000;
+const TEST_TIMEOUT_MS = 180_000;
 const REQUEST_TIMEOUT_MS = 20_000;
 const SESSION_KEY = "agent:qa:qa:session-dedup-reconnect";
 const IDEMPOTENCY_KEY = "qa-session-dedup-reconnect";

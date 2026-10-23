@@ -222,9 +222,34 @@ export async function publishSettledUpdateCommandResult(
 export function createPostUpdateFailureResult(
   params: Pick<FinishUpdateParams, "result" | "root" | "startedAt">,
   error: unknown,
+  activationVerified = false,
 ): { result: UpdateRunResult; message: string } {
   const message = formatErrorMessage(error);
   const failureFacts = collectUpdateDoctorFailureFacts(error);
+  if (
+    activationVerified &&
+    error instanceof Error &&
+    params.result.recovery?.serviceRestartSafe !== false
+  ) {
+    const warning = `Gateway activation verified; post-update maintenance needs attention: ${message}`;
+    return {
+      message: warning,
+      result: {
+        ...params.result,
+        steps: [
+          ...params.result.steps,
+          {
+            name: "post-update maintenance",
+            command: "openclaw update",
+            cwd: params.result.root ?? params.root,
+            durationMs: Math.max(0, Date.now() - params.startedAt),
+            exitCode: 0,
+            advisory: { kind: "recoverable-maintenance", message: warning },
+          },
+        ],
+      },
+    };
+  }
   const version = params.result.after?.version?.trim();
   return {
     message,

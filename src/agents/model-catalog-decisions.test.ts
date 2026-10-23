@@ -335,11 +335,11 @@ describe("captured model decisions", () => {
     };
     const owner = nativeOwner(true, true, () => true, cfg);
 
-    expect(await owner.evaluateEntry(entry)).toMatchObject({
+    expect(owner.evaluateEntry(entry)).toMatchObject({
       availability: false,
       unavailableReason: "auth-failed",
     });
-    expect(await owner.runtimeChoices(entry)).toEqual([]);
+    expect(owner.runtimeChoices(entry)).toEqual([]);
   });
 
   it("keeps ordinary host authentication distinct from native login", async () => {

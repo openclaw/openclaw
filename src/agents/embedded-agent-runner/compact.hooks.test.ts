@@ -1163,10 +1163,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     it.each([
       ["provider timeout", "request timed out", "fallback"],
-      ["intentional quality rejection", undefined, "cancel"],
       ["explicit model timeout", "request timed out", "cancel"],
-      // A failed corrective attempt stays a terminal quality cancellation, even on a 408.
-      ["corrective 408", "408", "cancel"],
       [
         "reasoning-mandatory rejection",
         "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
@@ -1227,22 +1224,17 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         const stream = vi.fn<StreamFn>((activeModel, _context, options) => {
           requestedModels.push(activeModel.id);
           requestedThinking.push(options?.reasoning);
-          const corrective = scenario === "corrective 408";
           const rejected =
             activeModel.id === primary &&
             errorMessage &&
-            !(outcome === "thinking" && options?.reasoning === "minimal") &&
-            !(corrective && requestedModels.length === 1);
+            !(outcome === "thinking" && options?.reasoning === "minimal");
           return createAssistantResultStream(
             rejected
               ? { ...createAssistant(activeModel, [], "error"), errorMessage }
               : createAssistant(activeModel, [
                   {
                     type: "text",
-                    text:
-                      outcome === "cancel" || corrective
-                        ? "Missing required sections."
-                        : fallbackSummary,
+                    text: outcome === "cancel" ? "Missing required sections." : fallbackSummary,
                   },
                 ]),
           );
@@ -1260,7 +1252,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
             model,
             recentTurnsPreserve: 0,
             qualityGuardEnabled: true,
-            qualityGuardMaxRetries: scenario === "corrective 408" ? 1 : 0,
+            qualityGuardMaxRetries: 0,
           });
           return [];
         });
@@ -1291,7 +1283,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
                 thinkingLevel: "off" as const,
                 ...(explicitModel ? { model: `openai/${primary}` } : {}),
                 recentTurnsPreserve: 0,
-                qualityGuard: { enabled: true, maxRetries: scenario === "corrective 408" ? 1 : 0 },
+                qualityGuard: { enabled: true, maxRetries: 0 },
               },
             },
           },

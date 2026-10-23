@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sql } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
@@ -58,7 +59,9 @@ export function readCronRunRecordsInDatabase(
   db: DatabaseSync,
   jobId?: string,
   runId?: string,
+  options?: { planningOnly?: boolean; taskIds?: readonly string[] },
 ): CronRunRecord[] {
+  const planningOnly = options?.planningOnly === true;
   let select = query(db)
     .selectFrom("task_runs")
     .select([
@@ -78,8 +81,19 @@ export function readCronRunRecordsInDatabase(
       "notify_policy",
       "terminal_outcome",
       "error",
-      "terminal_summary",
-      "detail_json",
+      planningOnly
+        ? /* kysely-allow-raw: Maintenance never reads the summary; preserve the decoded row shape. */ sql<
+            string | null
+          >`NULL`.as("terminal_summary")
+        : "terminal_summary",
+      planningOnly
+        ? /* kysely-allow-raw: Project only the two JSON members used for maintenance planning. */ sql<
+            string | null
+          >`CASE WHEN json_valid(detail_json) THEN json_object(
+            'storeKey', json_extract(detail_json, '$.storeKey'),
+            'kind', json_extract(detail_json, '$.kind')
+          ) END`.as("detail_json")
+        : "detail_json",
     ])
     .where("runtime", "=", "cron")
     .orderBy("created_at", "asc")
@@ -89,6 +103,9 @@ export function readCronRunRecordsInDatabase(
   }
   if (runId !== undefined) {
     select = select.where("run_id", "=", runId);
+  }
+  if (options?.taskIds !== undefined) {
+    select = select.where("task_id", "in", [...options.taskIds]);
   }
   return executeSqliteQuerySync(db, select).rows.map((row) => {
     // These released columns remain part of row admission even when Cron does not expose them.

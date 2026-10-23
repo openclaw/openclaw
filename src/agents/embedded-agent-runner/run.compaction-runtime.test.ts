@@ -2,11 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { prepareCompaction } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { refreshSessionEntryFromStore } from "../../auto-reply/reply/agent-runner-core.js";
 import { getReplyOperationSessionReader } from "../../auto-reply/reply/reply-run-registry.state.js";
 import {
@@ -14,7 +10,6 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
-import { onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -22,7 +17,6 @@ import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import {
   type RecoveryFixture,
   recoveryCompaction,
-  unchangedMaintenance,
   waitForCompactionAbort,
   withRecoveryFixture,
 } from "./run.compaction-runtime.test-support.js";

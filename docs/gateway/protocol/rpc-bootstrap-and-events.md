@@ -414,7 +414,10 @@ false` or `suppressNotifyOnExit: true` suppresses notifications. Denied events
 never enqueue a system event or wake agent work. Finished events notify only for
 timeout, nonzero or unknown exit code, or nonempty compacted output; successful
 exit 0 with no output stays quiet. Finished notifications with a run ID are
-deduplicated by canonical session and run ID. A heartbeat wake is requested only
-after a system event is queued.
+deduplicated by canonical session and run ID. While the `system.run` invocation
+that started the run still waits for its result, the Gateway holds the finished
+notification: the caller receives the output inline, and the notification is queued
+only if that invocation then fails (timeout, cancellation or disconnect). A
+heartbeat wake is requested only after a system event is queued.
 
 Node event delivery is best-effort, not a durable completion ledger.

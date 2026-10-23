@@ -164,6 +164,12 @@ native WAL admission without a verification receipt while the verifier is runnin
 See [integrity admission and Doctor maintenance](/reference/database-schemas/integrity-and-recovery#integrity-checks)
 for the provenance requirements and operator-requested verification.
 
+Gateway startup and restart checks admit only configured agent database targets.
+Retained stores for unconfigured agents remain untouched for Doctor to inspect.
+An incompatible secondary agent database refuses that agent's sessions with
+`openclaw doctor --fix` guidance, without blocking healthy agents or restarting
+the Gateway. Shared-state and required system-agent checks remain strict.
+
 Two mechanisms back that contract. CI runs
 `scripts/check-native-state-schema-version.mjs`, which fails the build when the
 Swift and TypeScript state-database contracts declare different schema versions.

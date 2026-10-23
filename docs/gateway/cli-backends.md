@@ -128,7 +128,9 @@ plugin code registered with `api.registerCliBackend(...)`.
 
 Claude CLI startup hook events are consumed in order while initialization completes, so a burst of `SessionStart` hooks does not stall the first turn. Restricted runs continue to disable native hooks.
 
-Direct agent calls and child-completion updates share the same session reply policy.
+Direct agent calls, child-completion updates, and cron wakes targeting an existing
+chat share the same session reply policy. Announce wakes still require an explicit
+message target for that turn; isolated cron runs keep their own delivery policy.
 A completion turn's delivery override does not by itself start a fresh CLI session;
 authentication, workspace, and tool compatibility checks still apply.
 Each turn receives delivery instructions for its current mode and available tools,
@@ -211,6 +213,11 @@ an answer does not end the admitted turn or grant its background work another tu
 The `openclaw agent` command also has its own request deadline. Its 600-second fallback default applies to that command invocation, not to ordinary Gateway turns. See [`openclaw agent`](/cli/agent).
 
 ### Claude CLI specifics
+
+For channels that deliver one final reply per turn, a Claude Code Stop-hook
+rejection discards the rejected reply segment, including when Claude runs a tool
+before rewriting. A `NO_REPLY` rewrite stays silent. Ordinary tool-split replies
+still preserve substantive pre-tool text.
 
 Interrupted turns can retain ordinary partial prose. If an unfinished reply contains
 standalone tool-protocol markup outside a code example, OpenClaw discards that

@@ -64,7 +64,6 @@ import {
   type NodeInvokeProgressParams,
   type NodeInvokeResultParams,
   type PendingInvoke,
-  type PendingSystemRunEvent,
 } from "./node-registry.invoke-stream.js";
 import {
   updateNodePresenceActivity,
@@ -76,6 +75,9 @@ import {
 import {
   authorizedSystemRunEventExpiresAt,
   authorizedSystemRunEventKey,
+  finalizeAuthorizedSystemRunEvent,
+  type AuthorizedSystemRunEvent,
+  type AuthorizedSystemRunEventState,
 } from "./node-registry.system-run.js";
 import { isNodeWorkerHostClientId } from "./node-runner-inventory-runtime.js";
 import type { NodeSession } from "./node-session.types.js";
@@ -126,13 +128,6 @@ const NODE_SESSION_POLICIES = new WeakMap<object, NodeSessionPolicy>();
 export function readNodeSessionWithheldCommands(node: object): readonly string[] {
   return NODE_SESSION_POLICIES.get(node)?.withheldCommands ?? [];
 }
-
-/** Authorized system.run event window bound to one node connection. */
-type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
-  nodeId: string;
-  connId: string;
-  expiresAtMs: number | null;
-};
 
 export type NodeConnectivityResult =
   | { ok: true }
@@ -1099,7 +1094,7 @@ export class NodeRegistry {
     runId?: string;
     sessionKey: string;
     terminal: boolean;
-  }): Pick<PendingSystemRunEvent, "invocationDeliveryContext"> | null {
+  }): AuthorizedSystemRunEventState | null {
     if (!params.connId || !params.sessionKey) {
       return null;
     }
@@ -1123,11 +1118,14 @@ export class NodeRegistry {
     if (match === null) {
       return null;
     }
-    const source = this.authorizedSystemRunEvents.get(match)?.invocationDeliveryContext;
-    if (params.terminal) {
-      this.authorizedSystemRunEvents.delete(match);
-    }
-    return source ? { invocationDeliveryContext: { ...source } } : {};
+    return finalizeAuthorizedSystemRunEvent({
+      event: this.authorizedSystemRunEvents.get(match),
+      terminal: params.terminal,
+      consume: () => this.authorizedSystemRunEvents.delete(match),
+      pendingInvokes: this.pendingInvokes.values(),
+      nodeId: params.nodeId,
+      connId,
+    });
   }
 
   private rememberAuthorizedSystemRunEvent(

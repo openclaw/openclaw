@@ -30,7 +30,7 @@ import {
   resolvedAcpMeta,
 } from "./server.sessions.reset-cleanup.test-support.js";
 import { loadTranscriptRows } from "./server.sessions.store-rpc.test-helpers.js";
-import { testState, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
   bootstrapCacheMocks,

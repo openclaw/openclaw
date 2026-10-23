@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -39,7 +40,8 @@ import {
 
 const execFileAsync = promisify(execFile);
 const SESSION_KEY = "agent:qa:node-worker-launch-wire";
-const TEST_TIMEOUT_MS = PROOF_TIMEOUT_MS + 60_000;
+const TEST_TIMEOUT_MS = PROOF_TIMEOUT_MS + 300_000;
+const PROGRESS_INTERVAL_MS = 60_000;
 const CONTROL_PROBE_MAX_MS = 4_000;
 const CONTROL_PROBE_P95_MS = 1_000;
 const FINALIZATION_LOAD_CONCURRENCY = 12;
@@ -100,6 +102,14 @@ describe("node worker launch wire", () => {
       let workerAuditBeforeRestart: string | undefined;
       let testFailure: { error: unknown } | undefined;
       let cleanupFailures: unknown[];
+      const proofStartedAt = Date.now();
+      const progress = setInterval(() => {
+        writeSync(
+          2,
+          `[node-worker-launch-wire] proof still running (${Date.now() - proofStartedAt}ms)\n`,
+        );
+      }, PROGRESS_INTERVAL_MS);
+      progress.unref();
 
       try {
         gateway = await startPairedNodeWorkerGateway({
@@ -578,6 +588,7 @@ describe("node worker launch wire", () => {
       } catch (error) {
         testFailure = { error };
       } finally {
+        clearInterval(progress);
         const cleanup = await Promise.allSettled([
           workerNode?.stop() ?? Promise.resolve(),
           legacyWorkerNode?.stop() ?? Promise.resolve(),

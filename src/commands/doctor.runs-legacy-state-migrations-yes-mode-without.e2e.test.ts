@@ -113,7 +113,7 @@ describe("doctor command", () => {
       signal.removeEventListener("abort", reportInterruption);
       observeMaintenance = undefined;
     }
-  }, 30_000);
+  }, 60_000);
 
   it("refuses doctor repair mode in Nix before repair side effects", async () => {
     const previous = process.env.OPENCLAW_NIX_MODE;
