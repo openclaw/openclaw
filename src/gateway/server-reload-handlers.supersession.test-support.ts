@@ -13,43 +13,61 @@ export function registerModelPublicationSupersessionTests(input: {
   installRefresh: (implementation: () => Promise<never>) => () => void;
 }) {
   it.each([
-    { name: "superseded publication", superseded: true, cancelled: true },
-    { name: "replaced models with current config", superseded: false, cancelled: true },
-    { name: "failed superseded publication", superseded: true, cancelled: false },
-    { name: "failed current publication", superseded: false, cancelled: false },
-  ])("preserves the recovery distinction for a $name", async ({ superseded, cancelled }) => {
-    const { handlers, setState } = input.createFixture();
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          fixture: { baseUrl: "http://127.0.0.1:9/v1", apiKey: "synthetic-key", models: [] },
+    {
+      name: "superseded publication",
+      superseded: true,
+      publicationReplaced: true,
+      cancelled: true,
+    },
+    { name: "current publication", superseded: false, publicationReplaced: true, cancelled: false },
+    {
+      name: "failed superseded publication",
+      superseded: true,
+      publicationReplaced: false,
+      cancelled: false,
+    },
+    {
+      name: "failed current publication",
+      superseded: false,
+      publicationReplaced: false,
+      cancelled: false,
+    },
+  ])(
+    "preserves the recovery distinction for a $name",
+    async ({ superseded, publicationReplaced, cancelled }) => {
+      const { handlers, setState } = input.createFixture();
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            fixture: { baseUrl: "http://127.0.0.1:9/v1", apiKey: "synthetic-key", models: [] },
+          },
         },
-      },
-    };
-    const plan = buildGatewayReloadPlan(["models.providers.fixture.apiKey"]);
-    let current = true;
-    const restoreRefresh = input.installRefresh(async () => {
-      current = !superseded;
-      throw cancelled
-        ? new PreparedModelRuntimePublicationSupersededError("publication replaced")
-        : new Error("catalog build failed");
-    });
-    try {
-      const reload = handlers.applyHotReload(plan, config, {
-        sourceConfig: config,
-        isCurrent: () => current,
-        publish: async (commit) => await commit(),
+      };
+      const plan = buildGatewayReloadPlan(["models.providers.fixture.apiKey"]);
+      let current = true;
+      const restoreRefresh = input.installRefresh(async () => {
+        current = !superseded;
+        throw publicationReplaced
+          ? new PreparedModelRuntimePublicationSupersededError("publication replaced")
+          : new Error("catalog build failed");
       });
-      if (cancelled) {
-        await expect(reload).rejects.toBeInstanceOf(GatewayConfigReloadSupersededError);
-      } else {
-        await expect(reload).resolves.toBe("applied-restart-required");
+      try {
+        const reload = handlers.applyHotReload(plan, config, {
+          sourceConfig: config,
+          isCurrent: () => current,
+          publish: async (commit) => await commit(),
+        });
+        if (cancelled) {
+          await expect(reload).rejects.toBeInstanceOf(GatewayConfigReloadSupersededError);
+        } else {
+          await expect(reload).resolves.toBe("applied-restart-required");
+        }
+        expect(setState).toHaveBeenCalledOnce();
+        expect(handlers.hasOutstandingGatewayRestart()).toBe(!cancelled);
+      } finally {
+        restoreRefresh();
+        handlers.stopRestartRetries();
       }
-      expect(setState).toHaveBeenCalledOnce();
-      expect(handlers.hasOutstandingGatewayRestart()).toBe(!cancelled);
-    } finally {
-      restoreRefresh();
-      handlers.stopRestartRetries();
-    }
-  });
+    },
+  );
 }

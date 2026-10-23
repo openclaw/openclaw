@@ -553,7 +553,12 @@ describe("subagent registry lifecycle hardening", () => {
           change === "reply"
             ? { ...terminalReply, text: "corrected result" }
             : { ...terminalReply },
-        endedAt: change === "older equivalent" ? 3_999 : change === "timing" ? 4_001 : 4_000,
+        endedAt:
+          change === "older equivalent"
+            ? 3_999
+            : change === "timing" || change === "reply"
+              ? 4_001
+              : 4_000,
         ...(change === "error"
           ? {
               outcome: { status: "error", error: "provider failed" },
@@ -562,6 +567,61 @@ describe("subagent registry lifecycle hardening", () => {
           : {}),
       });
       expect(prepared.isCurrent()).toBe(current);
+    },
+  );
+
+  describe.each([
+    {
+      name: "visible answer",
+      first: { disposition: "visible" as const, text: "first final" },
+      resultText: "first final",
+    },
+    {
+      name: "intentional silence",
+      first: { disposition: "silent" as const },
+      resultText: "NO_REPLY",
+    },
+    {
+      name: "empty reply",
+      first: { disposition: "empty" as const },
+      resultText: null,
+    },
+  ])("completion receipt ordering after $name", ({ first, resultText }) => {
+    it.each([
+      { order: "older", endedAt: 3_999, accepted: false },
+      { order: "equal-time", endedAt: 4_000, accepted: false },
+      { order: "newer", endedAt: 4_001, accepted: true },
+    ])("accepts only a newer correction ($order receipt)", async ({ endedAt, accepted }) => {
+      const entry = createRunEntry({ expectsCompletionMessage: true });
+      const controller = createLifecycleController({ entry });
+      const correction = { disposition: "visible", text: "corrected final" } as const;
+      await completeRun(controller, entry, { terminalReply: first, endedAt: 4_000 });
+      await completeRun(controller, entry, { terminalReply: correction, endedAt });
+
+      const stored = entry;
+      expect(stored.execution.endedAt).toBe(accepted ? 4_001 : 4_000);
+      expect(stored.completion).toMatchObject({
+        terminalReply: accepted ? correction : first,
+        resultText: accepted ? "corrected final" : resultText,
+      });
+    });
+  });
+
+  it.each([3_999, 4_000])(
+    "accepts the first producer reply after terminal timing (%s)",
+    async (endedAt) => {
+      const entry = createRunEntry({ expectsCompletionMessage: true });
+      const controller = createLifecycleController({ entry });
+      const outcome = { status: "error", error: "provider failed" } as const;
+      const reason = SUBAGENT_ENDED_REASON_ERROR;
+      await completeRun(controller, entry, { outcome, reason, terminalReply: undefined });
+      const terminalReply = { disposition: "visible", text: "first producer reply" } as const;
+      await completeRun(controller, entry, { outcome, reason, endedAt, terminalReply });
+
+      expect(entry.completion).toMatchObject({
+        terminalReply,
+        resultText: "first producer reply",
+      });
     },
   );
 
@@ -1644,6 +1704,30 @@ describe("subagent registry lifecycle hardening", () => {
     expect(entry.endedReason).toBe(SUBAGENT_ENDED_REASON_COMPLETE);
     expect(entry.terminalOwner).toBeUndefined();
   });
+
+  it.each([
+    ["with", "requester-revision"],
+    ["without", undefined],
+  ] as const)(
+    "hands a quiet interrupted child to a requester %s a lifecycle revision",
+    async (_label, completionRequesterLifecycleRevision) => {
+      const entry = createRunEntry({
+        expectsCompletionMessage: false,
+        completionRequesterSessionId: "requester-session",
+        completionRequesterLifecycleRevision,
+      });
+      const controller = createLifecycleController({ entry });
+
+      await controller.completeSubagentRun(makeInterruptedSubagentCompletion(entry));
+
+      expect(entry).toMatchObject({
+        terminalOwner: "interrupted-recovery",
+        completionTarget: "parent",
+        cleanup: "keep",
+        execution: { interruptionReason: "gateway-restart" },
+      });
+    },
+  );
 
   it("persists interrupted recovery before task projection and rejects late provider or yield", async () => {
     const entry = createRunEntry();

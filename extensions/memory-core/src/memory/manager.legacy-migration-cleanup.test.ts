@@ -129,7 +129,10 @@ describe("memory legacy migration cleanup", () => {
         list: [{ id: "main", default: true }],
       },
     };
-    const result = await MemoryIndexManager.get({ cfg, agentId: "main" });
+    const result = await MemoryIndexManager.get({
+      cfg,
+      agentId: "main",
+    });
     if (!result) {
       throw new Error("memory manager missing");
     }

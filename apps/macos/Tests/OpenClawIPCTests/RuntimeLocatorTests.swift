@@ -13,7 +13,7 @@ struct RuntimeLocatorTests {
     @Test func `resolve succeeds with valid node`() async throws {
         let script = """
         #!/bin/sh
-        echo v24.16.0
+        echo v24.22.1
         """
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -31,7 +31,7 @@ struct RuntimeLocatorTests {
         let script = """
         #!/bin/sh
         /bin/sleep 2.1
-        echo v24.16.0
+        echo v24.22.1
         """
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -84,11 +84,11 @@ struct RuntimeLocatorTests {
         ("23.11.0", false),
         ("24.14.1", false),
         ("24.15.0", false),
-        ("24.16.0", true),
+        ("24.22.1", true),
         ("25.8.1", false),
         ("25.9.0", false),
         ("26.0.0", false),
-        ("26.1.0", true),
+        ("26.12.1", true),
     ])
     func `node support matches the core runtime contract`(version: String, supported: Bool) throws {
         let parsed = try #require(RuntimeVersion.from(string: version))
@@ -134,7 +134,7 @@ struct RuntimeLocatorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let node = try self.makeExecutable(in: root, contents: """
         #!/bin/sh
-        echo v24.16.0
+        echo v24.22.1
         exit 1
         """)
 
@@ -150,7 +150,7 @@ struct RuntimeLocatorTests {
 
     @Test func `describe failure includes paths`() {
         let msg = RuntimeLocator.describeFailure(.notFound(searchPaths: ["/tmp/a", "/tmp/b"]))
-        #expect(msg.contains("Node >=24.16.0 <25, or >=26.1.0"))
+        #expect(msg.contains("Node >=24.22.1 <25, or >=26.12.1"))
         #expect(msg.contains("PATH searched: /tmp/a:/tmp/b"))
 
         let parseMsg = RuntimeLocator.describeFailure(
@@ -159,7 +159,7 @@ struct RuntimeLocatorTests {
                 raw: "garbage",
                 path: "/usr/local/bin/node",
                 searchPaths: ["/usr/local/bin"]))
-        #expect(parseMsg.contains("Node >=24.16.0 <25, or >=26.1.0"))
+        #expect(parseMsg.contains("Node >=24.22.1 <25, or >=26.12.1"))
     }
 
     @Test func `runtime version parses with leading V and metadata`() {

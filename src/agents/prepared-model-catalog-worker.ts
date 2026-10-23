@@ -119,7 +119,7 @@ export const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
 
 const GATEWAY_CATALOG_WORKERS = 1;
 // Leave room for source loaders and overlapping generations without inheriting the host heap budget.
-const CATALOG_WORKER_HEAP_LIMIT_MB = 512;
+const CATALOG_WORKER_HEAP_LIMITS = { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 32 };
 type CatalogPool = WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>;
 type CatalogPoolBorrower = {
   agentDir: string;
@@ -161,7 +161,7 @@ function createCatalogPool(
 ): CatalogPool {
   return new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: CATALOG_WORKER_HEAP_LIMIT_MB } },
+    workerOptions: { resourceLimits: CATALOG_WORKER_HEAP_LIMITS },
     maxWorkers: GATEWAY_CATALOG_WORKERS,
     // Only the inventory owner can replace captured code; idle retirement or crash restart
     // would import a different source generation into an existing publication.

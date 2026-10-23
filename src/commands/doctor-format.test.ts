@@ -3,6 +3,31 @@ import { describe, expect, it } from "vitest";
 import { buildGatewayRuntimeHints } from "./doctor-format.js";
 
 describe("buildGatewayRuntimeHints", () => {
+  it.each([
+    { env: {}, task: "OpenClaw Gateway", command: "openclaw", status: "stopped" },
+    {
+      env: { OPENCLAW_PROFILE: "work" },
+      task: "OpenClaw Gateway (work)",
+      command: "openclaw --profile work",
+      status: "stopped",
+    },
+    { env: {}, task: "OpenClaw Gateway", command: "openclaw", status: "running" },
+  ])(
+    "names the disabled Scheduled Task and recovery for $task ($status)",
+    ({ env, task, command, status }) => {
+      const text = buildGatewayRuntimeHints(
+        { status, state: "Disabled" },
+        { platform: "win32", env },
+      ).join("\n");
+
+      expect(text).toContain(`Scheduled Task '${task}' is registered but DISABLED`);
+      expect(text).toContain(`${command} gateway start`);
+      expect(text).toContain(`${command} doctor --fix`);
+      expect(text).toContain("to re-enable it");
+      expect(text).not.toContain("likely exited immediately");
+    },
+  );
+
   it("renders macOS GUI-session recovery for the selected profile", () => {
     const hints = buildGatewayRuntimeHints(
       {

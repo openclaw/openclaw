@@ -127,6 +127,19 @@ sidebarTitle: "Troubleshooting"
 
   </Accordion>
 
+  <Accordion title="Tool calls fail with Tool Search enabled">
+    On Ollama 0.40.1, some model templates can cause the server to mistake the
+    `<tool_call>` marker for Tool Search's `tool_call` function. OpenClaw avoids
+    this collision with transport-only tool aliases, so Tool Search can remain
+    enabled. Execution and session history keep the original tool names; raw
+    provider requests may show names such as `openclaw_tool_call`.
+
+    This translation covers native Ollama and the Ollama plugin's identified
+    OpenAI-compatible chat-completions route. Other providers are unchanged.
+    Custom Ollama templates with different markers may need separate diagnosis.
+
+  </Accordion>
+
   <Accordion title="Kimi or GLM returns garbled symbols">
     Hosted Kimi/GLM responses that are long, non-linguistic symbol runs are
     treated as a failed provider call rather than a successful reply, so

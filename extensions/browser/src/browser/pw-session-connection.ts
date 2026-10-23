@@ -51,6 +51,11 @@ import {
   normalizeCdpUrl,
   targetKey,
 } from "./pw-session-state.js";
+import {
+  guardHeadlessContexts,
+  isHeadlessChromium,
+  refuseHeadlessPasskeyDialogs,
+} from "./pw-session-webauthn.js";
 
 export { pageTargetInfo } from "./pw-session-page-target.js";
 
@@ -515,19 +520,50 @@ export async function connectBrowser(
           void closeTrackedPlaywrightConnection(connectionAttempt.retired).catch(() => {});
           throw new Error("Playwright connection attempt was superseded.");
         }
+        let disconnected = false;
         const onDisconnected = () => {
+          disconnected = true;
           const current = cachedByCdpUrl.get(normalized);
           if (current?.browser === browser) {
             cachedByCdpUrl.delete(normalized);
           }
         };
-        if (resolveBrowserEngine(engine).descriptor.sessionScope === "connection") {
+        // Listen before the awaited setup below, so a browser lost meanwhile is not cached.
+        browser.on("disconnected", onDisconnected);
+        const engineAdapter = resolveBrowserEngine(engine);
+        if (engineAdapter.descriptor.sessionScope === "connection") {
           markConnectionScopedBrowser(browser);
         }
-        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected, engine };
-        cachedByCdpUrl.set(normalized, connected);
-        browser.on("disconnected", onDisconnected);
+        // Relay connections drive the user's visible Chrome, which shows its own dialogs.
+        const headless =
+          !relay && engineAdapter.descriptor.id === "chromium"
+            ? await isHeadlessChromium(browser)
+            : false;
         observeBrowser(browser);
+        if (headless) {
+          // Before any caller can load a document through this connection.
+          await guardHeadlessContexts(browser.contexts());
+        }
+        if (disconnected) {
+          browser.off("disconnected", onDisconnected);
+          throw new Error("Browser disconnected while connecting.");
+        }
+        if (connectionAttempt.cancelled) {
+          browser.off("disconnected", onDisconnected);
+          connectionAttempt.retired = { browser, cdpUrl: normalized };
+          void closeTrackedPlaywrightConnection(connectionAttempt.retired).catch(() => {});
+          throw new Error("Playwright connection attempt was superseded.");
+        }
+        const connected: ConnectedBrowser = {
+          browser,
+          cdpUrl: normalized,
+          onDisconnected,
+          engine,
+          headless,
+        };
+        if (connectingByCdpUrl.get(normalized)?.attempt === connectionAttempt) {
+          cachedByCdpUrl.set(normalized, connected);
+        }
         return connected;
       } catch (err) {
         lastErr = err;
@@ -614,7 +650,11 @@ async function getPageForTargetIdOnce(opts: {
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
   }
-  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy, opts.relayReference);
+  const { browser, headless } = await connectBrowser(
+    opts.cdpUrl,
+    opts.ssrfPolicy,
+    opts.relayReference,
+  );
   const pages = await getAllPages(browser);
   if (!pages.length) {
     throw new Error("No pages available in the connected browser.");
@@ -638,6 +678,10 @@ async function getPageForTargetIdOnce(opts: {
   const found = accessible.find((entry) => entry.targetId === opts.targetId);
   if (found) {
     bindRoleRefsTarget(found.page, opts.cdpUrl, found.targetId);
+    if (headless) {
+      // Settled guards are cached; this only re-registers one that failed.
+      void refuseHeadlessPasskeyDialogs(found.page.context());
+    }
     return found.page;
   }
   throw new BrowserTabNotFoundError();

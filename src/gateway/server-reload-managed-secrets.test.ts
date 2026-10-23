@@ -8,6 +8,10 @@ import {
   getRuntimeConfigSourceSnapshot,
 } from "../config/runtime-snapshot.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../config/runtime-write-application.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
@@ -29,6 +33,8 @@ import type { GatewayConfigReloadTransactionOwnership } from "./config-reload.js
 import {
   closeTestConfigReloaders,
   createReloaderHarness,
+  createConfigReloadTestClock,
+  makeWrite,
   makeSnapshot,
   makeZeroDebounceHookWrite,
 } from "./config-reload.test-support.js";
@@ -199,6 +205,97 @@ async function createReload(
 }
 
 describe("managed reload authored source", () => {
+  it("acknowledges a delayed managed write already applied by the watcher with resolved secrets", async () => {
+    const initial: OpenClawConfig = { gateway: { reload: {} } };
+    const source: OpenClawConfig = {
+      ...initial,
+      models: {
+        providers: {
+          fixture: {
+            baseUrl: "https://fixture.example.invalid/v1",
+            apiKey: { source: "env", provider: "default", id: "RELOAD_KEY" },
+            models: [],
+          },
+        },
+      },
+    };
+    const prepareSnapshot = (config: OpenClawConfig) =>
+      prepareSecretsRuntimeSnapshot({
+        config,
+        includeAuthStoreRefs: false,
+        env: { RELOAD_KEY: "resolved-fixture-key" },
+      });
+    activateSecretsRuntimeSnapshotWithSource(await prepareSnapshot(initial), initial);
+    const activateRuntimeSecrets = createRuntimeSecretsActivator({
+      ...activatorOptions(),
+      prepareRuntimeSecretsSnapshot: ({ config }) => prepareSnapshot(config),
+    });
+    const handlers = createManagedReloadSecretHandlers({
+      params: {
+        activateRuntimeSecrets,
+        resolveSharedGatewaySessionGenerationForConfig: () => undefined,
+        sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+          current: undefined,
+          required: null,
+        }),
+        clients: [],
+        commitRuntimePolicy: vi.fn(),
+        reconcileRuntimePolicy: vi.fn(),
+      },
+      prepareRuntimeCandidate: (config) => config,
+      tryPrepareRuntimeSecrets: async (config) => ({
+        snapshot: await prepareSnapshot(config),
+        expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
+      }),
+      applyHotReload: async (_plan, _config, publication) => {
+        let committed = false;
+        await publication!.publish(
+          async () => {
+            committed = true;
+          },
+          () => committed,
+        );
+        return "applied";
+      },
+    });
+    const { clock, scheduler } = createConfigReloadTestClock();
+    const snapshot = makeSnapshot({ config: source, hash: "saved-secret-source" });
+    const readSnapshot = vi.fn(async () => makeSnapshot({ config: initial, hash: "initial" }));
+    const harness = createReloaderHarness(readSnapshot, {
+      scheduler,
+      initialConfig: initial,
+      onHotReload: handlers.onHotReload,
+      onNoopConfigCommit: handlers.onHotReload,
+      onEffectiveConfigUnchanged: handlers.onEffectiveConfigUnchanged,
+    });
+    await harness.reloader.ready;
+    readSnapshot.mockResolvedValue(snapshot);
+    harness.watcher.emit("change");
+    await clock.advanceBy(0);
+    expect(getRuntimeConfigSnapshot()?.models?.providers?.fixture?.apiKey).toBe(
+      "resolved-fixture-key",
+    );
+
+    const application = createRuntimeConfigWriteApplication();
+    const settled: string[] = [];
+    void application.result.then((status) => settled.push(status));
+    harness.emitWrite(
+      attachRuntimeConfigWriteApplication(
+        makeWrite(source, "saved-secret-source", { snapshot }),
+        application,
+      ),
+    );
+    await clock.advanceBy(0);
+
+    expect(settled).toEqual(["applied"]);
+    expect(getRuntimeConfigSnapshot()?.models?.providers?.fixture?.apiKey).toBe(
+      "resolved-fixture-key",
+    );
+    expect(getRuntimeConfigSourceSnapshot()).toEqual(source);
+    expect(harness.onHotReload).toHaveBeenCalledOnce();
+    await harness.reloader.stop();
+  });
+
   it.each(["same-source", "newer-write"] as const)(
     "rechecks config ownership after durable secrets publication preparation (%s)",
     async (observation) => {

@@ -263,6 +263,7 @@ export async function acquireEffectiveToolInventoryRuntimeModelContext(
       // The selected provider owner must join the generation before dynamic hooks resolve.
       loadRuntimePlugins: true,
       runtimePluginSelections: [{ provider, modelId, agentId }],
+      allowGatewaySubagentBinding: true,
     },
     { catalogMode: "static" },
   );

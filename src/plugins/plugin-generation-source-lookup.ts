@@ -80,14 +80,34 @@ function captureRecoverySource({
   let native: PluginNativeRecovery | undefined;
   try {
     native = captureNativeRecovery?.();
+    const directory = recovery.directory;
+    const relocate = (filename: string) =>
+      path.join(directory, path.relative(boundaryRoot, filename));
     const hardlinkedTargets = new Map<string, PluginNativeArtifactFact>();
-    // Preserve relative dependency links without reopening an updated package.
+    // Keep dependency links within the capture without reopening installed packages.
     fs.cpSync(boundaryRoot, recovery.directory, {
       recursive: true,
       verbatimSymlinks: true,
       filter: (from, to) => {
         const fact = native?.references.get(from);
         if (!fact) {
+          if (fs.lstatSync(from).isSymbolicLink()) {
+            const target = fs.readlinkSync(from);
+            const relative = path.isAbsolute(target)
+              ? relativePluginPathInsideRootSync(boundaryRoot, target)
+              : undefined;
+            if (relative !== undefined) {
+              // Windows junctions store absolute targets. A verbatim copy would
+              // keep pointing at the source after custody moves to the capture.
+              fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
+              fs.symlinkSync(
+                path.relative(path.dirname(to), path.join(directory, relative)),
+                to,
+                fs.statSync(from).isDirectory() ? "junction" : "file",
+              );
+              return false;
+            }
+          }
           return true;
         }
         const retained = { ...fact, sourceIdentity: fact.capturedIdentity };
@@ -106,8 +126,6 @@ function captureRecoverySource({
         recovery.directory,
       );
     }
-    const relocate = (filename: string) =>
-      path.join(recovery.directory, path.relative(boundaryRoot, filename));
     // A partial capture can copy successfully while losing an already-loaded companion.
     for (const captured of new Set(capturedPaths.values())) {
       fs.lstatSync(relocate(captured));

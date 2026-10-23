@@ -705,7 +705,7 @@ describe("runDaemonInstall integration", () => {
     },
   );
 
-  it.each([undefined, "26.8.1", "24.15.0"])(
+  it.each([undefined, "26.12.1", "24.22.1"])(
     "keeps an already-installed service read-only with Node %s",
     async (nodeVersion) => {
       await fs.writeFile(
@@ -747,9 +747,6 @@ describe("runDaemonInstall integration", () => {
       expect(serviceMock.readDefinitionMutationCapability).not.toHaveBeenCalled();
       expect(serviceMock.install).not.toHaveBeenCalled();
       expect(await snapshotConfig()).toEqual(before);
-      if (nodeVersion === "24.15.0") {
-        expect(runtimeLogs.join("\n")).toContain("unsupported version, capability probe passed");
-      }
     },
   );
 

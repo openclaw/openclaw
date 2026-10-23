@@ -99,6 +99,10 @@ its parent Gateway process. Diagnosis preserves that refusal: it does not stop t
 Gateway, retry the update, or bypass safety checks. See
 [Update troubleshooting](/install/update-troubleshooting).
 
+If Doctor cannot verify that it descends from the live update driver, it defers
+maintenance and directs you to `openclaw update repair`. A verified package swap
+stays installed; unreadable process ancestry alone does not authorize rollback.
+
 ### Retained updater runtime
 
 An update can retain its running code in an `openclaw-update-runtime-*` directory

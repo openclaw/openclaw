@@ -121,6 +121,24 @@ describe("slack exec approvals", () => {
     expect(isSlackExecApprovalAuthorizedSender({ cfg, senderId: "U456" })).toBe(true);
   });
 
+  it("accepts typed Slack command owners as exec approvers", () => {
+    const cfg = {
+      ...buildConfig({ enabled: "auto" }),
+      commands: {
+        ownerAllowFrom: [
+          "slack:user:U0123ABCD",
+          "slack:team:T0123:user:U0999ZZZZ",
+          "telegram:user:1",
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(getSlackExecApprovalApprovers({ cfg })).toEqual(["U0123ABCD"]);
+    expect(isSlackExecApprovalClientEnabled({ cfg })).toBe(true);
+    expect(isSlackExecApprovalAuthorizedSender({ cfg, senderId: "U0123ABCD" })).toBe(true);
+    expect(isSlackExecApprovalAuthorizedSender({ cfg, senderId: "U0999ZZZZ" })).toBe(false);
+  });
+
   it("defaults target to dm", () => {
     expect(
       resolveSlackExecApprovalTarget({ cfg: buildConfig({ enabled: true, approvers: ["U1"] }) }),
@@ -181,6 +199,9 @@ describe("slack exec approvals", () => {
     expect(normalizeSlackApproverId("user:U123OWNER")).toBe("U123OWNER");
     expect(normalizeSlackApproverId("user:u123owner")).toBe("U123OWNER");
     expect(normalizeSlackApproverId("slack:u123owner")).toBe("U123OWNER");
+    expect(normalizeSlackApproverId("slack:user:u123owner")).toBe("U123OWNER");
+    expect(normalizeSlackApproverId("slack:team:T123:user:U123OWNER")).toBeUndefined();
+    expect(normalizeSlackApproverId("slack:channel:C123CHANNEL")).toBeUndefined();
     expect(normalizeSlackApproverId("<@U123OWNER>")).toBe("U123OWNER");
     expect(normalizeSlackApproverId("<@u123owner>")).toBe("U123OWNER");
     expect(normalizeSlackApproverId("u123owner")).toBe("U123OWNER");

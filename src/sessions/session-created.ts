@@ -8,11 +8,15 @@ import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import { enqueueSystemEvent, peekSystemEventEntries } from "../infra/system-events.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "./session-state-event-kinds.js";
 import { recordSessionStateEvent } from "./session-state-events.js";
+
+const CREATION_SUMMARY_MAX_CHARS = 8192;
+const CREATION_SUMMARY_HEADER =
+  "Recent session creations (bounded summary; older entries may be omitted):";
 
 /** Notify Home of a new logical session and record its trusted creation attribution. */
 export function recordSessionCreated(
@@ -83,14 +87,32 @@ function enqueueSessionCreatedNotice(params: {
         }
       : undefined,
   };
-  enqueueSystemEvent(
-    wrapUntrustedPromptDataBlock({ label: "New session created", text: JSON.stringify(details) }),
-    withSystemEventOwner(
-      {
-        sessionKey: mainSessionKey,
-        contextKey: `${SESSION_CREATED_NOTICE_CONTEXT_PREFIX}${sessionKey}:${entry.sessionId}`,
-      },
-      agentId,
-    ),
+  const options = withSystemEventOwner(
+    {
+      sessionKey: mainSessionKey,
+      contextKey: SESSION_CREATED_NOTICE_CONTEXT_PREFIX,
+      replace: true,
+    },
+    agentId,
   );
+  const pending = peekSystemEventEntries(options.sessionKey).find(
+    (event) => event.contextKey === options.contextKey,
+  );
+  const notices = pending?.text.split("\n\n").slice(1) ?? [];
+  const notice = wrapUntrustedPromptDataBlock({
+    label: "New session created",
+    text: JSON.stringify(details),
+    maxEscapedChars: 2048,
+    truncationMarker: "…",
+  });
+  if (notices.includes(notice)) {
+    return;
+  }
+  notices.push(notice);
+  let text = [CREATION_SUMMARY_HEADER, ...notices].join("\n\n");
+  while (text.length > CREATION_SUMMARY_MAX_CHARS) {
+    notices.shift();
+    text = [CREATION_SUMMARY_HEADER, ...notices].join("\n\n");
+  }
+  enqueueSystemEvent(text, options);
 }

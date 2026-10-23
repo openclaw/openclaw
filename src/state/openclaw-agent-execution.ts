@@ -299,13 +299,13 @@ function createAgentDatabaseExecution(
       await nativeClosing;
       assertCallerCurrent();
     }
-    if (cleanupFailure) {
-      // A transient lifecycle refusal must not poison every later borrower.
-      // Retire the original generation before admitting any replacement work.
+    // Retire a failed or refused native generation before admitting replacement work.
+    if (cleanupFailure || generation?.failed()) {
       await closeNative();
       assertCurrent();
       source.assertCurrent();
       assertCallerCurrent();
+      signal?.throwIfAborted();
     }
     if (!generation) {
       for (let idle = executionState.idle; idle && idle !== owner; idle = executionState.idle) {
@@ -605,11 +605,8 @@ function createAgentDatabaseExecution(
       })().catch((error: unknown) => {
         closing = undefined;
         if (!revoked) {
-          // A rejected native close has not retired anything yet: the owner still holds
-          // its generation and lease, and `executions` still points at it. Leaving it
-          // retired would refuse every later borrower with "admission is closed" until
-          // the process drains. Re-admit the owner instead; its retained cleanupFailure
-          // makes the next request retry the native close before any new work.
+          // Failed cleanup retains this generation and lease. Let later borrowers retry;
+          // explicit revocation still prevents new work.
           retired = false;
         }
         throw error;

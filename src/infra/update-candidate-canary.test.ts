@@ -126,7 +126,11 @@ describe("update candidate canary", () => {
     try {
       const env = { TMPDIR: "/synthetic/tmp" };
       const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(), env, onStep });
-      expect(result).toMatchObject({ status: "error", phase: "snapshot" });
+      expect(result).toMatchObject({
+        status: "error",
+        phase: "snapshot",
+        reason: "candidate-snapshot-failed",
+      });
       const failed = result.steps.at(-1);
       expect(failed).toMatchObject({
         name: "candidate-state-snapshot",

@@ -57,7 +57,7 @@
   },
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*",
-    "markdown-it": "15.0.2",
+    "markdown-it": "15.0.3",
     "markdown-it-cjk-friendly": "3.0.0",
     "mdast-util-from-markdown": "2.0.3",
     "mdast-util-gfm-table": "2.0.0",

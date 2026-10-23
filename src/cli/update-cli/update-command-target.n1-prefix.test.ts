@@ -55,8 +55,9 @@ vi.mock("../../infra/update-check.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-check.js")>()),
   resolveNpmChannelTag: async () => ({ tag: "latest", version: "2027.1.0" }),
 }));
-vi.mock("../../infra/update-check-package-target.js", () => ({
-  fetchNpmPackageTargetStatus: async () => ({ version: "2027.1.0", nodeEngine: ">=26.1.0" }),
+vi.mock("../../infra/update-check-package-target.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-check-package-target.js")>()),
+  fetchNpmPackageTargetStatus: async () => ({ version: "2027.1.0", nodeEngine: ">=26.12.1" }),
 }));
 vi.mock("../../../node-sqlite.mjs", async (original) => ({
   ...(await original<typeof import("../../../node-sqlite.mjs")>()),
@@ -132,7 +133,7 @@ it("rejects a Bun-driven split-root update when the recorded service Node cannot
   });
   vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue({
     status: "supported",
-    version: "24.16.0",
+    version: "24.22.1",
     sqliteVersion: "3.51.3",
     nodeSharedSqlite: false,
     sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
@@ -162,7 +163,7 @@ it("rejects a Bun-driven split-root update when the recorded service Node cannot
   expect(result).toMatchObject({
     ok: false,
     error: expect.stringContaining(
-      "requires Node >=26.1.0; selected runtime is Node 24.16.0 at /old/node",
+      "requires Node >=26.12.1; selected runtime is Node 24.22.1 at /old/node",
     ),
     failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
   });
@@ -183,9 +184,9 @@ it("does not reinterpret an unowned direct project as a selected global target",
 });
 
 it.each([
-  { node: "24.16.0", sqliteText: true, admitted: false },
-  { node: "26.1.0", sqliteText: false, admitted: false },
-  { node: "26.1.0", sqliteText: true, admitted: true },
+  { node: "24.22.1", sqliteText: true, admitted: false },
+  { node: "26.12.1", sqliteText: false, admitted: false },
+  { node: "26.12.1", sqliteText: true, admitted: true },
 ])(
   "checks updater Node $node (SQLite text=$sqliteText) before a Bun service-root update",
   async ({ node, sqliteText, admitted }) => {
@@ -224,7 +225,7 @@ it.each([
         : {
             ok: false,
             error: expect.stringContaining(
-              `requires Node >=26.1.0; selected runtime is Node ${node}`,
+              `requires Node >=26.12.1; selected runtime is Node ${node}`,
             ),
             failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
           },

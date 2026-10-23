@@ -40,6 +40,7 @@ import {
 import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
+let dispatchLowLevelChannelReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchLowLevelChannelReplyFromConfig;
 let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acpx.js").tryDispatchAcpReplyHook;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
@@ -167,7 +168,8 @@ function createMockAcpSessionManager() {
 
 describe("dispatchReplyFromConfig ACP abort", () => {
   beforeAll(async () => {
-    ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
+    ({ dispatchReplyFromConfig, dispatchLowLevelChannelReplyFromConfig } =
+      await import("./dispatch-from-config.js"));
     ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acpx.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
     ({ replyRunRegistry, createReplyOperation } = await import("./reply-run-registry.js"));
@@ -739,6 +741,88 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expectNoReplies(dispatcher);
     expect(getActiveReplyRunCount()).toBe(0);
   });
+
+  it.each([false, true])(
+    "keeps low-level ACP successor cancellation separate from its predecessor (caller abort=%s)",
+    async (cancelCaller) => {
+      const sessionKey = "agent:main:acp:successor";
+      const turnStarted = createDeferred();
+      const releaseTurn = createDeferred();
+      const runtime = createAcpRuntime([]);
+      runtime.runTurn.mockImplementation(async function* () {
+        turnStarted.resolve();
+        await releaseTurn.promise;
+        yield { type: "text_delta", stream: "output", text: "Successor reply" };
+        yield { type: "done", status: "completed" };
+      });
+      acpMocks.readAcpSessionEntry.mockReturnValue({
+        sessionKey,
+        storeSessionKey: sessionKey,
+        cfg: {},
+        storePath: "/tmp/mock-sessions.json",
+        entry: {},
+        acp: {
+          backend: "acpx",
+          agent: "main",
+          runtimeSessionName: "runtime:successor",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      });
+      acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
+      const predecessor = createReplyOperation({
+        sessionKey,
+        sessionId: "predecessor-session",
+        resetTriggered: false,
+      });
+      const caller = new AbortController();
+      const dispatcher = createDispatcher();
+      const dispatch = dispatchLowLevelChannelReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          SessionKey: sessionKey,
+          BodyForAgent: "Retry the interrupted task",
+        }),
+        cfg: {
+          acp: { enabled: true, dispatch: { enabled: true } },
+          session: { sendPolicy: { default: "allow" } },
+        },
+        dispatcher,
+        replyOptions: { abortSignal: caller.signal },
+      });
+
+      try {
+        await Promise.race([
+          turnStarted.promise,
+          dispatch.then(() => {
+            throw new Error("ACP successor completed before its runtime started");
+          }),
+        ]);
+        expect(predecessor.abortByUser()).toBe(true);
+        if (cancelCaller) {
+          caller.abort();
+        }
+        releaseTurn.resolve();
+        await dispatch;
+
+        expect(runtime.runTurn).toHaveBeenCalledOnce();
+        expect(runtime.runTurn.mock.calls[0]?.[0].signal?.aborted).toBe(cancelCaller);
+        if (cancelCaller) {
+          expectNoReplies(dispatcher);
+        } else {
+          expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ text: "Successor reply" }),
+          );
+        }
+      } finally {
+        releaseTurn.resolve();
+        await Promise.allSettled([dispatch]);
+        predecessor.complete();
+      }
+    },
+  );
 
   it("suppresses reply resolver runs after active source abort", async () => {
     const existingOperation = createReplyOperation({

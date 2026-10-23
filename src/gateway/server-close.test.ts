@@ -8,7 +8,10 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
-import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  isAgentRunRestartAbortReason,
+} from "../agents/run-termination.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
 import {
   createReplyOperation,
@@ -2240,6 +2243,51 @@ describe("createGatewayCloseHandler", () => {
       }),
     );
     expect(controller.signal.aborted).toBe(true);
+  });
+
+  it("keeps a run aborted by the restart prelude eligible for recovery marking", async () => {
+    const controller = new AbortController();
+    controller.abort(createAgentRunRestartAbortError());
+    const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>();
+    const chatAbortControllers = new Map([
+      [
+        "prelude-aborted-run",
+        {
+          controller,
+          sessionId: "prelude-aborted-session-id",
+          sessionKey: "agent:main:prelude-aborted",
+          lifecycleGeneration: "generation-1",
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        chatAbortControllers,
+        markMainSessionsAbortedForRestart,
+      }),
+    );
+
+    await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeRuns: [
+          {
+            runId: "prelude-aborted-run",
+            lifecycleGeneration: "generation-1",
+            sessionKey: "agent:main:prelude-aborted",
+            sessionId: "prelude-aborted-session-id",
+            observedAt: expect.any(Number),
+          },
+        ],
+      }),
+    );
   });
 
   it("marks and quietly cancels terminal runs before persistence settles", async () => {

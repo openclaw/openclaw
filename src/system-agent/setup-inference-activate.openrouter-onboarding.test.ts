@@ -168,7 +168,7 @@ it.each([
       platform: "linux",
       deps: {
         probeLocalCommand: async (command) => ({ found: false, command }),
-        hasCodexCliAuthFile: () => false,
+        readCodexCliCredentials: () => null,
       },
     });
     const discovered = candidates.find((candidate) => candidate.kind === "existing-model");

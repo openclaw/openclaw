@@ -28,6 +28,15 @@ const GRANTED = 1;
 const REFUSED = 2;
 const TIMED_OUT = 3;
 
+// Admission deadlines cross threads, so both sides keep the process monotonic
+// clock captured at import. Fake timers replace `process.hrtime` on one thread
+// with a clock that starts at zero; reading that replacement would expire, or
+// extend, every deadline the other thread set.
+// Each side measures admission deadlines on its own thread's monotonic clock:
+// Bun starts process.hrtime at zero independently in every worker.
+const processMonotonicClock = process.hrtime;
+const readMonotonicNs = (): bigint => processMonotonicClock.bigint();
+
 /** Only the factory's admission before agent open may certify this refusal. */
 export const SqliteWorkerOpenRefusedError = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteWorkerOpenRefusedError"),
@@ -167,8 +176,14 @@ export function createSqliteWorkerOperationAdmission(
       return;
     }
     const decision = new Int32Array(message.decision);
+    // A worker's monotonic instant cannot cross threads. Bound host-side work
+    // from receipt while the worker independently enforces its own wait budget.
+    const hostDeadlineNs =
+      typeof message.deadlineMs === "number" && Number.isFinite(message.deadlineMs)
+        ? readMonotonicNs() + BigInt(Math.max(0, Math.ceil(message.deadlineMs))) * 1_000_000n
+        : undefined;
     const expired = () => {
-      if (typeof message.deadlineNs === "bigint" && process.hrtime.bigint() >= message.deadlineNs) {
+      if (hostDeadlineNs !== undefined && readMonotonicNs() >= hostDeadlineNs) {
         if (Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT) === REQUESTED) {
           Atomics.notify(decision, 0);
         }
@@ -438,12 +453,11 @@ export function requestSqliteWorkerOperationAdmission(
   const deadlineNs =
     request.deadlineMs === undefined
       ? undefined
-      : process.hrtime.bigint() + BigInt(request.deadlineMs) * 1_000_000n;
+      : readMonotonicNs() + BigInt(request.deadlineMs) * 1_000_000n;
   scope.port.postMessage(
     {
       ...request,
       decision: decision.buffer,
-      deadlineNs,
       ports: transferList.filter((value) => value instanceof MessagePort),
     },
     transferList,
@@ -453,7 +467,7 @@ export function requestSqliteWorkerOperationAdmission(
   // authority; settlement still joins native rollback before custody release.
   while (Atomics.load(decision, 0) === REQUESTED) {
     const remainingMs =
-      deadlineNs === undefined ? undefined : Number(deadlineNs - process.hrtime.bigint()) / 1e6;
+      deadlineNs === undefined ? undefined : Number(deadlineNs - readMonotonicNs()) / 1e6;
     if (remainingMs !== undefined && remainingMs <= 0) {
       Atomics.compareExchange(decision, 0, REQUESTED, TIMED_OUT);
     } else {

@@ -65,6 +65,7 @@ const BOOTSTRAP_LAUNCHER_FILES = [
 ];
 const READ_CONCURRENCY = 16;
 const IGNORED_PLUGIN_DIRECTORIES = new Set(["node_modules", "src", "test", "tests"]);
+const PLUGIN_DIST_SHARED_CHUNK_PREFIX = "dist/.setup";
 const METADATA_KEYS = [
   "name",
   "version",
@@ -371,10 +372,14 @@ async function prepareNodeBootstrapArtifact(
     const pluginFiles: string[] = [];
     const visit = async (directory: string, relativeRoot = ""): Promise<void> => {
       for (const child of await fs.readdir(directory, { withFileTypes: true })) {
-        if (child.name.startsWith(".") || IGNORED_PLUGIN_DIRECTORIES.has(child.name)) {
+        const relative = relativeRoot ? `${relativeRoot}/${child.name}` : child.name;
+        const isSharedChunkDirectory = relative === PLUGIN_DIST_SHARED_CHUNK_PREFIX;
+        if (
+          !isSharedChunkDirectory &&
+          (child.name.startsWith(".") || IGNORED_PLUGIN_DIRECTORIES.has(child.name))
+        ) {
           continue;
         }
-        const relative = relativeRoot ? `${relativeRoot}/${child.name}` : child.name;
         if (relative.split("/").length > 64) {
           throw new Error("Node bootstrap plugin exceeds its directory depth limit");
         }

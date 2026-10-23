@@ -324,20 +324,20 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     "candidate admit with warn does not bypass runtime recovery (%s profile)",
     async (profile) => {
       const verdict = candidateAdmissionVerdict();
-      verdict.facts.nodeEngines = ">=26.1.0";
+      verdict.facts.nodeEngines = ">=26.12.1";
       verdict.facts.checks[2] = {
         name: "node-runtime",
         status: "warn",
-        detail: "Candidate requires Node >=26.1.0; selected runtime is Node 24.20.0.",
+        detail: "Candidate requires Node >=26.12.1; selected runtime is Node 24.20.0.",
       };
       const { pkgRoot, stages, contexts, events } = await prepareCandidateAdmissionFixture({
         marker: true,
         verdict,
-        nodeEngine: ">=26.1.0",
+        nodeEngine: ">=26.12.1",
       });
       vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
         packageTargetStatus({
-          nodeEngine: ">=26.1.0",
+          nodeEngine: ">=26.12.1",
           schemaVersions: {
             state: OPENCLAW_STATE_SCHEMA_VERSION,
             agent: OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -352,7 +352,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
         .spyOn(recovery, "resolveTargetNodeRuntime")
         .mockImplementation(async ({ engine, recovery: provision }) => {
           expect(contexts).toHaveLength(1);
-          expect(engine).toBe(">=26.1.0");
+          expect(engine).toBe(">=26.12.1");
           const install = expectDefined(provision.installCommand, "installed runtime provisioner");
           expect(await install(process.execPath, ["--version"], provision.env)).toBe(0);
           events.push("runtime-recovery");
@@ -656,7 +656,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("node-runtime-preflight");
     expect(defaultRuntime.log).toHaveBeenCalledWith(
-      `openclaw@2026.3.23-2 requires Node >=22.19.0; selected runtime is Node ${process.versions.node}.\n${runtimeRecovery.expectedPlainRecovery("2026.3.23-2", "24.16.0", "absent", undefined, root)}`,
+      `openclaw@2026.3.23-2 requires Node >=22.19.0; selected runtime is Node ${process.versions.node}.\n${runtimeRecovery.expectedPlainRecovery("2026.3.23-2", "24.22.1", "absent", undefined, root)}`,
     );
   });
 }

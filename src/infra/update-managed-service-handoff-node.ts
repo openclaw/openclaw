@@ -42,14 +42,20 @@ async function assertManagedHandoffServiceRuntime(
   }
   let command: { programArguments: string[] } | null;
   try {
-    command =
-      supervisor === "launchd"
-        ? await (
-            await import("../daemon/launchd-runtime.js")
-          ).readLaunchAgentProgramArguments(env, {
-            requireEffective: true,
-          })
-        : supervisor === "systemd"
+    if (supervisor === "launchd") {
+      const runtime = await import("../daemon/launchd-runtime.js");
+      if (
+        typeof runtime.readCorrespondingLaunchAgentCommand !== "function" ||
+        typeof runtime.readLoadedLaunchAgentState !== "function"
+      ) {
+        throw new Error("Launchd update compatibility exports are unavailable.");
+      }
+      command = await runtime.readLaunchAgentProgramArguments(env, {
+        requireEffective: true,
+      });
+    } else {
+      command =
+        supervisor === "systemd"
           ? await (
               await import("../daemon/systemd-service-files.js")
             ).readSystemdServiceExecStart(env, { requireEffective: true })
@@ -58,6 +64,7 @@ async function assertManagedHandoffServiceRuntime(
             ).readScheduledTaskCommand(env, {
               requireEffective: true,
             });
+    }
   } catch (error) {
     console.warn(`[update] Could not inspect the managed service: ${String(error)}`);
     command = null;

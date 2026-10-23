@@ -652,7 +652,16 @@ describe("harness runtime plugins", () => {
         },
       };
       const plan = resolveAgentRuntimePluginLoadPlan({
-        metadataSnapshot: createMemoryPlanMetadataSnapshot(),
+        metadataSnapshot: createPluginMetadataSnapshot({
+          manifestRegistry: makeRegistry([
+            {
+              id: "codex",
+              channels: [],
+              origin: "bundled",
+              activation: { onAgentHarnesses: ["codex"] },
+            },
+          ]),
+        }),
         config,
         workspaceDir: "/tmp/workspace",
         basePluginIds,

@@ -443,7 +443,7 @@ export function normalizeStoredCronJobs(
       const fallbackAtMs = !parsedAt && atRaw ? parseAbsoluteTimeMs(atRaw) : null;
       const fallbackAt = fallbackAtMs !== null ? timestampMsToIsoString(fallbackAtMs) : undefined;
       const normalizedAt = parsedAt ?? fallbackAt;
-      if (normalizedAt) {
+      if (normalizedAt && (sched.at !== normalizedAt || "atMs" in sched)) {
         sched.at = normalizedAt;
         if ("atMs" in sched) {
           delete sched.atMs;

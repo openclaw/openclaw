@@ -192,8 +192,11 @@ describeLive("cron tool allowlists through live harnesses", () => {
             const results = history.messages.filter((message) => message.role === "toolResult");
             expect(assistants.length, JSON.stringify(history)).toBeGreaterThan(0);
             if (cap === "") {
-              expect(calls).toEqual([]);
-              expect(results).toEqual([]);
+              // An empty cap must not expose any tool call or result.
+              const inertProbes = new Set<string>();
+              expect(calls.filter((call) => !inertProbes.has(call.name))).toEqual([]);
+              expect(results.filter((result) => !inertProbes.has(result.toolName))).toEqual([]);
+              expect(JSON.stringify(results)).not.toContain(marker);
               expect(JSON.stringify(assistants)).not.toContain(marker);
               const assistantText = assistants
                 .map((message) =>

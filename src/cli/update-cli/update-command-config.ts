@@ -384,9 +384,10 @@ export async function readUpdateChannelConfig(
       readError: { code: null },
     });
   }
-  const legacyConfigPlan = channelRequested
-    ? await planUpdateChannelLegacyConfig(configSnapshot)
-    : undefined;
+  const legacyConfigPlan =
+    channelRequested || options?.tolerateReadFailure
+      ? await planUpdateChannelLegacyConfig(configSnapshot)
+      : undefined;
   const plannedConfig =
     legacyConfigPlan?.config ??
     (configSnapshot.valid

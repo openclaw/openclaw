@@ -30,10 +30,12 @@ type TestApplicationContext = ApplicationContext & { gateway: TestGateway };
 function contextWithClient(
   client: GatewayBrowserClient,
   connected = false,
+  bootId?: string,
 ): TestApplicationContext {
   let snapshot = {
     client,
     phase: connected ? "connected" : "stopped",
+    hello: bootId === undefined ? undefined : { server: { bootId } },
   } as ApplicationGatewaySnapshot;
   const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   return {
@@ -365,6 +367,61 @@ describe("LogsPage lifecycle", () => {
     expect(request.mock.calls[2]?.[1]).toMatchObject({ cursor: undefined });
     expect(page.logsFile).toBe("/tmp/source-b.log");
     expect(page.logsEntries.map((entry) => entry.raw)).toEqual(["B-one", "B-tail"]);
+  });
+
+  it("resumes the loaded cursor after a same-gateway reconnect", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 100, file: "/tmp/gateway.log", lines: ["before"] })
+      .mockResolvedValueOnce({ cursor: 110, file: "/tmp/gateway.log", lines: ["after"] });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = document.createElement("openclaw-logs-page") as TestLogsPage;
+    const context = contextWithClient(client, true, "same-boot");
+    page.context = context;
+    document.body.append(page);
+    await vi.waitFor(() => expect(page.logsStatus.hasLoaded).toBe(true));
+
+    context.gateway.publish({ ...context.gateway.snapshot, phase: "reconnecting" });
+    await page.updateComplete;
+    context.gateway.publish({ ...context.gateway.snapshot, phase: "connected" });
+    await page.updateComplete;
+    // The reconnect itself does not reset the cursor; the next poll resumes it.
+    await page.loadLogs({ quiet: true });
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]![1]).toMatchObject({ cursor: 100 });
+    expect(page.logsEntries.map((entry) => entry.raw)).toEqual(["before", "after"]);
+  });
+
+  it("retries a changed boot from the start while retaining stale rows until replacement", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 100, file: "/tmp/gateway.log", lines: ["before"] })
+      .mockRejectedValueOnce(new Error("replacement boot is not ready"))
+      .mockResolvedValueOnce({ cursor: 200, file: "/tmp/gateway.log", lines: ["restarted"] });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = document.createElement("openclaw-logs-page") as TestLogsPage;
+    const context = contextWithClient(client, true, "original-boot");
+    page.context = context;
+    document.body.append(page);
+    await vi.waitFor(() => expect(page.logsStatus.hasLoaded).toBe(true));
+
+    context.gateway.publish({ ...context.gateway.snapshot, phase: "reconnecting" });
+    await page.updateComplete;
+    // SAFETY: This focused snapshot fixture supplies only the hello boot field read by LogsPage.
+    context.gateway.publish({
+      ...context.gateway.snapshot,
+      phase: "connected",
+      hello: { server: { bootId: "replacement-boot" } },
+    } as ApplicationGatewaySnapshot);
+    await vi.waitFor(() => expect(page.logsStatus.error).toBe("replacement boot is not ready"));
+    expect(request.mock.calls[1]![1]).toMatchObject({ cursor: undefined });
+    expect(page.logsEntries.map((entry) => entry.raw)).toEqual(["before"]);
+
+    await page.loadLogs({ quiet: true });
+    expect(request.mock.calls[2]![1]).toMatchObject({ cursor: undefined });
+    expect(page.logsEntries.map((entry) => entry.raw)).toEqual(["restarted"]);
+    expect(page.logsStatus.error).toBeNull();
   });
 
   it("retains loaded logs as stale after failure and clears the marker on retry success", async () => {

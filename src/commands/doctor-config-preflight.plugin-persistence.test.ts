@@ -112,6 +112,7 @@ async function withPreflightPluginFixture(
 
 const readPluginPreflight = () =>
   readConfigPreflightSnapshot({
+    purpose: "doctor",
     allowCurrentPluginMetadata: true,
     includePluginMetadata: true,
     preparePluginMetadataSnapshot: true,
@@ -475,6 +476,7 @@ describe("startup plugin persistence", () => {
         await writeVersion("2.0.0");
         let producer: ReturnType<typeof getPluginCache> | undefined;
         const refreshed = await readConfigPreflightSnapshot({
+          purpose: "doctor",
           allowCurrentPluginMetadata: false,
           includePluginMetadata: true,
           preparePluginMetadataSnapshot: true,
@@ -639,6 +641,7 @@ describe("startup plugin persistence", () => {
           beforeStatePreparation: async () => {
             if (persisted) {
               const read = await readConfigPreflightSnapshot({
+                purpose: "startup",
                 allowCurrentPluginMetadata: false,
                 includePluginMetadata: true,
                 preparePluginMetadataSnapshot: true,

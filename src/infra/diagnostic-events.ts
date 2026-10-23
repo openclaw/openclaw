@@ -32,6 +32,7 @@ import type {
 import {
   consumeCoreSemanticRunProgressDiagnosticEvent,
   CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY,
+  type CoreSemanticRunProgressProvenance,
 } from "./diagnostic-semantic-run-progress-provenance.js";
 import {
   consumeToolExecutionLivenessDiagnosticEvent,
@@ -926,7 +927,7 @@ type InternalDiagnosticEventMetadata = DiagnosticEventMetadata &
     [CORE_MODEL_REQUEST_LIFECYCLE_METADATA_KEY]?: CoreModelRequestLifecycleProvenance;
     // String metadata survives duplicate module instances sharing dispatcher state;
     // only the non-SDK core emitter can set this semantic authority.
-    [CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY]?: boolean;
+    [CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY]?: CoreSemanticRunProgressProvenance;
   }>;
 
 export type DiagnosticModelCallContent = Readonly<{
@@ -1323,7 +1324,7 @@ type EmitDiagnosticEventOptions = {
   toolExecutionLiveness?: DiagnosticToolExecutionLiveness;
   allowSecurityEvent?: boolean;
   coreModelRequestLifecycle?: CoreModelRequestLifecycleProvenance;
-  coreSemanticRunProgress?: boolean;
+  coreSemanticRunProgress?: CoreSemanticRunProgressProvenance;
   hostPluginId?: string;
   internal?: boolean;
   privateData?: DiagnosticEventPrivateData;
@@ -1358,8 +1359,8 @@ function emitDiagnosticEventWithTrust(
     ...(options.coreModelRequestLifecycle
       ? { [CORE_MODEL_REQUEST_LIFECYCLE_METADATA_KEY]: options.coreModelRequestLifecycle }
       : {}),
-    ...(options.coreSemanticRunProgress === true
-      ? { [CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY]: true }
+    ...(options.coreSemanticRunProgress
+      ? { [CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY]: options.coreSemanticRunProgress }
       : {}),
     ...(trustedTraceContext ? { trustedTraceContext } : {}),
   };
@@ -1462,7 +1463,7 @@ export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, true, {
     ...(toolExecutionLiveness ? { toolExecutionLiveness } : {}),
     ...(hostPluginId ? { hostPluginId, internal: true } : {}),
-    ...(coreSemanticRunProgress ? { coreSemanticRunProgress: true } : {}),
+    ...(coreSemanticRunProgress ? { coreSemanticRunProgress } : {}),
   });
 }
 

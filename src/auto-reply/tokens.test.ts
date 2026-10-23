@@ -176,6 +176,12 @@ describe("isSilentReplyPayloadText", () => {
       ),
     ).toBe(false);
   });
+
+  it.each([".", "!", "?"])("suppresses reasoning text with trailing NO_REPLY%s", (punctuation) => {
+    expect(isSilentReplyPayloadText(`think\ninternal reasoning\nNO_REPLY${punctuation}`)).toBe(
+      true,
+    );
+  });
 });
 
 describe("stripSilentToken", () => {

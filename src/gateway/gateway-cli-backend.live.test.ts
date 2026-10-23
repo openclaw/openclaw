@@ -633,7 +633,6 @@ describeLive("gateway live (cli backend)", () => {
           cacheProbeOwner = {
             backendId: providerId,
             agentId: "dev",
-            authProfileId: CLI_CACHE_AUTH_PROFILE_ID,
             sessionId: history.sessionId,
             sessionKey,
           };

@@ -20,7 +20,7 @@ function runtimeFixture(script: string, name = "node"): string {
   return file;
 }
 
-function runtimeMetadata(nodeVersion = "26.8.1", sqliteVersion = "3.53.4") {
+function runtimeMetadata(nodeVersion = "26.12.1", sqliteVersion = "3.53.4") {
   return {
     nodeVersion,
     bunVersion: null,
@@ -47,7 +47,7 @@ describe.skipIf(process.platform === "win32")("runtime pin executable boundary",
 
   it.each([
     ["old Node", runtimeMetadata("22.16.0"), /unsupported/],
-    ["unsafe SQLite", runtimeMetadata("26.8.1", "3.51.0"), /unsupported/],
+    ["unsafe SQLite", runtimeMetadata("26.12.1", "3.51.0"), /unsupported/],
     ["malformed output", {}, /probe failed/],
   ])("refuses %s without selecting a replacement", async (_name, metadata, error) => {
     const file = runtimeFixture(

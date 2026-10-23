@@ -1334,6 +1334,59 @@ describe("previous release update compatibility", () => {
     ]);
   });
 
+  it.each(
+    (
+      [
+        ["2026.9.8", "io.runtime-BNEtkwm5.mjs"],
+        ["2026.10.5-beta.1", "io.runtime-t3hrjkTX.mjs"],
+      ] as const
+    ).flatMap(([release, target]) =>
+      ["exact", "changed delegation", "changed binding", "changed target"].map(
+        (variant) => [release, target, variant] as const,
+      ),
+    ),
+  )("traces only the exact shipped %s config alias (%s, %s)", (release, target, variant) => {
+    let alias = fsSync.readFileSync(
+      path.join(MODULE_ROOT, `test/fixtures/update-config-runtime-alias-${release}.txt`),
+      "utf8",
+    );
+    const exportedNames = [...alias.matchAll(/select\("(\w+)"\)/g)].flatMap(
+      (match) => match[1] ?? [],
+    );
+    const sortedNames = exportedNames.toSorted((left, right) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    );
+    if (variant === "changed delegation") {
+      alias = alias.replace("return runtime[name]", "return undefined");
+    } else if (variant === "changed binding") {
+      alias = alias.replace('select("createConfigIO")', 'select("readConfigFileSnapshot")');
+    } else if (variant === "changed target") {
+      alias = alias.replace(`"./${target}"`, '"./"');
+    }
+    const record = () =>
+      recordImportedFixture('(await import("./io.runtime.js"))', {
+        "io.runtime.js": alias,
+        [target]: `export { ${exportedNames.join(", ")} } from "./config-abcdefgh.mjs";\n`,
+        "config-abcdefgh.mjs": [
+          "//#region src/config/io.ts",
+          ...exportedNames.map((name) => `export function ${name}() {}`),
+        ].join("\n"),
+      });
+    if (variant !== "exact") {
+      expect(record).toThrow(`Cannot trace io.runtime.js export ${sortedNames[0]}`);
+      return;
+    }
+    expect(record().inventory.releases[0]?.chunks).toMatchObject([
+      {
+        path: "io.runtime.js",
+        exports: sortedNames.map((exported) => ({
+          exported,
+          origin: { module: "src/config/io.ts", symbol: exported },
+        })),
+      },
+    ]);
+  });
+
   it.each(["source scripts", "different owner", "mutable binding", "dist path", "unknown script"])(
     "distinguishes source completion contracts from unknown dynamic imports (%s)",
     (variant) => {

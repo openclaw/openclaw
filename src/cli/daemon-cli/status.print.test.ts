@@ -17,7 +17,7 @@ type TestDaemonStatus = Omit<DaemonStatus, "service"> & {
 
 function printDaemonStatus(
   status: TestDaemonStatus,
-  options: Parameters<typeof printDaemonStatusRuntime>[1],
+  options: Parameters<typeof printDaemonStatusRuntime>[1] = { json: false },
 ) {
   const loaded =
     status.service.loaded !== undefined
@@ -787,6 +787,33 @@ describe("printDaemonStatus", () => {
 
     const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
     expect(errors).not.toContain("Gateway port 18789 is not listening");
+  });
+
+  it("names a disabled custom Scheduled Task and explains how to re-enable it", () => {
+    using platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    expect(platform).toBeDefined();
+    printDaemonStatus({
+      extraServices: [],
+      service: {
+        label: "Scheduled Task",
+        loadedText: "registered",
+        notLoadedText: "not registered",
+        loadState: { status: "loaded" },
+        runtime: { status: "stopped", state: "Disabled" },
+        command: {
+          programArguments: [],
+          environment: { OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Custom Gateway" },
+        },
+      },
+    });
+
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).toContain("Scheduled Task 'OpenClaw Custom Gateway' is registered but DISABLED");
+    expect(errors).toContain("openclaw gateway start");
+    expect(errors).toContain("openclaw doctor --fix");
+    expect(errors).toContain("to re-enable it");
+    expect(errors).toContain('schtasks /Query /TN "OpenClaw Custom Gateway"');
+    expect(errors).not.toContain("likely exited immediately");
   });
 
   it("prints GUI-session recovery guidance for the service profile", () => {

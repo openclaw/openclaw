@@ -1338,6 +1338,37 @@ describe("runCliTurnCompactionLifecycle", () => {
     },
   );
 
+  it("resolves native compaction ownership from the CLI backend instead of the model provider", async () => {
+    const resolveBackend = vi.fn((backendId: string) =>
+      backendId === "claude-cli"
+        ? {
+            id: "claude-cli",
+            config: { command: "claude" },
+            bundleMcp: true,
+            ownsNativeCompaction: true,
+          }
+        : null,
+    );
+    const scenario = await prepareCompactionScenario({
+      suffix: "model-provider-with-cli-backend",
+      tmpDir,
+      provider: "anthropic",
+      model: "claude-opus-5-5",
+      sessionEntry: {
+        cliSessionBindings: { "claude-cli": { sessionId: "native-session" } },
+      },
+      deps: { resolveCliBackendConfig: resolveBackend },
+    });
+
+    const updatedEntry = await scenario.run({ cliBackendId: "claude-cli" });
+
+    expect(resolveBackend).toHaveBeenCalledWith("claude-cli", expect.anything());
+    expect(scenario.compactCalls).toHaveLength(0);
+    expect(scenario.recordCliCompactionInStore).not.toHaveBeenCalled();
+    expect(updatedEntry).toBe(scenario.sessionEntry);
+    expect(updatedEntry?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("native-session");
+  });
+
   it("does not skip compaction when backend does not declare ownsNativeCompaction", async () => {
     const scenario = await prepareCompactionScenario({
       suffix: "generic-no-ownership",
@@ -1384,7 +1415,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       },
     });
     const { compactCalls, recordCliCompactionInStore } = scenario;
-    await scenario.run();
+    await scenario.run({ cliBackendId: "codex" });
 
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
     expect(compactCalls).toHaveLength(0);

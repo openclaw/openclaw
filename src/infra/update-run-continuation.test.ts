@@ -196,6 +196,7 @@ describe("Windows update repair continuation", () => {
     const admission = inspectUpdateRepairDriverAdmission([unverifiedDriverRun()], runId);
     expect(admission).toMatchObject({
       kind: "conflict",
+      reason: "ancestry-unverified",
       message: expect.stringContaining("not evidence of another update"),
     });
     expect(admission).not.toMatchObject({ message: expect.stringContaining("liveness: alive") });

@@ -46,10 +46,10 @@ async function createConnectedGatewayClient(params: {
           clearTimeout(timer);
           resolve();
         },
-        onConnectError: (error) => {
+        onConnectError: (error: unknown) => {
           clearTimeout(timer);
           abortStart.abort();
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error)));
         },
       });
       void startGatewayClientWhenEventLoopReady(client, {

@@ -8,6 +8,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createGatewayKernel } from "./server-kernel.js";
@@ -90,11 +91,21 @@ describe("Gateway startup node capabilities", () => {
     const peers = [affected, unaffected, operator];
     let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
     let server: GatewayServer | undefined;
+    const admission = vi
+      .spyOn(
+        await import("./server-agent-database-startup.js"),
+        "activateGatewayAgentDatabaseStartup",
+      )
+      .mockImplementation(() => undefined);
     const createKernel = createGatewayKernel;
     const factory = vi
       .spyOn(await import("./server-kernel.js"), "createGatewayKernel")
       .mockImplementation(async (...args) => {
         kernel = await createKernel(...args);
+        expect(kernel.workerPlacementRuntime).toBeDefined();
+        vi.spyOn(kernel.workerPlacementRuntime!, "startRuntime").mockImplementation(async () => {
+          return null;
+        });
         for (const { client } of peers) {
           kernel.clients.add(client);
         }
@@ -104,6 +115,7 @@ describe("Gateway startup node capabilities", () => {
       .spyOn(await import("./server-startup-post-attach.js"), "startGatewayPostAttachRuntime")
       .mockImplementation(async (params) => {
         await params.onStartupPluginsLoaded?.({ pluginRegistry: registry, gatewayMethods: [] });
+        await params.startWorkerEnvironmentRuntime?.();
         return { stopGatewayUpdateCheck: async () => {}, startupSettled: Promise.resolve() };
       });
     try {
@@ -120,12 +132,14 @@ describe("Gateway startup node capabilities", () => {
         state.applyEnv();
         stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
         const { startGatewayServerCore } = await import("./server-start.js");
-        return await startGatewayServerCore(claim.port, {
-          auth: { mode: "token", token },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        });
+        return await withAgentDatabaseStartupAdmission(() =>
+          startGatewayServerCore(claim.port, {
+            auth: { mode: "token", token },
+            bind: "loopback",
+            controlUiEnabled: false,
+            sidecarStartup: "defer",
+          }),
+        );
       });
       expect(affected.client.invalidated).toBe(true);
       await expect(affected.closed).resolves.toEqual({
@@ -140,6 +154,7 @@ describe("Gateway startup node capabilities", () => {
         await server?.close();
       } finally {
         factory.mockRestore();
+        admission.mockRestore();
         postAttach.mockRestore();
         restoreActivePluginRegistrySnapshot(previousRegistry);
         await state.cleanup();

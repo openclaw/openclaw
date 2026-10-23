@@ -67,14 +67,14 @@ it.each([
     vi.spyOn(daemonService, "resolveGatewayService").mockReturnValue(service);
     vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockImplementation(async (node) => ({
       status: "supported",
-      version: compatible || node === "/current/node" ? "26.1.0" : "24.16.0",
+      version: compatible || node === "/current/node" ? "26.12.1" : "24.22.1",
       sqliteVersion: "3.53.0",
       nodeSharedSqlite: false,
       sqliteProbe: { available: true, version: "3.53.0", text: true, blob: true, json: true },
     }));
     vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
       ...targetMetadata,
-      nodeEngine: ">=26.1.0",
+      nodeEngine: ">=26.12.1",
     });
     if (current) {
       fs.writeFileSync(
@@ -122,14 +122,14 @@ it.each([
         {
           kind: "select-runtime",
           instruction:
-            "Install and select Node 26.1.0 using your system package manager or https://nodejs.org/en/download.",
+            "Install and select Node 26.12.1 using your system package manager or https://nodejs.org/en/download.",
         },
         ...(current && (!running || !refresh)
           ? [
               {
                 kind: "select-runtime",
                 instruction:
-                  "The Gateway service still selects /service/node. Before continuing, have its deployment owner select Node 26.1.0 in the service definition while retaining its installation, service account, and state/config selectors. Switching the shell runtime alone does not update that service definition.",
+                  "The Gateway service still selects /service/node. Before continuing, have its deployment owner select Node 26.12.1 in the service definition while retaining its installation, service account, and state/config selectors. Switching the shell runtime alone does not update that service definition.",
               },
             ]
           : []),
@@ -139,7 +139,7 @@ it.each([
         },
       ];
       const message = [
-        "openclaw@2026.9.2 requires Node >=26.1.0; selected runtime is Node 24.16.0 at /service/node.",
+        "openclaw@2026.9.2 requires Node >=26.12.1; selected runtime is Node 24.22.1 at /service/node.",
         "Recovery:",
         ...recoverySteps.map(
           (step, index) =>
@@ -160,7 +160,7 @@ it.each([
                   code: "node-runtime-preflight",
                   affectedKey: "engines.node",
                   message:
-                    "Target package: openclaw@2026.9.2; Minimum Node engine: 26.1.0; Running Node: 24.16.0",
+                    "Target package: openclaw@2026.9.2; Minimum Node engine: 26.12.1; Running Node: 24.22.1",
                 },
               ],
             },
@@ -204,7 +204,7 @@ it.each([
                 failureFacts: [
                   expect.objectContaining({
                     code: "node-runtime-preflight",
-                    message: expect.stringContaining("Minimum Node engine: 26.1.0"),
+                    message: expect.stringContaining("Minimum Node engine: 26.12.1"),
                   }),
                 ],
               }),

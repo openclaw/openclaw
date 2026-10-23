@@ -1,7 +1,11 @@
 import { statSync, type BigIntStats } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
-import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
+import {
+  assertStateDatabaseAccessAllowed,
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../infra/gateway-state-owner.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import {
   runWithSqliteBusyTimeout,
@@ -184,7 +188,20 @@ function openNativeStateDatabase(
               checkpoint: walMaintenance?.health,
             }),
           runMaintenance: (operation) => {
-            assertStateDatabaseAccessAllowed(params.pathname);
+            try {
+              assertStateDatabaseAccessAllowed(params.pathname);
+            } catch (error) {
+              if (
+                !(error instanceof StateDatabaseAdmissionPendingError) &&
+                !(error instanceof StateDatabaseOfflineMaintenanceError)
+              ) {
+                throw error;
+              }
+              stateDbLog.debug("Shared-state WAL maintenance deferred during offline maintenance", {
+                path: params.pathname,
+              });
+              return false;
+            }
             return operation();
           },
           foreignKeys: true,

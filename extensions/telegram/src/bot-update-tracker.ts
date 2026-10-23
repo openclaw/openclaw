@@ -34,7 +34,7 @@ type BeginUpdateResult =
     }
   | {
       accepted: false;
-      reason: "accepted-watermark" | "semantic-dedupe";
+      reason: "accepted-watermark" | "semantic-dedupe" | "pending";
     };
 
 type FinishUpdateOptions = {
@@ -216,13 +216,20 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
         skip(`update:${updateId}`);
         return { accepted: false, reason: "accepted-watermark" };
       } else if (acceptedUpdateIds.has(updateId)) {
-        // Same process already accepted this exact id (completed or in-flight).
+        // Pending middleware is not a terminal processing fact for a spool retry.
         skip(`update:${updateId}`);
-        return { accepted: false, reason: "accepted-watermark" };
+        return {
+          accepted: false,
+          reason: pendingUpdateIds.has(updateId) ? "pending" : "accepted-watermark",
+        };
       }
     }
     if (updateKey) {
-      if (activeHandledUpdateKeys.has(updateKey) || recentUpdates.peek(updateKey)) {
+      if (activeHandledUpdateKeys.has(updateKey)) {
+        skip(updateKey);
+        return { accepted: false, reason: "pending" };
+      }
+      if (recentUpdates.peek(updateKey)) {
         skip(updateKey);
         return { accepted: false, reason: "semantic-dedupe" };
       }

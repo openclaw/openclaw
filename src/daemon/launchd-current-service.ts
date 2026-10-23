@@ -48,6 +48,9 @@ export async function isCurrentProcessInsideLaunchdService(label: string): Promi
     if (membership === "inside") {
       return true;
     }
+    if (membership === "outside") {
+      return false;
+    }
     if (membership === "unknown") {
       throw new ServiceInspectionError("service-membership-unverified");
     }

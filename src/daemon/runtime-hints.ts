@@ -1,4 +1,5 @@
 /** Builds platform-specific log and start hints for daemon status output. */
+import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveGatewaySystemdServiceName, resolveGatewayWindowsTaskName } from "./constants.js";
 import { resolveGatewayRestartLogPath, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
@@ -40,13 +41,16 @@ export function buildPlatformRuntimeLogHints(params: {
 
 /** Build recovery details after the caller selects its applicable runtime state. */
 export function buildGatewayRuntimeRecoveryHints(params: {
-  kind: "gui-session" | "stopped";
+  kind: "gui-session" | "stopped" | "disabled-task";
   restartCommand: string;
   logFile?: string | null;
   platform?: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
   systemd?: GatewayServiceRuntime["systemd"];
 }): string[] {
+  const windowsTaskName =
+    params.env.OPENCLAW_WINDOWS_TASK_NAME?.trim() ||
+    resolveGatewayWindowsTaskName(params.env.OPENCLAW_PROFILE);
   const hints =
     params.kind === "gui-session"
       ? [
@@ -55,17 +59,22 @@ export function buildGatewayRuntimeRecoveryHints(params: {
           "For headless VM setups, enable auto-login for the target user or use a custom LaunchDaemon (not shipped).",
         ]
       : [];
+  if (params.kind === "disabled-task") {
+    hints.push(
+      `Scheduled Task '${windowsTaskName}' is registered but DISABLED; run \`${formatCliCommand("openclaw gateway start", params.env)}\` (or \`${formatCliCommand("openclaw doctor --fix", params.env)}\`) to re-enable it.`,
+    );
+  }
   if (params.logFile) {
     hints.push(`File logs: ${params.logFile}`);
   }
-  if (params.kind === "stopped") {
+  if (params.kind !== "gui-session") {
     hints.push(
       ...buildPlatformRuntimeLogHints({
         platform: params.platform,
         env: params.env,
         systemdServiceName: resolveGatewaySystemdServiceName(params.env.OPENCLAW_PROFILE),
         systemd: params.systemd,
-        windowsTaskName: resolveGatewayWindowsTaskName(params.env.OPENCLAW_PROFILE),
+        windowsTaskName,
       }),
     );
   }

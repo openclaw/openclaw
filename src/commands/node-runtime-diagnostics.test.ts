@@ -162,26 +162,22 @@ describe("Node runtime diagnostics command surfaces", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it.each(["cli", "service"])(
-    "renders an admitted out-of-table %s runtime as information",
-    async (source) => {
-      mocks.readCommand.mockResolvedValue(null);
-      if (source === "cli") {
-        mockCliRuntime("24.15.0");
-      } else {
-        mocks.readCommand.mockResolvedValue({ programArguments: ["/fixture/node", "gateway"] });
-        mocks.resolveNodeRuntimeInfo.mockResolvedValue({
-          status: "supported",
-          version: "24.15.0",
-          note: "Node 24.15.0: unsupported version, capability probe passed.",
-        });
-      }
-      await statusCommand({ json: true }, runtime);
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("[info] Node 24.15.0:"));
-      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("[warning]"));
-      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("undefined"));
-    },
-  );
+  it.each(["cli", "service"])("renders a below-floor %s runtime as a warning", async (source) => {
+    mocks.readCommand.mockResolvedValue(null);
+    if (source === "cli") {
+      mockCliRuntime("24.15.0");
+    } else {
+      mocks.readCommand.mockResolvedValue({ programArguments: ["/fixture/node", "gateway"] });
+      mocks.resolveNodeRuntimeInfo.mockResolvedValue({
+        status: "unsupported",
+        version: "24.15.0",
+        capabilityError: "Node 24.15.0: openclaw requires Node >=24.22.1 <25, or >=26.12.1.",
+      });
+    }
+    await statusCommand({ json: true }, runtime);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("[warning] Node 24.15.0:"));
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("undefined"));
+  });
 
   it("reports an uninspectable service without claiming its Node is unsupported", async () => {
     mocks.resolveNodeRuntimeInfo.mockResolvedValue({

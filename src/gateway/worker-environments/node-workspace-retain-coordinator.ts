@@ -5,6 +5,7 @@ import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
 } from "../../infra/node-runner-inventory.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
   NODE_WORKER_BUNDLE_RETAIN_MAX_HASHES,
   NODE_WORKER_RETAIN_REQUEST_MAX_BYTES,
@@ -358,7 +359,7 @@ export function createNodeWorkspaceRetainCoordinator(
         }
       } while (nodeId ? pendingNodes.has(nodeId) : pendingAll);
     };
-    const operation = run().finally(() => {
+    const operation = runOutsideAsyncWorkScope(run).finally(() => {
       operations.delete(nodeId);
       if (!stopped && (nodeId ? pendingNodes.has(nodeId) : pendingAll)) {
         void schedule(nodeId);

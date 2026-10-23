@@ -180,8 +180,22 @@ export type GatewayStateOwnerContentionError = InstanceType<
   typeof GatewayStateOwnerContentionError
 >;
 
-const StateDatabaseAdmissionPendingError = resolveGlobalSingleton(
+export const StateDatabaseAdmissionPendingError = resolveGlobalSingleton(
   Symbol.for("openclaw.stateDatabaseAdmissionPendingError"),
+  () =>
+    class extends Error {
+      constructor(
+        readonly databasePath: string,
+        message: string,
+      ) {
+        super(message);
+      }
+    },
+);
+
+/** A live foreign process holds offline-maintenance custody of this database. */
+export const StateDatabaseOfflineMaintenanceError = resolveGlobalSingleton(
+  Symbol.for("openclaw.stateDatabaseOfflineMaintenanceError"),
   () =>
     class extends Error {
       constructor(
@@ -709,7 +723,8 @@ export function assertStateDatabaseAccessAllowed(
       `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.`,
     );
   }
-  throw new Error(
+  throw new StateDatabaseOfflineMaintenanceError(
+    databasePath,
     `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.`,
   );
 }

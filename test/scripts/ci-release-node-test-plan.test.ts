@@ -36,6 +36,19 @@ it("splits measured full-release hosted rows without losing their execution cont
     expect(before).toHaveLength(1);
     const owner = before[0]!;
     const parentKey = `release-full-${owner.shardName}`;
+    const historicalFiles = files.slice(0, -1);
+    const historicalGeneration = shardMetadata.createCompactSplitTimingGeneration({
+      configs: owner.configs,
+      env: owner.env,
+      parentShardName: parentKey,
+      stripes: [historicalFiles],
+    });
+    measurements[historicalGeneration.timingKeys[0]!] = 3600;
+    const changedSelector = releaseRows();
+    expect(changedSelector.length).toBeGreaterThan(1);
+    expect(changedSelector.every((row) => row.predictedSeconds! <= 720)).toBe(true);
+    expect(changedSelector.flatMap((row) => row.includePatterns ?? []).toSorted()).toEqual(files);
+    delete measurements[historicalGeneration.timingKeys[0]!];
     measurements[parentKey] = 1800;
     const split = releaseRows();
     expect(split).toHaveLength(3);

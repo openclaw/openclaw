@@ -5,10 +5,7 @@ import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
-import { resolveGatewayNativeServiceIdentityConflict } from "../../daemon/constants.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
-import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
-import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -16,7 +13,10 @@ import {
   isGatewayExternallySupervised,
 } from "../../infra/gateway-supervision.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
-import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
+import {
+  type assertNoPendingPackageActivation,
+  settleStalePackageActivation,
+} from "../../infra/package-update-activation.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import {
@@ -33,7 +33,6 @@ import {
   type FreeBsdPkgOwnershipInspection,
 } from "../../infra/update-freebsd-pkg-ownership.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
-import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -70,7 +69,6 @@ import {
   UPDATE_RUNNER_TIMEOUT_MS,
 } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
-import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
@@ -85,6 +83,11 @@ import {
   type UpdateCommandOptions,
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
+import {
+  assertUpdatePackageActivationAdmissionCore,
+  prepareMutableUpdateRuntimeCore,
+  resolveUpdateCommandAdmissionEnvCore,
+} from "./update-command-admission-runtime.js";
 import { resolveForegroundUpdateAdmission } from "./update-command-handoff.js";
 import { revalidateUpdateDatabaseContext } from "./update-command-managed-context.js";
 import {
@@ -94,15 +97,7 @@ import {
 } from "./update-command-mutable-signals.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import {
-  resolveOwnedManagedUpdateEnv,
-  withOwnedManagedUpdateEnv,
-  resolveServiceRefreshEnv,
-} from "./update-command-service-env.js";
-import {
   GatewayServiceUpdateOwnershipError,
-  assertGatewayServiceManagementAllowedForUpdate,
-  isGatewayServiceManagementAllowedForUpdate,
-  readManagedGatewayServiceForUpdate,
   resolveManagedServicePackageUpdatePlan,
 } from "./update-command-service-plan.js";
 
@@ -158,48 +153,7 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
   expectedForeground?: true;
 }): Promise<NodeJS.ProcessEnv> {
-  const pkgOwnership =
-    params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS);
-  await pkgOwnership.assertUnowned(params.root);
-  let env = resolveServiceRefreshEnv(process.env, params.invocationCwd);
-  if (
-    await resolveForegroundUpdateAdmission({
-      root: params.root,
-      env,
-      expectedForeground:
-        params.expectedForeground ||
-        params.opts.run?.completionOwner === "gateway-restart" ||
-        undefined,
-    })
-  ) {
-    return env;
-  }
-  // A preview belongs to its explicit state directory. Real updates follow the
-  // same owned service selectors as finalization, then freeze them for all writers.
-  if (
-    !params.opts.dryRun &&
-    !env[UPDATE_RUN_ID_ENV] &&
-    isGatewayServiceManagementAllowedForUpdate(env)
-  ) {
-    const inspected = await readManagedGatewayServiceForUpdate(
-      env,
-      params.root,
-      (await resolveUpdateInstallKind(params.root)) === "package",
-    );
-    if (inspected) {
-      env = resolveOwnedManagedUpdateEnv({
-        processEnv: env,
-        serviceEnv: mergeGatewayServiceEnv(env, inspected.command),
-        serviceDefinitionEnv: resolveManagedGatewayServiceCommand(inspected.command)?.environment,
-        invocationCwd: params.invocationCwd,
-      });
-      // Contradictory native identity must refuse before database or target selection.
-      if (resolveGatewayNativeServiceIdentityConflict(env)) {
-        assertGatewayServiceManagementAllowedForUpdate(env);
-      }
-    }
-  }
-  return env;
+  return await resolveUpdateCommandAdmissionEnvCore(params);
 }
 
 /** Package admission must not open history or launch diagnostics on a retained operation. */
@@ -207,28 +161,7 @@ export function assertUpdatePackageActivationAdmission(
   root: string,
   options?: Parameters<typeof assertNoPendingPackageActivation>[1] & { serviceRoot?: string },
 ): void {
-  try {
-    assertNoPendingPackageActivation(resolveUpdateInstallRoot(root), options);
-  } catch (cause) {
-    throw new UpdateCommandPendingRecoveryFailure(
-      {
-        status: "error",
-        mode: "unknown",
-        root,
-        reason: "update-recovery-pending",
-        steps: [],
-        durationMs: 0,
-      },
-      formatErrorMessage(cause),
-      { cause },
-    );
-  }
-  // A retained publication still owns the service installation when the CLI updates another root.
-  if (options?.serviceRoot && options.serviceRoot !== root) {
-    assertUpdatePackageActivationAdmission(options.serviceRoot, {
-      continuation: options.continuation,
-    });
-  }
+  assertUpdatePackageActivationAdmissionCore(root, options);
 }
 
 export async function admitUpdateCommandRun(params: {
@@ -251,13 +184,17 @@ export async function admitUpdateCommandRun(params: {
     };
   };
 }): Promise<NonNullable<UpdateCommandOptions["run"]>> {
-  assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
+  const packageAdmission = {
+    serviceRoot: params.serviceRoot,
+    dryRun: params.opts.dryRun,
+  };
+  assertUpdatePackageActivationAdmission(params.root, packageAdmission);
   const env = await resolveUpdateCommandAdmissionEnv(params);
   // A previous invocation may have died with a sealed restoration plan. Detect
   // it before any writable owner open or history row creation changes that state.
   // An inherited diagnostic run ID is not a durable continuation claim.
   await assertUpdateRecoveryAdmission({ env });
-  assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
+  assertUpdatePackageActivationAdmission(params.root, packageAdmission);
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(env),
     env,
@@ -301,7 +238,7 @@ export async function admitUpdateCommandRun(params: {
       params.opts.run?.completionOwner === "gateway-restart" ||
       undefined,
   });
-  assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
+  assertUpdatePackageActivationAdmission(params.root, packageAdmission);
   const driver = readUpdateRunDriver();
   const ledgerOptions = {
     env,
@@ -655,9 +592,43 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   await pkgOwnership.assertUnowned(discoveredRoot);
   // A post-core marker cannot bypass pending recovery without the live original
   // owner. Check both roots before config/autostart preparation or history.
-  assertUpdatePackageActivationAdmission(discoveredRoot, {
-    continuation: postCoreUpdateResume ? opts.run?.executorFence : undefined,
-  });
+  const packageActivationNotes: string[] = [];
+  const admitPackageActivation = async (root: string) => {
+    if (!postCoreUpdateResume) {
+      let settled;
+      try {
+        settled = await settleStalePackageActivation(resolveUpdateInstallRoot(root), {
+          dryRun: opts.dryRun,
+        });
+      } catch (cause) {
+        throw new UpdateCommandPendingRecoveryFailure(
+          {
+            status: "error",
+            mode: "unknown",
+            root,
+            reason: "update-recovery-pending",
+            steps: [],
+            durationMs: 0,
+          },
+          formatErrorMessage(cause),
+          { cause },
+        );
+      }
+      if (settled) {
+        const note = `${opts.dryRun ? "Would settle" : "Settled"} previous package update ${settled.operationId} (${settled.reason}); update can proceed past package recovery admission. Evidence ${opts.dryRun ? "would be retained" : "retained"} at ${settled.retained}.`;
+        if (opts.dryRun) {
+          packageActivationNotes.push(note);
+        } else {
+          defaultRuntime.error(note);
+        }
+      }
+    }
+    assertUpdatePackageActivationAdmission(root, {
+      continuation: postCoreUpdateResume ? opts.run?.executorFence : undefined,
+      dryRun: !postCoreUpdateResume && opts.dryRun,
+    });
+  };
+  await admitPackageActivation(discoveredRoot);
   const servicePlan =
     installKind === "package" && !postCoreUpdateResume && !foreground
       ? await resolveManagedServicePackageUpdatePlan({
@@ -669,8 +640,11 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   const packageAdmission = {
     continuation: postCoreUpdateResume ? opts.run?.executorFence : undefined,
     serviceRoot: servicePlan?.serviceRoot ?? servicePlan?.rootRedirect?.root,
+    dryRun: !postCoreUpdateResume && opts.dryRun,
   };
-  assertUpdatePackageActivationAdmission(discoveredRoot, packageAdmission);
+  if (packageAdmission.serviceRoot && packageAdmission.serviceRoot !== discoveredRoot) {
+    await admitPackageActivation(packageAdmission.serviceRoot);
+  }
   opts.run?.executorFence?.assertCurrent();
   if (opts.dryRun !== true) {
     await assertOpenClawStateWriteAllowedAtPath({
@@ -713,6 +687,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     installKind,
     servicePlan,
     pkgOwnership,
+    packageActivationNotes,
   };
 }
 
@@ -721,18 +696,5 @@ export async function prepareMutableUpdateRuntime(
   env: NodeJS.ProcessEnv | undefined,
   fence: UpdateRecoveryFence,
 ) {
-  return await withOwnedManagedUpdateEnv(env, async () => {
-    fence.assertCurrent();
-    await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
-    fence.assertCurrent();
-    await assertOpenClawStateWriteAllowedAtPath({
-      databasePath: resolveOpenClawStateSqlitePath(process.env),
-    });
-    fence.assertCurrent();
-    await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
-    fence.assertCurrent();
-    const records = await loadInstalledPluginIndexInstallRecords();
-    fence.assertCurrent();
-    return records;
-  });
+  return await prepareMutableUpdateRuntimeCore(env, fence);
 }

@@ -2,7 +2,7 @@ import { writeSync } from "node:fs";
 import type { BackupProgressInfo } from "node:sqlite";
 import { StringDecoder } from "node:string_decoder";
 import { z } from "zod";
-import { formatErrorMessageWithCode } from "./errors.js";
+import { extractErrorCode, formatErrorMessageWithCode } from "./errors.js";
 
 export const UPDATE_STATE_INSPECTION_PROGRESS_PREFIX = "State schema progress: ";
 const DIAGNOSTIC_TAIL_CHARS = 12_000;
@@ -74,7 +74,15 @@ export function createUpdateStateInspectionReporter(legacy = false) {
       line = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "schema inspection; detailed progress omitted" })}\n`;
     }
     emittedBytes += Buffer.byteLength(line);
-    writeSync(2, line);
+    try {
+      writeSync(2, line);
+    } catch (error) {
+      // Advisory progress must not fail inspection when the nonblocking pipe is full.
+      const code = extractErrorCode(error);
+      if (code !== "EAGAIN" && code !== "EWOULDBLOCK") {
+        throw error;
+      }
+    }
   };
 }
 

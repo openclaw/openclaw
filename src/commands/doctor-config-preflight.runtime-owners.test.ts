@@ -77,6 +77,7 @@ describe("runtime plugin migration ownership", () => {
         const raw = JSON.stringify({ ...config, legacyFixture: { enabled: true } });
         await fs.writeFile(configPath, raw);
         const result = await readConfigPreflightSnapshot({
+          purpose: "doctor",
           allowCurrentPluginMetadata: false,
           includePluginMetadata,
           preparePluginMetadataSnapshot: false,

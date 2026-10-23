@@ -107,6 +107,12 @@ setup explains the limitation and names CPU execution in the confirmation.
 For other acceleration backends, run a compatible server yourself and choose
 **Existing llama-server**.
 
+The verified macOS builds require macOS 13.3 or later, and setup stops before
+downloading on older releases. To keep managed chat and local embeddings there,
+build `llama-server` on that Mac and set
+`models.providers.llama-cpp.localService.command` to its absolute path; see
+[Local model services](/gateway/local-model-services).
+
 If no recommendation fits, setup explains whether to free memory, free disk
 space, or fix cache-directory permissions. Cancelling or failing guided
 verification leaves the previous default model selected. A setup candidate has
@@ -119,6 +125,21 @@ remove model sections outside that inventory. Chat and embedding preparation
 update their owned settings while preserving the header, `[*]` defaults,
 comments, and additional options on retained models. Embedding-only setup uses
 a fresh preset.
+
+Managed embeddings default to one server slot (`parallel = 1`), a 2,048-token
+context, and a 2,048-token physical batch (`ubatch-size`). Memory indexing reserves
+four positions for tokenizer overhead and the server's context boundary. These defaults also apply to custom
+GGUFs and legacy EmbeddingGemma cache paths. One slot bounds llama.cpp's large
+embedding output buffer to one input; the context bound avoids reserving a custom
+model's full training context for short memory chunks.
+
+Existing context, batch, and slot settings in the embedding section, `[*]`, or
+the managed service's arguments or environment remain authoritative. OpenClaw adds
+the context bound only when no slot count or per-slot context is configured,
+because llama.cpp can divide total context across slots. If you choose a different
+slot count, size its context too. Long queries or direct embedding requests may
+need larger native capacity settings on models that support them.
+Missing defaults are added on the next managed preset preparation.
 
 ### Set up only local embeddings
 

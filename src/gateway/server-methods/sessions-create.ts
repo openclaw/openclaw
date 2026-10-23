@@ -10,6 +10,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   ProjectCheckoutError,
@@ -613,7 +614,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           },
           undefined,
         );
-        await handleDirectExternalChatSend(sendOptions);
+        // The initial child turn must acquire its own writer, not the spawning parent's.
+        await runWithoutOwnedSessionTranscriptWrites(() =>
+          handleDirectExternalChatSend(sendOptions),
+        );
       },
     };
     const created = await createGatewaySession(createParams).catch((error: unknown) => {

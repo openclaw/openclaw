@@ -12,7 +12,10 @@ import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import * as backoff from "../infra/backoff.js";
 import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import {
   startGatewayConfigReloader as startGatewayConfigReloaderImpl,
   type GatewayConfigReloadTransactionOwnership,
@@ -25,6 +28,13 @@ let currentTest: { timeout: number; signal: AbortSignal } | undefined;
 
 export function prepareConfigReloadTest({ task, signal }: TestContext) {
   currentTest = { timeout: task.timeout, signal };
+}
+
+export function createConfigReloadTestClock() {
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  onTestFinished(() => scheduler.stop());
+  return { clock, scheduler };
 }
 
 export function createPluginLifecycleLeaseTestClock() {
@@ -223,6 +233,20 @@ export function makeZeroDebounceHookWrite(persistedHash: string): ConfigWriteNot
     fingerprint: `runtime-${persistedHash}`,
     sourceFingerprint: `source-${persistedHash}`,
     writtenAtMs: Date.now(),
+  };
+}
+
+export function makeWrite(
+  config: OpenClawConfig,
+  hash: string,
+  overrides: Partial<ConfigWriteNotification> = {},
+): ConfigWriteNotification {
+  return {
+    ...makeZeroDebounceHookWrite(hash),
+    sourceConfig: config,
+    runtimeConfig: config,
+    snapshot: makeSnapshot({ config, hash }),
+    ...overrides,
   };
 }
 

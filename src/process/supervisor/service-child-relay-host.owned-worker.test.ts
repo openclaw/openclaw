@@ -9,11 +9,13 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { NodeWorkerJournalWorker } from "../../node-host/node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "../../node-host/node-worker-launch-store.js";
 import { requireNodeWorkerProcessIdentity } from "../../node-host/node-worker-process-identity.js";
+import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import { createServiceChildRelayAdapter } from "./service-child-relay-host.js";
 import type { ProcessExtinctionResult } from "./types.js";
 
@@ -33,6 +35,7 @@ it
     "stdin-closed",
     "delayed-output",
     "journal-write-failed",
+    "force-descendant",
   ] as const)(
   "runs a real owned worker through its IPC start gate and output drain (%s)",
   async (action) => {
@@ -58,7 +61,13 @@ it
     expect((await store.claim(claim, supervisor, 1)).action).toBe("start");
     const cleanupBinding = await store.cleanupBinding({ ...claim, supervisor });
     const marker = path.join(home, "started.txt");
-    const onWorkerMessage = vi.fn<(message: unknown) => void>();
+    const descendantReady = createDeferred<number>();
+    const onWorkerMessage = vi.fn<(message: unknown) => void>((message) => {
+      if (isRecord(message) && message.phase === "descendant" && typeof message.pid === "number") {
+        descendantReady.resolve(message.pid);
+      }
+    });
+    let descendantPid: number | undefined;
     let adapter: Awaited<ReturnType<typeof createServiceChildRelayAdapter>>["adapter"] | undefined;
     let cleanup: Promise<ProcessExtinctionResult> | undefined;
     const expectedOutput =
@@ -67,6 +76,12 @@ it
     let output = "";
     let stderr = "";
     try {
+      const descendantSource = `
+        process.on("SIGTERM", () => {});
+        globalThis.keepAlive = new (require("node:worker_threads").MessageChannel)();
+        globalThis.keepAlive.port1.on("message", () => {});
+        process.send(process.pid);
+      `;
       const workerArgs = [
         "-e",
         `
@@ -80,7 +95,16 @@ it
               for (const fd of message.lineageFds) fs.fstatSync(fd);
               fs.appendFileSync(${JSON.stringify(marker)}, "started\\n");
               process.send({ phase: "started", message }, () => {
-                process.stdout.write(${action === "delayed-output" ? '"x".repeat(256 * 1024)' : JSON.stringify(expectedOutput)}, () => process.disconnect());
+                process.stdout.write(${action === "delayed-output" ? '"x".repeat(256 * 1024)' : JSON.stringify(expectedOutput)}, () => {
+                  ${
+                    action === "force-descendant"
+                      ? `const descendant = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}], {
+                          stdio: ["ignore", "ignore", "ignore", ...message.lineageFds, "ipc"],
+                        });
+                        descendant.once("message", pid => process.send({ phase: "descendant", pid }));`
+                      : "process.disconnect();"
+                  }
+                });
               });
             });
             process.send({ phase: "waiting", pid: process.pid, parentPid: process.ppid });
@@ -98,6 +122,7 @@ it
         stdinMode: "pipe-open",
         oomScoreWrapperSelected: false,
         ownedWorker: true,
+        ...(action === "force-descendant" ? {} : { nativeProcessOwnerSupported: true as const }),
         cleanupBinding,
         onWorkerMessage,
         onSpawnCleanup: (pending) => {
@@ -163,12 +188,27 @@ it
           await delay(100);
           adapter.onStdout(collectOutput);
         }
-        await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+        if (action === "force-descendant") {
+          descendantPid = await withTestTimeout(
+            descendantReady.promise,
+            5_000,
+            "descendant did not start",
+          );
+          expect(isPidDefinitelyDead(descendantPid)).toBe(false);
+          adapter.kill("SIGKILL");
+          await withTestTimeout(adapter.waitForExtinction(), 5_000, "worker did not go extinct");
+          expect(isPidDefinitelyDead(descendantPid)).toBe(true);
+        }
+        await expect(adapter.wait()).resolves.toEqual(
+          action === "force-descendant"
+            ? { code: null, signal: "SIGKILL" }
+            : { code: 0, signal: null },
+        );
         expect(onWorkerMessage).toHaveBeenCalledWith({
           phase: "started",
           message: { type: "openclaw-worker-start-v1", lineageFds: expect.any(Array) },
         });
-        expect(onWorkerMessage).toHaveBeenCalledTimes(2);
+        expect(onWorkerMessage).toHaveBeenCalledTimes(action === "force-descendant" ? 3 : 2);
         expect(await readFile(marker, "utf8")).toBe("started\n");
         expect(output.length).toBe(expectedOutput.length);
         expect(output).toBe(expectedOutput);
@@ -191,6 +231,7 @@ it
         );
       }
     } finally {
+      killPidIfAlive(descendantPid);
       adapter?.kill("SIGKILL");
       await adapter?.wait().catch(() => undefined);
       await cleanup?.catch((error: unknown) => {

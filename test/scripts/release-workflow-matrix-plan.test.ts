@@ -514,7 +514,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       "matrix planner Node setup",
     );
     expect(setup.if).toBeUndefined();
-    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
+    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.22.1" });
     expect(setup.run).toContain("source .github/actions/setup-pnpm-store-cache/ensure-node.sh");
     expect(setup.run).toContain('openclaw_ensure_node "$REQUESTED_NODE_VERSION"');
     const planner = expectDefined(

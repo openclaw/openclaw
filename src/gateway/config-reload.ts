@@ -774,6 +774,29 @@ export function startGatewayConfigReloader(opts: {
       notifyCommitted();
     };
     if (changedPaths.length === 0 && !pluginLifecycle) {
+      if (
+        candidate &&
+        acceptedSourceSnapshot &&
+        persistedHash !== lastSourceOnly?.hash &&
+        configSourceSnapshotsMatch(sourceSnapshot, acceptedSourceSnapshot) &&
+        resolveConfigWriteFollowUp(afterWrite).mode === "auto" &&
+        !runtimeRefresh?.includeAuthStoreRefs &&
+        !runtimeRefresh?.requireImmediateApplication &&
+        !candidate.application?.prepare &&
+        !candidate.application?.requireImmediateApplication
+      ) {
+        // The watcher can publish before the writer's notification arrives. Consume
+        // that accepted runtime, not the notification's unresolved SecretRefs.
+        await acceptCurrentRuntimeEcho(
+          initialEpoch,
+          sourceSnapshot,
+          true,
+          assertInvokerOwned,
+          candidate.application,
+        );
+        settleRuntimeApplication();
+        return completeApplication();
+      }
       await commitReloadBaseline();
       publishedSource?.commit?.();
       opts.onConfigRevisionApplied?.(nextConfigRevisionHash);
@@ -891,6 +914,7 @@ export function startGatewayConfigReloader(opts: {
     snapshot: ConfigFileSnapshot,
     runtimeApplied: boolean,
     assertLeaseOwned: () => void,
+    application?: RuntimeConfigWriteApplicationClaim,
   ) => {
     const sourceOnly = runtimeApplied ? undefined : lastSourceOnly;
     const runtimeRefresh = runtimeApplied ? currentRuntimeRefresh : sourceOnly?.runtimeRefresh;
@@ -930,7 +954,7 @@ export function startGatewayConfigReloader(opts: {
       if (snapshot.valid && typeof snapshot.hash === "string") {
         await updateAcceptedSnapshot(hashConfigRaw(snapshot.raw), snapshot.parsed);
       }
-    });
+    }, application);
     source.accept(transactionEpoch);
     if (snapshot.valid) {
       await source.acceptPaths(snapshot.includedPaths ?? []);

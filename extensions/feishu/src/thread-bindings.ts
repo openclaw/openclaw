@@ -130,10 +130,6 @@ export function createFeishuThreadBindingManager(params: {
   cfg: OpenClawConfig;
 }): FeishuThreadBindingManager {
   const accountId = normalizeAccountId(params.accountId);
-  const existing = getState().managersByAccountId.get(accountId);
-  if (existing) {
-    return existing;
-  }
 
   const idleTimeoutMs = resolveThreadBindingIdleTimeoutMsForChannel({
     cfg: params.cfg,

@@ -730,6 +730,7 @@ describe("anthropic provider replay hooks", () => {
   );
 
   it.each([
+    { modelId: "claude-sonnet-5-5", pricingSource: "configured" },
     { modelId: "claude-sonnet-5", pricingSource: "configured" },
     { modelId: "claude-opus-5", pricingSource: "configured" },
     { modelId: "claude-fable-5", pricingSource: "configured" },

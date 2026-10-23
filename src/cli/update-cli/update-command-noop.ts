@@ -192,7 +192,7 @@ export async function finishAlreadyCurrentUpdate(
       (plan?.config ?? configSnapshot.config).update?.channel,
     );
     const beforeRepair = configSnapshot;
-    if (params.opts.channel && plan) {
+    if (plan) {
       configSnapshot = await withOwnedManagedUpdateEnv(env, () =>
         withPluginLifecycleLease({}, () =>
           maybeRepairLegacyConfigForUpdateChannel({

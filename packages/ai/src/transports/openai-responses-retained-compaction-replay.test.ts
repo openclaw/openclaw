@@ -234,7 +234,7 @@ describe("Responses retained-user compaction replay", () => {
       let input = convert({ messages: [...messages, carrier] }, replayMode);
       expect(input.slice(0, prefix.length), scenario).toEqual(prefix);
       expect(input.at(-1), scenario).toMatchObject({
-        role: "user",
+        role: "developer",
         content: [{ type: "input_text", text: carrier.content }],
       });
 

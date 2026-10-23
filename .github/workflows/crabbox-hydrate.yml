@@ -51,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           source .github/actions/setup-pnpm-store-cache/ensure-node.sh
-          openclaw_ensure_node "24.x"
+          openclaw_ensure_node "24.22.1"
 
       - &crabbox_retire_dependency_link_step
         name: Retire legacy Crabbox dependencies
@@ -442,7 +442,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24"
+          node-version: "24.22.1"
 
       - name: Fetch main ref
         shell: powershell

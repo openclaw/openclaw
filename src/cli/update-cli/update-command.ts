@@ -59,6 +59,10 @@ export async function updateCommand(
   inputOpts: UpdateCommandOptions,
   executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
+  const { tryRunImmutableUpdateCommand } = await import("./update-command-immutable.js");
+  if (await tryRunImmutableUpdateCommand(inputOpts)) {
+    return;
+  }
   const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");
   return await withRetainedUpdateRuntime(import.meta.url, (retainRuntime) =>
     updateCommandWithRuntime(inputOpts, retainRuntime, executorOptions),
@@ -101,7 +105,10 @@ async function updateCommandWithRuntime(
         prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     });
     const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
-    assertUpdatePackageActivationAdmission(root, { serviceRoot });
+    assertUpdatePackageActivationAdmission(root, {
+      serviceRoot,
+      dryRun: inputOpts.dryRun,
+    });
     const needsInitialization = await updateStateNeedsInitialization(env);
     const execute = (initialization?: InitializedUpdate) =>
       runAdmittedUpdate(
@@ -396,6 +403,7 @@ async function runResolvedUpdate(
   if (!schemaPreflight) {
     return;
   }
+  schemaPreflight.preflightNotes.push(...prepared.packageActivationNotes);
 
   if (opts.dryRun) {
     finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, { env: run.env });

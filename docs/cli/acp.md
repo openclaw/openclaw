@@ -73,6 +73,13 @@ openclaw acp --session-label "support inbox"
 openclaw acp --session agent:main:main --reset-session
 ```
 
+For a new bridge-owned session, ACP `session/new` persists its absolute `cwd`
+through Gateway session creation, so later prompts execute in that directory.
+The directory is on the Gateway host and follows its existing workspace and
+`operator.admin` policy. Sessions selected by key or label retain their existing
+Gateway-owned directory. `--no-prefix-cwd` only controls the prompt's directory
+hint.
+
 ## ACP client (debug)
 
 Use the built-in ACP client to sanity-check the bridge without an IDE. It spawns the ACP bridge and lets you type prompts interactively.

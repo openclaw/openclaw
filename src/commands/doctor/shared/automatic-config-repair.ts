@@ -253,6 +253,9 @@ async function writeAutomaticConfigRepair(
       expectedConfigPath: snapshot.path,
       assertCurrent: options.assertCurrent,
       auditOrigin: "doctor",
+      // Writes no longer read the migration ledger. Carry the admitted pending
+      // facts so a deferred plugin's legacy settings stay preserved, not rejected.
+      deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
       skipOutputLogs: true,
       skipRuntimeSnapshotRefresh: true,
       // The checked receipt proves these removed records already have a durable owner.

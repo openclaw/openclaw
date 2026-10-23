@@ -71,6 +71,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const tools = normalizeTools(toolsEnabled ? toolsRaw : []);
   const providedClientTools =
     toolsEnabled &&
+    params.attempt.trigger !== "memory" &&
     !params.attempt.disableTools &&
     !params.isRawModelRun &&
     !params.attempt.forceRestartSafeTools
@@ -103,6 +104,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   };
   const bundleMcpEnabled =
     !params.attempt.forceRestartSafeTools &&
+    params.attempt.trigger !== "memory" &&
     shouldCreateBundleMcpRuntimeForAttempt({
       toolsEnabled,
       disableTools: params.attempt.disableTools || params.isRawModelRun,
@@ -154,6 +156,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   try {
     const bundleLspEnabled =
       !params.attempt.forceRestartSafeTools &&
+      params.attempt.trigger !== "memory" &&
       shouldCreateBundleLspRuntimeForAttempt({
         toolsEnabled,
         disableTools: params.attempt.disableTools || params.isRawModelRun,

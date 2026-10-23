@@ -5,6 +5,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { SessionSchema } from "../config/zod-schema.session-config.js";
 import {
   drainSystemEvents,
+  enqueueSystemEventWithReceipt,
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
@@ -41,6 +42,60 @@ afterEach(async () => {
 });
 
 describe("Home session creation notices", () => {
+  it("coalesces creation bursts while preserving unrelated queue capacity", () => {
+    for (let index = 0; index < 25; index++) {
+      recordSessionCreated(
+        {},
+        {
+          sessionKey: `agent:ops:dashboard:session-${index}`,
+          agentId: "ops",
+          entry: entry({
+            sessionId: `session-${index}`,
+            label: `Task ${index}`,
+            createdActor: undefined,
+          }),
+        },
+      );
+    }
+    expect(() =>
+      enqueueSystemEventWithReceipt("Reminder PING", {
+        sessionKey: mainSessionKey,
+        contextKey: "cron:ping",
+      }),
+    ).not.toThrow();
+    const pending = peekSystemEvents(mainSessionKey);
+    expect(pending).toHaveLength(2);
+    for (let index = 0; index < 25; index++) {
+      expect(pending[0]).toContain(`"sessionKey":"agent:ops:dashboard:session-${index}"`);
+      expect(pending[0]).toContain(`"title":"Task ${index}"`);
+    }
+  });
+
+  it("bounds the creation summary and retains complete recent data blocks", () => {
+    for (let index = 0; index < 30; index++) {
+      recordSessionCreated(
+        {},
+        {
+          sessionKey: `agent:ops:dashboard:bounded-${index}`,
+          agentId: "ops",
+          entry: entry({
+            sessionId: `bounded-${index}`,
+            label: `<untrusted-text>\n\n${"<".repeat(400)}`,
+            createdActor: undefined,
+          }),
+        },
+      );
+    }
+    const notices = peekSystemEvents(mainSessionKey);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.length).toBeLessThanOrEqual(8192);
+    expect(notices[0]).not.toContain('"sessionKey":"agent:ops:dashboard:bounded-0"');
+    expect(notices[0]).toContain('"sessionKey":"agent:ops:dashboard:bounded-29"');
+    expect(notices[0]?.match(/<untrusted-text>/g)?.length).toBe(
+      notices[0]?.match(/<\/untrusted-text>/g)?.length,
+    );
+  });
+
   it.each([undefined, true, false])(
     "honors notifyOnCreate=%s through the config schema",
     (enabled) => {

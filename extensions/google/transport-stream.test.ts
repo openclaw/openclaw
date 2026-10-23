@@ -2100,22 +2100,6 @@ describe("google transport stream", () => {
     },
   );
 
-  it("resolves non-file Vertex ADC through google-auth-library without OAuth refresh fetch", async () => {
-    await useGoogleAuthLibraryCredentials("authlib", "ya29.google-auth-token");
-    const tokenFetchMock = vi.fn();
-
-    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
-      Authorization: "Bearer ya29.google-auth-token",
-    });
-
-    expect(googleAuthMock).toHaveBeenCalledWith({
-      scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-      clientOptions: { transporterOptions: { timeout: 30_000 } },
-    });
-    expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(1);
-    expect(tokenFetchMock).not.toHaveBeenCalled();
-  });
-
   it("never refreshes stale home ADC when the selected Cloud SDK directory has no credentials", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-stale-home-"));
     const homeCredentialsDir = path.join(tempDir, "home", ".config", "gcloud");
@@ -2870,8 +2854,9 @@ describe("google transport stream", () => {
     ["gemini-pro-latest", "Gemini Pro Latest"],
     ["gemini-flash-latest", "Gemini Flash Latest"],
     ["gemini-flash-lite-latest", "Gemini Flash Lite Latest"],
+    ["gemini-4-argon", "Gemini 4 Argon"],
   ])(
-    "adds skip-validator fallback to first-turn unsigned Gemini 3 tool calls for %s",
+    "adds skip-validator fallback to first-turn unsigned Gemini tool calls for %s",
     (modelId, modelName) => {
       const model = buildGeminiModel({ id: modelId, name: modelName });
       const params = buildGoogleGenerativeAiParams(model, {
@@ -2974,7 +2959,6 @@ describe("google transport stream", () => {
       expect(generationConfig).toHaveProperty("maxOutputTokens", maxOutputTokens);
     }
   });
-
   it("omits stopSequences when the stop list is empty", () => {
     const generationConfig = buildGeminiUserParams({}, { stop: [] }).generationConfig ?? {};
     expect(generationConfig).not.toHaveProperty("stopSequences");

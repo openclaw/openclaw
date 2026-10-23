@@ -84,8 +84,8 @@ esac
   const native = join(stage, "native");
   mkdirSync(wrapper);
   mkdirSync(native);
-  writeFileSync(join(wrapper, "package.json"), '{"version":"12.5.1"}');
-  executable(join(native, "pnpm"), "#!/bin/sh\necho 12.5.1\n");
+  writeFileSync(join(wrapper, "package.json"), '{"version":"12.15.0"}');
+  executable(join(native, "pnpm"), "#!/bin/sh\necho 12.15.0\n");
   function archive(directory: string, name: string, algorithm: string) {
     const output = join(origin, name);
     execFileSync("tar", [name.endsWith(".xz") ? "-cJf" : "-czf", output, "-C", stage, directory]);
@@ -94,9 +94,9 @@ esac
     return createHash(algorithm).update(bytes).digest("hex");
   }
   const hashes = {
-    node: archive("node", "node-v24.21.0-linux-x64.tar.xz", "sha256"),
-    wrapper: archive("wrapper", "pnpm-12.5.1.tgz", "sha512"),
-    native: archive("native", "exe.linux-x64-12.5.1.tgz", "sha512"),
+    node: archive("node", "node-v24.22.1-linux-x64.tar.xz", "sha256"),
+    wrapper: archive("wrapper", "pnpm-12.15.0.tgz", "sha512"),
+    native: archive("native", "exe.linux-x64-12.15.0.tgz", "sha512"),
   };
   const productionSpec = scriptSource.match(/^pnpm_spec="([^"]+)"$/mu)?.[1] ?? "";
   const spec = `${productionSpec.split("+")[0]}+sha512.${hashes.wrapper}`;
@@ -116,9 +116,9 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 if [[ "$url" == */SHASUMS256.txt ]]; then
-  printf '%s  %s\\n' ${JSON.stringify(hashes.node)} node-v24.21.0-linux-x64.tar.xz > "$output"
+  printf '%s  %s\\n' ${JSON.stringify(hashes.node)} node-v24.22.1-linux-x64.tar.xz > "$output"
 else
-  cp ${JSON.stringify(join(origin, "node-v24.21.0-linux-x64.tar.xz"))} "$output"
+  cp ${JSON.stringify(join(origin, "node-v24.22.1-linux-x64.tar.xz"))} "$output"
 fi
 `,
   );
@@ -148,7 +148,7 @@ fi
     .replace(productionSpec, spec)
     .replaceAll("fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6", hashes.node)
     .replaceAll(
-      "dcf914058a39cf8760b659d3348163ed01a9703500baa5f3f561958a03c309e71c127846891916980e75d364e66091edc093f72df984f9917d3c6796867f29f5",
+      "c9cf9095947ef7e9ebdbd2787d1ce13286a98314c10e776affea5eca8ab55d4b9f9d01677db5d4305b9d0c82b31e2e78e658a71aa98e9977e7d0da2e7cd81c3a",
       hashes.native,
     );
   const scriptPath = join(root, "bootstrap.sh");
@@ -229,8 +229,8 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
     for (let run = 0; run < 2; run++) {
       mkdirSync(join(f.install, "bin"), { recursive: true });
       executable(join(f.install, "bin", "node"), "#!/bin/sh\nexit 91\n");
-      mkdirSync(join(f.corepack, "v1", "pnpm", "12.5.1"), { recursive: true });
-      writeFileSync(join(f.corepack, "v1", "pnpm", "12.5.1", ".corepack"), '{"bin":"bad"}');
+      mkdirSync(join(f.corepack, "v1", "pnpm", "12.15.0"), { recursive: true });
+      writeFileSync(join(f.corepack, "v1", "pnpm", "12.15.0", ".corepack"), '{"bin":"bad"}');
       const result = f.run();
       expect(result.status, result.stderr).toBe(0);
     }
@@ -261,13 +261,13 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
       const f = fixture();
       const archive =
         kind === "node" || kind === "wrong-arch"
-          ? "node-v24.21.0-linux-x64.tar.xz"
+          ? "node-v24.22.1-linux-x64.tar.xz"
           : kind === "wrapper"
-            ? "pnpm-12.5.1.tgz"
-            : "exe.linux-x64-12.5.1.tgz";
+            ? "pnpm-12.15.0.tgz"
+            : "exe.linux-x64-12.15.0.tgz";
       const bytes =
         kind === "wrong-arch"
-          ? readFileSync(join(f.origin, "exe.linux-x64-12.5.1.tgz"))
+          ? readFileSync(join(f.origin, "exe.linux-x64-12.15.0.tgz"))
           : Buffer.from("substituted archive");
       writeFileSync(join(f.image, archive), bytes);
       writeFileSync(
@@ -330,11 +330,11 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
   it.each([false, true])(
     "falls back after a trusted pin advance (renamed stale archives: %s)",
     (renamed) => {
-      const f = fixture(source.replace("pnpm@12.5.1+", "pnpm@12.5.2+"));
+      const f = fixture(source.replace("pnpm@12.15.0+", "pnpm@12.5.2+"));
       if (renamed) {
-        for (const name of ["pnpm-12.5.1.tgz", "exe.linux-x64-12.5.1.tgz"]) {
+        for (const name of ["pnpm-12.15.0.tgz", "exe.linux-x64-12.15.0.tgz"]) {
           writeFileSync(
-            join(f.image, name.replace("12.5.1", "12.5.2")),
+            join(f.image, name.replace("12.15.0", "12.5.2")),
             readFileSync(join(f.image, name)),
           );
         }
@@ -349,7 +349,7 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
   it("refuses an invalid download after rejecting the image archive", () => {
     const f = fixture();
     for (const directory of [f.image, f.origin]) {
-      writeFileSync(join(directory, "node-v24.21.0-linux-x64.tar.xz"), "invalid");
+      writeFileSync(join(directory, "node-v24.22.1-linux-x64.tar.xz"), "invalid");
     }
     const result = f.run();
     expect(result.status).toBe(1);

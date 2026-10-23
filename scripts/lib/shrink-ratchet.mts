@@ -37,6 +37,7 @@ function readGitText(root: string, args: string[]) {
   return execFileSync("git", args, {
     cwd: root,
     encoding: "utf8",
+    maxBuffer: GIT_MAX_BUFFER,
     stdio: ["ignore", "pipe", "ignore"],
   });
 }

@@ -69,6 +69,11 @@ const transcriptBroadcastMocks = vi.hoisted(() => ({
   useActualHandler: false,
   readMessageById: vi.fn(),
 }));
+const lifecycleBroadcastHandler = vi.hoisted(() =>
+  vi.fn(() => {
+    throw new Error("lifecycle handler failure");
+  }),
+);
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as OpenClawConfig }));
 const observeActivitySummary = vi.hoisted(() =>
   vi.fn<
@@ -166,9 +171,7 @@ vi.mock("./server-session-events.js", async (importOriginal) => {
         throw new Error("transcript handler failure");
       };
     },
-    createLifecycleEventBroadcastHandler: () => () => {
-      throw new Error("lifecycle handler failure");
-    },
+    createLifecycleEventBroadcastHandler: () => lifecycleBroadcastHandler,
   };
 });
 
@@ -189,6 +192,9 @@ describe("startGatewayEventSubscriptions", () => {
     auditTestState.stopped = 0;
     transcriptBroadcastMocks.useActualHandler = false;
     transcriptBroadcastMocks.readMessageById.mockReset();
+    lifecycleBroadcastHandler.mockReset().mockImplementation(() => {
+      throw new Error("lifecycle handler failure");
+    });
     runtimeConfigState.value = {};
     agentEventHandlerMocks.persistLifecycle.mockReset().mockResolvedValue(undefined);
     agentEventHandlerMocks.resolveSessionKey.mockClear();
@@ -903,5 +909,26 @@ describe("startGatewayEventSubscriptions", () => {
       "Lifecycle event dispatch failed",
       expect.objectContaining({ sessionKey: "agent:main:main" }),
     );
+  });
+
+  it("joins lifecycle publication before subscription shutdown", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    lifecycleBroadcastHandler.mockImplementationOnce((async () => {
+      entered.resolve();
+      await release.promise;
+    }) as never);
+    unsubs = startGatewayEventSubscriptions(createParams());
+    emitSessionLifecycleEvent({ sessionKey: "agent:main:finished-child", reason: "created" });
+    await entered.promise;
+
+    let closed = false;
+    const shutdown = unsubs.agentUnsub().then(() => {
+      closed = true;
+    });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    release.resolve();
+    await shutdown;
   });
 });
