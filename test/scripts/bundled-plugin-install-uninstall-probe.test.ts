@@ -155,11 +155,7 @@ function pluginFixture(
 function writePluginManifest(root: string, pluginRoot: string, manifest: Record<string, unknown>) {
   const dir = path.join(root, pluginRoot);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-    "utf8",
-  );
+  writeJson(path.join(dir, "openclaw.plugin.json"), manifest);
 }
 
 function writeInstalledPlugin(root: string, sourcePath: string): string {
@@ -188,12 +184,9 @@ function runProbe(root: string, env: Record<string, string | undefined> = {}) {
 }
 
 function runProbeCommand(root: string, args: string[], env: Record<string, string | undefined>) {
-  const childEnv = { ...process.env, ...env };
-  for (const [key, value] of Object.entries(childEnv)) {
-    if (value === undefined) {
-      delete childEnv[key];
-    }
-  }
+  const childEnv = Object.fromEntries(
+    Object.entries({ ...process.env, ...env }).filter(([, value]) => value !== undefined),
+  );
   return runScript(root, probePath, args, childEnv);
 }
 

@@ -33,11 +33,18 @@ it.each([false, true])("rejects cross-account handoffs (owned: %s)", async (owne
   const recovery = vi.spyOn(client, "recoveryScope", "get").mockReturnValue("account-b");
   expect(admitInitialTurnHandoff(host, host.sessionKey)).toBe(false);
   expect(host.chatQueue).toEqual([]);
+  expect(host.chatError ?? null).toBeNull();
   recovery.mockReturnValue(original);
   expect(admitInitialTurnHandoff(host, host.sessionKey)).toBe(owned);
   expect(host.chatQueue).toEqual(
     owned ? [expect.objectContaining({ text: "Only account A", storageScope: scope })] : [],
   );
+  expect(host.chatError ?? null).toBe(
+    owned
+      ? "Could not store the previous draft in browser storage. It remains available in this tab."
+      : null,
+  );
+  expect(host.lastError ?? null).toBe(host.chatError ?? null);
   expect(host.request).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(60_000);
 });

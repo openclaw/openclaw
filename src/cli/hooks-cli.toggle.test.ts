@@ -387,6 +387,26 @@ describe("hooks CLI metadata config keys", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
+  it("sanitizes ambiguous hook metadata only in the human error", async () => {
+    const escape = "\u001b]0;untrusted-title\u0007\u009f";
+    mocks.callGateway.mockResolvedValue({
+      ...report,
+      hooks: [
+        { ...hook, name: `first${escape}`, hookKey: "shared-key" },
+        { ...hook, name: "second", hookKey: "shared-key" },
+      ],
+    });
+    const execution = runHooks("info", "shared-key");
+    await expect(execution).rejects.toMatchObject({
+      humanOutput: expect.stringContaining("first (shared-key), second (shared-key)"),
+      machineOutput: expect.stringContaining(escape),
+    });
+    await expect(execution).rejects.toMatchObject({
+      humanOutput: expect.not.stringContaining(escape),
+    });
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
   it("propagates blank leaf agent failures to the root CLI renderer", async () => {
     const message = "--agent must not be blank";
     const execution = runHooks("list", "--agent", "", "--json");

@@ -1,6 +1,15 @@
 import { createErrorBoundary } from "@solidjs/signals";
 import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onCleanup, Show, Switch, Match } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  Errored,
+  onCleanup,
+  Show,
+  Switch,
+  Match,
+} from "solid-js";
 import {
   ensureCustomElementDefined,
   isOptionalElementDefined,
@@ -45,7 +54,7 @@ import { BoardWidgetMenu } from "./board-widget-menu.tsx";
 
 registerEnglishCatalog(registerBoardEnglish);
 
-const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
+const loadMcpAppView = () => import("../mcp-app-view.tsx");
 const cells = new WeakMap<HTMLElement, BoardWidgetCellHandle>();
 
 export function boardWidgetPresentationReady(host: HTMLElement): boolean {
@@ -72,9 +81,14 @@ function BoardWidgetCellContent(
       ] as const,
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
-  const [actionError, setActionError] = createSignal(() => {
+  // A pending receipt would hold sibling bridge roots; observe only settled failures here.
+  const [actionFailure, setActionFailure] = createSignal<Promise<void> | undefined>(() => {
     actionBinding();
-    return "";
+    return undefined;
+  });
+  const actionFailed = () => actionFailure() !== undefined;
+  const actionOutcome = createMemo(() => actionFailure()?.then(() => null), {
+    loadingValue: undefined,
   });
   const [actionPending, setActionPending] = createSignal(false);
   const [widgetRoot, setWidgetRoot] = createSignal<HTMLElement>();
@@ -162,29 +176,34 @@ function BoardWidgetCellContent(
       : null,
   );
 
-  async function runAction(action: () => Promise<void>, failureMessage?: string) {
+  function runAction(run: () => Promise<void>, failureMessage?: string) {
     if (actionInFlight || props.busy) {
       return;
     }
     actionInFlight = true;
+    const binding = actionBinding();
+    // A cell-local action would hold the shared owner's busy updates across bridge roots.
     setActionPending(true);
-    setActionError("");
+    setActionFailure(undefined);
     menu?.close();
-    try {
-      await action();
-    } catch (error) {
-      if (connected) {
-        setActionError(formatUiError(error));
+    const completion = (async () => {
+      try {
+        await run();
+      } finally {
+        actionInFlight = false;
+        if (connected) {
+          setActionPending(false);
+        }
+      }
+    })();
+    void completion.catch(() => {
+      if (connected && actionBinding() === binding) {
+        void setActionFailure(completion);
       }
       if (failureMessage) {
         showToast({ message: failureMessage });
       }
-    } finally {
-      actionInFlight = false;
-      if (connected) {
-        setActionPending(false);
-      }
-    }
+    });
   }
   function selectMenuItem(value: string | undefined) {
     const widget = props.widget;
@@ -193,18 +212,18 @@ function BoardWidgetCellContent(
       return;
     }
     if (value === "remove") {
-      void runAction(() => callbacks.remove(widget));
+      runAction(() => callbacks.remove(widget));
     } else if (value?.startsWith("move:")) {
-      void runAction(() => callbacks.moveToTab(widget, value.slice(5)));
+      runAction(() => callbacks.moveToTab(widget, value.slice(5)));
     } else if (value?.startsWith("resize:")) {
       const size = Object.entries(BOARD_SIZE_PRESETS).find(
         ([preset]) => preset === value.slice(7),
       )?.[1];
       if (size) {
-        void runAction(() => callbacks.resizeTo(widget, size.w, size.h));
+        runAction(() => callbacks.resizeTo(widget, size.w, size.h));
       }
     } else if (value === "height:auto") {
-      void runAction(() =>
+      runAction(() =>
         callbacks.setHeightMode(widget, widget.heightMode !== "fixed" ? "fixed" : "auto"),
       );
     }
@@ -292,7 +311,7 @@ function BoardWidgetCellContent(
               class="btn btn--small"
               type="button"
               disabled={unavailable()}
-              onClick={() => void runAction(() => props.callbacks!.remove(props.widget!))}
+              onClick={() => runAction(() => props.callbacks!.remove(props.widget!))}
             >
               {t("board.widget.remove")}
             </button>
@@ -304,14 +323,20 @@ function BoardWidgetCellContent(
         widget={props.widget!}
         disabled={props.busy || actionPending() || !canGrant()}
         onGrant={(decision) =>
-          void runAction(
+          runAction(
             () => props.callbacks!.grant(props.widget!.name, decision),
             t(decision === "granted" ? "board.widget.allowFailed" : "board.widget.rejectFailed"),
           )
         }
         error={
-          <Show when={actionError()}>
-            <BoardWidgetError error={actionError()} action inline />
+          <Show when={actionFailed()}>
+            <Errored
+              fallback={(error) => (
+                <BoardWidgetError error={formatUiError(error())} action inline />
+              )}
+            >
+              {actionOutcome()}
+            </Errored>
           </Show>
         }
       />
@@ -368,7 +393,7 @@ function BoardWidgetCellContent(
               class="btn btn--small"
               type="button"
               disabled={unavailable()}
-              onClick={() => void runAction(() => props.callbacks!.remove(props.widget!))}
+              onClick={() => runAction(() => props.callbacks!.remove(props.widget!))}
             >
               {t("board.widget.remove")}
             </button>
@@ -449,7 +474,7 @@ function BoardWidgetCellContent(
           sessionKey={props.sessionKey ?? ""}
           widget={props.widget!}
           expired={() => appView.expire()}
-          remove={() => void runAction(() => props.callbacks!.remove(props.widget!))}
+          remove={() => runAction(() => props.callbacks!.remove(props.widget!))}
           retry={() => appView.retry()}
           viewRef={(element) => {
             mcpElement = element;
@@ -493,14 +518,12 @@ function BoardWidgetCellContent(
       : undefined;
   const label = () => props.widget?.title || props.widget?.name || "";
   const scrollable = () =>
-    Boolean(
-      bodyErrored() ||
-      actionError() ||
-      props.widget?.grantState === "pending" ||
-      props.widget?.grantState === "rejected" ||
-      props.widget?.contentKind === "mcp-app" ||
-      (props.widget?.contentKind === "plugin" && !props.widget.frameUrl),
-    );
+    bodyErrored() ||
+    actionFailed() ||
+    props.widget?.grantState === "pending" ||
+    props.widget?.grantState === "rejected" ||
+    props.widget?.contentKind === "mcp-app" ||
+    (props.widget?.contentKind === "plugin" && !props.widget.frameUrl);
   const style = (): SolidJSX.CSSProperties => {
     const rect = props.rect!;
     const height =
@@ -543,7 +566,7 @@ function BoardWidgetCellContent(
     }
     event.preventDefault();
     if (event.altKey) {
-      void runAction(() => props.callbacks!.nudge(props.widget!, direction));
+      runAction(() => props.callbacks!.nudge(props.widget!, direction));
     } else {
       props.callbacks!.focus(props.widget!, direction);
     }
@@ -623,9 +646,13 @@ function BoardWidgetCellContent(
           <Show when={bodyError()} fallback={<BodyBoundary />}>
             {(failure) => <BoardWidgetError error={failure().error} />}
           </Show>
-          <Show when={actionError() && props.widget!.grantState !== "pending"}>
+          <Show when={actionFailed() && props.widget!.grantState !== "pending"}>
             <div class="board-widget__error-overlay">
-              <BoardWidgetError error={actionError()} action />
+              <Errored
+                fallback={(error) => <BoardWidgetError error={formatUiError(error())} action />}
+              >
+                {actionOutcome()}
+              </Errored>
             </div>
           </Show>
         </div>

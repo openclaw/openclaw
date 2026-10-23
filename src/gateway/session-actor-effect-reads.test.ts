@@ -61,31 +61,23 @@ async function fixture() {
     throw new Error("Memory actor has no storage capability");
   }
   const store = actor.storage;
-  expect(
-    await store.mutate(
-      {
-        type: "session.entry.create",
-        input: {
-          entry: {
-            sessionId: "private-effects",
-            updatedAt: 1,
-            lifecycleRevision: "original",
-            spawnedCwd: "/synthetic/workspace",
-          },
-        },
-      },
-      authority,
-    ),
-  ).toMatchObject({ kind: "committed" });
-  const binding = { actor, authority, agentId: owner.agentId, path: owner.path };
-  const patch = async (value: Partial<SessionEntry>) => {
-    expect(
-      await store.mutate(
-        { type: "session.entry.patch", input: { operation: { kind: "fields", patch: value } } },
-        authority,
-      ),
-    ).toMatchObject({ kind: "committed" });
+  const mutate = async (operation: Parameters<typeof store.mutate>[0]) => {
+    expect(await store.mutate(operation, authority)).toMatchObject({ kind: "committed" });
   };
+  await mutate({
+    type: "session.entry.create",
+    input: {
+      entry: {
+        sessionId: "private-effects",
+        updatedAt: 1,
+        lifecycleRevision: "original",
+        spawnedCwd: "/synthetic/workspace",
+      },
+    },
+  });
+  const binding = { actor, authority, agentId: owner.agentId, path: owner.path };
+  const patch = (value: Partial<SessionEntry>) =>
+    mutate({ type: "session.entry.patch", input: { operation: { kind: "fields", patch: value } } });
   return { owner, actor, binding, patch };
 }
 

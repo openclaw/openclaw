@@ -240,7 +240,6 @@ function readManagedImageRow(db: EngineConnection, attachmentId: string) {
 export function migrateLegacyManagedOutgoingImages(params: {
   detected: LegacyStateDetection["managedOutgoingImages"];
   stateDir: string;
-  nowMs?: number;
 }): MigrationMessages {
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -270,7 +269,7 @@ export function migrateLegacyManagedOutgoingImages(params: {
     return { changes, warnings };
   }
 
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = Date.now();
   const discardedIds = new Set<string>();
   try {
     runOpenClawStateWriteTransaction(

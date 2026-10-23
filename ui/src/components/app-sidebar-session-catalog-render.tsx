@@ -319,11 +319,6 @@ function renderCatalogGroup(
         disabledReason={sectionDragDisabledReason()}
         onStartDrag={(id) => params.host.sessionOrganizer.startSidebarSectionDrag(id)}
         onFinishDrag={() => params.host.sessionOrganizer.finishSidebarSectionDrag()}
-        reorder={{
-          label: readCatalog().label,
-          onMove: (target: string, position: "before" | "after") =>
-            params.host.sessionOrganizer.reorderSidebarSection(sectionId(), target, position),
-        }}
         onContextMenu={(event) => {
           event.preventDefault();
           params.host.sidebarMenus.openCatalogViewMenu(

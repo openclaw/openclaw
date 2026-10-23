@@ -8,6 +8,7 @@ import {
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import type { ControlUiSessionFixture } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectFocused, pressAndExpectFocus } from "./sidebar-assertions.test-support.ts";
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI sidebar agent roster" });
@@ -54,7 +55,7 @@ const sessions: SessionsListResult = {
 };
 
 suite.define(() => {
-  it("shows only agents, preserves shortcuts, and routes through Sessions", async () => {
+  it("shows all sessions from the selector while preserving agent rows, shortcuts, and scoped Sessions", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 800, width: 1280 } },
       async ({ page }) => {
@@ -63,7 +64,7 @@ suite.define(() => {
             localStorage.setItem(
               key,
               JSON.stringify({
-                sidebarAgentsMode: "roster",
+                sidebarAgentsMode: "chip",
                 railShortcuts: ["session:agent:forge:project"],
               }),
             );
@@ -99,6 +100,40 @@ suite.define(() => {
         await waitForControlUiRoute(page, { routeId: "chat" });
 
         const sidebar = page.locator("openclaw-app-sidebar");
+        await sidebar.locator(".sidebar-agent-card__main").click();
+        const selector = sidebar.locator(".sidebar-agent-menu");
+        const allAgents = selector.locator('[data-value="scope:all"]');
+        await expectFocused(selector.locator('[data-value="agent:main"]'));
+        expect(
+          await selector
+            .locator('[role^="menuitem"]')
+            .evaluateAll((items) => items.map((item) => item.getAttribute("data-value"))),
+        ).toEqual(["command:new-agent", "scope:all", "agent:main", "agent:forge", "agent:scout"]);
+        await pressAndExpectFocus(
+          page,
+          "Home",
+          selector.locator('[data-value="command:new-agent"]'),
+        );
+        await pressAndExpectFocus(page, "ArrowDown", allAgents);
+        await page.keyboard.press("Enter");
+        const expectAllSessions = async () => {
+          await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
+          await expect
+            .poll(() =>
+              page
+                .locator(".sessions-table .session-agent-col [data-agent-id]")
+                .evaluateAll((chips) =>
+                  chips
+                    .map((chip) => chip.getAttribute("data-agent-id") ?? "")
+                    .toSorted((left, right) => left.localeCompare(right)),
+                ),
+            )
+            .toEqual(["forge", "forge", "main", "main", "scout", "scout"]);
+          expect((await gateway.getRequests("sessions.list")).at(-1)?.params).not.toHaveProperty(
+            "agentId",
+          );
+        };
+        await expectAllSessions();
         const headers = sidebar.locator(".sidebar-agent-roster__row");
         await expect.poll(() => headers.count()).toBe(3);
         expect(
@@ -106,7 +141,12 @@ suite.define(() => {
             items.map((item) => item.getAttribute("data-agent-id")),
           ),
         ).toEqual(["main", "forge", "scout"]);
-        expect(await sidebar.locator(".sidebar-recent-session").count()).toBe(0);
+        // Agent-only roster: the saved personal pin is the only session row, in Pinned.
+        expect(
+          await sidebar
+            .locator(".sidebar-recent-session")
+            .evaluateAll((items) => items.map((item) => item.getAttribute("data-session-key"))),
+        ).toEqual(["agent:forge:project"]);
         expect(await sidebar.locator("[data-agent-collapse]").count()).toBe(0);
         expect(
           await sidebar.locator(".sidebar-agent-roster__signals .session-unread-dot").count(),
@@ -118,11 +158,26 @@ suite.define(() => {
             )
             .count(),
         ).toBe(1);
+        // The run ring overhangs the avatar; keep it clear of the hover background's edge.
+        const ringInset = await sidebar
+          .locator('[data-agent-group="forge"] .sidebar-agent-roster__header')
+          .evaluate((header) => {
+            const ring = header.querySelector<HTMLElement>(".session-glyph__ring");
+            if (!ring) {
+              return null;
+            }
+            ring.style.animation = "none";
+            return ring.getBoundingClientRect().left - header.getBoundingClientRect().left;
+          });
+        expect(ringInset).toBeGreaterThanOrEqual(4);
         expect(
           await sidebar
-            .locator('.sidebar-rail [data-sidebar-entry="session:agent:forge:project"]')
+            .locator('[data-session-section="pinned"] [data-session-key="agent:forge:project"]')
             .count(),
         ).toBe(1);
+        expect(
+          await sidebar.locator('.sidebar-rail [data-sidebar-entry^="session:"]').count(),
+        ).toBe(0);
         await captureSidebarUiProof(suite, page, "sidebar-agent-only-roster.png");
 
         const forge = sidebar.locator('[data-agent-group="forge"]');
@@ -146,6 +201,24 @@ suite.define(() => {
             ),
           )
           .toBe(true);
+
+        const workspace = sidebar.locator(".sidebar-workspace-header__main");
+        await page.mouse.move(1100, 700);
+        await workspace.focus();
+        await workspace.hover();
+        await expect.poll(() => selector.getAttribute("data-phase")).toBe("open");
+        await expectFocused(workspace);
+        await page.keyboard.press("Enter");
+        await expectFocused(allAgents);
+        await pressAndExpectFocus(page, "End", selector.locator('[data-value="agent:scout"]'));
+        await pressAndExpectFocus(
+          page,
+          "Home",
+          selector.locator('[data-value="command:new-agent"]'),
+        );
+        await pressAndExpectFocus(page, "ArrowDown", allAgents);
+        await page.keyboard.press("Enter");
+        await expectAllSessions();
       },
     );
   });

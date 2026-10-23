@@ -2,6 +2,7 @@ import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { expectUnavailable } from "./plugin-instance.test-support.js";
 
 let instance: PluginInstance;
 beforeEach(() => {
@@ -15,12 +16,6 @@ function createSource(): object {
   return runInNewContext(
     `Object.defineProperty(Object.assign([], { execute() { return "current"; } }), "reader", { configurable: true, get() { return this.execute; } })`,
   );
-}
-
-function expectRetired(...operations: Array<() => unknown>) {
-  for (const operation of operations) {
-    expect(operation).toThrow("reloaded or disabled");
-  }
 }
 
 describe("managed plugin reflection", () => {
@@ -75,7 +70,7 @@ describe("managed plugin reflection", () => {
     expect(Reflect.defineProperty(view, "fixed", { value: 2 })).toBe(false);
     expect(Reflect.get(source, "fixed")).toBe(1);
     await instance.dispose();
-    expectRetired(() => Reflect.defineProperty(view, "late", { value: 2 }));
+    expectUnavailable(() => Reflect.defineProperty(view, "late", { value: 2 }));
     expect(Object.hasOwn(source, "late")).toBe(false);
   });
 
@@ -91,7 +86,7 @@ describe("managed plugin reflection", () => {
     expect(Reflect.get(view, "execute")).toBe(execute);
     expect(Reflect.apply(execute, view, [])).toBe("current");
     await instance.dispose();
-    expectRetired(
+    expectUnavailable(
       () => Reflect.apply(execute, view, []),
       () => Reflect.apply(Reflect.get(view, "execute"), view, []),
     );
@@ -105,7 +100,7 @@ describe("managed plugin reflection", () => {
     const execute = descriptor.get!.call(view);
     expect(Reflect.apply(execute, view, [])).toBe("current");
     await instance.dispose();
-    expectRetired(
+    expectUnavailable(
       () => descriptor.get!.call(view),
       () => Reflect.get(view, "reader"),
       () => Reflect.apply(execute, view, []),
@@ -163,7 +158,7 @@ describe("managed plugin proxy exports", () => {
       expect(admissions.every(Boolean)).toBe(true);
       await instance.dispose();
       admissions.length = 0;
-      expectRetired(() => read(view));
+      expectUnavailable(() => read(view));
       expect(admissions).toEqual([]);
     },
   );

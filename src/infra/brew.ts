@@ -12,20 +12,6 @@ type BrewResolutionOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
-function resolveBrewFromPath(pathEnv = process.env.PATH): string | undefined {
-  for (const dir of (pathEnv ?? "").split(path.delimiter)) {
-    const trimmed = dir.trim();
-    if (!trimmed || !path.isAbsolute(trimmed)) {
-      continue;
-    }
-    const candidate = path.join(trimmed, "brew");
-    if (canAccessSync(candidate, fs.constants.X_OK)) {
-      return candidate;
-    }
-  }
-  return undefined;
-}
-
 /** Returns standard Homebrew bin directories suitable for PATH augmentation. */
 export function resolveBrewPathDirs(opts?: BrewResolutionOptions): string[] {
   const homeDir = opts?.homeDir ?? os.homedir();
@@ -46,9 +32,15 @@ export function resolveBrewExecutable(opts?: BrewResolutionOptions): string | un
 
   // Use the real process PATH, not opts.env, because callers may pass workspace
   // env loaded from untrusted project state.
-  const pathBrew = resolveBrewFromPath();
-  if (pathBrew) {
-    return pathBrew;
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+    const trimmed = dir.trim();
+    if (!trimmed || !path.isAbsolute(trimmed)) {
+      continue;
+    }
+    const candidate = path.join(trimmed, "brew");
+    if (canAccessSync(candidate, fs.constants.X_OK)) {
+      return candidate;
+    }
   }
 
   return [

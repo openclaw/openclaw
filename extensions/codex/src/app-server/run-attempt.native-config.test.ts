@@ -676,7 +676,6 @@ it.each(["restore", "fresh"] as const)(
     const interruptModelExecution = vi.fn();
     const cancelForeground = vi.fn();
     const monitor = new codexNativeSubagentMonitorRuntime.Monitor(client.client, runtime, {
-      recoveryPollDelaysMs: [],
       interruptModelExecution,
     });
     const parent = await monitor.registerParent({

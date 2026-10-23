@@ -31,6 +31,9 @@ describe("projectSetupInferenceConfig", () => {
     apiKey,
     models: [],
   });
+  const providers = (
+    entries: NonNullable<OpenClawConfig["models"]>["providers"],
+  ): OpenClawConfig => ({ models: { providers: entries } });
 
   it.each<CredentialCase>([
     ["core no-auth marker", apiKeyCredential("custom-local", "custom-studio"), "custom-local"],
@@ -49,31 +52,23 @@ describe("projectSetupInferenceConfig", () => {
     "preserves credential semantics for %s",
     (_name, credential, expectedApiKey, providerApiKey) => {
       const provider = credential.provider;
-      const prepared: OpenClawConfig = {
-        models: {
-          providers: {
-            [provider.toUpperCase()]: providerConfig(8003, "stale-prepared-alias"),
-            [provider]: providerConfig(
-              8000,
-              providerApiKey ??
-                (credential.type === "token"
-                  ? credential.token
-                  : (credential.key ?? credential.keyRef)),
-            ),
-          },
-        },
-      };
+      const prepared = providers({
+        [provider.toUpperCase()]: providerConfig(8003, "stale-prepared-alias"),
+        [provider]: providerConfig(
+          8000,
+          providerApiKey ??
+            (credential.type === "token"
+              ? credential.token
+              : (credential.key ?? credential.keyRef)),
+        ),
+      });
 
       const projected = projectSetupInferenceConfig({
-        base: {
-          models: {
-            providers: {
-              [provider.toUpperCase()]: providerConfig(8001, "old-alias-key"),
-              [provider]: providerConfig(8002, "old-canonical-key"),
-              sibling: { baseUrl: "http://127.0.0.1:9000/v1", models: [] },
-            },
-          },
-        },
+        base: providers({
+          [provider.toUpperCase()]: providerConfig(8001, "old-alias-key"),
+          [provider]: providerConfig(8002, "old-canonical-key"),
+          sibling: { baseUrl: "http://127.0.0.1:9000/v1", models: [] },
+        }),
         prepared,
         modelRef: `${provider}/local-model`,
         agentId: "main",

@@ -1,23 +1,53 @@
-import type { Locator, Page } from "playwright";
+import path from "node:path";
+import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect } from "vitest";
-import {
-  activateSelfRemovingControl,
-  actionOpacity,
-  controlUiSessionPath,
-  installMockGateway,
-  sessionsListResponse,
-  waitForPatch,
-} from "./session-management.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import * as support from "./session-management.test-support.ts";
 
-type GatewayOptions = NonNullable<Parameters<typeof installMockGateway>[1]>;
-type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
+export { expectAttribute, expectCount, expectText } from "./session-page.test-support.ts";
+
+type GatewayOptions = NonNullable<Parameters<typeof support.installMockGateway>[1]>;
+type Gateway = Awaited<ReturnType<typeof support.installMockGateway>>;
 type Fields = Record<string, unknown>;
+type Suite = ReturnType<typeof support.createSessionManagementE2eSuite>;
+
+export function withSessionPage(
+  suite: Suite,
+  run: (page: Page) => Promise<void>,
+  overrides: BrowserContextOptions = {},
+  videoName?: string,
+) {
+  const options = { ...createControlUiE2eContextOptions(), ...overrides };
+  if (videoName && support.captureUiProofEnabled) {
+    options.recordVideo = { dir: suite.artifactDir, size: options.viewport ?? undefined };
+  }
+  return suite.withPage(
+    options,
+    ({ page }) => run(page),
+    async ({ page, context }) => {
+      if (videoName) {
+        const video = page.video();
+        await suite.closeBrowserContext(context);
+        await video?.saveAs(path.join(suite.artifactDir, videoName));
+      }
+    },
+  );
+}
+
 export function installSessionRows(page: Page, rows: unknown[], options: GatewayOptions = {}) {
-  return installMockGateway(page, {
+  return support.installMockGateway(page, {
     ...options,
-    methodResponses: { "sessions.list": sessionsListResponse(rows), ...options.methodResponses },
+    methodResponses: {
+      "sessions.list": support.sessionsListResponse(rows),
+      ...options.methodResponses,
+    },
   });
 }
+export const sessionMethods = (...methods: string[]) => [
+  "chat.metadata",
+  "chat.startup",
+  ...methods,
+];
 export const mainAndResearchAgents = {
   agents: [
     { id: "main", name: "Main" },
@@ -31,7 +61,7 @@ export function sessionPage(rows: readonly unknown[], offset: number, limit: num
   const page = rows.slice(offset, offset + limit);
   const nextOffset = offset + page.length;
   return {
-    ...sessionsListResponse(page, {
+    ...support.sessionsListResponse(page, {
       offset,
       totalCount: rows.length,
       hasMore: nextOffset < rows.length,
@@ -42,17 +72,19 @@ export function sessionPage(rows: readonly unknown[], offset: number, limit: num
 }
 export const requestCount = async (gateway: Gateway, method: string, match?: Fields) =>
   (await gateway.getRequests(method, match)).length;
+export const pollText = (locator: Locator) => expect.poll(() => locator.textContent());
+export const pollValue = (locator: Locator) => expect.poll(() => locator.inputValue());
+export const pollAttribute = (locator: Locator, name: string) =>
+  expect.poll(() => locator.getAttribute(name));
+export const pollCount = (locator: Locator, options?: { timeout: number }) =>
+  expect.poll(() => locator.count(), options);
 export async function expectNoRequests(gateway: Gateway, ...methods: string[]) {
   for (const method of methods) {
     expect(await gateway.getRequests(method)).toEqual([]);
   }
 }
 export const expectSessionPath = (page: Page, key: string) =>
-  expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(key));
-export const expectText = (locator: Locator, text: string) =>
-  expect.poll(() => locator.textContent()).toContain(text);
-export const expectCount = (locator: Locator, count: number) =>
-  expect.poll(() => locator.count()).toBe(count);
+  expect.poll(() => new URL(page.url()).pathname).toBe(support.controlUiSessionPath(key));
 export const sessionRows = (root: Page | Locator) => (key: string) =>
   root.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
 export const expectRightPadding = (locator: Locator, value: string) =>
@@ -73,7 +105,7 @@ export async function forEachActionMode(
       await button(row, "Pin session", false).focus();
     }
     for (const control of controls) {
-      await expect.poll(() => actionOpacity(control)).toBe("1");
+      await expect.poll(() => support.actionOpacity(control)).toBe("1");
     }
     await check();
   }
@@ -94,16 +126,16 @@ export async function bounds(locator: Locator) {
   return rect;
 }
 type Rect = Awaited<ReturnType<typeof bounds>>;
+export const centerX = (rect: Rect) => rect.x + rect.width / 2;
 export const centerY = (rect: Rect) => rect.y + rect.height / 2;
 export const right = (rect: Rect) => rect.x + rect.width;
 
-export function sessionPatch(gateway: Gateway, key: string, fields: Fields) {
-  return waitForPatch(
+export const sessionPatch = (gateway: Gateway, key: string, fields: Fields) =>
+  support.waitForPatch(
     gateway,
     (params) =>
       params.key === key && Object.entries(fields).every(([name, value]) => params[name] === value),
   );
-}
 
 export async function switchAgent(sidebar: Locator, name: string) {
   await button(sidebar, /Switch agent/, false).click();
@@ -124,5 +156,5 @@ export async function archiveSession(
     await button(row, "Open session menu", false).click();
   }
   const menu = surface === "header" ? "openclaw-chat-header-session-menu" : "openclaw-session-menu";
-  await activateSelfRemovingControl(menuItem(page.locator(menu), "Archive session"));
+  await support.activateSelfRemovingControl(menuItem(page.locator(menu), "Archive session"));
 }

@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Model } from "../types.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
-import { processCompletionsStream } from "./openai-completions-stream.js";
+import { streamFixture } from "./openai-completions-suite.test-support.js";
 import {
   createAssistantOutput,
   expectRecordFields,
   getAssistantMessage,
   makeCompletionsChunk,
   makeCompletionsModel,
-  streamChunks,
 } from "./openai-completions.test-support.js";
 
 function geminiToolReplayContext(
@@ -68,8 +67,8 @@ async function expectStreamedSignature(
   chunks: readonly unknown[],
   thoughtSignature: string,
 ) {
-  const output = createAssistantOutput(model);
-  await processCompletionsStream(streamChunks(chunks), output, model, { push() {} });
+  const { output, run } = streamFixture(model);
+  await run(chunks);
   expectRecordFields(output.content[0], {
     type: "toolCall",
     id: "call_abc",
@@ -87,49 +86,40 @@ describe("Gemini thought_signature round-trip on OpenAI-compatible completions",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
   });
 
-  it("captures thought_signature from streamed Google tool_calls", async () => {
-    const chunks = [
-      makeCompletionsChunk({
-        tool_calls: [
-          {
-            index: 0,
-            id: "call_abc",
-            type: "function",
-            function: { name: "echo_value", arguments: "" },
-            extra_content: { google: { thought_signature: "SIG-OPAQUE-ABC==" } },
-          },
-        ],
-      }),
-      makeCompletionsChunk(
-        { tool_calls: [{ index: 0, function: { arguments: '{"value":"repro"}' } }] },
-        "tool_calls" as const,
-      ),
-    ] as const;
-    await expectStreamedSignature(geminiModel, chunks, "SIG-OPAQUE-ABC==");
-  });
-
-  it("captures a top-level thought_signature from streamed OpenAI-compatible tool_calls", async () => {
-    const veniceGeminiModel = makeCompletionsModel({
-      id: "gemini-3-6-flash",
-
-      provider: "venice",
-      baseUrl: "https://api.venice.ai/api/v1",
-    });
-    const chunks = [
-      makeCompletionsChunk({
-        tool_calls: [
-          {
-            index: 0,
-            id: "call_abc",
-            type: "function",
-            function: { name: "echo_value", arguments: '{"value":"repro"}' },
-            thought_signature: "SIG-VENICE-OPAQUE-ABC==",
-          },
-        ],
-      }),
-      makeCompletionsChunk({}, "tool_calls" as const),
-    ] as const;
-    await expectStreamedSignature(veniceGeminiModel, chunks, "SIG-VENICE-OPAQUE-ABC==");
+  it.each([false, true])("captures streamed signatures (top-level=%s)", async (topLevel) => {
+    const model = topLevel
+      ? makeCompletionsModel({
+          id: "gemini-3-6-flash",
+          provider: "venice",
+          baseUrl: "https://api.venice.ai/api/v1",
+        })
+      : geminiModel;
+    const signature = topLevel ? "SIG-VENICE-OPAQUE-ABC==" : "SIG-OPAQUE-ABC==";
+    await expectStreamedSignature(
+      model,
+      [
+        makeCompletionsChunk({
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_abc",
+              type: "function",
+              function: { name: "echo_value", arguments: topLevel ? '{"value":"repro"}' : "" },
+              ...(topLevel
+                ? { thought_signature: signature }
+                : { extra_content: { google: { thought_signature: signature } } }),
+            },
+          ],
+        }),
+        makeCompletionsChunk(
+          topLevel
+            ? {}
+            : { tool_calls: [{ index: 0, function: { arguments: '{"value":"repro"}' } }] },
+          "tool_calls",
+        ),
+      ],
+      signature,
+    );
   });
 
   it("re-emits captured thought_signature for same Google route tool-call replay", () => {

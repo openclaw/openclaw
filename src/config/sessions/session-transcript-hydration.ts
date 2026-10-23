@@ -149,7 +149,12 @@ export function prepareSessionTranscriptHydration(
           return memory.read("session.history.maintenance", { request });
         }
         memory.assertCurrent();
-        return { kind: "transcript-maintenance" };
+        return {
+          kind: "transcript-maintenance",
+          ...(request.operation === "custom-branch" && request.leafEntryId === null
+            ? { events: [] }
+            : {}),
+        };
       },
       readRecentActiveEvents: async (maxEvents) => {
         if (!memory.missing) {

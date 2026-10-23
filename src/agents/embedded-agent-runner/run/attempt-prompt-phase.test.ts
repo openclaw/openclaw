@@ -146,69 +146,45 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(mocks.submitPrompt).toHaveBeenCalledTimes(1);
   });
 
-  it("persists one redacted blocked turn across prompt retries without submitting it", async () => {
+  it.each([false, true])("persists a safe blocked turn (policy throws: %s)", async (throws) => {
     const fixture = createFixture();
     const manager = guardSessionManager(SessionManager.inMemory());
     fixture.input.prepared.sessionRuntime.sessionManager = manager;
-    mocks.beforeAgentRun.mockResolvedValue({
-      outcome: "block",
-      reason: "unsafe input",
-      message: "Request blocked.",
-    });
+    if (throws) {
+      mocks.beforeAgentRun.mockRejectedValue(new Error("policy unavailable"));
+    } else {
+      mocks.beforeAgentRun.mockResolvedValue({
+        outcome: "block",
+        reason: "unsafe input",
+        message: "Request blocked.",
+      });
+    }
     const write = vi.spyOn(fixture.input.sessionLock, "withOwnedTranscriptWrite");
-
     await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
-    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
-
-    expect(fixture.input.state.beforeAgentRunBlockedBy).toBe("policy");
+    if (!throws) {
+      await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+    }
+    const blockedBy = throws ? "before_agent_run" : "policy";
+    const message = throws
+      ? "Your message could not be sent: blocked by before_agent_run"
+      : "Your message could not be sent: Request blocked. (blocked by policy)";
+    expect(fixture.input.state.beforeAgentRunBlockedBy).toBe(blockedBy);
     expect(fixture.readState().promptError).toBeInstanceOf(Error);
-    expect(fixture.readState().promptError).toHaveProperty(
-      "message",
-      "Your message could not be sent: Request blocked. (blocked by policy)",
-    );
-    expect(mocks.beforeAgentRun).toHaveBeenCalledTimes(2);
+    expect(fixture.readState().promptError).toHaveProperty("message", message);
+    expect(mocks.beforeAgentRun).toHaveBeenCalledTimes(throws ? 1 : 2);
     expect(write).toHaveBeenCalledTimes(1);
     expect(mocks.submitPrompt).not.toHaveBeenCalled();
     const messages = manager.buildSessionContext().messages;
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({
       role: "user",
-      content: [
-        {
-          type: "text",
-          text: "Your message could not be sent: Request blocked. (blocked by policy)",
-        },
-      ],
+      content: [{ type: "text", text: message }],
       idempotencyKey: "hook-block:before_agent_run:user:run-1",
-      __openclaw: { beforeAgentRunBlocked: { blockedBy: "policy", blockedAt: expect.any(Number) } },
+      __openclaw: { beforeAgentRunBlocked: { blockedBy, blockedAt: expect.any(Number) } },
     });
     expect(fixture.input.prepared.sessionRuntime.agentSession.activeSession.messages).toEqual(
       messages,
     );
-  });
-
-  it("fails closed and persists a safe blocked turn when the policy runner throws", async () => {
-    const fixture = createFixture();
-    const manager = guardSessionManager(SessionManager.inMemory());
-    fixture.input.prepared.sessionRuntime.sessionManager = manager;
-    mocks.beforeAgentRun.mockRejectedValue(new Error("policy unavailable"));
-    const write = vi.spyOn(fixture.input.sessionLock, "withOwnedTranscriptWrite");
-
-    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
-
-    expect(fixture.input.state.beforeAgentRunBlockedBy).toBe("before_agent_run");
-    expect(fixture.readState().promptError).toHaveProperty(
-      "message",
-      "Your message could not be sent: blocked by before_agent_run",
-    );
-    expect(write).toHaveBeenCalledTimes(1);
-    expect(mocks.submitPrompt).not.toHaveBeenCalled();
-    expect(manager.buildSessionContext().messages).toEqual([
-      expect.objectContaining({
-        role: "user",
-        idempotencyKey: "hook-block:before_agent_run:user:run-1",
-      }),
-    ]);
   });
 
   it.each([

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { nextFrame } from "../test-helpers/modal-dialog.ts";
@@ -45,6 +45,7 @@ async function mountImage(item: Partial<ImageLightboxItem> = {}, deferredClose =
   });
   container.append(viewer);
   await viewer.updateComplete;
+  await vi.dynamicImportSettled();
   await expect.poll(() => viewer.querySelector("openclaw-modal-dialog")).not.toBeNull();
   const modal = viewer.querySelector("openclaw-modal-dialog")!;
   await modal.updateComplete;

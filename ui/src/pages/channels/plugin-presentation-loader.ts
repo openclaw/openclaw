@@ -1,4 +1,4 @@
-import { createMemo, onCleanup } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
@@ -121,7 +121,7 @@ export function createChannelPluginPresentation(hooks: PluginPresentationHooks) 
     catalog = null;
     icons.reset();
   }
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
     reset();
   });

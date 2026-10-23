@@ -19,11 +19,6 @@ import {
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
 
-type SystemAgentInteractiveRunner = (
-  opts: RunSystemAgentOptions,
-  runtime: RuntimeEnv,
-) => Promise<void>;
-
 export type RunSystemAgentOptions = {
   message?: string;
   yes?: boolean;
@@ -37,7 +32,6 @@ export type RunSystemAgentOptions = {
   onReady?: () => void;
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
-  runInteractiveTui?: SystemAgentInteractiveRunner;
   /** Exact live-tested route supplied by the inference gate. */
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
 };
@@ -184,8 +178,7 @@ async function runBoundSystemAgent(
     return;
   }
 
-  const runInteractiveTui =
-    boundOpts.runInteractiveTui ?? (await import("./tui-backend.js")).runSystemAgentTui;
+  const { runSystemAgentTui } = await import("./tui-backend.js");
   boundOpts.onReady?.();
-  await runInteractiveTui(boundOpts, runtime);
+  await runSystemAgentTui(boundOpts, runtime);
 }

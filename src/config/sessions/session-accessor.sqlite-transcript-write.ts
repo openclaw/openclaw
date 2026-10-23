@@ -238,6 +238,7 @@ export function appendTranscriptEventSnapshotSync(
     scheduleProjectionReconcile: false;
     onProjectionReconcileNeeded: () => void;
     eventJson?: string;
+    persistActorMutation?: boolean;
   },
   view?: TranscriptWriteViewGuard,
   transaction?: OpenClawAgentDatabase,

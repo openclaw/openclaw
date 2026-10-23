@@ -1,3 +1,4 @@
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   normalizeToolParameterSchema,
   shouldOmitEmptyArrayItems,
@@ -25,11 +26,7 @@ function resolveToolSchemaModelCompat(
   if (!compat) {
     return undefined;
   }
-  const unsupportedToolSchemaKeywords = Array.isArray(compat.unsupportedToolSchemaKeywords)
-    ? compat.unsupportedToolSchemaKeywords.filter(
-        (keyword): keyword is string => typeof keyword === "string",
-      )
-    : [];
+  const unsupportedToolSchemaKeywords = filterStringEntries(compat.unsupportedToolSchemaKeywords);
   if (unsupportedToolSchemaKeywords.length === 0 && compat.omitEmptyArrayItems !== true) {
     return undefined;
   }

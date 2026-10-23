@@ -7,7 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   installPackageDir,
@@ -88,6 +88,7 @@ async function replaceDirectory(directory: string, retained: string, text: strin
 }
 
 describe("installPackageDir rollback", () => {
+  const fixtureDatabasePaths = new Set<string>();
   const fixtureRootTracker = createSuiteTempRootTracker({
     prefix: "openclaw-install-package-dir-rollback-",
   });
@@ -95,6 +96,10 @@ describe("installPackageDir rollback", () => {
   afterEach(async () => {
     __setFsSafeTestHooksForTest(undefined);
     vi.restoreAllMocks();
+    for (const pathname of fixtureDatabasePaths) {
+      await closeOpenClawStateDatabaseByPathAsync(pathname);
+    }
+    fixtureDatabasePaths.clear();
     await fixtureRootTracker.cleanup();
   });
 
@@ -195,6 +200,8 @@ describe("installPackageDir rollback", () => {
   async function createFixture(name: string) {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make(name);
+    const databasePath = path.join(fixtureRoot, "leases.sqlite");
+    fixtureDatabasePaths.add(databasePath);
     const paths = await createExistingInstallFixture(fixtureRoot);
     const install = (
       options: Partial<Parameters<typeof installPackageDir>[0]> = {},
@@ -208,7 +215,12 @@ describe("installPackageDir rollback", () => {
       );
     return {
       fixtureRoot,
-      leaseOptions: { path: path.join(fixtureRoot, "leases.sqlite"), leaseMs: 300_000, waitMs: 0 },
+      leaseOptions: {
+        path: databasePath,
+        env: { ...process.env, OPENCLAW_STATE_DIR: fixtureRoot },
+        leaseMs: 300_000,
+        waitMs: 0,
+      },
       ...paths,
       install,
       async retain(
@@ -432,7 +444,6 @@ describe("installPackageDir rollback", () => {
       release.resolve();
       await original.catch(() => undefined);
       await rollback.catch(() => undefined);
-      closeOpenClawStateDatabaseForTest();
     }
   });
 
@@ -659,13 +670,9 @@ describe("installPackageDir rollback", () => {
       if (replaced === "backup") {
         await run();
       } else {
-        try {
-          await withPluginLifecycleLease(leaseOptions, async (lease) =>
-            run(lease.assertOwned.bind(lease)),
-          );
-        } finally {
-          closeOpenClawStateDatabaseForTest();
-        }
+        await withPluginLifecycleLease(leaseOptions, async (lease) =>
+          run(lease.assertOwned.bind(lease)),
+        );
       }
     },
   );
@@ -957,7 +964,6 @@ describe("installPackageDir rollback", () => {
       resumeCleanup.resolve();
       await lifecycle.catch(() => undefined);
       await pendingInstall?.catch(() => undefined);
-      closeOpenClawStateDatabaseForTest();
     }
   });
 });

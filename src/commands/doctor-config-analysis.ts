@@ -219,6 +219,8 @@ export function stripUnknownConfigKeys(
       }
       const keyPath = [...issuePath, key].map(String);
       if (
+        (key === "heartbeat" && issuePath[0] === "agents") ||
+        (key === "heartbeatVisibility" && issuePath[0] === "channels") ||
         preservedPaths.some((retained) =>
           retained.slice(0, keyPath.length).every((part, index) => keyPath[index] === part),
         )

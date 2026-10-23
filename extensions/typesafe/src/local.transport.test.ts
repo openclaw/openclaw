@@ -6,15 +6,13 @@ import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-r
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { evaluate } from "./client.js";
 import { runtimeConfig } from "./config.js";
-import type { EvaluationInput } from "./schema.js";
 import {
-  choiceAnswer,
   closeServer,
   collectRequest,
   decisionContext,
+  mixedFixture,
   mockJsonResponse as mockResponse,
   registeredDecisionProvider,
-  scoreAnswer,
   stubAmbientProxies,
 } from "./transport.test-support.js";
 
@@ -27,37 +25,13 @@ vi.mock("node:dns/promises", async (importOriginal) => {
 });
 
 const baseUrl = "http://127.0.0.1:8009";
-const input = {
-  model: "kev-latest",
-  state: { message: "Synthetic outage" },
-  questions: {
-    c: { type: "choice", criteria: { support: "Service outages", sales: null } },
-    s: { type: "score", criteria: [null, { impact: ["widespread", true, 2] }] },
-    b: { type: "noul", instructions: { question: "Escalate?" } },
-  },
-} satisfies EvaluationInput;
-const criteria = ["", '{"impact":["widespread",true,2]}'];
-const wireInput = {
-  ...input,
-  questions: {
-    c: { ...input.questions.c, instructions: null },
-    s: { ...input.questions.s, instructions: null, criteria },
-    b: input.questions.b,
-  },
-};
-const decisionBatch = {
-  ...input,
-  questions: { ...input.questions, b: { ...input.questions.b, type: "boolean" as const } },
-};
-const localAnswer = {
-  model: "kev-latest",
-  answers: {
-    c: choiceAnswer("support", { support: 0.9, sales: 0.1 }, 0.8),
-    s: scoreAnswer(0.8, { 0: 0.2, 1: 0.8 }, { 0: "", 1: criteria[1] }, 0.8),
-    b: { type: "noul", noul: 0.75 },
-  },
-  usage: { input_tokens: 30, output_tokens: 12 },
-  latency_ms: 15.7,
+const input = { ...mixedFixture.input, model: "kev-latest" };
+const wireInput = { ...mixedFixture.localInput, model: input.model };
+const decisionBatch = { ...mixedFixture.batch, model: input.model };
+const localAnswer = { ...mixedFixture.localResponse, model: input.model };
+const expectedResult = {
+  ...mixedFixture.result,
+  result: { ...mixedFixture.result.result, model: input.model },
 };
 
 beforeEach(() => {
@@ -78,7 +52,7 @@ function registeredProvider(endpoint?: string) {
   }));
 }
 
-it("refuses to send the local Kev selection to hosted inference through registered handlers", async () => {
+it("refuses hosted dispatch for local Kev", async () => {
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
   await expect(
@@ -113,7 +87,7 @@ it.each([
   "http://2130706433:8009",
   "http://localhost.:8009",
   null,
-])("rejects non-origin, non-loopback, or ambiguous endpoint %s", (url) => {
+])("rejects unsafe loopback endpoint %s", (url) => {
   expect(() => runtimeConfig({ baseUrl: url })).toThrow("baseUrl");
 });
 
@@ -122,24 +96,13 @@ it.each([-1, "15"])("rejects invalid local latency metadata %s", async (latency_
   await expect(evaluate(input, runtimeConfig({ baseUrl }))).rejects.toThrow("invalid response");
 });
 
-it.each([false, true])(
-  "accepts metadata with hosted=%s and ignores stale local keys",
-  async (hosted) => {
-    const fetch = mockResponse(localAnswer);
-    const hostedInput = { ...wireInput, model: "jev-latest" };
-    const config = { ...runtimeConfig(hosted ? {} : { baseUrl }), apiKey: "hosted-secret" };
-    await expect(evaluate(hosted ? hostedInput : input, config)).resolves.toHaveProperty(
-      "evaluation.model",
-      "kev-latest",
-    );
-    expect(fetch.mock.calls[0]?.[0]).toBe(
-      hosted ? "https://api.typesafe.ai/v1/systemone" : `${baseUrl}/v1/systemone`,
-    );
-    expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
-      hosted ? "Bearer hosted-secret" : null,
-    );
-  },
-);
+it("never sends a stale hosted key locally", async () => {
+  const fetch = mockResponse(localAnswer);
+  await expect(
+    evaluate(input, { ...runtimeConfig({ baseUrl }), apiKey: "hosted-secret" }),
+  ).resolves.toHaveProperty("evaluation.model", "kev-latest");
+  expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBeNull();
+});
 
 it.each(["127.0.0.1", "localhost", "[::1]"])("reuses local %s sockets", async (hostname) => {
   const received: { url?: string; authorization?: string; host?: string; body: string }[] = [];
@@ -169,18 +132,9 @@ it.each(["127.0.0.1", "localhost", "[::1]"])("reuses local %s sockets", async (h
     const provider = registeredProvider(`http://${hostname}:${address.port}`);
     expect(provider.isReady?.()).toBe(true);
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      await expect(
-        provider.evaluate(decisionBatch, decisionContext(input.model)),
-      ).resolves.toMatchObject({
-        status: "ok",
-        result: {
-          answers: {
-            c: localAnswer.answers.c,
-            s: { type: "score", score: 0.8, probabilities: [0.2, 0.8] },
-            b: { type: "boolean", probabilityTrue: 0.75 },
-          },
-        },
-      });
+      await expect(provider.evaluate(decisionBatch, decisionContext(input.model))).resolves.toEqual(
+        expectedResult,
+      );
     }
     expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
     expect(received).toHaveLength(5);

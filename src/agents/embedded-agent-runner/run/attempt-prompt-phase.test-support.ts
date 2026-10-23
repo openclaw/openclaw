@@ -99,7 +99,6 @@ export function createPromptAssemblyResult(
     promptBuildPrependContext: undefined,
     promptBuildAppendContext: undefined,
     originContext: undefined,
-    heartbeatSummary: undefined,
     leasedSteering: undefined,
     transcriptLeafId: null,
   };

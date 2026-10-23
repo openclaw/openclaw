@@ -82,6 +82,7 @@ describe("gateway candidate connection", () => {
 
     expect(mocks.options[0]?.url).toBe("ws://192.168.1.20:18789/openclaw-gw");
     expect(mocks.clients[0]?.start).toHaveBeenCalledOnce();
+    connection.updateNodeManifest(manifest);
     closeCandidate();
     await vi.waitFor(() => expect(mocks.clients).toHaveLength(2));
     const [first, winner] = mocks.clients;
@@ -89,6 +90,7 @@ describe("gateway candidate connection", () => {
     expect(first?.stop).toHaveBeenCalledOnce();
     expect(mocks.options[1]?.url).toBe("wss://gateway.tailnet.example:443");
     expect(winner?.start).toHaveBeenCalledOnce();
+    expect(winner?.updateNodeManifest).toHaveBeenCalledWith(manifest);
 
     mocks.options[0]?.onEvent?.({ type: "event", event: "stale" });
     mocks.options[0]?.onHelloOk?.({} as never);
@@ -135,16 +137,6 @@ describe("gateway candidate connection", () => {
 
     expect(callbacks.onWinningCandidate).toHaveBeenCalledWith(candidates[0]);
     expect(mocks.clients).toHaveLength(1);
-  });
-
-  it("carries a pre-hello manifest update into the next candidate", async () => {
-    const connection = createConnection();
-
-    connection.updateNodeManifest(manifest);
-    closeCandidate();
-    await vi.waitFor(() => expect(mocks.clients).toHaveLength(2));
-
-    expect(mocks.clients[1]?.updateNodeManifest).toHaveBeenCalledWith(manifest);
   });
 
   it.each([false, true])("cannot start candidates after stop (queued=%s)", async (queued) => {

@@ -150,7 +150,10 @@ export function createComposerMobileInteraction(
       containsComposed(composerInput() ?? undefined, target) || ownedOverlay(target);
     // Floating cards share the gesture surface without starting editor interaction.
     const insideComposer = (target: Node | null) =>
-      containsComposed(shell(), target) || ownedOverlay(target, shell());
+      containsComposed(shell(), target) ||
+      // Collapsing on pointerdown would move Latest before its click can activate.
+      containsComposed(props.getScrollToLatestElement?.() ?? undefined, target) ||
+      ownedOverlay(target, shell());
     const editable = (target: Node | null) =>
       target instanceof Element &&
       target.matches(
@@ -168,15 +171,15 @@ export function createComposerMobileInteraction(
           }
           pointerOrigin = event.composedPath()[0];
           setKeyboardNavigation(false);
-          // Closing the keyboard may retain focus, so the next editor tap has
-          // no focusin edge. Keep its origin before restoring the writing layout.
+          // Focus during the tap, before expansion moves the native hit target.
+          // iOS needs this user gesture to open the software keyboard.
           if (
             event.button === 0 &&
-            pointerOrigin instanceof Node &&
+            pointerOrigin instanceof HTMLTextAreaElement &&
             pointerOrigin === state.composerTextarea &&
-            doc.activeElement === pointerOrigin &&
             editable(pointerOrigin)
           ) {
+            pointerOrigin.focus({ preventScroll: true });
             changeEditing(true);
           }
           if (pointerOrigin instanceof Node && !insideComposer(pointerOrigin)) {

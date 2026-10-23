@@ -262,8 +262,6 @@ export async function downloadMSTeamsAttachments(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   deadline?: MSTeamsRequestDeadline;
-  /** When true, embeds original filename in stored path for later extraction. */
-  preserveFilenames?: boolean;
   logger?: MSTeamsAttachmentDownloadLogger;
   /** Already-acquired Graph token for reference attachments from a Graph message. */
   graphReferenceToken?: string;
@@ -365,7 +363,6 @@ export async function downloadMSTeamsAttachments(params: {
         maxBytes: params.maxBytes,
         contentTypeHint: candidate.contentTypeHint,
         kind: candidate.graphReference ? undefined : candidate.mediaKind,
-        preserveFilenames: params.preserveFilenames,
         // `fetchImpl` below owns Teams auth fallback and enforces the
         // attachment fetch policy through `safeFetchWithPolicy`.
         fetchImpl: (input, init) =>

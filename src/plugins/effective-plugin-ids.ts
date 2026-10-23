@@ -7,7 +7,6 @@ import {
 } from "../channels/config-presence.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isVitestRuntimeEnv } from "../infra/env.js";
 import {
   listExplicitConfiguredChannelIdsForConfig,
   loadGatewayStartupPluginPlan,
@@ -55,7 +54,6 @@ type ResolveEffectivePluginIdsParams = {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;
-  bundledPluginsDir?: string;
   /** Prepared metadata for this invocation. Without it every lookup below rebuilds
    * the registry, so callers that already hold a snapshot must pass it. */
   metadataSnapshot?: PluginMetadataSnapshot;
@@ -68,10 +66,7 @@ export function resolveEffectivePluginIds(params: ResolveEffectivePluginIdsParam
 export async function resolveEffectivePluginIdsAsync(
   params: ResolveEffectivePluginIdsParams,
 ): Promise<string[]> {
-  const prepared =
-    params.bundledPluginsDir || params.metadataSnapshot?.pluginIds
-      ? undefined
-      : params.metadataSnapshot;
+  const prepared = params.metadataSnapshot?.pluginIds ? undefined : params.metadataSnapshot;
   const autoEnabled = applyPluginAutoEnable({
     config: params.config,
     env: params.env,
@@ -97,12 +92,8 @@ function resolveEffectivePluginIdsWithChannels(
   },
 ): string[] {
   // Effective ids are a whole-config question. A plugin-scoped snapshot only carries
-  // its own manifests, and a bundled-plugins-dir override rewrites the discovery env,
-  // so neither can answer it — those callers keep re-deriving.
-  const prepared =
-    params.bundledPluginsDir || params.metadataSnapshot?.pluginIds
-      ? undefined
-      : params.metadataSnapshot;
+  // its own manifests, so those callers keep re-deriving.
+  const prepared = params.metadataSnapshot?.pluginIds ? undefined : params.metadataSnapshot;
   const autoEnabled =
     preparedChannels?.autoEnabled ??
     applyPluginAutoEnable({
@@ -155,29 +146,16 @@ function resolveEffectivePluginIdsWithChannels(
   for (const pluginId of configuredPluginIds) {
     ids.add(pluginId);
   }
-  const bundledOwnerEnv = params.env;
-  const bundledOwnerWorkspaceDir = params.workspaceDir;
-  const bundledOwnerManifestRecords = prepared?.plugins;
-  const bundledPluginsDir = params.bundledPluginsDir ? params.bundledPluginsDir : undefined;
   // Channel state callbacks run before this pass and may update config.
   const bundledOwnerPlugins = normalizePluginsConfig(effectiveConfig.plugins);
   const channelIds = new Set(configuredChannelIds);
   if (channelIds.size > 0) {
-    const env = bundledPluginsDir
-      ? {
-          ...bundledOwnerEnv,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-          ...(isVitestRuntimeEnv(bundledOwnerEnv) || isVitestRuntimeEnv()
-            ? { OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1" }
-            : {}),
-        }
-      : bundledOwnerEnv;
     const records =
-      bundledOwnerManifestRecords ??
+      prepared?.plugins ??
       loadManifestMetadataSnapshot({
         config: effectiveConfig,
-        env,
-        workspaceDir: bundledOwnerWorkspaceDir,
+        env: params.env,
+        workspaceDir: params.workspaceDir,
       }).plugins;
     for (const plugin of records) {
       if (plugin.origin !== "bundled") {

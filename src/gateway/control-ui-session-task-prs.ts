@@ -1,5 +1,6 @@
 import { createRetainedCache } from "../infra/retained-cache.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import type { TaskPublicationRead } from "../state/github-publication-task-reads.worker.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
@@ -8,12 +9,17 @@ import type { ControlUiSessionTaskPullRequest } from "./control-ui-contract.js";
 import type { EntryRow } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
+// Only structural selections are shared. Audience checks remain live for every reader.
+const childrenByRevision = new WeakMap<object, Map<string, EntryRow[]>>();
+
 /** Traverse the row owner's indexed lineage; neither checkout nor transcript is evidence. */
 export function selectTaskPublicationSessions(
   projection: SessionRowProjection,
   root: EntryRow,
   allows: (row: EntryRow) => boolean,
 ): TaskPublicationRead["sessions"] {
+  // Registry publications can defer parent-index updates until row preparation.
+  void projection.state;
   const seen = new Set<string>();
   const pending = [root];
   const sessions: TaskPublicationRead["sessions"] = [];
@@ -34,7 +40,15 @@ export function selectTaskPublicationSessions(
       sessionId: row.entry.sessionId,
       lifecycleRevision: row.entry.lifecycleRevision ?? null,
     });
-    pending.push(...projection.selectEntries({ parentSessionKey: row.key }));
+    const revision = projection.sharingRevision;
+    const children = revision ? getOrCreateWeakOwnerMap(childrenByRevision, revision) : undefined;
+    let selected = children?.get(row.key);
+    if (!selected) {
+      selected = projection.selectEntries({ parentSessionKey: row.key });
+      // Acquisition may advance the revision; never label earlier candidates with its successor.
+      children?.set(row.key, selected);
+    }
+    pending.push(...selected);
   }
   return sessions.toSorted(
     (a, b) => a.sessionKey.localeCompare(b.sessionKey) || a.agentId.localeCompare(b.agentId),

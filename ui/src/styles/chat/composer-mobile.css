@@ -190,10 +190,6 @@
   font-weight: 500;
 }
 
-.chat-footer:has(.agent-chat__composer-shell[data-mobile-composer="true"]) {
-  --chat-transcript-fade-height: 10px;
-}
-
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
   .agent-chat__input-btn--attach {
   width: 32px;

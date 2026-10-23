@@ -97,16 +97,9 @@ const buildQuerySuggestions = (
   if (!query.trim()) {
     return [];
   }
-  const lastQueryWord = terms.at(-1)?.raw ?? "";
-  const [rawKey, rawValue] = lastQueryWord.includes(":")
-    ? [
-        lastQueryWord.slice(0, lastQueryWord.indexOf(":")),
-        lastQueryWord.slice(lastQueryWord.indexOf(":") + 1),
-      ]
-    : ["", ""];
-
-  const key = normalizeLowercaseStringOrEmpty(rawKey);
-  const value = normalizeLowercaseStringOrEmpty(rawValue);
+  const lastTerm = terms.at(-1);
+  const key = normalizeLowercaseStringOrEmpty(lastTerm?.key);
+  const value = normalizeLowercaseStringOrEmpty(lastTerm?.value);
 
   if (!key) {
     return [

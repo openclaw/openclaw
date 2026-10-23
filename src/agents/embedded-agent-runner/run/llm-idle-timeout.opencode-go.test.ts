@@ -1,5 +1,4 @@
 import type { FirstStreamEventInternalOptions } from "@openclaw/ai/internal/runtime";
-import type { Model } from "@openclaw/llm-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
@@ -8,6 +7,7 @@ import { classifyFailoverSignalCore } from "../../failover/classify-core.js";
 import { shouldRetryFailoverSignal } from "../../failover/retry-evidence.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import {
   resolveLlmFirstEventTimeoutMs,
   resolveLlmIdleTimeoutMs,
@@ -18,18 +18,16 @@ const { default: plugin } = await loadBundledPluginFacade<{
   default: Parameters<typeof registerSingleProviderPlugin>[0];
 }>({ pluginId: "opencode-go", artifactBasename: "index.js" });
 const provider = await registerSingleProviderPlugin(plugin);
-const model: Model = {
+const model = makeProviderModelFixture({
   api: "openai-completions",
   provider: "opencode-go",
   id: "deepseek-v4-flash",
   name: "Synthetic Go model",
   baseUrl: "https://opencode.ai/zen/go/v1",
   reasoning: true,
-  input: ["text"],
   contextWindow: 262_144,
   maxTokens: 8192,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-};
+});
 
 async function openStream(trigger?: "cron", requestTimeoutMs?: number) {
   vi.useFakeTimers();

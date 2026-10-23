@@ -51,3 +51,11 @@ export function sessionMutationGatewayHello(
 ): GatewayHelloOk {
   return gatewayHelloForMethods(SESSION_MUTATION_TEST_METHODS, scopes);
 }
+
+export function sidebarGatewayHello(): GatewayHelloOk {
+  return gatewayHelloForMethods([
+    ...SESSION_MUTATION_TEST_METHODS,
+    "agents.create",
+    "openclaw.chat",
+  ]);
+}

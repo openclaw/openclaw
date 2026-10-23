@@ -246,12 +246,13 @@ Sessions are reused until you reset them manually or opt into an automatic reset
   metadata writes.
 - **Idle reset** (`mode: "idle"`) - opt into a new session after `session.reset.idleMinutes`
   of inactivity. Idle freshness is based on the last real user/channel
-  interaction, so heartbeat, cron, and exec system events do not keep the
-  session alive.
+  interaction, including browser Talk consults. Heartbeat, cron, and exec system
+  events do not keep the session alive.
 - **Manual reset** - type `/new` or `/reset` in chat. `/new <model>` also
   switches the model.
 
 When both daily and idle resets are configured, whichever expires first wins.
+The message that triggers an automatic reset continues in the new conversation.
 Heartbeat, cron, exec, and other system-event turns may write session metadata,
 but those writes do not extend daily or idle reset freshness. When a reset
 rolls the session, queued system-event notices for the old session are
@@ -337,6 +338,16 @@ recorded permissions against current profile, role, access-grant, and device
 policy. A Control UI administrator can therefore continue authorized automation
 work after a restart without losing `operator.admin`. Recovery cannot gain scopes
 the original caller lacked, and revocation still stops the recovered run.
+Callers with `operator.sessions.write` can resume their own interrupted turns
+without needing the broader `operator.write` scope. If the original grant has
+been revoked, recovery records an interruption and a notice in the session
+instead of repeatedly retrying the same input. Send a new authenticated message
+after access is restored to continue.
+If the recorded source no longer matches the session or interrupted input,
+recovery also retires that stale input with one local interruption notice.
+The incoming message can then continue normally without resetting the session.
+Pending replies, harness completions, and independent runs retain their existing
+recovery protection.
 Older interrupted turns without a recorded authorization source remain restricted;
 send a fresh authenticated message to continue privileged work. Session ownership
 or a saved display name never grants recovery permissions.

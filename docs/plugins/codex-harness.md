@@ -26,6 +26,14 @@ its temporary loopback address. Upstream, authentication-profile, and creation-t
 policy changes still invalidate thread reuse; live requests continue through the
 current owned proxy.
 
+Provider-review acknowledgments must continue the reviewed native thread. If
+changed tools or runtime configuration would require a replacement thread, or
+native resume fails, OpenClaw refuses the acknowledgment before creating or saving
+a replacement. Restore the original tools and runtime configuration and retry
+from the original conversation. The review remains pending until Codex accepts
+the continuation; acknowledgment does not bypass the review checks or repair a
+binding that was already replaced by an earlier failed attempt.
+
 ## Shared output projection
 
 Codex uses the shared native harness projection owners for bounded tool output,
@@ -38,6 +46,13 @@ The Codex adapter retains native item identities, protocol parsing, approvals,
 hook handling, and transcript provenance. Constructed messages are persisted
 through the existing scoped transcript APIs; the shared projection helpers do
 not own storage.
+
+Run tool summaries retain explicit native-tool failures recorded before execution,
+including malformed patches and workspace refusals. A successful retry leaves the
+earlier failure in the count. Code Mode wrapper output does not add another count
+when a native execution item already accounts for it. A completed command result
+with a nonzero exit code also marks the run unsafe to replay, even if its native
+execution item is missing.
 
 During `initialize`, OpenClaw uses `capabilities.optOutNotificationMethods` to
 suppress unused app-server notifications before they reach the transport and JSON
@@ -631,6 +646,12 @@ send another continuation for a result it has consumed. Explicit OpenClaw or ACP
 delegation continues to use `sessions_spawn`. Stored submission and result
 receipts are recovery evidence, not permission to adopt a child or deliver to a
 replacement parent.
+
+When a native child spawns its own child, Codex delivers that grandchild's result
+to the immediate native parent. OpenClaw retires the completed assignment without
+another root continuation, including after restart when native lineage can be
+verified. Unavailable lineage leaves the assignment pending for later recovery;
+native-parent rotation alone does not prove nested delivery.
 
 For native Codex V1 agents, a completed `wait` result also records delivery to
 the foreground parent. OpenClaw does not start another continuation for that

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   BoardSnapshot,
   BoardWidgetPutParams,
@@ -7,6 +7,7 @@ import type {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createDashboardTool } from "../../agents/tools/dashboard-tool.js";
+import * as inProcessGateway from "../../agents/tools/in-process-gateway.js";
 import type { InProcessGatewayCaller } from "../../agents/tools/in-process-gateway.js";
 import { readBoardHtml } from "../../boards/board-store.test-support.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -482,7 +483,11 @@ describe("website dashboard authoring", () => {
       }
       return payload as T;
     };
-    const tool = createDashboardTool({ agentSessionKey: sessionKey, callGateway });
+    const gatewaySpy = vi
+      .spyOn(inProcessGateway, "callInProcessGatewayTool")
+      .mockImplementation(callGateway);
+    onTestFinished(() => gatewaySpy.mockRestore());
+    const tool = createDashboardTool({ agentSessionKey: sessionKey });
     return { ...harness, tool };
   }
 

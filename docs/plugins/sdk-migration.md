@@ -346,6 +346,7 @@ The anchors from the single-page version still resolve here.
 
 [Removed surfaces and replacements](/plugins/sdk-migration/removed-surfaces) — what was removed, and the replacement for each legacy API.
 
+- [Heartbeat executor and wake helpers](/plugins/sdk-migration/removed-surfaces#heartbeat-executor-and-wake-helpers)
 - <a id="removed-compatibility-surfaces"></a>[Removed compatibility surfaces](/plugins/sdk-migration/removed-surfaces#removed-compatibility-surfaces)
 - <a id="process-global-api-provider-publication"></a>[Process-global API-provider publication](/plugins/sdk-migration/removed-surfaces#process-global-api-provider-publication)
 - <a id="deactivate-hook-alias"></a>[Deactivate hook alias](/plugins/sdk-migration/removed-surfaces#deactivate-hook-alias)

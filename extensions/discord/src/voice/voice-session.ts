@@ -322,7 +322,6 @@ export class DiscordVoiceSessions {
       guildName: channelInfo.guild?.name,
       channelId,
       channelName: channelInfo.name,
-      sessionChannelId,
       voiceSessionKey: voiceRoute.sessionKey,
       route,
       audio,

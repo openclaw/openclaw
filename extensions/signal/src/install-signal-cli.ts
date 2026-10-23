@@ -87,15 +87,10 @@ function normalizeSignalCliRelease(value: Record<string, unknown>): SignalCliRel
 }
 
 /** @internal Exported for testing. */
-export async function downloadToFile(
-  url: string,
-  dest: string,
-  maxRedirects = 5,
-  maxBytes = MAX_SIGNAL_CLI_ARCHIVE_BYTES,
-): Promise<void> {
+export async function downloadToFile(url: string, dest: string): Promise<void> {
   const { response, release } = await fetchWithSsrFGuard({
     url,
-    maxRedirects,
+    maxRedirects: 5,
     requireHttps: true,
     timeoutMs: SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS,
     capture: false,
@@ -112,9 +107,9 @@ export async function downloadToFile(
       const declaredLength = CONTENT_LENGTH_RE.test(trimmedLength)
         ? Number(trimmedLength)
         : Number.NaN;
-      if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_SIGNAL_CLI_ARCHIVE_BYTES) {
         throw new Error(
-          `signal-cli archive exceeds the ${maxBytes}-byte download cap (declared ${declaredLength}).`,
+          `signal-cli archive exceeds the ${MAX_SIGNAL_CLI_ARCHIVE_BYTES}-byte download cap (declared ${declaredLength}).`,
         );
       }
     }
@@ -126,16 +121,19 @@ export async function downloadToFile(
     }
     const destination = await fsRoot(path.dirname(dest));
     await destination.create(path.basename(dest), chunks(), {
-      maxBytes,
+      maxBytes: MAX_SIGNAL_CLI_ARCHIVE_BYTES,
       mkdir: false,
       durable: false,
       mode: 0o666 & ~process.umask(),
     });
   } catch (error) {
     if (extractErrorCode(error) === "too-large") {
-      throw new Error(`signal-cli archive exceeded the ${maxBytes}-byte download cap.`, {
-        cause: error,
-      });
+      throw new Error(
+        `signal-cli archive exceeded the ${MAX_SIGNAL_CLI_ARCHIVE_BYTES}-byte download cap.`,
+        {
+          cause: error,
+        },
+      );
     }
     throw error;
   } finally {

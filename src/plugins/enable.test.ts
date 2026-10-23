@@ -7,70 +7,45 @@ const telegramEnabled = {
   channels: { telegram: enabledEntry },
   plugins: { entries: { telegram: enabledEntry } },
 };
-
 describe("enablePluginInConfig", () => {
   it.each([
-    {
-      name: "enables a canonical plugin allowed through a mixed-case compatibility id",
-      cfg: { plugins: { allow: [" GOOGLE-GEMINI-CLI "] } },
-      pluginId: "google",
-      config: { plugins: { allow: ["google"], entries: { google: enabledEntry } } },
-    },
-    {
-      name: "canonicalizes a mixed-case compatibility target before enabling it",
-      cfg: {},
-      pluginId: " GOOGLE-GEMINI-CLI ",
-      config: { plugins: { entries: { google: enabledEntry } } },
-    },
-    {
-      name: "enables built-in channel already present in configured allowlist",
-      cfg: { plugins: { allow: ["telegram"] } },
-      pluginId: "telegram",
-      config: { ...telegramEnabled, plugins: { ...telegramEnabled.plugins, allow: ["telegram"] } },
-    },
-    {
-      name: "re-enables built-in channels after explicit plugin-level disable",
-      cfg: {
+    [
+      "enables a canonical plugin allowed through a mixed-case compatibility id",
+      "google",
+      { plugins: { allow: [" GOOGLE-GEMINI-CLI "] } },
+      { plugins: { allow: ["google"], entries: { google: enabledEntry } } },
+    ],
+    [
+      "canonicalizes a mixed-case compatibility target before enabling it",
+      " GOOGLE-GEMINI-CLI ",
+      {},
+      { plugins: { entries: { google: enabledEntry } } },
+    ],
+    [
+      "enables built-in channel already present in configured allowlist",
+      "telegram",
+      { plugins: { allow: ["telegram"] } },
+      { ...telegramEnabled, plugins: { ...telegramEnabled.plugins, allow: ["telegram"] } },
+    ],
+    [
+      "re-enables built-in channels after explicit plugin-level disable",
+      "telegram",
+      {
         channels: { telegram: enabledEntry },
         plugins: { entries: { telegram: { enabled: false } } },
       },
-      pluginId: "telegram",
-      config: telegramEnabled,
+      telegramEnabled,
+    ],
+  ] satisfies Array<[string, string, OpenClawConfig, OpenClawConfig]>)(
+    "%s",
+    (_name, pluginId, cfg, config) => {
+      expect(enablePluginInConfig(cfg, pluginId)).toEqual({
+        enabled: true,
+        pluginId: pluginId === "telegram" ? "telegram" : "google",
+        config,
+      });
     },
-  ] satisfies Array<{
-    name: string;
-    cfg: OpenClawConfig;
-    pluginId: string;
-    config: OpenClawConfig;
-  }>)("$name", ({ cfg, pluginId, config }) => {
-    expect(enablePluginInConfig(cfg, pluginId)).toEqual({
-      enabled: true,
-      pluginId: pluginId === "telegram" ? "telegram" : "google",
-      config,
-    });
-  });
-
-  it.each([
-    {
-      name: "refuses a canonical plugin denied through a mixed-case compatibility id",
-      cfg: { plugins: { deny: [" GOOGLE-GEMINI-CLI "] } },
-      pluginId: "google",
-      reason: "blocked by denylist",
-    },
-    {
-      name: "refuses built-in channel outside configured allowlist",
-      cfg: { plugins: { allow: ["memory-core"] } },
-      pluginId: "telegram",
-      reason: "blocked by allowlist",
-    },
-  ])("$name", ({ cfg, pluginId, reason }) => {
-    expect(enablePluginInConfig(cfg, pluginId)).toEqual({
-      config: cfg,
-      enabled: false,
-      pluginId,
-      reason,
-    });
-  });
+  );
 
   it("can enable a built-in channel plugin entry without mutating channel config", () => {
     expect(enablePluginInConfig({}, "twitch", { updateChannelConfig: false })).toEqual({
@@ -94,24 +69,26 @@ describe("enableExplicitlySelectedPluginInConfig", () => {
       },
     });
   });
-
-  it.each([
-    { pluginId: "google", plugins: { allow: ["memory-core"] }, reason: "blocked by allowlist" },
-    {
-      pluginId: "clickclack",
-      plugins: { allow: ["memory-core"], deny: ["clickclack"] },
-      reason: "blocked by denylist",
-    },
-  ])(
-    "keeps $pluginId blocked by policy without changing the allowlist",
-    ({ pluginId, plugins, reason }) => {
-      const config = { plugins };
-      expect(enableExplicitlySelectedPluginInConfig(config, pluginId)).toEqual({
-        config,
-        enabled: false,
-        pluginId,
-        reason,
-      });
-    },
-  );
 });
+
+const enablers = {
+  policy: enablePluginInConfig,
+  selection: enableExplicitlySelectedPluginInConfig,
+};
+it.each([
+  ["policy", "google", { deny: [" GOOGLE-GEMINI-CLI "] }, "denylist"],
+  ["policy", "telegram", { allow: ["memory-core"] }, "allowlist"],
+  ["selection", "google", { allow: ["memory-core"] }, "allowlist"],
+  ["selection", "clickclack", { allow: ["memory-core"], deny: ["clickclack"] }, "denylist"],
+] satisfies Array<[keyof typeof enablers, string, OpenClawConfig["plugins"], string]>)(
+  "%s keeps %s blocked without changing config",
+  (entry, pluginId, plugins, policy) => {
+    const config = { plugins };
+    expect(enablers[entry](config, pluginId)).toEqual({
+      config,
+      enabled: false,
+      pluginId,
+      reason: `blocked by ${policy}`,
+    });
+  },
+);

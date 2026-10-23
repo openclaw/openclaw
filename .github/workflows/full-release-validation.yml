@@ -170,7 +170,7 @@ env:
   GH_REPO: ${{ github.repository }}
   # Read retries and one-shot dispatch recovery share this classifier; dispatch POSTs never retry.
   GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|(^|[^A-Za-z0-9_])EOF([^A-Za-z0-9_]|$)|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
   RELEASE_ISOLATION_TOOLING_CONTRACT: "2"
   FULL_RELEASE_DISPATCH_WITNESS_CONTRACT: "1"
   FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT: "1"
@@ -306,7 +306,7 @@ jobs:
 
       - name: Setup admission Node.js
         env:
-          REQUESTED_NODE_VERSION: "24.x"
+          REQUESTED_NODE_VERSION: "24.22.1"
         run: |
           set -euo pipefail
           source workflow/.github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -1096,7 +1096,7 @@ jobs:
 
       - name: Setup Node.js
         env:
-          REQUESTED_NODE_VERSION: "24.x"
+          REQUESTED_NODE_VERSION: "24.22.1"
         run: |
           set -euo pipefail
           source workflow/.github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -1300,7 +1300,7 @@ jobs:
         if: env.CHILD_EVIDENCE_REUSE == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Dispatch CI

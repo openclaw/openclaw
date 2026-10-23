@@ -22,22 +22,14 @@ function claim(ctx: MsgContext, claimFn = claimInbound) {
   return result;
 }
 
-const loaded: Array<typeof import("./inbound-dedupe.js")> = [];
-async function fresh(scope: string) {
-  const module = await importFreshModule<typeof import("./inbound-dedupe.js")>(
+const fresh = (scope: string) =>
+  importFreshModule<typeof import("./inbound-dedupe.js")>(
     import.meta.url,
     `./inbound-dedupe.js?scope=${scope}`,
   );
-  loaded.push(module);
-  module.resetInboundDedupe();
-  return module;
-}
 
 afterEach(() => {
   resetInbound();
-  for (const module of loaded.splice(0)) {
-    module.resetInboundDedupe();
-  }
   vi.useRealTimers();
 });
 

@@ -590,6 +590,12 @@ describe("gateway client capability tool filtering", () => {
       ).toBe(actions);
       expect(Value.Check(tool.parameters, { title: "Publish workspace" })).toBe(publishing);
       expect(Value.Check(tool.parameters, { action: "publish" })).toBe(publishing);
+      expect(
+        Value.Check(tool.parameters, {
+          action: "prepare_pr",
+          pullRequestUrl: "https://github.com/example/repository/pull/1",
+        }),
+      ).toBe(false);
       expect(Value.Check(tool.parameters, { action: "refresh_base" })).toBe(false);
       expect(Value.Check(tool.parameters, { action: "edit" })).toBe(publishing);
       expect(Value.Check(tool.parameters, { action: "ready" })).toBe(publishing || actions);
@@ -602,6 +608,7 @@ describe("gateway client capability tool filtering", () => {
       } else if (!actions) {
         expect(tool.parameters).toHaveProperty("properties", {
           action: expect.any(Object),
+          pullRequestUrl: expect.any(Object),
           draft: expect.any(Object),
           title: expect.any(Object),
           body: expect.any(Object),

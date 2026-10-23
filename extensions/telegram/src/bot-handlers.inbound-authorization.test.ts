@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import {
   consumeChannelAdmissionEvidence,
@@ -87,7 +86,9 @@ it("binds a Telegram forum admission to the finalized parent and topic scope", a
       requireConfiguredGroup: false,
       dmAccess: "silent",
     });
-    assert(gate.allowed, "expected forum admission");
+    if (!gate.allowed) {
+      throw new Error("expected forum admission");
+    }
     const sessionKey = "agent:main:telegram:group:forum:topic:99";
     const ingress = await gate.resolveChannelIngress({
       agentId: "main",

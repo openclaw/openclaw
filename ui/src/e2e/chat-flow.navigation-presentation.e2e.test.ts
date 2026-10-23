@@ -322,7 +322,8 @@ suite.define(() => {
       );
     }
 
-    await panes.first().click({ position: { x: 20, y: 80 } });
+    // Activate through the composer; a retained hovercard can cover a pane-relative pixel.
+    await panes.first().locator(".agent-chat__composer-combobox textarea").click();
     await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
     await expect.poll(visibleActionLabels).toEqual([activeActions, ["Details"]]);
     expect(await headers.first().locator(".chat-header-session-menu__trigger").isVisible()).toBe(
@@ -345,7 +346,7 @@ suite.define(() => {
     ]);
 
     const lastPane = page.locator(".chat-split-view__pane").last();
-    await lastPane.click({ position: { x: 20, y: 80 } });
+    await lastPane.locator(".agent-chat__composer-combobox textarea").click();
     await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
     await expect.poll(visibleActionLabels).toEqual([["Details"], activeActions]);
     expect(await headers.last().locator(".chat-header-session-menu__trigger").isVisible()).toBe(
@@ -543,7 +544,7 @@ suite.define(() => {
       .poll(() => composer.evaluate((element) => element === document.activeElement))
       .toBe(true);
 
-    await page.getByRole("button", { name: "Open command palette" }).click();
+    await page.getByRole("button", { name: "Command palette" }).click();
     const paletteInput = page.locator(".cmd-palette__input");
     await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
     await expect
@@ -593,7 +594,8 @@ suite.define(() => {
     );
     const pinnedSessionKey = "agent:main:session-pinned";
     const createdOrder = [pinnedSessionKey, ...createdSessionKeys];
-    const updatedOrder = [...createdSessionKeys.toReversed(), pinnedSessionKey];
+    // Personal pins lead the list in their Pinned section regardless of sort mode.
+    const updatedOrder = [pinnedSessionKey, ...createdSessionKeys.toReversed()];
     const sessions = {
       count: createdSessionKeys.length + 1,
       defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
@@ -627,12 +629,12 @@ suite.define(() => {
     await page
       .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
       .waitFor({ timeout: 10_000 });
-    // Personal shortcuts do not add a row to the ten-row Sessions page.
+    // Pinned rows sit above, and do not occupy, the ten-row Sessions page.
     const pinnedLink = page.locator(
-      `.sidebar-rail [data-sidebar-entry="session:${pinnedSessionKey}"] a`,
+      `[data-session-section="pinned"] .sidebar-recent-session[data-session-key="${pinnedSessionKey}"] a.sidebar-recent-session__link`,
     );
     await pinnedLink.waitFor();
-    await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 10));
+    await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 11));
     await page.getByRole("button", { name: "Show more" }).click();
     await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 

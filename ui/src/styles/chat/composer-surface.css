@@ -663,6 +663,10 @@
   position: relative;
 }
 
+.agent-chat__input-btn--attach > .oc-menu-item__label {
+  display: contents;
+}
+
 .agent-chat__input-btn--has-overrides::after {
   position: absolute;
   top: 3px;
@@ -885,6 +889,10 @@
 .chat-send-btn--stop svg {
   width: 18px;
   height: 18px;
+}
+
+.chat-send-btn--stop rect {
+  rx: 3px;
 }
 
 .chat-send-btn--stop:hover:not(:disabled) {
@@ -1190,7 +1198,7 @@
     --chat-composer-send-size: var(--chat-mobile-row-plus-target-size);
   }
 
-  .agent-chat__input--mobile-toolbar svg {
+  :where(.agent-chat__input--mobile-toolbar) svg {
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
     stroke-width: var(--chat-mobile-row-icon-stroke);
@@ -1303,10 +1311,6 @@
 @container chat-conversation (max-height: 320px) {
   .chat-footer {
     --chat-footer-max-height: 100cqh;
-  }
-
-  .chat-footer::before {
-    display: none;
   }
 
   .agent-chat__input {

@@ -111,7 +111,7 @@ describe("nextcloud talk core", () => {
     expect(match(["*"]).allowed).toBe(true);
     expect(match(["nc:User-Id"])).toEqual({
       allowed: true,
-      matchKey: "user-id",
+      matchKey: "users/user-id",
       matchSource: "id",
     });
     expect(match(["allowed"], "other").allowed).toBe(false);

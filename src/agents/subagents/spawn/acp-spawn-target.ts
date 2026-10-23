@@ -2,8 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { getAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentIdStrict, normalizeOptionalAgentId } from "../../../routing/session-key.js";
-import { listAgentEntries, resolveAgentEntry } from "../../agent-scope-config.js";
-import { listAgentIds } from "../../agent-scope.js";
+import { resolveAgentEntry } from "../../agent-scope-config.js";
 
 type ResolvedAcpAgentTarget = {
   ok: true;
@@ -78,22 +77,4 @@ function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): bool
   return (cfg.acp?.allowedAgents ?? []).some(
     (entry) => entry.trim() === "*" || normalizeOptionalAgentId(entry) === agentId,
   );
-}
-
-export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {
-  const ids = new Set<string>(listAgentIds(cfg));
-  const candidates = [
-    ...listAgentEntries(cfg).flatMap((agent) =>
-      agent.runtime?.type === "acp" ? [agent.runtime.acp?.agent] : [],
-    ),
-    cfg.acp?.defaultAgent,
-    ...(cfg.acp?.allowedAgents ?? []).filter((entry) => entry.trim() !== "*"),
-  ];
-  for (const entry of candidates) {
-    const id = normalizeOptionalAgentId(entry);
-    if (id) {
-      ids.add(id);
-    }
-  }
-  return Array.from(ids);
 }

@@ -260,42 +260,37 @@ async function materializeCapturedRepositoryWorkspace(
       );
     }
     if (repository.checkpointRef) {
-      await withSessionRepositoryCheckpoint(
-        { workspaceId, includePublication: true },
-        async (snapshot) => {
-          assertCurrent();
-          const applied = await applyStagedWorkerWorkspace({
-            ...snapshot,
-            acceptance: { kind: "reconcile" },
-            root,
-            // The checkout is unbound until verification. Failed preparation rolls it
-            // back; a crash leaves the immutable checkpoint available for a fresh retry.
-            journal: {
-              load: async () => undefined,
-              begin: async () => assertCurrent(),
-              commit: async () => assertCurrent(),
-              abort: async () => {},
-            },
-          });
-          if (applied.conflictPaths.length || applied.manifestRef !== repository.manifestHash) {
-            throw new Error(
-              "Repository changes could not be fully restored; retry the Gateway move",
-            );
-          }
-          await applied.verifyLocalStable();
-          await alignPublication();
-          for (const restore of await prepareRepositoryPublicationRestore({
-            ...snapshot,
-            ...(published?.pushed_head_commit
-              ? { indexBase: { root, commit: published.pushed_head_commit, assertCurrent } }
-              : {}),
-          })) {
-            await command(restore.argv, { cwd: root, input: restore.input });
-          }
-          await applied.verifyLocalStable();
-          assertCurrent();
-        },
-      );
+      await withSessionRepositoryCheckpoint({ workspaceId }, async (snapshot) => {
+        assertCurrent();
+        const applied = await applyStagedWorkerWorkspace({
+          ...snapshot,
+          acceptance: { kind: "reconcile" },
+          root,
+          // The checkout is unbound until verification. Failed preparation rolls it
+          // back; a crash leaves the immutable checkpoint available for a fresh retry.
+          journal: {
+            load: async () => undefined,
+            begin: async () => assertCurrent(),
+            commit: async () => assertCurrent(),
+            abort: async () => {},
+          },
+        });
+        if (applied.conflictPaths.length || applied.manifestRef !== repository.manifestHash) {
+          throw new Error("Repository changes could not be fully restored; retry the Gateway move");
+        }
+        await applied.verifyLocalStable();
+        await alignPublication();
+        for (const restore of await prepareRepositoryPublicationRestore({
+          ...snapshot,
+          ...(published?.pushed_head_commit
+            ? { indexBase: { root, commit: published.pushed_head_commit, assertCurrent } }
+            : {}),
+        })) {
+          await command(restore.argv, { cwd: root, input: restore.input });
+        }
+        await applied.verifyLocalStable();
+        assertCurrent();
+      });
     } else {
       await alignPublication();
     }

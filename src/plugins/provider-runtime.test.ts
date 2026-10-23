@@ -616,13 +616,11 @@ describe("provider-runtime", () => {
   });
 
   it("uses the prepared run registry without repeating provider discovery", () => {
-    const provider: ProviderPlugin = {
-      id: DEMO_PROVIDER_ID,
+    const provider = createDemoProvider({
       pluginId: "embedded-owner",
       label: "Prepared demo",
-      auth: [],
       classifyFailoverReason: () => "overloaded",
-    };
+    });
     const registry = createEmptyPluginRegistry();
     registry.providers.push({
       pluginId: "registered-owner",
@@ -683,13 +681,12 @@ describe("provider-runtime", () => {
       matches: false,
     },
   ])("selects $requestedProvider hooks by its configured API owner $api", (row) => {
-    const provider: ProviderPlugin = {
+    const provider = createDemoProvider({
       id: row.providerId,
       label: row.providerId,
       aliases: row.aliases,
-      auth: [],
       createStreamFn: vi.fn(() => vi.fn()),
-    };
+    });
     if (row.loaded) {
       const registry = createEmptyPluginRegistry();
       registry.providers.push({ pluginId: row.providerId, provider, source: "test" });
@@ -820,16 +817,15 @@ describe("provider-runtime", () => {
     const resolveTransportTurnState = vi.fn(() => ({
       headers: { "x-demo-turn": "turn-1" },
     }));
-    const provider: ProviderPlugin = createDemoProvider({
-      resolveTransportTurnState,
-      createStreamFn,
-      wrapSimpleCompletionStreamFn,
-    });
     const model = attachModelProviderRuntimePluginHandle(MODEL, {
       provider: DEMO_PROVIDER_ID,
       modelId: MODEL.id,
       workspaceDir: "/tmp/workspace",
-      plugin: provider,
+      plugin: createDemoProvider({
+        resolveTransportTurnState,
+        createStreamFn,
+        wrapSimpleCompletionStreamFn,
+      }),
     });
 
     expect(
@@ -874,7 +870,7 @@ describe("provider-runtime", () => {
   it("honors an explicit transport fallback owner over the model's attached handle", () => {
     const streamFn = vi.fn();
     registerLoadedProviders([
-      { id: "fallback", label: "Fallback", auth: [], createStreamFn: () => streamFn },
+      createDemoProvider({ id: "fallback", label: "Fallback", createStreamFn: () => streamFn }),
     ]);
     const model = attachModelProviderRuntimePluginHandle(MODEL, {
       provider: DEMO_PROVIDER_ID,
@@ -943,12 +939,11 @@ describe("provider-runtime", () => {
         });
       const firstMetadata = metadata("first");
       const currentMetadata = metadata("current");
-      const provider = (owner: string): ProviderPlugin => ({
-        id: DEMO_PROVIDER_ID,
-        label: owner,
-        auth: [],
-        resolveAuthProfileId: (context) => `${owner}/${context.preferredProfileId}`,
-      });
+      const provider = (owner: string) =>
+        createDemoProvider({
+          label: owner,
+          resolveAuthProfileId: (context) => `${owner}/${context.preferredProfileId}`,
+        });
       const firstProvider = provider("first");
       const currentProvider = provider("current");
       resolvePluginProvidersMock.mockImplementation((params) =>
@@ -1088,7 +1083,7 @@ describe("provider-runtime", () => {
   );
 
   it("does not cache provider-scoped misses while runtime provider loading is in flight", () => {
-    const provider: ProviderPlugin = createDemoProvider();
+    const provider = createDemoProvider();
     let providerScopedLoadInFlight = true;
     isPluginProvidersLoadInFlightMock.mockImplementation(
       (params) =>
@@ -1156,11 +1151,10 @@ describe("provider-runtime", () => {
   it("resolves declared external auth plugins with different provider ids", () => {
     resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue(["demo-plugin"]);
     resolvePluginProvidersMock.mockReturnValue([
-      {
+      createDemoProvider({
         id: "demo-provider",
         pluginId: "demo-plugin",
         label: "Demo Provider",
-        auth: [],
         resolveExternalAuthProfiles: () => [
           {
             profileId: "demo-provider:external",
@@ -1173,7 +1167,7 @@ describe("provider-runtime", () => {
             },
           },
         ],
-      },
+      }),
     ]);
 
     const [profile] = resolveExternalAuthProfilesWithPlugins({
@@ -1562,11 +1556,10 @@ describe("provider-runtime", () => {
 
   it("resolves failover classification through hook-only aliases", () => {
     registerLoadedProviders([
-      {
+      createDemoProvider({
         id: "openai",
         label: "OpenAI",
         hookAliases: ["azure-openai-responses"],
-        auth: [],
         matchesContextOverflowError: ({ errorMessage }) =>
           /\bcontent_filter\b.*\btoo long\b/i.test(errorMessage),
         classifyFailoverReason: ({ errorMessage, code, status }) => {
@@ -1575,7 +1568,7 @@ describe("provider-runtime", () => {
           }
           return /\bquota exceeded\b/i.test(errorMessage) ? "rate_limit" : undefined;
         },
-      },
+      }),
     ]);
 
     expect(
@@ -1930,7 +1923,6 @@ describe("provider-runtime", () => {
     ).toBe(DEMO_PROVIDER_ID);
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });
-
   it("dispatches runtime hooks for the matched provider", async () => {
     resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["openai"]);
     resolveUsageHookProviderPluginContractsMock.mockReturnValue([
@@ -2399,13 +2391,12 @@ describe("provider-runtime", () => {
   });
 
   it("does not treat core transport apis as custom provider plugin owners", () => {
-    const openaiPlugin: ProviderPlugin = {
+    const openaiPlugin = createDemoProvider({
       id: "openai",
       label: "OpenAI",
       hookAliases: ["openai-responses"],
-      auth: [],
       createStreamFn: vi.fn(() => vi.fn()),
-    };
+    });
     resolvePluginProvidersMock.mockReturnValue([openaiPlugin]);
 
     const plugin = resolveProviderRuntimePlugin({

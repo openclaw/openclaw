@@ -1,13 +1,22 @@
 import { createMemo as createActivityMemo } from "@solidjs/signals";
 import { dynamic } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import {
+  createDeferred,
+  createMemo,
+  Errored,
+  For,
+  isPending,
+  latest,
+  Loading,
+  Show,
+} from "solid-js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { IpLocation } from "../../components/ip-location.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import "../../components/viewer-facepile.ts";
+import "../../components/solid/viewer-facepile.tsx";
 import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import {
@@ -56,6 +65,7 @@ export type SessionActivityViewProps = {
   presenceViewers: readonly PresenceViewer[];
   presentationRevision?: number;
   result?: SessionsListResult;
+  read?: { promise: Promise<void> };
   loading: boolean;
   retrying: boolean;
   error?: string;
@@ -505,6 +515,9 @@ function renderActivityLoading() {
 }
 
 export function renderSessionActivityView(props: SessionActivityViewProps) {
+  const request = createMemo(() => props.read);
+  // Keep accepted rows and scope changes live while their next read settles.
+  const read = createDeferred(() => request()?.promise);
   const projection = createMemo(() => projectSessionActivity(props.result));
   const onlineById = createMemo(
     () =>
@@ -532,6 +545,20 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
       ? (people().find((person) => person.id === props.filters.personId) ?? identity())
       : null,
   );
+  function feedback(error: string | undefined, pending: boolean) {
+    return (
+      <>
+        <span role={error ? "alert" : "status"} title={error}>
+          {error ?? (props.retrying && pending ? t("common.refreshing") : undefined)}
+        </span>
+        <Show when={Boolean(error || props.retrying)}>
+          <button class="btn btn--sm" disabled={pending} onClick={() => props.onRetry()}>
+            {t("common.retry")}
+          </button>
+        </Show>
+      </>
+    );
+  }
   return (
     <div class="activity-feed">
       <div class="activity-feed__toolbar">
@@ -569,17 +596,28 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         />
       </div>
       <div class="activity-feed__feedback">
-        <span role={props.error ? "alert" : "status"} title={props.error ?? undefined}>
-          {props.error ?? (props.retrying ? t("common.refreshing") : undefined)}
-        </span>
-        <Show when={Boolean(props.error || props.retrying)}>
-          <button class="btn btn--sm" disabled={props.loading} onClick={() => props.onRetry()}>
-            {t("common.retry")}
-          </button>
-        </Show>
+        <Loading on={request()} fallback={feedback(undefined, true)}>
+          <Errored
+            fallback={(error) => {
+              const failure = error();
+              return feedback(failure instanceof Error ? failure.message : String(failure), false);
+            }}
+          >
+            {(latest(read), feedback(props.error, props.loading || isPending(read)))}
+          </Errored>
+        </Loading>
       </div>
       <div class="activity-feed__main">
-        {props.loading && !props.result ? renderActivityLoading() : undefined}
+        <Errored fallback={() => null}>
+          <Loading on={request()} fallback={!props.result ? renderActivityLoading() : undefined}>
+            {
+              (latest(read),
+              (props.loading || isPending(read)) && !props.result
+                ? renderActivityLoading()
+                : undefined)
+            }
+          </Loading>
+        </Errored>
         {props.result?.activityPulse ? (
           <SessionActivityPulse
             pulse={props.result.activityPulse}

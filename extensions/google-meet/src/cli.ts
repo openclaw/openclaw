@@ -47,10 +47,10 @@ import {
 } from "./cli-space-commands.js";
 import { resolveGoogleMeetGatewayOperationTimeoutMs, type GoogleMeetConfig } from "./config.js";
 import { createGoogleMeetSpace, fetchGoogleMeetSpace } from "./meet-api.js";
+import type { GoogleMeetOAuthRuntime } from "./oauth-owner.js";
 import {
   buildGoogleMeetAuthUrl,
   exchangeGoogleMeetAuthCode,
-  resolveGoogleMeetAccessToken,
   waitForGoogleMeetAuthCode,
 } from "./oauth.js";
 import {
@@ -58,6 +58,7 @@ import {
   fetchResolvedGoogleMeetArtifacts,
   fetchResolvedGoogleMeetAttendance,
   resolveArtifactQueryFromParams,
+  resolveGoogleMeetTokenFromParams,
 } from "./plugin-helpers.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
@@ -83,6 +84,7 @@ function sanitizeOAuthErrorMessage(error: unknown): string {
 async function buildOAuthDoctorReport(
   config: GoogleMeetConfig,
   options: DoctorOptions,
+  runtime?: GoogleMeetOAuthRuntime,
 ): Promise<OAuthDoctorReport> {
   const clientId = options.clientId?.trim() || config.oauth.clientId;
   const clientSecret = options.clientSecret?.trim() || config.oauth.clientSecret;
@@ -111,15 +113,19 @@ async function buildOAuthDoctorReport(
       : "Google Meet cached access token is configured",
   });
 
-  let token: Awaited<ReturnType<typeof resolveGoogleMeetAccessToken>>;
+  let token: Awaited<ReturnType<typeof resolveGoogleMeetTokenFromParams>>;
   try {
-    token = await resolveGoogleMeetAccessToken({
-      clientId,
-      clientSecret,
-      refreshToken,
-      accessToken,
-      expiresAt,
-    });
+    token = await resolveGoogleMeetTokenFromParams(
+      config,
+      {
+        clientId,
+        clientSecret,
+        refreshToken,
+        accessToken,
+        expiresAt,
+      },
+      runtime,
+    );
     checks.push({
       id: "oauth-token",
       ok: true,
@@ -235,6 +241,7 @@ export function registerGoogleMeetCli(params: {
   program: Command;
   config: GoogleMeetConfig;
   ensureRuntime: () => Promise<GoogleMeetRuntime>;
+  oauthRuntime?: GoogleMeetOAuthRuntime;
 }): void {
   const operationTimeoutMs = resolveGoogleMeetGatewayOperationTimeoutMs(params.config);
   const root = params.program
@@ -307,6 +314,7 @@ export function registerGoogleMeetCli(params: {
     config: params.config,
     ensureRuntime: params.ensureRuntime,
     operationTimeoutMs,
+    oauthRuntime: params.oauthRuntime,
   };
 
   registerGoogleMeetCreateCommands(context);
@@ -406,7 +414,7 @@ export function registerGoogleMeetCli(params: {
     const lateAfterMinutes = parseOptionalNumber(late);
     const earlyBeforeMinutes = parseOptionalNumber(early);
     return {
-      ...(await resolveArtifactQueryFromParams(context.config, raw)),
+      ...(await resolveArtifactQueryFromParams(context.config, raw, context.oauthRuntime)),
       lateAfterMinutes,
       earlyBeforeMinutes,
     };
@@ -558,7 +566,7 @@ export function registerGoogleMeetCli(params: {
     .option("--json", "Print JSON output", false)
     .action(async (sessionId: string | undefined, options: DoctorOptions) => {
       if (options.oauth) {
-        const report = await buildOAuthDoctorReport(context.config, options);
+        const report = await buildOAuthDoctorReport(context.config, options, context.oauthRuntime);
         if (options.json) {
           writeStdoutJson(report);
           return;

@@ -115,18 +115,6 @@ function buildToolInventoryNotices(params: {
   return undefined;
 }
 
-function resolveConfiguredFallbackApi(
-  providerConfig: { api?: string; baseUrl?: string } | undefined,
-): string {
-  const explicitApi = normalizeOptionalString(providerConfig?.api);
-  if (explicitApi) {
-    return explicitApi;
-  }
-  return normalizeOptionalString(providerConfig?.baseUrl)
-    ? "openai-completions"
-    : "openai-responses";
-}
-
 /** Resolves configured or bundled metadata without starting provider discovery. */
 function resolveStaticToolInventoryRuntimeModelContext(params: {
   cfg: OpenClawConfig;
@@ -160,7 +148,9 @@ function resolveStaticToolInventoryRuntimeModelContext(params: {
       normalizeOptionalString(configuredModel.api) ??
       normalizeOptionalString(providerConfig?.api) ??
       normalizeOptionalString(bundledStaticModel?.api) ??
-      resolveConfiguredFallbackApi(providerConfig);
+      (normalizeOptionalString(providerConfig?.baseUrl)
+        ? "openai-completions"
+        : "openai-responses");
     runtimeModel = {
       ...bundledStaticModel,
       ...configuredModel,

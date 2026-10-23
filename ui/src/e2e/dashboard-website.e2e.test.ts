@@ -97,13 +97,18 @@ suite.define(() => {
         });
         await catalogRow.hover();
         await catalogRow.getByRole("button", { name: "Pin", exact: true }).click();
-        const pinned = sidebar.locator(
-          `.sidebar-rail__pin[data-sidebar-entry="session:${sessionKey}"]`,
-        );
-        await pinned.getByRole("link", { name: "Service status", exact: true }).waitFor();
         expect(await catalogRow.getByRole("button", { name: "Unpin", exact: true }).count()).toBe(
           1,
         );
+        const showView = (name: "Pages" | "Sessions") =>
+          sidebar.locator(".sidebar-rail").getByRole("button", { name, exact: true }).click();
+        // Pinned dashboards join the Sessions list's Pinned section, not the rail.
+        expect(await sidebar.locator(".sidebar-rail__pin").count()).toBe(0);
+        await showView("Sessions");
+        const pinned = sidebar
+          .locator(`[data-session-section="pinned"] [data-session-key="${sessionKey}"]`)
+          .locator("a.sidebar-recent-session__link");
+        await pinned.getByText("Service status", { exact: true }).waitFor();
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         await content.getByRole("textbox", { name: "Status note" }).fill("Keep this note");
         const originalFrame = await frame.elementHandle();
@@ -156,9 +161,11 @@ suite.define(() => {
         });
         await page.mouse.move(0, 0);
         await page.screenshot({ path: `${suite.artifactDir}/website-expanded.png` });
-        await pages.getByRole("link", { name: "Agents", exact: true }).click();
-        await page.waitForURL(`${suite.server.baseUrl}agents`);
-        await pinned.getByRole("link", { name: "Service status", exact: true }).click();
+        await showView("Pages");
+        await pages.getByRole("link", { name: "Sessions", exact: true }).click();
+        await page.waitForURL(`${suite.server.baseUrl}sessions`);
+        await showView("Sessions");
+        await pinned.click();
         await frame.waitFor();
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
         expect(await content.getByRole("textbox", { name: "Status note" }).inputValue()).toBe(

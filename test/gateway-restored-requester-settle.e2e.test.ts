@@ -19,10 +19,10 @@ import {
 import { loadSessionEntry, replaceSessionEntry } from "../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
-import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
-import { redactSensitiveText } from "../src/logging/redact.js";
+import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import type { Deferred } from "../src/shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import { connectProofClient, readRequestText } from "./helpers/gateway-integration-fixtures.js";
 import {
   createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
@@ -74,17 +74,14 @@ describe("Gateway restored requester settlement", () => {
       // The final case also resumes a retained yielded fence and then admits a user follow-up.
       await seedRestoredRequesters(instance, 1, { yieldedFence: outcome === "final" });
       await instance.startGateway();
-      const client = await connectGatewayClient({
-        url: instance.url,
-        token: instance.gatewayToken,
-      });
+      const client = await connectProofClient(instance);
       const sessionKey = "agent:main:gateway-restored-requester-0";
       const session = async () =>
         (
           await client.request<SessionsListResult>("sessions.list", { agentId: "main" })
         ).sessions.find((row) => row.key === sessionKey);
       try {
-        await waitForGateway(instance, () => expect(modelServer.requestCount()).toBe(1));
+        await vi.waitFor(() => expect(modelServer.requestCount()).toBe(1), { timeout: 30_000 });
         await expect(session()).resolves.toMatchObject({ status: "running", hasActiveRun: true });
         // This elapsed wait is the regression itself: the real model socket must
         // remain open beyond the announcement budget, without a new sender turn.
@@ -166,10 +163,9 @@ describe("Gateway restored requester settlement", () => {
       await seedRestoredRequesters(instance, 3);
 
       await instance.startGateway();
-      await waitForGateway(
-        instance,
+      await vi.waitFor(
         () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(2),
-        20,
+        { timeout: 30_000, interval: 20 },
       );
       expect(modelServer.active(), instance.logs()).toBe(2);
       expect(modelServer.peakRestored(), instance.logs()).toBe(2);
@@ -215,35 +211,6 @@ async function setupGateway(
   });
   instances.push(instance);
   return { modelServer, instance };
-}
-
-async function waitForGateway(
-  instance: OpenClawTestInstance,
-  assertion: () => void,
-  interval?: number,
-) {
-  await vi.waitFor(assertion, { timeout: 30_000, interval }).catch((error: unknown) => {
-    const readiness = instance.readiness.map(
-      ({ outcome, elapsedMs, attempts, lastProbe, child }) => ({
-        outcome,
-        elapsedMs,
-        attempts,
-        lastProbe,
-        child,
-      }),
-    );
-    // Snapshot the existing bounded child buffers before normal fixture cleanup removes state.
-    let diagnostic = redactSensitiveText(
-      `${instance.name}\n${JSON.stringify({ readiness })}\n${instance.logs()}`,
-      { mode: "tools" },
-    );
-    for (const token of [instance.gatewayToken, instance.hookToken]) {
-      if (token) {
-        diagnostic = diagnostic.replaceAll(token, "[fixture token]");
-      }
-    }
-    throw new Error(diagnostic, { cause: error });
-  });
 }
 
 async function seedRestoredRequesters(
@@ -376,10 +343,7 @@ async function startHeldModelServer() {
     modelId: "restored-settle",
     bindError: "restored requester model server did not bind",
     onRequest: async (request, response) => {
-      let body = "";
-      for await (const chunk of request) {
-        body += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-      }
+      const body = await readRequestText(request);
       const index = requests.length;
       const release = createDeferred();
       requests.push({ release, body, response, startedAt: Date.now() });

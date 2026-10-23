@@ -239,7 +239,6 @@ export async function spawnSubagentDirect(
     const cleanupCreatedSession = (emitLifecycleHooks = false) =>
       cleanupProvisionalSession(childSessionKey, {
         emitLifecycleHooks,
-        deleteTranscript: true,
         ...provisionalSessionIdentity,
         isCurrent: isCleanupCurrent,
         ...(cleanupOwner ? { callGateway: cleanupOwner.callGateway } : {}),
@@ -448,7 +447,6 @@ export async function spawnSubagentDirect(
         ...childTarget,
         attachmentId,
         emitLifecycleHooks: threadBindingReady,
-        deleteTranscript: true,
         ...provisionalSessionIdentity,
         ...options,
         isCurrent: isCleanupCurrent,
@@ -548,6 +546,7 @@ export async function spawnSubagentDirect(
         return {
           runId,
           requesterTurnRunId: ctx.requesterTurnRunId,
+          nativePluginOwner: params.collect ? ctx.nativePluginOwner : undefined,
           ...childTarget,
           controllerSessionKey: ownership.controllerSessionKey,
           sessionEntry: childEntry,

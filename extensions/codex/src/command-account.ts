@@ -40,7 +40,6 @@ export type CodexAccountAuthOverview = {
   currentLine?: string;
   subscriptionLabel?: string;
   subscriptionUsage?: string;
-  orderTitle: string;
   rows: CodexAccountAuthRow[];
 };
 
@@ -117,7 +116,6 @@ export async function readCodexAccountAuthOverview(params: {
   const activeRow = rows.find((row) => row.active);
   if (!activeRow) {
     return {
-      orderTitle: "Auth order",
       rows,
     };
   }
@@ -131,7 +129,6 @@ export async function readCodexAccountAuthOverview(params: {
     ...(activeIsApiKey ? { currentLine: buildApiKeyActiveLine(activeRow, subscriptionUsage) } : {}),
     ...(subscriptionLabel ? { subscriptionLabel } : {}),
     ...(subscriptionUsageLine ? { subscriptionUsage: subscriptionUsageLine } : {}),
-    orderTitle: "Auth order",
     rows,
   };
 }

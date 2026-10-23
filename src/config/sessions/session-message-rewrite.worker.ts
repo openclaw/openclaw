@@ -110,7 +110,7 @@ export type SessionMessageRewriteOperations = {
     output: ReturnType<typeof prepareLockedTranscriptAppend>;
   };
   "session.transcript.lock.facts": {
-    input: LockedTranscriptTarget & { idempotencyKeys: readonly string[]; sourceRunId?: string };
+    input: LockedTranscriptTarget & Parameters<typeof readTranscriptMirrorFacts>[2];
     output: ReturnType<typeof readTranscriptMirrorFacts>;
   };
   "session.transcript.lock.commit": {
@@ -632,6 +632,7 @@ export function applySessionMessageRewrite<T>(
     candidate: SessionMessageRewriteCommitted,
     current: SessionMessageRewriteSnapshot | null,
   ) => T,
+  options: { touchMutation?: boolean } = {},
 ) {
   return writeTransaction(
     "session.transcript.message-rewrite",
@@ -665,7 +666,7 @@ export function applySessionMessageRewrite<T>(
                 seq: current.seq,
               },
             ],
-            { projectionCurrent: facts !== undefined },
+            { projectionCurrent: facts !== undefined, touchMutation: options.touchMutation },
           );
         } catch (error) {
           if (error instanceof SqliteTranscriptMutationConflictError) {

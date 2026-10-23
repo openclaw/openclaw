@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { recordLegacyAcpMigrationSources } from "../../config/sessions/session-accessor.sqlite-acp-provenance.js";
 import { readSessionEntryCache } from "../../config/sessions/session-accessor.sqlite-entry-cache.js";
@@ -23,6 +24,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../sql-connection.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
+import { createSqliteWorkerTransferCollector } from "../sqlite-worker-transfer.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
@@ -338,6 +340,18 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             },
           ]),
         );
+        runSqliteImmediateTransactionSync(database.db, () => {
+          const insert = database.db.prepare(
+            "INSERT INTO session_participants (session_key, identity_namespace, actor_id, contribution_count, first_prompted_at) VALUES (?, ?, ?, 1, ?)",
+          );
+          for (const [type, id, time] of [
+            ["profile", "a", 20],
+            ["agent", "a", 20],
+            ["agent", "z", null],
+          ] as const) {
+            insert.run(scope.sessionKey, JSON.stringify({ type }), id, time);
+          }
+        });
         return { database, scope };
       });
       const f = createSessionActorWorkerFixture(seed, (options) =>
@@ -406,8 +420,41 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         };
       };
       try {
+        let coldPatch: unknown;
+        const transfer = createSqliteWorkerTransferCollector("patch", (value) => {
+          coldPatch = value;
+        });
+        f.hooks.admit = (_stage, facts) => {
+          if (isRecord(facts) && "transfer" in facts) {
+            transfer.accept(facts.transfer);
+          }
+        };
+        patch("coldPatch", { label: "Cold participant projection" });
+        delete f.hooks.admit;
+        if (engine === "postgres") {
+          // BEGIN + eager lock, hydrated entry, node/window CTE, COMMIT.
+          expect(recorder.queries.coldPatch).toHaveLength(4);
+        }
         const initial = state();
         const before = read();
+        const timestampedParticipants = [
+          { identity: { type: "agent", id: "a" } },
+          { identity: { type: "profile", id: "a" } },
+        ];
+        const untimestampedParticipant = { identity: { type: "agent", id: "z" } };
+        expect(coldPatch).toMatchObject({
+          entry: {
+            participants:
+              engine === "sqlite"
+                ? [untimestampedParticipant, ...timestampedParticipants]
+                : [...timestampedParticipants, untimestampedParticipant],
+          },
+        });
+        // Actor hydration has always normalized NULL timestamps first on both engines.
+        expect(before.entry?.participants).toEqual([
+          untimestampedParticipant,
+          ...timestampedParticipants,
+        ]);
         const acceptedOutcome = await execute("acceptInput", {
           type: "session.actor.acceptInput",
           input: {
@@ -519,6 +566,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             ).toHaveLength(name === "rollback" || name === "revokedGrant" ? 0 : 1);
           }
           expect(recorder.counts).toEqual({
+            coldPatch: 1,
             acceptInput: 1,
             completeTurn: 1,
             entryPatch: 1,

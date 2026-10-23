@@ -6,8 +6,9 @@ import { EMPTY_LINK_READERS } from "../../components/link-reader-target.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import type { SidebarPanelDefinitionParams, SidebarPanelData } from "./chat-pane-embedded-types.ts";
@@ -16,6 +17,7 @@ import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatDetailSlot } from "./components/chat-detail-slot-view.tsx";
+import type { ChatSessionRailElement } from "./components/chat-session-rail.tsx";
 import {
   requestCloseSessionWorkspacePreview,
   pinSessionWorkspacePreview,
@@ -32,6 +34,8 @@ import type {
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type PanelHostProps = { registerPanelHost?: SidebarPanelHostRegistration };
 type Props = SidebarPanelDefinitionParams & PanelHostProps;
@@ -94,6 +98,8 @@ function CompanionPanel(props: Props) {
       prop:presented={presented()}
       prop:focusRequest={props.companionFocusRequest}
       prop:sessionKey={props.state.sessionKey}
+      prop:agentId={props.agentId}
+      prop:assistantName={props.state.assistantName}
       prop:digest={props.digest}
       prop:running={Boolean(props.activeRunId)}
       prop:activeRunId={props.activeRunId}
@@ -107,6 +113,7 @@ function CompanionPanel(props: Props) {
       prop:onSubmit={props.onCompanionSubmit}
       prop:onDraftChange={props.onCompanionDraftChange}
       prop:onAttachmentsChange={props.onCompanionAttachmentsChange}
+      prop:onOpenImage={props.state.handleOpenImage}
       prop:uploadConfig={props.state.uploadConfig}
       prop:attachmentLimits={resolveChatAttachmentLimits(props.state.hello?.policy)}
     />
@@ -446,27 +453,7 @@ type EmbeddedAttributes<Element extends HTMLElement> = SolidJSX.HTMLAttributes<E
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-chat-session-rail": HTMLAttributes<HTMLElement> & {
-        "prop:presentation"?: SidebarPanelDefinitionParams["presentation"];
-        "prop:sessionKey"?: SidebarPanelDefinitionParams["state"]["sessionKey"];
-        "prop:digest"?: SidebarPanelDefinitionParams["digest"];
-        "prop:running"?: boolean;
-        "prop:activeRunId"?: SidebarPanelDefinitionParams["activeRunId"];
-        "prop:pullRequests"?: SidebarPanelDefinitionParams["pullRequests"];
-        "prop:companion"?: SidebarPanelDefinitionParams["companion"];
-        "prop:modelControls"?: SidebarPanelDefinitionParams["companionModelControls"];
-        "prop:client"?: SidebarPanelDefinitionParams["state"]["client"];
-        "prop:connected"?: boolean;
-        "prop:sendShortcut"?: SidebarPanelDefinitionParams["state"]["settings"]["chatSendShortcut"];
-        "prop:inputDeviceId"?: string;
-        "prop:onSubmit"?: SidebarPanelDefinitionParams["onCompanionSubmit"];
-        "prop:onDraftChange"?: SidebarPanelDefinitionParams["onCompanionDraftChange"];
-        "prop:onAttachmentsChange"?: SidebarPanelDefinitionParams["onCompanionAttachmentsChange"];
-        "prop:uploadConfig"?: SidebarPanelDefinitionParams["state"]["uploadConfig"];
-        "prop:attachmentLimits"?: ReturnType<typeof resolveChatAttachmentLimits>;
-        "prop:presented"?: boolean;
-        "prop:focusRequest"?: SidebarPanelDefinitionParams["companionFocusRequest"];
-      };
+      "openclaw-chat-session-rail": EmbeddedAttributes<ChatSessionRailElement>;
       "openclaw-portals-page": EmbeddedAttributes<HTMLElementTagNameMap["openclaw-portals-page"]>;
       "openclaw-chat-files-panel": EmbeddedAttributes<
         HTMLElementTagNameMap["openclaw-chat-files-panel"]

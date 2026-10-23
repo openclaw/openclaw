@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import type { Server, ServerResponse } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
@@ -21,6 +21,11 @@ import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../../../
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { runQaGatewayTestFixture } from "../../../helpers/qa-gateway-test-lifetime.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
+import {
+  createNativeProvider,
+  nativeModel,
+  writeNativeCompletion,
+} from "./native-provider-proof-fixture.js";
 import {
   closeWireServer,
   connectWireClient,
@@ -54,7 +59,7 @@ it.skipIf(process.platform === "win32")(
     const runStarts = new Set<string>();
     const terminals: Array<{ runId: string; phase: string; yielded?: boolean }> = [];
     let operator: Awaited<ReturnType<typeof connectWireClient>> | undefined;
-    let provider: ReturnType<typeof createServer> | undefined;
+    let provider: Server | undefined;
     let providerClaim: TestPortClaim | undefined;
     let published: Awaited<ReturnType<typeof createPublishedWireWorkspace>> | undefined;
     let verificationRequests = 0;
@@ -80,19 +85,15 @@ it.skipIf(process.platform === "win32")(
         const requests: Array<{
           messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>;
         }> = [];
-        provider = createServer((request, response) => {
-          void (async () => {
+        provider = createNativeProvider(
+          async (request, response, rawBody) => {
             if (request.url === "/tool-entered") {
               heldTools.push(response);
               process.stderr.write("[midtool-node-loss] physical exec reached HTTP barrier\n");
               toolEntered.resolve();
               return;
             }
-            const chunks: Buffer[] = [];
-            for await (const chunk of request) {
-              chunks.push(Buffer.from(chunk));
-            }
-            const body = JSON.parse(Buffer.concat(chunks).toString()) as (typeof requests)[number];
+            const body = JSON.parse(rawBody) as (typeof requests)[number];
             expect(request.url).toBe("/v1/chat/completions");
             requests.push(body);
             process.stderr.write(
@@ -154,23 +155,15 @@ it.skipIf(process.platform === "win32")(
               };
               finish = "tool_calls";
             }
-            response.writeHead(200, { "content-type": "text/event-stream" });
-            for (const [piece, finish_reason] of [
-              [delta, null],
-              [{}, finish],
-            ]) {
-              response.write(
-                `data: ${JSON.stringify({ id: `midtool-${requests.length}`, object: "chat.completion.chunk", created: 1, model: modelId, choices: [{ index: 0, delta: piece, finish_reason }] })}\n\n`,
-              );
-            }
-            response.end("data: [DONE]\n\n");
-          })().catch((error: unknown) => {
+            writeNativeCompletion(response, `midtool-${requests.length}`, modelId!, delta, finish);
+          },
+          (error, response) => {
             providerErrors.push(error);
             toolEntered.reject(error);
             completed.reject(error);
             response.destroy();
-          });
-        });
+          },
+        );
         const reservation = await reserveTestPortListener({
           offsets: [0],
           signal,
@@ -194,16 +187,11 @@ it.skipIf(process.platform === "win32")(
                 api: "openai-completions",
                 baseUrl: `http://127.0.0.1:${address.port}/v1`,
                 models: [
-                  {
-                    id: modelId!,
-                    name: modelId!,
-                    contextWindow: 32768,
+                  nativeModel(modelId!, {
                     maxTokens: 256,
                     reasoning: true,
                     thinkingLevelMap: { medium: "medium" },
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  },
+                  }),
                 ],
               },
             },

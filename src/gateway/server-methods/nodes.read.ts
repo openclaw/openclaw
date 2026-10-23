@@ -7,7 +7,6 @@ import {
   validateNodePluginToolsUpdateParams,
   validateNodeSkillsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { updatePairedNodeSessionHost } from "../../infra/device-pairing-node-facts.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -167,9 +166,8 @@ const handlePluginSurfaceRefresh: GatewayRequestHandler = ({ params, respond, cl
 export function refreshConnectedNodeSurfaceCaches(params: {
   context: GatewayRequestContext;
   nodeSession: NodeSession;
-  cfg?: OpenClawConfig;
 }) {
-  const cfg = params.cfg ?? params.context.getRuntimeConfig();
+  const cfg = params.context.getRuntimeConfig();
   const { nodeSession } = params;
   recordRemoteNodeInfo({
     nodeId: nodeSession.nodeId,

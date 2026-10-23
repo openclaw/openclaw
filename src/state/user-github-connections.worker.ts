@@ -165,7 +165,8 @@ function applyMutation(
       if (
         current?.generation !== mutation.generation ||
         current.selection.kind !== "connected" ||
-        current.selection.profileId !== mutation.profileId
+        current.selection.profileId !== mutation.profileId ||
+        current.selection.refresh !== undefined
       ) {
         throw new Error("My GitHub selection changed.");
       }
@@ -259,7 +260,8 @@ export const userGitHubConnectionOperations = {
             }
           : {
               ...selection,
-              refresh: undefined,
+              refresh:
+                result.kind === "materialized" || result.restore ? undefined : selection.refresh,
               ...(result.kind === "materialized"
                 ? { login: result.login, refreshFailure: undefined }
                 : { refreshFailure: result.failure }),

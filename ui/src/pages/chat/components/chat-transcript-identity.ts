@@ -3,9 +3,11 @@ import { classifySessionKind } from "../../../../../src/sessions/classify-sessio
 import {
   normalizeRoleForGrouping,
   resolveMessageRole,
-  resolveMessageSender,
 } from "../../../lib/chat/message-normalizer.ts";
-import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
+import {
+  resolveMessageSender,
+  sessionParticipantIdentityKey,
+} from "../../../lib/chat/sender-label.ts";
 import {
   isSubagentSessionKey,
   isUiGlobalScopeConfigured,
@@ -20,7 +22,7 @@ import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 
 const participants = createTranscriptMemo<{
   showOwnSenderName: boolean;
-  sessionPeople: Set<string>;
+  replyPeople: readonly string[];
 }>();
 const forwardedGroups = createTranscriptMemo<boolean>();
 
@@ -75,7 +77,7 @@ export function resolveTranscriptParticipants(
           identity && identity.type !== "agent" ? [sessionParticipantIdentityKey(identity)] : [],
         ),
       );
-      return { showOwnSenderName, sessionPeople };
+      return { showOwnSenderName, replyPeople: [...sessionPeople].toSorted() };
     },
   );
 }

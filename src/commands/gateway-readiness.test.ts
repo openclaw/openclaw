@@ -11,7 +11,10 @@ const { gatherStatus, confirm, installGateway, startGateway } = vi.hoisted(() =>
 }));
 vi.mock("../cli/daemon-cli/status.gather.js", () => ({ gatherDaemonStatus: gatherStatus }));
 vi.mock("../cli/prompt.js", () => ({ promptYesNo: confirm }));
-vi.mock("../cli/daemon-cli/install.runtime.js", () => ({ runDaemonInstall: installGateway }));
+vi.mock("../cli/daemon-cli/install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/daemon-cli/install.js")>()),
+  runDaemonInstall: installGateway,
+}));
 vi.mock("../cli/daemon-cli/lifecycle.js", () => ({ runDaemonStart: startGateway }));
 
 type StatusOverrides = Omit<Partial<DaemonStatus>, "service"> & {

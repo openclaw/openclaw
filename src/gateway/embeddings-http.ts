@@ -14,7 +14,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
-import type { MemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import {
   acquireEmbeddingProviderLease,
   closeEmbeddingProvider,
@@ -54,10 +53,6 @@ const DEFAULT_EMBEDDINGS_BODY_BYTES = 5 * 1024 * 1024;
 const MAX_EMBEDDING_INPUTS = 128;
 const MAX_EMBEDDING_INPUT_CHARS = 8_192;
 const MAX_EMBEDDING_TOTAL_CHARS = 65_536;
-type MemorySearchEmbeddingConfig = Pick<
-  NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
-  "local" | "remote" | "inputType" | "queryInputType" | "documentInputType"
->;
 
 // Built only from the two sizes so provider URLs and response text stay in the Gateway log.
 function resolveEmbeddingDimensionsError(err: unknown): OpenAiCompatError | undefined {
@@ -113,44 +108,6 @@ function validateInputTexts(texts: string[]): string | undefined {
 
 function isLocalEmbeddingProvider(cfg: OpenClawConfig, provider: string): boolean {
   return getMemoryEmbeddingProvider(provider, cfg)?.transport === "local";
-}
-
-async function createConfiguredEmbeddingProvider(params: {
-  cfg: OpenClawConfig;
-  agentDir: string;
-  provider: string;
-  model: string;
-  dimensions?: number;
-  memorySearch?: MemorySearchEmbeddingConfig;
-}): Promise<MemoryEmbeddingProvider> {
-  const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(() => params.cfg);
-  const providerId = params.provider;
-  const adapter = getMemoryEmbeddingProvider(providerId, params.cfg);
-  if (!adapter) {
-    throw new Error(`Unknown memory embedding provider: ${providerId}`);
-  }
-  const remote = params.memorySearch?.remote;
-  const createOptions = {
-    config: params.cfg,
-    agentDir: params.agentDir,
-    provider: providerId,
-    model: params.model || adapter.defaultModel || "",
-    local: params.memorySearch?.local,
-    remote: remote
-      ? { baseUrl: remote.baseUrl, apiKey: remote.apiKey, headers: remote.headers }
-      : undefined,
-    inputType: params.memorySearch?.inputType,
-    queryInputType: params.memorySearch?.queryInputType,
-    documentInputType: params.memorySearch?.documentInputType,
-    dimensions: params.dimensions,
-    fallback: "none",
-    acquireLocalService,
-  };
-  const { provider } = await adapter.create(createOptions);
-  if (!provider) {
-    throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
-  }
-  return provider;
 }
 
 // Request model overrides are constrained to the configured memory provider so
@@ -275,16 +232,39 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     const { provider, release } = await acquireEmbeddingProviderLease(
       providerScopeKey,
       abortController.signal,
-      async () =>
-        await createConfiguredEmbeddingProvider({
-          cfg,
+      async () => {
+        const providerId = target.provider;
+        const model = target.model;
+        // Request dimensions apply even when the agent has disabled memory search.
+        const dimensions = payload.dimensions ?? memorySearch?.outputDimensionality;
+        const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(() => cfg);
+        const adapter = getMemoryEmbeddingProvider(providerId, cfg);
+        if (!adapter) {
+          throw new Error(`Unknown memory embedding provider: ${providerId}`);
+        }
+        const remote = memorySearch?.remote;
+        const createOptions = {
+          config: cfg,
           agentDir,
-          provider: target.provider,
-          model: target.model,
-          // Request dimensions apply even when the agent has disabled memory search.
-          dimensions: payload.dimensions ?? memorySearch?.outputDimensionality,
-          memorySearch: memorySearch ?? undefined,
-        }),
+          provider: providerId,
+          model: model || adapter.defaultModel || "",
+          local: memorySearch?.local,
+          remote: remote
+            ? { baseUrl: remote.baseUrl, apiKey: remote.apiKey, headers: remote.headers }
+            : undefined,
+          inputType: memorySearch?.inputType,
+          queryInputType: memorySearch?.queryInputType,
+          documentInputType: memorySearch?.documentInputType,
+          dimensions,
+          fallback: "none",
+          acquireLocalService,
+        };
+        const { provider: createdProvider } = await adapter.create(createOptions);
+        if (!createdProvider) {
+          throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
+        }
+        return createdProvider;
+      },
       (createdProvider) =>
         requestedProviderNeedsCleanup || isLocalEmbeddingProvider(cfg, createdProvider.id),
     );

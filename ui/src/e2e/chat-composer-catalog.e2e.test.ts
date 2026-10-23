@@ -240,7 +240,6 @@ suite.define(() => {
               ...buildGatewaySessionSnapshot({
                 sessionRow: running,
                 agentId: "main",
-                includeSession: true,
                 activeRunState: { active: true },
               }),
             });
@@ -331,7 +330,6 @@ suite.define(() => {
               ...buildGatewaySessionSnapshot({
                 sessionRow: recovered,
                 agentId: "main",
-                includeSession: true,
                 activeRunState: { active: false, runIds: [] },
               }),
             });

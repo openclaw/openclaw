@@ -1,5 +1,14 @@
-import { createMemo, createSignal, createUniqueId, Show, useContext } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  createUniqueId,
+  Errored,
+  latest,
+  Show,
+  useContext,
+} from "solid-js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
+import { GitDiffValues } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import {
   createMenuControls,
@@ -7,21 +16,27 @@ import {
   type MenuEntry,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { sessionPullRequestStateIcons } from "../../../lib/session-pull-request-presentation.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
+import { createPullRequestCopy } from "./chat-pull-request-copy.ts";
 import {
-  ChecksRow,
+  ChecksRows,
   StatusWarning,
   STATE_LABEL_KEYS,
   type ChatPullRequestsProps,
 } from "./chat-pull-request-shared.tsx";
 import "./chat-ci-details.ts";
 import "./chat-ci-automation-control.ts";
+
+const CHECK_ROLLUP = {
+  failing: ["failed", "chat.pullRequests.checksFailed", "circleX"],
+  pending: ["running", "chat.pullRequests.checksRunning", "loader"],
+  passing: ["passed", "chat.pullRequests.checksPassed", "check"],
+} as const;
 
 export function PullRequestActions(props: {
   label: string;
@@ -36,73 +51,40 @@ export function PullRequestActions(props: {
   const controls = createMenuControls();
   const parentPresented = useContext(ContentPresentation);
   let menu: MenuHandle | undefined;
-  const [copying, setCopying] = createSignal(false);
-  const [copyFailed, setCopyFailed] = createSignal(false);
   const [page, setPage] = createSignal<"home" | "checks" | "monitoring">("home");
-  let backButton: HTMLButtonElement | undefined;
-  let checksButton: HTMLButtonElement | undefined;
-  let monitoringButton: HTMLButtonElement | undefined;
   const navigate = (next: "checks" | "monitoring") => {
     setPage(next);
-    queueMicrotask(() => backButton?.focus());
+    queueMicrotask(() => menu?.itemElement("back")?.focus());
   };
   const back = () => {
-    const previous = page();
+    const previous = page() === "checks" ? "checks" : "monitoring";
     setPage("home");
-    queueMicrotask(() => (previous === "checks" ? checksButton : monitoringButton)?.focus());
+    queueMicrotask(() => menu?.itemElement(previous)?.focus());
   };
   const [menuOpen, setMenuOpen] = createSignal(false);
   const presentation = createMemo(() => projectPresentation(props.presented));
   const presented = () => parentPresented() && !props.dismissed && presentation().read();
-  const copy = async () => {
-    if (copying()) {
-      return;
-    }
-    const url = props.pullRequest.url;
-    setCopying(true);
-    setCopyFailed(false);
-    const current = () =>
-      presented() && menu?.overlay.open === true && props.pullRequest.url === url;
-    const copied = await copyToClipboard(url, current);
-    setCopying(false);
-    if (!current()) {
-      return;
-    }
-    if (copied) {
+  const clipboard = createPullRequestCopy({
+    url: () => props.pullRequest.url,
+    presented: () => presented() && menu?.overlay.open === true,
+    onCopied: () => {
       menu?.close();
       showToast({ message: t("chat.pullRequests.linkCopied") });
-    } else {
-      setCopyFailed(true);
-    }
-  };
+    },
+  });
   const checks = () => props.pullRequest.checks;
   const rollup = () => {
     const current = checks();
     if (!current) {
       return undefined;
     }
-    if (current.state === "failing" && current.failed > 0) {
+    const [state, label, icon] = CHECK_ROLLUP[current.state];
+    if (current[state] > 0) {
       return {
-        label: t("chat.pullRequests.checksFailed"),
-        count: current.failed,
-        icon: "circleX",
-        state: "failed",
-      } as const;
-    }
-    if (current.state === "pending" && current.running > 0) {
-      return {
-        label: t("chat.pullRequests.checksRunning"),
-        count: current.running,
-        icon: "loader",
-        state: "running",
-      } as const;
-    }
-    if (current.state === "passing" && current.passed > 0) {
-      return {
-        label: t("chat.pullRequests.checksPassed"),
-        count: current.passed,
-        icon: "check",
-        state: "passed",
+        label: t(label),
+        count: current[state],
+        icon,
+        state,
       } as const;
     }
     if (current.skipped > 0) {
@@ -125,26 +107,7 @@ export function PullRequestActions(props: {
       <div class="chat-pr-menu__checks-heading">
         <span>{t("chat.pullRequests.checksTitle")}</span>
         <div class="chat-pr-menu__checks-totals">
-          <ChecksRow
-            label={t("chat.pullRequests.checksFailed")}
-            count={checks()?.failed ?? 0}
-            modifier="failed"
-          />
-          <ChecksRow
-            label={t("chat.pullRequests.checksRunning")}
-            count={checks()?.running ?? 0}
-            modifier="running"
-          />
-          <ChecksRow
-            label={t("chat.pullRequests.checksPassed")}
-            count={checks()?.passed ?? 0}
-            modifier="passed"
-          />
-          <ChecksRow
-            label={t("chat.pullRequests.checksSkipped")}
-            count={checks()?.skipped ?? 0}
-            modifier="skipped"
-          />
+          <ChecksRows checks={checks()} runningFirst />
         </div>
       </div>
       <openclaw-chat-ci-details
@@ -194,14 +157,7 @@ export function PullRequestActions(props: {
     label: t("common.back"),
     closeOnSelect: false,
     render: (attributes) => (
-      <button
-        {...attributes}
-        ref={(element) => {
-          backButton = element;
-        }}
-        class="oc-menu-item chat-pr-menu__back"
-        type="button"
-      >
+      <button {...attributes} class="oc-menu-item chat-pr-menu__back" type="button">
         <span class="oc-menu-item__icon">
           <Icon name="arrowLeft" />
         </span>
@@ -260,16 +216,11 @@ export function PullRequestActions(props: {
                     <Icon name="diff" />
                     <span>{t("chat.pullRequests.codeChanges")}</span>
                     <span class="chat-pr-menu__value">
-                      <Show when={props.pullRequest.additions !== undefined}>
-                        <span class="chat-pr__additions">
-                          +{props.pullRequest.additions?.toLocaleString("en-US")}
-                        </span>
-                      </Show>
-                      <Show when={props.pullRequest.deletions !== undefined}>
-                        <span class="chat-pr__deletions">
-                          −{props.pullRequest.deletions?.toLocaleString("en-US")}
-                        </span>
-                      </Show>
+                      <GitDiffValues
+                        item={props.pullRequest}
+                        classPrefix="chat-pr"
+                        locale="en-US"
+                      />
                     </span>
                   </div>
                 </Show>
@@ -310,9 +261,6 @@ export function PullRequestActions(props: {
                 render: (attributes) => (
                   <button
                     {...attributes}
-                    ref={(element) => {
-                      checksButton = element;
-                    }}
                     class="oc-menu-item chat-pr-menu__drill-trigger"
                     type="button"
                   >
@@ -349,17 +297,23 @@ export function PullRequestActions(props: {
                 id: "copy",
                 label: t("chat.pullRequests.copyLink"),
                 icon: <Icon name="link" />,
-                disabled: copying(),
+                disabled: clipboard.copying(),
                 closeOnSelect: false,
               },
               {
                 kind: "content",
                 id: "copy-error",
                 content: (
-                  <Show when={copyFailed()}>
-                    <p class="chat-pr-menu__error" role="alert">
-                      {t("chat.pullRequests.copyFailed")}
-                    </p>
+                  <Show when={!clipboard.copying()}>
+                    <Errored
+                      fallback={
+                        <p class="chat-pr-menu__error" role="alert">
+                          {t("chat.pullRequests.copyFailed")}
+                        </p>
+                      }
+                    >
+                      {latest(clipboard.outcome)}
+                    </Errored>
                   </Show>
                 ),
               },
@@ -372,9 +326,6 @@ export function PullRequestActions(props: {
             render: (attributes) => (
               <button
                 {...attributes}
-                ref={(element) => {
-                  monitoringButton = element;
-                }}
                 class="oc-menu-item chat-pr-menu__drill-trigger"
                 type="button"
               >
@@ -425,7 +376,7 @@ export function PullRequestActions(props: {
       onOpenChange={(open) => {
         setMenuOpen(open);
         if (!open) {
-          setCopyFailed(false);
+          clipboard.retire();
           setPage("home");
         }
       }}
@@ -447,7 +398,7 @@ export function PullRequestActions(props: {
           props.onDismiss();
         }
         if (item.id === "copy") {
-          void copy();
+          void clipboard.copy();
         }
       }}
     />

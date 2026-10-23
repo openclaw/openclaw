@@ -41,6 +41,7 @@ import {
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
+import { gatewayTestTextTransport } from "../server/connection-transport.test-support.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { createBoardHarness as createHarness } from "./board.test-support.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
@@ -301,7 +302,7 @@ describe("board gateway runtime boundaries", () => {
         const request = JSON.parse(rawDataToString(data)) as RequestFrame;
         if (request.method === "connect") {
           gatewayClient = {
-            socket,
+            socket: gatewayTestTextTransport(socket),
             connect: {
               role: "operator",
               scopes: ["operator.admin"],

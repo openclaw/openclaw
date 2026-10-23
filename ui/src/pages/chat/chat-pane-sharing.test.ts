@@ -31,9 +31,10 @@ import {
   openNativeMenu,
 } from "./components/chat-pane-header.test-support.ts";
 import type {
+  PreparedChatSessionSharing,
   ChatSessionSharingState,
   ChatSessionSharingOutcome,
-} from "./components/chat-session-sharing.solid.tsx";
+} from "./components/chat-session-sharing-shared.tsx";
 
 const { confirmPublicShare, copyPublicShare } = vi.hoisted(() => ({
   confirmPublicShare: vi.fn<(...args: unknown[]) => Promise<boolean>>(),
@@ -47,6 +48,7 @@ afterEach(() => {
 });
 
 type SharingPane = TestChatPane & {
+  prepareSessionSharing: (row: GatewaySessionRow) => PreparedChatSessionSharing | undefined;
   loadSessionSharing: (row: GatewaySessionRow, force?: boolean) => Promise<void>;
   syncSelectedSessionSharing: (row: GatewaySessionRow | undefined) => void;
   sessionSharingCacheKey: (sessionKey: string) => string;
@@ -273,7 +275,7 @@ describe("public session sharing", () => {
       await pane.loadSessionSharing(row, true);
       draw();
       const sharingMenu = header.querySelector(".chat-pane__sharing-menu")!;
-      await openNativeMenu(sharingMenu);
+      await openNativeMenu(sharingMenu, "public:copy");
       const copyButton = sharingMenu.querySelector<HTMLButtonElement>(
         '[data-value="public:copy"]',
       )!;
@@ -639,6 +641,28 @@ describe("chat pane sharing authorization", () => {
 
     expect(request).not.toHaveBeenCalled();
     expect(sessions.reconcileMutation).not.toHaveBeenCalled();
+  });
+
+  it("settles a failed forced read without retaining an older pending receipt", async () => {
+    const row = sessionRow();
+    const first = createDeferred<SessionMembersListEvidenceResult>();
+    const second = createDeferred<SessionMembersListEvidenceResult>();
+    const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const { pane } = createSharingTestChatPane({
+      client: createGatewayBrowserClientFixture({ request }),
+      sessions: createSessionCapabilityFixture(),
+    });
+    const oldLoad = pane.loadSessionSharing(row);
+    const newLoad = pane.loadSessionSharing(row, true);
+    const read = pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.read;
+    second.reject(new Error("Membership read failed"));
+    await newLoad;
+    await expect(read).resolves.toBeUndefined();
+    const failed = pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key));
+    expect(failed).toEqual({ loading: false, error: "Membership read failed" });
+    first.resolve(sharingResult(row));
+    await oldLoad;
+    expect(pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))).toBe(failed);
   });
 
   it("releases a stale same-key sharing load for the replacement session", async () => {

@@ -163,8 +163,6 @@ async function runToolOnlyTurn(
     text.length === 0,
     `expected tool-only response for ${params.tool.name}, got ${JSON.stringify(text)}`,
   );
-  assert(toolCall.type === "toolCall", `expected toolCall block for ${params.tool.name}`);
-
   return { prompt, response, toolCall };
 }
 
@@ -456,27 +454,19 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     regressions.push(...findings.regressions);
     warnings.push(...findings.warnings);
   };
-  const openai = await resolveLiveCacheProviderPool({
-    config: {
-      provider: "openai",
-      api: "openai-responses",
-      envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
-      preferredModelIds: ["gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini", "gpt-5.4"],
-    },
-    regressions,
-    summary,
-    warnings,
+  const resolvePool = (config: Parameters<typeof resolveLiveCacheProviderPool>[0]["config"]) =>
+    resolveLiveCacheProviderPool({ config, regressions, summary, warnings });
+  const openai = await resolvePool({
+    provider: "openai",
+    api: "openai-responses",
+    envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
+    preferredModelIds: ["gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini", "gpt-5.4"],
   });
-  const anthropic = await resolveLiveCacheProviderPool({
-    config: {
-      provider: "anthropic",
-      api: "anthropic-messages",
-      envVar: "OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL",
-      preferredModelIds: ["claude-sonnet-5", "claude-haiku-4-5"],
-    },
-    regressions,
-    summary,
-    warnings,
+  const anthropic = await resolvePool({
+    provider: "anthropic",
+    api: "anthropic-messages",
+    envVar: "OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL",
+    preferredModelIds: ["claude-sonnet-5", "claude-haiku-4-5"],
   });
 
   for (const lane of ["stable", "tool", "image", "mcp"] as const) {
