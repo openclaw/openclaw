@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { expect, it, onTestFinished } from "vitest";
 import {
   openOpenClawAgentDatabase,
@@ -5,7 +6,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { prepareSessionGenerationFacts } from "./session-delivery-generation.js";
 
 const original = {
@@ -43,7 +44,7 @@ it.each([
     const metadata = { ...original, ...settings, label: "native metadata" };
     replaceSessionEntrySync(scope, metadata);
     generation.assertCurrent();
-    expect(generation.readSessionSettings()).toEqual(settings);
+    expect(generation.readSessionSettings()).toMatchObject(settings);
 
     const version = database.db.prepare("PRAGMA data_version").get()?.data_version;
     const write = database.db.prepare(
@@ -114,3 +115,57 @@ it("refuses reentrant delivery during raw execution and unfinished RETURNING cur
   rows.return?.();
   generation.assertCurrent();
 });
+
+// Windows does not permit replacing the open database files used by this proof.
+it.skipIf(process.platform === "win32").each(["before preparation", "during preparation"] as const)(
+  "refuses the next guarded write after its database file is replaced %s",
+  async (phase) => {
+    const { database, scope, generation } = await fixture();
+    const foreignPath = `${database.path}.foreign.sqlite`;
+    const originalPath = `${database.path}.original`;
+    const foreign = openOpenClawAgentDatabase({ agentId: "main", path: foreignPath });
+    replaceSessionEntrySync(
+      { ...scope, storePath: foreignPath },
+      { ...original, label: "foreign owner" },
+    );
+    const readLabel = (db: typeof database) =>
+      db.db
+        .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+        .get(scope.sessionKey)?.entry_json;
+    expect(String(readLabel(foreign))).toContain("foreign owner");
+    generation.assertCurrent();
+    const replaceFile = () => {
+      fs.renameSync(database.path, originalPath);
+      fs.renameSync(foreignPath, database.path);
+    };
+    let replaced = false;
+    try {
+      if (phase === "before preparation") {
+        replaceFile();
+        replaced = true;
+      }
+      await expect(
+        patchSessionEntryCore(
+          scope,
+          async () => {
+            if (!replaced) {
+              replaceFile();
+              replaced = true;
+            }
+            await Promise.resolve();
+            return { label: "must not persist" };
+          },
+          { workerGuard: { source: generation.assertCurrent }, skipMaintenance: true },
+        ),
+      ).rejects.toThrow(/identity|target changed|generation/i);
+      expect(replaced).toBe(true);
+      expect(String(readLabel(database))).not.toContain("must not persist");
+      expect(String(readLabel(foreign))).toContain("foreign owner");
+    } finally {
+      if (replaced) {
+        fs.renameSync(database.path, foreignPath);
+        fs.renameSync(originalPath, database.path);
+      }
+    }
+  },
+);

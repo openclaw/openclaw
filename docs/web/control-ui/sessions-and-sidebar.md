@@ -109,6 +109,9 @@ the page topbar while the drawer is closed. Opening the drawer moves that action
 back to the rail, without a second header button. In team mode, creation opens the
 same agent picker as the rail. Native apps keep their native creation controls.
 
+In a single-owner list, session activity stays at the far-right edge, including
+when hover or keyboard focus reveals pin and archive actions.
+
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
 without a saved choice starts with **My sessions**. Before a profile is identified,
@@ -661,8 +664,8 @@ works while that menu is open.
 
 In the macOS app, these additional shortcuts apply while the Dashboard web view
 has keyboard focus. A separate native reading pane does not forward Archive to
-the Dashboard or another window. The existing native **⌘N** New Gateway Window
-and **⌘⇧N** New Thread commands are unchanged.
+the Dashboard or another window. **⌘N** opens **New Thread** in the selected
+experience. **File → New Gateway Window…** has no keyboard shortcut.
 
 These direct shortcuts do not change the command palette's **⌘K / Ctrl+K**, then
 **⌘Enter / Ctrl+Enter** workflow for starting a task in the background.

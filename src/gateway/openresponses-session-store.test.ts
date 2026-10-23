@@ -9,10 +9,6 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { lookupResponseSession, rememberResponseSession } from "./openresponses-session-store.js";
-import {
-  MAX_RESPONSE_SESSION_ENTRIES,
-  RESPONSE_SESSION_RETENTION_MS,
-} from "./openresponses-session-store.types.js";
 
 const scope = {
   authSubject: "synthetic-subject",
@@ -22,8 +18,8 @@ const scope = {
 const storeOptions = {
   ownerId: "core:openresponses",
   namespace: "response-sessions",
-  maxEntries: MAX_RESPONSE_SESSION_ENTRIES,
-  defaultTtlMs: RESPONSE_SESSION_RETENTION_MS,
+  maxEntries: 5_000,
+  defaultTtlMs: 30 * 24 * 60 * 60_000,
 } as const;
 const current = () => {};
 
@@ -62,14 +58,14 @@ it("keeps reads and Incognito noncreating, and scoped continuity survives reopen
     const store = createCorePluginStateKeyedStore({ ...storeOptions, env });
     const [entry] = await store.entries();
     expect(entry).toMatchObject({ key: input.responseId, value: { ...scope, sessionKey } });
-    expect(entry!.expiresAt).toBe(entry!.createdAt + RESPONSE_SESSION_RETENTION_MS);
+    expect(entry!.expiresAt).toBe(entry!.createdAt + storeOptions.defaultTtlMs);
     const expiredAt = Date.now() - 1;
     seedPluginStateEntriesForTests([
       {
         ...entry!,
         pluginId: storeOptions.ownerId,
         namespace: storeOptions.namespace,
-        createdAt: expiredAt - RESPONSE_SESSION_RETENTION_MS,
+        createdAt: expiredAt - storeOptions.defaultTtlMs,
         expiresAt: expiredAt,
       },
     ]);

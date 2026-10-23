@@ -182,12 +182,28 @@ export type ParentState = {
   turnIds: Set<string>;
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
   requesterSessionKey?: string;
+  requesterStorePath?: string;
   completionScope?: AgentHarnessCompletionScope;
   historyOwner?: CodexNativeSubagentHistoryOwner;
   agentId?: string;
   submissionStore?: CodexNativeSubagentSubmissionStore;
   assignmentStore?: CodexNativeSubagentAssignmentStore;
 };
+
+export type NativeSubagentsReadRequest = {
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+  storePath: string;
+  parentThreadId: string;
+  historyOwner: CodexNativeSubagentHistoryOwner;
+  assertCurrent(): void;
+};
+
+export type NativeSubagentsSnapshot = Awaited<
+  ReturnType<NonNullable<AgentHarness["readNativeSubagents"]>>
+>;
 
 export type NativeExecutionWait = {
   kind: "approval" | "user_input" | "agent_messages" | "children";
@@ -245,7 +261,7 @@ export type KnownChild = {
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
   assignment: NativeSubagentAssignment & { terminal: boolean; unanchored?: true };
   turnId?: string;
-  observedTurns: Map<string, { awaitingInteraction?: true }>;
+  observedTurns: Map<string, { awaitingInteraction?: true; state?: NativeTurnState }>;
   pendingTurns: Array<
     NativeTurnObservation & {
       admittedOwner?: ParentOwner;

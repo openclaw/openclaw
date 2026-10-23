@@ -47,13 +47,14 @@ export function isModelPickerOptionSelected(
 export function formatModelContextMeta(option: ChatModelPickerOption): string {
   const active = option.contextTokens;
   const maximum = option.contextWindow;
-  if (active && maximum && active !== maximum) {
+  if (active && maximum && active < maximum) {
     return t("chat.modelControls.contextActiveAndMax", {
       active: formatContextTokenCapacity(active),
       maximum: formatContextTokenCapacity(maximum),
     });
   }
-  return maximum ? formatContextTokenCapacity(maximum) : "";
+  const capacity = active || maximum;
+  return capacity ? formatContextTokenCapacity(capacity) : "";
 }
 
 /** Owners omit completed empty groups; a published group has rows or an active receipt. */

@@ -246,6 +246,12 @@ export function stubObjectUrls(...urls: string[]) {
   const createObjectURL = vi.fn();
   urls.forEach((url) => createObjectURL.mockReturnValueOnce(url));
   const revokeObjectURL = vi.fn();
-  vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = createObjectURL;
+      static override revokeObjectURL = revokeObjectURL;
+    },
+  );
   return revokeObjectURL;
 }

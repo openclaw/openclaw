@@ -33,6 +33,8 @@ type DispatchRepositoryOptions = {
   targetAlreadyRemote?: boolean;
   // Records a PR-branch head that the release branch only received as a squash.
   unreachableContributionRecord?: boolean;
+  // Replaces the candidate-owned release-notes prose line.
+  releaseNotes?: string;
 };
 const repositoryTemplateDirs = useAutoCleanupTempDirTracker(afterAll);
 const dispatchRepositoryTemplates = new Map<string, ReturnType<typeof createDispatchRepository>>();
@@ -124,7 +126,7 @@ console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { run
       [
         "## 2026.8.1",
         "",
-        "Release notes for the selected candidate.",
+        options.releaseNotes ?? "Release notes for the selected candidate.",
         "",
         "### Complete contribution record",
         "",
@@ -157,6 +159,7 @@ export function prepareDispatchRepository(root: string, options: DispatchReposit
     options.targetAlreadyRemote !== false,
     options.candidateOwned === true,
     options.unreachableContributionRecord === true,
+    options.releaseNotes ?? null,
   ]);
   let template = dispatchRepositoryTemplates.get(key);
   if (!template) {

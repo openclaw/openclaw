@@ -277,6 +277,8 @@ async function updateLoadedJob(params: {
     patch,
     options: {
       streamSandbox: opts?.streamSandbox,
+      operatorSource: opts?.operatorSource,
+      operatorSourceExecutionRevision: opts?.operatorSourceExecutionRevision,
       inferenceBinding: opts?.inferenceBinding,
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,

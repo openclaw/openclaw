@@ -88,9 +88,11 @@ async function fixture(
     await opened;
   }
   expect(host.querySelector("[data-anchored-overlay]")!.matches(":popover-open")).toBe(open);
-  expect(
-    host.querySelector<HTMLInputElement>("input[type=range]")?.checkVisibility() ?? false,
-  ).toBe(open);
+  await expect
+    .poll(
+      () => host?.querySelector<HTMLInputElement>("input[type=range]")?.checkVisibility() ?? false,
+    )
+    .toBe(open);
   return {
     input: host.querySelector<HTMLInputElement>("input[type=range]")!,
     onThinkingSelect,

@@ -211,6 +211,7 @@ suite.define(() => {
       ["idle", {}],
       ["unread", { unread: true }],
       ["running", { hasActiveRun: true, status: "running", activeRunIds: ["run-1"] }],
+      ["parent", { hasActiveRun: true, status: "running", childSessions: ["agent:main:child"] }],
     ];
     const rows = states.map(([id, state], index) =>
       Object.assign(
@@ -256,7 +257,7 @@ suite.define(() => {
           text: box(".sidebar-recent-session__text"),
           indicator: box(".sidebar-session-indicator:not(:empty)"),
           actions: box(".session-row-actions"),
-          archive: box("[data-sidebar-session-archive]"),
+          toggle: box("[data-child-session-toggle]"),
         };
       });
     const header = await page
@@ -274,18 +275,25 @@ suite.define(() => {
       expect(status.indicator?.left).toBeGreaterThanOrEqual(status.text?.right ?? Infinity);
     }
 
-    // Hover actions overlay the trailing edge; the status must stay visible beside them.
+    // Hover actions must appear before the fixed trailing status, not push it left.
     await row("running").hover();
     await expectBrowser(row("running").locator(".session-row-actions button").first()).toHaveCSS(
       "opacity",
       "1",
     );
     const hovered = await rowGeometry("running");
-    expect(hovered.indicator?.right).toBeLessThanOrEqual(hovered.actions?.left ?? -Infinity);
-    // At rest, trailing status sits in the archive action's column.
-    const centerX = (rect?: { left: number; right: number }) =>
-      rect ? (rect.left + rect.right) / 2 : Number.NaN;
-    expect(centerX(unread.indicator)).toBeCloseTo(centerX(hovered.archive), 1);
+    expect(hovered.indicator?.left).toBeGreaterThanOrEqual(hovered.actions?.right ?? Infinity);
+    expect(hovered.indicator?.right).toBeCloseTo(running.indicator?.right ?? 0, 5);
+    await page.mouse.move(1100, 700);
+    await row("running").locator("a").focus();
+    const focused = await rowGeometry("running");
+    expect(focused.indicator?.left).toBeGreaterThanOrEqual(focused.actions?.right ?? Infinity);
+    expect(focused.indicator?.right).toBeCloseTo(running.indicator?.right ?? 0, 5);
+    await row("parent").hover();
+    const parent = await rowGeometry("parent");
+    expect(parent.toggle).toBeDefined();
+    expect(parent.indicator?.left).toBeGreaterThanOrEqual(parent.toggle?.right ?? Infinity);
+    expect(parent.indicator?.right).toBeCloseTo(running.indicator?.right ?? 0, 5);
   });
 
   it("derives People controls and owner filtering from current session owners", async () => {

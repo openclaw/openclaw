@@ -255,7 +255,9 @@ suite.define(() => {
 
         await logout.click();
         await expectRequests(gateway, "channels.logout", 0);
-        const firstConfirm = await waitForConfirmModal(page);
+        const firstConfirm = (await waitForConfirmModal(page)).filter({
+          has: page.getByText("Log out of WhatsApp account default?", { exact: true }),
+        });
         const confirmation = await firstConfirm.textContent();
         expect(confirmation).toContain("Log out of WhatsApp account default?");
         expect(confirmation).toContain(
@@ -270,7 +272,9 @@ suite.define(() => {
         await expect.poll(() => field(detail, "Linked").textContent()).toContain("Yes");
 
         await logout.click();
-        const secondConfirm = await waitForConfirmModal(page);
+        const secondConfirm = (await waitForConfirmModal(page)).filter({
+          has: page.getByText("Log out of WhatsApp account default?", { exact: true }),
+        });
         await button(secondConfirm, "Logout").click();
         await expect
           .poll(async () => detail.locator(".settings-row__desc").allTextContents())

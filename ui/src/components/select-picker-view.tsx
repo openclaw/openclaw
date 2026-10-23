@@ -374,14 +374,14 @@ export function PickerContent<Option extends PickerOption>(props: {
   };
   const OptionRow = (row: { option: () => Option; grouped: boolean }) => {
     const itemRef = menu.itemRef();
-    // The parent For keys each mounted row by value.
-    const initialValue = untrack(() => row.option().value);
     let element: HTMLDivElement;
     onSettled(() => {
-      optionElements.set(initialValue, element);
+      // The parent For keeps this registration's value for the row's lifetime.
+      const value = row.option().value;
+      optionElements.set(value, element);
       return () => {
-        if (optionElements.get(initialValue) === element) {
-          optionElements.delete(initialValue);
+        if (optionElements.get(value) === element) {
+          optionElements.delete(value);
         }
       };
     });
