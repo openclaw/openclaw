@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import * as toast from "../../lib/toast.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import {
   createDraftFixture,
@@ -70,14 +71,46 @@ it.each([
     renderControl(control, next.context)
       .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')!
       .click();
-    const thinking = renderControl(control, next.context).querySelector<HTMLInputElement>(
-      '[data-chat-thinking-slider="true"]',
-    )!;
+    const rendered = renderControl(control, next.context);
+    const initialEffort = await waitForSolid(() => {
+      const picker = rendered.querySelector<HTMLDetailsElement>(
+        ".chat-controls__effort-picker[data-chat-native-picker]",
+      );
+      expect(picker).not.toBeNull();
+      return picker!;
+    });
+    if (!initialEffort.open) {
+      initialEffort.querySelector<HTMLElement>("summary")!.click();
+    }
+    const thinking = await waitForSolid(() => {
+      const input = rendered.querySelector<HTMLInputElement>('[data-chat-thinking-slider="true"]');
+      expect(input).not.toBeNull();
+      return input!;
+    });
     thinking.value = "1";
     thinking.dispatchEvent(new Event("change", { bubbles: true }));
-    renderControl(control, next.context)
-      .querySelector<HTMLButtonElement>(`[data-chat-speed-option="${speedOption}"]`)!
-      .click();
+    await waitForSolid(() =>
+      expect(rendered.querySelector(".chat-controls__effort-trigger")?.textContent).toContain(
+        "High",
+      ),
+    );
+    // A model-control refresh can replace the open menu; use its current visible trigger.
+    const effort = rendered.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
+    if (effort.open) {
+      effort.querySelector<HTMLElement>("summary")!.click();
+    }
+    await waitForSolid(() =>
+      expect(rendered.querySelector(".chat-controls__effort-menu")).toBeNull(),
+    );
+    effort.querySelector<HTMLElement>("summary")!.click();
+    const speed = await waitForSolid(() => {
+      const button = rendered.querySelector<HTMLButtonElement>(
+        `[data-chat-speed-option="${speedOption}"]`,
+      );
+      expect(button).not.toBeNull();
+      return button!;
+    });
+    speed.click();
     const selected = { model: "openai/gpt-5.6-sol", thinkingLevel: "high", fastMode };
     await vi.waitFor(() => expect(prefs.stored()).toMatchObject(selected));
     admitted.resolve(acceptedWorktreeSession);

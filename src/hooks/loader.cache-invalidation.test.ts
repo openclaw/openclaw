@@ -53,10 +53,7 @@ describe("loaded hook import freshness", () => {
   });
 
   async function loadAndExpect(message: string) {
-    const prepared = await prepareInternalHooks(config, workspaceDir, {
-      managedHooksDir: path.join(workspaceDir, "unused-managed"),
-      bundledHooksDir: path.join(workspaceDir, "unused-bundled"),
-    });
+    const prepared = await prepareInternalHooks(config, workspaceDir);
     expect(prepared.loadedCount).toBe(1);
     prepared.commit();
     const event = createInternalHookEvent("command", "new", "freshness-session");
