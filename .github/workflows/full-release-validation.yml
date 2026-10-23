@@ -2205,16 +2205,20 @@ jobs:
       CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
       PREPARED_NPM_BUNDLE_JSON: ${{ needs.prepare_npm_package.outputs.prepared_bundle_json }}
     steps:
-      - name: Dispatch immutable validation candidate producer
-        id: dispatch
-        if: github.run_attempt == 1
-        run: *full_release_child_dispatch
       - *artifact_tooling_checkout
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
+
+      - name: Wait for candidate acquisition GitHub API quota
+        if: github.run_attempt == 1
+        run: node scripts/wait-for-github-api-quota.mjs --minimum-remaining 6 --max-wait-seconds 18000
+      - name: Dispatch immutable validation candidate producer
+        id: dispatch
+        if: github.run_attempt == 1
+        run: *full_release_child_dispatch
 
       - *artifact_producer_resolution
       - name: Wait for exact validation candidate
