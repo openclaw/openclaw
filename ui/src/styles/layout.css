@@ -1058,6 +1058,11 @@ openclaw-settings-save-indicator:empty {
   --sidebar-lead: 20px;
   --sidebar-row-gap: 8px;
   --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
+  /* Title-aligned controls include the row wrapper, not just the link padding. */
+  --sidebar-session-row-inset: 2px;
+  --sidebar-session-title-inset: calc(
+    var(--sidebar-text-offset) + var(--sidebar-session-row-inset)
+  );
   --sidebar-pad-x: 10px;
   --sidebar-session-link-padding-block: 4px;
   --sidebar-session-row-floor: 30px;
@@ -1552,8 +1557,8 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-session-catalog-load-more {
   display: block;
-  width: calc(100% - var(--sidebar-text-offset) - 10px);
-  margin: 3px 10px 5px var(--sidebar-text-offset);
+  width: calc(100% - var(--sidebar-session-title-inset) - 10px);
+  margin: 3px 10px 5px var(--sidebar-session-title-inset);
   padding: 4px 0;
   border: none;
   border-radius: var(--radius-sm);
@@ -1669,6 +1674,11 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-session-tree__children {
+  /* Child rows retain their leading status column under an inline owner. */
+  --sidebar-session-title-inset: calc(
+    var(--sidebar-text-offset) + var(--sidebar-session-row-inset)
+  );
+
   margin-left: var(--sidebar-lead);
 }
 
@@ -1680,7 +1690,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-session-tree__show-more {
   min-height: 28px;
-  padding: 6px var(--sidebar-text-offset);
+  padding: 6px var(--sidebar-session-title-inset);
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -1799,15 +1809,11 @@ openclaw-settings-save-indicator:empty {
   color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
 }
 
-.sidebar-session-catalog-project > .sidebar-session-pagination--catalog {
-  padding-left: calc(var(--sidebar-text-offset) + var(--sidebar-lead));
-}
-
 .sidebar-session-pagination {
   display: flex;
   justify-content: flex-start;
   gap: 14px;
-  padding: 0 10px 10px var(--sidebar-text-offset);
+  padding: 0 10px 10px var(--sidebar-session-title-inset);
 }
 
 .sidebar-session-pagination__button {
@@ -1870,7 +1876,7 @@ openclaw-settings-save-indicator:empty {
   align-items: center;
   min-width: 0;
   min-height: var(--sidebar-session-row-min-height);
-  padding-right: 2px;
+  padding: 0 4px 0 var(--sidebar-session-row-inset);
   border-radius: var(--radius-md);
   color: var(--muted);
   cursor: var(--cursor-action);
@@ -1969,6 +1975,14 @@ openclaw-settings-save-indicator:empty {
   outline-offset: -2px;
 }
 
+.sidebar-recent-sessions__group--inline-owner {
+  --sidebar-session-title-inset: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset));
+}
+
+.shell:not(.shell--mobile-nav) .sidebar-recent-sessions__group--inline-owner {
+  --sidebar-session-title-inset: calc(6px + var(--sidebar-session-row-inset));
+}
+
 /* A single selected owner's sessions sit directly under the owner picker:
    titles start at the picker's leading edge, so the link inset only offsets
    the list's negative inline margin. Status moves to the trailing edge
@@ -1991,11 +2005,10 @@ openclaw-settings-save-indicator:empty {
   margin-top: calc(4px - var(--sidebar-group-gap));
 }
 
-.shell:not(.shell--mobile-nav)
-  .sidebar-recent-sessions__group--inline-owner
+.sidebar-recent-sessions__group--inline-owner
   .sidebar-recent-session:not(.sidebar-recent-session--child)
   > .sidebar-recent-session__link {
-  padding-inline-start: 6px;
+  padding-inline-start: calc(var(--sidebar-session-title-inset) - var(--sidebar-session-row-inset));
 }
 
 /* Row actions overlay the link's trailing edge (on hover, or always on the
@@ -2200,7 +2213,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
   position: absolute;
-  inset: 50% 2px auto auto;
+  inset: 50% 4px auto auto;
   transform: translateY(-50%);
   pointer-events: none;
 }
@@ -2212,7 +2225,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
   > .sidebar-recent-session__aside {
-  inset: calc(1px + max(24px, var(--sidebar-title-line-height)) / 2) 2px auto auto;
+  inset: calc(1px + max(24px, var(--sidebar-title-line-height)) / 2) 4px auto auto;
 }
 
 .sidebar-recent-session--child > .sidebar-recent-session__aside {
@@ -2229,7 +2242,7 @@ openclaw-settings-save-indicator:empty {
    same link-relative geometry as toggle-less rows, so one mask fits both. */
 .sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
-  right: calc(var(--sidebar-child-session-toggle-width) + 4px);
+  right: calc(var(--sidebar-child-session-toggle-width) + 6px);
 }
 
 .sidebar-recent-session:not(
@@ -3033,7 +3046,7 @@ a:is(
 
   position: relative;
   min-height: max(32px, var(--sidebar-session-row-min-height));
-  padding: 0 8px;
+  padding: 0 10px;
   border: 1px solid transparent;
   color: var(--muted);
   transition:
@@ -3064,7 +3077,7 @@ a:is(
 
   .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
     > .sidebar-recent-session__aside {
-    inset: 50% 2px auto auto;
+    inset: 50% 4px auto auto;
   }
 
   .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {
