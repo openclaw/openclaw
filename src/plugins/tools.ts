@@ -556,7 +556,7 @@ function* resolvePluginToolsFromRegistry(
         workspace.assertCurrent();
         factoryContext.assertInvocationCurrent?.();
       }
-      const factoryResult = factories.resolve(entry, factoryContext, declaredNames, owner.registry);
+      const factoryResult = factories.resolve(entry, factoryContext, declaredNames);
       if (factoryResult.failed) {
         continue;
       }
