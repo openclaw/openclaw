@@ -2,6 +2,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
+import { generateVideo as generateRuntimeVideo } from "openclaw/plugin-sdk/video-generation-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildFalVideoGenerationProvider } from "./video-generation-provider.js";
 
@@ -52,33 +53,42 @@ describe("fal video generation provider", () => {
     expect(fetchGuardMock).not.toHaveBeenCalled();
   });
 
-  it("marks overrides dropped by prompt-only and audio-less models unsupported", async () => {
+  it.each([
+    { model: "fal-ai/minimax/video-01-live", ignored: ["aspectRatio", "resolution", "audio"] },
+    { model: "fal-ai/heygen/v2/video-agent", ignored: ["aspectRatio", "resolution", "audio"] },
+    { model: "fal-ai/kling-video/v2.1/master/text-to-video", ignored: ["audio"] },
+    { model: "fal-ai/wan/v2.2-a14b/text-to-video", ignored: ["audio"] },
+    { model: "bytedance/seedance-2.0/text-to-video", ignored: [] },
+  ])("reports ignored overrides through the runtime for $model", async ({ model, ignored }) => {
+    mockCompletedFalVideoJob();
     const provider = buildFalVideoGenerationProvider();
-    const resolve = (model: string) =>
-      provider.resolveModelCapabilities?.({ provider: "fal", model, cfg: {} });
-    const promptOnly = {
-      supportsAspectRatio: false,
-      supportsResolution: false,
-      supportsSize: false,
-      supportsAudio: false,
-    };
-
-    for (const model of ["fal-ai/minimax/video-01-live", "fal-ai/heygen/v2/video-agent"]) {
-      const capabilities = await resolve(model);
-      expect(capabilities?.generate).toEqual(promptOnly);
-      expect(capabilities?.imageToVideo).toEqual({ enabled: true, ...promptOnly });
+    const result = await generateRuntimeVideo(
+      {
+        cfg: { agents: { defaults: { mediaModels: { video: `fal/${model}` } } } },
+        prompt: "Animate this",
+        aspectRatio: "16:9",
+        resolution: "1080P",
+        audio: true,
+      },
+      {
+        getProvider: (id) => (id === provider.id ? provider : undefined),
+        listProviders: () => [provider],
+        getProviderEnvVars: () => [],
+        log: { debug: vi.fn(), warn: vi.fn() },
+      },
+    );
+    expect(result.ignoredOverrides.map((override) => override.key)).toEqual(ignored);
+    const body = getSubmitBody();
+    if (ignored.includes("aspectRatio")) {
+      expect(body).toEqual({ prompt: "Animate this" });
+    } else {
+      expect(body).toMatchObject({ aspect_ratio: "16:9" });
+      if (ignored.includes("audio")) {
+        expect(body).not.toHaveProperty("generate_audio");
+      } else {
+        expect(body).toMatchObject({ resolution: "1080p", generate_audio: true });
+      }
     }
-
-    for (const model of [
-      "fal-ai/kling-video/v2.1/master/text-to-video",
-      "fal-ai/wan/v2.2-a14b/image-to-video",
-    ]) {
-      const capabilities = await resolve(model);
-      expect(capabilities?.generate).toEqual({ supportsAudio: false });
-      expect(capabilities?.imageToVideo).toEqual({ enabled: true, supportsAudio: false });
-    }
-
-    expect(await resolve("bytedance/seedance-2.0/text-to-video")).toBeUndefined();
   });
 
   function mockFalProviderRuntime() {
