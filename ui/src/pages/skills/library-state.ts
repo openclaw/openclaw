@@ -9,24 +9,31 @@ import {
   onSettled,
   refresh,
 } from "solid-js";
-import type {
-  SkillLibraryEntry,
-  SkillLibraryFile,
-  SkillsLibraryListResult,
-  SkillsLibraryReadResult,
-  SkillsLibraryReceipt,
-  SkillsLibraryMutateParams,
+import {
+  type SkillLibraryEntry,
+  type SkillLibraryFile,
+  type SkillsLibraryListResult,
+  type SkillsLibraryReadResult,
+  type SkillsLibraryReceipt,
+  type SkillsLibraryMutateParams,
+  type SkillsLibraryUploadResult,
+  SKILL_LIBRARY_MAX_BUNDLE_BYTES,
+  SKILL_LIBRARY_MAX_FILE_BYTES,
+  SKILL_LIBRARY_MAX_FILES,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillLibraryEnglish } from "../../i18n/locales/en-skill-library.ts";
+import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { assertUploadsEnabled, uploadsEnabled } from "../../lib/uploads.ts";
-import { readLibraryFiles, uploadLibraryArchive } from "./library-files.ts";
+
+registerSkillLibraryEnglish();
 
 export type LibraryView = "workspace" | "mine" | "team" | "all";
 type LibraryListOutcome = {
@@ -513,6 +520,7 @@ export function createSkillLibrary(
             : undefined,
       );
     },
+    // Local reads may finish after uploads are disabled; publication and each request recheck policy.
     async importFiles(files: File[]) {
       if (!files.length) {
         return;
@@ -523,32 +531,95 @@ export function createSkillLibrary(
       }
       await perform(async () => {
         assertUploadsEnabled(config());
-        const [file] = files;
-        if (file && files.length === 1 && file.name.toLowerCase().endsWith(".zip")) {
+        const [archiveFile] = files;
+        if (archiveFile && files.length === 1 && archiveFile.name.toLowerCase().endsWith(".zip")) {
           if (!data.list?.profileId) {
             throw new Error(t("skillLibrary.signIn"));
           }
-          const receipt = await uploadLibraryArchive(
-            connection.client,
-            file,
-            data.importSlug,
-            () => gateway.isCurrent(connection),
-            config(),
-          );
+          const client = connection.client;
+          const slug = data.importSlug;
+          const uploadConfig = config();
+          assertUploadsEnabled(uploadConfig);
+          if (archiveFile.size < 1 || archiveFile.size > SKILL_LIBRARY_MAX_BUNDLE_BYTES) {
+            throw new Error(t("skillLibrary.bundleLimit"));
+          }
+          const bytes = new Uint8Array(await archiveFile.arrayBuffer());
+          const sha256 = Array.from(
+            new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+            (byte) => byte.toString(16).padStart(2, "0"),
+          ).join("");
+          const request = (params: unknown) => {
+            assertUploadsEnabled(uploadConfig);
+            if (!gateway.isCurrent(connection)) {
+              throw new Error(t("skillLibrary.connectionChanged"));
+            }
+            return client.request<SkillsLibraryUploadResult>("skills.library.upload", params);
+          };
+          const begin = await request({ action: "begin", slug, sizeBytes: bytes.length, sha256 });
+          if (!("uploadId" in begin)) {
+            throw new Error(t("skillLibrary.uploadFailed"));
+          }
+          let offset = begin.offset;
+          while (offset < bytes.length) {
+            const end = Math.min(offset + begin.maxChunkBytes, bytes.length);
+            const result = await request({
+              action: "chunk",
+              uploadId: begin.uploadId,
+              offset,
+              data: bytesToBase64(bytes.subarray(offset, end)),
+            });
+            if (!("offset" in result) || result.offset !== end) {
+              throw new Error(t("skillLibrary.uploadFailed"));
+            }
+            offset = result.offset;
+          }
+          const receipt = await request({ action: "commit", uploadId: begin.uploadId });
+          if (!("state" in receipt)) {
+            throw new Error(t("skillLibrary.uploadFailed"));
+          }
+
           if (gateway.isCurrent(connection)) {
             setImportOpen(false);
             await recordReceipt(receipt);
           }
           return;
         }
-        const bundle = await readLibraryFiles(files, config());
+        const readConfig = config();
+        assertUploadsEnabled(readConfig);
+        if (
+          files.length > SKILL_LIBRARY_MAX_FILES ||
+          files.some((file) => file.size > SKILL_LIBRARY_MAX_FILE_BYTES) ||
+          files.reduce((sum, file) => sum + file.size, 0) > SKILL_LIBRARY_MAX_BUNDLE_BYTES
+        ) {
+          throw new Error(t("skillLibrary.bundleLimit"));
+        }
+        let content: string | undefined;
+        const bundleFiles: SkillLibraryFile[] = [];
+        for (const importedFile of files) {
+          assertUploadsEnabled(readConfig);
+          const path = importedFile.webkitRelativePath
+            ? importedFile.webkitRelativePath.split("/").slice(1).join("/")
+            : importedFile.name;
+          const bytes = new Uint8Array(await importedFile.arrayBuffer());
+          if (path === "SKILL.md") {
+            content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+          } else {
+            bundleFiles.push({ path, content: bytesToBase64(bytes), encoding: "base64" });
+          }
+        }
+        if (content === undefined) {
+          throw new Error(t("skillLibrary.missingSkill"));
+        }
+
         assertUploadsEnabled(config());
         if (!gateway.isCurrent(connection)) {
           return;
         }
         create();
         if (data.draft) {
-          Object.assign(data.draft, bundle, {
+          Object.assign(data.draft, {
+            content,
+            files: bundleFiles,
             slug: data.importSlug,
             dirty: true,
             importedFiles: true,
