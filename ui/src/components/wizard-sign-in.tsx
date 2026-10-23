@@ -1,7 +1,8 @@
-import { createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 import type { WizardStep } from "../api/types.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { createInterval, createTimeout } from "../lib/reactive/timers.ts";
 import { handleCopyButton } from "./copy-button-state.ts";
 import { resolveProviderIconName } from "./provider-icon-data.ts";
 import { ProviderBrandIcon, ProviderFallbackIcon } from "./solid/provider-icon.tsx";
@@ -67,22 +68,25 @@ export function ModelSetupSignIn(props: ModelSetupSignInProps) {
   const code = createMemo(() => props.step.deviceCode);
   const provider = () => props.providerLabel || t("modelSetup.wizard.signInPage");
   const [slow, setSlow] = createSignal(false);
-  const slowTimer = setTimeout(() => setSlow(true), SIGN_IN_SLOW_MS);
-  // The deadline is fixed when the code is first shown; later progress keeps the same code.
-  const expiresInMinutes = untrack(() => props.step.deviceCode?.expiresInMinutes);
-  const expiresAt =
-    expiresInMinutes === undefined ? undefined : Date.now() + expiresInMinutes * 60_000;
-  const remainingMinutes = () =>
-    expiresAt === undefined ? undefined : Math.ceil((expiresAt - Date.now()) / 60_000);
-  const [minutesLeft, setMinutesLeft] = createSignal(remainingMinutes());
-  const expiryTimer =
-    expiresAt === undefined
-      ? undefined
-      : setInterval(() => setMinutesLeft(remainingMinutes()), EXPIRY_TICK_MS);
-  onCleanup(() => {
-    clearTimeout(slowTimer);
-    clearInterval(expiryTimer);
+  createTimeout(
+    () => setSlow(true),
+    () => SIGN_IN_SLOW_MS,
+  );
+  // Progress updates that repeat the same lifetime keep the original deadline.
+  const expiresInMinutes = createMemo(() => props.step.deviceCode?.expiresInMinutes);
+  const expiresAt = createMemo(() => {
+    const minutes = expiresInMinutes();
+    return minutes === undefined ? undefined : Date.now() + minutes * 60_000;
   });
+  const [now, setNow] = createSignal(Date.now());
+  createInterval(
+    () => setNow(Date.now()),
+    () => (expiresAt() === undefined ? undefined : EXPIRY_TICK_MS),
+  );
+  const minutesLeft = () => {
+    const deadline = expiresAt();
+    return deadline === undefined ? undefined : Math.ceil((deadline - now()) / 60_000);
+  };
   const expired = () => (minutesLeft() ?? 1) <= 0;
   const stillWaiting = () => props.waiting && slow() && !code();
   const lead = () => {

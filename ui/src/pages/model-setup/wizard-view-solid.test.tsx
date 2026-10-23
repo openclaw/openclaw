@@ -150,7 +150,9 @@ const redirectStep = {
 
 it("presents browser sign-in as a provider badge with quiet recovery and corner cancel", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   const cancel = vi.fn();
   const { container } = mountSolid(() => (
     <ModelSetupWizard
@@ -199,7 +201,9 @@ it("presents browser sign-in as a provider badge with quiet recovery and corner 
 
 it("shows device-code expiry only near the end and retires an expired code", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   const { container } = mountSolid(() => (
     <ModelSetupWizard
       {...wizardDefaults}
