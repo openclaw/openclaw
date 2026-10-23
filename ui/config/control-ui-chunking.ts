@@ -145,7 +145,16 @@ export function controlUiStableChunkName(id: string): string | undefined {
   if (moduleIdIncludesPackage(id, "highlight.js")) {
     return "markdown-highlight-runtime";
   }
-  if (moduleIdIncludesPackage(id, "dompurify")) {
+  if (
+    moduleIdIncludesPackage(id, "dompurify") ||
+    moduleIdIncludesPackage(id, "markdown-it") ||
+    moduleIdIncludesPackage(id, "entities") ||
+    moduleIdIncludesPackage(id, "linkify-it") ||
+    moduleIdIncludesPackage(id, "mdurl") ||
+    moduleIdIncludesPackage(id, "punycode.js") ||
+    moduleIdIncludesPackage(id, "uc.micro")
+  ) {
+    // Keep the parser closure with its lazy consumers, outside stale shared boot captures.
     return "markdown-runtime";
   }
 
