@@ -32,7 +32,10 @@ type PersonalNavigationHost = {
   readonly sidebarEntries: readonly string[];
   readonly sessionOwnerFilterId: string | null;
   readonly sessionDataContext:
-    | Pick<ApplicationContext, "sessions" | "gateway" | "plugins" | "connectionBootstrap">
+    | Pick<
+        ApplicationContext,
+        "sessions" | "gateway" | "plugins" | "connectionBootstrap" | "navigation"
+      >
     | undefined;
   readonly navigationCatalog: { readonly dashboards: SessionListSnapshot | null };
   sessionNavigationAgentId(row: Pick<GatewaySessionRow, "key" | "agentId">): string;
@@ -280,31 +283,37 @@ export function createSidebarPinnedSessions(
   return { synchronize, seed, get, dispose };
 }
 
-export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarRecentSession[]) {
-  let navigationState: SidebarSessionNavigationState | undefined;
-  const livePins: SidebarRecentSession[] = [];
-  const pins = host.sidebarEntries.flatMap((value) => {
-    const entry = parseSidebarEntry(value);
-    if (entry?.type !== "session") {
-      return [];
-    }
-    const navigation = (navigationState ??= host.getSessionNavigationState());
-    const loaded = host.findSidebarSessionByKey(entry.key, navigation);
-    const catalog = loaded
-      ? undefined
-      : host.navigationCatalog.dashboards?.result?.sessions.find((row) => row.key === entry.key);
-    const live = loaded ?? (catalog ? navigation.toSidebarSession(catalog) : undefined);
-    if (live) {
-      livePins.push(live);
-      return [live];
-    }
-    const snapshot = host.pinnedSessions.get(entry.key);
-    return snapshot ? [snapshot] : [];
-  });
-  if (livePins.length) {
-    // A query replacement must not collapse visible pins while their descriptors load.
-    host.pinnedSessions.seed(livePins);
+/** Saved group membership is a reference, never authority to reveal a session. */
+export function resolvePersonalSidebarSession(host: PersonalNavigationHost, key: string) {
+  const loaded = host.findSidebarSessionByKey(key);
+  const catalog = loaded
+    ? undefined
+    : host.navigationCatalog.dashboards?.result?.sessions.find((row) => row.key === key);
+  const live =
+    loaded ?? (catalog ? host.getSessionNavigationState().toSidebarSession(catalog) : undefined);
+  if (live) {
+    // A query replacement must not collapse a visible reference while its descriptor loads.
+    host.pinnedSessions.seed([live]);
+    return live;
   }
+  return host.pinnedSessions.get(key);
+}
+
+export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarRecentSession[]) {
+  const keys = host.sidebarSnapshot
+    ? []
+    : [
+        ...host.sidebarEntries.flatMap((value) => {
+          const entry = parseSidebarEntry(value);
+          return entry?.type === "session" ? [entry.key] : [];
+        }),
+        ...(host.sessionDataContext?.navigation.snapshot.personalSessionGroups ?? []).flatMap(
+          (group) => group.sessionKeys,
+        ),
+      ];
+  const pins = [...new Set(keys)].flatMap((key) => {
+    const row = resolvePersonalSidebarSession(host, key);
+    return row ? [row] : [];  });
   return buildReconciledSidebarZone({
     sidebarEntries: host.sidebarEntries,
     rows: [...pins, ...rows],

@@ -32,6 +32,7 @@ import { AppSidebarBase } from "./app-sidebar-base.ts";
 import { resolveSidebarDisplayAgent } from "./app-sidebar-display-agent.ts";
 import {
   personalSidebarZone,
+  resolvePersonalSidebarSession,
   createSidebarPinnedSessions,
   personalSidebarOwnerProjection,
   personalSidebarOwnerFilterId,
@@ -493,6 +494,11 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     }
     const liveRows = rows ?? this.selectedAgentSessionRows(this.getSessionNavigationState());
     return personalSidebarZone(this, liveRows);
+  }
+
+  resolvePersonalGroupSession(key: string): SidebarRecentSession | undefined {
+    // Startup snapshots are presentation only; group membership resolves through current access.
+    return this.sidebarSnapshot ? undefined : resolvePersonalSidebarSession(this, key);
   }
 
   /** Explicit personal unpins remove a reference, never shared session metadata. */
