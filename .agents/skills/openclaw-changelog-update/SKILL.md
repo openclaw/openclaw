@@ -94,6 +94,7 @@ of this skill; initial generation must never overwrite them.
    node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
      --base <base-tag> \
      --target <target-ref> \
+     --release-branch <canonical-release-branch> \
      --main-ref origin/main \
      --version <YYYY.M.PATCH> \
      --manifest /tmp/openclaw-release-<YYYY.M.PATCH>.json \
@@ -316,6 +317,9 @@ of this skill; initial generation must never overwrite them.
   ```
 - verify each beta page with its exact beta version, captured base and target;
   verify stable and extended-stable with their own source section and range.
+  Extended-stable verification also requires
+  `--regular-stable-version <current-regular-stable-version>` so the canonical
+  release notice is checked against its immutable regular-stable context.
   Never compare multiple beta pages against one cumulative stable section.
   A `### Release verification` tail is permitted; other body drift fails.
 - `scripts/render-github-release-notes.mts` is the canonical release-body

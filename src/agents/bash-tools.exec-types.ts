@@ -63,7 +63,6 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   mode?: ExecMode;
   bypassHostApprovalFloors?: boolean;
   trigger?: string;
-  continuesConversation?: boolean;
   pathPrepend?: string[];
   safeBins?: string[];
   strictInlineEval?: boolean;

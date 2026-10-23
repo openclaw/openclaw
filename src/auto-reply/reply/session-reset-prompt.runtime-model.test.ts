@@ -1,14 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 
 const inventoryMocks = vi.hoisted(() => {
   const runtimeModel = {
     id: "dynamic-chat",
-    name: "dynamic-chat",
     provider: "dynamic-provider",
     api: "openai-responses",
-    baseUrl: "https://example.invalid/v1",
   };
   return {
     runtimeModel,
@@ -22,24 +19,7 @@ const inventoryMocks = vi.hoisted(() => {
         throw new Error("runtime model facts must be explicitly owner-published");
       }
       return {
-        agentId: "main",
-        profile: "coding",
-        groups: [
-          {
-            id: "core",
-            label: "Built-in tools",
-            source: "core",
-            tools: [
-              {
-                id: "read",
-                label: "Read",
-                description: "Read files",
-                rawDescription: "Read files",
-                source: "core",
-              },
-            ],
-          },
-        ],
+        groups: [{ tools: [{ id: "read" }] }],
       };
     }),
   };
@@ -64,35 +44,23 @@ describe("resolveBareResetBootstrapFileAccess runtime model ownership", () => {
   });
 
   it("resolves runtime model context once and passes explicit facts to inventory", async () => {
-    const cfg = {} as OpenClawConfig;
-    const params = {
-      cfg,
+    const modelParams = {
+      cfg: {},
       agentId: "main",
-      sessionKey: "agent:main:main",
       workspaceDir: "/tmp/workspace-main",
       modelProvider: "dynamic-provider",
       modelId: "dynamic-chat",
     };
-
+    const params = { ...modelParams, sessionKey: "agent:main:main" };
     await expect(resolveBareResetBootstrapFileAccess(params)).resolves.toBe(true);
-
-    expect(inventoryMocks.resolveRuntimeModelContext).toHaveBeenCalledTimes(1);
-    expect(inventoryMocks.resolveRuntimeModelContext).toHaveBeenCalledWith({
-      cfg,
-      agentId: params.agentId,
-      workspaceDir: params.workspaceDir,
-      modelProvider: params.modelProvider,
-      modelId: params.modelId,
-    });
-    expect(inventoryMocks.resolveInventory).toHaveBeenCalledTimes(1);
-    const inventoryParams = inventoryMocks.resolveInventory.mock.calls[0]?.[0];
-    expect(inventoryParams).toMatchObject({
-      ...params,
-      modelApi: inventoryMocks.runtimeModel.api,
-      runtimeModel: inventoryMocks.runtimeModel,
-    });
-    expect(Object.hasOwn(inventoryParams ?? {}, "modelApi")).toBe(true);
-    expect(Object.hasOwn(inventoryParams ?? {}, "runtimeModel")).toBe(true);
+    expect(inventoryMocks.resolveRuntimeModelContext).toHaveBeenCalledExactlyOnceWith(modelParams);
+    expect(inventoryMocks.resolveInventory).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        ...params,
+        modelApi: inventoryMocks.runtimeModel.api,
+        runtimeModel: inventoryMocks.runtimeModel,
+      }),
+    );
     expect(inventoryMocks.release).toHaveBeenCalledOnce();
   });
 

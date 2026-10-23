@@ -262,7 +262,7 @@ describe("DesktopClient", () => {
     });
 
     expect(sockets[0]?.url).toBe(expectedUrl);
-    expect(instances[0]?.target).toBe(target);
+    expect(target.contains(instances[0]!.target)).toBe(true);
     expect(instances[0]?.channel).toBe(sockets[0]);
   });
 
@@ -314,6 +314,14 @@ describe("DesktopClient", () => {
   ])(
     "gates Match at the authenticated controller boundary ($canResize/$viewOnly)",
     async ({ canResize, viewOnly, resizes }) => {
+      // JSDOM has no layout; this case covers the RFB resize permission boundary.
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          disconnect() {}
+        },
+      );
       const { instances, connect } = setupClient();
       const handle = await connect({
         canResize,
@@ -333,6 +341,10 @@ describe("DesktopClient", () => {
       expect([rfb.viewOnly, rfb.resizeSession]).toEqual([viewOnly, resizes]);
       handle.setSizingMode("actual");
       expect([rfb.scaleViewport, rfb.resizeSession]).toEqual([false, false]);
+      for (const mode of ["fit-height", "fit-width"] as const) {
+        handle.setSizingMode(mode);
+        expect([rfb.scaleViewport, rfb.resizeSession]).toEqual([true, false]);
+      }
       handle.setSizingMode("match");
       expect([rfb.scaleViewport, rfb.resizeSession]).toEqual([true, resizes]);
       handle.setSizingMode("fit");

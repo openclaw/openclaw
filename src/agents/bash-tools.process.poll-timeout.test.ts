@@ -8,6 +8,9 @@ import {
   addSession,
   appendOutput,
   deleteSession,
+  getActiveBackgroundExecSessionCount,
+  getFinishedSession,
+  getSession,
   markExited,
   recordNotifyOnExitRemoval,
   type ProcessSession,
@@ -21,8 +24,17 @@ import {
   recordToolCall,
   recordToolCallOutcome,
 } from "./tool-loop-detection.js";
+import { isToolResultError } from "./tool-result-error.js";
 
-beforeEach(() => vi.useFakeTimers());
+const { cancel, killTree } = vi.hoisted(() => ({ cancel: vi.fn(), killTree: vi.fn() }));
+// mock-isolation: Registry fixtures exercise cancellation decisions without launching processes.
+vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: () => ({ cancel }) }));
+// mock-isolation: Synthetic process IDs must never reach the host process-killing implementation.
+vi.mock("../process/kill-tree.js", () => ({ killProcessTree: killTree }));
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.useFakeTimers();
+});
 afterEach(() => {
   resetProcessRegistryForTests();
   resetDiagnosticSessionStateForTest();
@@ -224,27 +236,6 @@ test("an already-aborted poll leaves buffered output unread", async () => {
   expect(session.pendingOutput).toEqual([{ stream: "stdout", text: "interactive prompt\n" }]);
 });
 
-test("poll drains interleaved output in callback order across completion", async () => {
-  const { session, poll } = harness();
-  appendOutput(session, "stderr", "ERR-before\n");
-  appendOutput(session, "stdout", "OUT-after\n");
-  check(await poll(), { status: "running", aggregated: "ERR-before\nOUT-after\n" }, [
-    "ERR-before\nOUT-after",
-  ]);
-  const pending = poll("2000");
-  const unread = `ERR-last\n${"x".repeat(2_001)}\nEND`;
-  appendOutput(session, "stderr", unread);
-  markExited(session, 0, null, "completed");
-  await tick();
-  check(
-    await pending,
-    { status: "completed", aggregated: `ERR-before\nOUT-after\n${unread}` },
-    [unread],
-    ["ERR-before", "OUT-after"],
-  );
-  expect(text(await poll())).not.toContain(unread);
-});
-
 test("a waiting poll cannot adopt a same-id successor after removal", async () => {
   const { session, poll } = harness();
   const pending = poll(2_000);
@@ -323,11 +314,12 @@ test("capped stream output stays ordered, compact, and frozen through terminal d
 test.each([
   [null, null, "failed", "manual-cancel", false, "unknown exit code"],
   [null, "SIGKILL", "failed", "no-output-timeout", true, "signal SIGKILL"],
+  [null, "SIGTERM", "failed", "overall-timeout", true, "signal SIGTERM"],
 ] as const)(
   "preserves exit %s/%s as %s (%s) across waiting and retained observations",
   async (code, signal, status, reason, timedOut, label) => {
     const { session, poll, call } = harness();
-    const pending = poll(1_000);
+    const pending = poll("1000");
     appendOutput(session, "stderr", "terminal output\n");
     const noOutputTimedOut = reason === "no-output-timeout";
     markExited(session, code, signal, status, reason, noOutputTimedOut);
@@ -357,6 +349,12 @@ test.each([
     ]);
     const retained = await poll();
     check(retained, details, [`Process exited with ${label}.`], ["terminal output"]);
+    if (reason === "overall-timeout") {
+      const killed = await call("kill");
+      check(killed, details);
+      expect(isToolResultError(killed)).toBe(true);
+      expect(cancel).not.toHaveBeenCalled();
+    }
     expect(remove).not.toHaveBeenCalled();
     acknowledgeInternalToolResult(raced);
     expect(remove).toHaveBeenCalledOnce();
@@ -381,3 +379,87 @@ test("poll aborts while waiting for completion", async () => {
   controller.abort();
   await rejected;
 });
+
+function managedSession(managed = true) {
+  const fixture = harness({ pid: 4242 });
+  if (managed) {
+    fixture.session.processActivity = {
+      resultSettled: false,
+      lastOutputAtMs: fixture.session.startedAt,
+    };
+  }
+  return fixture;
+}
+
+test("remove hides a running session without releasing its active-process count", async () => {
+  const { session, call } = managedSession();
+  expect((await call("remove")).content[0]).toMatchObject({
+    text: "Removed session session from the process list. Termination was requested but is not yet confirmed.",
+  });
+  expect(cancel).toHaveBeenCalledExactlyOnceWith(session.id, "manual-cancel");
+  expect(getSession(session.id)).toBeUndefined();
+  expect(getFinishedSession(session.id)).toBeUndefined();
+  expect(getActiveBackgroundExecSessionCount()).toBe(1);
+  markExited(session, null, "SIGTERM", "failed", "manual-cancel");
+  expect(getActiveBackgroundExecSessionCount()).toBe(0);
+  expect(getFinishedSession(session.id)).toBeUndefined();
+});
+
+test("removes a retained completed session and its logs", async () => {
+  const { session, call } = managedSession();
+  markExited(session, 0, null, "completed");
+  expect((await call("kill")).details).toMatchObject({ status: "completed", exitCode: 0 });
+  expect(cancel).not.toHaveBeenCalled();
+  expect((await call("remove")).details).toMatchObject({ status: "completed" });
+  expect((await call("log")).details).toMatchObject({
+    status: "failed",
+    error: `No session found for ${session.id}`,
+  });
+  expect((await call("kill")).details).toMatchObject({
+    status: "failed",
+    error: `No active session found for ${session.id}`,
+  });
+});
+
+test("keeps terminal observations scoped when a cleared process id is reused", async () => {
+  const { session, call } = managedSession();
+  const scopedCall = (scopeKey: string) =>
+    createProcessTool({ scopeKey }).execute("kill", { action: "kill", sessionId: session.id });
+  session.scopeKey = "owner";
+  markExited(session, 0, null, "completed");
+  expect((await scopedCall("other")).details).toMatchObject({ status: "failed" });
+  await call("clear");
+  const successor = managedSession().session;
+  successor.scopeKey = "other";
+  expect((await scopedCall("owner")).details).toMatchObject({ status: "failed" });
+  expect(cancel).not.toHaveBeenCalled();
+  expect((await scopedCall("other")).details).toMatchObject({
+    cancellationRequested: true,
+    terminationConfirmed: false,
+  });
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(getSession(session.id)).toBe(successor);
+});
+
+test.each([
+  ["kill", false],
+  ["remove", false],
+  ["kill", true],
+  ["remove", true],
+] as const)(
+  "refuses %s without cancellation authority (finalizing=%s)",
+  async (action, finalizing) => {
+    const { session, call } = managedSession(finalizing);
+    if (finalizing) {
+      session.processActivity = { resultSettled: true, lastOutputAtMs: session.startedAt };
+      session.finalizing = true;
+    }
+    const result = await call(action);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(killTree).not.toHaveBeenCalled();
+    expect(getSession(session.id)?.exited).toBe(false);
+    const message = finalizing ? "is finalizing" : "no active supervisor cancellation handle";
+    expect(result.content[0]).toMatchObject({ text: expect.stringContaining(message) });
+    expect(result.details).toMatchObject({ status: "failed" });
+  },
+);

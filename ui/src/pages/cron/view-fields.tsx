@@ -21,12 +21,16 @@ const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   everyAmount: "cron.form.every",
   cronExpr: "cron.form.expression",
   staggerAmount: "cron.form.staggerWindow",
+  activeHoursStart: "cron.form.activeHoursStart",
+  activeHoursEnd: "cron.form.activeHoursEnd",
+  activeHoursTimezone: "cron.form.timezoneOptional",
   triggerScript: "cron.form.triggerScript",
   payloadText: "cron.form.assistantTaskPrompt",
   payloadModel: "cron.form.model",
   payloadThinking: "cron.form.thinking",
   timeoutSeconds: "cron.form.timeoutSeconds",
   deliveryMode: "cron.form.deliveryModeLabel",
+  deliveryDirectPolicy: "cron.form.directPolicy",
   deliveryTo: "cron.form.to",
   failureAlertAfter: "cron.form.failureAlertAfter",
   failureAlertCooldownSeconds: "cron.form.failureAlertCooldown",
@@ -108,7 +112,7 @@ export function FieldRow(props: {
             <div class={["cron-control", { "cron-control--wide": props.wide }]}>
               {props.control}
               {props.error ? (
-                <div id={props.errorId} class="cron-help cron-error">
+                <div id={props.errorId} class="cron-help cron-error" role="alert">
                   {t(props.error)}
                 </div>
               ) : undefined}

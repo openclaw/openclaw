@@ -43,6 +43,7 @@ import {
   type McporterRegistryReadOutcome,
   type McporterRegistryRejectReason,
 } from "./audit-mcporter-registry.js";
+import { listConfiguredOpenInboundPolicyPaths } from "./audit-open-inbound.js";
 import type {
   SecurityAuditFinding,
   SecurityAuditReport,
@@ -84,7 +85,6 @@ type SecurityAuditOptions = {
   platform?: NodeJS.Platform;
   deep?: boolean;
   includeFilesystem?: boolean;
-  includeChannelSecurity?: boolean;
   /** Override where to check state (default: resolveStateDir()). */
   stateDir?: string;
   /** Override config path check (default: resolveConfigPath()). */
@@ -119,7 +119,6 @@ type AuditExecutionContext = Omit<SecurityAuditOptions, "config"> & {
   env: NodeJS.ProcessEnv;
   platform: NodeJS.Platform;
   includeFilesystem: boolean;
-  includeChannelSecurity: boolean;
   deep: boolean;
   deepTimeoutMs: number;
   stateDir: string;
@@ -149,7 +148,6 @@ function emitSecurityAuditReportEvent(params: {
   summary: SecurityAuditSummary;
   deep: boolean;
   includeFilesystem: boolean;
-  includeChannelSecurity: boolean;
   suppressedCount: number;
 }) {
   const hasCritical = params.summary.critical > 0;
@@ -181,7 +179,7 @@ function emitSecurityAuditReportEvent(params: {
       suppressed_count: params.suppressedCount,
       deep: params.deep,
       include_filesystem: params.includeFilesystem,
-      include_channel_security: params.includeChannelSecurity,
+      include_channel_security: true,
     },
   });
 }
@@ -383,7 +381,7 @@ async function collectPluginSecurityAuditFindings(
           .map(([id]) => id),
       ]),
     );
-    if (context.includeChannelSecurity && context.plugins !== undefined) {
+    if (context.plugins !== undefined) {
       const { resolveConfiguredChannelPluginIdsAsync } =
         await import("../plugins/channel-plugin-ids.js");
       const auditedChannelPluginIds = new Set(context.plugins.map((plugin) => plugin.id));
@@ -467,7 +465,10 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   return findings;
 }
 
-function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function collectExecRuntimeFindings(
+  cfg: OpenClawConfig,
+  openExecSurfacePaths: string[],
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const globalExecHost = cfg.tools?.exec?.host;
   const globalStrictInlineEval = cfg.tools?.exec?.strictInlineEval === true;
@@ -539,7 +540,6 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   );
   const fullExecScopes = effectiveExecScopes.filter((entry) => entry.security === "full");
   const execEnabledScopes = effectiveExecScopes.filter((entry) => entry.security !== "deny");
-  const openExecSurfacePaths = collectOpenExecSurfacePaths(cfg);
 
   if (fullExecScopes.length > 0) {
     findings.push({
@@ -928,35 +928,6 @@ async function collectAgentSkillMcpBoundaryFindings(params: {
   return findings;
 }
 
-function collectOpenExecSurfacePaths(cfg: OpenClawConfig): string[] {
-  const channels = asNullableRecord(cfg.channels);
-  if (!channels) {
-    return [];
-  }
-  const hits = new Set<string>();
-  const seen = new WeakSet<object>();
-  const visit = (value: unknown, scope: string) => {
-    const record = asNullableRecord(value);
-    if (!record || seen.has(record)) {
-      return;
-    }
-    seen.add(record);
-    if (record.groupPolicy === "open") {
-      hits.add(`${scope}.groupPolicy`);
-    }
-    if (record.dmPolicy === "open") {
-      hits.add(`${scope}.dmPolicy`);
-    }
-    for (const [key, nested] of Object.entries(record)) {
-      visit(nested, `${scope}.${key}`);
-    }
-  };
-  for (const [channelId, channelValue] of Object.entries(channels)) {
-    visit(channelValue, `channels.${channelId}`);
-  }
-  return Array.from(hits).toSorted();
-}
-
 function collectAutoAllowSkillsHits(approvals: ExecApprovalsFile): string[] {
   const hits: string[] = [];
   if (approvals.defaults?.autoAllowSkills === true) {
@@ -997,7 +968,6 @@ async function createAuditExecutionContext(
   const env = opts.env ?? process.env;
   const platform = opts.platform ?? process.platform;
   const includeFilesystem = opts.includeFilesystem !== false;
-  const includeChannelSecurity = opts.includeChannelSecurity !== false;
   const deep = opts.deep === true;
   const deepTimeoutMs = Math.max(250, opts.deepTimeoutMs ?? 5000);
   const stateDir = opts.stateDir ?? resolveStateDir(env);
@@ -1019,7 +989,6 @@ async function createAuditExecutionContext(
     env,
     platform,
     includeFilesystem,
-    includeChannelSecurity,
     deep,
     deepTimeoutMs,
     stateDir,
@@ -1045,8 +1014,21 @@ export async function runSecurityAuditCore(
   const { cfg, env, platform, stateDir, configPath } = context;
   copyConfigResolutionFacts(context.sourceConfig, cfg);
   const auditNonDeep = await import("./audit.nondeep.runtime.js");
+  const channelMetadata = cfg.channels
+    ? (await import("../plugins/plugin-registry.js"))
+        .loadPluginRegistrySnapshot({
+          config: cfg,
+          env,
+          stateDir,
+          workspaceDir: context.workspaceDir,
+        })
+        .plugins.flatMap((plugin) => (plugin.packageChannel ? [plugin.packageChannel] : []))
+    : [];
+  const openInboundPolicies = listConfiguredOpenInboundPolicyPaths(cfg, channelMetadata);
 
-  findings.push(...(await auditNonDeep.collectAttackSurfaceSummaryFindings(cfg)));
+  findings.push(
+    ...(await auditNonDeep.collectAttackSurfaceSummaryFindings(cfg, openInboundPolicies)),
+  );
   findings.push(...collectAgentRosterFindings(context.sourceConfig));
   findings.push(...auditNonDeep.collectSyncedFolderFindings({ stateDir, configPath }));
 
@@ -1058,7 +1040,7 @@ export async function runSecurityAuditCore(
   );
   findings.push(...(await collectPluginSecurityAuditFindings(context)));
   findings.push(...collectElevatedFindings(cfg));
-  findings.push(...collectExecRuntimeFindings(cfg));
+  findings.push(...collectExecRuntimeFindings(cfg, openInboundPolicies));
   findings.push(...(await collectAgentSkillMcpBoundaryFindings({ cfg, stateDir })));
   const hooksGatewayAuthCfg = shouldMaterializeHooksGatewayAuthRefs(cfg)
     ? await materializeAuditGatewayAuthRefs({
@@ -1084,9 +1066,9 @@ export async function runSecurityAuditCore(
   findings.push(...auditNonDeep.collectMinimalProfileOverrideFindings(cfg));
   findings.push(...auditNonDeep.collectSecretsInConfigFindings(context.sourceConfig));
   findings.push(...auditNonDeep.collectSmallModelRiskFindings({ cfg, env }));
-  findings.push(...auditNonDeep.collectExposureMatrixFindings(cfg));
-  findings.push(...auditNonDeep.collectLikelyMultiUserSetupFindings(cfg));
-  findings.push(...auditNonDeep.collectCrossAgentSessionAccessFindings(cfg));
+  findings.push(...auditNonDeep.collectExposureMatrixFindings(cfg, openInboundPolicies));
+  findings.push(...auditNonDeep.collectLikelyMultiUserSetupFindings(cfg, openInboundPolicies));
+  findings.push(...auditNonDeep.collectCrossAgentSessionAccessFindings(cfg, openInboundPolicies));
 
   if (context.includeFilesystem) {
     findings.push(...(await collectFilesystemFindings(context)));
@@ -1120,29 +1102,27 @@ export async function runSecurityAuditCore(
     );
   }
 
-  let shouldAuditChannelSecurity = false;
-  if (context.includeChannelSecurity) {
-    if (context.plugins !== undefined) {
-      shouldAuditChannelSecurity = true;
-    } else {
-      const { hasConfiguredChannelsForReadOnlyScopeAsync, resolveConfiguredChannelPluginIdsAsync } =
-        await import("../plugins/channel-plugin-ids.js");
-      shouldAuditChannelSecurity =
-        (await hasConfiguredChannelsForReadOnlyScopeAsync({
+  let shouldAuditChannelSecurity: boolean;
+  if (context.plugins !== undefined) {
+    shouldAuditChannelSecurity = true;
+  } else {
+    const { hasConfiguredChannelsForReadOnlyScopeAsync, resolveConfiguredChannelPluginIdsAsync } =
+      await import("../plugins/channel-plugin-ids.js");
+    shouldAuditChannelSecurity =
+      (await hasConfiguredChannelsForReadOnlyScopeAsync({
+        config: cfg,
+        activationSourceConfig: context.sourceConfig,
+        workspaceDir: context.workspaceDir,
+        env,
+      })) ||
+      (
+        await resolveConfiguredChannelPluginIdsAsync({
           config: cfg,
           activationSourceConfig: context.sourceConfig,
           workspaceDir: context.workspaceDir,
           env,
-        })) ||
-        (
-          await resolveConfiguredChannelPluginIdsAsync({
-            config: cfg,
-            activationSourceConfig: context.sourceConfig,
-            workspaceDir: context.workspaceDir,
-            env,
-          })
-        ).length > 0;
-    }
+        })
+      ).length > 0;
   }
   if (shouldAuditChannelSecurity) {
     const channelPlugins =
@@ -1199,7 +1179,6 @@ export async function runSecurityAuditCore(
     summary,
     deep: context.deep,
     includeFilesystem: context.includeFilesystem,
-    includeChannelSecurity: context.includeChannelSecurity,
     suppressedCount: filtered.suppressedFindings.length,
   });
   return {

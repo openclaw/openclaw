@@ -127,10 +127,11 @@ describe("buildXiaomiSpeechProvider", () => {
         voiceCompatible: voiceNote,
         audioBuffer: Buffer.from(voiceNote ? "fake-opus-audio" : "fake-mp3-audio"),
       });
-      expect(timeoutSpy).toHaveBeenCalledWith(
-        expect.any(Function),
-        voiceNote ? 30000 : MAX_TIMER_TIMEOUT_MS,
-      );
+      expect(
+        timeoutSpy.mock.calls.some(
+          ([, delay]) => delay === (voiceNote ? 30000 : MAX_TIMER_TIMEOUT_MS),
+        ),
+      ).toBe(true);
       expect(mockFetch).toHaveBeenCalledOnce();
       const [url, init] = mockFetch.mock.calls[0] ?? [];
       expect(url).toBe("https://api.xiaomimimo.com/v1/chat/completions");

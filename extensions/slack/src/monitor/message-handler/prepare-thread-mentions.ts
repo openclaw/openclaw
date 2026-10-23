@@ -1,4 +1,8 @@
 import {
+  type ResolveInboundMentionDecisionNestedParams,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
   implicitMentionKindWhen,
   resolveBotThreadMentionPolicy,
 } from "openclaw/plugin-sdk/channel-mention-gating";
@@ -72,7 +76,21 @@ export async function resolveSlackThreadMentionPolicy(params: {
   });
 }
 
-export function resolveSlackMentionSource(params: {
+export function resolveSlackMentionDecision(params: {
+  facts: ResolveInboundMentionDecisionNestedParams["facts"] & {
+    explicitBotMention: boolean;
+    explicitSubteamMention: boolean;
+  };
+  policy: ResolveInboundMentionDecisionNestedParams["policy"];
+}) {
+  const decision = resolveInboundMentionDecision(params);
+  return {
+    ...decision,
+    mentionSource: resolveSlackMentionSource({ ...params.facts, ...decision }),
+  };
+}
+
+function resolveSlackMentionSource(params: {
   explicitBotMention: boolean;
   explicitSubteamMention: boolean;
   matchedImplicitMentionKinds: readonly string[];

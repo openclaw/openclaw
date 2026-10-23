@@ -62,6 +62,8 @@ export type SlackCapabilitiesConfig = string[];
 
 export type SlackActionConfig = {
   reactions?: boolean;
+  /** Enable public workspace channel creation (default: false). */
+  channels?: boolean;
   messages?: boolean;
   pins?: boolean;
   search?: boolean;

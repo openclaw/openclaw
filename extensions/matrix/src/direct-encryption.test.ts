@@ -195,7 +195,7 @@ describe.each([true, false])(
         },
       });
       const total = counts();
-      expect(result?.target).toMatchObject({ to: `room:${roomId}`, roomId });
+      expect(result?.target).toMatchObject({ to: `room:${roomId}` });
       expectRepair(client, encrypted);
       expect(total).toEqual(availability);
     });

@@ -10,7 +10,7 @@ import {
   stubGatewayStoreTestGlobals,
 } from "../../app/gateway-store.test-support.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
-import { page } from "./route.ts";
+import { page } from "./route.tsx";
 import type { UsageRouteData } from "./types.ts";
 
 const totals = {
@@ -36,7 +36,7 @@ function createUsageRouter() {
   const store = createGatewayStoreTestStore();
   store.gateway.start();
   const request = vi.spyOn(store.gateway.snapshot.client!, "request").mockResolvedValue(payload);
-  store.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+  store.current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
   const selection = createAgentSelectionCapability(store.gateway, {
     state: { agentsList: null },
     subscribe: () => () => {},
@@ -92,16 +92,16 @@ describe("usage route", () => {
       if (change === "navigation") {
         await router.navigate("other", context);
       } else if (change === "disconnect" || change === "reconnect") {
-        current().opts.onClose?.({ code: 1012, reason: "restart", willRetry: true });
+        current().testOptions.onClose?.({ code: 1012, reason: "restart", willRetry: true });
         if (change === "reconnect") {
-          current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+          current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
           expect(gateway.snapshot.client).toBe(admitted.client);
           expect(gateway.snapshot.hello).not.toBe(admitted.hello);
         }
       } else if (change === "client") {
         gateway.connect();
         current().request.mockResolvedValue(payload);
-        current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+        current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
       } else if (change === "set") {
         selection.set("research");
       } else {
@@ -111,7 +111,7 @@ describe("usage route", () => {
       expect(usageCalls()).toEqual([]);
 
       if (gateway.snapshot.phase !== "connected") {
-        current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+        current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
       }
       await router.revalidate(context, "usage");
       const active = router.getState().matches[0];
@@ -190,6 +190,8 @@ describe("usage route", () => {
         mode: "specific",
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         includeContextWeight: false,
+        sort: "cost",
+        sortDirection: "desc",
       });
     },
   );

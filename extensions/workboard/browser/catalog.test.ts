@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "./api/gateway.ts";
 import { WorkboardCatalog } from "./catalog.ts";
@@ -27,14 +27,13 @@ beforeEach(() => {
   client = { request } as unknown as GatewayBrowserClient;
 });
 
-const expectBoard = (id: string) =>
-  vi.waitFor(() => expect(snapshots.at(-1)?.boards[0]?.id).toBe(id));
+const expectBoard = (id: string) => vi.waitFor(() => expect(snapshots.at(-1)?.[0]?.id).toBe(id));
 const expectRequests = (count: number) =>
   vi.waitFor(() => expect(request).toHaveBeenCalledTimes(count));
 const change = (payload?: unknown) =>
   runtime.handleGatewayEvent("plugin.workboard.changed", payload);
 function expectCachedBoard(id: string) {
-  expect(snapshots.at(-1)?.boards[0]?.id).toBe(id);
+  expect(snapshots.at(-1)?.[0]?.id).toBe(id);
   expect(getWorkboardState(host).boards[0]?.id).toBe(id);
   expect(host.boardsReady).toBe(true);
 }

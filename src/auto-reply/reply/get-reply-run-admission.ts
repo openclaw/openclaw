@@ -14,8 +14,6 @@ import { composeSessionSourceAssertion } from "../../config/sessions/session-sou
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
-import { notifyGatewayWorkMetricsChanged } from "../../infra/gateway-work-metrics-events.js";
-import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import { replyRunInterruptTargetOperation } from "../../sessions/session-controller.contracts.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
@@ -51,10 +49,7 @@ import {
   loadSessionUpdatesRuntime,
   routeThreadIdsMatch,
 } from "./get-reply-run-helpers.js";
-import {
-  REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
-  waitForPreparedReplyQueue,
-} from "./get-reply-run-queue.js";
+import { waitForPreparedReplyQueue } from "./get-reply-run-queue.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { hasPendingFollowupQueueWork } from "./queue/state.js";
@@ -101,7 +96,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionStore,
   } = params;
   const assertPreparationActive = composeSessionSourceAssertion(
-    [opts?.operatorAuthority?.assertCurrent, opts?.internalEventExecution?.assertCurrent],
+    [
+      opts?.operatorAuthority?.assertCurrent,
+      opts?.internalEventExecution?.assertCurrent,
+      opts?.scheduledAutomation?.assertCurrent,
+    ],
     (assertSourceCurrent) => {
       opts?.abortSignal?.throwIfAborted();
       opts?.replyOperation?.abortSignal.throwIfAborted();
@@ -142,28 +141,20 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         }));
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
   const prioritySource =
-    activeRunQueueMode === "interrupt" && !context.isHeartbeat && !isRoomEvent
-      ? sourceInput
-      : undefined;
+    activeRunQueueMode === "interrupt" && !isRoomEvent ? sourceInput : undefined;
   // Priority precedes runtime loading and every abort/settlement await. It is
   // the same source captured at ingress, never a second interrupt-only input.
   if (sourceInput) {
     updateSessionControllerSourcePolicy(sourceInput, {
       ...resolvedQueue,
-      mode: context.isHeartbeat || isRoomEvent ? "followup" : activeRunQueueMode,
+      mode: isRoomEvent ? "followup" : activeRunQueueMode,
     });
   }
   // Keep the physical owner through preparation; IDs can overlap across stores.
   const capturedOwner = resolveControllerOwner();
   const capturedInterruptOperation = capturedOwner?.active;
-  const capturedNativeAttachment = capturedOwner?.attachment;
-  const capturedNativeAttempt =
-    capturedNativeAttachment && "handle" in capturedNativeAttachment
-      ? capturedNativeAttachment
-      : undefined;
   const activeRunInterruptTarget =
     activeRunQueueMode === "interrupt" &&
-    !context.isHeartbeat &&
     !isRoomEvent &&
     capturedInterruptOperation &&
     capturedInterruptOperation !== opts?.replyOperation
@@ -215,9 +206,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     }
     const eventContext = getReplySystemEventContext(opts);
     const routeSystemEventSessionKey = normalizeOptionalString(eventContext?.sessionKey);
-    const systemEventSessionKeys = context.isHeartbeat
-      ? [routeSystemEventSessionKey ?? sessionKey]
-      : routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
+    const systemEventSessionKeys =
+      routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
         ? [routeSystemEventSessionKey, sessionKey]
         : [sessionKey];
     for (const systemEventSessionKey of systemEventSessionKeys) {
@@ -233,12 +223,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         isMainSession: isCurrentSession && isMainSession,
         isNewSession: isCurrentSession && isNewSession,
         // Producer-owned turns consume only their captured occurrence selection.
-        events:
-          context.isHeartbeat || opts?.internalEventExecution
-            ? (eventContext?.events ?? [])
-            : undefined,
-        deferredEventIds: context.isHeartbeat ? eventContext?.deferredEventIds : undefined,
-        onEventsAdmitted: context.isHeartbeat ? eventContext?.onEventsAdmitted : undefined,
+        events: opts?.internalEventExecution ? (eventContext?.events ?? []) : undefined,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
@@ -289,7 +274,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionEntryHandle?.replaceCurrent(sessionEntry);
   }
   const skillsSnapshot = skillResult.skillsSnapshot;
-  let promptBodies = await rebuildPromptBodies();
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await traceRunPhase("reply.resolve_default_thinking", () =>
       modelState.resolveDefaultThinkingLevel({ provider, model, agentRuntime: thinkingRuntime }),
@@ -384,71 +368,17 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           preparedSessionState.sessionFile,
         )
       : undefined;
-  const rawActiveSessionIdForInterrupt =
-    capturedNativeAttempt?.operation.sessionId ?? resolveSessionlessNativeAttachment()?.sessionId;
-  const shouldPreemptHeartbeat =
-    !isRoomEvent && !context.isHeartbeat && rawActiveSessionIdForInterrupt !== undefined;
-  assertPreparationActive();
-  const heartbeatPreemption =
-    sourceInput || sessionKey
-      ? await (async () => {
-          if (
-            !shouldPreemptHeartbeat ||
-            !capturedNativeAttempt?.handle.preemptByVisibleTurn ||
-            resolveControllerOwner()?.attachment !== capturedNativeAttachment ||
-            capturedOwner?.active !== capturedNativeAttempt.operation
-          ) {
-            return "not-heartbeat";
-          }
-          assertPreparationActive();
-          try {
-            if (!capturedNativeAttempt.handle.preemptByVisibleTurn()) {
-              return "not-heartbeat";
-            }
-          } catch (error) {
-            if (sourceInput) {
-              throw error;
-            }
-            diag.warn(
-              `heartbeat preemption failed: sessionId=${capturedNativeAttempt.operation.sessionId} err=${String(error)}`,
-            );
-          } finally {
-            if (!sourceInput) {
-              notifyGatewayWorkMetricsChanged();
-            }
-          }
-          const [nativeSettled, ownerSettled] = await Promise.all([
-            waitForCapturedSessionNativeAttemptEnd(
-              capturedNativeAttempt.sessionId,
-              REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-              capturedNativeAttempt,
-            ),
-            waitForReplyOperationOwnerSettlement(
-              capturedNativeAttempt.operation,
-              REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-            ),
-          ]);
-          return nativeSettled && ownerSettled ? "drained" : "timed-out";
-        })()
-      : shouldPreemptHeartbeat && embeddedAgentRuntime
-        ? await embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun(
-            rawActiveSessionIdForInterrupt,
-            REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-          )
-        : "not-heartbeat";
-  if (heartbeatPreemption === "timed-out") {
-    if (prioritySource) {
-      retireSessionControllerInput(prioritySource);
-    }
-    typing.cleanup();
-    return {
-      kind: "reply",
-      reply: { text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT },
-    } as const;
-  }
-  const visibleTurnPreemptsHeartbeat = heartbeatPreemption === "drained";
   const resolveRuntimeAuthProfile = async () => {
-    if (useFastReplyRuntime && !params.configuredProfileId && !modelState.operatorModelOverride) {
+    const binding = opts?.scheduledAutomation?.job.inferenceBinding;
+    if (binding) {
+      return { authProfileId: binding.profileId, authProfileIdSource: binding.source };
+    }
+    if (
+      useFastReplyRuntime &&
+      !params.configuredProfileId &&
+      !modelState.operatorModelOverride &&
+      !opts?.scheduledAutomation
+    ) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
         authProfileIdSource: resolveCollapsedSessionAuthPinSource(
@@ -459,6 +389,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     const shouldUseEphemeralSession =
       params.autoFallbackPrimaryProbe !== undefined ||
       params.configuredProfileId !== undefined ||
+      opts?.scheduledAutomation !== undefined ||
       modelState.operatorModelOverride === true;
     const authSessionKey = shouldUseEphemeralSession ? (sessionKey ?? sessionIdFinal) : sessionKey;
     const authSessionEntry = preparedSessionState.sessionEntry
@@ -553,13 +484,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const shouldSteer =
     !isRoomEvent &&
     activeRunAcceptsCurrentThread &&
-    !context.isHeartbeat &&
     !effectiveResetTriggered &&
-    !visibleTurnPreemptsHeartbeat &&
     resolvedQueue.mode === "steer";
   const shouldFollowup =
     !effectiveResetTriggered &&
-    !visibleTurnPreemptsHeartbeat &&
     ((isRoomEvent && isActive) ||
       resolvedQueue.mode === "steer" ||
       resolvedQueue.mode === "followup" ||
@@ -568,7 +496,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     hasQueuedFollowups,
     interrupt: activeRunQueueMode === "interrupt" && !isRoomEvent,
     isActive,
-    isHeartbeat: context.isHeartbeat,
     shouldFollowup,
     resetTriggered: effectiveResetTriggered,
   });
@@ -628,7 +555,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         preparedSessionState = resolvePreparedSessionState();
         // The interrupted run may have changed goal or suggestion state while admission waited.
         refreshInboundContextAfterAdmissionWait();
-        promptBodies = await rebuildPromptBodies();
       },
       resolveBusyState: resolveQueueBusyState,
     });
@@ -640,10 +566,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       return { kind: "reply", reply: queueReply } as const;
     }
   }
-  if (activeRunQueueAction !== "drop") {
-    await traceRunPhase("reply.drain_system_events", () => drainSystemEventBlocks());
-    promptBodies = await rebuildPromptBodies();
-  }
+  await traceRunPhase("reply.drain_system_events", () => drainSystemEventBlocks());
+  const promptBodies = await rebuildPromptBodies();
 
   return {
     kind: "ready",

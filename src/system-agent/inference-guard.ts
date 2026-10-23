@@ -2,7 +2,6 @@ import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import {
   resolveSystemAgentVerifiedInferenceRoute,
   type SystemAgentVerifiedInferenceBinding,
-  type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 
 /** The host retains error presentation and conversation cleanup at the write boundary. */
@@ -28,14 +27,13 @@ export async function requireSystemAgentPersistentApplyInference(
 /** Read guards share failure classification; the conversation retains cleanup ownership. */
 export async function requireSystemAgentInferenceRoute(
   binding: SystemAgentVerifiedInferenceBinding | undefined,
-  deps: SystemAgentVerifiedInferenceDeps | undefined,
   stage: ConstructorParameters<typeof SystemAgentInferenceUnavailableError>[0],
   onUnavailable?: (failures: readonly unknown[]) => void,
 ) {
   let failures: unknown[] = [];
   if (binding) {
     try {
-      const route = await resolveSystemAgentVerifiedInferenceRoute(binding, deps);
+      const route = await resolveSystemAgentVerifiedInferenceRoute(binding);
       if (route) {
         return route;
       }

@@ -3,11 +3,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
-import { build, createServer, loadConfigFromFile, type Plugin } from "vite";
+import { build, createServer, type Plugin } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { controlUiPluginDistributionsPlugin } from "../../config/control-ui-plugin-distributions.ts";
+import controlUiViteConfig from "../../vite.config.ts";
 
 let root: string;
 beforeEach(async () => {
@@ -80,14 +80,7 @@ async function fixture() {
 }
 
 async function compile(inputs = new Set<string>()) {
-  const loaded = await loadConfigFromFile(
-    { command: "build", mode: "production" },
-    fileURLToPath(new URL("../../vite.config.ts", import.meta.url)),
-  );
-  if (!loaded) {
-    throw new Error("Control UI Vite configuration was not loaded");
-  }
-  const config = loaded.config;
+  const config = controlUiViteConfig({ command: "build" });
   return build({
     ...config,
     root,

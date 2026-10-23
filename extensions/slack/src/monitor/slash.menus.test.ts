@@ -27,14 +27,13 @@ import {
 } from "./slash.commands.test-harness.js";
 import { firstCallPayload, getSlackSlashMocks } from "./slash.test-harness.js";
 
-const slackMocks = getSlackSlashMocks();
 const {
   dispatchMock,
   deliverSlackSlashRepliesMock,
   recordDeliveredCommandExchangeMock,
   resolveAgentRouteMock,
   turnPlanMock,
-} = slackMocks;
+} = getSlackSlashMocks();
 const { pluginCommandFixtures, skillCommandFixtures } = getSlackCommandFixtures();
 type SlashReplies = Parameters<typeof deliverSlackSlashReplies>[0];
 type MenuElement = {
@@ -62,14 +61,13 @@ describe("Slack native command argument menus", () => {
   let argMenuHandler: (args: unknown) => Promise<void>;
   let argMenuOptionsHandler: (args: unknown) => Promise<void>;
   const trackEvent = vi.fn();
-  const command = (name: string) => requireHandler(harness.commands, `/${name}`, `/${name}`);
+  const command = (name: string, testHarness = harness) =>
+    requireHandler(testHarness.commands, `/${name}`, `/${name}`);
   const click = (options: Partial<Parameters<typeof runArgMenuAction>[1]> = {}) =>
     runArgMenuAction(argMenuHandler, { action: { value: menuValue() }, ...options });
   const recordedText = () => recordDeliveredCommandExchangeMock.mock.calls.at(-1)?.[0].replyText;
   async function menu(name: string, testHarness = harness) {
-    const { respond } = await runCommandHandler(
-      requireHandler(testHarness.commands, `/${name}`, `/${name}`),
-    );
+    const { respond } = await runCommandHandler(command(name, testHarness));
     expect(respond).toHaveBeenCalledTimes(1);
     const payload = firstCallPayload(respond, "response") as MenuPayload;
     const actions = (payload.blocks ?? []).filter((block) => block.type === "actions");
@@ -77,11 +75,7 @@ describe("Slack native command argument menus", () => {
   }
   function expectEphemeral() {
     const payload = firstCallPayload(harness.postEphemeral, "postEphemeral");
-    expect(payload).toMatchObject({
-      token: "bot-token",
-      channel: "C1",
-      user: "U1",
-    });
+    expect(payload).toMatchObject({ token: "bot-token", channel: "C1", user: "U1" });
     return payload;
   }
   function expectDelivery(count: number, replies: Array<{ text: string }>) {
@@ -126,7 +120,9 @@ describe("Slack native command argument menus", () => {
 
   beforeAll(async () => {
     harness = createArgMenusHarness();
-    await registerCommands(harness.ctx, harness.account, trackEvent);
+    expect(await registerCommands(harness.ctx, harness.account, trackEvent)).toEqual({
+      mode: "native",
+    });
     argMenuHandler = requireHandler(harness.actions, /^openclaw_cmdarg/, "arg-menu action");
     argMenuOptionsHandler = requireHandler(harness.options, "openclaw_cmdarg", "arg-menu options");
   });
@@ -300,10 +296,7 @@ describe("Slack native command argument menus", () => {
       },
     });
     await registerCommands(testHarness.ctx, testHarness.account);
-    const handler = requireHandler(testHarness.commands, "/think", "/think");
-
-    const values = await getCommandArgMenuValues(handler);
-
+    const values = await getCommandArgMenuValues(command("think", testHarness));
     expect(values.length).toBeGreaterThan(0);
     expect(values).toContain("ultra");
     if (source === "parent") {
@@ -323,8 +316,7 @@ describe("Slack native command argument menus", () => {
 
     await registerCommands(testHarness.ctx, testHarness.account);
     expect(testHarness.commands.size).toBeGreaterThan(0);
-    expect(runtimeLog).toHaveBeenCalledTimes(1);
-    expect(runtimeLog).toHaveBeenCalledWith(
+    expect(runtimeLog).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining(
         "slack: external arg-menu registration failed; falling back to static slash command menus.",
       ),
@@ -345,8 +337,7 @@ describe("Slack native command argument menus", () => {
     const { respond } = await runCommandHandler(command(name));
     const actions = expectArgMenuLayout(respond);
     const element = actions.elements?.[0];
-    expect(element?.type).toBe(type);
-    expect(element).toHaveProperty("confirm");
+    expect(element).toMatchObject({ type, confirm: expect.anything() });
     expect(recordDeliveredCommandExchangeMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "session:1",
@@ -386,22 +377,24 @@ describe("Slack native command argument menus", () => {
   it("uses static_select when encoded values fit Slack option limits", async () => {
     const { respond, element: firstElement } = await menu("reportlong");
     expectArgMenuLayout(respond);
-    expect(firstElement).toMatchObject({ type: "static_select", action_id: "openclaw_cmdarg" });
+    expect(firstElement).toMatchObject({
+      type: "static_select",
+      action_id: "openclaw_cmdarg",
+      confirm: expect.anything(),
+    });
     const longOption = firstElement?.options?.find((option) => option.value?.includes("xxx"));
     expect(longOption?.value?.length).toBeGreaterThan(75);
     expect(longOption?.value?.length).toBeLessThanOrEqual(150);
-    expect(firstElement).toHaveProperty("confirm");
     await click({ action: { selected_option: firstElement?.options?.[0] } });
     expectSingleDispatchedSlashBody("/reportlong day");
   });
 
   it("truncates button labels when static_select value limit would be exceeded", async () => {
     const { element: firstElement } = await menu("reportlongbutton");
-    expect(firstElement?.type).toBe("button");
+    expect(firstElement).toMatchObject({ type: "button", confirm: expect.anything() });
     expect(firstElement?.text?.text).toHaveLength(75);
     expect(firstElement?.text?.text?.endsWith("…")).toBe(true);
     expect(firstElement?.value?.length).toBeGreaterThan(75);
-    expect(firstElement).toHaveProperty("confirm");
     expect(recordedText()).toContain(firstElement?.text?.text);
     expect(recordedText()).not.toContain("Long button label ".repeat(8));
   });

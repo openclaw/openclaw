@@ -24,6 +24,7 @@ import {
 } from "./server.chat-goal.test-support.js";
 import { prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
+import { result as workerCommandResult } from "./worker-environments/bootstrap.test-support.js";
 import { createDispatchEnvironmentFixtures } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import {
   projectPlacementTurnClaim,
@@ -169,14 +170,7 @@ export function registerWorkerGoalChatCases(
             runWorkspaceCommand: async (command) => {
               command.assertCurrent?.();
               expect(JSON.parse(command.input ?? "null")).toEqual({ op: "discover" });
-              return {
-                stdout: "",
-                stderr: "",
-                code: 0,
-                signal: null,
-                killed: false,
-                termination: "exit",
-              };
+              return workerCommandResult();
             },
             quiesceWorkspace: unexpectedTransport,
             reconcileWorkspace: unexpectedTransport,

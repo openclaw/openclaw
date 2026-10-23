@@ -29,12 +29,12 @@ function registerTargets(titler: SessionLinkTitler, host: HTMLElement) {
   }
 }
 
-function decorate(titler: SessionLinkTitler, element: HTMLElement, load = false) {
+function decorate(titler: SessionLinkTitler, element: HTMLElement) {
   titler.register(
     element,
     element.querySelector<HTMLElement>(".session-label") ?? document.createElement("span"),
   );
-  return titler.decorate(element, load);
+  return titler.decorate(element);
 }
 
 function renderMarkdown(
@@ -159,12 +159,12 @@ describe("SessionLinkTitler", () => {
     label.textContent = SESSION_KEY;
     first.replaceChildren(label);
 
-    await decorate(titler, first, true);
-    await decorate(titler, second, true);
+    await decorate(titler, first);
+    await decorate(titler, second);
 
     expectTitle(first, "Research plan");
     expectTitle(second, "Research plan");
-    await decorate(titler, first, true);
+    await decorate(titler, first);
     expectTitle(first, "Research plan");
     expect(first.getAttribute("href")).toBe("/chat/main/research");
     expect(request).toHaveBeenCalledExactlyOnceWith("controlUi.sessionPreview", {
@@ -174,7 +174,7 @@ describe("SessionLinkTitler", () => {
     label.textContent = "Updated by the producer";
     expect(first.textContent).toBe("Updated by the producer");
     titler.context = sessionContext([row("Replacement Gateway")]);
-    await decorate(titler, first, true);
+    await decorate(titler, first);
     expect(first.firstElementChild).toBe(label);
     expect(first.textContent).toBe("Updated by the producer");
   });
@@ -188,7 +188,7 @@ describe("SessionLinkTitler", () => {
     const request = vi.fn().mockImplementation(() => oldPreview.promise);
     const { titler } = createTitler([], request);
     const previous = sessionAnchor();
-    const decorating = decorate(titler, previous, true);
+    const decorating = decorate(titler, previous);
     await Promise.resolve();
     if (state === "cached") {
       oldPreview.resolve(previewResponse({ title: "Previous Gateway" }));
@@ -212,7 +212,7 @@ describe("SessionLinkTitler", () => {
     await decorating;
     expect(previous.textContent).toBe(state === "cached" ? "Previous Gateway" : SESSION_KEY);
     const current = state === "cached" ? previous : sessionAnchor();
-    await decorate(titler, current, true);
+    await decorate(titler, current);
 
     expect(current.textContent).toBe("Current Gateway");
     expect(request).toHaveBeenCalledTimes(2);
@@ -226,14 +226,14 @@ describe("SessionLinkTitler", () => {
       .mockResolvedValueOnce(previewResponse());
     const { titler } = createTitler([], request);
 
-    await decorate(titler, sessionAnchor(), true);
+    await decorate(titler, sessionAnchor());
     await vi.advanceTimersByTimeAsync(5 * 60_000);
-    await decorate(titler, sessionAnchor(), true);
-    await decorate(titler, sessionAnchor(), true);
+    await decorate(titler, sessionAnchor());
+    await decorate(titler, sessionAnchor());
     expect(request).toHaveBeenCalledTimes(2);
 
     await vi.advanceTimersByTimeAsync(30_000);
-    await decorate(titler, sessionAnchor(), true);
+    await decorate(titler, sessionAnchor());
     expect(request).toHaveBeenCalledTimes(3);
   });
 

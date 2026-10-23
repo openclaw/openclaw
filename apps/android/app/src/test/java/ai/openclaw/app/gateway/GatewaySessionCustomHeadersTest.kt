@@ -299,6 +299,15 @@ class GatewaySessionCustomHeadersTest {
       val audioPath = "/api/chat/media/outgoing/main/$audioAttachmentId/full?mediaTicket=audio-ticket"
       val audioPlaybackPath = "$audioPath&playback=1"
       val audioBytes = byteArrayOf(5, 6, 7, 8)
+      val fileArtifactId = "artifact_managed_media_44444444-4444-4444-8444-444444444444"
+      val filePath = "/api/chat/media/outgoing/main/44444444-4444-4444-8444-444444444444/full?mediaTicket=file-ticket"
+      val fileBytes = "%PDF-1.7\nsynthetic document\n%%EOF".toByteArray()
+      val csvBytes = "name,value\nexample,42\n".toByteArray()
+      val csvData =
+        java.util.Base64
+          .getEncoder()
+          .encodeToString(csvBytes)
+      val artifactRequests = ConcurrentLinkedQueue<kotlinx.serialization.json.JsonObject>()
       val audioRequestCount = AtomicInteger()
       val mediaRequests = ConcurrentLinkedQueue<RecordedRequest>()
       val invalidMediaPaths =
@@ -310,11 +319,25 @@ class GatewaySessionCustomHeadersTest {
           "invalid-empty-ticket" to "${imagePath.substringBefore('?')}?mediaTicket=",
           "invalid-prefix" to "/other/path?mediaTicket=ticket",
         )
+      val redirectTrap =
+        MockWebServer().apply {
+          enqueue(MockResponse().setHeader("Content-Type", "application/pdf").setBody("unexpected redirect"))
+          start()
+        }
       val server =
         MockWebServer().apply {
           dispatcher =
             object : Dispatcher() {
               override fun dispatch(request: RecordedRequest): MockResponse {
+                if (request.path?.startsWith("$contextPath$filePath") == true) {
+                  mediaRequests.add(request)
+                  return when (request.requestUrl?.queryParameter("test")) {
+                    "redirect" -> MockResponse().setResponseCode(302).setHeader("Location", redirectTrap.url("/must-not-load"))
+                    "oversized" -> MockResponse().setHeader("Content-Type", "application/pdf").setHeader("Content-Length", 100L * 1024L * 1024L + 1L)
+                    "missing-mime" -> MockResponse().setBody(Buffer().write(fileBytes))
+                    else -> MockResponse().setHeader("Content-Type", "application/pdf").setChunkedBody(Buffer().write(fileBytes), 8)
+                  }
+                }
                 if (request.path == "$contextPath$imagePath") {
                   mediaRequests.add(request)
                   imageRequest.complete(request)
@@ -364,14 +387,31 @@ class GatewaySessionCustomHeadersTest {
                         }
 
                         "artifacts.download" -> {
+                          artifactRequests.add(frame.getValue("params").jsonObject)
                           val requestedArtifactId =
                             frame["params"]
                               ?.jsonObject
                               ?.get("artifactId")
                               ?.jsonPrimitive
                               ?.content
+                          val invalidFilePath = requestedArtifactId?.removePrefix("file-")?.let(invalidMediaPaths::get)
                           val invalidMediaPath = invalidMediaPaths[requestedArtifactId]
-                          if (invalidMediaPath != null) {
+                          if (requestedArtifactId == "inline-csv") {
+                            webSocket.send(
+                              """{"type":"res","id":"$id","ok":true,"payload":{"artifact":{"id":"inline-csv","type":"file","mimeType":"text/csv","download":{"mode":"bytes"}},"encoding":"base64","data":"$csvData"}}""",
+                            )
+                          } else if (requestedArtifactId == fileArtifactId || requestedArtifactId?.startsWith("file-") == true) {
+                            val path =
+                              invalidFilePath ?: when (requestedArtifactId) {
+                                "file-redirect" -> "$filePath&test=redirect"
+                                "file-oversized" -> "$filePath&test=oversized"
+                                "file-missing-mime" -> "$filePath&test=missing-mime"
+                                else -> filePath
+                              }
+                            webSocket.send(
+                              """{"type":"res","id":"$id","ok":true,"payload":{"artifact":{"id":"$requestedArtifactId","type":"file","mimeType":"application/pdf","download":{"mode":"url"}},"url":"$path"}}""",
+                            )
+                          } else if (invalidMediaPath != null) {
                             webSocket.send(
                               """{"type":"res","id":"$id","ok":true,"payload":{"artifact":{"id":"$requestedArtifactId","type":"video","mimeType":"video/mp4","download":{"mode":"url"}},"url":"$invalidMediaPath"}}""",
                             )
@@ -474,16 +514,49 @@ class GatewaySessionCustomHeadersTest {
         assertArrayEquals(audioBytes, audio.bytes)
         assertEquals(2, audioRequestCount.get())
 
+        val file =
+          session.loadMediaArtifact(stableId, "main", "main", fileArtifactId, GatewayMediaKind.File) as? GatewayLoadedMedia.Buffered
+        assertArrayEquals(fileBytes, file?.bytes)
+        assertEquals("application/pdf", file?.mimeType)
+        val fileRequest = mediaRequests.last()
+        assertEquals("$contextPath$filePath", fileRequest.path)
+        assertEquals("*/*", fileRequest.getHeader("Accept"))
+
         val validMediaRequestCount = mediaRequests.size
+        val csv =
+          session.loadMediaArtifact(stableId, "main", "main", "inline-csv", GatewayMediaKind.File) as? GatewayLoadedMedia.Buffered
+        assertArrayEquals(csvBytes, csv?.bytes)
+        assertEquals("text/csv", csv?.mimeType)
         for (artifactId in invalidMediaPaths.keys) {
           assertNull(session.loadMediaArtifact(stableId, "main", "main", artifactId, GatewayMediaKind.Video))
+          assertNull(session.loadMediaArtifact(stableId, "main", "main", "file-$artifactId", GatewayMediaKind.File))
+        }
+        // A file load must not inherit the old untyped image fallback or accept a different media kind.
+        assertNull(session.loadMediaArtifact(stableId, "main", "main", artifactId, GatewayMediaKind.File))
+        assertNull(session.loadMediaArtifact(stableId, "main", "main", videoArtifactId, GatewayMediaKind.File))
+        for (kind in listOf(GatewayMediaKind.Image, GatewayMediaKind.Audio, GatewayMediaKind.Video)) {
+          assertNull(session.loadMediaArtifact(stableId, "main", "main", fileArtifactId, kind))
         }
         assertEquals(validMediaRequestCount, mediaRequests.size)
+        if (contextPath.isEmpty()) {
+          for (id in listOf("file-redirect", "file-oversized", "file-missing-mime")) {
+            assertNull(session.loadMediaArtifact(stableId, "main", "main", id, GatewayMediaKind.File))
+          }
+          assertEquals(0, redirectTrap.requestCount)
+        }
+        assertTrue(
+          artifactRequests.all {
+            it["sessionKey"]?.jsonPrimitive?.content == "main" && it["agentId"]?.jsonPrimitive?.content == "main"
+          },
+        )
         assertTrue(mediaRequests.all { it.getHeader("Authorization") == null })
+        session.disconnectAndJoin()
+        assertNull(session.loadMediaArtifact(stableId, "main", "main", fileArtifactId, GatewayMediaKind.File))
       } finally {
         session.disconnectAndJoin()
         scope.cancel()
         server.shutdown()
+        redirectTrap.shutdown()
       }
     }
 

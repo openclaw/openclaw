@@ -34,13 +34,22 @@ never opens the selected Gateway database. Shared state schema 29 retires
 and removes socket material from `exec_approvals_config`. Approval policy remains
 shared; its meaning and execution authority are unchanged.
 
+The cutover reads socket credentials from the canonical approval JSON, even when
+the legacy SQL path or token-presence projections are stale. It preserves the
+socket path, token, and approval policy; rollback restores the original row,
+including its projections. Invalid socket values in the canonical JSON still
+require repair before migration.
+
 The TypeScript owner and Swift adapter use exclusive SQLite custody in DELETE
 journal mode. A running macOS app owns the bounded operation route; other clients
 use its authenticated control socket first. The app closes the physical database
 between operations so existing maintenance custody can capture and restore it.
 A dispatched operation with a lost reply is never replayed offline. When no app
 received the request, clients acquire bounded exclusive custody and release it
-at completion, including when another CLI briefly owns the file.
+at completion, including when another CLI briefly owns the file. An app released
+before this route refuses it as an unknown operation before dispatch; clients
+treat that app as absent and use the same offline custody, so a newer CLI or
+Gateway still starts while an older app is running.
 iOS app and extension operations use the same Swift owner for a bounded
 operation and close before suspension. No owner selects an identity or token
 by comparing timestamps with another store. The existing maintenance lock blocks
@@ -177,6 +186,15 @@ moves memory index revision advancement from six row triggers into the batch
 writer's transaction. SQLite and PostgreSQL drop the triggers without changing
 retained rows or revision values. Older writers require the verified pre-upgrade
 backup because they rely on those triggers to invalidate readers.
+
+Shared-state [schema 31](/reference/database-schemas/state-schema-history#state-schema-31)
+stores local workspace baselines by path and checkpoints as recoverable deltas.
+The schema migration preserves legacy manifest documents and pending receipts;
+the existing projection owner converts each workspace atomically and resumes
+unfinished conversions from the retained input. Archives and publications keep
+their complete manifest format. This is a shared-state change only: the agent
+schema version is unchanged. Older checkpoint writers require the verified
+pre-upgrade backup for rollback.
 
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still
@@ -894,6 +912,10 @@ integrity scan; the migration's source integrity admission runs a whole-database
 quick check plus full checks of affected tables, or a whole-database full check
 when `--full-integrity-check` is selected. AUTOINCREMENT, virtual/shadow tables, unsupported SQLite runtimes,
 or sources outside the active state directory fall back to full backups.
+Fresh credential capture also uses Doctor's full image when a legacy
+`sqlite_stat4` table cannot be recreated by the current runtime. The image must
+still contain the tables and rows being retired; a changed retry source preserves
+its original backup and reports a data-risk refusal instead of losing credentials.
 Historical migrations keep their full-file backup when no scoped backup is
 declared, while integrity admission uses the same quick-plus-affected-tables
 policy. Backup eligibility and integrity coverage are separate contracts.

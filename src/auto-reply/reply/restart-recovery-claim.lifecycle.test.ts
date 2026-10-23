@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   markSessionAbortTarget,
@@ -48,9 +52,10 @@ async function claimFixture(
   overrides: Partial<Parameters<typeof createReplyRestartRecoveryClaimController>[0]> = {},
 ) {
   const scope = {
-    agentId: "main",
-    storePath: path.join(tempDirs.make("openclaw-reply-claim-"), "sessions.json"),
-    sessionKey: "agent:main:main",
+    agentId: overrides.agentId ?? "main",
+    storePath:
+      overrides.storePath ?? path.join(tempDirs.make("openclaw-reply-claim-"), "sessions.json"),
+    sessionKey: overrides.sessionKey ?? "agent:main:main",
   };
   const fixture = await createRecoveryControllerFixture(
     scope,
@@ -66,6 +71,43 @@ async function claimFixture(
   return { ...fixture, controller: fixture.controller() };
 }
 
+it("adopts an exact channel recovery claim before execution starts", async () => {
+  setRuntimeConfigSnapshot({});
+  onTestFinished(clearRuntimeConfigSnapshot);
+  const deliveryContext = {
+    channel: "telegram",
+    to: "chat",
+    accountId: "default",
+    threadId: "thread",
+  };
+  const claim = {
+    restartRecoveryDeliveryContext: deliveryContext,
+    restartRecoveryDeliveryReceiptState: "terminal-pending" as const,
+    restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+    restartRecoveryDeliveryRunId: "recovery-run",
+    restartRecoveryDeliverySourceRunId: "source-turn",
+    restartRecoveryDeliveryToolCallId: "message-call",
+  };
+  await using fixture = await claimFixture(
+    {
+      ...claim,
+      abortedLastRun: false,
+      lifecycleRunId: "recovery-run",
+      sessionId: "channel-session",
+      startedAt: 1,
+    },
+    {
+      sessionKey: "agent:main:telegram:group:chat:topic:thread",
+      resolveDeliveryContext: () => deliveryContext,
+      sourceTurnId: "source-turn",
+    },
+  );
+  await expect(fixture.controller.admitUserTurn()).resolves.toBe("admitted");
+  const persisted = loadSessionEntry(fixture.scope);
+  expect(persisted).toMatchObject(claim);
+  expect(persisted?.status).toBeUndefined();
+});
+
 async function restartReply(
   controller: ReturnType<typeof createReplyRestartRecoveryClaimController>,
   operation: ReplyOperation,
@@ -73,7 +115,7 @@ async function restartReply(
   let drains = 0;
   const reply = await handleReplyAgentRunError(new Error("Backend stopped"), {
     resolveVisibleReplyDelivery: async () => false,
-    isHeartbeat: false,
+
     replyExpectation: "required",
     isRestartRecoveryArmed: controller.isArmed,
     replyOperation: operation,
@@ -217,6 +259,7 @@ it.each([
       let assertBoundary: () => void;
       try {
         if (stage === "cold-registration") {
+          operation.abortForRestart();
           await fixture.releaseDatabase();
           await closeOpenClawAgentDatabasesAsync();
           clearOpenClawAgentDatabaseValidationCache();
@@ -238,7 +281,6 @@ it.each([
             expect(witnessed).toBe(1);
             expect(readEntry()).toMatchObject({ sessionId: "old-session" });
           };
-          operation.abortForRestart();
         } else {
           const read = entryReads.readSessionEntryInWorker;
           const reads = vi.spyOn(entryReads, "readSessionEntryInWorker");
@@ -294,7 +336,7 @@ it.each(["active-storage", "retired-storage", "retired-cleanup"] as const)(
               staleError,
             )
           : storageError;
-      const reads = vi
+      using _ = vi
         .spyOn(entryReads, "readSessionEntryInWorker")
         .mockImplementationOnce(async () => {
           if (failure !== "active-storage") {
@@ -302,12 +344,8 @@ it.each(["active-storage", "retired-storage", "retired-cleanup"] as const)(
           }
           throw expected;
         });
-      try {
-        operation.abortForRestart();
-        await expect(controller.isArmed()).rejects.toBe(expected);
-      } finally {
-        reads.mockRestore();
-      }
+      operation.abortForRestart();
+      await expect(controller.isArmed()).rejects.toBe(expected);
     });
   },
 );
@@ -419,7 +457,7 @@ describe("restart recovery claim settlement", () => {
       });
       await writerEntered.promise;
       let interruptedAtCommit = false;
-      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+      using admission = probe.admission(workerAdmission, (request, grant, admit) => {
         if (
           !interruptedAtCommit &&
           (interruption === "commit-rotation" || interruption === "commit-abort") &&
@@ -456,11 +494,8 @@ describe("restart recovery claim settlement", () => {
       } finally {
         releaseWriter.resolve();
       }
-      try {
-        await Promise.all([handoff, clearing]);
-      } finally {
-        admission.mockRestore();
-      }
+      await Promise.all([handoff, clearing]);
+      admission.mockRestore();
       expect(interruptedAtCommit).toBe(
         interruption === "commit-rotation" || interruption === "commit-abort",
       );

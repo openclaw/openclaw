@@ -82,25 +82,19 @@ describe("runMessageAction core send routing", () => {
   });
 
   it.each([
-    {
-      label: "failed",
-      error: new Error("provider rejected the message"),
-      expectedStatus: "failed" as const,
-      expectedMessageId: undefined,
-    },
-    {
-      label: "partial_failed",
-      error: new OutboundDeliveryError("second send failed", {
+    ["failed", new Error("provider rejected the message"), undefined],
+    [
+      "partial_failed",
+      new OutboundDeliveryError("second send failed", {
         cause: new Error("provider rejected the attachment"),
         results: [{ channel: "testchat", messageId: "first-send-1" }],
         stage: "platform_send",
       }),
-      expectedStatus: "partial_failed" as const,
-      expectedMessageId: "first-send-1",
-    },
-  ])(
-    "returns structured $label core delivery outcomes to CLI callers",
-    async ({ error, expectedStatus, expectedMessageId }) => {
+      "first-send-1",
+    ],
+  ] as const)(
+    "returns structured %s core delivery outcomes to CLI callers",
+    async (expectedStatus, error, expectedMessageId) => {
       const sendText = vi.fn().mockRejectedValue(error);
       registerTestChatPlugin({ deliveryMode: "direct", sendText });
 
@@ -208,33 +202,12 @@ describe("runMessageAction core send routing", () => {
   });
 
   it.each([
-    {
-      label: "implicit first-mode reply",
-      params: {},
-      replyToMode: "first" as const,
-      expectedReplyIds: ["source-1", undefined],
-      expectedSource: "implicit",
-      expectedMode: "first",
-    },
-    {
-      label: "implicit all-mode reply",
-      params: {},
-      replyToMode: "all" as const,
-      expectedReplyIds: ["source-1", "source-1"],
-      expectedSource: "implicit",
-      expectedMode: "all",
-    },
-    {
-      label: "explicit reply while replies are otherwise off",
-      params: { replyTo: "explicit-1" },
-      replyToMode: "off" as const,
-      expectedReplyIds: ["explicit-1", "explicit-1"],
-      expectedSource: "explicit",
-      expectedMode: undefined,
-    },
-  ])(
-    "carries resolved reply facts through durable chunk fanout for $label",
-    async ({ params, replyToMode, expectedReplyIds, expectedSource, expectedMode }) => {
+    ["first", {}, ["source-1", undefined], "implicit", "first"],
+    ["all", {}, ["source-1", "source-1"], "implicit", "all"],
+    ["off", { replyTo: "explicit-1" }, ["explicit-1", "explicit-1"], "explicit", undefined],
+  ] as const)(
+    "carries resolved reply facts through durable chunk fanout in %s mode",
+    async (replyToMode, params, expectedReplyIds, expectedSource, expectedMode) => {
       const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
         channel: "testchat",
         messageId: text,
@@ -335,34 +308,18 @@ describe("runMessageAction core send routing", () => {
   });
 
   it.each([
-    {
-      name: "does not double-apply an existing prefix",
-      prefix: "[Nexus]",
-      message: "[Nexus] already prefixed",
-      expected: "[Nexus] already prefixed",
-    },
-    {
-      name: "resolves identity templates",
-      prefix: "[{identity.name}]",
-      message: "hello world",
-      expected: "[Nexus] hello world",
-      agents: { entries: { main: { identity: { name: "Nexus" } } } },
-    },
-    {
-      name: "drops unresolved model templates",
-      prefix: "[{provider}/{model}]",
-      message: "hello world",
-      expected: "hello world",
-    },
-  ])("responsePrefix $name", async ({ prefix, message, expected, agents }) => {
+    ["[Nexus]", "[Nexus] already prefixed", "[Nexus] already prefixed", false],
+    ["[{identity.name}]", "hello world", "[Nexus] hello world", true],
+    ["[{provider}/{model}]", "hello world", "hello world", false],
+  ] as const)("resolves responsePrefix %s", async (prefix, message, expected, useIdentity) => {
     const sendText = registerSlackTextPlugin();
     await runMessageAction({
       cfg: {
         channels: { slack: { enabled: true, responsePrefix: prefix } },
-        ...(agents ? { agents } : {}),
+        ...(useIdentity ? { agents: { entries: { main: { identity: { name: "Nexus" } } } } } : {}),
       } as OpenClawConfig,
       params: { channel: "slack", target: "channel:OTHER", message },
-      ...(agents ? { agentId: "main" } : {}),
+      ...(useIdentity ? { agentId: "main" } : {}),
     });
     expect(sendText).toHaveBeenCalledOnce();
     expect(mockFirstRecordArg(sendText, "send text").text).toBe(expected);

@@ -54,6 +54,7 @@ describe("parseIdentityMarkdown", () => {
     ],
     ["- **Avatar:** `(workspace-relative path, http(s) URL, or data URI)`", null],
     ["- **Avatar:** *(not set yet)*", null],
+    ["- Name: Café 🤖 �\n", { name: "Café 🤖 �" }],
   ] as const)("parses decorated values and ignores placeholders: %s", async (content, expected) => {
     expect(await parseIdentityFromContent(content)).toEqual(expected);
   });
@@ -107,7 +108,7 @@ describe("loadAgentIdentityFromWorkspace", () => {
     },
   );
 
-  it.each(["missing", "oversized"])(
+  it.each(["missing", "oversized", "invalid-encoding"])(
     "classifies %s identity reads without matching error text",
     async (kind) => {
       const identityPath = path.join(
@@ -116,12 +117,22 @@ describe("loadAgentIdentityFromWorkspace", () => {
       );
       if (kind === "missing") {
         await expect(loadAgentIdentityFromFile(identityPath)).resolves.toBeNull();
-      } else {
+      } else if (kind === "oversized") {
         fs.writeFileSync(identityPath, "x".repeat(TEST_MAX_IDENTITY_FILE_BYTES + 1));
         expect(loadAgentIdentityFromWorkspace(tempDir)).toBeNull();
         expect(await load()).toBeNull();
         await expect(loadAgentIdentityFromFile(identityPath)).rejects.toThrow(
           `exceeds the maximum size of ${TEST_MAX_IDENTITY_FILE_BYTES} bytes`,
+        );
+      } else {
+        fs.writeFileSync(
+          identityPath,
+          Buffer.from([0x2d, 0x20, 0x4e, 0x61, 0x6d, 0x65, 0x3a, 0x20, 0xff]),
+        );
+        expect(loadAgentIdentityFromWorkspace(tempDir)).toBeNull();
+        expect(await load()).toBeNull();
+        await expect(loadAgentIdentityFromFile(identityPath)).rejects.toThrow(
+          "must be valid UTF-8",
         );
       }
     },

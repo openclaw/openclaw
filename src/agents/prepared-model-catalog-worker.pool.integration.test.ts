@@ -19,6 +19,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginMetadataSnapshotCache, retirePluginCache } from "../plugins/plugin-cache.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -246,7 +247,11 @@ describe("Gateway catalog worker pool", () => {
       const originalError = await renewal.catch((error: unknown) => error);
       expect(catalogFailures[0]).toMatchObject({ modelFactsChanged: false });
       expect(originalError).toBe(await queuedAuth.catch((error: unknown) => error));
-      expect(originalError).toMatchObject({ message: "worker exited with code 1" });
+      expect(originalError).toMatchObject({
+        message: expect.stringMatching(
+          /^worker exited with code 1 \[task=preparedModelCatalog\.task /,
+        ),
+      });
       taskChannel.unsubscribe(recordFailure);
       expect(failedTasks).toEqual([
         { activeTasks: 1, pendingTasks: 1 },
@@ -495,6 +500,64 @@ describe("Gateway catalog worker pool", () => {
       }
     },
   );
+
+  it("closes automatic catalog discovery without reporting a refresh failure", async ({
+    signal,
+  }) => {
+    const observed = observeWorkers();
+    const warnings = runtimeWarnings.length;
+    let marker: string | undefined;
+    let discovery: ReturnType<typeof loadCompletedFullCatalog> | undefined;
+    let closing: Promise<void> | undefined;
+    try {
+      const fixture = await createFleetFixture(
+        (input) => {
+          marker = input.marker;
+          observed.subscribe();
+          fs.writeFileSync(`${marker}.hold`, "");
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        },
+        true,
+        { agentCount: 1 },
+      );
+      await withinTest(receipts.waitFor(fixture.marker, "start"), signal);
+      const original = fixture.snapshots[0]!;
+      // Join automatic discovery so its detached warning handler settles before inspection.
+      discovery = original.loadFullModelCatalog!({ changedOnly: true });
+      void discovery.catch(() => undefined);
+      const { workerFailures } = getPreparedModelCatalogWorkerPoolSnapshot();
+      expect(observed.spawned).toHaveLength(1);
+      expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
+        workers: 1,
+        activeTasks: 1,
+        pendingTasks: 1,
+      });
+
+      closing = closePreparedModelRuntimeSnapshots();
+      await withinTest(closing, signal);
+      await expect(withinTest(discovery, signal)).rejects.toThrow(
+        "prepared model runtime process lifetime closed",
+      );
+
+      expect(original.isCurrent()).toBe(false);
+      expect(observed.spawned[0]!.threadId).toBe(-1);
+      expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
+        workers: 0,
+        activeTasks: 0,
+        pendingTasks: 0,
+        workerFailures,
+      });
+      expect(runtimeWarnings.slice(warnings)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      if (marker) {
+        fs.rmSync(`${marker}.hold`, { force: true });
+      }
+      closing ??= closePreparedModelRuntimeSnapshots();
+      await Promise.allSettled([discovery, closing]);
+      observed.close();
+    }
+  });
 
   it.for(["shutdown", "plugin retirement"])(
     "does not report renewal failure during warm %s",

@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexWebSearchProvider as createContractCodexWebSearchProvider } from "../web-search-contract-api.js";
 import { codexModel as baseModel } from "./app-server/bounded-turn.test-harness.js";
 import {
@@ -11,9 +11,12 @@ import {
 } from "./app-server/codex-app-server.test-fixtures.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
+import * as shared from "./app-server/shared-client.js";
 import { createCodexWebSearchProvider } from "./web-search-provider.js";
 // Loads the provider's lazy runtime at collection, outside the first test's deadline.
 import "./web-search-provider.runtime.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 function threadStartResult(model: string) {
   const result = baseThreadStartResult("thread-1", "/tmp/openclaw-agent");
@@ -110,9 +113,9 @@ function createSearchTool(provider: ReturnType<typeof createCodexWebSearchProvid
 
 function searchFixture(options?: Parameters<typeof createFakeClient>[0], pluginConfig?: unknown) {
   const fixture = createFakeClient(options);
+  vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockResolvedValue(fixture.client);
   const tool = createSearchTool(
     createCodexWebSearchProvider({
-      clientFactory: async () => fixture.client,
       resolvePluginConfig: () => pluginConfig,
     }),
   );
@@ -146,6 +149,10 @@ describe("codex web search provider", () => {
   it("runs an isolated grounded Codex search with configured restrictions", async () => {
     const { client, requests } = createFakeClient();
     let isolatedStartOptions: CodexAppServerStartOptions | undefined;
+    vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockImplementation(async (options) => {
+      isolatedStartOptions = options?.startOptions;
+      return client;
+    });
     const provider = createCodexWebSearchProvider({
       resolvePluginConfig: () => ({
         appServer: {
@@ -162,10 +169,6 @@ describe("codex web search provider", () => {
           clearEnv: ["CODEX_HOME", "KEEP_CLEARED"],
         },
       }),
-      clientFactory: async (options) => {
-        isolatedStartOptions = options?.startOptions;
-        return client;
-      },
     });
     const tool = createSearchTool(provider);
 
@@ -244,13 +247,12 @@ describe("codex web search provider", () => {
     const release = createDeferred<void>();
     const denial = new Error("search caller no longer authorized");
     let current = true;
-    const provider = createCodexWebSearchProvider({
-      clientFactory: async () => {
-        entered.resolve();
-        await release.promise;
-        return client;
-      },
+    vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+      return client;
     });
+    const provider = createCodexWebSearchProvider();
     const tool = provider.createTool({ config, searchConfig: config.tools?.web?.search });
     const pending = tool!.execute(
       { query: "synthetic authority probe" },

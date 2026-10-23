@@ -23,7 +23,6 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { focusWithoutTooltip } from "../components/tooltip.ts";
-import type { BoardFace } from "../lib/board/settings.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -42,6 +41,7 @@ import {
 } from "../pages/debug/debug-overlay-state.ts";
 import { ShellCommandPaletteOwner } from "./app-shell-command-palette-loading.ts";
 import type { ShellOwnedElements } from "./app-shell-lazy-view.tsx";
+import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import { openShellNewSession, type ShellNewSessionHost } from "./app-shell-new-session.ts";
 import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
@@ -84,6 +84,7 @@ let nativeCommandsOwner: (() => void)[] | undefined;
 
 export interface ShellChromeHost
   extends ShellNewSessionHost, ShellPanelHost, ShellNavigationElements, ShellNavigationSurfaces {
+  readonly shellNavigation: ShellNavigationCapability;
   readonly elements: ShellOwnedElements;
   readonly element: HTMLElement;
   readonly isConnected: boolean;
@@ -99,12 +100,6 @@ export interface ShellChromeHost
   commandPaletteTarget: CommandPaletteTargetDetail | undefined;
   invalidate(): void;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
-  exitSettings(): void;
-  navigate(routeId: string, options?: ApplicationNavigationOptions): void;
-  chatNavigationOptions(
-    face: BoardFace,
-    options?: ApplicationNavigationOptions,
-  ): ApplicationNavigationOptions | undefined;
 }
 
 export class ShellChromeOwner {
@@ -237,6 +232,24 @@ export class ShellChromeOwner {
     }
   };
 
+  private finishNavigationMotion(): void {
+    // Finish only this invocation's navigation transitions after the DOM commit,
+    // before paint. CSS remains unchanged for the next click or reduced motion.
+    void this.host.updateComplete.then(() => {
+      const { shellElement, navDrawerElement, navBackdropElement } = this.host;
+      for (const element of [shellElement, navDrawerElement, navBackdropElement]) {
+        for (const animation of element?.getAnimations() ?? []) {
+          if (
+            animation instanceof CSSTransition &&
+            (element !== shellElement || animation.transitionProperty === "grid-template-columns")
+          ) {
+            animation.finish();
+          }
+        }
+      }
+    });
+  }
+
   /** Restore to the persistent rail view, or content when navigation is unavailable. */
   restoreFocusTo = (target: HTMLElement | null | undefined): void =>
     focusWithoutTooltip(
@@ -311,7 +324,7 @@ export class ShellChromeOwner {
     if (typeof search === "string" && search.startsWith("?") && !search.includes("#")) {
       options.search = search;
     }
-    this.host.navigate(routeId, options);
+    this.host.shellNavigation.navigate(routeId, options);
   };
 
   readonly handleNativeHistoryState = (event: Event): void => {
@@ -380,7 +393,7 @@ export class ShellChromeOwner {
       !this.shouldIgnoreSettingsEscape(event)
     ) {
       event.preventDefault();
-      host.exitSettings();
+      host.shellNavigation.exitSettings();
     }
   };
 
@@ -402,7 +415,13 @@ export class ShellChromeOwner {
       return;
     }
     if (host.navDrawerOpen && isMobileNavLayout()) {
+      const togglesSidebar =
+        !event.defaultPrevented &&
+        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar, event);
       handleNavDrawerKeydown(host, event);
+      if (togglesSidebar) {
+        this.finishNavigationMotion();
+      }
       return;
     }
     // A replaced workspace can retain its palette ref after the DOM is detached.
@@ -460,12 +479,13 @@ export class ShellChromeOwner {
     }
     if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings, event)) {
       event.preventDefault();
-      host.navigate("appearance");
+      host.shellNavigation.navigate("appearance");
       return;
     }
     if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar, event)) {
       event.preventDefault();
       this.toggleNavigationSurface();
+      this.finishNavigationMotion();
     }
   };
 
@@ -654,7 +674,7 @@ export class ShellChromeOwner {
     replay: () => unknown = () => this.dispatchLazyShellEvent(event),
   ): void {
     if (element !== this.host.commandPaletteElement) {
-      this.commandPaletteLoading.clear();
+      this.commandPaletteLoading.dismiss();
     }
     this.pendingLazyAction = event;
     persistLazyShellAction(event);
@@ -688,7 +708,7 @@ export class ShellChromeOwner {
   }
 
   cancelPendingLazyAction(): void {
-    this.commandPaletteLoading.clear();
+    this.commandPaletteLoading.dismiss();
     const event = this.pendingLazyAction;
     if (event) {
       this.clearPendingLazyAction(event);

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -16,10 +17,7 @@ import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
-import {
-  admitStoredChatComposerQueueItem,
-  listStoredChatOutboxes,
-} from "./composer-persistence.ts";
+import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 
 const selected = "agent:main:selected";
 const queued = "agent:main:queued";
@@ -78,8 +76,8 @@ function outboxHost(history: () => ChatHistoryResult | Promise<ChatHistoryResult
     sendState: "waiting-reconnect" as const,
   };
   expect(
-    admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, queued), item),
-  ).toBe(true);
+    admitStoredChatComposerQueueItemResult(host, captureChatOutboxAdmission(host, queued), item),
+  ).toBe("admitted");
   return host;
 }
 
@@ -118,23 +116,23 @@ it("publishes a real recovery-owner change to subscribed panes during a foreign 
     attachmentStorageError: "missing",
   });
   expect(
-    admitStoredChatComposerQueueItem(
+    admitStoredChatComposerQueueItemResult(
       host,
       captureChatOutboxAdmission(host, selected),
       item("old-owner", client.recoveryScope!),
     ),
-  ).toBe(true);
+  ).toBe("admitted");
   const replacement = createTestGatewayClient(async () => ({}));
   vi.spyOn(replacement, "recoveryScope", "get").mockReturnValue("replacement-scope");
   const writer = makeChatHost({ client: replacement, sessionKey: selected });
   onTestFinished(() => writer.sessions.dispose());
   expect(
-    admitStoredChatComposerQueueItem(
+    admitStoredChatComposerQueueItemResult(
       writer,
       captureChatOutboxAdmission(writer, selected),
       item("new-owner", "replacement-scope"),
     ),
-  ).toBe(true);
+  ).toBe("admitted");
   expect(host.chatQueue.map((row) => row.id)).toEqual(["old-owner"]);
   publish.mockClear();
   peerPublish.mockClear();
@@ -267,17 +265,21 @@ it("keeps global outbox event recovery bound to the event's agent", async () => 
   onTestFinished(() => host.sessions.dispose());
   for (const agentId of ["main", "work"]) {
     expect(
-      admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, "global", agentId), {
-        id: agentId,
-        sendRunId: `${agentId}-run`,
-        sessionKey: "global",
-        agentId,
-        text: agentId,
-        createdAt: 1,
-        sendAttempts: 1,
-        sendState: "waiting-reconnect",
-      }),
-    ).toBe(true);
+      admitStoredChatComposerQueueItemResult(
+        host,
+        captureChatOutboxAdmission(host, "global", agentId),
+        {
+          id: agentId,
+          sendRunId: `${agentId}-run`,
+          sessionKey: "global",
+          agentId,
+          text: agentId,
+          createdAt: 1,
+          sendAttempts: 1,
+          sendState: "waiting-reconnect",
+        },
+      ),
+    ).toBe("admitted");
   }
   await resumeStoredChatOutboxes(host, sessionEvent("global"));
   expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(0);

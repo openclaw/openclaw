@@ -1,7 +1,7 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createXApiClient, type XFetch } from "./api.js";
 import { XBudgetExceededError } from "./spend.js";
+import { createXTestApi as createXApiClient, type XFetch } from "./test-support/api-client.js";
 import { createXTestSpend } from "./test-support/spend.js";
 
 const post = { id: "11", text: "Hello", author_id: "7", conversation_id: "11" };

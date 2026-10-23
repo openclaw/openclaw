@@ -9,12 +9,14 @@ import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.j
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import * as metadata from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { captureReplyExecutionSelection } from "../../sessions/session-controller.execution-selection.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import * as registryState from "../../sessions/session-controller.state.js";
 import { createCommandTurnContext } from "../command-turn-context.js";
 import { bindReplyFallbackSteeringRoute } from "./agent-runner-fallback-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { createReplyParams } from "./agent-runner-steer-adoption.test-support.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import * as followupRunner from "./followup-runner.js";
 import { createPersonalToolScreenDispatcher } from "./personal-tool-turn.test-support.js";
 import { getFollowupQueueDepth, type FollowupRun } from "./queue.js";
@@ -24,6 +26,7 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
+import { resolveReplySteeringIntent } from "./reply-steering-intent.js";
 import * as toolAuthority from "./reply-tool-authority.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
@@ -85,6 +88,7 @@ describe("ordinary steering into automatic model fallback", () => {
           throw new Error("incoming caller revoked");
         }
       });
+      run.run.clientCaps = ["ui-commands"];
       const operation = createReplyOperation({
         sessionKey: key,
         sessionId: run.run.sessionId,
@@ -92,6 +96,8 @@ describe("ordinary steering into automatic model fallback", () => {
       });
       await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
       await operation.bindToolAuthorityRouteAsync(run.run);
+      run.run.clientCaps = ["ui-commands", "ui-tool-images"];
+      run.run.gatewayUiCommandTarget = { connId: "new-tab", profileId: "incoming-user" };
       const injected = vi.fn(async () => {});
       const replacementInjected = vi.fn(async () => {});
       const attach = (queueMessage: () => Promise<void>) =>
@@ -188,6 +194,11 @@ describe("ordinary steering into automatic model fallback", () => {
         expect(injected).not.toHaveBeenCalled();
         expect(getFollowupQueueDepth(key)).toBe(0);
         expect(typing.cleanup).toHaveBeenCalledOnce();
+        expect(run.run.clientCaps).toEqual(["ui-commands", "ui-tool-images"]);
+        expect(run.run.gatewayUiCommandTarget).toEqual({
+          connId: "new-tab",
+          profileId: "incoming-user",
+        });
       } finally {
         resume.resolve();
         await incoming.catch(() => {});
@@ -202,6 +213,11 @@ describe("ordinary steering into automatic model fallback", () => {
 
   it.each([
     "automatic",
+    "same-profile-caps",
+    "same-profile-legacy-snapshot",
+    "same-profile-exec-change",
+    "same-profile-config-change",
+    "same-profile-caps-narrower",
     "queued-followup",
     "cross-profile",
     "cross-profile-default",
@@ -220,6 +236,7 @@ describe("ordinary steering into automatic model fallback", () => {
     "hook-route",
     "transport-alias",
   ] as const)("preserves admitted selection and authority: %s", async (scenario) => {
+    const sameProfile = scenario.startsWith("same-profile");
     const collaborative = scenario.startsWith("collaborative-");
     const explicitSteer = scenario.startsWith("explicit-steer-");
     const crossProfile =
@@ -269,7 +286,7 @@ describe("ordinary steering into automatic model fallback", () => {
     if (explicitSteer || collaborative) {
       run.run.conversationId = "shared-steering-chat";
     }
-    if (crossProfile || explicitSteer) {
+    if (crossProfile || explicitSteer || sameProfile) {
       run.operatorAuthority = operator(run, "alice");
       Object.assign(run.run, {
         senderId: "alice-sender",
@@ -279,7 +296,26 @@ describe("ordinary steering into automatic model fallback", () => {
         gatewayUiCommandTarget: { connId: "alice-tab", profileId: "alice" },
       });
     }
-    await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+    const snapshot = prepareReplyToolAuthority({
+      ...run,
+      ...(sameProfile
+        ? {
+            executionSelection: captureReplyExecutionSelection({
+              run: run.run,
+              sessionEntry: undefined,
+            }),
+          }
+        : {}),
+    });
+    await operation.bindToolAuthoritySnapshotAsync(
+      scenario === "same-profile-legacy-snapshot"
+        ? {
+            ...snapshot,
+            // Released projectors have no current host-private continuation preparer.
+            projectAsync: (...args) => snapshot.projectAsync(...args),
+          }
+        : snapshot,
+    );
     operation.setPhase("running");
     const delivered: string[] = [];
     const candidates: string[] = [];
@@ -333,7 +369,7 @@ describe("ordinary steering into automatic model fallback", () => {
           operation.attachBackend({
             kind: "embedded",
             terminalReplyExpectation:
-              explicitSteer || collaborative ? "required" : "result-required",
+              explicitSteer || collaborative || sameProfile ? "required" : "result-required",
             supportsTranscriptCommitWait: true,
             cancel: vi.fn(),
             messageInjectionV2: {
@@ -375,9 +411,34 @@ describe("ordinary steering into automatic model fallback", () => {
       } else if (scenario === "changed-tools") {
         run.toolsAllow = ["read"];
       }
+      if (scenario === "same-profile-caps" || scenario === "same-profile-legacy-snapshot") {
+        run.run.clientCaps = ["ui-commands", "ui-tool-images"];
+      } else if (scenario === "same-profile-caps-narrower") {
+        run.run.clientCaps = [];
+      } else if (scenario === "same-profile-exec-change") {
+        run.run.execOverrides = { security: "deny" };
+      } else if (scenario === "same-profile-config-change") {
+        run.run.config = { ...run.run.config, tools: { deny: ["exec"] } };
+      }
+      // This fixture starts at the authorized adapter boundary. Use its real
+      // host intent producer, preserving explicit change versus resolved defaults.
+      const steeringIntent = sameProfile
+        ? resolveReplySteeringIntent({
+            directives: parseInlineSessionDirectives(
+              scenario === "same-profile-exec-change" ? "/exec security=deny" : run.prompt,
+            ),
+            resetTriggered: false,
+          })
+        : undefined;
+      if (scenario === "same-profile-exec-change") {
+        expect(steeringIntent).toEqual({ kind: "new-execution" });
+      } else if (sameProfile) {
+        expect(steeringIntent).toEqual({ kind: "continue-existing" });
+      }
       const resultState: ReplyOperationRunState = {};
       const shouldSteer =
         scenario === "automatic" ||
+        scenario === "same-profile-caps" ||
         scenario === "queued-followup" ||
         scenario === "collaborative-automatic" ||
         scenario === "policy-fallback" ||
@@ -406,13 +467,18 @@ describe("ordinary steering into automatic model fallback", () => {
           gatewayUiCommandTarget: { connId: "bob-tab", profileId: "bob" },
         });
       }
+      const incomingCaps = structuredClone(run.run.clientCaps);
+      const incomingTarget = structuredClone(run.run.gatewayUiCommandTarget);
       const incoming = steer(run, key, {
+        steeringIntent,
         opts: { runId: scenario, [REPLY_OPERATION_RUN_STATE]: resultState },
         sessionCtx:
-          explicitSteer || collaborative
+          explicitSteer || collaborative || sameProfile
             ? {
                 Provider: "telegram",
-                ChatId: "shared-steering-chat",
+                ChatId: sameProfile
+                  ? (run.run.conversationId ?? undefined)
+                  : "shared-steering-chat",
                 SenderId: run.run.senderId,
                 SenderName: run.run.senderName,
                 GatewayClientCaps: run.run.clientCaps,
@@ -446,6 +512,8 @@ describe("ordinary steering into automatic model fallback", () => {
       }
       expect(operation.requesterPrincipalKey).toBe(requesterPrincipalKey);
       expect(operation.toolAuthorityFingerprint).toBe(toolAuthorityFingerprint);
+      expect(run.run.clientCaps).toEqual(incomingCaps);
+      expect(run.run.gatewayUiCommandTarget).toEqual(incomingTarget);
       if (crossProfile) {
         const dispatch = await createPersonalToolScreenDispatcher(["alice", "bob"]);
         await withGatewayToolCallerIdentity(

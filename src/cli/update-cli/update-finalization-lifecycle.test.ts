@@ -191,6 +191,12 @@ it("records a returned failed outcome without requiring an exception", async () 
 it.each(["failed", "completed"] as const)(
   "settles a late completion-cache result without hiding its outcome (%s)",
   async (outcome) => {
+    // Exclude performance from fake timers and map it to the mocked wall clock
+    // so admission (performance.now() + budget) and inspection stay in one domain.
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     const { lifecycle, read } = finalization(1_000, true);
     const entered = createDeferredCore();

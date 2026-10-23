@@ -73,7 +73,7 @@ function preparePreview(
   vi.spyOn(updateGlobal, "resolveGlobalInstallTarget").mockResolvedValue(f.params.installTarget);
   vi.spyOn(packageTarget, "fetchNpmPackageTargetStatus").mockResolvedValue({
     version: "3.0.0",
-    nodeEngine: ">=24.16.0",
+    nodeEngine: ">=24.22.1",
   });
   vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(createMockGatewayService());
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);

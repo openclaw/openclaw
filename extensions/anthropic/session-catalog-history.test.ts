@@ -38,6 +38,13 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
 }));
 
 describe("importClaudeHistory", () => {
+  it.each(["", "{", "null", "[]", "42", '"text"', "{}"])(
+    "ignores malformed JSON and non-message transcript rows: %j",
+    (line) => {
+      expect(parseTranscriptLine(Buffer.from(line))).toBeUndefined();
+    },
+  );
+
   it("omits metadata without changing other native conversation rows", async () => {
     const items = [
       parseMessage("user", "private skill instructions", { isMeta: true }),

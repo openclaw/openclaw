@@ -110,7 +110,7 @@ it("keeps requesting Ultrafast after a downgrade and clears it on the first hono
     baseUrl: model.baseUrl,
   };
   const read = () =>
-    accountCatalog.readServiceTierObservation({
+    accountCatalog.readServiceTierObservations({
       ...route,
       identityKey: attribution.accountRoute,
     });
@@ -134,7 +134,7 @@ it("keeps requesting Ultrafast after a downgrade and clears it on the first hono
   for (const tier of ["priority", "priority", "ultrafast"]) {
     responseTier = tier;
     await wrapped(model, { messages: [] }, options);
-    expect(read()).toEqual(tier === "ultrafast" ? undefined : expectedObservation("priority"));
+    expect(read()).toEqual(tier === "ultrafast" ? [] : [expectedObservation("priority")]);
   }
   expect(payloads).toEqual(Array.from({ length: 3 }, () => ({ service_tier: "ultrafast" })));
   expect(previous).toHaveBeenCalledTimes(3);

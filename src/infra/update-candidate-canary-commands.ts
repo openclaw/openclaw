@@ -78,8 +78,4 @@ export type CanaryResult = {
   gatewayRestartCompletion?: boolean;
   doctorConfigWrites?: boolean;
   doctorConfigChanges?: UpdateDoctorConfigChange[];
-  listenerIsolation?: {
-    gateway: { host: "127.0.0.1"; port: number };
-    mcpAppSandbox: "disabled";
-  };
 } & CanaryOutcome;

@@ -1,7 +1,9 @@
+import { sanitizeEmbeddingCacheHeaders } from "openclaw/plugin-sdk/embedding-provider-adapter";
 import {
   createLazyRuntimeMethodBinder,
   createLazyRuntimeModule,
 } from "openclaw/plugin-sdk/lazy-runtime";
+import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   definePluginEntry,
   type OpenClawPluginApi,
@@ -13,14 +15,46 @@ import {
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-import { lmstudioMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import lmstudioProviderDiscovery from "./provider-discovery.js";
 import { LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER, LMSTUDIO_PROVIDER_LABEL } from "./src/defaults.js";
+import {
+  createLmstudioEmbeddingProvider,
+  DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
+} from "./src/embedding-provider.js";
 import {
   normalizeLmstudioConfiguredCatalogEntries,
   normalizeLmstudioProviderConfig,
 } from "./src/models.js";
 import { wrapLmstudioInferencePreload } from "./src/stream.js";
+
+const lmstudioMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
+  id: "lmstudio",
+  defaultModel: DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
+  transport: "remote",
+  authProviderId: "lmstudio",
+  allowExplicitWhenConfiguredAuto: true,
+  create: async (options) => {
+    const providerId = options.provider?.trim() || "lmstudio";
+    const { provider, client } = await createLmstudioEmbeddingProvider({
+      ...options,
+      provider: providerId,
+      fallback: "none",
+    });
+    return {
+      provider,
+      runtime: {
+        id: "lmstudio",
+        inlineBatchTimeoutMs: 10 * 60_000,
+        cacheKeyData: {
+          provider: providerId,
+          baseUrl: client.baseUrl,
+          model: client.model,
+          headers: sanitizeEmbeddingCacheHeaders(client.headers, ["authorization", "x-api-key"]),
+        },
+      },
+    };
+  },
+};
 
 const PROVIDER_ID = "lmstudio";
 const loadSetup = createLazyRuntimeModule(() => import("./src/setup.js"));

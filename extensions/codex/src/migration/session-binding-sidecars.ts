@@ -12,10 +12,11 @@ import {
 } from "openclaw/plugin-sdk/file-access-runtime";
 import { withFileLock, type FileLockOptions } from "openclaw/plugin-sdk/file-lock";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   archiveLegacyStateSource,
+  decodeUtf8Input,
   legacyStateFileExists,
+  Utf8InputError,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
@@ -29,6 +30,11 @@ import {
   readLegacySessionIndex,
   resolveLegacySessionFileLocator,
 } from "./session-binding-legacy-index.js";
+import {
+  collectBindingOwners,
+  tryResolveLegacyBindingOwnerAgentId,
+  type LegacyBindingOwner,
+} from "./session-binding-owners.js";
 
 const LEGACY_BINDING_SUFFIX = ".codex-app-server.json";
 const CODEX_AGENT_HARNESS_ID = "codex";
@@ -54,27 +60,12 @@ type LegacyBindingSource = {
   agentIds: Set<string>;
 };
 
-type LegacyBindingOwner = {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-  transcriptPath: string;
-  lifecycleRevision?: string;
-  agentHarnessId?: string;
-  updatedAt?: number;
-};
-
-type BindingOwnerCollection = {
-  owners: Map<string, LegacyBindingOwner[]>;
-  failures: string[];
-};
-
 type SourceMigrationResult = {
   archived: boolean;
   importedKeys: number;
   notice?: string;
   warning?: string;
+  warningDisposition?: "recoverable";
 };
 
 async function collectSessionSurfaces(params: MigrationEnvironment): Promise<SessionSurface[]> {
@@ -146,11 +137,18 @@ async function collectSessionSurfaces(params: MigrationEnvironment): Promise<Ses
 async function collectLegacyBindingSources(
   params: MigrationEnvironment,
   options: { firstOnly?: boolean } = {},
-): Promise<{ sources: LegacyBindingSource[]; surfaces: SessionSurface[] }> {
+): Promise<{
+  sources: LegacyBindingSource[];
+  surfaces: SessionSurface[];
+  failures: Utf8InputError[];
+}> {
   const surfaces = await collectSessionSurfaces(params);
   const sources = new Map<string, LegacyBindingSource>();
+  const failures: Utf8InputError[] = [];
   for (const surface of surfaces) {
-    const sidecars = surface.scan ? walkSidecars(surface.root) : iterateIndexedSidecars(surface);
+    const sidecars = surface.scan
+      ? walkSidecars(surface.root)
+      : iterateIndexedSidecars(surface, failures);
     for await (const sidecarPath of sidecars) {
       const canonicalSidecar = await canonicalPathFromExistingAncestor(sidecarPath);
       const source = sources.get(canonicalSidecar) ?? {
@@ -163,20 +161,27 @@ async function collectLegacyBindingSources(
       }
       sources.set(canonicalSidecar, source);
       if (options.firstOnly) {
-        return { sources: [source], surfaces };
+        return { sources: [source], surfaces, failures };
       }
     }
   }
   return {
     sources: [...sources.values()].toSorted((a, b) => a.sidecarPath.localeCompare(b.sidecarPath)),
     surfaces,
+    failures,
   };
 }
 
-async function* iterateIndexedSidecars(surface: SessionSurface): AsyncGenerator<string> {
+async function* iterateIndexedSidecars(
+  surface: SessionSurface,
+  failures: Utf8InputError[],
+): AsyncGenerator<string> {
   for (const storePath of surface.storePaths) {
     const index = await readLegacySessionIndex(storePath);
     if ("failure" in index) {
+      if (index.failure instanceof Utf8InputError) {
+        failures.push(index.failure);
+      }
       continue;
     }
     for (const { entry } of index.entries) {
@@ -224,126 +229,6 @@ async function* walkSidecars(root: string): AsyncGenerator<string> {
   }
 }
 
-async function collectBindingOwners(
-  sources: LegacyBindingSource[],
-  surfaces: SessionSurface[],
-  params: MigrationEnvironment,
-): Promise<BindingOwnerCollection> {
-  const sourcePaths = new Set(
-    await Promise.all(
-      sources.map((source) => canonicalPathFromExistingAncestor(source.transcriptPath)),
-    ),
-  );
-  const owners = new Map<string, Map<string, LegacyBindingOwner>>();
-  const storeAgentIds = new Map<string, Set<string>>();
-  for (const surface of surfaces) {
-    for (const storePath of surface.storePaths) {
-      const agents = storeAgentIds.get(storePath) ?? new Set<string>();
-      for (const agentId of surface.agentIds) {
-        agents.add(agentId);
-      }
-      storeAgentIds.set(storePath, agents);
-    }
-  }
-  const failures: string[] = [];
-  for (const [storePath, agentIds] of storeAgentIds) {
-    const canonicalStorePath = await canonicalPathFromExistingAncestor(storePath);
-    const index = await readLegacySessionIndex(storePath);
-    if ("failure" in index) {
-      failures.push(index.failure);
-      continue;
-    }
-    const sessionsDir = path.dirname(storePath);
-    for (const { sessionKey, entry } of index.entries) {
-      const sessionId = entry.sessionId;
-      const agentId = tryResolveLegacyBindingOwnerAgentId({
-        sessionKey,
-        config: params.config,
-        storeAgentIds: agentIds,
-      });
-      if (!agentId) {
-        failures.push(`session index ${storePath} has an ambiguous owner for ${sessionKey}`);
-        continue;
-      }
-      let legacyTranscriptPath: string;
-      let canonicalLegacyTranscriptPath: string;
-      try {
-        legacyTranscriptPath = await resolveLegacySessionFileLocator(sessionsDir, entry, sessionId);
-        canonicalLegacyTranscriptPath =
-          await canonicalPathFromExistingAncestor(legacyTranscriptPath);
-      } catch {
-        failures.push(`session index ${storePath} has an invalid locator for ${sessionKey}`);
-        continue;
-      }
-      if (!sourcePaths.has(canonicalLegacyTranscriptPath)) {
-        continue;
-      }
-      const owner: LegacyBindingOwner = {
-        agentId,
-        sessionId,
-        sessionKey,
-        storePath,
-        transcriptPath: legacyTranscriptPath,
-        ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
-        agentHarnessId: entry.agentHarnessId?.trim(),
-        ...(entry.updatedAt !== undefined ? { updatedAt: entry.updatedAt } : {}),
-      };
-      const candidates =
-        owners.get(canonicalLegacyTranscriptPath) ?? new Map<string, LegacyBindingOwner>();
-      const ownerKey = `${agentId}\0${sessionId}\0${sessionKey}\0${canonicalStorePath}`;
-      const configuredStorePath = resolveStorePath(params.config.session?.store, {
-        agentId,
-        env: params.env,
-      });
-      // The same physical store can appear through a configured symlink and a
-      // discovered real path. Mutate through the path the runtime itself owns.
-      if (!candidates.has(ownerKey) || storePath === configuredStorePath) {
-        candidates.set(ownerKey, owner);
-      }
-      owners.set(canonicalLegacyTranscriptPath, candidates);
-    }
-  }
-  return {
-    owners: new Map([...owners].map(([key, values]) => [key, [...values.values()]])),
-    failures,
-  };
-}
-
-function tryResolveLegacyBindingOwnerAgentId(params: {
-  sessionKey: string;
-  config: MigrationEnvironment["config"];
-  storeAgentIds?: Set<string>;
-}): string | undefined {
-  if (params.sessionKey.trim().toLowerCase().startsWith("agent:")) {
-    return resolveSessionAgentIdsStrict({
-      sessionKey: params.sessionKey,
-      config: params.config,
-    }).sessionAgentId;
-  }
-  const storeAgentId = params.storeAgentIds?.size === 1 ? [...params.storeAgentIds][0] : undefined;
-  const configuredAgentId = params.config.agents?.defaults?.systemAgent?.agentId?.trim();
-  const systemAgentId =
-    !storeAgentId && configuredAgentId ? normalizeAgentId(configuredAgentId) : undefined;
-  const fallbackAgentIds =
-    systemAgentId && listAgentIds(params.config).includes(systemAgentId)
-      ? [undefined, systemAgentId]
-      : [undefined];
-  for (const fallbackAgentId of fallbackAgentIds) {
-    try {
-      return resolveSessionAgentIdsStrict({
-        sessionKey: params.sessionKey,
-        config: params.config,
-        ...(storeAgentId ? { agentId: storeAgentId } : fallbackAgentId ? { fallbackAgentId } : {}),
-      }).sessionAgentId;
-    } catch (error) {
-      if ((error as { code?: unknown }).code !== "AGENT_SELECTION_REQUIRED") {
-        throw error;
-      }
-    }
-  }
-  return undefined;
-}
-
 function copyBindingForSession(stored: MigratedBindingRow, sessionId: string): MigratedBindingRow {
   return stored.state === "active"
     ? { version: 1, state: "active", binding: stored.binding, sessionId }
@@ -374,10 +259,12 @@ async function migrateSource(
   try {
     return await withFileLock(source.sidecarPath, LEGACY_BINDING_LOCK_OPTIONS, async () => {
       const [contents, stat] = await Promise.all([
-        fs.readFile(source.sidecarPath, "utf8"),
+        fs.readFile(source.sidecarPath),
         fs.stat(source.sidecarPath),
       ]);
-      const raw = JSON.parse(contents) as Record<string, unknown>;
+      const raw = JSON.parse(
+        decodeUtf8Input(contents, `Legacy Codex binding ${source.sidecarPath}`),
+      ) as Record<string, unknown>;
       const [
         {
           bindingStoreKey,
@@ -592,6 +479,9 @@ async function migrateSource(
       return { archived: true, importedKeys };
     });
   } catch (error) {
+    if (error instanceof Utf8InputError) {
+      return { ...retain(error.message), warningDisposition: "recoverable" };
+    }
     // Parallel doctor runs can both discover a source before the first archives it.
     if (
       (error as NodeJS.ErrnoException).code === "ENOENT" &&
@@ -688,7 +578,10 @@ export async function collectLegacySessionBindingBackupResources(params: Migrati
 }
 
 export async function detectLegacySessionBindingSidecars(params: MigrationParams) {
-  const { sources } = await collectLegacyBindingSources(params, { firstOnly: true });
+  const { sources, failures } = await collectLegacyBindingSources(params, { firstOnly: true });
+  if (failures.length > 0) {
+    return { preview: failures.map((error) => error.message) };
+  }
   return sources.length > 0
     ? {
         preview: [
@@ -702,16 +595,26 @@ export async function migrateLegacySessionBindingSidecars(params: MigrationParam
   const changes: string[] = [];
   const warnings: string[] = [];
   const notices: string[] = [];
-  const { sources, surfaces } = await collectLegacyBindingSources(params);
+  const { sources, surfaces, failures } = await collectLegacyBindingSources(params);
   if (sources.length === 0) {
-    return { changes, warnings };
+    return {
+      changes,
+      warnings: failures.map((error) => error.message),
+      ...(failures.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
+    };
   }
   const ownerCollection = await collectBindingOwners(sources, surfaces, params);
   if (ownerCollection.failures.length > 0) {
     warnings.push(
       `Left ${sources.length} Codex binding sidecar(s) in place because session ownership is indeterminate: ${ownerCollection.failures.join("; ")}`,
     );
-    return { changes, warnings };
+    return {
+      changes,
+      warnings,
+      ...(ownerCollection.failures.every((error) => error instanceof Utf8InputError)
+        ? { warningDisposition: "recoverable" as const }
+        : {}),
+    };
   }
   const store = params.context.openPluginStateKeyedStore<MigratedBindingRow>({
     namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -720,6 +623,7 @@ export async function migrateLegacySessionBindingSidecars(params: MigrationParam
   });
   let migrated = 0;
   let partialImports = 0;
+  let recoverableWarnings = 0;
   for (const source of sources) {
     const candidates =
       ownerCollection.owners.get(await canonicalPathFromExistingAncestor(source.transcriptPath)) ??
@@ -727,6 +631,9 @@ export async function migrateLegacySessionBindingSidecars(params: MigrationParam
     const result = await migrateSource(source, candidates, params, store);
     if (result.warning) {
       warnings.push(result.warning);
+      if (result.warningDisposition === "recoverable") {
+        recoverableWarnings++;
+      }
     }
     if (result.notice) {
       notices.push(result.notice);
@@ -750,7 +657,9 @@ export async function migrateLegacySessionBindingSidecars(params: MigrationParam
   return {
     changes,
     warnings,
+    ...(warnings.length > 0 && warnings.length === recoverableWarnings
+      ? { warningDisposition: "recoverable" as const }
+      : {}),
     ...(notices.length > 0 ? { notices } : {}),
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

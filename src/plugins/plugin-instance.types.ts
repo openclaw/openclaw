@@ -1,3 +1,17 @@
+import type { Static } from "typebox";
+import type { PluginRuntimeRetentionSchema } from "../../packages/gateway-protocol/src/schema/plugin-retention.js";
+
+/** Payload-free facts shared with administrator inspection. */
+export type PluginRetentionSnapshot = Static<typeof PluginRuntimeRetentionSchema>;
+export type PluginRetainedReference = Omit<PluginRetentionSnapshot["references"][number], "ageMs">;
+/** Host-authored correlation only, never invocation or authorization authority. */
+export type PluginRetentionOwner = Readonly<Exclude<PluginRetainedReference["owner"], "unknown">>;
+export type PluginRetentionReason = PluginRetainedReference["reason"];
+export type PluginWorkRelease = (() => void) & {
+  /** Updates observation only; never releases or revokes a hold. */
+  setCleanupState?: (state: PluginRetainedReference["cleanupState"]) => void;
+};
+
 /** Disposal and admission shared by instance resources and registry handles. */
 export type PluginInstanceLifecycle = {
   readonly signal: AbortSignal;
@@ -20,8 +34,6 @@ export type PluginInstanceAdmission = {
 /** Known disposal faults are reported outcomes, never new-call admission failures. */
 export type PluginInstanceDisposalResult = {
   errors: readonly unknown[];
-  /** Errors seen only in host cleanup, eligible for its named-hook reporting. */
-  hostCleanupErrors?: readonly unknown[];
 };
 
 /** A host-owned logical consumer retains only its exact instance's admitted operations. */
@@ -48,7 +60,7 @@ export interface PluginInstanceResource {
 /** Captured code custody survives retiring a runtime until recovery consumes or releases it. */
 export type PluginModuleLoaderRecovery = {
   bind(instance: PluginModuleLoaderOwner): void;
-  dispose(): void;
+  dispose(): Promise<void>;
 };
 
 /** Runtime and setup loaders use the same instance-owned captured source. */

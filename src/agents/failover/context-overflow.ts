@@ -11,23 +11,16 @@ import {
   isProviderRequestSizeCeilingError,
   isRateLimitErrorMessage,
 } from "./message-patterns.js";
-import {
-  classifyProviderPluginError,
-  type PreparedProviderFailoverOwner,
-} from "./provider-patterns.js";
+import { classifyProviderPluginError } from "./provider-patterns.js";
 
-export function isContextOverflowError(
-  errorMessage?: string,
-  opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
-): boolean {
+export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
   return (
     isContextOverflowErrorFromTables(errorMessage) ||
     (looksLikeProviderContextOverflowCandidate(errorMessage) &&
-      classifyProviderPluginError({ errorMessage, providerPlugin: opts?.providerPlugin }) ===
-        "context_overflow")
+      classifyProviderPluginError({ errorMessage }) === "context_overflow")
   );
 }
 

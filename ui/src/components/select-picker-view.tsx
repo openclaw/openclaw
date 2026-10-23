@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { For, Show, createMemo, createSignal, createStore, onSettled, untrack } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createAnchoredOverlay } from "../lib/reactive/overlay-anchor.ts";
@@ -10,6 +10,7 @@ import type { OverlayNativeAdapter } from "./overlay-types.ts";
 import type { PickerOption, PickerParams, PickerGroup } from "./select-picker-types.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useMenuMachine } from "./solid/menu-machine.ts";
+import { MenuNavigationError } from "./solid/menu-navigation-error.tsx";
 import { useOverlayControl } from "./solid/overlay-control.ts";
 import "./solid/overlay.css";
 
@@ -61,10 +62,13 @@ export function PickerContent<Option extends PickerOption>(props: {
   let sheetScroll: { root: Element; top: number } | undefined;
   let hoverTimer: ReturnType<typeof setTimeout> | undefined;
   let hoverOpened = false;
+  // A row the pointer highlights is already where the user is looking. Revealing
+  // it would scroll a clipped edge row against an in-progress wheel or trackpad scroll.
+  let pointerHighlight = false;
   const [searching, setSearching] = createSignal(false);
   const [query, setQuery] = createSignal("");
   const [keyboard, setKeyboard] = createSignal(false);
-  const [collapsed, setCollapsed] = createSignal(new Set<string>());
+  const [collapsed, setCollapsed] = createStore<string[]>([]);
   const direction = () => (getComputedStyle(props.host).direction === "rtl" ? "rtl" : "ltr");
   const resolvePlacement = (
     placement: PickerParams<Option>["placement"],
@@ -112,7 +116,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         section = {
           group,
           options: [],
-          expanded: Boolean(query().trim()) || !collapsed().has(group.id),
+          expanded: Boolean(query().trim()) || !collapsed.includes(group.id),
         };
         groups.set(group.id, section);
       }
@@ -143,10 +147,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         intent === "last" &&
         !rows().some((option) => option.value === props.params.value && !option.disabled)
       ) {
-        menu.service.send({
-          type: "HIGHLIGHTED.SET",
-          value: rows().findLast((option) => !option.disabled)?.value ?? null,
-        });
+        menu.setHighlightedValue(rows().findLast((option) => !option.disabled)?.value ?? null);
       }
       target?.focus({ preventScroll: true });
     },
@@ -183,7 +184,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     items: rows,
     value: () => props.params.value,
   });
-  const active = () => menu.read().highlightedValue;
+  const active = () => menu.highlightedValue();
   const controls = () =>
     props.params.groupBy
       ? sections()
@@ -225,7 +226,7 @@ export function PickerContent<Option extends PickerOption>(props: {
           if (searching()) {
             setQuery(initialKey);
           } else {
-            menu.service.send({ type: "TYPEAHEAD", key: initialKey });
+            menu.typeahead(initialKey);
           }
         });
       }
@@ -247,6 +248,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     if (event.isComposing || props.params.disabled) {
       return;
     }
+    pointerHighlight = false;
     const editing = event.target instanceof HTMLInputElement;
     if (!editing || event.key.startsWith("Arrow")) {
       setKeyboard(true);
@@ -317,17 +319,14 @@ export function PickerContent<Option extends PickerOption>(props: {
       enter ? 120 : 150,
     );
   }
-  onCleanup(() => {
-    clearTimeout(hoverTimer);
-  });
   createScrollPosition(
     () => ({
       reveal: opened()
         ? {
             identity: [opened(), active(), query(), rows()],
             target: () =>
-              overlay.open
-                ? optionElements.get(menu.service.context.get("highlightedValue") ?? "")
+              overlay.open && !pointerHighlight
+                ? optionElements.get(menu.highlightedValueNow() ?? "")
                 : undefined,
           }
         : undefined,
@@ -336,6 +335,7 @@ export function PickerContent<Option extends PickerOption>(props: {
   );
   function onOpenChange(next: boolean) {
     if (next) {
+      pointerHighlight = false;
       props.params.onOpen?.();
       const root = surface.offsetParent;
       if (props.params.sheet && root) {
@@ -345,8 +345,9 @@ export function PickerContent<Option extends PickerOption>(props: {
     } else {
       setQuery("");
       setSearching(false);
-      // Disabled overlays can retire repeatedly as unrelated DOM content changes.
-      setCollapsed((current) => (current.size ? new Set<string>() : current));
+      setCollapsed((draft) => {
+        draft.length = 0;
+      });
       hoverOpened = false;
       if (sheetScroll) {
         sheetScroll.root.scrollTop = sheetScroll.top;
@@ -358,6 +359,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     const disconnectAnchor = anchor.connect();
     const stop = control.connect(() => {}, onOpenChange);
     return () => {
+      clearTimeout(hoverTimer);
       stop();
       disconnectAnchor();
     };
@@ -375,14 +377,17 @@ export function PickerContent<Option extends PickerOption>(props: {
     // The parent For keys each mounted row by value.
     const initialValue = untrack(() => row.option().value);
     let element: HTMLDivElement;
-    onCleanup(() => {
-      if (optionElements.get(initialValue) === element) {
-        optionElements.delete(initialValue);
-      }
+    onSettled(() => {
+      optionElements.set(initialValue, element);
+      return () => {
+        if (optionElements.get(initialValue) === element) {
+          optionElements.delete(initialValue);
+        }
+      };
     });
     return (
       <div
-        ref={[itemRef, (node) => optionElements.set(initialValue, (element = node))]}
+        ref={[itemRef, (node) => (element = node)]}
         {...menu.item(
           row.option().value,
           row.option().disabled || !visible().has(row.option().value),
@@ -402,8 +407,9 @@ export function PickerContent<Option extends PickerOption>(props: {
         onMouseDown={(event) => event.preventDefault()}
         onMouseMove={() => {
           setKeyboard(false);
+          pointerHighlight = true;
           if (!row.option().disabled) {
-            menu.read().setHighlightedValue(row.option().value);
+            menu.setHighlightedValue(row.option().value);
           }
         }}
         onClick={() => commit(row.option().value)}
@@ -496,6 +502,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         popover={props.params.sheet ? undefined : "manual"}
         hidden={props.params.sheet ? true : undefined}
       >
+        <MenuNavigationError binding={menu} />
         <Show when={props.params.sheet}>
           <div class="picker-select__page-header">
             <button
@@ -575,14 +582,13 @@ export function PickerContent<Option extends PickerOption>(props: {
                       aria-controls={`${id}-group-${index()}`}
                       disabled={Boolean(query().trim())}
                       onClick={() =>
-                        setCollapsed((current) => {
-                          const next = new Set(current);
-                          if (next.has(group().id)) {
-                            next.delete(group().id);
+                        setCollapsed((draft) => {
+                          const collapsedIndex = draft.indexOf(group().id);
+                          if (collapsedIndex !== -1) {
+                            draft.splice(collapsedIndex, 1);
                           } else {
-                            next.add(group().id);
+                            draft.push(group().id);
                           }
-                          return next;
                         })
                       }
                     >

@@ -152,6 +152,18 @@ export class PluginRegistrationResourceSource {
     void this.#dispose(pluginId, entry);
   }
 
+  /** Move a completed registration together with its successor instance custody. */
+  transferRegistrationTo(pluginId: string, target: PluginRegistrationResourceSource): void {
+    const entry = this.#registrations.get(pluginId);
+    if (entry) {
+      if (this.#closed || target.#closed || target.#registrations.has(pluginId)) {
+        throw new Error(`Plugin registration custody cannot transfer: ${pluginId}`);
+      }
+      this.#registrations.delete(pluginId);
+      target.#registrations.set(pluginId, entry);
+    }
+  }
+
   async #waitForRegistrations(): Promise<void> {
     while (this.#pending.size > 0) {
       await Promise.all(this.#pending);

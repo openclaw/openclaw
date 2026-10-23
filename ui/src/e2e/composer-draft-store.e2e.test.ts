@@ -126,8 +126,11 @@ suite.define(() => {
       const sessionKeyHandle = await page.evaluateHandle<
         typeof import("../lib/sessions/session-key.ts")
       >('import("/src/lib/sessions/session-key.ts")');
+      const scopeHandle = await page.evaluateHandle<
+        typeof import("../lib/chat/outbox-store-scope.ts")
+      >('import("/src/lib/chat/outbox-store-scope.ts")');
       const result = await page.evaluate(
-        async ({ draftStore, sessionKeys, composer }) => {
+        async ({ draftStore, sessionKeys, composer, scopes }) => {
           const client = { recoveryScope: "credential-a", recoveryScopeReady: true };
           const state = {
             settings: { gatewayUrl: "owner-fence-gateway" },
@@ -143,7 +146,7 @@ suite.define(() => {
           const scope = {
             gatewayOwner: state.settings.gatewayUrl,
             recoveryScope: client.recoveryScope,
-            scopeKey: `chat:v3:${composer.storedChatOutboxScopeKey(
+            scopeKey: `chat:v3:${scopes.storedChatOutboxScopeKey(
               sessionKeys.resolveUiConversationIdentity(state, state.sessionKey),
             )}`,
           };
@@ -182,7 +185,12 @@ suite.define(() => {
           );
           return draftStore.read(scope);
         },
-        { draftStore: storeHandle, sessionKeys: sessionKeyHandle, composer: composerHandle },
+        {
+          draftStore: storeHandle,
+          sessionKeys: sessionKeyHandle,
+          composer: composerHandle,
+          scopes: scopeHandle,
+        },
       );
 
       expect(result).toMatchObject({
@@ -548,9 +556,9 @@ suite.define(() => {
           )
           .click();
         await expect.poll(() => composer.inputValue()).toBe("");
-        const composerHandle = await page.evaluateHandle<
-          typeof import("../pages/chat/composer-persistence.ts")
-        >('import("/src/pages/chat/composer-persistence.ts")');
+        const queueHandle = await page.evaluateHandle<
+          typeof import("../pages/chat/composer-queue-persistence.ts")
+        >('import("/src/pages/chat/composer-queue-persistence.ts")');
         const outboxHandle = await page.evaluateHandle<
           typeof import("../lib/chat/outbox-store.ts")
         >('import("/src/lib/chat/outbox-store.ts")');
@@ -564,7 +572,7 @@ suite.define(() => {
           .toBe(true);
         // A submitted, held message has a separate reload contract from unsent input.
         const admission = await page.evaluate(
-          ({ persistence, outbox, sessionKey }) => {
+          ({ queuePersistence, outbox, sessionKey }) => {
             const pane = document.querySelector<HTMLElement & { state: ChatPageHost }>(
               'openclaw-chat-pane[aria-hidden="false"]',
             );
@@ -579,7 +587,7 @@ suite.define(() => {
               throw new Error("Expected the authenticated Incognito composer owner");
             }
             const target = outbox.storageTargetForComposer(state);
-            const admitted = persistence.admitStoredChatComposerQueueItem(
+            const admitted = queuePersistence.admitStoredChatComposerQueueItemResult(
               state,
               outbox.captureChatOutboxAdmission(state, sessionKey),
               {
@@ -595,9 +603,9 @@ suite.define(() => {
               storageScope: JSON.stringify([target.gatewayOwner, target.recoveryScope]),
             };
           },
-          { persistence: composerHandle, outbox: outboxHandle, sessionKey: incognito },
+          { queuePersistence: queueHandle, outbox: outboxHandle, sessionKey: incognito },
         );
-        expect(admission.admitted).toBe(true);
+        expect(admission.admitted).toBe("admitted");
         await composer.fill("Private unsent draft — café 雪 🦞");
         await activePane.locator(".agent-chat__file-input").setInputFiles({
           name: "private-draft.txt",

@@ -26,7 +26,6 @@ import {
   createMaintenanceSessionManagerOpenFixture,
 } from "./context-engine-maintenance.fixtures.test-support.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
-import { resetDeferredTurnMaintenanceStateForTest } from "./context-engine-maintenance.test-support.js";
 
 const rewriteMock = vi.fn((_params?: unknown) => ({
   changed: true,
@@ -137,12 +136,10 @@ describe("runContextEngineMaintenance", () => {
     rewriteMock.mockClear();
     sessionManagerFixture.reset();
     resolveTargetMock.mockClear();
-    resetDeferredTurnMaintenanceStateForTest();
   });
 
   afterEach(() => {
     process.off("SIGTERM", keepProcessAlive);
-    resetDeferredTurnMaintenanceStateForTest();
     vi.useRealTimers();
   });
 

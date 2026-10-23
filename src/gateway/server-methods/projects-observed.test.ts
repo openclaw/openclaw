@@ -4,11 +4,14 @@ import {
   PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT,
   PROJECTS_LIST_MAX_IDENTITY_PROBES,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { managedWorktrees } from "../../agents/worktrees/service.js";
+import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withRestoredMocks } from "../../test-utils/vitest-spies.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
-import { createProjectsHandlers } from "./projects.js";
+import { projectsHandlers } from "./projects.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const seededSessions = vi.hoisted(() => ({
@@ -19,8 +22,17 @@ function session(name: string, updatedAt: number, fields: Partial<SessionEntry>)
   return [`agent:main:${name}`, { sessionId: name, updatedAt, ...fields }] as const;
 }
 
-function worktree(name: string, ownerId: string | undefined, lastActiveAt: number) {
+function worktree(
+  name: string,
+  ownerId: string | undefined,
+  lastActiveAt: number,
+): ManagedWorktreeRecord {
   return {
+    id: name,
+    name,
+    branch: `openclaw/${name}`,
+    baseRef: "HEAD",
+    createdAt: lastActiveAt,
     repoFingerprint: name,
     repoRoot: `/repos/${name}`,
     path: `/worktrees/${name}`,
@@ -105,36 +117,39 @@ async function listObservedProjects(
   {
     worktrees = [],
     client = authenticatedClient("operator@example.com"),
-  }: { worktrees?: unknown[]; client?: GatewayClient } = {},
+  }: { worktrees?: ManagedWorktreeRecord[]; client?: GatewayClient } = {},
 ) {
-  const handlers = createProjectsHandlers({
-    listRegistryRecords: async () => worktrees,
-    resolveRepositoryIdentities: (roots: string[]) =>
+  const registry = vi.spyOn(managedWorktrees, "listRegistryRecords").mockResolvedValue(worktrees);
+  const identities = vi
+    .spyOn(managedWorktrees, "resolveRepositoryIdentities")
+    .mockImplementation((roots) =>
       Promise.all(roots.map((root) => resolveRepositoryIdentity(root).catch(() => undefined))),
-  } as never);
-  const responses: Parameters<RespondFn>[] = [];
-  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-  const projection = createSessionRowProjectionFixture({ cfg, store: {}, modelCatalog: [] });
-  try {
-    await handlers["projects.list"]?.({
-      params: { includeObserved: true },
-      respond: (...response: Parameters<RespondFn>) => responses.push(response),
-      context: bindSessionRowProjection(
-        { getRuntimeConfig: () => cfg },
-        () => projection,
-      ) as GatewayRequestContext,
-      client,
-    } as never);
-  } finally {
-    projection.dispose();
-  }
-  expect(responses).toHaveLength(1);
-  const [ok, payload] = responses[0]!;
-  expect(ok).toBe(true);
-  if (!isRecord(payload) || !Array.isArray(payload.observedProjects)) {
-    throw new TypeError("projects.list response is missing observedProjects");
-  }
-  return payload.observedProjects;
+    );
+  return await withRestoredMocks([registry, identities], async () => {
+    const responses: Parameters<RespondFn>[] = [];
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    const projection = createSessionRowProjectionFixture({ cfg, store: {}, modelCatalog: [] });
+    try {
+      await projectsHandlers["projects.list"]?.({
+        params: { includeObserved: true },
+        respond: (...response: Parameters<RespondFn>) => responses.push(response),
+        context: bindSessionRowProjection(
+          { getRuntimeConfig: () => cfg },
+          () => projection,
+        ) as GatewayRequestContext,
+        client,
+      } as never);
+    } finally {
+      projection.dispose();
+    }
+    expect(responses).toHaveLength(1);
+    const [ok, payload] = responses[0]!;
+    expect(ok).toBe(true);
+    if (!isRecord(payload) || !Array.isArray(payload.observedProjects)) {
+      throw new TypeError("projects.list response is missing observedProjects");
+    }
+    return payload.observedProjects;
+  });
 }
 
 beforeEach(() => {

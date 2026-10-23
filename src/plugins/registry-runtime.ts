@@ -8,12 +8,12 @@ import {
   type OpenBlobStoreOptions,
 } from "../plugin-state/plugin-blob-store.js";
 import {
+  createPluginStateKeyedStore,
   createPluginStateRuntimeStores,
   type OpenAsyncKeyedStoreOptions,
 } from "../plugin-state/plugin-state-store.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
-import { createPluginRuntimeKeyedStore } from "./plugin-runtime-keyed-store.js";
 import { capturePluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
 import { PluginTrustRefusalError } from "./plugin-trust.js";
 import {
@@ -21,13 +21,13 @@ import {
   getPluginRecordRegistry,
   getPluginRegistryResourceOwner,
   isPluginRecordActive,
-  isPluginRegistryPreparing,
 } from "./registry-lifecycle.js";
 import {
   createRegisteredChannelRuntimeResolver,
   createScopedPluginChannelRuntime,
 } from "./registry-runtime-channel.js";
 import { createPluginRuntimeFacades } from "./registry-runtime-facades.js";
+import { createPluginSystemRuntime } from "./registry-runtime-system.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import {
@@ -201,8 +201,21 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 assertRuntimeCurrent,
               ),
             ),
-            openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
-              createPluginRuntimeKeyedStore<T>(record, options, assertRuntimeCurrent),
+            openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
+              // Bind storage and operation code to the same admitted instance before yielding.
+              if (options.retention === "retained") {
+                assertRuntimeCurrent();
+              }
+              return createPluginStateKeyedStore<T>(
+                record.id,
+                options,
+                assertRuntimeCurrent,
+                capturePluginStateOperationModuleSource(
+                  getPluginInstance(record),
+                  assertRuntimeCurrent,
+                ),
+              );
+            },
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
             ) => {
@@ -265,25 +278,14 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           } satisfies PluginRuntime["config"];
         }
         if (prop === "system") {
-          const system: PluginRuntime["system"] = getRuntimeProperty();
-          const route = <T>(run: () => T): T => {
-            assertRuntimeCurrent();
-            if (isPluginRegistryPreparing(registry) && !isPluginRecordActive(registry, record)) {
-              throw new Error(
-                `Plugin "${pluginId}" cannot route system events during replacement preparation.`,
-              );
-            }
-            return runWithPluginScope(run);
-          };
-          return {
-            ...system,
-            enqueueSystemEvent: (...args) => route(() => system.enqueueSystemEvent(...args)),
-            requestHeartbeat: (...args) => route(() => system.requestHeartbeat(...args)),
-            requestHeartbeatNow: (...args) => route(() => system.requestHeartbeatNow(...args)),
-            runHeartbeatOnce: (...args) => route(() => system.runHeartbeatOnce(...args)),
-            runCommandWithTimeout: (...args) =>
-              runWithPluginScope(() => system.runCommandWithTimeout(...args)),
-          } satisfies PluginRuntime["system"];
+          return createPluginSystemRuntime({
+            state,
+            record,
+            system: getRuntimeProperty(),
+            currentRegistry,
+            assertRuntimeCurrent,
+            runWithPluginScope,
+          });
         }
         if (prop === "channel") {
           const channel = channelRuntime.resolve(record);
@@ -683,5 +685,3 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     revokePluginRuntimeRecord: channelRuntime.revoke,
   };
 }
-
-export type PluginRuntimeResolver = ReturnType<typeof createPluginRuntimeResolver>;

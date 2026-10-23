@@ -3,8 +3,11 @@ import { existsSync, readFileSync } from "node:fs";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { HeapSpaceInfo } from "node:v8";
+import type { sampleTrackedWorkerMemory } from "../../src/infra/worker-cpu.ts";
 import type { WorkerMessageMetric } from "../../src/infra/worker-message-metrics.ts";
 import type { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
+import type { GatewayWorkerCpuSnapshot } from "./gateway-bench-worker-profile.ts";
 
 export const GATEWAY_PROFILE_CHANNEL = "openclaw-gateway-bench-profile";
 export const GATEWAY_GC_TRACE_MARKER = "OPENCLAW_GATEWAY_BENCH_GC ";
@@ -27,12 +30,21 @@ export type GatewayCpuUsageSnapshot = {
   atMonotonicMicros: number;
   process: NodeJS.CpuUsage;
   mainThread: NodeJS.CpuUsage;
+  workerCpu?: GatewayWorkerCpuSnapshot;
 };
 
 export type GatewayResourceSnapshot = GatewayCpuUsageSnapshot & {
   memory: NodeJS.MemoryUsage;
+  heapSpaces: HeapSpaceInfo[];
+  workers?: ReturnType<typeof sampleTrackedWorkerMemory>;
   activeResources: Record<string, number>;
   runtime: { node: string; platform: string; arch: string };
+  sessionCensus?: {
+    scope: "source-main-isolate";
+    SessionManager: number;
+    AgentSession: number;
+    Agent: number;
+  };
 };
 
 export type GatewayBenchCommand =
@@ -43,13 +55,21 @@ export type GatewayBenchCommand =
       action: "start" | "stop";
       captureId?: string;
     }
-  | { channel: typeof GATEWAY_PROFILE_CHANNEL; kind: "cpu-usage"; action: "sample" }
+  | {
+      channel: typeof GATEWAY_PROFILE_CHANNEL;
+      kind: "cpu-usage";
+      action: "sample";
+      includeWorkers?: boolean;
+    }
   | {
       channel: typeof GATEWAY_PROFILE_CHANNEL;
       kind: "resource-usage";
       action: "sample";
       initial?: boolean;
+      includeWorkers?: boolean;
       collectGarbage?: boolean;
+      sessionCensus?: boolean;
+      clearPromptCacheObservations?: boolean;
       snapshotPath?: string;
     };
 
@@ -233,11 +253,15 @@ export async function startGatewayDiagnostics(child: ChildProcess, captureId?: s
   };
 }
 
-export async function readGatewayCpuUsage(child: ChildProcess): Promise<GatewayCpuUsageSnapshot> {
+export async function readGatewayCpuUsage(
+  child: ChildProcess,
+  options: { includeWorkers?: boolean } = {},
+): Promise<GatewayCpuUsageSnapshot> {
   const reply = await sendGatewayBenchCommand(child, {
     channel: GATEWAY_PROFILE_CHANNEL,
     kind: "cpu-usage",
     action: "sample",
+    ...options,
   });
   if (!reply.cpuUsage) {
     throw new Error("Gateway did not report CPU usage");
@@ -248,7 +272,14 @@ export async function readGatewayCpuUsage(child: ChildProcess): Promise<GatewayC
 /** Samples the Gateway itself, not the controller or its descendants. */
 export async function readGatewayResources(
   child: ChildProcess,
-  options: { initial?: boolean; collectGarbage?: boolean; snapshotPath?: string } = {},
+  options: {
+    initial?: boolean;
+    includeWorkers?: boolean;
+    collectGarbage?: boolean;
+    sessionCensus?: boolean;
+    clearPromptCacheObservations?: boolean;
+    snapshotPath?: string;
+  } = {},
 ): Promise<GatewayResourceSnapshot> {
   const reply = await sendGatewayBenchCommand(child, {
     channel: GATEWAY_PROFILE_CHANNEL,
@@ -291,6 +322,9 @@ export function measureGatewayCpuUsage(
     wallMs: (after.atMonotonicMicros - before.atMonotonicMicros) / 1_000,
     process: delta(before.process, after.process),
     mainThread: delta(before.mainThread, after.mainThread),
+    ...(before.workerCpu && after.workerCpu
+      ? { workerCpu: { before: before.workerCpu, after: after.workerCpu } }
+      : {}),
   };
 }
 
@@ -299,6 +333,8 @@ async function sendGatewayBenchCommand(
   command: GatewayBenchCommand,
 ): Promise<GatewayProfileReply> {
   const { kind, action } = command;
+  // Constructor census scans the full heap three times, unlike a resource sample.
+  const timeoutMs = command.kind === "resource-usage" && command.sessionCensus ? 120_000 : 30_000;
   return await new Promise<GatewayProfileReply>((resolve, reject) => {
     const finish = (result: Error | GatewayProfileReply) => {
       clearTimeout(timer);
@@ -327,8 +363,8 @@ async function sendGatewayBenchCommand(
     const onDisconnect = () =>
       finish(new Error(`Gateway disconnected during ${kind} profile ${action}`));
     const timer = setTimeout(
-      () => finish(new Error(`Gateway ${kind} profile ${action} timed out after 30000ms`)),
-      30_000,
+      () => finish(new Error(`Gateway ${kind} profile ${action} timed out after ${timeoutMs}ms`)),
+      timeoutMs,
     );
     child.on("message", onMessage);
     child.once("exit", onExit);
@@ -363,20 +399,75 @@ export function readGatewayHeapProfile(
 ) {
   const profile: HeapProfiler.SamplingHeapProfile = JSON.parse(readFileSync(profilePath, "utf8"));
   const sites: Array<{ sampledBytes: number; stack: string[] }> = [];
+  const broadcastSites = new Map<
+    string,
+    { sampledBytes: number; sites: Array<{ sampledBytes: number; stack: string[] }> }
+  >();
+  let broadcastSampledBytes = 0;
+  let projectionSelfSampledBytes = 0;
+  let sourceProjectionObserved = false;
   let sampledAllocatedBytes = 0;
   const formatFrame = (frame: HeapProfiler.SamplingHeapProfileNode["callFrame"]): string => {
     const filePath = frame.url.startsWith("file://") ? fileURLToPath(frame.url) : frame.url;
     const url = path.isAbsolute(filePath) ? path.relative(process.cwd(), filePath) : filePath;
     return `${frame.functionName || "(anonymous)"} (${url}:${frame.lineNumber + 1})`;
   };
-  const visit = (node: HeapProfiler.SamplingHeapProfileNode, parents: string[]) => {
+  const visit = (
+    node: HeapProfiler.SamplingHeapProfileNode,
+    parents: string[],
+    parentBroadcasting = false,
+    parentFamily = "otherBroadcast",
+  ) => {
     const stack = [...parents, formatFrame(node.callFrame)];
+    let broadcasting = parentBroadcasting;
+    let family = parentFamily;
+    if (node.callFrame.functionName === "broadcastInternal") {
+      broadcasting = true;
+      family = "otherBroadcast";
+    }
+    const file = node.callFrame.url.split("/").at(-1);
+    if (broadcasting) {
+      if (
+        [
+          "serializeFrameField",
+          "frameWithSequence",
+          "serializeSession",
+          "serializeMessage",
+        ].includes(node.callFrame.functionName) ||
+        file === "session-row-serialization.ts" ||
+        file === "serialized-json.ts"
+      ) {
+        family = "encoding";
+      } else if (family !== "encoding") {
+        if (node.callFrame.functionName === "prepareSessionRowRecipient") {
+          family = "recipientSetup";
+        } else if (
+          file === "session-row-presentation.ts" ||
+          file === "session-row-publication.ts"
+        ) {
+          family = "rowPresentation";
+        } else if (file === "session-event-projection.ts") {
+          family = "eventProjection";
+        }
+      }
+      if (file === "session-event-projection.ts") {
+        sourceProjectionObserved = true;
+        projectionSelfSampledBytes += node.selfSize;
+      }
+      broadcastSampledBytes += node.selfSize;
+      if (node.selfSize > 0) {
+        const bucket = broadcastSites.get(family) ?? { sampledBytes: 0, sites: [] };
+        bucket.sampledBytes += node.selfSize;
+        bucket.sites.push({ sampledBytes: node.selfSize, stack });
+        broadcastSites.set(family, bucket);
+      }
+    }
     sampledAllocatedBytes += node.selfSize;
     if (node.selfSize > 0) {
       sites.push({ sampledBytes: node.selfSize, stack: stack.slice(-8) });
     }
     for (const child of node.children) {
-      visit(child, stack);
+      visit(child, stack, broadcasting, family);
     }
   };
   visit(profile.head, []);
@@ -387,6 +478,23 @@ export function readGatewayHeapProfile(
     includesCollectedObjects: options.includeCollectedObjects ?? true,
     sampledAllocatedBytes,
     topAllocationSites: sites.toSorted((a, b) => b.sampledBytes - a.sampledBytes).slice(0, 20),
+    broadcastAllocation: {
+      scope: "disjoint sampled allocation subtrees under broadcastInternal; not operation counts",
+      sourceProjectionObserved,
+      sampledBytes: broadcastSampledBytes,
+      projectionSelfSampledBytes,
+      families: Object.fromEntries(
+        [...broadcastSites].map(([family, bucket]) => [
+          family,
+          {
+            sampledBytes: bucket.sampledBytes,
+            topAllocationSites: bucket.sites
+              .toSorted((a, b) => b.sampledBytes - a.sampledBytes)
+              .slice(0, 10),
+          },
+        ]),
+      ),
+    },
   };
 }
 
@@ -396,19 +504,20 @@ export async function measureGatewayAllocations(
   profilePath: string,
   operationCount: number,
   workload: () => Promise<void>,
+  options: { samplingIntervalBytes?: number } = {},
 ) {
   if (!Number.isSafeInteger(operationCount) || operationCount < 1) {
     throw new Error("Allocation measurement needs a positive operation count");
   }
   const before = await readGatewayResources(child);
-  await controlGatewayProfile(child, "heap", "start", profilePath);
+  await controlGatewayProfile(child, "heap", "start", profilePath, options);
   try {
     await workload();
   } finally {
     await controlGatewayProfile(child, "heap", "stop", profilePath);
   }
   const after = await readGatewayResources(child);
-  const heap = readGatewayHeapProfile(profilePath);
+  const heap = readGatewayHeapProfile(profilePath, options);
   if (!heap.diagnostics || heap.diagnostics.collectionErrors > 0) {
     throw new Error("Allocation measurement has incomplete diagnostic accounting");
   }

@@ -135,16 +135,11 @@ vi.mock("../infra/gateway-processes.js", () => ({
     findVerifiedGatewayListenerPidsOnPortSync(port),
 }));
 
-const {
-  installScheduledTask,
-  isScheduledTaskInstalled,
-  readScheduledTaskRuntime,
-  restartScheduledTask,
-  resolveTaskScriptPath,
-  stopScheduledTask,
-  uninstallScheduledTask,
-} = await import("./schtasks.js");
-const { removeStartupEntries } = await import("./schtasks-runtime.js");
+const { restartScheduledTask, stopScheduledTask } = await import("./schtasks-control.js");
+const { installScheduledTask, uninstallScheduledTask } = await import("./schtasks-install.js");
+const { resolveTaskScriptPath } = await import("./schtasks-layout.js");
+const { isScheduledTaskInstalled, readScheduledTaskRuntime, removeStartupEntries } =
+  await import("./schtasks-runtime.js");
 const { createMockGatewayService } = await import("./service.test-helpers.js");
 const { readGatewayServiceStatusForTest } =
   await import("../commands/status.service-summary.test-support.ts");

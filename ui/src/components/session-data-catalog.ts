@@ -37,7 +37,7 @@ import {
   createPanelRefreshStatus,
   failPanelRefresh,
   type PanelRefreshStatus,
-} from "./panel-refresh-status.ts";
+} from "./panel-refresh-status-state.ts";
 import type { ContextualSidebar } from "./sidebar-context-state.ts";
 
 export interface SessionDataInputs {
@@ -64,7 +64,7 @@ export interface SessionDataInputs {
 }
 
 export interface SessionCatalogDataOwner {
-  readonly context: ApplicationContext | undefined;
+  readonly context: ApplicationContext;
   readonly isSessionDataHostConnected: boolean;
   readonly sessionCatalogRowsVisible: boolean;
   sessionCatalogs: SessionCatalog[];
@@ -85,13 +85,11 @@ export interface SessionCatalogDataOwner {
 interface SessionCatalogResetOwner extends SessionCatalogDataOwner {
   sessionScopeGeneration: number;
   pendingCatalogArchives: ReadonlySet<string>;
-  sessionsLoading: boolean;
 }
 
 export function retireSessionCatalogData(owner: SessionCatalogResetOwner): void {
   owner.sessionScopeGeneration += 1;
   owner.pendingCatalogArchives = new Set();
-  owner.sessionsLoading = false;
   owner.loadingMoreSessionCatalogIds = new Set();
   owner.sessionCatalogLive.clear();
 }
@@ -120,7 +118,7 @@ export function areSessionCatalogsSettled(
   return (
     !status.error &&
     (!canCallGatewayMethod(
-      owner.context?.gateway.snapshot,
+      owner.context.gateway.snapshot,
       "sessions.catalog.list",
       "operator.read",
     ) ||
@@ -145,9 +143,6 @@ function visibleSessionCatalogClient(owner: SessionCatalogDataOwner): GatewayBro
 
 function refreshSessionCatalogsInBackground(owner: SessionCatalogDataOwner): Promise<void> {
   const context = owner.context;
-  if (!context) {
-    return Promise.resolve();
-  }
   const scope = owner.sessionCatalogLive.refreshScope;
   return context.connectionBootstrap.run(
     scope,
@@ -166,24 +161,24 @@ function refreshSessionCatalogsInBackground(owner: SessionCatalogDataOwner): Pro
 
 export function resolveSessionCatalogAgentId(owner: SessionCatalogDataOwner): string | null {
   const context = owner.context;
-  const gateway = context?.gateway.snapshot;
+  const gateway = context.gateway.snapshot;
   // Only an authoritative connected hello can revoke catalog ownership; a
   // transient reconnect still preserves its rows until the replacement lands.
   if (
-    gateway?.phase === "connected" &&
+    gateway.phase === "connected" &&
     !canCallGatewayMethod(gateway, "sessions.catalog.list", "operator.read")
   ) {
     return null;
   }
-  const agentsState = context?.agents.state;
+  const agentsState = context.agents.state;
   const agentsList =
-    gateway?.phase === "connected" &&
+    gateway.phase === "connected" &&
     gateway.client &&
-    agentsState?.connected &&
+    agentsState.connected &&
     agentsState.client === gateway.client
       ? agentsState.agentsList
       : null;
-  const rawSelected = context?.agentSelection.state.selectedId;
+  const rawSelected = context.agentSelection.state.selectedId;
   const selected = rawSelected?.trim() ? normalizeAgentId(rawSelected) : null;
   if (agentsList) {
     if (selected && agentsList.agents.some((agent) => normalizeAgentId(agent.id) === selected)) {
@@ -194,7 +189,7 @@ export function resolveSessionCatalogAgentId(owner: SessionCatalogDataOwner): st
       ? defaultId
       : null;
   }
-  if (gateway?.phase !== "connected" || !gateway.hello || !gateway.assistantAgentId) {
+  if (gateway.phase !== "connected" || !gateway.hello || !gateway.assistantAgentId) {
     return null;
   }
   const helloDefault = normalizeAgentId(gateway.assistantAgentId);
@@ -224,9 +219,7 @@ function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): Promise<v
 }
 
 export function updateSessionCatalogData(owner: SessionCatalogDataOwner): void {
-  if (owner.context) {
-    owner.synchronizeSessionScope();
-  }
+  owner.synchronizeSessionScope();
   if (
     !visibleSessionCatalogClient(owner) ||
     owner.sessionCatalogLive.hasRequested ||
@@ -304,7 +297,7 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
       owner.sessionCatalogRefreshStatus = failPanelRefresh(
         owner.sessionCatalogRefreshStatus,
         error,
-        owner.context?.gateway.snapshot,
+        owner.context.gateway.snapshot,
       );
       owner.requestSessionDataUpdate();
     },

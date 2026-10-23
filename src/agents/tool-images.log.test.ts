@@ -1,5 +1,3 @@
-// Tool image logging tests cover diagnostic context emitted while sanitizing
-// oversized or transformed image payloads.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,50 +39,30 @@ vi.mock("../media/media-services.js", () => ({
 
 import { sanitizeContentBlocksImages } from "./tool-images.js";
 
-async function createLargePng(): Promise<Buffer> {
-  return createSolidPngBuffer(2001, 8, { r: 0x7f, g: 0x7f, b: 0x7f });
-}
-
 describe("tool-images log context", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let png: Buffer;
 
-  beforeAll(async () => {
-    png = await createLargePng();
+  beforeAll(() => {
+    png = createSolidPngBuffer(2001, 8, { r: 0x7f, g: 0x7f, b: 0x7f });
   });
 
   beforeEach(() => {
     infoMock.mockClear();
-    resizeToJpegMock.mockReset();
-    resizeToJpegMock.mockResolvedValue(Buffer.alloc(100, 2));
+    resizeToJpegMock.mockReset().mockResolvedValue(Buffer.alloc(100, 2));
     warnMock.mockClear();
   });
 
   it.each([
-    { maxBytes: 512, outputBytes: [768], minimumBytes: 768, limit: "512B", actual: "768B" },
-    {
-      maxBytes: 256 * 1024,
-      outputBytes: [512 * 1024],
-      minimumBytes: 512 * 1024,
-      limit: "256.0KB",
-      actual: "512.0KB",
-    },
-    {
-      maxBytes: 1.5 * 1024 * 1024,
-      outputBytes: [2 * 1024 * 1024],
-      minimumBytes: 2 * 1024 * 1024,
-      limit: "1.50MB",
-      actual: "2.00MB",
-    },
-  ])(
-    "reports the effective SDK image cap of $limit with smallest candidate $actual",
-    async ({ maxBytes, outputBytes, minimumBytes, limit, actual }) => {
+    [512, 768, "512B", "768B"],
+    [256 * 1024, 512 * 1024, "256.0KB", "512.0KB"],
+    [1.5 * 1024 * 1024, 2 * 1024 * 1024, "1.50MB", "2.00MB"],
+  ] as const)(
+    "reports SDK image cap %s with smallest candidate %s",
+    async (maxBytes, minimumBytes, limit, actual) => {
       const filePath = path.join(tempDirs.make("tool-image-cap-"), "sample.png");
       await writeFile(filePath, png);
-      for (const bytes of outputBytes) {
-        const candidate = Buffer.alloc(bytes, 2);
-        resizeToJpegMock.mockResolvedValueOnce(candidate).mockResolvedValue(candidate);
-      }
+      resizeToJpegMock.mockResolvedValue(Buffer.alloc(minimumBytes, 2));
 
       const result = await imageResultFromFile({
         label: "sdk:image",

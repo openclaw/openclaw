@@ -7,6 +7,7 @@ import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-d
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { ownerRoster, sessionPerson } from "./session-ownership-fixtures.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 import {
   chooseSidebarMenuOption,
@@ -20,14 +21,8 @@ suite.define(() => {
   it("keeps only Gateway-admitted catalog conversations under Involving me", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const sidebar = page.locator(".sidebar");
-      const actor = (id: string, label: string) => ({
-        type: "human" as const,
-        id,
-        label,
-        identity: { type: "profile" as const, id },
-      });
-      const viewer = actor("profile-ada", "Ada");
-      const other = actor("profile-bob", "Bob");
+      const viewer = sessionPerson("profile-ada", "Ada");
+      const other = sessionPerson("profile-bob", "Bob");
       const session = (sessionId: string, label: string, updatedAt: number, owner = other) => ({
         key: `agent:main:${sessionId === "own" ? sessionId : `${sessionId}-catalog`}`,
         sessionId,
@@ -41,14 +36,9 @@ suite.define(() => {
       const involved = session("involved", "Collaborative coding", 2);
       const unrelated = session("unrelated", "Another person's coding", 1);
       const response = {
-        ts: 1,
-        path: "",
-        count: 3,
+        ...ownerRoster([native, involved, unrelated], [viewer, other]),
         hasMore: false,
         nextOffset: null,
-        defaults: { contextTokens: null, model: null, modelProvider: null },
-        owners: [viewer, other],
-        sessions: [native, involved, unrelated],
       };
       const entry = (threadId: string, name: string, sessionKey?: string) => ({
         threadId,

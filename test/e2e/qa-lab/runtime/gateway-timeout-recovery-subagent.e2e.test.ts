@@ -10,6 +10,7 @@ import {
   createQaGatewayChild,
   startQaBusServer,
 } from "../../../../extensions/qa-lab/api.js";
+import { closeHttpServer, readRequestText } from "../../../helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesSse as writeSse } from "../../../helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../../helpers/promise.js";
 import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
@@ -156,11 +157,7 @@ async function startProofProvider() {
         response.end(JSON.stringify({ data: [{ id: "gpt-5.6-luna", object: "model" }] }));
         return;
       }
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      const body = JSON.parse(await readRequestText(request)) as Record<string, unknown>;
       const inputText = JSON.stringify(body.input ?? body);
       if (request.method !== "POST" || request.url !== "/v1/responses") {
         response.writeHead(404).end();
@@ -253,10 +250,7 @@ async function startProofProvider() {
     stop: async () => {
       compactionStarted.resolve();
       compactionRelease.resolve();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(server);
     },
   };
 }

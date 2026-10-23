@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import {
   isSessionEntryDataSql,
   observeHostDataSql,
@@ -10,16 +10,14 @@ import {
   withSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { sessionRewindHandlers } from "./sessions-rewind.js";
+import { invokeHandler } from "./sessions-rewind.handler.test-support.js";
 import {
   cfg,
   invokeMessageCut,
-  messageCutContext,
   mutationMethods,
   seedMessageCutSource,
   useMessageCutStorageFixture,
 } from "./sessions-rewind.storage.test-support.js";
-import type { RespondFn } from "./types.js";
 
 useMessageCutStorageFixture();
 
@@ -27,26 +25,18 @@ const sessionKey = "agent:main:dashboard:incognito-source";
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 
-async function listBranches() {
-  const method = "sessions.branches.list";
-  const params = { sessionKey };
-  const respond = vi.fn<RespondFn>();
-  await expectDefined(
-    sessionRewindHandlers[method],
-    method,
-  )({
-    req: { type: "req", id: "actor-branches", method, params },
-    params,
-    respond,
-    context: messageCutContext(),
-    client: null,
-    isWebchatConnect: () => false,
+async function expectBranches(branches: [string, boolean][]) {
+  const respond = await invokeHandler("sessions.branches.list", undefined, {
+    params: { sessionKey },
   });
-  return respond;
+  const expected = expect.arrayContaining(
+    branches.map(([leafEntryId, active]) => expect.objectContaining({ leafEntryId, active })),
+  );
+  expect(respond).toHaveBeenCalledWith(true, { branches: expected }, undefined);
 }
 
-it.each(mutationMethods)("acquires memory history for unbound %s", async (method) => {
-  await withOpenClawTestState({ label: "message-cut-memory-actor" }, async (state) => {
+it.each(mutationMethods)("acquires memory history for unbound %s", (method) =>
+  withOpenClawTestState({ label: "message-cut-memory-actor" }, async (state) => {
     await state.writeConfig(cfg);
     const scope = expectDefined(
       await withSessionActorStorage(
@@ -56,22 +46,13 @@ it.each(mutationMethods)("acquires memory history for unbound %s", async (method
       ),
       "message-cut memory session",
     );
-    const captured = expectDefined(
-      captureSessionActorStorageOwner(scope, authority),
-      "message-cut memory owner",
-    );
+    const captured = expectDefined(captureSessionActorStorageOwner(scope, authority), "owner");
     const sql = observeHostDataSql();
     try {
-      expect(await listBranches()).toHaveBeenCalledWith(
-        true,
-        {
-          branches: expect.arrayContaining([
-            expect.objectContaining({ leafEntryId: "user-2", active: true }),
-            expect.objectContaining({ leafEntryId: "alternate-user", active: false }),
-          ]),
-        },
-        undefined,
-      );
+      await expectBranches([
+        ["user-2", true],
+        ["alternate-user", false],
+      ]);
       const mutation = invokeMessageCut(method, scope);
       expect(await mutation.error).toBeUndefined();
       expect(mutation.respond).toHaveBeenCalledWith(
@@ -89,23 +70,14 @@ it.each(mutationMethods)("acquires memory history for unbound %s", async (method
       } else {
         expect(current?.previousSessionId).toBe(scope.sessionId);
         expect(current?.sessionId).not.toBe(scope.sessionId);
-        expect(await listBranches()).toHaveBeenCalledWith(
-          true,
-          {
-            branches: expect.arrayContaining([
-              expect.objectContaining({
-                active: true,
-                leafEntryId: method === "sessions.rewind" ? "assistant-1" : "alternate-user",
-              }),
-            ]),
-          },
-          undefined,
-        );
+        await expectBranches([
+          [method === "sessions.rewind" ? "assistant-1" : "alternate-user", true],
+        ]);
       }
       expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
     } finally {
       sql.restore();
       memorySessionActorOwners.closeDatabase(captured);
     }
-  });
-});
+  }),
+);

@@ -142,7 +142,7 @@ export class SessionLinkTitler {
     // A code link can acquire an anchor, changing its registration key below.
     const registrations = [...this.registered.values()];
     for (const entry of registrations) {
-      void this.decorate(entry.element, true, targets);
+      void this.decorate(entry.element, targets);
     }
   }
 
@@ -154,7 +154,6 @@ export class SessionLinkTitler {
 
   async decorate(
     element: HTMLElement,
-    load = false,
     targets?: Map<string, SessionTitleTarget | SessionReference | null>,
   ): Promise<void> {
     const entry = this.registered.get(element);
@@ -189,9 +188,6 @@ export class SessionLinkTitler {
       this.titledAnchors.delete(anchor);
     }
     if (target && !("sessionKey" in target)) {
-      if (!load) {
-        return;
-      }
       try {
         target = await this.resolveReference(target, scope);
       } catch {
@@ -207,7 +203,7 @@ export class SessionLinkTitler {
     }
     const cached = this.cachedOrSeededEntry(target);
     this.stampAnchor(entry, target, cached?.value);
-    if (!load || cached?.value) {
+    if (cached?.value) {
       return;
     }
     try {

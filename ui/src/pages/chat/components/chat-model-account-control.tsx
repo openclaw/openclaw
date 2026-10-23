@@ -13,12 +13,12 @@ export function ChatModelAccountSectionView(props: ChatModelAccountSectionViewPr
       aria-label={t("chat.modelAccounts.section")}
     >
       <button
-        ref={search?.ref(search.groups)}
         class="chat-controls__provider-heading chat-controls__account-heading"
         type="button"
         data-chat-account-group-toggle
         data-chat-model-group-toggle
         aria-expanded={props.open ? "true" : "false"}
+        aria-controls={search?.listId("accounts")}
         disabled={props.disabled}
         onClick={() => props.onToggle()}
       >
@@ -34,7 +34,7 @@ export function ChatModelAccountSectionView(props: ChatModelAccountSectionViewPr
         </span>
       </button>
       <div
-        ref={search?.ref(search.lists)}
+        id={search?.listId("accounts")}
         class="chat-controls__provider-model-list"
         data-chat-model-list="true"
         role="listbox"
@@ -43,18 +43,25 @@ export function ChatModelAccountSectionView(props: ChatModelAccountSectionViewPr
         <For each={props.options} keyed={(option) => option.value}>
           {(option, index) => (
             <button
-              ref={search?.ref(search.rows)}
+              ref={search?.rowRef(() => `account:${option().value}`)}
+              id={search?.optionId(`account:${option().value}`)}
               class="chat-controls__inline-select-option chat-controls__model-option"
               type="button"
               role="option"
               aria-selected={option().value === props.currentValue ? "true" : "false"}
               data-chat-account-option={option().value}
               data-chat-model-option={`account:${option().value}`}
+              data-chat-model-key={`account:${option().value}`}
+              data-chat-model-rank={search?.row(`account:${option().value}`)?.rank}
+              data-chat-model-highlighted={
+                search?.highlighted() === `account:${option().value}` ? "" : undefined
+              }
+              style={{ "--chat-model-rank": search?.row(`account:${option().value}`)?.rank }}
               data-chat-model-index={props.startIndex + index()}
               data-chat-model-name={option().label.toLocaleLowerCase()}
               data-chat-model-keywords={option().description?.toLocaleLowerCase() ?? ""}
               data-chat-model-provider-label="account"
-              hidden={!props.open}
+              hidden={search?.row(`account:${option().value}`)?.hidden ?? !props.open}
               aria-disabled={option().disabled ? "true" : undefined}
               disabled={props.disabled || Boolean(option().disabled && option().value !== "more")}
               onMouseEnter={handleModelOptionMouseEnter}

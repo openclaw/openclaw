@@ -109,7 +109,11 @@ function ConfigMapRow(
                 : containsRedactedSentinel(props.params.value[key()])
                   ? t("configForm.renameRedactedBlocked")
                   : "";
-              if (nextKey in props.params.value || error) {
+              if (
+                Object.hasOwn(props.params.value, nextKey) ||
+                props.params.reservedKeys.has(nextKey) ||
+                error
+              ) {
                 target.value = key();
                 if (error) {
                   target.setCustomValidity(error);
@@ -193,7 +197,7 @@ export function ConfigMapField(props: MapProps): JSX.Element {
                 const nextValue = { ...props.params.value };
                 let index = 1;
                 let key = `custom-${index}`;
-                while (key in nextValue) {
+                while (Object.hasOwn(nextValue, key) || props.params.reservedKeys.has(key)) {
                   index += 1;
                   key = `custom-${index}`;
                 }

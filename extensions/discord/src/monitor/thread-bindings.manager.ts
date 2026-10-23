@@ -299,7 +299,6 @@ function createLoadedThreadBindingManager(
     getIdleTimeoutMs: () => idleTimeoutMs,
     getMaxAgeMs: () => maxAgeMs,
     getByThreadId: (threadId) => getBinding(threadId)?.record,
-    getBySessionKey: (targetSessionKey) => manager.listBySessionKey(targetSessionKey)[0],
     listBySessionKey: (targetSessionKey) =>
       resolveBindingIdsForSession({
         targetSessionKey,

@@ -35,6 +35,7 @@ export async function startWatchNodeHttpRuntime(
     onPollReady?: (response: ServerResponse) => void;
   },
 ) {
+  vi.stubEnv("OPENCLAW_STATE_DIR", baseDir);
   const nodeRegistry = new NodeRegistry({
     resolveCurrentPairingState: async (nodeId) => {
       const state = resolveNodePairingState(await getPairedDevice(nodeId, baseDir));
@@ -52,7 +53,6 @@ export async function startWatchNodeHttpRuntime(
   const runtime = createWatchNodeHttpRuntime({
     nodeRegistry,
     getConfig: () => options?.config ?? {},
-    pairingBaseDir: baseDir,
     broadcast: (event, payload) => broadcasts.push({ event, payload }),
     onNodeConnected: (session) => connectedNodes.push(session.nodeId),
     onNodeDisconnected: (nodeId, reason) => disconnectedNodes.push({ nodeId, reason }),

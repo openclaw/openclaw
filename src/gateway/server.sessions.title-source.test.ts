@@ -17,7 +17,7 @@ afterEach(() => {
   testState.agentConfig = undefined;
 });
 
-it("names task-bearing prepare, create, and send requests while preserving controls and manual names", async () => {
+it("names task-bearing sends and attachments while ignoring control-only messages", async () => {
   await withTitleProvider(
     "Repair request routing",
     async ({ cfg, workspaceDir, storePath, requests }) => {
@@ -57,143 +57,75 @@ Handle the supplied task.
         getSessionEventSubscriberConnIds: () => new Set(["title-observer"]),
       };
       const options = { ...controlUiClient, context };
+      const entry = (sessionKey: string) =>
+        loadSessionEntry({ agentId: "main", sessionKey, storePath });
+      const waitForTitle = (key: string) =>
+        vi.waitFor(() => expect(entry(key)?.displayName).toBe("Repair request routing"), {
+          timeout: 20_000,
+        });
+      async function request(
+        method: Parameters<typeof directSessionReq>[0],
+        params: Record<string, unknown>,
+      ) {
+        const result = await directSessionReq(method, params, options);
+        expect(result.ok, JSON.stringify(result.error)).toBe(true);
+        return result.payload;
+      }
+      const create = (key: string, fields: Record<string, unknown> = {}) =>
+        request("sessions.create", { agentId: "main", key, ...fields });
+      const send = (sessionKey: string, message: string, idempotencyKey: string) =>
+        request("chat.send", { sessionKey, message, idempotencyKey });
       dispatchInboundMessageMock.mockResolvedValue({
         queuedFinal: false,
         counts: { block: 0, final: 0, tool: 0 },
       });
       const task = "/route_proof /api request routing needs repair";
-      const prepared = await directSessionReq<{ title: string | null }>(
-        "sessions.title.prepare",
-        { agentId: "main", message: task },
-        options,
-      );
-      expect(prepared.ok, JSON.stringify(prepared.error)).toBe(true);
-      expect(prepared.payload?.title).toBe("Repair request routing");
-
-      const createdKey = "agent:main:dashboard:created-title-source";
-      const created = await directSessionReq(
-        "sessions.create",
-        { agentId: "main", key: createdKey, titleSource: task },
-        options,
-      );
-      expect(created.ok, JSON.stringify(created.error)).toBe(true);
-      await vi.waitFor(
-        () =>
-          expect(
-            loadSessionEntry({ agentId: "main", sessionKey: createdKey, storePath })?.displayName,
-          ).toBe("Repair request routing"),
-        { timeout: 20_000 },
-      );
+      const sentKey = "agent:main:dashboard:sent-title-source";
+      await create(sentKey);
+      await send(sentKey, "/status", "title-control");
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), { timeout: 20_000 });
+      expect(entry(sentKey)?.displayName).toBeUndefined();
+      expect(requests).toHaveLength(0);
+      await send(sentKey, task, "title-task");
+      await waitForTitle(sentKey);
       expect(context.broadcastToConnIds).toHaveBeenCalledWith(
         "sessions.changed",
-        expect.objectContaining({ sessionKey: createdKey, reason: "chat.title" }),
+        expect.objectContaining({ sessionKey: sentKey, reason: "chat.title" }),
         expect.anything(),
         expect.anything(),
       );
-
-      const sentKey = "agent:main:dashboard:sent-title-source";
-      const empty = await directSessionReq(
-        "sessions.create",
-        { agentId: "main", key: sentKey },
-        options,
-      );
-      expect(empty.ok, JSON.stringify(empty.error)).toBe(true);
-      const control = await directSessionReq(
-        "chat.send",
-        { sessionKey: sentKey, message: "/status", idempotencyKey: "title-control" },
-        options,
-      );
-      expect(control.ok, JSON.stringify(control.error)).toBe(true);
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), { timeout: 20_000 });
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: sentKey, storePath })?.displayName,
-      ).toBeUndefined();
-      expect(requests).toHaveLength(2);
-      const sent = await directSessionReq(
-        "chat.send",
-        { sessionKey: sentKey, message: task, idempotencyKey: "title-task" },
-        options,
-      );
-      expect(sent.ok, JSON.stringify(sent.error)).toBe(true);
-      await vi.waitFor(
-        () =>
-          expect(
-            loadSessionEntry({ agentId: "main", sessionKey: sentKey, storePath })?.displayName,
-          ).toBe("Repair request routing"),
-        { timeout: 20_000 },
-      );
-
+      expect(requests).toHaveLength(1);
       const manualKey = "agent:main:dashboard:manual-title-source";
-      expect(
-        (
-          await directSessionReq(
-            "sessions.create",
-            { agentId: "main", key: manualKey, label: "My chosen name", titleSource: task },
-            options,
-          )
-        ).ok,
-      ).toBe(true);
+      await create(manualKey, { label: "My chosen name", titleSource: task });
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), { timeout: 20_000 });
-      expect(loadSessionEntry({ agentId: "main", sessionKey: manualKey, storePath })?.label).toBe(
-        "My chosen name",
-      );
-      expect(requests).toHaveLength(3);
+      expect(entry(manualKey)?.label).toBe("My chosen name");
+      expect(requests).toHaveLength(1);
       const attachmentKey = "agent:main:dashboard:attachment-title-source";
-      expect(
-        (
-          await directSessionReq(
-            "sessions.create",
-            {
-              agentId: "main",
-              key: attachmentKey,
-            },
-            options,
-          )
-        ).ok,
-      ).toBe(true);
-      expect(
-        (
-          await directSessionReq(
-            "chat.send",
-            {
-              sessionKey: attachmentKey,
-              message: "/status",
-              idempotencyKey: "title-attachment",
-              attachments: [
-                {
-                  type: "file",
-                  mimeType: "text/plain",
-                  fileName: "incident.txt",
-                  content: Buffer.from("Repair the attachment incident").toString("base64"),
-                },
-              ],
-            },
-            options,
-          )
-        ).ok,
-      ).toBe(true);
-      await vi.waitFor(
-        () =>
-          expect(
-            loadSessionEntry({ agentId: "main", sessionKey: attachmentKey, storePath })
-              ?.displayName,
-          ).toBe("Repair request routing"),
-        { timeout: 20_000 },
-      );
-      expect(requests).toHaveLength(4);
-      for (const request of requests.slice(0, 3)) {
-        const messages = request.body.messages as Array<{ role: string; content: string }>;
+      await create(attachmentKey);
+      await request("chat.send", {
+        sessionKey: attachmentKey,
+        message: "/status",
+        idempotencyKey: "title-attachment",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "text/plain",
+            fileName: "incident.txt",
+            content: Buffer.from("Repair the attachment incident").toString("base64"),
+          },
+        ],
+      });
+      await waitForTitle(attachmentKey);
+      expect(requests).toHaveLength(2);
+      for (const [index, titleRequest] of requests.entries()) {
+        const messages = titleRequest.body.messages as Array<{ role: string; content: string }>;
         expect(
           JSON.parse(messages.findLast((message) => message.role === "user")!.content),
-        ).toEqual({ conversationLabelSource: "/api request routing needs repair" });
+        ).toEqual({
+          conversationLabelSource:
+            index === 0 ? "/api request routing needs repair" : "Repair the attachment incident",
+        });
       }
-      const attachmentMessages = requests[3]!.body.messages as Array<{
-        role: string;
-        content: string;
-      }>;
-      expect(
-        JSON.parse(attachmentMessages.findLast((message) => message.role === "user")!.content),
-      ).toEqual({ conversationLabelSource: "Repair the attachment incident" });
     },
   );
 });

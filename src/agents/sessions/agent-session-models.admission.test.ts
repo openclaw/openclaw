@@ -27,17 +27,15 @@ import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-a
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import {
-  createTestSession,
+  createModelSelectionSession,
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
-import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import type { ExtensionEvent, ThinkingLevelSelectEvent } from "./extensions/types.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import * as metadataRuntime from "./session-manager-metadata-runtime.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
-import { SettingsManager } from "./settings-manager.js";
 
 const startModel = {
   ...testModel,
@@ -56,6 +54,32 @@ async function closeDatabaseRoots(roots: Iterable<string>) {
     await closeOpenClawAgentDatabasesAsync(root);
     closeOpenClawAgentDatabasesForTest(root);
   }
+}
+
+function observeMetadataCommit(afterAppend?: () => void, afterClose = () => {}) {
+  const original = metadataRuntime.withSessionMetadataWorker;
+  const observe: typeof original = async (options, database, assertCurrent, operation) => {
+    const result = await original(
+      options,
+      database,
+      assertCurrent,
+      afterAppend
+        ? (scope) =>
+            operation({
+              execute: async (command, commandOptions) => {
+                const reply = await scope.execute(command, commandOptions);
+                if (command.type === "session.metadata.append") {
+                  afterAppend();
+                }
+                return reply;
+              },
+            })
+        : operation,
+    );
+    afterClose();
+    return result;
+  };
+  return vi.spyOn(metadataRuntime, "withSessionMetadataWorker").mockImplementation(observe);
 }
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -113,37 +137,16 @@ describe("model transitions after SQLite write admission", () => {
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const transitions: Array<{ previous: string | undefined; next: string }> = [];
-    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-      [
-        "model_select",
-        [
-          async (event) => {
-            const selection = event as ModelSelectEvent;
-            transitions.push({ previous: selection.previousModel?.id, next: selection.model.id });
-            await onSelect?.(selection);
-          },
-        ],
-      ],
-      [
-        "thinking_level_select",
-        [async (event) => await onThinkingSelect?.(event as ThinkingLevelSelectEvent)],
-      ],
-    ]);
-    const resourceLoader = createResourceLoader(handlers);
-    const fixture = await createTestSession({
+    const fixture = await createModelSelectionSession({
       model: startModel,
-      sessionManager: SessionManager.open(target, root),
-      settingsManager: SettingsManager.inMemory({
-        compaction: { enabled: false },
-        retry: { enabled: false },
-        defaultThinkingLevel: "medium",
-      }),
-      resourceLoader,
-    });
-    fixture.modelRegistry.registerProvider(startModel.provider, {
-      api: startModel.api,
-      baseUrl: startModel.baseUrl,
       models,
+      thinkingLevel: "medium",
+      sessionManager: SessionManager.open(target, root),
+      onModelSelect: async (event) => {
+        transitions.push({ previous: event.previousModel?.id, next: event.model.id });
+        await onSelect?.(event);
+      },
+      onThinkingSelect: async (event) => await onThinkingSelect?.(event),
     });
     const options = toDatabaseOptions(resolveSqliteReadScope(target));
     return {
@@ -151,7 +154,6 @@ describe("model transitions after SQLite write admission", () => {
       target,
       options,
       transitions,
-      extensionRuntime: resourceLoader.getExtensions().runtime,
       readModelChanges: () =>
         SessionManager.open(target, root)
           .getEntries()
@@ -339,25 +341,13 @@ describe("model transitions after SQLite write admission", () => {
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     await replaceSessionEntry(replacement, { sessionId: replacement.sessionId, updatedAt: 2 });
     const manager = SessionManager.open(target, root);
-    const original = metadataRuntime.withSessionMetadataWorker;
     let rebound = false;
-    const observeHeader: typeof original = async (options, database, assertCurrent, operation) =>
-      await original(options, database, assertCurrent, (scope) =>
-        operation({
-          execute: async (command, commandOptions) => {
-            const reply = await scope.execute(command, commandOptions);
-            // The durable assertions below verify that only the lazy header committed.
-            if (command.type === "session.metadata.append" && !rebound) {
-              rebound = true;
-              manager.setSessionTarget(replacement);
-            }
-            return reply;
-          },
-        }),
-      );
-    const observed = vi
-      .spyOn(metadataRuntime, "withSessionMetadataWorker")
-      .mockImplementation(observeHeader);
+    const observed = observeMetadataCommit(() => {
+      if (!rebound) {
+        rebound = true;
+        manager.setSessionTarget(replacement);
+      }
+    });
     try {
       await expect(manager.appendModelChange("test-provider", "old-model")).rejects.toThrow();
     } finally {
@@ -592,38 +582,22 @@ describe("model transitions after SQLite write admission", () => {
         content: "A newer durable turn",
         timestamp: 2,
       });
-      const original = metadataRuntime.withSessionMetadataWorker;
       let invalidated = false;
-      const observeCommittedResult: typeof original = async (
-        options,
-        database,
-        assertCurrent,
-        operation,
-      ) => {
-        const result = await original(options, database, assertCurrent, (scope) =>
-          operation({
-            execute: async (command, commandOptions) => {
-              const reply = await scope.execute(command, commandOptions);
-              if (command.type === "session.metadata.append") {
-                invalidated = true;
-                if (changedOwner === "extension") {
-                  extensionRuntime.invalidate("extension invalidated after metadata commit");
-                } else if (changedOwner === "manager") {
-                  sessionManager.setSessionTarget(replacement);
-                }
-              }
-              return reply;
-            },
-          }),
-        );
-        if (changedOwner === "manager-after-close") {
-          sessionManager.setSessionTarget(replacement);
-        }
-        return result;
-      };
-      const observer = vi
-        .spyOn(metadataRuntime, "withSessionMetadataWorker")
-        .mockImplementation(observeCommittedResult);
+      const observer = observeMetadataCommit(
+        () => {
+          invalidated = true;
+          if (changedOwner === "extension") {
+            extensionRuntime.invalidate("extension invalidated after metadata commit");
+          } else if (changedOwner === "manager") {
+            sessionManager.setSessionTarget(replacement);
+          }
+        },
+        () => {
+          if (changedOwner === "manager-after-close") {
+            sessionManager.setSessionTarget(replacement);
+          }
+        },
+      );
       try {
         const change = extensionRuntime.setModel(selectedModel);
         if (changesExtension) {
@@ -841,20 +815,9 @@ describe("model transitions after SQLite write admission", () => {
     await session.setModel(nextModel);
     const before = await loadTranscriptEvents(target);
     const replacement = { ...target, env: { OPENCLAW_STATE_DIR: secondRoot } };
-    const original = metadataRuntime.withSessionMetadataWorker;
-    const observeCommittedResult: typeof original = async (
-      options,
-      database,
-      assertCurrent,
-      operation,
-    ) => {
-      const result = await original(options, database, assertCurrent, operation);
-      sessionManager.setSessionTarget(replacement);
-      return result;
-    };
-    const observer = vi
-      .spyOn(metadataRuntime, "withSessionMetadataWorker")
-      .mockImplementation(observeCommittedResult);
+    const observer = observeMetadataCommit(undefined, () =>
+      sessionManager.setSessionTarget(replacement),
+    );
     try {
       const failure: unknown = await session
         .setThinkingLevel("low")

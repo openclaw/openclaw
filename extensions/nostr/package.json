@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/nostr",
-  "version": "2026.10.5",
+  "version": "2026.10.6",
   "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.",
   "repository": {
     "type": "git",
@@ -8,19 +8,19 @@
   },
   "type": "module",
   "dependencies": {
-    "@solidjs/web": "2.0.0-rc.14",
+    "@solidjs/web": "2.0.0-rc.16",
     "nostr-tools": "2.25.2",
-    "solid-js": "2.0.0-rc.14",
-    "zod": "4.6.6"
+    "solid-js": "2.0.0-rc.16",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "@solidjs/compiler": "2.0.0-rc.14",
+    "@solidjs/compiler": "2.0.0-rc.16",
     "esbuild": "0.28.2",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.10.5"
+    "openclaw": ">=2026.10.6"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -88,10 +88,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.10.5"
+      "pluginApi": ">=2026.10.6"
     },
     "build": {
-      "openclawVersion": "2026.10.5"
+      "openclawVersion": "2026.10.6"
     },
     "release": {
       "publishToClawHub": true,

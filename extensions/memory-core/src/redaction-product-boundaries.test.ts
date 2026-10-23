@@ -19,7 +19,7 @@ vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
 
 import { runDreamingSweepPhases } from "./dreaming-phases.js";
 import { applyShortTermPromotions, type PromotionCandidate } from "./short-term-promotion.js";
-import { createMemoryCoreTestHarness } from "./test-helpers.js";
+import { createMemoryCoreTestHarness, createPromotionCandidateForTest } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const RAW_DREAMING_SECRET = "OPENAI_API_KEY=sk-1234567890abcdef"; // pragma: allowlist secret
@@ -41,38 +41,18 @@ function promotionCandidate(
   sourcePath: string,
   snippet: string,
 ): PromotionCandidate {
-  return {
+  return createPromotionCandidateForTest({
     key,
     path: sourcePath,
     startLine: line,
     endLine: line,
-    source: "memory",
     snippet,
-    recallCount: 3,
-    signalCount: 3,
-    avgScore: 0.95,
-    maxScore: 0.95,
-    uniqueQueries: 2,
-    firstRecalledAt: "2026-08-01T18:00:00.000Z",
-    lastRecalledAt: "2026-08-02T18:00:00.000Z",
-    ageDays: 1,
-    score: 0.95,
-    recallDays: ["2026-08-01", "2026-08-02"],
-    conceptTags: ["security", "boundary"],
-    components: {
-      frequency: 1,
-      relevance: 0.95,
-      diversity: 0.5,
-      recency: 1,
-      consolidation: 0.5,
-      conceptual: 0.2,
-    },
     provenance: {
       originClass,
       sessionKind: "interactive",
       observedAt: Date.parse("2026-08-02T18:00:00.000Z"),
     },
-  };
+  });
 }
 
 afterEach(() => {

@@ -26,8 +26,24 @@ suite.define(() => {
         terminalEnabled: true,
         featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
         methodResponses: {
-          "terminal.list": { sessions: [] },
+          "terminal.list": {
+            sessions: [
+              { ...terminalSession("keyboard-terminal", { shell: "/bin/sh" }), attached: true },
+            ],
+          },
           "terminal.open": terminalSession("keyboard-terminal", { shell: "/bin/sh" }),
+          "terminal.attach": {
+            cases: [
+              {
+                match: { sessionId: "keyboard-terminal" },
+                response: {
+                  ...terminalSession("keyboard-terminal", { shell: "/bin/sh" }),
+                  buffer: "",
+                  seq: 0,
+                },
+              },
+            ],
+          },
         },
       });
       await page.goto(`${suite.server.baseUrl}${route}`);
@@ -40,6 +56,9 @@ suite.define(() => {
         .locator("openclaw-terminal-panel")
         .filter({ has: page.locator(".tp-host") });
       const terminal = panel.locator(".tp-host");
+      if (route === "chat") {
+        await panel.locator(".tp-session.is-current").click();
+      }
       await terminal.locator("canvas").waitFor();
       await terminal.click();
       await page.keyboard.type("x");
@@ -53,6 +72,7 @@ suite.define(() => {
         await tabLabel.waitFor({ state: "hidden" });
         expect(await gateway.getRequests("terminal.input")).toEqual(before);
         await page.keyboard.press("Control+Backquote");
+        await panel.locator(".tp-session.is-current").click();
         await tabLabel.waitFor();
       } else {
         await expect
@@ -295,7 +315,7 @@ suite.define(() => {
       expect(closeControlMetrics.borderRadius).not.toBe("0px");
       expect(closeControlMetrics.closeBorderBottomWidth).toBe("0px");
       expect(closeControlMetrics.closeInset).toBeGreaterThanOrEqual(-0.5);
-      expect(closeControlMetrics.tabHeight).toBe(30);
+      expect(closeControlMetrics.tabHeight).toBe(28);
       expect(closeControlMetrics.width).toBe(28);
       expect(closeControlMetrics.height).toBe(28);
       expect(closeControlMetrics.centerOffset).toBeLessThanOrEqual(0.5);

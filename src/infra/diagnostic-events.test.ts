@@ -369,16 +369,11 @@ describe("diagnostic-events", () => {
       outcome: "denied",
       severity: "medium",
     } as const;
-    emit({
-      ...security,
-      type: "security.event",
-      eventId: "untrusted-security-event",
-    } as unknown as Parameters<typeof emit>[0]);
-    emitTrusted({
-      ...security,
-      type: "security.event",
-      eventId: "generic-trusted-security-event",
-    } as unknown as Parameters<typeof emitTrusted>[0]);
+    for (const send of [emit, emitTrusted]) {
+      send({ ...security, type: "security.event", eventId: "forged" } as unknown as Parameters<
+        typeof emit
+      >[0]);
+    }
     emitSecurity({ ...security, eventId: "security-event-1" });
 
     expect(internalEvents).toHaveBeenCalledExactlyOnceWith(

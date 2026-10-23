@@ -18,7 +18,7 @@ export const MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS = null;
 export type ModelSetupPageState =
   | { phase: "loading" }
   | { phase: "ready"; result: SystemAgentSetupDetectResult }
-  | { phase: "detect-error"; message: string };
+  | { phase: "detect-error" };
 
 export function preparedModelPageState(
   result: SystemAgentSetupDetectResult,
@@ -101,7 +101,6 @@ export type ModelSetupState = {
   nativeSessionCatalogsEnabled: boolean;
   iconUrls: Record<string, string>;
   setupRefreshWarning: string | null;
-  detectionError: string | null;
   detectionRequest: object | null;
   cancellationNotice: string | null;
 };
@@ -121,7 +120,6 @@ export function createModelSetupState(): ModelSetupState {
     nativeSessionCatalogsEnabled: false,
     iconUrls: {},
     setupRefreshWarning: null,
-    detectionError: null,
     detectionRequest: null,
     cancellationNotice: null,
   };

@@ -45,8 +45,8 @@ suite.define(() => {
         expect(await undo.count()).toBe(0);
         if (transition === "navigate") {
           const pages = await openSidebarPages(page);
-          await pages.getByRole("link", { name: "Agents", exact: true }).click();
-          await page.waitForURL((url) => url.pathname.endsWith("/agents"));
+          await pages.getByRole("link", { name: "Usage", exact: true }).click();
+          await page.waitForURL((url) => url.pathname.endsWith("/usage"));
           await page.locator("openclaw-sessions-page").waitFor({ state: "detached" });
         }
         const destination = new URL(page.url()).pathname;
@@ -201,7 +201,7 @@ suite.define(() => {
         await ui.button(rowFor(archived.key), "Pin session").waitFor({ state: "attached" });
         expect(
           await page
-            .locator(`.sidebar-rail [data-sidebar-entry="session:${archived.key}"]`)
+            .locator(`[data-session-section="pinned"] [data-session-key="${archived.key}"]`)
             .count(),
         ).toBe(0);
       }),

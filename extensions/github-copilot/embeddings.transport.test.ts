@@ -84,7 +84,6 @@ async function startCopilotServer(handle: {
 function pointTokenAt(baseUrl: string): void {
   resolveCopilotRuntimeAuthMock.mockResolvedValue({
     apiKey: "copilot_test_token_abc",
-    source: "test",
     baseUrl,
   });
 }
@@ -120,7 +119,6 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
   beforeEach(() => {
     resolveFirstGithubTokenMock.mockResolvedValue({
       githubToken: "gh_test_token_123",
-      hasProfile: false,
     });
   });
 

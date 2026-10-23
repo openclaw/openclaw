@@ -6,16 +6,21 @@ import {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { createPluginRuntimeMock, createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuBroadcastIngressSettlement } from "./bot-broadcast.js";
 import type { handleFeishuMessage } from "./bot.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
+import { feishuDedupeState } from "./dedup-state.js";
 import type { FeishuMessageProcessingClaim } from "./dedup.js";
+import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { monitorSingleAccount } from "./monitor.account.js";
 import { createFeishuTestIngressQueue } from "./monitor.test-mocks.js";
+import { createFeishuVcMeetingInvitedHandler } from "./monitor.vc-meeting-invited-handler.js";
+import { getFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 
 type MessageParams = Parameters<typeof handleFeishuMessage>[0];
 const meetingEvent = (event_id: string) => ({
@@ -48,7 +53,7 @@ const mocks = vi.hoisted(() => ({
   warmup: vi.fn(),
   claim: vi.fn(),
   menu: vi.fn(),
-  handleMessage: vi.fn(),
+  handleMessage: vi.fn<typeof handleFeishuMessage>(),
   parseMessage: vi.fn(),
   stopBindings: vi.fn(),
   createBindings: vi.fn(),
@@ -100,13 +105,14 @@ function mockIngressQueue(openChannelIngressQueue: typeof createFeishuTestIngres
   mocks.runtime.mockReturnValue(createPluginRuntimeMock({ state: { openChannelIngressQueue } }));
 }
 
-function startAccount(controller: AbortController, vcAutoJoin = false) {
+function startAccount(controller: AbortController, vcAutoJoin = false, fireAndForget?: boolean) {
   const credentials = { appId: "fixture-app", appSecret: "fixture-secret", vcAutoJoin };
   const cfg = { channels: { feishu: { accounts: { test: credentials } } } };
   return monitorSingleAccount({
     cfg,
     account: resolveFeishuAccount({ cfg, accountId: "test" }),
     abortSignal: controller.signal,
+    fireAndForget,
     botOpenIdSource: { kind: "prefetched", botOpenId: "fixture-bot", source: "provider" },
     channelRuntime: createPluginRuntimeMock().channel,
     runtime: createRuntimeEnv(),
@@ -118,7 +124,7 @@ const nextTurn = () =>
     setImmediate(resolve);
   });
 
-function monitorAccount(eventType?: string, vcAutoJoin = false) {
+function monitorAccount(eventType?: string, vcAutoJoin = false, fireAndForget?: boolean) {
   const controller = new AbortController();
   const ready = createDeferred<(event: unknown) => Promise<unknown>>();
   mocks.register.mockImplementation(
@@ -147,7 +153,7 @@ function monitorAccount(eventType?: string, vcAutoJoin = false) {
     },
   );
   let stopped = false;
-  const monitor = startAccount(controller, vcAutoJoin).finally(() => {
+  const monitor = startAccount(controller, vcAutoJoin, fireAndForget).finally(() => {
     stopped = true;
   });
   void monitor.catch(ready.reject);
@@ -446,4 +452,123 @@ describe("Feishu account replay work ownership", () => {
       }
     },
   );
+});
+
+describe("Feishu meeting invitation replay", () => {
+  const vcEvent = {
+    ...meetingEvent("evt_vc_123"),
+    call_id: "call_vc_123",
+    meeting: { id: "6911188411934433028", meeting_no: "123456789", topic: "Weekly sync" },
+    inviter: {
+      id: { open_id: "ou_inviter_1", user_id: "u_inviter_1", union_id: "on_inviter_1" },
+      user_name: "Alice",
+    },
+  };
+  const invitation = { ...vcEvent, inviter: { id: { user_id: "u_inviter_1" } } };
+  const envelope = {
+    schema: "2.0",
+    header: { event_type: "vc.bot.meeting_invited_v1" },
+    event: vcEvent,
+  };
+  const handler = (abortSignal?: AbortSignal) =>
+    createFeishuVcMeetingInvitedHandler({
+      cfg: { channels: { feishu: { enabled: true, dmPolicy: "open", allowFrom: ["*"] } } },
+      accountId: "test",
+      runtime: createRuntimeEnv(),
+      fireAndForget: false,
+      autoJoin: true,
+      abortSignal,
+    });
+  beforeEach(() => {
+    feishuDedupeState.guard = createChannelReplayGuard<string | null | undefined>({
+      dedupe: { ttlMs: 24 * 60 * 60 * 1000, memoryMaxSize: 1000 },
+      buildReplayKey: (key) => key,
+    });
+    mocks.claim.mockImplementation(({ messageId, namespace }) =>
+      feishuDedupeState.guard.claim(messageId, { namespace }),
+    );
+    mocks.handleMessage.mockResolvedValue(undefined);
+  });
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    feishuDedupeState.reset();
+  });
+
+  it("releases failed invitations for redelivery and preserves adopted replay ownership after stop", async () => {
+    let adopted: FeishuIngressLifecycle | undefined;
+    mocks.handleMessage.mockRejectedValueOnce(new Error("pre-adoption failure"));
+    mocks.handleMessage.mockImplementation(async ({ turnAdoptionLifecycle }: MessageParams) => {
+      adopted = turnAdoptionLifecycle;
+      await adopted?.onAdopted();
+    });
+    const controller = new AbortController();
+    const receive = handler(controller.signal);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await receive(invitation);
+    }
+    expect(mocks.handleMessage).toHaveBeenCalledTimes(2);
+    const event = mocks.handleMessage.mock.calls[0]?.[0].event;
+    if (!event) {
+      throw new Error("Expected an invitation dispatch");
+    }
+    expect(getFeishuSyntheticDirectPreDispatchTarget(event)).toBe("user:u_inviter_1");
+    expect(event.message.content).toContain("123456789");
+    expect(event.message.content).toContain("call_vc_123");
+    const key = resolveFeishuMessageDedupeKey(event);
+    expect(key).not.toBe(event.message.message_id);
+    expect(await feishuDedupeState.guard.hasRecent(key, { namespace: "test" })).toBe(true);
+    controller.abort();
+    expect(adopted?.abortSignal.aborted).toBe(false);
+    await handler()(invitation);
+    expect(mocks.handleMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not dispatch malformed invite events", async () => {
+    const receive = handler();
+    await receive({ ...invitation, meeting: { topic: "Weekly sync" } });
+    await receive({ ...invitation, inviter: { id: {} } });
+    await receive({ ...invitation, meeting: { meeting_no: "not-a-meeting" } });
+    expect(mocks.handleMessage).not.toHaveBeenCalled();
+    expect(mocks.claim).not.toHaveBeenCalled();
+  });
+
+  it("keeps meeting invitations inert until the live account opts in", async () => {
+    const account = monitorAccount(undefined, false, false);
+    try {
+      await expect((await account.ready)(envelope)).resolves.toBeUndefined();
+      expect(mocks.handleMessage).not.toHaveBeenCalled();
+    } finally {
+      await account.close();
+    }
+  });
+
+  it("abandons deferred invitation ownership when the account transport ends", async () => {
+    let lifecycle: FeishuIngressLifecycle | undefined;
+    mocks.handleMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }: MessageParams) => {
+      lifecycle = turnAdoptionLifecycle;
+      lifecycle?.onDeferred();
+    });
+    mocks.handleMessage.mockImplementation(async ({ turnAdoptionLifecycle }: MessageParams) => {
+      await turnAdoptionLifecycle?.onAdopted();
+    });
+    const account = monitorAccount(undefined, true, false);
+    try {
+      const invoke = await account.ready;
+      await invoke(envelope);
+      const key = mocks.claim.mock.calls[0]?.[0].messageId;
+      expect((await feishuDedupeState.guard.claim(key, { namespace: "test" })).kind).toBe(
+        "inflight",
+      );
+      await account.close();
+      expect(lifecycle?.abortSignal.aborted).toBe(true);
+      expect(() => lifecycle?.onAdopted()).toThrow();
+      await invoke(envelope);
+      expect(mocks.handleMessage).toHaveBeenCalledOnce();
+      await handler()(vcEvent);
+      expect(mocks.handleMessage).toHaveBeenCalledTimes(2);
+      expect(await feishuDedupeState.guard.hasRecent(key, { namespace: "test" })).toBe(true);
+    } finally {
+      await account.close();
+    }
+  });
 });

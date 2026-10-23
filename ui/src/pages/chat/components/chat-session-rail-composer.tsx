@@ -1,13 +1,16 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../../lib/browser-platform.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { showToast } from "../../../lib/toast.ts";
 import type { ChatSessionCompanionThread } from "../chat-session-companion.ts";
@@ -34,6 +37,8 @@ import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.tsx";
 import { ComposerDictationStatus } from "./chat-voice-activity.tsx";
 import { DirectDictationView } from "./direct-dictation-view.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 const SIDE_CHAT_QUESTION_MAX_LENGTH = 400;
 
@@ -103,12 +108,7 @@ export function SessionRailComposer(props: {
     dictation.revision();
     return dictationControl.previewDraft() ?? props.companion.draft;
   });
-  createEffect(visibleDraft, (draft) => {
-    if (textarea && textarea.value !== draft) {
-      textarea.value = draft;
-      scheduleTextareaHeightAdjustment(textarea);
-    }
-  });
+  const draftRef = liveValue<HTMLTextAreaElement>(visibleDraft, scheduleTextareaHeightAdjustment);
   // The dictated preview reaches the draft only on commit, so submission finishes it first.
   const submit = () => {
     const active = dictationControl.dictation;
@@ -127,6 +127,9 @@ export function SessionRailComposer(props: {
     });
   };
   const keydown = (event: KeyboardEvent) => {
+    if (keepMobileReturnNative(event)) {
+      return;
+    }
     if (isComposingKeyboardEvent(event) || emojiMenu.handleKeydown(event, paneId())) {
       return;
     }
@@ -171,8 +174,13 @@ export function SessionRailComposer(props: {
             maxlength={SIDE_CHAT_QUESTION_MAX_LENGTH}
             autocomplete="off"
             aria-label={t("chat.rail.askLabel")}
+            enterkeyhint="enter"
             aria-keyshortcuts={
-              props.sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"
+              isMobileBrowserPlatform()
+                ? undefined
+                : props.sendShortcut === "enter"
+                  ? "Enter"
+                  : "Control+Enter Meta+Enter"
             }
             aria-autocomplete="list"
             aria-controls={emojiMenu.open ? paneDomId(paneId(), "emoji-menu-listbox") : undefined}
@@ -228,12 +236,15 @@ export function SessionRailComposer(props: {
               props.onDraftChange?.(event.currentTarget.value);
               emojiMenu.update(event.currentTarget, !composing);
             }}
-            ref={(element) => {
-              textarea = element;
-              props.textareaRef(element);
-              observeTextareaOverflow(element);
-              scheduleTextareaHeightAdjustment(element);
-            }}
+            ref={[
+              draftRef,
+              (element) => {
+                textarea = element;
+                props.textareaRef(element);
+                observeTextareaOverflow(element);
+                scheduleTextareaHeightAdjustment(element);
+              },
+            ]}
           />
           <span class="agent-chat__composer-placeholder" aria-hidden="true">
             {t("chat.rail.askPlaceholder")}

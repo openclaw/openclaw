@@ -642,6 +642,15 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           nativePreToolUseFailures.record(failure);
         }
       },
+      onNativeSubagentSubmission: runtime.nativeToolSurfaceEnabled
+        ? async (receipt, assertCurrent) => {
+            const monitor = state.nativeSubagentMonitor;
+            if (!monitor) {
+              throw new Error("Native submission monitor is unavailable");
+            }
+            await monitor.observeSubmissionAcknowledgement(receipt, assertCurrent);
+          }
+        : undefined,
     });
     await state.nativeHookRelay?.prepareInvocation();
     connection.assertCurrent();

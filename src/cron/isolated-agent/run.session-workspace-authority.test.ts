@@ -36,8 +36,22 @@ import {
 import { realCronSession } from "./run.session.test-support.js";
 import { loadRunCronIsolatedAgentTurn, runEmbeddedAgentMock } from "./run.test-harness.js";
 
+const sessionRunner = vi.hoisted(() => ({
+  runEmbedded: vi.fn<typeof import("../../agents/embedded-agent-runner/run.js").runEmbeddedAgent>(),
+}));
+// mock-isolation: Only model execution is synthetic; session admission and filesystem tools stay real.
+vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
+  runEmbeddedAgent: sessionRunner.runEmbedded,
+}));
+
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const realSession = await realCronSession();
+await Promise.all([
+  import("../../auto-reply/dispatch.js"),
+  import("../../auto-reply/reply/get-reply-from-config.runtime.js").then((runtime) =>
+    runtime.prewarmConfigDrivenReplyRuntime(),
+  ),
+]);
 installRequesterCronAuthorityTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const createRepo = useManagedWorktreeTestRepository();
@@ -45,6 +59,9 @@ const createRepo = useManagedWorktreeTestRepository();
 beforeEach(() => {
   resetAuthorityRunHarness();
   realSession.install();
+  sessionRunner.runEmbedded
+    .mockReset()
+    .mockImplementation((params) => runEmbeddedAgentMock(params));
 });
 
 it.each([
@@ -53,6 +70,8 @@ it.each([
   "operator",
   "archived",
   "managed",
+  "managed-alias",
+  "managed-escape",
   "managed-foreign-owner",
   "managed-manual-owner",
 ] as const)("scheduled file access respects %s conversation workspace", async (scenario) => {
@@ -80,6 +99,17 @@ it.each([
   await fs.writeFile(path.join(stateDir, "sentinel.txt"), "DEFAULT_WORKSPACE");
   await fs.writeFile(path.join(ownWorkspace, "sentinel.txt"), "OWN_WORKSPACE");
   await fs.writeFile(path.join(foreignWorkspace, "sentinel.txt"), "FOREIGN_WORKSPACE");
+  let boundWorkspace = ownWorkspace;
+  if (worktree && (scenario === "managed-alias" || scenario === "managed-escape")) {
+    boundWorkspace =
+      scenario === "managed-alias"
+        ? path.join(expectDefined(managedRoot, "managed root"), "workspace-alias")
+        : path.join(worktree.path, "escaped-workspace");
+    await fs.symlink(
+      scenario === "managed-alias" ? worktree.path : foreignWorkspace,
+      boundWorkspace,
+    );
+  }
   const creatorEntry = {
     sessionId: SESSION_ID,
     updatedAt: Date.now(),
@@ -87,7 +117,7 @@ it.each([
     lastInteractionAt: Date.now(),
     lifecycleRevision: "original",
     createdActor: CREATOR,
-    spawnedCwd: ownWorkspace,
+    spawnedCwd: boundWorkspace,
     worktree: worktree
       ? { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot }
       : undefined,
@@ -161,6 +191,9 @@ it.each([
     withAuthorityTools(
       params,
       async (tools) => {
+        params.onExecutionPhase?.({ phase: "model_call_started" });
+        await params.onExecutionStarted?.();
+        await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
         const read = expectDefined(
           tools.find((tool) => tool.name === "read"),
           "read tool",
@@ -185,14 +218,25 @@ it.each([
   try {
     await execution.run(job.id, "force");
     const result = execution.getJob(job.id)?.state;
-    if (scenario === "foreign" || scenario === "archived" || scenario.startsWith("managed-")) {
+    if (scenario === "archived") {
+      // The occurrence admission pauses the job before any session turn runs.
+      expect(reads).toEqual([]);
+      expect(result?.lastRunStatus).toBe("skipped");
+      expect(result?.lastError).toMatch(/it was archived/);
+      expect(execution.getJob(job.id)?.enabled).toBe(false);
+    } else if (
+      scenario === "foreign" ||
+      scenario === "managed-foreign-owner" ||
+      scenario === "managed-manual-owner" ||
+      scenario === "managed-escape"
+    ) {
       expect(reads).toEqual([]);
       expect(result?.lastRunStatus).toBe("error");
       expect(result?.lastError).toMatch(
         scenario === "foreign"
           ? /only use its owning conversation’s workspace/
-          : scenario === "archived"
-            ? /is archived/
+          : scenario === "managed-escape"
+            ? /workspace does not match its managed worktree/
             : /worktree is missing, retired, or mismatched/,
       );
     } else {

@@ -3,7 +3,6 @@ import { t } from "../../i18n/index.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import { ComposerDictationSession, formatDictationError } from "./composer-dictation-session.ts";
-import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
   HOLD_PROGRESS_MS = 350;
@@ -55,7 +54,6 @@ export function insertComposerDictation(
 
 // Gesture and session admission must remain synchronous across pointer and media callbacks.
 export class ComposerDictationOwner extends EventTarget {
-  readonly inputLevel = new RealtimeTalkLevelSignal();
   private readonly playback = new GatewaySpeechPlayback();
   private phase: DictationPhase = "idle";
   private pointerId: number | null = null;
@@ -322,7 +320,6 @@ export class ComposerDictationOwner extends EventTarget {
             }
           }
         },
-        onLevel: (level) => this.inputLevel.set(level),
         onTranscriptChange: () => this.dispatchEvent(new Event("change")),
         onReady: () => {
           if (this.session === session && this.phase === "connecting") {
@@ -357,14 +354,14 @@ export class ComposerDictationOwner extends EventTarget {
     this.clearPointerGesture();
     const session = this.session;
     if (!session) {
-      this.reset();
+      this.setPhase("idle");
       return Promise.resolve(false);
     }
     this.setPhase("stopping");
     const transcript = options.commit ? session.transcriptSnapshot() : "";
     const committed = Boolean(options.commit && transcript && wasActive && !this.disposed);
     this.session = null;
-    this.reset();
+    this.setPhase("idle");
     if (!options.commit) {
       void session.cancel().catch(() => undefined);
       return Promise.resolve(false);
@@ -398,11 +395,6 @@ export class ComposerDictationOwner extends EventTarget {
         return true;
       })
       .catch(() => false);
-  }
-
-  private reset(): void {
-    this.inputLevel.set(0);
-    this.setPhase("idle");
   }
 
   private retirePendingCommit(): void {

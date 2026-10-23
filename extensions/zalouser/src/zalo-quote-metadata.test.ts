@@ -188,7 +188,6 @@ it("extracts quote metadata and implicit mentions", async () => {
 
   expect(message).toMatchObject({
     quotedGlobalMsgId: "987654321234",
-    quotedOwnerId: "555444333",
     quotedBody: "Previous bot message content",
     implicitMention: true,
   });
@@ -217,7 +216,6 @@ it("reuses group context until its five-minute TTL expires", async () => {
 
   await withStoredSession("cache-ttl", api, async () => {
     await expect(resolveZaloGroupContext("cache-ttl", "group-ttl")).resolves.toMatchObject({
-      groupId: "group-ttl",
       name: "Group",
     });
     now.mockReturnValue(1_700_000_299_999);

@@ -8,7 +8,10 @@ import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal
 
 const { emitAgentEvent } = vi.hoisted(() => ({ emitAgentEvent: vi.fn() }));
 
-vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent }));
+vi.mock("../../infra/agent-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/agent-events.js")>()),
+  emitAgentEvent,
+}));
 
 describe("createAgentLifecycleTerminalBackstop", () => {
   beforeEach(() => emitAgentEvent.mockClear());

@@ -18,8 +18,12 @@ import {
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
+import { formatRestartRecoveryAdmission } from "../agents/main-session-recovery/main-session-recovery-presentation.js";
 import { captureRequesterOrigin } from "../agents/requester-origin.js";
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../agents/restart-recovery-prompt.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { createGatewayCrashLoopRecovery } from "../cli/gateway-cli/crash-loop-recovery.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
@@ -33,7 +37,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { loadOrCreateDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
+import {
+  beginGatewayBootLifecycle,
+  completeGatewayBootLifecycle,
+} from "../infra/gateway-boot-lifecycle.js";
 import { waitForSessionParticipantRecording } from "../sessions/session-participant-recording.js";
+import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -81,11 +90,15 @@ async function interruptInput(
   await receipt.settled?.();
 }
 
-it.for(["steer", "followup"] as const)(
-  "rechecks captured chat operators and resumes their predecessor before %s replay",
+it.for([
+  { queueMode: "steer", quarantine: false },
+  { queueMode: "followup", quarantine: false },
+  { queueMode: "followup", quarantine: true },
+] as const)(
+  "rechecks captured chat operators before $queueMode replay (quarantine: $quarantine)",
   { timeout: 90_000 },
-  async (queueMode) => {
-    const runPrefix = `replay-${queueMode}`;
+  async ({ queueMode, quarantine }) => {
+    const runPrefix = `replay-${queueMode}${quarantine ? "-quarantine" : ""}`;
     const state = await createOpenClawTestState({
       label: "chat-replay-authority",
       env: {
@@ -104,6 +117,8 @@ it.for(["steer", "followup"] as const)(
       }
     });
     const providerErrors: unknown[] = [];
+    const recoveryAdmission = formatRestartRecoveryAdmission();
+    const recoveryResumePrefix = formatSystemTurnPrompt(RESTART_RECOVERY_INTERRUPTION_NOTE);
     const reply = (response: Parameters<typeof writeOpenAiResponsesText>[0], text: string) =>
       writeOpenAiResponsesText(response, {
         text,
@@ -124,17 +139,22 @@ it.for(["steer", "followup"] as const)(
             content?: string | Array<{ text?: string }>;
           }>;
         };
-        // Historical interrupted-input notices may quote future queued messages.
+        // Ignore standalone recovery controls, but retain merged prompts carrying the input.
         const activeInput = payload.input
           .filter((item) => item.role === "user")
           .map((item) =>
-            stripInternalRuntimeContext(
-              typeof item.content === "string"
-                ? item.content
-                : (item.content ?? []).map((part) => part.text ?? "").join("\n"),
+            stripInboundMetadata(
+              stripInternalRuntimeContext(
+                typeof item.content === "string"
+                  ? item.content
+                  : (item.content ?? []).map((part) => part.text ?? "").join("\n"),
+              ),
             ),
           )
-          .findLast((text) => text.trim());
+          .findLast(
+            (text) =>
+              text.trim() && text !== recoveryAdmission && !text.startsWith(recoveryResumePrefix),
+          );
         if (activeInput?.includes("PEER_INPUT")) {
           replayOrder.push("peer");
           reply(response, "Peer completed.");
@@ -161,13 +181,15 @@ it.for(["steer", "followup"] as const)(
     let startupProbe: WebSocket | undefined;
     const recoveryStarted = createDeferred();
     const releaseRecovery = createDeferred();
+    const quarantineObserved = createDeferred();
+    let recoverBoot: ReturnType<typeof createGatewayCrashLoopRecovery> | undefined;
     const recover = deliveryRecovery.recoverSessionSendDeliveries;
     const recoverySpy = vi
       .spyOn(deliveryRecovery, "recoverSessionSendDeliveries")
       .mockImplementation(async (...args) => {
         recoveryStarted.resolve();
         await releaseRecovery.promise;
-        return recover(...args);
+        await recover(...args);
       });
     try {
       const provider = buildMockOpenAiResponsesProvider(
@@ -181,7 +203,6 @@ it.for(["steer", "followup"] as const)(
           defaults: {
             workspace: state.workspaceDir,
             skipBootstrap: false,
-            heartbeat: { every: "0m" },
             model: { primary: provider.modelRef },
             models: { [provider.modelRef]: { agentRuntime: { id: "openclaw" } } },
           },
@@ -384,6 +405,21 @@ it.for(["steer", "followup"] as const)(
         cfg: config,
         configPath: state.configPath,
         token: "synthetic-replay-token",
+        ...(quarantine
+          ? {
+              channelAutostartSuppression: {
+                reason: "crash-loop-breaker" as const,
+                message: "Synthetic interrupted-input quarantine",
+              },
+              tryRecoverChannelAutostartSuppression: async (signal?: AbortSignal) => {
+                const pausedUntil = await expectDefined(recoverBoot, "boot recovery")(signal);
+                if (pausedUntil !== undefined) {
+                  quarantineObserved.resolve();
+                }
+                return pausedUntil;
+              },
+            }
+          : {}),
       });
       const client = gateway.client;
       const expectRunOk = async (runId: string) => {
@@ -431,12 +467,52 @@ it.for(["steer", "followup"] as const)(
           error: { code: "UNAVAILABLE", retryable: true },
         });
         expect(requests).toEqual([]);
+        if (quarantine) {
+          // Real persisted crashes leave a short quarantine window after fixture startup.
+          const now = Date.now();
+          for (let i = 0; i < 3; i++) {
+            const failedAt = now - 295_000 + i;
+            const boot = await beginGatewayBootLifecycle(process.env, failedAt);
+            await completeGatewayBootLifecycle(
+              boot.id,
+              { outcome: "startup_failed" },
+              process.env,
+              failedAt,
+            );
+          }
+          const boot = await beginGatewayBootLifecycle(process.env, now - 290_000);
+          expect(boot.decision.tripped).toBe(true);
+          let activeBootId = boot.id;
+          recoverBoot = createGatewayCrashLoopRecovery({
+            bootId: activeBootId,
+            getActiveBootId: () => activeBootId,
+            onRecovered: (bootId) => {
+              activeBootId = bootId;
+            },
+          });
+        }
       } finally {
         if (startupProbe) {
           await closeGatewayTestWebSocket(startupProbe);
           startupProbe = undefined;
         }
         releaseRecovery.resolve();
+      }
+      if (quarantine) {
+        await quarantineObserved.promise;
+        const { fixture } = expectDefined(
+          cases.find(({ change }) => change === "unchanged"),
+          "quarantined operator fixture",
+        );
+        expect(startedRuns).toEqual([]);
+        expect((await listSessionPendingInputs(fixture.target)).items).toMatchObject([
+          { runId: `${runPrefix}-peer`, state: "interrupted" },
+          { runId: `${runPrefix}-unchanged`, state: "interrupted" },
+        ]);
+        await vi.waitFor(() => expect(startedRuns).toContain(`${runPrefix}-recovery-predecessor`), {
+          timeout: 30_000,
+        });
+        await expectRunOk(`${runPrefix}-recovery-predecessor`);
       }
       await vi.waitFor(() => expect(startedRuns).toContain(`${runPrefix}-peer`), {
         timeout: 30_000,

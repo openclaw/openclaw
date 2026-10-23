@@ -153,6 +153,13 @@ GGUFs and legacy EmbeddingGemma cache paths. One slot bounds llama.cpp's large
 embedding output buffer to one input; the context bound avoids reserving a custom
 model's full training context for short memory chunks.
 
+`memory.search.outputDimensionality` truncates local embedding vectors before
+L2 normalization, preserving the requested size in the index identity. Use a
+GGUF model that supports dimensionality reduction. Without this setting, vectors
+retain their native size; requesting a larger size than the model returns fails.
+If an existing index contains native-size vectors despite a smaller configured
+size, rebuild it with `openclaw memory index --force --agent <id>`.
+
 Existing context, batch, and slot settings in the embedding section, `[*]`, or
 the managed service's arguments or environment remain authoritative. OpenClaw adds
 the context bound only when no slot count or per-slot context is configured,
@@ -529,6 +536,15 @@ model.
   tool-capable Jinja chat template.
 - Managed Linux builds require glibc 2.34 on x64 or 2.38 on arm64. Windows
   builds require the Microsoft Visual C++ 2015-2022 Redistributable.
+- If a Linux upgrade removes a shared library, setup and embedding diagnostics
+  name the missing library and its runtime package. For `libssl.so.3` or
+  `libcrypto.so.3`, install OpenSSL 3 (`libssl3t64` or `libssl3` on Debian/Ubuntu);
+  for `libgomp.so.1`, install OpenMP (`libgomp1` on Debian/Ubuntu). OpenSSL 4 does
+  not replace OpenSSL 3 for the pinned build. Restore the missing runtime, rerun
+  llama.cpp setup, then verify with `openclaw memory status --deep` and retry
+  `openclaw memory index --force`. Re-downloading the same build does not supply
+  system libraries; existing memory indexes are preserved while embeddings are
+  unavailable.
 - A model that replies to a simple prompt but fails the setup tool check is
   not selected as the default. Retry after reviewing its tool support or choose
   another model.

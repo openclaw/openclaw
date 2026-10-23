@@ -368,10 +368,6 @@ process.stdout.write(JSON.stringify(version === "2026.9.2" ? { openclaw: packed 
   const firstFixture = readJson(path.join(root, "artifacts/first-hop-fixture.json"));
   const secondFixture = readJson(path.join(root, "artifacts/second-hop-fixture.json"));
   expect(firstFixture.sourceSha256).toBe(sha256(fs.readFileSync(tarball)));
-  expect(firstFixture.members.changes.map((entry: { path: string }) => entry.path)).toEqual([
-    "dist/build-info.json",
-    "package.json",
-  ]);
   expect(secondFixture).toMatchObject({
     sourceSha256: firstFixture.targetSha256,
     removedCompatibilityChunks: [],

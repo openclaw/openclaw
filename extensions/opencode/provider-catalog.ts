@@ -97,7 +97,6 @@ const opencodeZenCatalog = createUpstreamProviderCatalog({
 export async function prepareOpencodeZenModel(params: {
   modelId: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
 }): Promise<ProviderRuntimeModel | undefined> {
   const snapshot = await opencodeZenCatalog.refreshMetadata(params);
   return snapshot?.get(params.modelId.trim().toLowerCase())?.model;

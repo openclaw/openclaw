@@ -155,11 +155,13 @@ export async function recoverSandboxPersistentExecOrphans(
   options: { env?: NodeJS.ProcessEnv } = {},
 ) {
   const store = createSandboxPersistentExecStore(options);
-  await recoverOrphanContainers(store);
+  await recoverOrphanContainers(store, await store.list());
 }
 
-async function recoverOrphanContainers(store: Store): Promise<void> {
-  const records = await store.list();
+async function recoverOrphanContainers(
+  store: Store,
+  records: SandboxPersistentExecRecord[],
+): Promise<void> {
   const registry = await readRegistry({ path: store.databasePath, env: store.environment });
   const targets = new Map<string, DockerPersistentExecTarget>();
   for (const record of records) {
@@ -226,24 +228,21 @@ export async function settleSandboxPersistentExecsForRetirement(params: {
 }
 
 /** One owner holds container custody, current authority, and workspace finalization per attempt. */
-export function createSandboxPersistentExecOwner(params: {
-  scheduler: GatewayScheduler;
-  assertCurrent?: () => void;
-}) {
+export function createSandboxPersistentExecOwner(params: { scheduler: GatewayScheduler }) {
   let retainedStore: Store | undefined;
-  const storeForOwner = () =>
-    (retainedStore ??= createSandboxPersistentExecStore({ assertCurrent: params.assertCurrent }));
+  const storeForOwner = () => (retainedStore ??= createSandboxPersistentExecStore());
 
   return {
     async recover(this: void) {
       const store = storeForOwner();
+      const records = await store.list();
       const failures: unknown[] = [];
       try {
-        await recoverOrphanContainers(store);
+        await recoverOrphanContainers(store, records);
       } catch (error) {
         failures.push(error);
       }
-      for (const record of await store.list()) {
+      for (const record of records) {
         try {
           const owner = active.get(`${store.databasePath}\0${record.ownerKey}`);
           if (owner?.attemptId === record.attemptId) {
@@ -284,7 +283,6 @@ export function createSandboxPersistentExecOwner(params: {
       const cancellation = new AbortController();
       let outputAttached = true;
       const assertCurrent = () => {
-        params.assertCurrent?.();
         input.signal.throwIfAborted();
         input.assertCurrent();
         if (cancellation.signal.aborted) {

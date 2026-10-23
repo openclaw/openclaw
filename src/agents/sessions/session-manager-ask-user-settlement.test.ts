@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, assert, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, assert, beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import {
   loadTranscriptEvents,
   readTranscriptMutationAtSync,
@@ -16,6 +16,8 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import * as questionDispatch from "../harness/gateway-question-dispatch.js";
+import type { AgentHarnessQuestionGatewayCall as GatewayCall } from "../harness/gateway-question-dispatch.js";
 import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { createAskUserTool } from "../tools/ask-user-tool.js";
@@ -72,10 +74,6 @@ for (const outcome of ["timeout", "answer"] as const) {
       const questions = new QuestionManager(scheduler);
       const waiting = createDeferredCore();
       let questionId = "";
-      type GatewayCall = Extract<
-        NonNullable<Parameters<typeof createAskUserTool>[0]["gatewayCall"]>,
-        (...args: never[]) => unknown
-      >;
       const gatewayCall = (async (
         method: string,
         _options: unknown,
@@ -93,10 +91,12 @@ for (const outcome of ["timeout", "answer"] as const) {
         }
         throw new Error(`Unexpected question method: ${method}`);
       }) as GatewayCall;
-      const pending = createAskUserTool({ sessionKey: target.sessionKey, gatewayCall }).execute(
-        "ask",
-        args,
-      );
+      const dispatch = questionDispatch.resolveAgentQuestionGatewayCall(gatewayCall);
+      const gatewaySpy = vi
+        .spyOn(questionDispatch, "resolveAgentQuestionGatewayCall")
+        .mockReturnValue(dispatch);
+      onTestFinished(() => gatewaySpy.mockRestore());
+      const pending = createAskUserTool({ sessionKey: target.sessionKey }).execute("ask", args);
       const rewriteReady = createDeferredCore();
       const releaseRewrite = createDeferredCore();
       const withWorker = metadataRuntime.withSessionMetadataWorker;
