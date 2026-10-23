@@ -85,6 +85,7 @@ vi.mock("../infra/gateway-owner-lease.worker.js", async (importOriginal) => ({
     onAdmitted();
   },
 }));
+// mock-isolation: Dispatch tests supply fixture handles without opening their synthetic source paths.
 vi.mock("./openclaw-state-db-read-connection.js", () => ({
   closeRetainedOpenClawStateReadConnections: vi.fn(),
   readOpenClawStateReadOnlyLocation: mock.settle,
