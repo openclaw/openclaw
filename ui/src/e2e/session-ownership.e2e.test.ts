@@ -229,6 +229,15 @@ suite.define(() => {
       ),
     );
     rows.push({
+      key: "agent:main:child",
+      kind: "direct",
+      label: "Inline child session",
+      createdActor: patrick,
+      owner: { actor: patrick },
+      spawnedBy: "agent:main:parent",
+      updatedAt: 2,
+    });
+    rows.push({
       key: "agent:main:mira",
       kind: "direct",
       label: "Mira session",
@@ -323,6 +332,9 @@ suite.define(() => {
     );
     const toggle = row("parent").locator("[data-child-session-toggle]");
     await toggle.click();
+    await expectBrowser(group.locator('[data-session-key="agent:main:child"]')).toContainText(
+      "Inline child session",
+    );
     await expectBrowser(toggle).toHaveAttribute("aria-expanded", "true");
   });
 
