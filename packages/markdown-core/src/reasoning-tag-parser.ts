@@ -396,6 +396,19 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
     const blockStart = block.position?.start?.offset;
     const endLine = block.position?.end?.line;
     const blockEnd = block.position?.end?.offset;
+    const previous = blocks[index - 1];
+    const startLine = block.position?.start?.line;
+    // An unfinished table delimiter can still rejoin its preceding paragraph.
+    if (
+      block.type === "table" &&
+      block.children?.length === 1 &&
+      blockEnd === text.length &&
+      previous?.type === "paragraph" &&
+      startLine !== undefined &&
+      previous.position?.end?.line === startLine - 1
+    ) {
+      retainStart = Math.min(retainStart, previous.position?.start?.offset ?? retainStart);
+    }
     if (
       paragraphs &&
       block.type === "paragraph" &&

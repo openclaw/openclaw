@@ -5,12 +5,7 @@ import {
   createProtectionScanState,
 } from "../../../packages/tool-call-repair/src/protection-fast-path.js";
 import { escapeRegExp } from "../regexp.js";
-import {
-  canReuseMarkdownOwnership,
-  findCodeOwnership,
-  findCodeRegions,
-  stripBlockquotePrefixes,
-} from "./code-regions.js";
+import { canReuseMarkdownOwnership, findCodeOwnership, findCodeRegions } from "./code-regions.js";
 
 export type TextProjection = { text: string; delta: string | null };
 type TextProjector = (input: TextProjection) => TextProjection;
@@ -87,8 +82,7 @@ function findTextCheckpoint(
       const retain = ownership.definitions.reduce(
         (offset, { identifier, start }) =>
           identifier.length > 999 ? Math.min(offset, start) : offset,
-        // A table can retain its header, but never settle earlier mutable images or titles.
-        Math.min(ownership.retainStart, findOpenGfmTableStart(text) ?? text.length),
+        ownership.retainStart,
       );
       const start = retain === 0 ? 0 : text.lastIndexOf("\n", retain - 1) + 1;
       const completeEnd = text.lastIndexOf("\n") + 1;
@@ -116,58 +110,6 @@ function findTextCheckpoint(
     return { offset: cursor, context: state.fenceChar.repeat(state.fenceLength) + "\n" };
   }
   return { offset: closedFence ? cursor : lastLineStart, context: "" };
-}
-
-function findOpenGfmTableStart(text: string) {
-  if (!text || text.endsWith("\n") || text.endsWith("\r")) {
-    return undefined;
-  }
-  const delimiterBreak = Math.max(text.lastIndexOf("\r"), text.lastIndexOf("\n"));
-  if (delimiterBreak < 0) {
-    return undefined;
-  }
-  const delimiterRow = stripBlockquotePrefixes(text.slice(delimiterBreak + 1));
-  if (!/^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/u.test(delimiterRow)) {
-    return undefined;
-  }
-
-  const headerEnd =
-    text[delimiterBreak] === "\n" && text[delimiterBreak - 1] === "\r"
-      ? delimiterBreak - 1
-      : delimiterBreak;
-  const headerBreak = Math.max(
-    text.lastIndexOf("\r", headerEnd - 1),
-    text.lastIndexOf("\n", headerEnd - 1),
-  );
-  const headerStart = headerBreak + 1;
-  if (!stripBlockquotePrefixes(text.slice(headerStart, headerEnd)).trim()) {
-    return undefined;
-  }
-
-  // Keep the whole containing paragraph: a table boundary can temporarily make
-  // an inline span across the header appear closed until the delimiter row settles.
-  let paragraphStart = headerStart;
-  let lineStart = headerStart;
-  while (lineStart > 0) {
-    let previousLineEnd = lineStart - 1;
-    if (text[previousLineEnd] === "\n" && text[previousLineEnd - 1] === "\r") {
-      previousLineEnd -= 1;
-    }
-    if (text[previousLineEnd] !== "\r" && text[previousLineEnd] !== "\n") {
-      break;
-    }
-    const previousBreak = Math.max(
-      text.lastIndexOf("\r", previousLineEnd - 1),
-      text.lastIndexOf("\n", previousLineEnd - 1),
-    );
-    const previousLineStart = previousBreak + 1;
-    if (/^[ \t]*$/u.test(text.slice(previousLineStart, previousLineEnd))) {
-      break;
-    }
-    paragraphStart = previousLineStart;
-    lineStart = previousLineStart;
-  }
-  return paragraphStart;
 }
 
 function createCheckpointTransform(
