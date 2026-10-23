@@ -275,7 +275,10 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
   });
 
   it("delivers distinct custom reactions to the recovered topic owner", async () => {
-    resolveCachedMessageThreadSpec.mockResolvedValue({ scope: "forum", id: FORUM_TOPIC_ID });
+    resolveCachedMessageThreadSpec.mockResolvedValue({
+      threadSpec: { scope: "forum", id: FORUM_TOPIC_ID },
+      isTopicMessage: false,
+    });
     enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
     const handler = registerHandler(
       buildTelegramConfig({ topics: { [FORUM_TOPIC_ID]: { agentId: "topicbot" } } }),
