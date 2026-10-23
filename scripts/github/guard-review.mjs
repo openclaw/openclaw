@@ -416,7 +416,7 @@ export async function openGuard({ context, commentMarker, approvalCommand }, pre
     return null;
   }
   // Invalidate previous approval before any fallible file or authority reads.
-  await publishGuardStatus(guard, "failure", "Security review has not completed");
+  await publishGuardStatus(guard, "pending", "Security review has not completed");
   if (review.fileSnapshot) {
     await assertGuardUnchanged(review);
   } else {
@@ -531,7 +531,7 @@ export async function finishGuard(guard, { description, requiresApproval = false
   const allowed = !requiresApproval || approval !== null;
   await publishGuardStatus(
     guard,
-    allowed ? "success" : "failure",
+    allowed ? "success" : "pending",
     allowed ? description : "A maintainer must approve the current PR revision",
   );
   guard.approval = approval;

@@ -418,7 +418,7 @@ describe("combined security review entry point", () => {
         enforcement.reviews.findLast(
           (entry) => entry.body?.context === "openclaw/dependency-review",
         )?.body?.state,
-      ).toBe("failure");
+      ).toBe("pending");
       expect(enforcement.stdout).toContain("Automatic lockfile cleanup is best effort.");
     } else {
       expect(cleanup.combined.at(-1)).toBe("failure");
@@ -961,7 +961,7 @@ describe("combined security review entry point", () => {
       result.reviews.findLast(
         (entry) => entry.body?.context === "openclaw/security-sensitive-review",
       )?.body?.state,
-    ).toBe("failure");
+    ).toBe("pending");
   });
 
   it("recovers a failed sticky-notice update while preserving missing approval", () => {
@@ -1199,7 +1199,7 @@ describe("combined security review entry point", () => {
       for (const context of ["openclaw/dependency-review", "openclaw/security-sensitive-review"]) {
         expect(
           result.reviews.findLast((entry) => entry.body?.context === context)?.body?.state,
-        ).toBe("failure");
+        ).toBe("pending");
       }
       const notices = result.requests.map((entry) => entry.body?.body ?? "").join("\n");
       expect(notices).toContain("/allow-dependencies-change");
@@ -1734,7 +1734,7 @@ describe("combined security review entry point", () => {
     expect(notices.map((entry) => entry.body?.body).join("\n")).toContain(
       "/allow-security-sensitive-change",
     );
-    expect(result.reviews.every((entry) => entry.body?.state === "failure")).toBe(true);
+    expect(result.reviews.every((entry) => entry.body?.state === "pending")).toBe(true);
     const approved = evaluate({
       [rolePath]: { role_name: "write" },
       "GET /repos/openclaw/openclaw/collaborators/reviewer/permission": { role_name: "maintain" },
@@ -1868,7 +1868,7 @@ describe("combined security review entry point", () => {
       [rolePath]: { role_name: "read" },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.reviews.filter((entry) => entry.body?.state === "failure")).toHaveLength(4);
+    expect(result.reviews.filter((entry) => entry.body?.state === "pending")).toHaveLength(4);
     expect(result.combined).not.toContain("success");
   });
 

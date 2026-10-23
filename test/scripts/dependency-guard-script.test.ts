@@ -254,7 +254,7 @@ describe("dependency guard script", () => {
           ? []
           : [approvalNotice, { ...approval, ...overrides }],
       });
-      expectGuard(result, ["failure", allowed ? "success" : "failure"], 0, overrides);
+      expectGuard(result, ["pending", allowed ? "success" : "pending"], 0, overrides);
       if (author) {
         expect(result.stdout).toContain("informational");
         expect(result.stdout).toContain("- `pnpm-workspace.yaml`\n");
@@ -271,7 +271,7 @@ describe("dependency guard script", () => {
     const result = runDependencyGuard({
       [`GET ${issuePath}/comments`]: afterTwoReads([approvalNotice, approval], [approvalNotice]),
     });
-    expectGuardState(result, "failure");
+    expectGuardState(result, "pending");
     expect(result.stdout).toContain("Maintainer dependency review required");
   });
 
@@ -307,7 +307,7 @@ describe("dependency guard script", () => {
         expect(detection.writes).toEqual([]);
       }
       const result = runDependencyGuard(fixture);
-      expectGuardState(result, "failure");
+      expectGuardState(result, "pending");
       if (notice) {
         expect(result.stdout).toContain(notice);
       }
@@ -318,7 +318,7 @@ describe("dependency guard script", () => {
     const cases = [
       { role: "write", headVersion: "1", expected: "success", notice: false },
       { role: "admin", headVersion: "1", expected: "success", notice: false },
-      { role: "write", headVersion: "2", expected: "failure", notice: true },
+      { role: "write", headVersion: "2", expected: "pending", notice: true },
     ];
     for (const { role, headVersion, expected, notice } of cases) {
       const result = runDependencyGuard({
@@ -347,7 +347,7 @@ describe("dependency guard script", () => {
         [`GET ${manifestPath}?ref=${headSha}`]: status === "removed" ? { httpError: 404 } : content,
         [`GET ${graphPath}`]: [],
       });
-      expectGuardState(result, "failure");
+      expectGuardState(result, "pending");
       expect(result.stdout).toContain("/allow-dependencies-change");
     }
   });
@@ -359,7 +359,7 @@ describe("dependency guard script", () => {
         [`GET ${pullPath}/files`]: [{ filename: "package.json" }],
         [`GET ${comparisonPath}`]: invalidComparison,
       });
-      expectGuard(result, ["failure"], 1);
+      expectGuard(result, ["pending"], 1);
       expect(result.stderr).toContain("merge base");
       expect(result.writes).toEqual([]);
     }
@@ -391,7 +391,7 @@ describe("dependency guard script", () => {
         },
         "autoscrub",
       );
-      expectGuard(result, ["failure"], writeError ? 1 : 0);
+      expectGuard(result, ["pending"], writeError ? 1 : 0);
       if (writeError) {
         expect(result.stderr).toContain("Fixture API failure");
         expect(result.stdout).toContain(
@@ -476,7 +476,7 @@ describe("dependency guard script", () => {
       [`GET ${graphPath}`]: [],
     };
     const autoscrub = runDependencyGuard(routes, "autoscrub", null);
-    expectGuard(autoscrub, ["failure"]);
+    expectGuard(autoscrub, ["pending"]);
     expect(autoscrub.writes).toEqual([]);
     const notice = autoscrub.calls.find(
       (call) => call.path === `${issuePath}/comments` && call.method === "POST",
@@ -486,7 +486,7 @@ describe("dependency guard script", () => {
     expect(notice?.body?.body).toContain("git restore");
 
     const enforcement = runDependencyGuard(routes, "enforce", null);
-    expectGuardState(enforcement, "failure");
+    expectGuardState(enforcement, "pending");
     expect(enforcement.stdout).toContain("/allow-dependencies-change");
     expect(enforcement.stdout).toContain("Automatic lockfile cleanup is best effort.");
   });
