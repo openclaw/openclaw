@@ -70,12 +70,6 @@ export const LAB_FEATURES = (
       docsUrl: "https://docs.openclaw.ai/web/control-ui/chat",
       configPath: ["gateway", "controlUi", "experimental", "chatBubbles"],
     },
-    {
-      ...BOOLEAN_GATE,
-      id: "customPluginUi",
-      docsUrl: "https://docs.openclaw.ai/plugins/feature-plugins",
-      configPath: ["gateway", "controlUi", "experimental", "customPlugins"],
-    },
     CLAWS_LAB_FEATURE,
     {
       ...BOOLEAN_GATE,

@@ -72,8 +72,8 @@ describe("plugin board widget cells", () => {
   });
 
   it.each([false, true])(
-    "preserves a removable unavailable widget (Labs disabled: %s)",
-    async (labsDisabled) => {
+    "preserves a removable unavailable widget (configuration disabled: %s)",
+    async (configDisabled) => {
       const widget: BoardWidget = {
         name: "work-item",
         tabId: "main",
@@ -94,7 +94,7 @@ describe("plugin board widget cells", () => {
         navigate,
         gateway: { snapshot: { phase: "connected" } },
         plugins: {
-          errors: labsDisabled
+          errors: configDisabled
             ? [
                 {
                   pluginId: "custom-review",
@@ -119,21 +119,15 @@ describe("plugin board widget cells", () => {
 
       const placeholder = cell.querySelector('[data-test-id="board-disabled-plugin"]');
       expect(placeholder?.textContent).toContain(
-        labsDisabled ? "Custom plugin UI is off" : "Widget from disabled plugin custom-review",
+        configDisabled ? "Custom plugin UI is off" : "Widget from disabled plugin custom-review",
       );
       expect(cell.widget).toBe(widget);
       expect(cellCallbacks.remove).not.toHaveBeenCalled();
-      const labsLink = placeholder?.querySelector<HTMLAnchorElement>(
-        'a[href="/console/settings/labs"]',
-      );
-      if (labsDisabled) {
-        expect(labsLink?.textContent?.trim()).toBe("Open Labs");
-        labsLink?.click();
-        expect(navigate).toHaveBeenCalledExactlyOnceWith("labs");
-        expect(cellCallbacks.remove).not.toHaveBeenCalled();
-      } else {
-        expect(labsLink).toBeNull();
+      expect(placeholder?.querySelector('a[href="/console/settings/labs"]')).toBeNull();
+      if (configDisabled) {
+        expect(placeholder?.textContent).toContain("Disabled by the Gateway configuration");
       }
+      expect(navigate).not.toHaveBeenCalled();
       const removeButton = placeholder?.querySelector("button");
       expect(removeButton).not.toBeNull();
       removeButton?.click();

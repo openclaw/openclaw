@@ -163,6 +163,29 @@ describe("renderPluginConsentDialog", () => {
     },
   );
 
+  it.each([true, false, undefined])(
+    "discloses native web UI only when inspection confirms it (%s)",
+    (hasNativeUi) => {
+      const container = mount({
+        inspection: createInspectResult({
+          overview: {
+            hasNativeUi,
+            capabilities: { providers: [], channels: [], contracts: {}, ui: ["page"] },
+          },
+        }),
+      });
+      const disclosure = container.querySelector(".plugin-native-ui-disclosure");
+      expect(Boolean(disclosure)).toBe(hasNativeUi === true);
+      if (hasNativeUi) {
+        expect(normalizedText(disclosure)).toContain("Includes native web UI");
+        expect(normalizedText(disclosure)).toContain(
+          "This plugin runs code in the OpenClaw web app. It can read and modify the app’s interface and use the Gateway permissions of the signed-in user. Only enable plugins you trust.",
+        );
+        expect(disclosure?.querySelector("[role=alert], input, button")).toBeNull();
+      }
+    },
+  );
+
   it("explains an empty manifest and preserves external-plugin grants", () => {
     const container = mount();
     const text = normalizedText(container.querySelector('[data-plugin-consent="enable"]'));

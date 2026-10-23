@@ -88,6 +88,20 @@ describe("managed plugin catalog", () => {
     mockHostedOfficialCatalog([]);
   });
 
+  it.each([true, false])(
+    "reports native web UI from the selected installed manifest (%s)",
+    async (native) => {
+      const snapshot = metadataSnapshot({ enabled: false });
+      snapshot.plugins[0]!.uiCapabilities = ["page"];
+      if (native) {
+        snapshot.plugins[0]!.controlUi = { entry: "dist/browser/index.js" };
+      }
+      mocks.metadata.mockReturnValue(snapshot);
+      const result = await listLocalPlugins();
+      expect(result.plugins[0]).toMatchObject({ id: "workboard", hasNativeUi: native });
+    },
+  );
+
   it("normalizes package-shaped hosted rows and deduplicates their runtime id", async () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
     mockHostedOfficialCatalog([hostedFeedDiffsEntry]);

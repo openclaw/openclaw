@@ -41,6 +41,28 @@ it("keeps long README tails and wires fenced-code controls", () => {
   expect(text(".plugin-catalog-detail__readme-section > h2")).toBe("README");
 });
 
+it.each(["code-plugin", "bundle-plugin", undefined] as const)(
+  "places qualified installation trust before the actions (family=%s)",
+  (family) => {
+    const result = createDiscoveryDetail(
+      createPlugin({ installed: false, state: "not-installed" }),
+    );
+    result.plugin.catalog.family = family;
+    result.detail.uiCapabilities = ["page"];
+    const { container } = mount(result);
+    const notice = container.querySelector(".plugin-native-ui-disclosure");
+    expect(notice?.textContent).toContain(
+      family === "bundle-plugin" ? "Bundle contents" : "Plugin code",
+    );
+    expect(notice?.textContent).toContain(
+      family === "bundle-plugin" ? "Bundles can add content" : "If a plugin includes native web UI",
+    );
+    expect(notice?.textContent).not.toContain("Includes native web UI");
+    const actions = container.querySelector(".plugin-catalog-detail__actions")!;
+    expect(notice!.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  },
+);
+
 it("uses a white tile for an official package icon", () => {
   const imageUrl = "https://example.com/icon.png";
   const result = createDiscoveryDetail(createPlugin({ origin: "official" }));

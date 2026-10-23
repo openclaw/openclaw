@@ -214,12 +214,6 @@ describe("LabsPage", () => {
       note: "labs: update codeMode",
     },
     {
-      label: "Custom plugin UI",
-      sourceConfig: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
-      expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: null } } } },
-      note: "labs: update customPluginUi",
-    },
-    {
       label: "Claws",
       sourceConfig: { gateway: { controlUi: { experimental: { claws: true } } } },
       expectedPatch: { gateway: { controlUi: { experimental: { claws: null } } } },
@@ -340,12 +334,6 @@ describe("LabsPage", () => {
       sourceConfig: {},
       expectedPatch: { gateway: { controlUi: { experimental: { chatBubbles: true } } } },
       note: "labs: update chatBubbles",
-    },
-    {
-      label: "Custom plugin UI",
-      sourceConfig: {},
-      expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
-      note: "labs: update customPluginUi",
     },
     {
       label: "Claws",

@@ -18,6 +18,7 @@ import {
   buildGatewayReloadPlan,
   listConfigReloadRefinementPrefixes,
 } from "./config-reload-plan.js";
+import { isCustomPluginUiEnabled } from "./control-ui-plugin-policy.js";
 import { GATEWAY_EVENTS } from "./events.js";
 import {
   indexPluginNodeCapabilitySurfaces,
@@ -411,8 +412,7 @@ export async function finishGatewayStartup(params: {
   if (tlsRenewal) {
     registerGatewayLifetimeSidecars(tlsRenewal);
   }
-  let appliedCustomPluginUiEnabled =
-    gatewayPluginConfigAtStart.gateway?.controlUi?.experimental?.customPlugins === true;
+  let appliedCustomPluginUiEnabled = isCustomPluginUiEnabled(gatewayPluginConfigAtStart);
   const configReloaderParams: Parameters<typeof startManagedGatewayConfigReloader>[0] = {
     scheduler: runtime.scheduler,
     onReloadEnabledChange: tlsRenewal?.setEnabled,
@@ -530,8 +530,7 @@ export async function finishGatewayStartup(params: {
         runtime.nodeDesktopService.reconcileRuntimePolicy(),
         runtimeState.discovery?.update({ mdnsMode: nextConfig.discovery?.mdns?.mode }),
         (async () => {
-          const customPluginUiEnabled =
-            nextConfig.gateway?.controlUi?.experimental?.customPlugins === true;
+          const customPluginUiEnabled = isCustomPluginUiEnabled(nextConfig);
           if (customPluginUiEnabled !== appliedCustomPluginUiEnabled) {
             const { listControlUiPluginCatalog } = await import("./control-ui-plugin-assets.js");
             const catalog = await listControlUiPluginCatalog();

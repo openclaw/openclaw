@@ -1,0 +1,26 @@
+.plugin-native-ui-disclosure {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  background: var(--bg-elevated);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.plugin-native-ui-disclosure strong {
+  font-weight: 600;
+}
+
+.plugin-native-ui-disclosure p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.plugin-catalog-results > .plugin-native-ui-disclosure {
+  margin: 16px 0;
+}
+
+.plugin-catalog-detail__heading > .plugin-native-ui-disclosure {
+  margin-top: 12px;
+}

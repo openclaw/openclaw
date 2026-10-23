@@ -13,7 +13,10 @@ import {
   createPlugin,
   createResult,
 } from "./plugins-page.test-support.ts";
-import { renderPluginSettingsDetail, type DetailProps } from "./settings-view.tsx";
+import {
+  renderPluginSettingsDetail as PluginSettingsDetail,
+  type DetailProps,
+} from "./settings-view.tsx";
 
 beforeEach(() => i18n.setLocale("en"));
 
@@ -67,12 +70,21 @@ function mount(overrides: Partial<DetailProps>, setup?: (props: DetailProps) => 
     onRefresh: vi.fn(),
     ...overrides,
   };
+  const [currentProps, setProps] = createSignal(props);
   const { container } = mountSolid(() => {
     setup?.(props);
-    return renderPluginSettingsDetail(props);
+    return <PluginSettingsDetail {...currentProps()} />;
   });
   flush();
-  return { container, find: queryWithin(container), props };
+  return {
+    container,
+    find: queryWithin(container),
+    props,
+    update: (next: Partial<DetailProps>) => {
+      setProps((previous) => ({ ...previous, ...next }));
+      flush();
+    },
+  };
 }
 
 async function selectSettingAction(row: Element, value: "ask" | "reset") {
@@ -125,6 +137,45 @@ it("does not offer enablement or Settings for an uninstalled plugin", () => {
     result: createResult(createPlugin({ installed: false, state: "not-installed" })),
   });
   expect(find('[aria-label="Enable Workboard"], [aria-label="Settings"]')).toBeNull();
+});
+
+it.each([
+  { inventory: true, inspected: false, visible: false },
+  { inventory: false, inspected: true, visible: true },
+  { inventory: true, inspected: undefined, visible: true },
+  { inventory: undefined, inspected: undefined, visible: false },
+])(
+  "uses inspection $inspected over inventory $inventory for native UI disclosure",
+  ({ inventory, inspected, visible }) => {
+    const { container } = mount({
+      result: createResult(createPlugin({ hasNativeUi: inventory })),
+      inspection: createInspectResult({
+        overview: {
+          hasNativeUi: inspected,
+          capabilities: { providers: [], channels: [], contracts: {}, ui: ["page"] },
+        },
+      }),
+    });
+    const disclosure = container.querySelector(".plugin-native-ui-disclosure");
+    expect(Boolean(disclosure)).toBe(visible);
+  },
+);
+
+it("retains the disclosure as inventory enables the plugin and inspection arrives", () => {
+  const { container, update } = mount({
+    result: createResult(createPlugin({ hasNativeUi: true })),
+    inspection: null,
+  });
+  const disclosure = () => container.querySelector(".plugin-native-ui-disclosure");
+  expect(disclosure()?.textContent).toContain("Only enable plugins you trust.");
+  expect(container.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();
+  update({
+    result: createResult(createPlugin({ hasNativeUi: true, enabled: true, state: "enabled" })),
+  });
+  expect(container.querySelector('[aria-label="Disable Workboard"]')).not.toBeNull();
+  expect(disclosure()?.textContent).toContain("Only enable plugins you trust.");
+  update({ inspection: createInspectResult({ overview: { hasNativeUi: true } }) });
+  expect(disclosure()?.textContent).toContain("Only enable plugins you trust.");
 });
 
 it("retains the focused Uninstall button when inspection arrives", () => {

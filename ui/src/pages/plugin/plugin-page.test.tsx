@@ -183,7 +183,7 @@ afterEach(() => {
 });
 
 describe("PluginPage", () => {
-  it("offers Labs after a custom plugin is blocked, without mistaking a failure for disablement", async () => {
+  it("explains the configured native UI opt-out without mistaking a failure for disablement", async () => {
     const pluginId = "custom-review";
     let loading = true;
     const listeners = new Set<() => void>();
@@ -237,10 +237,9 @@ describe("PluginPage", () => {
     await settle();
     expect(page.textContent).toContain("Custom plugin UI is off");
     expect(page.params).toEqual({ document: "saved-draft" });
-    const link = page.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
-    expect(link?.textContent?.trim()).toBe("Open Labs");
-    link?.click();
-    expect(navigate).toHaveBeenCalledExactlyOnceWith("labs");
+    expect(page.querySelector('a[href="/console/settings/labs"]')).toBeNull();
+    expect(page.textContent).toContain("Disabled by the Gateway configuration");
+    expect(navigate).not.toHaveBeenCalled();
     plugins.errors = [{ pluginId, message: "Custom plugin UI is off" }];
     listeners.forEach((listener) => listener());
     await settle();
