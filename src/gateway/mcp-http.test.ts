@@ -1895,6 +1895,18 @@ describe("mcp loopback server", () => {
       status: 415,
     },
     {
+      name: "mixed-case JSON content type",
+      authenticated: true,
+      headers: { "content-type": "Application/JSON" },
+      status: 200,
+    },
+    {
+      name: "mixed-case non-JSON content type",
+      authenticated: true,
+      headers: { "content-type": "Application/XML" },
+      status: 415,
+    },
+    {
       name: "non-loopback origin before authentication",
       authenticated: false,
       headers: { origin: "https://evil.example" },
@@ -1924,28 +1936,6 @@ describe("mcp loopback server", () => {
       }
     },
   );
-
-  it("accepts JSON tool calls with a mixed-case content type", async () => {
-    const { port, runtime } = await startLoopbackServerForTest();
-    const response = await sendRaw({
-      port,
-      token: runtime.ownerToken,
-      headers: { "content-type": "Application/JSON" },
-      body: "{}",
-    });
-    expect(response.status).toBe(200);
-  });
-
-  it("still rejects a mixed-case non-JSON media type", async () => {
-    const { port, runtime } = await startLoopbackServerForTest();
-    const response = await sendRaw({
-      port,
-      token: runtime.ownerToken,
-      headers: { "content-type": "Application/XML" },
-      body: "{}",
-    });
-    expect(response.status).toBe(415);
-  });
 
   it.each<{
     name: string;

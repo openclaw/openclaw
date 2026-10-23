@@ -230,12 +230,8 @@ export function validateMcpLoopbackRequest(params: {
   }
 
   const contentType = getHeader(params.req, "content-type") ?? "";
-  // Media types are case-insensitive (RFC 9110 §8.3.1); compare the JSON prefix
-  // case-insensitively so third-party clients sending "Application/JSON" are not
-  // rejected. The accepted set stays identical to the previous prefix match.
-  if (
-    !contentType.slice(0, "application/json".length).toLowerCase().startsWith("application/json")
-  ) {
+  // Media types are case-insensitive (RFC 9110 §8.3.1).
+  if (contentType.slice(0, "application/json".length).toLowerCase() !== "application/json") {
     logMcpLoopbackTraffic("reject", {
       reason: "unsupported_media_type",
       method: params.req.method ?? "",
