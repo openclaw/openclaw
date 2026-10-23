@@ -329,11 +329,24 @@ function resolveSingleObservedModelRoute(
     };
   }
   const chatGPTApi = effectiveApi?.toLowerCase() === OPENAI_CHATGPT_RESPONSES_API;
+  const modelId = normalizeOpenAIModelRouteId(context.modelId);
+  const knownRouteContract =
+    isOpenAIDualRouteModelId(modelId) ||
+    isOpenAIPlatformOnlyRouteModelId(modelId) ||
+    isOpenAISubscriptionOnlyRouteModelId(modelId);
 
   // A custom endpoint owns its protocol contract. Subscription egress always
   // requires authored ChatGPT intent; observed Platform adapters remain safe
-  // API-key fallbacks for otherwise unspecified custom routes.
-  if (endpointKind === "custom") {
+  // API-key fallbacks for otherwise unspecified custom routes. A known model
+  // with no authored route keeps the official contract: a stale catalog row
+  // is not a relay and must not take the turn down.
+  const staleCustomChatGPTCatalog =
+    endpointKind === "custom" &&
+    chatGPTApi &&
+    !authored?.chatGPTApi &&
+    !configuredRoute &&
+    knownRouteContract;
+  if (endpointKind === "custom" && !staleCustomChatGPTCatalog) {
     if (chatGPTApi && !authored?.chatGPTApi) {
       return {
         kind: "incompatible",
@@ -395,7 +408,6 @@ function resolveSingleObservedModelRoute(
     };
   }
 
-  const modelId = normalizeOpenAIModelRouteId(context.modelId);
   // Retain Completions for API-key callers; older configs also used this
   // adapter while Codex selected subscription credentials independently.
   const platformApi =
