@@ -1,3 +1,4 @@
+import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { prepareSessionEntryReplacementDatabase } from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import {
   resolveSqliteReadScope,
@@ -69,7 +70,9 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
 }): Promise<{
   compactionTimeoutMs: number;
   assertCronRootCurrent?: () => void;
-  ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext;
+  ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext & {
+    sessionTarget: SessionTranscriptRuntimeTarget;
+  };
   transcriptLifecycle: ReturnType<typeof createEmbeddedAttemptTranscriptLifecycle>;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
 }> {
@@ -133,7 +136,9 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
     initialWriter
       ? initialWriter.withTranscriptWrite(() => transcriptLifecycle.withTranscriptWrite(operation))
       : transcriptLifecycle.withTranscriptWrite(operation);
-  const ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext = {
+  const ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext & {
+    sessionTarget: SessionTranscriptRuntimeTarget;
+  } = {
     sessionFile,
     sessionKey,
     sessionTarget: fencedSessionTarget,
