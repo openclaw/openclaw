@@ -17,7 +17,9 @@ export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAut
   const invocation = readOperatorToolGatewayAuthority();
   const caller = getGatewayToolCallerIdentity()?.operatorAuthority;
   const scope = getPluginRuntimeGatewayRequestScope();
-  const retained = scope?.client?.internal?.operatorRunAuthority;
+  // The admitted caller owns continuation authority; the ambient client may still
+  // belong to the completed recovery request that launched this child.
+  const retained = caller ? undefined : scope?.client?.internal?.operatorRunAuthority;
   const authority = prepared ?? caller ?? invocation?.operatorRunAuthority ?? retained;
   if (!authority) {
     return undefined;

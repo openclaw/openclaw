@@ -508,6 +508,7 @@ function expectIsolatedRunFields(fields: Record<string, unknown>) {
     callArg(runCronIsolatedAgentTurnMock, 0, 0, "isolated cron run"),
     "isolated cron run",
   );
+  expect(options.trigger).toBe("cron");
   for (const [key, value] of Object.entries(fields)) {
     expect(options[key]).toEqual(value);
   }

@@ -399,7 +399,7 @@ describe("update-cli", () => {
       });
       primeNpmChannelTag("latest", "2026.7.1");
       vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-        packageTargetStatus({ version: "2026.7.1", nodeEngine: ">=26.1.0" }),
+        packageTargetStatus({ version: "2026.7.1", nodeEngine: ">=26.12.1" }),
       );
       nodeVersionSatisfiesEngine.mockImplementation(
         (version: string | null) => version === "26.8.1",

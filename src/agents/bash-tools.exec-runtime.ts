@@ -54,7 +54,7 @@ import {
   waitForExecSession,
 } from "./bash-process-registry.js";
 import { emitExecProcessCompleted } from "./bash-tools.exec-diagnostics.js";
-import { prepareHostExecSpawn } from "./bash-tools.exec-host-spawn.js";
+import { prepareHostExecSpawn, resolveExecLaunchEnv } from "./bash-tools.exec-host-spawn.js";
 import { createExecLaunchLifecycle } from "./bash-tools.exec-launch.js";
 import { maybeNotifyOnExit, prepareExecExitNotification } from "./bash-tools.exec-notify.js";
 import {
@@ -762,7 +762,7 @@ export async function runExecProcess({
           withoutGatewayToolCallerIdentity(() =>
             supervisor.spawn({
               ...input,
-              ...(grant ? { env: { ...input.env, ...grant.env } } : {}),
+              env: resolveExecLaunchEnv(input.env, Boolean(opts.sandbox), grant?.env),
               onCancel: () => {
                 beginSandboxTermination();
                 grant?.revoke();

@@ -1,5 +1,6 @@
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { decodeWikiPageUtf8 } from "./markdown.js";
 
 type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
 
@@ -23,6 +24,7 @@ export async function readWikiPageStat(vault: VaultRoot, pagePath: string) {
 export async function readExistingWikiPage(
   read: () => Promise<string>,
   emptyOn: (error: unknown) => boolean,
+  fallback: () => string = () => "",
 ): Promise<string> {
   try {
     return await read();
@@ -32,11 +34,23 @@ export async function readExistingWikiPage(
       return await read();
     } catch (error) {
       if (emptyOn(error)) {
-        return "";
+        return fallback();
       }
       throw error;
     }
   }
+}
+
+export function readExistingWikiPageUtf8(
+  vault: VaultRoot,
+  relativePath: string,
+  fallback: () => string,
+): Promise<string> {
+  return readExistingWikiPage(
+    async () => decodeWikiPageUtf8(await vault.readBytes(relativePath), relativePath),
+    (error) => error instanceof FsSafeError && error.code === "not-found",
+    fallback,
+  );
 }
 
 export async function writeGuardedVaultPage(params: {

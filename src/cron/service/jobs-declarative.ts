@@ -30,6 +30,7 @@ export function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
     toolsAllowProvenance: job.toolsAllowProvenance,
     toolsAllowExecTarget: job.toolsAllowExecTarget,
     runtimeAuthority: job.runtimeAuthority,
+    operatorSource: job.operatorSource,
     runtimeAuthorityRecoveryRequired: job.runtimeAuthorityRecoveryRequired,
     delivery: job.delivery,
     displayName: job.displayName,

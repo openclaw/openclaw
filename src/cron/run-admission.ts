@@ -1,5 +1,6 @@
 import {
   type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
@@ -41,6 +42,7 @@ export function prepareCronRunAdmission(params: {
   toolsAllow?: string[];
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   executionIdentity?: CronExecutionIdentityAdmission;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   ingressBoundary?: "cron.isolated-agent" | "cron.script";
   resolveGatewayContext?: GatewayContextResolver;
 }) {
@@ -52,6 +54,7 @@ export function prepareCronRunAdmission(params: {
   const basePreparedRunAdmission = prepareAgentRunAdmission({
     operationalRunInstance,
     admissionSource: params.admissionSource,
+    operatorAuthority: params.operatorAuthority,
     cfg: params.cfg,
     facts: {
       runId,

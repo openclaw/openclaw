@@ -14,6 +14,7 @@ import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "../infra/gateway-suspend-coordinator.js";
+import { sanitizeHostExecEnv, setGatewayCredentialEnvKeys } from "../infra/host-env-security.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
 import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
@@ -733,6 +734,54 @@ describe("runExecProcess PTY fallback", () => {
     } finally {
       unsubscribe();
     }
+  });
+});
+
+describe("runExecProcess Gateway credential withholding", () => {
+  afterEach(() => {
+    setGatewayCredentialEnvKeys("hooks.token", []);
+    vi.unstubAllEnvs();
+  });
+
+  async function launchAfterReload(requestedNewValue?: string) {
+    vi.stubEnv("OLD_HOOK_TOKEN", "synthetic-old-hook-token");
+    vi.stubEnv("NEW_HOOK_TOKEN", "synthetic-new-hook-token");
+    // Prepare while hooks.token still references OLD_HOOK_TOKEN.
+    setGatewayCredentialEnvKeys("hooks.token", ["OLD_HOOK_TOKEN"]);
+    const prepared = sanitizeHostExecEnv({
+      overrides: requestedNewValue ? { NEW_HOOK_TOKEN: requestedNewValue } : undefined,
+    });
+    expect(prepared).not.toHaveProperty("OLD_HOOK_TOKEN");
+    expect(prepared).toHaveProperty("NEW_HOOK_TOKEN");
+    const launchedEnvs: Array<SpawnInput["env"]> = [];
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
+      launchedEnvs.push(input.env);
+      return runtimeManagedRun(input, "ok");
+    });
+    const handle = await runTestExecProcess({
+      env: prepared,
+      workdir: process.cwd(),
+      // Approval revalidation is the last await before launch; hooks.token reloads here.
+      beforeSpawn: async () => {
+        setGatewayCredentialEnvKeys("hooks.token", ["NEW_HOOK_TOKEN"]);
+        return undefined;
+      },
+    });
+    expect((await handle.promise).status).toBe("completed");
+    expect(launchedEnvs).toHaveLength(1);
+    return launchedEnvs[0];
+  }
+
+  it("withholds a hook token source activated after the env was prepared", async () => {
+    const launched = await launchAfterReload();
+    expect(launched).not.toHaveProperty("NEW_HOOK_TOKEN");
+    expect(launched).not.toHaveProperty("OLD_HOOK_TOKEN");
+    expect(launched).toHaveProperty("PATH");
+  });
+
+  it("keeps a value the request supplied for the newly active name", async () => {
+    const launched = await launchAfterReload("requested-value");
+    expect(launched?.NEW_HOOK_TOKEN).toBe("requested-value");
   });
 });
 

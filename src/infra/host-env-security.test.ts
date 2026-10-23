@@ -15,6 +15,7 @@ import {
   sanitizeHostExecEnv,
   sanitizeHostExecEnvWithDiagnostics,
   sanitizeSystemRunEnvOverrides,
+  setGatewayCredentialEnvKeys,
 } from "./host-env-security.js";
 
 const OPENCLAW_CLI_ENV_VALUE = "1";
@@ -164,6 +165,39 @@ RUSTUP_DIST_ROOT=https://mirror.example.test/deprecated-dist
 RUSTUP_DIST_SERVER=https://mirror.example.test | RUSTUP_HOME=/tmp/rustup-home
 RUSTUP_TOOLCHAIN=/tmp/rustup-toolchain | RUSTUP_UPDATE_ROOT=https://mirror.example.test/rustup | OK=1`),
     );
+  });
+
+  it("withholds the env sources of Gateway credentials from inherited host exec env", () => {
+    const baseEnv = {
+      PATH: "/usr/bin:/bin",
+      OPENCLAW_HOOK_TOKEN: "synthetic-hook-token",
+      OK: "1",
+    };
+    try {
+      setGatewayCredentialEnvKeys("test", ["openclaw_hook_token"]);
+      expect(sanitizeHostExecEnv({ baseEnv })).toEqual({
+        PATH: "/usr/bin:/bin",
+        OK: "1",
+        OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+      });
+      // A command's own requested value is not the Gateway credential and still applies.
+      expect(
+        sanitizeHostExecEnv({ baseEnv, overrides: { OPENCLAW_HOOK_TOKEN: "requested" } })
+          .OPENCLAW_HOOK_TOKEN,
+      ).toBe("requested");
+      // Owners publish independently; clearing one keeps the other withheld.
+      setGatewayCredentialEnvKeys("other", ["OK"]);
+      setGatewayCredentialEnvKeys("test", []);
+      expect(sanitizeHostExecEnv({ baseEnv })).toEqual({
+        PATH: "/usr/bin:/bin",
+        OPENCLAW_HOOK_TOKEN: "synthetic-hook-token",
+        OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+      });
+    } finally {
+      setGatewayCredentialEnvKeys("test", []);
+      setGatewayCredentialEnvKeys("other", []);
+    }
+    expect(sanitizeHostExecEnv({ baseEnv }).OPENCLAW_HOOK_TOKEN).toBe("synthetic-hook-token");
   });
 
   it("drops non-string inherited values while preserving non-portable inherited keys", () => {
