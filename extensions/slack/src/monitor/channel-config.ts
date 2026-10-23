@@ -92,6 +92,10 @@ export function resolveSlackChannelConfig(params: {
       resolved.requireMentionInBotThreads,
       fallback?.requireMentionInBotThreads,
     ),
+    requireExplicitBotMention: firstDefined(
+      resolved.requireExplicitBotMention,
+      fallback?.requireExplicitBotMention,
+    ),
     ignoreOtherMentions: firstDefined(resolved.ignoreOtherMentions, fallback?.ignoreOtherMentions),
     replyToMode: firstDefined(resolved.replyToMode, fallback?.replyToMode),
     allowBots: firstDefined(resolved.allowBots, fallback?.allowBots),
