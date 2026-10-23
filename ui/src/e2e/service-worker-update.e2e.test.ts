@@ -9,7 +9,10 @@ import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { waitForControlUiTerminalReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  waitForControlUiGatewayReady,
+  waitForControlUiTerminalReady,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   buildProductionControlUiE2e,
   createControlUiMockBootstrapConfig,
@@ -625,6 +628,7 @@ describe("Control UI service-worker production update E2E", () => {
         const registration = await navigator.serviceWorker.getRegistration();
         return registration?.installing?.state === "installing";
       });
+      await waitForControlUiGatewayReady(page);
       await waitForControlUiTerminalReady(page);
       await page.evaluate(() => {
         window.dispatchEvent(

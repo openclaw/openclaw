@@ -122,8 +122,9 @@ it("publishes readiness when the retained sidebar's delayed module commits", asy
     expect(sidebar.isConnected).toBe(false);
     sidebarImport.resolve();
     await vi.dynamicImportSettled();
-    expect(customElements.get("openclaw-app-sidebar")).toBeDefined();
+    await customElements.whenDefined("openclaw-app-sidebar");
     await waitForSolid(() => {
+      expect(customElements.get("openclaw-app-sidebar")).toBeDefined();
       expect(query("openclaw-app-sidebar")).toBe(sidebar);
       expect(readiness.hook.snapshot()).toMatchObject({ routeReady: true });
     });
