@@ -3466,6 +3466,15 @@ byte-for-byte between revisions; it contains complete 25-row filter results and
 full-roster facets. Run at least five alternating baseline/candidate processes on
 the benchmark host. This is an owner probe, not Gateway or transport evidence.
 
+Add `--ordinary --iterations 2200` to cycle through eleven ordinary, archive,
+label, agent, kind-exclusion, and static-search requests over 5,000 rows, replacing
+one row revision every ten operations. The static-search case matches session IDs;
+it does not measure dynamic model or run-state search. The golden includes results
+before and after churn. `--heap-profile profile.json` saves allocation attribution.
+Both modes report per-operation timing sample counts and observed GC totals and
+maximum pause, excluding GC triggered by stopping the allocation sampler. These
+owner measurements do not include Gateway transport or event-loop delay.
+
 For long RPC allocation windows, use `--warmup-operations` to warm fewer requests
 than the measured `--operations` count. For example, `--scenario sessions.list
 --warmup-operations 25000 --operations 100000 --rounds 1 --allocations --trace-gc

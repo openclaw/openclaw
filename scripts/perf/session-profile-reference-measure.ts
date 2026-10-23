@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Session, type HeapProfiler } from "node:inspector/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { performance, PerformanceObserver } from "node:perf_hooks";
 import { parseArgs } from "node:util";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../src/config/sessions.js";
@@ -15,6 +16,8 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "108" },
     output: { type: "string" },
     golden: { type: "string" },
+    ordinary: { type: "boolean", default: false },
+    "heap-profile": { type: "string" },
   },
 });
 const iterations = parseStrictIntegerOption({
@@ -26,17 +29,15 @@ const iterations = parseStrictIntegerOption({
 const stateDir = await mkdtemp(path.join(tmpdir(), "session-profile-reference-"));
 process.env.OPENCLAW_STATE_DIR = stateDir;
 
-const [registry, filters, targets, contexts, selections, work, profiles, database] =
-  await Promise.all([
-    import("../../src/agents/subagents/registry/subagent-registry-state.js"),
-    import("../../src/gateway/session-list-filters.js"),
-    import("../../src/gateway/session-list-target.js"),
-    import("../../src/gateway/session-row-projection-context.js"),
-    import("../../src/gateway/session-row-selection.js"),
-    import("../../src/shared/synchronous-work.js"),
-    import("../../src/state/user-profile-list.js"),
-    import("../../src/state/openclaw-state-db.js"),
-  ]);
+const [registry, filters, targets, contexts, selections, profiles, database] = await Promise.all([
+  import("../../src/agents/subagents/registry/subagent-registry-state.js"),
+  import("../../src/gateway/session-list-filters.js"),
+  import("../../src/gateway/session-list-target.js"),
+  import("../../src/gateway/session-row-projection-context.js"),
+  import("../../src/gateway/session-row-selection.js"),
+  import("../../src/state/user-profile-list.js"),
+  import("../../src/state/openclaw-state-db.js"),
+]);
 const inspector = new Session();
 let owner: ReturnType<typeof contexts.createSessionRowProjectionContext> | undefined;
 let catalog: Awaited<ReturnType<typeof profiles.prepareUserProfileCatalog>> | undefined;
@@ -61,7 +62,7 @@ try {
   catalog = await profiles.prepareUserProfileCatalog();
   const sqlitePath = path.join(stateDir, "state", "openclaw.sqlite");
   assert.equal(existsSync(sqlitePath), false, "preparation must not create profile storage");
-  const cfg = { agents: { entries: { main: {} } } };
+  const cfg = { agents: { entries: { main: {}, ...(values.ordinary ? { secondary: {} } : {}) } } };
   const context = owner.current;
   const identities = context.userProfileIdentityById;
   const identityId = (index: number) =>
@@ -82,14 +83,14 @@ try {
           },
     );
   }
-  const configuredAgentIds = new Set(["main"]);
+  const configuredAgentIds = new Set(values.ordinary ? ["main", "secondary"] : ["main"]);
   const storePath = path.join(stateDir, "synthetic-sessions");
   const selection = selections.createSessionRowSelection(
     cfg,
     {
       path: storePath,
       paths: new Map([[storePath, 0]]),
-      agentId: "main",
+      agentId: values.ordinary ? undefined : "main",
       configuredAgentIds,
       ownerAgentIds: configuredAgentIds,
     },
@@ -99,10 +100,14 @@ try {
   const viewerKeys = [new Set<string>(), new Set<string>()];
   const sessionCount = 5_000;
   const now = 10_000_000;
+  const keys: string[] = [];
   for (let index = 0; index < sessionCount; index++) {
     const person = index % profileCount;
     const group = Math.floor(person / 25);
-    const key = `agent:main:session-${index}`;
+    const agentId = values.ordinary && index % 2 ? "secondary" : "main";
+    const kind = values.ordinary ? index % 5 : 0;
+    const key = `agent:${agentId}:${kind === 1 ? "cron:" : kind === 2 ? "subagent:" : ""}session-${index}`;
+    keys.push(key);
     viewerKeys[group]!.add(key);
     const entry: SessionEntry = {
       sessionId: `session-${index}`,
@@ -115,12 +120,15 @@ try {
         },
       })),
       ...(index % 3 === 0 ? { archivedAt: 1 } : {}),
+      ...(values.ordinary ? { label: `Label ${index % 10}` } : {}),
+      ...(kind === 3 ? { createdActor: { type: "system" as const, id: "system" } } : {}),
+      ...(kind === 4 ? { createdSurface: "plugin-dock" as const } : {}),
     };
     selection.add({
       key,
       entry,
-      agentId: "main",
-      storeTarget: { agentId: "main", storePath },
+      agentId,
+      storeTarget: { agentId, storePath },
       selection: targets.readSessionListSelectionFacts(key, entry),
       generation: Symbol(key),
       hasBoard: false,
@@ -144,25 +152,43 @@ try {
     },
     { name: "ordinary-list", opts: {} },
   ];
-  const requests = ["all", "first", "second"].flatMap((viewer, viewerIndex) =>
-    cases.map(({ name, opts }) => ({
-      name: `${viewer}/${name}`,
-      params: {
-        cfg,
-        entries: selected.entries,
-        entriesSorted: true,
-        getTarget: selected.get,
-        involvementKeys: selected.involvementKeys,
-        getRowContext: () => context,
-        userProfileIdentityById: identities,
-        configuredAgentIds,
-        now,
-        restrictProfileReferences: viewerIndex !== 0,
-        entryFilter:
-          viewerIndex === 0 ? undefined : (key: string) => viewerKeys[viewerIndex - 1]!.has(key),
-        opts: { archived: "all" as const, includePeople: true, ...opts },
-      },
-    })),
+  const ordinaryCases: typeof cases = [
+    { name: "default", opts: {} },
+    { name: "open", opts: { archived: false } },
+    { name: "archived", opts: { archived: true } },
+    { name: "all", opts: { archived: "all" } },
+    { name: "label", opts: { label: "Label 0" } },
+    { name: "agent", opts: { agentId: "secondary" } },
+    { name: "exclude-cron", opts: { excludeCron: true } },
+    { name: "exclude-subagents", opts: { excludeSubagents: true } },
+    { name: "exclude-system", opts: { excludeSystem: true } },
+    { name: "exclude-dock", opts: { excludeDock: true } },
+    // Every session ID matches: dynamic model search requires the real Gateway preparation path.
+    { name: "static-search", opts: { search: "session-" } },
+  ];
+  const requests = (values.ordinary ? ["all"] : ["all", "first", "second"]).flatMap(
+    (viewer, viewerIndex) =>
+      (values.ordinary ? ordinaryCases : cases).map(({ name, opts }) => ({
+        name: `${viewer}/${name}`,
+        params: {
+          cfg,
+          entries: selected.entries,
+          entriesSorted: true,
+          getTarget: selected.get,
+          involvementKeys: selected.involvementKeys,
+          getRowContext: () => context,
+          userProfileIdentityById: identities,
+          configuredAgentIds,
+          now,
+          restrictProfileReferences: viewerIndex !== 0,
+          entryFilter:
+            viewerIndex === 0 ? undefined : (key: string) => viewerKeys[viewerIndex - 1]!.has(key),
+          opts: {
+            ...(values.ordinary ? {} : { archived: "all" as const, includePeople: true }),
+            ...opts,
+          },
+        },
+      })),
   );
   for (const { params } of requests) {
     const reference = params.opts.involvingProfileId;
@@ -171,20 +197,23 @@ try {
     }
   }
   const page = { offset: 0, limit: 25, ownerLimit: 25 };
-  const run = (index: number) =>
-    work.runSynchronousWork(filters.filterSessionEntries(requests[index]!.params, page));
-  const golden = requests.map(({ name, params }, index) => ({
-    name,
-    opts: params.opts,
-    result: run(index),
-  }));
-  assert.equal(golden.length, 27);
-  assert.equal(golden[3]!.result.involvingProfileId, identityId(43));
-  assert.equal(golden[4]!.result.involvingProfileId, identityId(3));
-  assert.equal(golden[5]!.result.involvingProfileId, undefined);
-  assert.equal(golden[12]!.result.involvingProfileId, undefined);
-  assert.equal(golden[21]!.result.involvingProfileId, identityId(43));
-  assert.equal(golden[6]!.result.totalCount, 0);
+  const run = (index: number) => filters.filterSessionEntries(requests[index]!.params, page);
+  const capture = () =>
+    requests.map(({ name, params }, index) => ({
+      name,
+      opts: params.opts,
+      result: run(index),
+    }));
+  const golden = capture();
+  if (!values.ordinary) {
+    assert.equal(golden.length, 27);
+    assert.equal(golden[3]!.result.involvingProfileId, identityId(43));
+    assert.equal(golden[4]!.result.involvingProfileId, identityId(3));
+    assert.equal(golden[5]!.result.involvingProfileId, undefined);
+    assert.equal(golden[12]!.result.involvingProfileId, undefined);
+    assert.equal(golden[21]!.result.involvingProfileId, identityId(43));
+    assert.equal(golden[6]!.result.totalCount, 0);
+  }
   const warmupOperations = requests.length * 2;
   for (let index = 0; index < warmupOperations; index++) {
     run(index % requests.length);
@@ -197,18 +226,50 @@ try {
     includeObjectsCollectedByMinorGC: true,
   });
   const counts = requests.map(() => 0);
+  const durations = new Float64Array(iterations);
+  const gcDurations: number[] = [];
+  let measuredUntil = Infinity;
+  const measuredSince = performance.now();
+  const observer = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      if (entry.startTime >= measuredSince && entry.startTime < measuredUntil) {
+        gcDurations.push(entry.duration);
+      }
+    }
+  });
+  observer.observe({ entryTypes: ["gc"] });
   let returnedEntries = 0;
   let matchedEntries = 0;
+  let updates = 0;
   const started = process.threadCpuUsage();
   for (let index = 0; index < iterations; index++) {
+    if (values.ordinary && index % 10 === 0) {
+      const key = keys[updates % sessionCount]!;
+      const row = selected.get(key)!;
+      const entry = { ...row.entry, updatedAt: now + index + 1 };
+      selection.add({
+        ...row,
+        entry,
+        selection: targets.readSessionListSelectionFacts(key, entry),
+        generation: Symbol(key),
+      });
+      updates++;
+    }
     const requestIndex = index % requests.length;
+    const before = performance.now();
     const result = run(requestIndex);
+    durations[index] = performance.now() - before;
     returnedEntries += result.entries.length;
     matchedEntries += result.totalCount;
     counts[requestIndex]!++;
   }
   const cpu = process.threadCpuUsage(started);
+  measuredUntil = performance.now();
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  observer.disconnect();
   assert.equal(
     matchedEntries,
     golden.reduce((sum, item, index) => sum + item.result.totalCount * counts[index]!, 0),
@@ -218,6 +279,7 @@ try {
     golden.reduce((sum, item, index) => sum + item.result.entries.length * counts[index]!, 0),
   );
   assert.equal(existsSync(sqlitePath), false, "measurement must not create profile storage");
+  durations.sort();
   const result = {
     sessionCount,
     profileCount,
@@ -226,6 +288,18 @@ try {
     participantsPerSession: 3,
     warmupOperations,
     operations: iterations,
+    updates,
+    durationMs: {
+      samples: durations.length,
+      p50: durations[Math.floor(iterations * 0.5)],
+      p95: durations[Math.floor(iterations * 0.95)],
+      p99: durations[Math.floor(iterations * 0.99)],
+    },
+    gc: {
+      collections: gcDurations.length,
+      totalMs: gcDurations.reduce((sum, duration) => sum + duration, 0),
+      maxMs: Math.max(0, ...gcDurations),
+    },
     requests: requests.map(({ name }, index) => ({ name, operations: counts[index] })),
     returnedEntries,
     matchedEntries,
@@ -235,7 +309,10 @@ try {
     includesCollectedObjects: true,
   };
   if (values.golden) {
-    await writeJson(values.golden, golden);
+    await writeJson(values.golden, values.ordinary ? { before: golden, after: capture() } : golden);
+  }
+  if (values["heap-profile"]) {
+    await writeJson(values["heap-profile"], profile);
   }
   if (values.output) {
     await writeJson(values.output, result);
