@@ -4586,7 +4586,9 @@ try {
         : undefined;
       try {
         streamStart = await runScenario(round);
-        await drainEvents();
+        if (!values["dashboard-rpc"]) {
+          await drainEvents();
+        }
         if (values["dashboard-rpc"]) {
           // Dashboards keep polling between bursts of agent work.
           const pacedUntil = Math.min(
