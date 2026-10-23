@@ -83,7 +83,25 @@ for a required-lane defect. A second cut (re-basing the candidate on newer
 merged `main` commits only for a confirmed release blocker and name each one in
 the handoff record.
 
-Run deterministic source preflight, then validate the exact Code SHA:
+After the final backport or release commit and before every release-branch push
+that can feed validation, run the integrated exact-HEAD gate:
+
+```bash
+pnpm release:push
+```
+
+This wrapper refreshes and pins `origin/main`, requires a clean canonical
+`release/YYYY.M.PATCH` worktree, captures `HEAD`, and runs changed
+static/type checks, production dead-code analysis, and changed tests from a
+fresh detached worktree with a frozen dependency install. It pushes that
+captured SHA itself only after every gate passes and the source branch,
+worktree, and HEAD remain unchanged. Do not use a separate `git push`:
+validation and push must stay one operation. A failed gate, concurrent commit,
+or non-fast-forward remote update blocks the push and FRV dispatch. Record the
+passing SHA and comparison base in the handoff; do not substitute
+`release:prepush`, a worker's partial check, or an earlier branch state.
+
+Then run deterministic source preflight and validate the same exact Code SHA:
 
 ```bash
 PUBLICATION_SELECTION='{"route":"normal","npmDistTag":"beta","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}'

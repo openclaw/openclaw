@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString as normalizeLifecycleRunId } from "@openclaw/normalization-core/string-coerce";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
@@ -5,12 +6,14 @@ import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
+  isAgentRunResumableToolTimeout,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
 import {
   isMainSessionRecoveryLifecycleEvent,
   projectMainSessionRecoveryLifecycle,
 } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
+import { isMainRestartRecoveryCandidate } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { buildUpdatedSessionGoalStatus } from "../config/sessions/goals-transitions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -204,29 +207,36 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   // Use the normalized outcome so a prior hard timeout still owns the terminal state.
   const interruptedForRestart =
     terminal?.reason === "cancelled" && terminal.stopReason === "restart";
-  const status =
-    terminal && !interruptedForRestart
+  const interruptedForToolTimeout = isAgentRunResumableToolTimeout(terminal);
+  const resumableInterruption = interruptedForRestart || interruptedForToolTimeout;
+  const status = resumableInterruption
+    ? "interrupted"
+    : terminal
       ? SESSION_STATUS_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminal)]
       : "running";
   return {
     updatedAt,
     status,
-    lastRunError: terminal
-      ? resolveSessionRunError({ ...terminal, errorKind: params.event.data?.errorKind }, status)
-      : undefined,
+    lastRunError: resumableInterruption
+      ? interruptedForRestart
+        ? "Run interrupted by a Gateway restart."
+        : "Tool execution timed out with an unknown outcome. Resume to verify state before repeating it."
+      : terminal
+        ? resolveSessionRunError({ ...terminal, errorKind: params.event.data?.errorKind }, status)
+        : undefined,
     startedAt,
     endedAt: interruptedForRestart ? undefined : endedAt,
     runtimeMs: interruptedForRestart
       ? undefined
       : resolveRuntimeMs({ startedAt, endedAt, existingRuntimeMs: existing?.runtimeMs }),
     ...(terminal &&
-    !interruptedForRestart &&
+    !resumableInterruption &&
     params.event.controlUiVisible === true &&
     params.event.isHeartbeat !== true &&
     endedAt !== undefined
       ? { lastActivityAt: Math.max(existing?.lastActivityAt ?? 0, endedAt) }
       : {}),
-    abortedLastRun: interruptedForRestart || status === "killed",
+    abortedLastRun: resumableInterruption || status === "killed",
   };
 }
 
@@ -251,7 +261,8 @@ function derivePersistedSessionLifecyclePatch(params: {
   const snapshotPatch: Partial<PersistedLifecycleSessionShape> = {
     ...snapshot,
     updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
-    ...(snapshot.status === "running" && snapshot.abortedLastRun === true
+    ...((snapshot.status === "running" || snapshot.status === "interrupted") &&
+    snapshot.abortedLastRun === true
       ? { restartRecoveryForceSafeTools: true }
       : {}),
   };
@@ -472,11 +483,46 @@ export async function persistGatewaySessionLifecycleEvent(params: {
         // their async persistence can settle out of order.
         return null;
       }
+      if (
+        phase !== "start" &&
+        entry.lifecycleRunId === undefined &&
+        terminalRunId !== undefined &&
+        (eventRunId === terminalRunId || eventClientRunId === terminalRunId)
+      ) {
+        // A duplicate terminal event cannot recreate recovery after its original
+        // checkpoint was settled or explicitly cleared.
+        return null;
+      }
       const patch: Partial<PersistedLifecycleSessionShape> &
         Pick<SessionEntry, "providerReview" | "goal"> = derivePersistedSessionLifecyclePatch({
         entry,
         event: params.event,
       });
+      if (
+        eventRunId &&
+        patch.status === "interrupted" &&
+        isMainRestartRecoveryCandidate(entry, sessionEntry.canonicalKey)
+      ) {
+        const lifecycleGeneration =
+          params.event.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
+        patch.restartRecoveryRuns = [
+          ...(entry.restartRecoveryRuns ?? []).filter(
+            (run) => run.runId !== eventRunId || run.lifecycleGeneration !== lifecycleGeneration,
+          ),
+          { runId: eventRunId, lifecycleGeneration },
+        ];
+        if (
+          !entry.mainRestartRecovery &&
+          isAgentRunResumableToolTimeout(resolveSettledLifecycleTerminalOutcome(params.event))
+        ) {
+          patch.mainRestartRecovery = {
+            cycleId: randomUUID(),
+            revision: 1,
+            chargedAttempts: 0,
+            safeToolsRequired: true,
+          };
+        }
+      }
       if (providerReview && Object.keys(patch).length > 0) {
         patch.providerReview = providerReview.review;
       }

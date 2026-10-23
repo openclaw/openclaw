@@ -126,6 +126,64 @@ async function expectFutureOneShot(params: {
 }
 
 describe("cron one-shot schedule ownership", () => {
+  it("persists and runs a same-session next_check continuation after restart", async () => {
+    const delayMs = 60_000;
+    const runIsolatedAgentJob = vi
+      .fn<CronServiceDeps["runIsolatedAgentJob"]>()
+      .mockResolvedValueOnce({ status: "ok", summary: "pending", nextCheck: { delayMs } })
+      .mockResolvedValueOnce({ status: "ok", summary: "done" });
+    let cron = createCron({ runIsolatedAgentJob });
+
+    try {
+      await cron.start();
+      cron.pauseScheduling();
+      const atMs = clock.clock.now() + 1_000;
+      const job = await cron.add({
+        name: "same-session continuation",
+        enabled: true,
+        deleteAfterRun: true,
+        schedule: { kind: "at", at: new Date(atMs).toISOString() },
+        sessionTarget: "session:agent:main:dashboard:continuation",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "agentTurn",
+          message: "Check the pending task.",
+          toolsAllow: ["automations"],
+        },
+        delivery: { mode: "none" },
+      });
+      clock.setTime(atMs);
+      await expect(cron.run(job.id, "due")).resolves.toMatchObject({ ok: true, ran: true });
+      const continuationAtMs = atMs + delayMs;
+      expect(cron.getJob(job.id)).toMatchObject({
+        enabled: true,
+        sessionTarget: "session:agent:main:dashboard:continuation",
+        payload: { toolsAllow: ["automations"] },
+        state: { nextRunAtMs: continuationAtMs, pacedNextRunAtMs: continuationAtMs },
+      });
+      expect(
+        (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id),
+      ).toMatchObject({
+        state: { nextRunAtMs: continuationAtMs, pacedNextRunAtMs: continuationAtMs },
+      });
+
+      cron.stop();
+      clock.setTime(continuationAtMs + 1_000);
+      cron = createCron({ runIsolatedAgentJob });
+      cron.pauseScheduling();
+      await cron.start();
+      const restartRunAtMs =
+        continuationAtMs + 1_000 + DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS;
+      expect(cron.getJob(job.id)?.state.nextRunAtMs).toBe(restartRunAtMs);
+      clock.setTime(restartRunAtMs);
+      await expect(cron.run(job.id, "due")).resolves.toMatchObject({ ok: true, ran: true });
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+      expect(cron.getJob(job.id)).toBeUndefined();
+    } finally {
+      cron.stop();
+    }
+  });
+
   it.each([
     { mode: "direct", deleteAfterRun: false },
     { mode: "queued", deleteAfterRun: true },

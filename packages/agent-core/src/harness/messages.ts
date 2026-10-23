@@ -120,6 +120,16 @@ export function isRuntimeContextCarrier(message: AgentMessage): boolean {
   );
 }
 
+/** Recognize both persisted harness carriers and their LLM-facing projection. */
+export function hasRuntimeContextMarker(message: unknown): boolean {
+  const candidate = asOptionalRecord(message);
+  return (
+    candidate?.runtimeContextCarrier === true ||
+    (candidate?.role === "custom" &&
+      asOptionalRecord(candidate.details)?.runtimeContextCarrier === true)
+  );
+}
+
 /** Convert harness transcript messages into the LLM-facing message sequence. */
 export function convertToLlm(messages: AgentMessage[]): Message[] {
   const llmMessages: Message[] = [];
@@ -172,7 +182,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
         message.role === "compactionSummary"
           ? normalizeCompactionSummaryTimestamp(message.timestamp)
           : message.timestamp,
-      ...(isRuntimeContextCarrier(message) ? { runtimeContextCarrier: true } : {}),
+      ...(isRuntimeContextCarrier(message) ? { runtimeContextCarrier: true } : { synthetic: true }),
     });
   });
   return llmMessages;

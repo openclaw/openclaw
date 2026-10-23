@@ -81,8 +81,10 @@ import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import { resolveHarnessAuthProfileSelection } from "./attempt-auth-selection.js";
 import { emitAgentAttemptRuntimeStart } from "./attempt-callbacks.js";
 import {
+  assertCliRestartSafeToolSupport,
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
+  isClaudeCliProvider,
   resolveCommandReplyExpectation,
   resolveFallbackRetryPrompt,
   rebaseExecApprovalContinuationPromptRange,
@@ -95,10 +97,6 @@ import {
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-
-function isClaudeCliProvider(provider: string): boolean {
-  return provider.trim().toLowerCase() === "claude-cli";
-}
 
 export function runAgentAttempt(params: {
   preparedRunAdmission: PreparedAgentRunAdmission;
@@ -320,6 +318,7 @@ export function runAgentAttempt(params: {
   const isCliExecutionProvider = sessionRuntimeOverride
     ? sessionCliRuntime !== undefined
     : isCliProvider(cliExecutionProvider, params.cfg);
+  assertCliRestartSafeToolSupport(isCliExecutionProvider, params.opts.forceRestartSafeTools);
   const completionRetainsRequesterTools =
     trustedSubagentAnnounceHandoff &&
     !isRawModelRun &&

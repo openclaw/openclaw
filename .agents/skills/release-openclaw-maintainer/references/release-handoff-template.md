@@ -17,6 +17,7 @@ operator steering. Do not preserve superseded scope.
 - cut SHA: `<full sha>`
 - cut time: `<UTC timestamp>`
 - Code SHA: `<regular release full sha | not applicable>`
+- integrated prepush: `<passing Code SHA + pinned comparison base | pending>`
 - Candidate C: `<exact qualification target sha>`
 - Qualification Q: `<C for candidate-owned | original workflow SHA for historical route>`
 - Admission/verifier/publisher P: `<independent trusted full sha and ref>`

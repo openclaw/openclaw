@@ -423,7 +423,9 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       expect(onAgentEvent).not.toHaveBeenCalled();
     };
     return {
+      runParams,
       compact,
+      target,
       maintain,
       beforeHook,
       afterHook,

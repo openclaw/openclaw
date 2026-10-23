@@ -14,6 +14,11 @@ const SCRIPT_FAILURE_COPY = {
   tool_budget_exceeded: "exceeded its tool budget",
 } satisfies Record<Exclude<CronTriggerFailureCode, "plugin_reload_failed">, string>;
 
+/** Fixed copy for the safe chat notification projection. */
+function formatCronWatchdogFailure(): string {
+  return "Session watchdog stopped the run after its execution deadline.";
+}
+
 /** Renders only classified reasons or closed producer-authored failure facts. */
 export function cronFailureDetailLines(
   errorReason: FailoverReason | undefined,
@@ -40,6 +45,9 @@ export function cronFailureDetailLines(
         ? "Cause: command timed out"
         : "Cause: command stopped after producing no output",
     ];
+  }
+  if (failureNotificationDetail.kind === "agent-watchdog") {
+    return [`Cause: ${formatCronWatchdogFailure()}`];
   }
   const label =
     failureNotificationDetail.source === "payload" ? "automation script" : "trigger script";

@@ -461,7 +461,7 @@ export function hasDeferredPluginSessionImport(params: {
   return Boolean(readDeferredPluginSessionImportReceipt(params));
 }
 
-export function readDeferredPluginSessionImportReceipt(
+function readDeferredPluginSessionImportReceipt(
   params: Pick<SessionImportSource, "target" | "sqlitePath" | "env"> & { database?: DatabaseSync },
 ) {
   const target = { ...params.target, sqlitePath: params.sqlitePath };

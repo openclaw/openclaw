@@ -4,21 +4,27 @@ import {
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import { isRuntimeContextCarrier } from "../messages.js";
 import { buildSessionContext, projectSessionEntryMessage } from "../session/session.js";
 import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
 import { CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.js";
+import {
+  MAX_LATEST_USER_REQUEST_CHARS,
+  resolveCompactionRequestMessages,
+  resolveLatestCompactionUserRequest,
+  stripPreviousCompactionMetadata,
+} from "./request-scope.js";
 import { runSummarizationCompletion } from "./summarization-completion.js";
 import {
   computeFileLists,
   createFileOps,
   extractFileOpsFromMessage,
   type FileOperations,
+  formatCompactionUserLabel,
   formatFileOperations,
-  formatPersistedSenderSuffix,
   getCompactionContent,
   mergeSummaryFileOperations,
   stringifyCompactionValue,
@@ -102,27 +108,6 @@ export interface CompactionResult<T = unknown> {
 export const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
 export const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 const TURN_CONTEXT_PREFIX = "\n\n---\n\n**Turn Context (split turn):**\n\n";
-const MAX_LATEST_USER_REQUEST_CHARS = 800;
-const LATEST_USER_REQUEST_TRUNCATED_MARKER = "\n[... latest user request truncated ...]\n";
-
-function extractLatestUserRequest(messages: AgentMessage[]): string | undefined {
-  let source = "";
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "user") {
-      source = getCompactionContent(message.content).text.trim();
-      if (source) {
-        break;
-      }
-    }
-  }
-  if (!source || source.length <= MAX_LATEST_USER_REQUEST_CHARS) {
-    return source || undefined;
-  }
-  const contentBudget = MAX_LATEST_USER_REQUEST_CHARS - LATEST_USER_REQUEST_TRUNCATED_MARKER.length;
-  const headBudget = Math.floor(contentBudget / 2);
-  return `${truncateUtf16Safe(source, headBudget)}${LATEST_USER_REQUEST_TRUNCATED_MARKER}${sliceUtf16Safe(source, -(contentBudget - headBudget))}`;
-}
 
 export function capCompactionSummary(
   summary: string,
@@ -351,8 +336,8 @@ export function estimateTokens(message: AgentMessage): number {
     }
     case "user": {
       chars = countContentChars(message.content);
-      // serializeConversation projects this exact persisted-sender suffix.
-      chars += estimateStringChars(formatPersistedSenderSuffix(message));
+      // User text is the baseline; charge the exact added source and sender label.
+      chars += estimateStringChars(formatCompactionUserLabel(message)) - "User".length;
       break;
     }
     case "custom":
@@ -435,6 +420,8 @@ interface CompactionRetentionBudget {
 }
 
 interface CompactionRetentionConstraints {
+  /** The run's source input; later internal updates do not replace its human ask. */
+  requestFromEntryId?: string;
   /** An admitted, unprocessed user remains intact even before its budget is prepared. */
   preserveFromEntryId?: string;
   budget?: CompactionRetentionBudget;
@@ -682,6 +669,8 @@ export interface CompactionPreparation {
   turnPrefixMessages: AgentMessage[];
   /** Whether compaction splits a turn. */
   isSplitTurn: boolean;
+  /** Run-owner selection is authoritative, including an empty pending request. */
+  requestState?: "unresolved" | "none";
   /** Bounded request that the run owner will resume after compaction. */
   latestUnresolvedUserRequest?: string;
   /** Estimated context tokens before compaction. */
@@ -700,7 +689,7 @@ export interface CompactionPreparation {
 export function prepareCompaction(
   pathEntries: SessionTreeEntry[],
   settings: CompactionSettings,
-  requestState?: "unresolved",
+  requestState?: "unresolved" | "none",
   constraints?: CompactionRetentionConstraints,
 ): Result<CompactionPreparation | undefined, CompactionError> {
   const lastEntry = pathEntries.at(-1);
@@ -756,9 +745,26 @@ export function prepareCompaction(
   const boundaryEnd = effectiveEntries.length;
 
   const contextMessages = buildSessionContext(pathEntries).messages;
-  const latestUnresolvedUserRequest = requestState
-    ? (extractLatestUserRequest(contextMessages) ?? previousLatestUnresolvedUserRequest)
-    : undefined;
+  // An admitted request can have later internal updates. Without that identity,
+  // only the latest input is known to belong to this run; do not scan past an
+  // independent internal input and revive an older human task.
+  const requestEntryId = constraints?.requestFromEntryId ?? constraints?.preserveFromEntryId;
+  const requestMessages = resolveCompactionRequestMessages({
+    entries: pathEntries,
+    contextMessages,
+    requestEntryId,
+    project: getMessageFromEntryForCompaction,
+  });
+  if (!requestMessages) {
+    return err(
+      new CompactionError("invalid_session", "Compaction cannot find the admitted request."),
+    );
+  }
+  const latestUnresolvedUserRequest = resolveLatestCompactionUserRequest({
+    requestState,
+    requestMessages,
+    previous: previousLatestUnresolvedUserRequest,
+  });
   const contextUsage = estimateContextTokens(contextMessages);
   const tokensBefore = contextUsage.tokens;
   const totalEstimatedTokens = contextMessages.reduce(
@@ -849,6 +855,7 @@ export function prepareCompaction(
     messagesToSummarize,
     turnPrefixMessages,
     isSplitTurn: cutPoint.isSplitTurn,
+    ...(requestState ? { requestState } : {}),
     ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
     tokensBefore,
     previousSummary,
@@ -908,13 +915,10 @@ export async function compact(
   }
 
   const summarizeTurnPrefix = isSplitTurn && turnPrefixMessages.length > 0;
-  const previousFileOperations = previousSummaryDetails
-    ? formatFileOperations(previousSummaryDetails.readFiles, previousSummaryDetails.modifiedFiles)
-    : "";
-  const preservedPreviousSummary =
-    previousFileOperations && previousSummary?.endsWith(previousFileOperations)
-      ? previousSummary.slice(0, -previousFileOperations.length)
-      : previousSummary;
+  const preservedPreviousSummary = stripPreviousCompactionMetadata(
+    previousSummary,
+    previousSummaryDetails,
+  );
   const historyResult =
     messagesToSummarize.length > 0 || !summarizeTurnPrefix
       ? await generateSummary(

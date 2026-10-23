@@ -2,9 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  isMainSessionRestartRecoveryInputProvenance,
+  MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL,
+} from "../sessions/input-provenance.js";
+import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { classifyClaudeCliHistoryLine } from "./cli-session-history.claude-activity.js";
-import { readClaudeCliFallbackSeed } from "./cli-session-history.claude.js";
+import {
+  parseClaudeCliHistoryEntry,
+  readClaudeCliFallbackSeed,
+} from "./cli-session-history.claude.js";
 import { buildLegacyReseedPrompt } from "./cli-session-history.test-support.js";
 import { expectRecordFields } from "./test-helpers.assertions.js";
 
@@ -30,6 +38,29 @@ describe("Claude history activity rows", () => {
       ).toEqual({ humanTurn: false });
     },
   );
+});
+
+describe("Claude restart recovery history", () => {
+  it.each([
+    "Your previous turn was interrupted while OpenClaw was waiting on tool/model work. ",
+    "Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. ",
+  ])("preserves the canonical and legacy recovery marker", (opening) => {
+    const content = formatSystemTurnPrompt(`${opening}Continue safely.`);
+    const parsed = parseClaudeCliHistoryEntry(
+      { type: "user", message: { role: "user", content } },
+      "native-session",
+      1,
+      new Map(),
+      { reseedMode: "recover" },
+    );
+    expect(parsed).toMatchObject({
+      provenance: {
+        kind: "internal_system",
+        sourceTool: MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL,
+      },
+    });
+    expect(isMainSessionRestartRecoveryInputProvenance(parsed?.provenance)).toBe(true);
+  });
 });
 
 describe("readClaudeCliFallbackSeed", () => {

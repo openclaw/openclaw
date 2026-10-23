@@ -245,6 +245,14 @@ it.each([
           parameters: Type.Object({}),
           execute,
         },
+        {
+          name: "sessions_yield",
+          label: "Yield",
+          description: "Collects asynchronous fixture results",
+          parameters: Type.Object({}),
+          async: false,
+          execute: vi.fn(),
+        },
       ],
     });
 
@@ -392,6 +400,14 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
           description: "Records once",
           parameters: Type.Object({}),
           execute,
+        },
+        {
+          name: "sessions_yield",
+          label: "Yield",
+          description: "Collects asynchronous fixture results",
+          parameters: Type.Object({}),
+          async: false,
+          execute: vi.fn(),
         },
       ],
     });

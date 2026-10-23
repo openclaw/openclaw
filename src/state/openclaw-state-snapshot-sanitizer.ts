@@ -51,14 +51,7 @@ export function sanitizeOpenClawGlobalStateSnapshot(database: DatabaseSync): voi
       stateDb.selectFrom("exec_approvals_config").select(["config_key", "raw_json"]),
     ).rows;
     for (const row of rows) {
-      let sanitized: ExecApprovalsFile = FAIL_CLOSED_EXEC_APPROVALS;
-      const parsed = tryParsePersistedExecApprovals(row.raw_json);
-      if (parsed) {
-        sanitized = structuredClone(parsed);
-        if (sanitized.socket) {
-          delete sanitized.socket.token;
-        }
-      }
+      const sanitized = readSnapshotExecApprovals(row.raw_json);
       executeSqliteQuerySync(
         database,
         stateDb
@@ -71,4 +64,16 @@ export function sanitizeOpenClawGlobalStateSnapshot(database: DatabaseSync): voi
       );
     }
   }
+}
+
+/** Keep a policy Doctor can still migrate instead of substituting fail-closed defaults. */
+function readSnapshotExecApprovals(rawJson: string): ExecApprovalsFile {
+  // This release line's persisted parser still accepts and normalizes the
+  // supported legacy shape, so no separate Doctor-only parser is needed here.
+  const parsed = tryParsePersistedExecApprovals(rawJson);
+  const sanitized = structuredClone(parsed ?? FAIL_CLOSED_EXEC_APPROVALS);
+  if (sanitized.socket) {
+    delete sanitized.socket.token;
+  }
+  return sanitized;
 }

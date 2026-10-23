@@ -489,6 +489,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
         providerOverride: "openai",
         modelOverride: "gpt-5.6-sol",
         modelSelectionLocked: true,
+        restartRecoveryForceSafeTools: true,
         pinnedAt: 1,
         sandbox: "required",
         spawnedCwd: "/tmp/recovered-worktree",
@@ -551,6 +552,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
     modelOverride: "gpt-5.6-sol",
     previousSessionId: sourceSessionId,
     providerOverride: "openai",
+    restartRecoveryForceSafeTools: true,
     sandbox: "required",
     spawnedCwd: "/tmp/recovered-worktree",
   });

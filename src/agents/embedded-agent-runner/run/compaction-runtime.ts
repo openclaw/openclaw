@@ -1,3 +1,4 @@
+import path from "node:path";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import {
   withOwnedSessionTranscriptWrites,
@@ -91,6 +92,14 @@ export async function compactEmbeddedRunForRecovery(
   const { runParams } = input;
   const owner = input.prepareRecoveryOwner();
   const activeSession = owner.session;
+  const requestAdmission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
+  const requestFromEntryId =
+    requestAdmission?.agentId === input.sessionAgentId &&
+    requestAdmission.sessionKey === input.resolvedSessionKey &&
+    activeSession.target?.storePath &&
+    path.resolve(requestAdmission.storePath) === path.resolve(activeSession.target.storePath)
+      ? requestAdmission.entryId
+      : undefined;
   const reason =
     recovery.trigger === "budget"
       ? "context budget recovery"
@@ -211,6 +220,7 @@ export async function compactEmbeddedRunForRecovery(
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
                 requestBudget: input.state.compactionRequestBudget,
+                requestFromEntryId,
                 pendingRequestState:
                   recovery.trigger === "timeout_recovery" ? undefined : "unresolved",
                 memoryTranscript: owner.sessionManager

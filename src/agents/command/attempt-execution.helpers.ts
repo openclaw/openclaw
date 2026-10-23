@@ -560,3 +560,15 @@ export function rebaseExecApprovalContinuationPromptRange(params: {
     end: offset + params.range.end,
   };
 }
+export function isClaudeCliProvider(provider: string): boolean {
+  return provider.trim().toLowerCase() === "claude-cli";
+}
+
+export function assertCliRestartSafeToolSupport(
+  isCliExecutionProvider: boolean,
+  forceRestartSafeTools?: boolean,
+): void {
+  if (isCliExecutionProvider && forceRestartSafeTools === true) {
+    throw new Error("CLI runtimes cannot enforce restart-safe tool restrictions");
+  }
+}

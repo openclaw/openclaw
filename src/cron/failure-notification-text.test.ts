@@ -37,6 +37,10 @@ describe("cronFailureDetailLines", () => {
       { kind: "command-timeout", mode: "no-output" } as const,
       "Cause: command stopped after producing no output",
     ],
+    [
+      { kind: "agent-watchdog", reason: "execution_deadline" } as const,
+      "Cause: Session watchdog stopped the run after its execution deadline.",
+    ],
   ])("renders closed command detail %#", (detail, expected) => {
     expect(cronFailureDetailLines(undefined, detail)).toEqual([expected]);
   });

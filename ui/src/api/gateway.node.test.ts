@@ -4,7 +4,6 @@ import {
   ConnectErrorDetailCodes,
   GATEWAY_CLIENT_CAPS,
   GATEWAY_SERVER_CAPS,
-  type ConnectParams,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
@@ -32,6 +31,7 @@ import { expectSignedPayloadFields } from "./gateway-signature.test-support.ts";
 import {
   getLatestWebSocket,
   MockWebSocket,
+  parseLatestConnectFrame,
   stubWindowGlobals,
   useNodeFakeTimers,
   wsInstances,
@@ -143,24 +143,6 @@ function createDeviceTokenState(request: (method: string) => Promise<unknown>) {
 const { GatewayBrowserClient, GatewayRequestError, resolveGatewayErrorDetailCode } =
   await import("./gateway.ts");
 
-type ConnectFrame = {
-  id?: string;
-  method?: string;
-  params?: {
-    auth?: { token?: string; bootstrapToken?: string; password?: string; deviceToken?: string };
-    client: { buildId?: string; platform?: string; deviceFamily?: string };
-    maxProtocol?: number;
-    minProtocol?: number;
-    caps?: string[];
-    scopes?: string[];
-    modelCatalog?: ConnectParams["modelCatalog"];
-    device?: {
-      id?: string;
-      signedAt?: number;
-    };
-  };
-};
-
 const REQUEST_FRAME_ID = "2:00000000-0000-4000-8000-000000000000";
 
 function requestFrameBytes(method: string, params?: unknown): number {
@@ -254,10 +236,6 @@ function stubInsecureCrypto() {
     randomUUID: () => "req-insecure",
     getRandomValues: (array: Uint8Array) => array.fill(7),
   });
-}
-
-function parseLatestConnectFrame(ws: MockWebSocket): ConnectFrame {
-  return JSON.parse(ws.sent.at(-1) ?? "{}") as ConnectFrame;
 }
 
 async function continueConnect(
@@ -506,6 +484,7 @@ describe("GatewayBrowserClient", () => {
       GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
+      GATEWAY_CLIENT_CAPS.UI_AGENT_GITHUB_SETTINGS,
       GATEWAY_CLIENT_CAPS.UI_COMMANDS,
       GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
     ]);
