@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
@@ -45,10 +46,12 @@ suite.define(() => {
         main.locator(`[data-chat-model-option="${ref}"] .chat-controls__model-option-name`);
       const opus = option("anthropic/claude-opus-4-8");
       const sonnet = option("anthropic/claude-sonnet-5");
+      await revealChatModelOption(main, "anthropic/claude-opus-4-8");
       await expect.poll(() => opus.textContent()).toBe("Opus 4.8 · opus");
       await expect.poll(() => sonnet.textContent()).toBe("Sonnet 5 · sonnet");
 
       const nvidia = option("nvidia/moonshotai/kimi-k2.5");
+      await revealChatModelOption(main, "nvidia/moonshotai/kimi-k2.5");
       await expect.poll(() => nvidia.textContent()).toBe("Kimi K2.5");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
     } finally {
