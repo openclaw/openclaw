@@ -1,8 +1,11 @@
 import { Show, createUniqueId } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../../../lib/editor-links.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+
+registerFilePreviewEnglish();
 
 export function ChatSidebarEditorMenu(props: {
   absolutePath: string | null;
