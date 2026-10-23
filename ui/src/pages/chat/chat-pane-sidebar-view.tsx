@@ -1,5 +1,9 @@
-import { dynamic } from "@solidjs/web";
-import { For, Show, createSignal, onSettled } from "solid-js";
+import { dynamic, Portal } from "@solidjs/web";
+import { Errored, For, Loading, Show, createSignal, lazy, onSettled } from "solid-js";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "../../app/stale-chunk-reload.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
@@ -24,6 +28,10 @@ import {
 } from "./sidebar-layout.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+const ChatSidebarRegion = lazy(() => import("./components/chat-sidebar-region.runtime.tsx"), {
+  export: "ChatSidebarRegion",
+});
 
 export function SidebarRegionView(props: SidebarRegionViewProps) {
   let shell!: HTMLElement;
@@ -234,6 +242,95 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
   const collapsed = () =>
     props.narrow ||
     (props.availableWidth > 0 && props.availableWidth < SIDEBAR_NARROW_BREAKPOINT_PX);
+  function RegionPlaceholder(status: { error?: unknown; retry?: () => void }) {
+    return (
+      <Portal mount={outlet}>
+        <For each={visiblePanels()} keyed={(panel) => panel.id}>
+          {(panel) => {
+            const definition = () =>
+              props.panelDefinitions.find((entry) => entry.slot === panel().slot)!;
+            return (
+              <section
+                class={[
+                  "side-panel__panel",
+                  { "sidebar-region__failed-panel": Boolean(status.retry) },
+                ]}
+                data-region={panel().id === props.layout.mainPanelId ? "main" : "side"}
+              >
+                <Show
+                  when={status.retry}
+                  fallback={<PanelLoadingSkeleton {...definition().loading} />}
+                >
+                  <header class="rail-header">
+                    <strong>{definition().label}</strong>
+                    <button
+                      class="rail-header__action"
+                      type="button"
+                      aria-label={t("chat.sidebarColumns.close", { panel: definition().label })}
+                      onClick={() => props.callbacks.closeSlot(panel().slot)}
+                    >
+                      <Icon name="x" />
+                    </button>
+                  </header>
+                  <LazyViewError
+                    error={status.error}
+                    stale={isStaleChunkImportError(status.error)}
+                    onRetry={() => status.retry?.()}
+                  />
+                </Show>
+              </section>
+            );
+          }}
+        </For>
+      </Portal>
+    );
+  }
+  function RegionRuntime() {
+    // Refs belong to the conditional region, outside Loading's tracked children.
+    const regionRefs = [
+      elementRef((element: HTMLElementTagNameMap["openclaw-chat-sidebar-region"]) =>
+        props.onRegionViewRef?.(element),
+      ),
+      elementRef((element: HTMLElementTagNameMap["openclaw-chat-sidebar-region"]) => {
+        regionView = element;
+        return () => {
+          regionView = undefined;
+        };
+      }),
+    ];
+    return (
+      <Errored
+        fallback={(error) => (
+          <RegionPlaceholder
+            error={error()}
+            retry={() => void retryStaleChunkReloadWhenReachable()}
+          />
+        )}
+      >
+        <Loading fallback={<RegionPlaceholder />}>
+          <ChatSidebarRegion
+            ref={regionRefs}
+            elements={elements}
+            panelIdPrefix={props.panelIdPrefix}
+            mobileHost={props.mobileHost}
+            onScrollPortRef={props.mobileScrollFades?.register}
+            presentation={props.presentation}
+            conversationTab={props.conversationTab}
+            layout={props.layout}
+            fetchFavicon={props.fetchFavicon}
+            panelDefinitions={props.panelDefinitions}
+            callbacks={props.callbacks}
+            narrow={props.narrow}
+            sideFocusLocked={props.sideFocusLocked === true}
+            sideFocusManaged={props.sideFocusManaged === true}
+            sideFocusOrigin={props.sideFocusOrigin}
+            availableWidth={props.availableWidth}
+            onPanelReady={props.onPanelReady}
+          />
+        </Loading>
+      </Errored>
+    );
+  }
   return (
     <div
       ref={[(element) => (region = element), elementRef(props.onRegionElementRef)]}
@@ -319,34 +416,6 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
             </button>
           </openclaw-tooltip>
         </div>
-      </Show>
-      <Show when={props.regionError === undefined}>
-        <openclaw-chat-sidebar-region
-          ref={[
-            elementRef(props.onRegionViewRef),
-            elementRef((element) => {
-              regionView = element;
-              return () => {
-                regionView = undefined;
-              };
-            }),
-          ]}
-          prop:elements={elements}
-          prop:panelIdPrefix={props.panelIdPrefix}
-          prop:mobileHost={props.mobileHost}
-          prop:onScrollPortRef={props.mobileScrollFades?.register}
-          prop:presentation={props.presentation}
-          prop:conversationTab={props.conversationTab}
-          prop:layout={props.layout}
-          prop:fetchFavicon={props.fetchFavicon}
-          prop:panelDefinitions={props.panelDefinitions}
-          prop:callbacks={props.callbacks}
-          prop:narrow={props.narrow}
-          prop:sideFocusLocked={props.sideFocusLocked === true}
-          prop:sideFocusManaged={props.sideFocusManaged === true}
-          prop:sideFocusOrigin={props.sideFocusOrigin}
-          prop:availableWidth={props.availableWidth}
-        />
       </Show>
       <div
         id={`${props.panelIdPrefix}-conversation`}
@@ -616,62 +685,12 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
           hidden={Boolean(props.mobileHost) && (!panelsVisible() || detailsChild())}
           inert={Boolean(props.mobileHost) && (!panelsVisible() || detailsChild())}
         >
-          <Show when={props.regionError === null}>
-            <For each={visiblePanels()} keyed={(panel) => panel.id}>
-              {(panel) => (
-                <div
-                  class="side-panel__panel"
-                  data-region={panel().id === props.layout.mainPanelId ? "main" : "side"}
-                >
-                  <PanelLoadingSkeleton
-                    {...props.panelDefinitions.find(
-                      (definition) => definition.slot === panel().slot,
-                    )!.loading}
-                  />
-                </div>
-              )}
-            </For>
-          </Show>
-          <Show
-            when={props.regionError != null}
-            fallback={
-              <div class="sidebar-region__right-runtime" ref={(element) => (outlet = element)} />
-            }
-          >
-            <div class="sidebar-region__right-runtime" ref={(element) => (outlet = element)}>
-              <For each={visiblePanels()} keyed={(panel) => panel.id}>
-                {(panel) => {
-                  const label = () =>
-                    props.panelDefinitions.find((definition) => definition.slot === panel().slot)!
-                      .label;
-                  return (
-                    <section
-                      class="side-panel__panel sidebar-region__failed-panel"
-                      data-region={panel().id === props.layout.mainPanelId ? "main" : "side"}
-                    >
-                      {/* Shell chrome cannot depend on the region module that failed to load. */}
-                      <header class="rail-header">
-                        <strong>{label()}</strong>
-                        <button
-                          class="rail-header__action"
-                          type="button"
-                          aria-label={t("chat.sidebarColumns.close", {
-                            panel: label(),
-                          })}
-                          onClick={() => props.callbacks.closeSlot(panel().slot)}
-                        >
-                          <Icon name="x" />
-                        </button>
-                      </header>
-                      <LazyViewError {...props.regionError!} />
-                    </section>
-                  );
-                }}
-              </For>
-            </div>
-          </Show>
+          <div class="sidebar-region__right-runtime" ref={(element) => (outlet = element)} />
         </div>
       </section>
+      <Show when={props.layout.columns.length > 0}>
+        <RegionRuntime />
+      </Show>
     </div>
   );
 }

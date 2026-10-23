@@ -192,7 +192,7 @@ export async function runSummarizationCompletion(
     if (response.stopReason === "length") {
       return err(
         new SummaryOutputBudgetError(
-          `${params.errorLabel} failed: summary output budget (${params.maxTokens} tokens) was exhausted without visible text; reduce thinking or increase the selected model's maxTokens before retrying`,
+          `${params.errorLabel} failed: summary output budget (${maxTokens} tokens) was exhausted without visible text for ${model.provider}/${model.id} (model maxTokens: ${model.maxTokens}); set agents.defaults.compaction.thinkingLevel to "off" if supported, or use agents.defaults.compaction.model to select a model that can summarize within this budget`,
         ),
       );
     }

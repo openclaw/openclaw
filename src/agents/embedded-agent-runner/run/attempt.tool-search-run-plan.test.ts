@@ -38,7 +38,8 @@ async function plan(
     catalogToolCount?: number;
     codeMode?: boolean;
     directory?: boolean;
-    allow?: string[];
+    allow?: string[] | null;
+    config?: OpenClawConfig;
     configAllow?: string[];
     agentAllow?: string[];
     toolsEnabled?: boolean;
@@ -52,6 +53,7 @@ async function plan(
   const visibleTools = options.visibleTools ?? [tool("dispatch_action")];
   const uncompactedTools = options.uncompactedTools ?? [];
   const config: OpenClawConfig = {
+    ...options.config,
     tools: {
       allow: options.configAllow,
       codeMode: options.codeMode ?? false,
@@ -59,8 +61,11 @@ async function plan(
         enabled: !options.codeMode,
         mode: options.directory ? "directory" : "tools",
       },
+      ...options.config?.tools,
     },
-    agents: { entries: { main: { tools: { allow: options.agentAllow } } } },
+    agents: options.config?.agents ?? {
+      entries: { main: { tools: { allow: options.agentAllow } } },
+    },
   };
   const admission = prepareSystemAgentRunAdmission(config, "catalog-plan", "main", "catalog-test");
   const abort = new AbortController();
@@ -91,7 +96,7 @@ async function plan(
         baseUrl: "https://example.test/v1",
       }),
       thinkLevel: "off",
-      toolsAllow: options.allow ?? ["missing_tool"],
+      toolsAllow: options.allow === null ? undefined : (options.allow ?? ["missing_tool"]),
       disableTools: options.disableTools,
       authProfileStore: { version: 1, profiles: {} },
       authStorage,
@@ -243,6 +248,38 @@ describe("embedded attempt tool catalog", () => {
     ]);
     expect([...result.capabilityToolNames]).toEqual(["dispatch_action"]);
     expect(result.hasCallableTools).toBe(true);
+  });
+
+  it.each([
+    { name: "an explicit allowlist", tools: { allow: ["read"] } },
+    { name: "additive plugin grants", tools: { alsoAllow: ["optional_plugin_tool"] } },
+  ])("allows a deny-all agent to run without tools under $name", async ({ tools }) => {
+    const result = await plan({
+      visibleTools: [],
+      clientTools: [],
+      allow: null,
+      config: {
+        tools,
+        agents: { entries: { main: { tools: { deny: ["*"] } } } },
+      },
+    });
+    expect(result.hasCallableTools).toBe(false);
+    expect(result.visibleAllowedToolNames.size).toBe(0);
+    expect(result.emptyExplicitToolAllowlistError).toBeNull();
+  });
+
+  it("still rejects a command-time tool request denied by the agent", async () => {
+    const result = await plan({
+      visibleTools: [],
+      clientTools: [],
+      allow: ["read"],
+      config: {
+        tools: { allow: ["read"] },
+        agents: { entries: { main: { tools: { deny: ["*"] } } } },
+      },
+    });
+    expect(result.hasCallableTools).toBe(false);
+    expect(result.emptyExplicitToolAllowlistError?.message).toContain("runtime toolsAllow: read");
   });
 
   it("carries native catalog capabilities without widening direct execution authority", async () => {

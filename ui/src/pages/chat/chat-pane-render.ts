@@ -367,7 +367,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         lockChatScroll(state);
         this.transcript.cancelScroll();
       },
-      onDismissProgressCard: progressPresentation ? this.hideProgressCard.bind(this) : undefined,
+      onDismissProgressCard: progressPresentation
+        ? this.hideProgressCard.bind(this, progressPresentation)
+        : undefined,
       ...conversationAttention,
       asyncQuestionStorage: nativeConversation
         ? this.chatState.composerPersistence.durableScope

@@ -86,7 +86,7 @@ export type NewSessionComposerOptions = {
   requiresModifier: boolean;
   onChange: () => void;
   submitDisabledReason?: string;
-  blockedSubmitNotice?: string;
+  onBlockedSubmit?: () => void;
   dictationActive?: boolean;
   dictationPreview?: string;
   dictationStatus?: JSX.Element;
@@ -191,8 +191,7 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
       event.preventDefault();
       return;
     }
-    // A reasoned gate still consumes the press: the submission flow records the
-    // attempt and surfaces the reason instead of silently inserting a newline.
+    // A reasoned gate consumes the press and reveals its explanation.
     // Only silent gates (busy button, empty draft) keep Enter native.
     if (options.canSubmit || options.submitDisabledReason !== undefined) {
       event.preventDefault();
@@ -337,22 +336,26 @@ function StartControl(props: { options: NewSessionComposerOptions }) {
     props.options.submitting
       ? t("newSession.starting")
       : t(props.options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
-  const reasonedBlock = () =>
-    !props.options.canSubmit && props.options.submitDisabledReason !== undefined;
   const busy = () =>
     props.options.submitting || props.options.attachmentDraft.reads.pendingReads > 0;
   return (
-    <openclaw-tooltip content={props.options.submitDisabledReason ?? label()}>
+    <openclaw-tooltip
+      content={props.options.submitDisabledReason ?? label()}
+      onPointerDown={(event) => {
+        if (event.button === 0 && !props.options.canSubmit) {
+          props.options.onBlockedSubmit?.();
+        }
+      }}
+    >
       <button
         type="button"
         class={[
           "chat-send-btn new-session-page__start-submit",
           {
-            "new-session-page__start-submit--blocked": reasonedBlock(),
             "new-session-page__start-submit--busy": busy(),
           },
         ]}
-        disabled={!props.options.canSubmit && !reasonedBlock()}
+        disabled={!props.options.canSubmit}
         aria-disabled={props.options.canSubmit ? "false" : "true"}
         aria-busy={busy() ? "true" : "false"}
         aria-label={label()}
@@ -692,20 +695,6 @@ export function NewSessionComposer(props: {
           </div>
         </div>
       </div>
-      <Show when={options().blockedSubmitNotice}>
-        <div
-          class="new-session-page__blocked-submit agent-chat__composer-status"
-          data-tone="info"
-          role="status"
-        >
-          <div class="agent-chat__composer-status-band">
-            <span class="agent-chat__composer-status-icon" aria-hidden="true">
-              <Icon name="info" />
-            </span>
-            <span class="agent-chat__composer-status-text">{options().blockedSubmitNotice}</span>
-          </div>
-        </div>
-      </Show>
     </div>
   );
 }

@@ -480,7 +480,7 @@ function createApprovalPage(
   };
 }
 
-defineSolidBridge<ApprovalPageProps>(
+export const ApprovalPage = defineSolidBridge<ApprovalPageProps>(
   "openclaw-approval-page",
   (_props, host) => {
     const context = useApplication();

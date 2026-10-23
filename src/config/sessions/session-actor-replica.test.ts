@@ -640,6 +640,14 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
     assert(facts, "Expected resident row facts");
     facts.entry.label = "caller edit";
     expect(readSessionActorRowFacts(target)?.entry.label).toBeUndefined();
+    expect(facts.entry.activitySummary).toBe(before.entry?.activitySummary);
+    expect(facts.activitySummaryWatermark).toBe(before.transcript.watermark);
+    expect(() => {
+      facts.entry.activitySummary!.text = "Caller edit to borrowed summary";
+    }).toThrow(TypeError);
+    expect(() => {
+      facts.activitySummaryWatermark!.maxSeq = 99;
+    }).toThrow(TypeError);
 
     assert(before.target.database.kind === "file", "Replica fixture requires a durable target");
     const entryTarget = { ...before.target, database: before.target.database };
@@ -679,11 +687,11 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
     expect(readEntry()?.entry?.label).toBeUndefined();
     expect(readEntry()?.projection?.hasBoard).toBe(false);
     expect(readEntry(["skillsSnapshot"])?.snapshots).toEqual([]);
+    const retainedRow = readSessionActorRowFacts(target)!;
+    expect(retainedRow.entry.activitySummary).toBe(retained.entry?.activitySummary);
+    expect(retainedRow.activitySummaryWatermark).toBe(before.transcript.watermark);
     expect((await readSessionEntryReadOnlyInWorker(scope))?.skillsSnapshot?.prompt).toBe(
       "Saved instructions",
-    );
-    expect(readSessionActorRowFacts(target)?.activitySummaryWatermark).toEqual(
-      before.transcript.watermark,
     );
 
     const appended = appendTranscriptEventSync(

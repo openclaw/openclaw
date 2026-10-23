@@ -662,6 +662,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
     }
     const avatar = resolveAssistantDisplayAvatar(chatProps);
     const region = renderSidebarRegion({
+      onPanelReady: () => {
+        this.flushPendingPanelToggles();
+      },
       mobileScrollFades: this.mobileScrollFades,
       onRegionElementRef: (element) => {
         this.sidebarRegionElement = element;
