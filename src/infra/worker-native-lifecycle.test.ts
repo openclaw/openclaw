@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { MessageChannel, Worker, type Transferable } from "node:worker_threads";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { BrokerResourceAttachment } from "../process/spawn-broker/resource-protocol.js";
@@ -125,7 +126,7 @@ function startSupervisor() {
     notify();
   });
   supervisor.once("error", (error) => {
-    failure = error;
+    failure = toErrorObject(error, "Native worker supervisor failed");
     notify();
   });
   supervisor.once("exit", (code) => {
