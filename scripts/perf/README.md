@@ -2856,19 +2856,19 @@ The report records `rowMode` alongside the page limit.
 
 Supported scenarios:
 
-| Scenario               | One measured operation                                                                                     |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `sessions.list`        | One compact sidebar page RPC, `archived=all`, `--limit` rows                                               |
-| `sessions.describe`    | One detailed parent-row RPC, including the harness's synthetic children                                    |
-| `sessions.patch`       | One title, expiring status-note, or model-selection mutation on a retained fixture session                 |
-| `sessions.cleanup`     | One cleanup RPC in warning mode, including current subagent preservation and commit compatibility checks   |
-| `connect`              | One owned socket replacement and validated hello handshake; no sidebar restoration                         |
-| `reconnect`            | One owned socket replacement, subscriptions, and verified current sidebar                                  |
-| `subscribe`            | One `sessions.subscribe` snapshot registration/refresh RPC on the sender, with the same page shape as list |
-| `chat.send`            | One completed turn: synthetic read-tool call, then paced streaming answer; one client and one run          |
-| `transcript-broadcast` | One completed `agent` turn, streamed to `--clients` subscribers; `--runs` concurrent turns per round       |
-| `plugins.reload`       | One live reload of a synthetic no-op plugin through the lifecycle RPC                                      |
-| `plugin.scope`         | One synthetic plugin RPC checking invocation scope before and after an asynchronous suspension             |
+| Scenario               | One measured operation                                                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `sessions.list`        | One compact sidebar page RPC, `archived=all`, `--limit` rows                                                                   |
+| `sessions.describe`    | One detailed parent-row RPC, including the harness's synthetic children                                                        |
+| `sessions.patch`       | One title, expiring status-note, or model-selection mutation on a retained fixture session                                     |
+| `sessions.cleanup`     | One cleanup RPC in warning mode, including current subagent preservation and commit compatibility checks                       |
+| `connect`              | One owned socket replacement and validated hello handshake; no sidebar restoration                                             |
+| `reconnect`            | One owned socket replacement, subscriptions, and verified current sidebar                                                      |
+| `subscribe`            | One `sessions.subscribe` snapshot registration/refresh RPC on the sender, with the same page shape as list                     |
+| `chat.send`            | One completed turn: synthetic read-tool call, then paced streaming answer; one client, `--runs` concurrent turns (default one) |
+| `transcript-broadcast` | One completed `agent` turn, streamed to `--clients` subscribers; `--runs` concurrent turns per round                           |
+| `plugins.reload`       | One live reload of a synthetic no-op plugin through the lifecycle RPC                                                          |
+| `plugin.scope`         | One synthetic plugin RPC checking invocation scope before and after an asynchronous suspension                                 |
 
 RPC scenarios use `--operations` per round. `--rpc-concurrency` defaults to one
 and bounds concurrent requests across the connected sockets. For a reconnect
@@ -2879,6 +2879,34 @@ and update timestamps with the pre-storm page. The report separates handshake
 latency from time until all sidebars are current. Intentional disconnection does
 not imply event replay. These scenarios isolate RPC costs; they do not generate
 background session activity at production rates.
+
+For acknowledgement latency, `chat.send` also accepts `--diagnostics` without
+allocation or CPU profiling. `--runs 8 --rounds 125` records 1,000 measured ACKs
+after one unmeasured warmup cohort:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --entry src/entry.ts --scenario chat.send \
+  --port 41617 --mock-port 41618 --runs 8 --rounds 125 \
+  --chunks 10 --chunk-interval-ms 10 --diagnostics --trace-gc \
+  --start-at <shared-future-epoch-ms> --revision <measured-commit-sha>
+```
+
+Each fresh send must return `started` with its requested run ID, then complete
+successfully through `agent.wait`. The existing model-arrival barrier verifies
+eight overlapping turns, and tool-completion and subscriber checks remain active.
+`samples[].rpc["chat.send"]` records ACK count, p50/p95/p99/max and individual
+latencies in milliseconds. `chatSendAck` pools those observations across measured
+rounds; it measures the first wire response, separately from turn completion and
+post-ACK startup diagnostics. Per-round tails with eight samples are context only;
+use the pooled observations for p99. Run separate matching fixtures concurrently
+under the shared guard and one quiet-slot lock, then swap interleaved CPU sets.
+Apply the campaign's sample-count and paired absolute/relative-delta rules.
+Add `--chat-attachment-kib 4` or `--chat-attachment-kib 256` for separate small
+and larger text-attachment runs. Each turn sends a deterministic
+`synthetic-attachment.txt` with MIME type `text/plain` and origin `paste` through
+the real attachment path. The report records `chatAttachmentBytes`; zero means
+no attachment. Keep the attachment size identical within each comparison pair.
 
 For entry-patch transfer measurements, prepare separate matching small fixtures
 sequentially, then run the existing driver against the source Gateway:
@@ -3200,7 +3228,7 @@ sampling defaults remain 32 KiB for RPC/turn rounds and 512 KiB for memory soaks
 Stopping a heap sample forces GC, so use one long round for natural-GC acceptance
 rather than aggregating short rounds separated by sample stops.
 
-Turn scenarios use `--runs` (forced
+Turn scenarios use `--runs` (defaulting
 to one for `chat.send`); `--chunks` controls streamed answer size. `plugins.reload`
 defaults to one operation per round; other RPC scenarios default to 100. Count
 the warmup when choosing reload batches: the admin RPC allows 30 calls per minute.
