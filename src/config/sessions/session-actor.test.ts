@@ -4,7 +4,10 @@ import { renderAssistantRequestFailureCopy } from "../../agents/failover/assista
 import { appendSessionManagerActor } from "../../agents/sessions/session-manager-actor-append.js";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import {
+  hasSqliteWorkerOutcomeUnknown,
+  SqliteWorkerError,
+} from "../../infra/sqlite-worker-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
@@ -826,28 +829,25 @@ it.each([
     Object.assign(new SqliteWorkerError("SQLite worker stopped", "outcome-unknown"), {
       cause: Object.assign(new Error("database or disk is full"), { errcode: 13 }),
     }),
-    "SQLITE_FULL",
     "unknown",
     false,
     undefined,
   ],
-  [new Error("database or disk is full"), "SQLITE_FULL", "unknown-result", false, undefined],
-  [new Error("Ordinary reply lost"), "session_actor_reconciliation", "unknown", false, undefined],
+  [new Error("database or disk is full"), "unknown-result", false, undefined],
+  [new Error("Ordinary reply lost"), "unknown", false, undefined],
   [
     Object.assign(new Error("database or disk is full"), { errcode: 13 }),
-    "SQLITE_FULL",
     "normal",
     true,
     undefined,
   ],
   [
     new Error("Ordinary reply lost"),
-    "SQLITE_FULL",
     "unknown",
     false,
     Object.assign(new Error("database or disk is full during settlement"), { code: "SQLITE_FULL" }),
   ],
-] as const)("retains %s (%s, %s)", async (cause, expected, reply, rollback, settlementError) => {
+] as const)("retains uncertainty with %s (%s)", async (cause, reply, rollback, settlementError) => {
   await withActor(async ({ actor, commands, fault }) => {
     const initial = await actor.read(authority);
     if (actor.target.database.kind !== "file") {
@@ -896,14 +896,11 @@ it.each([
     } catch (error) {
       failure = error;
     }
-    expect(classifyGatewayStorageFailure(failure)).toBe(expected);
-    if (expected === "SQLITE_FULL") {
-      expect(
-        renderAssistantRequestFailureCopy({
-          storageFailure: classifyGatewayStorageFailure(failure),
-        }),
-      ).toContain("disk is full. Free up space");
-    }
+    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+    expect(classifyGatewayStorageFailure(failure)).toBe("session_actor_reconciliation");
+    expect(
+      renderAssistantRequestFailureCopy({ storageFailure: classifyGatewayStorageFailure(failure) }),
+    ).toMatch(/check|reopen|retry/i);
     const diagnostic = formatErrorMessageWithCode(failure);
     expect(diagnostic).toContain("Session actor requires reconciliation before another command");
     expect(diagnostic).toContain(cause.message);
@@ -917,7 +914,9 @@ it.each([
         assertCurrent() {},
         append: messageAppend(actor, initial.entry!.sessionId, { role: "user", content: [] }),
       }),
-    ).rejects.toSatisfy((error: unknown) => classifyGatewayStorageFailure(error) === expected);
+    ).rejects.toSatisfy(
+      (error: unknown) => classifyGatewayStorageFailure(error) === "session_actor_reconciliation",
+    );
     expect(commands).toHaveLength(before);
     fault.reply = "normal";
     expect((await actor.read(authority)).entry?.updatedAt).toBe(
@@ -942,11 +941,13 @@ it.each(["command", "flush"] as const)(
           }
         }),
       ).rejects.toSatisfy((error: unknown) => {
+        expect(hasSqliteWorkerOutcomeUnknown(error)).toBe(true);
+        expect(classifyGatewayStorageFailure(error)).toBe("session_actor_reconciliation");
         expect(
           renderAssistantRequestFailureCopy({
             storageFailure: classifyGatewayStorageFailure(error),
           }),
-        ).toContain("disk is full. Free up space");
+        ).toMatch(/check|reopen|retry/i);
         expect(formatErrorMessageWithCode(error)).toContain("database or disk is full");
         return true;
       });

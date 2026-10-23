@@ -6,9 +6,16 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
+import { classifyGatewayStorageFailure } from "./sqlite-error-diagnostics.js";
 import { receiveSqliteWorkerReply } from "./sqlite-worker-broker-reply.js";
 import type { Actor, Job } from "./sqlite-worker-broker.types.js";
 import type { SqliteWorkerCloseReceipt } from "./sqlite-worker-contract.js";
+import {
+  hasSqliteWorkerOutcomeUnknown,
+  isSqliteWorkerError,
+  retainSqliteWorkerErrorCode,
+  SqliteWorkerError,
+} from "./sqlite-worker-error.js";
 import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
 
@@ -147,54 +154,72 @@ it.each(["valid", "framed", "close", "mismatched", "unsafe", "malformed"])(
   },
 );
 
-it("hydrates cached-context execute-frame errors without an explicit request context", () => {
-  const original = Object.assign(
-    new Error("Synthetic preparation failure", { cause: new Error("Synthetic read failure") }),
-    { code: "EIO", errno: -5 },
-  );
-  const sharedState = encodeOpenClawStateWorkerError(original, { includeOrdinary: true });
-  assert(sharedState);
-  const unexpected = () => {
-    throw new Error("Failed continuation must not dispatch or finish successfully");
-  };
-  const job: Job = {
-    custody: new SqliteWorkerSlotCustody().createRequest(),
-    observation: { started() {}, completed() {} },
-    request: { type: "execute-frame", id: 1, actor: 1, input: new Uint8Array() },
-    bytes: 0,
-    result: createDeferredCore().promise,
-    resolve: unexpected,
-    reject: unexpected,
-    detach: unexpected,
-  };
-  let failure: unknown;
+it.each(["ordinary", "uncertain-aggregate"])(
+  "hydrates %s cached-context execute-frame errors without an explicit request context",
+  (kind) => {
+    const primary = Object.assign(
+      new Error("Synthetic preparation failure", { cause: new Error("Synthetic read failure") }),
+      { code: "EIO", errno: -5 },
+    );
+    const original =
+      kind === "ordinary"
+        ? primary
+        : retainSqliteWorkerErrorCode(
+            new AggregateError([primary], "Synthetic cleanup failure", { cause: primary }),
+            new SqliteWorkerError("Synthetic unknown write", "outcome-unknown"),
+          );
+    const sharedState = encodeOpenClawStateWorkerError(original, { includeOrdinary: true });
+    assert(sharedState);
+    const unexpected = () => {
+      throw new Error("Failed continuation must not dispatch or finish successfully");
+    };
+    const job: Job = {
+      custody: new SqliteWorkerSlotCustody().createRequest(),
+      observation: { started() {}, completed() {} },
+      request: { type: "execute-frame", id: 1, actor: 1, input: new Uint8Array() },
+      bytes: 0,
+      result: createDeferredCore().promise,
+      resolve: unexpected,
+      reject: unexpected,
+      detach: unexpected,
+    };
+    let failure: unknown;
 
-  receiveSqliteWorkerReply(
-    { actors: new Set(), current: job, worker: { postMessage: unexpected } },
-    {
-      id: 1,
-      ok: false,
-      error: {
-        name: "Error",
+    receiveSqliteWorkerReply(
+      { actors: new Set(), current: job, worker: { postMessage: unexpected } },
+      {
+        id: 1,
+        ok: false,
+        error: {
+          name: original.name,
+          message: original.message,
+          code: kind === "ordinary" ? "EIO" : "outcome-unknown",
+          sharedState: structuredClone(sharedState),
+        },
+      },
+      {
+        fail(error) {
+          failure = error;
+        },
+        finish: unexpected,
+        dispatch: unexpected,
+      },
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    if (kind === "uncertain-aggregate") {
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+      expect(classifyGatewayStorageFailure(failure)).toBe("session_actor_reconciliation");
+      expect(isSqliteWorkerError(failure, "outcome-unknown")).toBe(false);
+      expect(failure).toMatchObject({ cause: { code: "EIO" } });
+    } else {
+      expect(failure).toMatchObject({
         message: "Synthetic preparation failure",
         code: "EIO",
-        sharedState: structuredClone(sharedState),
-      },
-    },
-    {
-      fail(error) {
-        failure = error;
-      },
-      finish: unexpected,
-      dispatch: unexpected,
-    },
-  );
-
-  expect(failure).toBeInstanceOf(Error);
-  expect(failure).toMatchObject({
-    message: "Synthetic preparation failure",
-    code: "EIO",
-    errno: -5,
-    cause: { message: "Synthetic read failure" },
-  });
-});
+        errno: -5,
+        cause: { message: "Synthetic read failure" },
+      });
+    }
+  },
+);

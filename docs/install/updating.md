@@ -47,6 +47,17 @@ stopped backup and identify the changed file. This repair must
 be present in the runtime performing the snapshot, including the candidate worker
 when the installed updater delegates capture to it.
 
+Update snapshots and database backups accept a database whose only integrity
+findings are `malformed inverted index` reports on canonical, schema-validated
+agent FTS tables. A Node upgrade that changes SQLite tokenization (for example,
+SQLite 3.54) produces exactly these findings on an intact database, and the
+runtime that next admits the copy rebuilds the indexes. The copies keep the
+original index bytes, so rollback to the previous runtime restores its own
+index. Unknown FTS definitions and findings mixed with any other damage still
+refuse the update. The candidate performs the rehearsal snapshot, so this applies
+from the first update to a candidate with the fix; activation-time backups need
+the installed updater to contain it.
+
 Memory embedding migrations space maintenance renewals from the completion of
 each renewal, so slow renewals leave time for conversion work. The candidate must
 contain this fix; it does not change an older migration already running.

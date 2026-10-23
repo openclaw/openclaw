@@ -1418,7 +1418,6 @@ src/channels/message/ingress-monitor.ts	2
 src/channels/message/outbound-bridge.ts	1
 src/channels/plugins/account-config-mutation.ts	1
 src/channels/plugins/account-helpers.ts	6
-src/channels/plugins/bootstrap-registry.ts	1
 src/channels/plugins/bundled-setup-policy.ts	2
 src/channels/plugins/bundled.ts	4
 src/channels/plugins/chat-target-prefixes.ts	2
@@ -2163,7 +2162,7 @@ src/plugins/interactive.ts	4
 src/plugins/lazy-service-module.ts	1
 src/plugins/legacy-session-surfaces.ts	2
 src/plugins/loader-channel-runtime.ts	1
-src/plugins/loader-channel-setup.ts	12
+src/plugins/loader-channel-setup.ts	11
 src/plugins/loader-load-context.ts	4
 src/plugins/loader-module-runtime.ts	5
 src/plugins/loader-records.ts	1

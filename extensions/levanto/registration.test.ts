@@ -9,7 +9,7 @@ import {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -107,6 +107,11 @@ const questionBatch = (id: string, question: DecisionQuestionV2): DecisionBatchV
 });
 const unavailable = (reason: string) => ({ status: "unavailable", reason });
 const unsupported = unavailable("unsupported-input");
+beforeEach(() => {
+  // The fixture owns a finite caller budget, not a cold request-policy benchmark.
+  // Only deadline scenarios advance time; HTTP, credentials and parsing stay real.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+});
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -238,7 +243,7 @@ it("uses one native batch for mixed scalar kinds and retains partial failures an
   };
   const { provider, context, fetch } = fixture(Response.json(native));
   const outcome = await provider.evaluate(input, context);
-  assert(outcome.status === "ok");
+  assert(outcome.status === "ok", JSON.stringify(outcome));
   expect(validateDecisionResultV2(input, outcome.result)).toBe(true);
   expect(outcome.result.answers).toMatchObject({
     c: { choice: "a", probability: 0.7, probabilities: { a: 0.7, b: 0.3 } },
@@ -278,7 +283,17 @@ it.each([2, 26])("preserves a %i-level rubric and distribution", async (count) =
     ),
   );
   const outcome = await provider.evaluate(input, context);
-  assert(outcome.status === "ok");
+  assert(
+    outcome.status === "ok",
+    outcome.status === "ok"
+      ? ""
+      : JSON.stringify({
+          status: outcome.status,
+          reason: outcome.reason,
+          fetchCount: fetch.mock.calls.length,
+          deadlineRemainingMs: context.deadlineMonotonicMs - performance.now(),
+        }),
+  );
   expect(outcome.result.answers).toMatchObject({
     score: {
       type: "score",
@@ -392,7 +407,6 @@ it.each([
   ["abort", "image"],
   ["deadline", "image"],
 ])("settles %s during %s and prevents later work", async (kind, phase) => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
   const started = createDeferred<void>();
   const cancel = vi.fn();
   const { provider, context, probe, fetch } = fixture(

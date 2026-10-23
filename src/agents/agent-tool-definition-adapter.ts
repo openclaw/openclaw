@@ -2,6 +2,7 @@
  * Owns hook execution, client-tool delegation, result coercion, and safe
  * logging for failed tool calls.
  */
+import { isLocalStorageOutcomeError } from "../infra/sqlite-error-diagnostics.js";
 import { logDebug, logError } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { isPlainObject } from "../utils.js";
@@ -115,7 +116,7 @@ async function executeAdaptedToolOperation(params: {
     }
     return payloadTextResult(result ?? { status: "ok", tool: toolName });
   } catch (err) {
-    if (params.signal?.aborted) {
+    if (params.signal?.aborted || isLocalStorageOutcomeError(err)) {
       throw err;
     }
     const described = describeToolExecutionError(err);

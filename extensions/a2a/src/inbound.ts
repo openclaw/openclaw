@@ -5,7 +5,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import type { A2aTaskStore } from "./task-store.js";
 import type { ResolvedA2aChannelAccount } from "./types.js";
 
-type A2aInboundDispatchParams = {
+export async function dispatchA2aInbound(params: {
   account: ResolvedA2aChannelAccount;
   config: OpenClawConfig;
   channelRuntime: PluginRuntime["channel"];
@@ -15,9 +15,7 @@ type A2aInboundDispatchParams = {
   messageId: string;
   peerName: string;
   text: string;
-};
-
-export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Promise<void> {
+}): Promise<void> {
   // Peer credentials admit tasks, never user commands (including plugin commands).
   if (params.text.trimStart().startsWith("/")) {
     params.store.reject(

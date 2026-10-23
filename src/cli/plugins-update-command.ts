@@ -131,14 +131,21 @@ function mayMutatePluginInstallRecord(
   return Boolean(record?.marketplaceSource && record.marketplacePlugin);
 }
 
-function pluginConfigReferencesId(config: OpenClawConfig, pluginId: string) {
+function pluginConfigReferencesId(
+  config: OpenClawConfig,
+  pluginId: string,
+  record?: PluginInstallRecord,
+) {
   const plugins = config.plugins;
   return (
     plugins?.allow?.includes(pluginId) ||
     plugins?.deny?.includes(pluginId) ||
     Object.hasOwn(plugins?.entries ?? {}, pluginId) ||
     plugins?.slots?.memory === pluginId ||
-    plugins?.slots?.contextEngine === pluginId
+    plugins?.slots?.contextEngine === pluginId ||
+    Object.values(record?.contextEngineIdsByPlugin ?? {}).some((ids) =>
+      ids.includes(plugins?.slots?.contextEngine ?? ""),
+    )
   );
 }
 
@@ -413,7 +420,11 @@ async function runPluginUpdateCommandUnlocked(
           specOverride: pluginSelection.specOverrides?.[pluginId],
         }) &&
         (pluginReferencesMayBeUnresolved ||
-          pluginConfigReferencesId(mutationSnapshot.snapshot.sourceConfig, pluginId))
+          pluginConfigReferencesId(
+            mutationSnapshot.snapshot.sourceConfig,
+            pluginId,
+            pluginInstallRecords[pluginId],
+          ))
       );
     });
     const pluginLoadPathMayMutate = packageUpdateIds.some((pluginId) =>

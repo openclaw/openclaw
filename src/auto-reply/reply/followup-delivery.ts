@@ -45,6 +45,7 @@ import {
 } from "./automation-reply-payloads.js";
 import { deliverBlockReply } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
+import { createFollowupSpeechPreparer } from "./followup-delivery-tts.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
@@ -568,7 +569,8 @@ export async function deliverFollowupDecision(params: {
   const origin = resolveOriginMessageProvider({ originatingChannel });
   const sameChannelOrigin = Boolean(origin && origin === provider);
   const crossChannelOrigin = Boolean(origin && provider && origin !== provider);
-  for (const payload of payloads) {
+  const prepareSpeech = createFollowupSpeechPreparer({ turn, defaults, kind });
+  for (let payload of payloads) {
     const providerRoute = deliveryPlan.resolveFollowupRoute({
       payload,
       originatingChannel,
@@ -599,6 +601,13 @@ export async function deliverFollowupDecision(params: {
       }
     }
     await typing.signalTextDelta(payload.text);
+    // The stalled recovery owner delivers its terminal notice after the operation aborts.
+    if (
+      turn.queued.stalledTurnRecovery !== true ||
+      !isReplyOperationStalledBeforeOutput(turn.operation)
+    ) {
+      payload = await prepareSpeech(payload, route);
+    }
     if (route !== "origin") {
       await dispatchPayload(payload);
     } else if (isRoutableChannel(originatingChannel) && originatingTo) {

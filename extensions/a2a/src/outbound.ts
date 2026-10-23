@@ -28,17 +28,13 @@ const A2aOutboundResponseSchema = z.object({
     .optional(),
 });
 
-type A2aOutboundSendParams = {
+export async function sendA2aChannelText(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   to: string;
   text: string;
   assertDirectAdapterHandoff?: () => void;
-};
-
-export async function sendA2aChannelText(
-  params: A2aOutboundSendParams,
-): Promise<{ to: string; messageId: string }> {
+}): Promise<{ to: string; messageId: string }> {
   const account = resolveA2aChannelAccount({
     cfg: params.cfg,
     accountId: params.accountId,

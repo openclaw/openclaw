@@ -1237,6 +1237,12 @@ this repair. If startup cannot repair the indexes, stop the Gateway and run
 restart it. Switching SQLite versions again may require another rebuild,
 without changing stored content or the database schema.
 
+Update rehearsal snapshots and update database backups do not repair these
+indexes. When every finding names a canonical, schema-validated FTS table, they
+copy the database unchanged and leave the rebuild to the runtime that admits it,
+because a check under the target SQLite can flag an index the previous runtime
+reads correctly. Such a check is not recorded as a full verification.
+
 <a id="downgrades-are-unsupported" />
 
 <a id="example-state-schema-13-to-12" />

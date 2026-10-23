@@ -21,7 +21,11 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
-import { resolveDeferredPluginMigrationConfigPaths } from "./deferred-plugin-migration-config.js";
+import {
+  hasDeferredPluginMigrationConfig,
+  preserveDeferredPluginMigrationConfig,
+  resolveDeferredPluginMigrationConfigPaths,
+} from "./deferred-plugin-migration-config.js";
 import { createConfigIO } from "./io.factory.js";
 import { readCurrentConfigForPolicyCheck, withCurrentConfigPolicyReader } from "./io.runtime.js";
 import type { ConfigWriteOptions, ConfigIoFactoryOptions } from "./io.types.js";
@@ -51,6 +55,37 @@ vi.mock("../infra/kysely-sync.js", async (importOriginal) => {
       return actual.executeSqliteQuerySync(db, query);
     }) satisfies typeof actual.executeSqliteQuerySync,
   };
+});
+
+it("retains the authored canonical config key for a mixed-case migration owner", () => {
+  const sourceConfig = {
+    plugins: {
+      entries: { "mixed-upgrade-proof": { enabled: true, config: { token: "retained" } } },
+    },
+  };
+  const pending = {
+    pluginId: "MiXeD-upgrade-proof",
+    reason: "Package pending",
+    command: "openclaw doctor --fix",
+    ...resolveDeferredPluginMigrationConfigPaths({
+      config: sourceConfig,
+      pluginId: "MiXeD-upgrade-proof",
+    }),
+  };
+  expect(pending.configPaths).toContainEqual([
+    "plugins",
+    "entries",
+    "mixed-upgrade-proof",
+    "config",
+  ]);
+  expect(hasDeferredPluginMigrationConfig(sourceConfig, pending)).toBe(true);
+  expect(
+    preserveDeferredPluginMigrationConfig({
+      sourceConfig,
+      nextConfig: { plugins: { entries: { "mixed-upgrade-proof": { enabled: true } } } },
+      pending: [pending],
+    }),
+  ).toEqual(sourceConfig);
 });
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {

@@ -384,8 +384,10 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
           expect(diagnostic).toContain("Recovery result delivery failed");
           expect(diagnostic).toContain("Recovery settlement failed");
           expect(diagnostic).toContain("database or disk is full");
-          expect(renderStorageFailureSummary(classifyGatewayStorageFailure(outcome))).toBe(
-            "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+          const storageOutcome = classifyGatewayStorageFailure(outcome);
+          expect(storageOutcome).toBe("session_actor_reconciliation");
+          expect(renderStorageFailureSummary(storageOutcome)).toMatch(
+            /check.*history.*before trying again/i,
           );
         }
       } else if (loseResult) {

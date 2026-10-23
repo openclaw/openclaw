@@ -49,11 +49,7 @@ afterEach(() => {
   views.clear();
   vi.unstubAllGlobals();
   document.documentElement.style.setProperty("--chat-text-size", originalTextSize);
-  if (originalCopy === undefined) {
-    delete en.chat.pairingQrExpired;
-  } else {
-    en.chat.pairingQrExpired = originalCopy;
-  }
+  en.chat.pairingQrExpired = originalCopy;
   if (originalThemeMode === null) {
     document.documentElement.removeAttribute("data-theme-mode");
   } else {

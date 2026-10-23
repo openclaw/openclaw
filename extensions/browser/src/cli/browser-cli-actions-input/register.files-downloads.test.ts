@@ -80,12 +80,12 @@ describe("browser action input file/download commands", () => {
   });
 
   it("rejects conflicting dialog actions without arming the hook", async () => {
-    await run("dialog", "--accept", "--dismiss");
-    expect(gatewayMock).not.toHaveBeenCalled();
-    expect(String(browserCliRuntime.error.mock.calls.at(-1)?.[0])).toContain(
+    await expect(run("dialog", "--accept", "--dismiss")).rejects.toThrow(
       "Specify only one of --accept or --dismiss",
     );
-    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+    expect(gatewayMock).not.toHaveBeenCalled();
+    expect(browserCliRuntime.error).not.toHaveBeenCalled();
+    expect(browserCliRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("preserves an empty prompt response", async () => {

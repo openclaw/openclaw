@@ -62,11 +62,13 @@ describe("restart recovery terminal delivery receipt", () => {
     });
     try {
       await expect(begin(scope())).rejects.toSatisfy((error: unknown) => {
+        const storageOutcome = classifyGatewayStorageFailure(error);
+        expect(storageOutcome).toBe("session_actor_reconciliation");
         expect(
           renderAssistantRequestFailureCopy({
-            storageFailure: classifyGatewayStorageFailure(error),
+            storageFailure: storageOutcome,
           }),
-        ).toContain("disk is full. Free up space");
+        ).toMatch(/check.*history.*before trying again/i);
         return hasSqliteWorkerOutcomeUnknown(error);
       });
       expect(read()).toEqual(before);

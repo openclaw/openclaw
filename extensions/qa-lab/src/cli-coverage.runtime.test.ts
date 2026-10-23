@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { runQaCoverageReportCommand } from "../reporting-api.js";
 import { makeRuntimeParitySummary } from "./agentic-parity-report-test-helpers.js";
-import { runQaCoverageReportCommand } from "./cli-coverage.runtime.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { runQaFlowSuiteFromRuntime, runQaSuite } = vi.hoisted(() => ({

@@ -2,6 +2,48 @@ import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
 const enApprovals = {
+  execApproval: {
+    watcherApprovalScope:
+      "Approval applies to this saved watcher. Source changes or reactivation may require approval again.",
+    watcherSandboxSummary:
+      "Runs in your sandbox after you leave this chat, until stopped. Restarts automatically after interruptions.",
+    watcherGatewaySummary:
+      "Runs on the Gateway after you leave this chat, until stopped. Restarts automatically after interruptions.",
+    watcherSummary:
+      "Runs after you leave this chat, until stopped. Restarts automatically after interruptions.",
+    startWatcher: "Start watching",
+    saveWatcher: "Save watcher change",
+    cancelWatcher: "Cancel",
+    scope: en.execApproval.scope,
+    expiresIn: "expires in {time}",
+    expired: "expired",
+    execApprovalNeeded: "Exec approval needed",
+    runCommand: "Run this command?",
+    pluginApprovalNeeded: "Plugin approval needed",
+    requestedBySession: "Approval requested by session {session}",
+    pending: "{count} pending",
+    otherPending: "Other pending requests",
+    reviewRequest: "Review approval from {agent}: {command}",
+    decisionRequest: "{decision}: {command}",
+    agentPendingOne: en.execApproval.agentPendingOne,
+    agentPending: en.execApproval.agentPending,
+    allowOnce: "Allow once",
+    alwaysAllow: "Always allow",
+    alwaysAllowHere: "Always allow here",
+    allowAlwaysUnavailable: "Allow Always is unavailable for this command.",
+    reviewOnly: en.execApproval.reviewOnly,
+    deny: "Deny",
+    details: "Details",
+    labels: {
+      host: "Host",
+      session: "Session",
+      cwd: "CWD",
+      directory: "Directory",
+      resolved: "Resolved",
+      security: "Security",
+      ask: "Ask",
+    },
+  },
   approvalPage: {
     brandName: "OpenClaw",
     eyebrow: "Operator approval",
@@ -124,6 +166,9 @@ export const registerApprovalsEnglish = Object.assign(
     Object.assign(en.approvalPage, enApprovals.approvalPage);
     Object.assign(en.standingGrants, enApprovals.standingGrants);
     Object.assign(en.approvalHistory, enApprovals.approvalHistory);
+    const { labels, ...execApproval } = enApprovals.execApproval;
+    Object.assign(en.execApproval, execApproval);
+    Object.assign(en.execApproval.labels, labels);
   },
   { catalog: enApprovals },
 );

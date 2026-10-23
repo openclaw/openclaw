@@ -3,6 +3,21 @@ import { en } from "./en.ts";
 
 const enLabs = {
   labsPage: {
+    swarm: {
+      title: en.labsPage.swarm.title,
+      groupTitle: "Parallel tasks",
+      defaultPhase: en.labsPage.swarm.defaultPhase,
+      progress: "{complete} of {total}",
+      active: "{running} running · {queued} queued · {failed} failed or stopped",
+      finished: "{done} completed · {failed} failed or stopped",
+      completed: "{done} completed",
+      failedOrStopped: "Failed or stopped",
+      childOutcome: "Child runs finished. Check the conversation for the final response.",
+      childOutcomeProcessing: "Child runs finished. The parent is processing their results.",
+      details: "Child details",
+      detailsUnavailable: "Child details are unavailable. Counts include all accepted workers.",
+      otherGroups: "{count} more active groups",
+    },
     configure: "Configure",
     configureFeature: "Configure {name}",
     decisionAssistance: {
@@ -73,6 +88,10 @@ const enLabs = {
 } satisfies TranslationMap;
 
 export const registerLabsEnglish = Object.assign(
-  () => Object.assign(en.labsPage, enLabs.labsPage),
+  () => {
+    const { swarm, ...labsPage } = enLabs.labsPage;
+    Object.assign(en.labsPage, labsPage);
+    Object.assign(en.labsPage.swarm, swarm);
+  },
   { catalog: enLabs },
 );

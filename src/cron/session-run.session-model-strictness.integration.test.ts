@@ -139,6 +139,8 @@ describe("stored session model selections in scheduled session turns", () => {
     storedSelection: Pick<SessionEntry, "modelOverrideSource">;
     target?: "main" | "session";
     payload?: { model?: string; fallbacks?: string[] };
+    /** A system-event job carries text only: no job model, fallbacks or model policy. */
+    payloadKind?: "systemEvent";
     storedPin?: { provider: string; model: string } | null;
     defaultPrimary?: string;
     modelAllow?: string[];
@@ -237,7 +239,10 @@ describe("stored session model selections in scheduled session turns", () => {
         sessionTarget: params.target === "main" ? "main" : `session:${sessionKey}`,
         wakeMode: "now",
         delivery: { mode: "none" },
-        payload: { kind: "agentTurn", message: "Reply.", ...params.payload },
+        payload:
+          params.payloadKind === "systemEvent"
+            ? { kind: "systemEvent", text: "Reply." }
+            : { kind: "agentTurn", message: "Reply.", ...params.payload },
         state: {},
       };
       const conversation = {
@@ -355,9 +360,37 @@ describe("stored session model selections in scheduled session turns", () => {
   );
 
   it.each([
+    { name: "user", storedSelection: { modelOverrideSource: "user" as const } },
+    { name: "legacy", storedSelection: {} },
+  ])(
+    "reports a failed $name selection in a main system-event turn instead of answering from a configured fallback",
+    async ({ storedSelection }) => {
+      const { result, requests } = await runWithFailingPinnedModel({
+        storedSelection,
+        target: "main",
+        payloadKind: "systemEvent",
+      });
+
+      expect(requests).toEqual(["pinned/model-x"]);
+      expect(result.status).toBe("error");
+      expect(result.error).toContain("Couldn't sign in to the AI service");
+    },
+  );
+
+  it.each([
     {
       name: "an automatic session selection",
       storedSelection: { modelOverrideSource: "auto" as const },
+      expected: ["pinned/model-x", "fallback/model-b"],
+    },
+    {
+      // The session has no pin, so the failing default keeps the configured chain.
+      name: "an unpinned session in a main system-event turn",
+      storedSelection: {},
+      storedPin: null,
+      defaultPrimary: "pinned/model-x",
+      target: "main" as const,
+      payloadKind: "systemEvent" as const,
       expected: ["pinned/model-x", "fallback/model-b"],
     },
     {
@@ -409,6 +442,20 @@ describe("stored session model selections in scheduled session turns", () => {
       const { result, requests } = await runWithFailingPinnedModel({
         storedSelection: {},
         storedPin: null,
+        retargetWhileAdmitting: { pin: { provider: "pinned", model: "model-x" } },
+      });
+
+      expect(requests).toEqual(["primary/model-a", "pinned/model-x"]);
+      expect(result.status).toBe("error");
+      expect(result.error).toContain("Couldn't sign in to the AI service");
+    });
+
+    it("keeps a queued main system-event turn strict once the user pins a model", async () => {
+      const { result, requests } = await runWithFailingPinnedModel({
+        storedSelection: {},
+        storedPin: null,
+        target: "main",
+        payloadKind: "systemEvent",
         retargetWhileAdmitting: { pin: { provider: "pinned", model: "model-x" } },
       });
 

@@ -899,6 +899,22 @@ Package installation does not perform operator-state migrations. Doctor and
 `openclaw update status` report pending plugin upgrades even when no update run
 exists.
 
+## Context engine plugin-ID selectors
+
+Releases before declared engine ownership stored the installing plugin's ID in
+`plugins.slots.contextEngine`. When that plugin registers a different engine
+ID, the selector never resolves and turns fall back to `legacy`. Doctor replaces
+the selector with the plugin's single declared `contextEngineIds` entry when the
+plugin is independently enabled or allowlisted and no other eligible plugin
+declares that engine. A selector that is already a declared engine ID, `legacy`,
+`none`, or an undeclared equal-ID plugin stays unchanged. With multiple declared
+engines, a disabled or denied owner, or a conflicting owner, Doctor keeps the
+selector and reports which engine ID to set. Incomplete plugin discovery skips
+the repair. Update-time Doctor applies the same rule through the normal backed-up
+config write; plugin settings and install records are not touched.
+
+See [Plugin and engine IDs](/concepts/context-engine#plugin-and-engine-ids).
+
 ## Blocked local plugins
 
 Doctor preserves the complete configuration entry and plugin policy for a local

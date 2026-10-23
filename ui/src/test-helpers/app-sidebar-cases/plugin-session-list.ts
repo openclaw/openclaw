@@ -47,6 +47,7 @@ it.each([false, true])("AppSidebar replacement sessions (delegates: %s)", async 
       actions: new Map(),
       accessories: new Map(),
       widgets: new Map(),
+      inlineViews: new Map(),
       replacements: new Map(),
     },
     selections: new Map(),

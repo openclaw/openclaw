@@ -1377,6 +1377,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/plugin-lifecycle-lease.postgres.test.ts",
   "src/infra/database-engine/session-path-alias.conformance.test.ts",
   "src/infra/database-engine/session-archive-alias.conformance.test.ts",
+  "src/infra/database-engine/outcome-surfaces.postgres.test.ts",
 ];
 
 const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);

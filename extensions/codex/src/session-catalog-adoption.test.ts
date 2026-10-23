@@ -8,6 +8,7 @@ import { createLazyCodexAppServerBindingStore } from "./app-server/session-bindi
 import { createCodexAppServerBindingStore, bindingStoreKey } from "./app-server/session-binding.js";
 import { createCodexSqliteTestBindingStateStore } from "./app-server/session-binding.sqlite.test-helpers.js";
 import { listAdoptedSessionEntries } from "./session-catalog-adoption.js";
+import * as adoptionKeys from "./session-catalog-node-adoption.js";
 import {
   commandRpcMocks,
   pinnedConnectionMocks,
@@ -239,7 +240,9 @@ it("reuses adoption preparation across catalog lists until the entry revision ch
     entriesForCatalog: () => catalogEntries,
   };
   const list = () => f.list({ sessionEntries });
+  const parseKey = vi.spyOn(adoptionKeys, "adoptionSessionKeyRest");
   expect((await list()).hosts[0]?.sessions[0]?.sessionKey).toBe(sessionKey);
+  expect(parseKey).toHaveBeenCalledExactlyOnceWith(sessionKey);
   const coldInspections = inspectedEntries;
   let result: Awaited<ReturnType<typeof list>> | undefined;
   for (let listIndex = 0; listIndex < 100; listIndex++) {
@@ -248,11 +251,13 @@ it("reuses adoption preparation across catalog lists until the entry revision ch
   const warmInspections = inspectedEntries - coldInspections;
   expect(result?.hosts[0]?.sessions[0]?.sessionKey).toBe(sessionKey);
   expect(warmInspections).toBe(0);
+  expect(parseKey).toHaveBeenCalledTimes(1);
 
   adopted.entry = { ...adopted.entry, initializationPending: true };
   sessionEntries.revision = {};
   expect((await list()).hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
   expect(inspectedEntries).toBeGreaterThan(coldInspections);
+  expect(parseKey).toHaveBeenCalledTimes(1);
 });
 
 it("reports duplicate adoption across agents before decoding a later malformed bulk row", async () => {

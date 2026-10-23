@@ -45,19 +45,22 @@ export function resolveModelFallbackOptions(
   run: FollowupRun["run"],
   config: FollowupRun["run"]["config"] = run.config,
 ) {
+  // Only agent-turn jobs pick a model; system-event turns keep the session's fallback policy.
+  const automation =
+    run.scheduledAutomation?.job.payload.kind === "agentTurn" ? run.scheduledAutomation : undefined;
   const modelFallbackAvailability = resolveModelFallbackAvailability({
     cfg: config,
     agentId: run.agentId,
     sessionKey: run.sessionKey,
     modelSelectionLocked: run.modelSelectionLocked,
-    ...(run.scheduledAutomation
+    ...(automation
       ? {
           hasSessionModelOverride: false,
           modelFallbacksOverride: resolveCronFallbacksOverride({
             cfg: config,
-            job: run.scheduledAutomation.job,
+            job: automation.job,
             agentId: run.agentId,
-            ...run.scheduledAutomation.modelFallbackPolicy,
+            ...automation.modelFallbackPolicy,
           }),
         }
       : {

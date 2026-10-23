@@ -585,6 +585,8 @@ it("retires cached branch data after canonical replacement and hydrates the new 
 it.each([
   "archived",
   "unchanged",
+  "row refresh",
+  "source",
   "grant",
   "selection",
   "literal-global",
@@ -666,6 +668,12 @@ it.each([
         );
         if (mutation === "store closure") {
           await closeOpenClawAgentDatabaseByPathAsync((await sessionSource(key)).path);
+        } else if (mutation === "row refresh") {
+          sessionChanges.emit({ agentId: "main", sessionKey: key, scope: "session-entry" });
+          await projection?.ensureMaterialized();
+        } else if (mutation === "source") {
+          await f.seed(key, f.other.id, { spawnedCwd: "/synthetic/replacement" });
+          await projection?.ensureMaterialized();
         } else if (mutation === "selection") {
           if (!projection) {
             throw new Error("Missing session projection for selection replacement");
@@ -682,10 +690,11 @@ it.each([
         held.resolve(result);
         await request;
         expect(load).toHaveBeenCalledOnce();
+        const allowed = mutation === "unchanged" || mutation === "row refresh";
         expect(respond).toHaveBeenCalledExactlyOnceWith(
-          mutation === "unchanged",
-          mutation === "unchanged" ? result : undefined,
-          mutation === "unchanged"
+          allowed,
+          allowed ? result : undefined,
+          allowed
             ? undefined
             : expect.objectContaining({
                 code: "UNAVAILABLE",
@@ -778,7 +787,7 @@ it("keeps warm default-loader SQL constant as readers join without a native row 
       expect(preparation).toHaveBeenCalledTimes(1);
       preparation.mockClear();
       await f.subscriptions.replace(f.client.connId!, [sessionKey]);
-      expect(preparation).toHaveBeenCalledTimes(2);
+      expect(preparation).not.toHaveBeenCalled();
     } finally {
       preparation.mockRestore();
     }

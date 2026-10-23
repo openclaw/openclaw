@@ -384,8 +384,10 @@ it.each([
           expect(failure).toHaveProperty("message", error);
           if (outcome === "unknown") {
             expect(failure).toHaveProperty("code", "outcome-unknown");
-            expect(renderStorageFailureSummary(classifyGatewayStorageFailure(failure))).toBe(
-              "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+            const storageOutcome = classifyGatewayStorageFailure(failure);
+            expect(storageOutcome).toBe("session_actor_reconciliation");
+            expect(renderStorageFailureSummary(storageOutcome)).toMatch(
+              /check.*history.*before trying again/i,
             );
           }
           await expect(claimWriter()).rejects.toThrow(error);

@@ -1,7 +1,7 @@
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { GatewayRetainedWorkScope } from "../../shared/async-work-scope.js";
-import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
+import { registerOpenClawStatePathAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
@@ -23,23 +23,15 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
       return work.scope.track(run);
     },
   };
-  const unregister = registerOpenClawStateDatabaseAsyncResource({
-    async close(identity) {
-      if (
-        !identity ||
-        identity.key === admission.identity.key ||
-        identity.canonicalPath === admission.identity.canonicalPath
-      ) {
-        await work.beginDrainAll();
-        if (work.hasGateways) {
-          // Read admission may retire while the Gateway still owns the close prelude.
-          work.reopen();
-        } else {
-          lifetimes.delete(key);
-          unregister();
-        }
-      }
-    },
+  const unregister = registerOpenClawStatePathAsyncResource(admission, async () => {
+    await work.beginDrainAll();
+    if (work.hasGateways) {
+      // Read admission may retire while the Gateway still owns the close prelude.
+      work.reopen();
+    } else {
+      lifetimes.delete(key);
+      unregister();
+    }
   });
   return owner;
 }

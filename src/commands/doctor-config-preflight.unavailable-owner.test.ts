@@ -19,6 +19,7 @@ import { createDoctorPluginMigrationPreparation } from "./doctor-config-prefligh
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { prepareLegacyConfigMigrationRuntime } from "./doctor/shared/legacy-config-migrate.test-support.js";
+import { inspectPluginMigrationAvailability } from "./doctor/shared/plugin-migration-availability.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
 const withHome = useDoctorConfigPreflightHome();
@@ -74,6 +75,92 @@ async function readReceipt(home: string, pluginId: string) {
 }
 
 describe("unavailable plugin migration owners", () => {
+  it("recognizes an installed mixed-case owner and settles its earlier canonical obligation", async () => {
+    await withHome(async (home) => {
+      const pluginId = "MiXeD-upgrade-proof";
+      const policyId = "mixed-upgrade-proof";
+      const root = path.join(home, ".openclaw", "extensions", policyId);
+      const config = {
+        gateway: { mode: "local" as const },
+        plugins: { entries: { [policyId]: { enabled: true } } },
+      };
+      await writeOpenClawConfig(home, config);
+      await fs.mkdir(root, { recursive: true });
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          name: "@fixture/mixed-upgrade-proof",
+          version: "1.0.0",
+          openclaw: { extensions: ["./index.cjs"] },
+        }),
+      );
+      await fs.writeFile(
+        path.join(root, "index.cjs"),
+        `module.exports = { id: "${pluginId}", register() {} };\n`,
+      );
+      await fs.writeFile(
+        path.join(root, "openclaw.plugin.json"),
+        JSON.stringify({ id: pluginId, configSchema: { type: "object" } }),
+      );
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        await seedInstalledPluginIndex(
+          {
+            [pluginId]: {
+              source: "npm",
+              spec: "@fixture/mixed-upgrade-proof@1.0.0",
+              resolvedName: "@fixture/mixed-upgrade-proof",
+              resolvedSpec: "@fixture/mixed-upgrade-proof@1.0.0",
+              version: "1.0.0",
+              installPath: root,
+            },
+          },
+          { config },
+        );
+        const available = await inspectPluginMigrationAvailability({
+          cfg: config,
+          env: process.env,
+          deferInstallation: false,
+        });
+        expect(available.pending).toEqual([]);
+        expect(available.statelessPlugins).toContainEqual({ id: pluginId, version: "1.0.0" });
+        expect(available.unavailablePluginIds).not.toContain(pluginId);
+        for (const plugins of [
+          { ...config.plugins, deny: [policyId] },
+          { ...config.plugins, entries: { [policyId]: { enabled: false } } },
+        ]) {
+          const blocked = await inspectPluginMigrationAvailability({
+            cfg: { ...config, plugins },
+            env: process.env,
+            retainedPluginIds: [policyId],
+            deferInstallation: false,
+          });
+          expect(blocked.statelessPlugins).toEqual([]);
+          expect(blocked.unavailablePluginIds).toContain(pluginId);
+        }
+
+        await recordDeferredPluginMigrations({
+          pending: [
+            {
+              pluginId: policyId,
+              reason: "Earlier upgrade",
+              command: "openclaw doctor --fix",
+              requiresStateMigration: true,
+            },
+          ],
+        });
+        const owner = await prepareMigrationOwner();
+        await owner.complete();
+        expect(readDeferredPluginMigrations()).toContainEqual(
+          expect.objectContaining({ pluginId: policyId, requiresStateMigration: true }),
+        );
+        owner.observe({ changes: [], warnings: [], completedPluginIds: [pluginId] });
+        await owner.complete();
+        expect(readDeferredPluginMigrations()).toEqual([]);
+        expect(await readReceipt(home, policyId)).toMatchObject({ status: "completed" });
+      });
+    });
+  });
+
   it.each([
     { kind: "object", value: {} },
     { kind: "array", value: [] },

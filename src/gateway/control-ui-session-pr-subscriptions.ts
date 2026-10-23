@@ -30,6 +30,7 @@ import type {
 import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
 import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
+import { yieldSessionListWork } from "./session-projection-work.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
 const CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS = 60_000;
@@ -47,7 +48,9 @@ type SubscriptionDeps = {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   prepareRead: (
     connId: string,
-    session: Pick<ControlUiSessionPullRequestsParams, "sessionKey" | "agentId">,
+    session: Pick<ControlUiSessionPullRequestsParams, "sessionKey" | "agentId"> & {
+      taskReceiptsOnly: boolean;
+    },
   ) => Promise<ControlUiSessionPrRead | undefined>;
   isConnectionActive?: (connId: string) => boolean;
   scheduler: GatewayScheduler;
@@ -195,31 +198,30 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
       }
       return undefined;
     }
-    const changed = watched.target.identity !== target.identity;
+    if (watched.target.identity === target.identity) {
+      watched.target = target;
+      return { watched, target };
+    }
     const previous = keyStates.get(watched.target.identity);
     const state = stateForTarget(target, undefined, previous);
-    if (changed) {
-      if (
-        watched.target.ownGitHubIdentity &&
-        watched.target.ownGitHubIdentity !== target.ownGitHubIdentity
-      ) {
-        invalidatePrReader(connId, deps.broadcastToConnIds);
-      }
-      removeMembership(previous, connId, sessionKey);
-      watched.deliveredHash = undefined;
+    if (
+      watched.target.ownGitHubIdentity &&
+      watched.target.ownGitHubIdentity !== target.ownGitHubIdentity
+    ) {
+      invalidatePrReader(connId, deps.broadcastToConnIds);
     }
+    removeMembership(previous, connId, sessionKey);
+    watched.deliveredHash = undefined;
     watched.target = target;
     addControlUiSessionPrMembership(state, connId, sessionKey);
-    if (changed) {
-      const replacement = scope
-        .track(() => loadSnapshot(target.identity))
-        .then(
-          () => {},
-          () => {},
-        );
-      replacements.add(replacement);
-      void replacement.finally(() => replacements.delete(replacement));
-    }
+    const replacement = scope
+      .track(() => loadSnapshot(target.identity))
+      .then(
+        () => undefined,
+        () => undefined,
+      );
+    replacements.add(replacement);
+    void replacement.finally(() => replacements.delete(replacement));
     return { watched, target };
   };
 
@@ -475,7 +477,10 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     if (
       keyStates.size === 0 ||
       (!ownAuthorityChanged && !sessionChangeScopeAffectsStoredRows(change)) ||
-      ("facts" in change && change.facts?.kind === "unchanged")
+      (!change.factsInvalidated &&
+        "facts" in change &&
+        (change.facts?.kind === "unchanged" || change.facts?.kind === "category")) ||
+      change.factsInvalidated === "category"
     ) {
       return;
     }
@@ -498,7 +503,13 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
       }
     }
     if (keys.length > 0) {
-      void scope.track(() => Promise.allSettled(keys.map(currentKeyState))).catch(() => {});
+      // Warm readers must not drain the whole audience ahead of the mutation's RPC reply.
+      void scope
+        .track(async () => {
+          await yieldSessionListWork();
+          return Promise.allSettled(keys.map(currentKeyState));
+        })
+        .catch(() => {});
     }
   });
 
@@ -581,20 +592,10 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
           let readCurrent = existingMode === receiptOnly ? previous?.readCurrent : undefined;
           let target = await readCurrent?.();
           if (!target) {
-            const preparedRead = await deps.prepareRead(normalizedConnId, session);
-            readCurrent =
-              preparedRead && receiptOnly
-                ? async () => {
-                    const current = await preparedRead();
-                    return (
-                      current && {
-                        ...current,
-                        taskReceiptsOnly: true,
-                        identity: JSON.stringify([current.identity, "receipts-only"]),
-                      }
-                    );
-                  }
-                : preparedRead;
+            readCurrent = await deps.prepareRead(normalizedConnId, {
+              ...session,
+              taskReceiptsOnly: receiptOnly,
+            });
             target = await readCurrent?.();
           }
           if (!readCurrent || !target) {

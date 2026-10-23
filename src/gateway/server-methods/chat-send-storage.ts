@@ -1,4 +1,4 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
   acquireSessionActorStorage,
   runWithSessionActorStorage,
@@ -8,6 +8,7 @@ import {
   resolveChatSendSessionKey,
   resolveRequestedSessionAgentId,
 } from "../session-request-agent.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export async function runChatSendWithStorage(
@@ -46,13 +47,10 @@ export async function runChatSendWithStorage(
     },
   );
   if (!binding) {
-    handlerOptions.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `Incognito session "${resolveChatSendSessionKey(cfg, rawKey, requested.agentId)}" was not found.`,
-      ),
+    respondError(
+      handlerOptions.respond,
+      ErrorCodes.INVALID_REQUEST,
+      `Incognito session "${resolveChatSendSessionKey(cfg, rawKey, requested.agentId)}" was not found.`,
     );
     return;
   }

@@ -127,11 +127,13 @@ it("retains storage guidance when ACP entry rollback loses native settlement", (
       ).rejects.toSatisfy((error: unknown) => {
         expect(formatErrorMessageWithCode(error)).toContain(storageError.message);
         expect(formatErrorMessageWithCode(error)).toContain(settlementError.message);
+        const storageOutcome = classifyGatewayStorageFailure(error);
+        expect(storageOutcome).toBe("session_actor_reconciliation");
         expect(
           renderAssistantRequestFailureCopy({
-            storageFailure: classifyGatewayStorageFailure(error),
+            storageFailure: storageOutcome,
           }),
-        ).toContain("disk is full. Free up space");
+        ).toMatch(/check.*history.*before trying again/i);
         return true;
       });
     } finally {

@@ -6,10 +6,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AGENT_FTS_SCHEMAS as schemas } from "../state/openclaw-agent-fts-schema.js";
 import { installSqliteFtsTokenizerMismatch } from "./sqlite-index-corruption.test-support.js";
 import { repairDoctorSqliteIndexCorruption as repairDoctor } from "./sqlite-index-recovery.js";
-import {
-  classifySqliteFtsIntegrityFindings as classify,
-  repairSqliteIndexCorruption as repair,
-} from "./sqlite-index-schema.js";
+import { repairSqliteIndexCorruption as repair } from "./sqlite-index-schema.js";
+import { classifySqliteFtsIntegrityFindings as classify } from "./sqlite-integrity.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const tables = ["memory_index_chunks_fts", "session_transcript_fts"];

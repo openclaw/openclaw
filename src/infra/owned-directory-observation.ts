@@ -145,13 +145,15 @@ function attach(directory: Directory) {
               return;
             }
             const affected = [...source.directories];
-            const changedPath = filename ? path.resolve(candidate, filename) : undefined;
+            const renamedRoot =
+              event === "rename" && (!filename || filename === path.basename(candidate));
+            let changedPath: string | undefined;
             for (const entry of affected) {
               if (
                 entry.path === candidate ||
-                !changedPath ||
-                (event === "rename" && filename === path.basename(candidate)) ||
-                isPathInside(entry.path, changedPath) ||
+                !filename ||
+                renamedRoot ||
+                isPathInside(entry.path, (changedPath ??= path.resolve(candidate, filename))) ||
                 isPathInside(changedPath, entry.path)
               ) {
                 notify(entry, entry.path === candidate ? filename : undefined);
@@ -160,16 +162,15 @@ function attach(directory: Directory) {
             // A renamed directory's watcher can remain bound to its retired inode.
             // Child-file renames do not retire the directory or its queued events.
             if (event === "rename") {
-              const renamedRoot = !filename || filename === path.basename(candidate);
               // An absent directory waits on its nearest ancestor. Only the next segment
               // toward it can move that attach point; closing a native watch for other
               // children (SQLite sidecars) can block the main thread for seconds on macOS.
               const readmit = affected.filter(
-                (entry) =>
+                ({ watchRoot }) =>
                   renamedRoot ||
-                  (entry.watchRoot !== candidate &&
-                    changedPath !== undefined &&
-                    isPathInside(changedPath, entry.watchRoot)),
+                  (watchRoot !== candidate &&
+                    filename !== undefined &&
+                    isPathInside((changedPath ??= path.resolve(candidate, filename)), watchRoot)),
               );
               for (const entry of readmit) {
                 detach(entry);

@@ -7,7 +7,10 @@ import { listen } from "../../lib/reactive/listener.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { BrowserPanelHost } from "./browser-panel-operation-ownership.ts";
 
-interface BrowserPanelNativePresentationHost {
+let presentationOrder = 0;
+
+/** The web panel owns geometry and occlusion; native owns the actual views. */
+export function createBrowserPanelNativePresentation(controller: {
   readonly host: Pick<
     BrowserPanelHost,
     "isConnected" | "browserPanelIsOpen" | "renderRoot" | "sessionKey"
@@ -16,14 +19,7 @@ interface BrowserPanelNativePresentationHost {
   readonly activeTargetId: string | null;
   readonly mode: "interact" | "annotate" | "inspect";
   reportError(error: unknown): void;
-}
-
-let presentationOrder = 0;
-
-/** The web panel owns geometry and occlusion; native owns the actual views. */
-export function createBrowserPanelNativePresentation(
-  controller: BrowserPanelNativePresentationHost,
-) {
+}) {
   // Every panel has a scope, including insecure HTTP origins without randomUUID.
   const scope = generateUUID();
   let presentedTabId: string | null = null;

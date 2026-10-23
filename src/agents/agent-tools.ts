@@ -14,6 +14,7 @@
  */
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
+import { readScheduledToolTargets } from "../cron/execution-context-registry.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
@@ -441,6 +442,7 @@ function* assembleOpenClawCodingTools(
             gatewayCallerChannel: gatewayCaller.channel,
             gatewayCallerLocal: gatewayCaller.local,
             gatewayCallerScheduled: gatewayCaller.scheduled,
+            scheduledToolTargets: readScheduledToolTargets(options),
             admitScheduledMessageInvocation: options?.messageActionTurnCapability
               ? messageInvocationPolicy.admit
               : undefined,

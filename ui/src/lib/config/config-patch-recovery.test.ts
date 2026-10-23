@@ -4,6 +4,7 @@ import { isGatewayProtocolResponseError } from "@openclaw/gateway-client/browser
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { configRawForDisplay } from "./config-draft-model.ts";
 import {
   expectFeedback,
   configServerTransport,
@@ -343,7 +344,7 @@ describe("config patch recovery", () => {
       const patch = runtimeConfig.patch(disableFeature);
       await patchStarted.promise;
       editCount(3);
-      const draftRaw = state.configRaw;
+      const draftRaw = configRawForDisplay(state);
       await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
       releasePatch.resolve();
       await expect(patch).resolves.toBe(true);
@@ -354,8 +355,8 @@ describe("config patch recovery", () => {
         lastError: expect.stringContaining(CONFLICT),
         configFormDirty: true,
         configFormMode: mode,
-        configRaw: draftRaw,
       });
+      expect(configRawForDisplay(state)).toBe(draftRaw);
       expect(state.configFormOriginal).toEqual({ count: 1 });
       expect(state.configDraftBaseHash).toBe("hash-3");
       expectCalls(request, "config.set", 1);

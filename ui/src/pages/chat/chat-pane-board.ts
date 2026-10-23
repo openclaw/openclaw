@@ -584,13 +584,13 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   private pageBoardWidget(layout: SidebarLayout | undefined, board: ResolvedBoardView) {
+    // Eligibility belongs to the loaded snapshot, not the lazy renderer registration.
     if (
       !layout ||
       !this.state ||
       !selectedChatSessionRow(this.state) ||
       !this.visuallyPresented ||
       !board.provider.hasLoadedSnapshot ||
-      !customElements.get("openclaw-board-view") ||
       !isSidebarSlotVisible(layout, "dashboard")
     ) {
       return undefined;

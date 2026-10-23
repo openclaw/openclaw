@@ -211,6 +211,14 @@ function NativeNotificationSection(props: {
   );
 }
 
+const renderWebPushError = (error: () => unknown) => (
+  <div class="settings-row">
+    <div class="settings-row__text">
+      <span class="cfg-field__error">{formatUiError(error())}</span>
+    </div>
+  </div>
+);
+
 function WebPushSection(props: {
   push: NonNullable<NotificationsSectionProps["webPush"]>;
   actions: NotificationsSectionProps;
@@ -404,29 +412,13 @@ function WebPushSection(props: {
             </div>
           </div>
         </Show>
-        <Errored
-          fallback={(error) => (
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <span class="cfg-field__error">{formatUiError(error())}</span>
-              </div>
-            </div>
-          )}
-        >
+        <Errored fallback={renderWebPushError}>
           <Loading on={props.push.command} fallback={null}>
             {(commandOutcome(), null)}
           </Loading>
         </Errored>
       </NotificationSection>
-      <Errored
-        fallback={(error) => (
-          <div class="settings-row">
-            <div class="settings-row__text">
-              <span class="cfg-field__error">{formatUiError(error())}</span>
-            </div>
-          </div>
-        )}
-      >
+      <Errored fallback={renderWebPushError}>
         <Loading on={props.push.read} fallback={null}>
           <Show when={props.push.canReadPreferences ? latest(preferences) : (read(), undefined)}>
             {(current) => (

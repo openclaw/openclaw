@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type {
   SessionActor,
   SessionActorAppend,
@@ -104,7 +105,7 @@ export async function appendSessionManagerActor(input: {
     if (outcome.error.name === "SqliteTranscriptMutationConflictError") {
       throw new SqliteTranscriptMutationConflictError(append.input.scope.sessionId);
     }
-    throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
+    throw toErrorObject(outcome.error, outcome.error.message);
   }
   return finish(
     outcome,

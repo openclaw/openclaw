@@ -1,5 +1,6 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { createMemo, createStore, onSettled } from "solid-js";
+import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-document.ts";
 import {
   BOARD_GRID_COLUMNS,
   BOARD_GRID_GAP,
@@ -24,6 +25,8 @@ import type {
   BoardWidgetCellProps,
 } from "./board-widget-cell-options.ts";
 import { boardWidgetPresentationReady } from "./board-widget-cell.solid.tsx";
+
+registerBoardDocumentEnglish();
 
 type BoardPointerGesture = {
   mode: "move" | "resize";

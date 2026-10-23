@@ -15,6 +15,7 @@ import {
   useNoBundledPlugins,
 } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { projectPluginContributions } from "../plugins/registry-contributions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../plugins/registry-inspection.test-support.js";
@@ -23,6 +24,7 @@ import { createPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope as withRegistry } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { bindPluginRuntimeLoadContextState } from "../plugins/runtime/load-context-state.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -379,3 +381,29 @@ it.each([
     }
   },
 );
+
+// A retained or full-only factory cannot bypass the target generation's selected owner.
+it.each(["adopt", "retain"] as const)("enforces prepared ownership during %s", (operation) => {
+  const root = registryWithPluginEngine();
+  for (const owner of ["plugin:new-owner", "plugin:ce-probe", null]) {
+    const target = createEmptyPluginRegistry();
+    target.plugins.push(...root.plugins);
+    bindPluginRuntimeLoadContextState(target, {
+      workspaceDir: undefined,
+      rawConfig: {},
+      activationInputFingerprint: "synthetic",
+      controlPlaneFingerprint: "synthetic",
+      registrationConfigKey: "synthetic",
+      declaredProviderOwners: new Map(),
+      selectedContextEngine: { engineId: "ce-probe", owner },
+    });
+    let result = target;
+    if (operation === "adopt") {
+      result = adoptRuntimeContextEngineRegistrations(target, root);
+    } else {
+      projectPluginContributions(root, root.plugins[0]!, target);
+    }
+    expect(result.contextEngines.has("ce-probe")).toBe(owner === "plugin:ce-probe");
+    expect(root.contextEngines.has("ce-probe")).toBe(true);
+  }
+});

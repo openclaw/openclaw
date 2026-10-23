@@ -85,6 +85,51 @@ function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string):
     .join("\n");
 }
 
+function appendCodeSafetySummaryFindings(
+  findings: SecurityAuditFinding[],
+  summary: SkillScanSummary,
+  kind: "plugins" | "skills",
+  name: string,
+  rootDir: string,
+): void {
+  const skill = kind === "skills";
+  const label = `${skill ? "Skill" : "Plugin"} "${name}"`;
+  const checkId = `${kind}.code_safety`;
+  if (summary.truncated) {
+    findings.push({
+      checkId: `${checkId}.scan_truncated`,
+      severity: "warn",
+      title: `${label} code scan is incomplete`,
+      detail: `Static code scan reached its file or directory-entry budget under ${rootDir}. Some files were not checked.`,
+      remediation:
+        "Review the remaining files manually; this bounded scan is not a full code audit.",
+    });
+  }
+
+  const severity = summary.critical > 0 ? "critical" : summary.warn > 0 ? "warn" : undefined;
+  if (!severity) {
+    return;
+  }
+  const details = formatCodeSafetyDetails(
+    summary.findings.filter((finding) => finding.severity === severity),
+    rootDir,
+  );
+  const critical = severity === "critical";
+  findings.push({
+    checkId,
+    severity,
+    title: `${label} contains ${critical ? "dangerous" : "suspicious"} code patterns`,
+    detail: `Found ${summary[severity]} ${critical ? "critical issue(s)" : "warning(s)"} in ${summary.scannedFiles} scanned file(s)${skill ? ` under ${rootDir}` : ""}:\n${details}`,
+    remediation: critical
+      ? skill
+        ? `Review the skill source code before use. If untrusted, remove "${rootDir}".`
+        : "Review the plugin source code carefully before use. If untrusted, remove the plugin from your OpenClaw extensions state directory."
+      : skill
+        ? "Check that the behavior in flagged lines is intentional and safe."
+        : "Check that the flagged code is intentional and safe.",
+  });
+}
+
 async function getCodeSafetySummary(params: {
   dirPath: string;
   includeFiles?: string[];
@@ -226,34 +271,7 @@ export async function collectPluginsCodeSafetyFindings(params: {
     if (!summary) {
       continue;
     }
-    if (summary.truncated) {
-      findings.push({
-        checkId: "plugins.code_safety.scan_truncated",
-        severity: "warn",
-        title: `Plugin "${pluginName}" code scan is incomplete`,
-        detail: `Static code scan reached its file or directory-entry budget under ${pluginPath}. Some files were not checked.`,
-        remediation:
-          "Review the remaining files manually; this bounded scan is not a full code audit.",
-      });
-    }
-
-    const severity = summary.critical > 0 ? "critical" : summary.warn > 0 ? "warn" : undefined;
-    if (severity) {
-      const details = formatCodeSafetyDetails(
-        summary.findings.filter((finding) => finding.severity === severity),
-        pluginPath,
-      );
-      const critical = severity === "critical";
-      findings.push({
-        checkId: "plugins.code_safety",
-        severity,
-        title: `Plugin "${pluginName}" contains ${critical ? "dangerous" : "suspicious"} code patterns`,
-        detail: `Found ${summary[severity]} ${critical ? "critical issue(s)" : "warning(s)"} in ${summary.scannedFiles} scanned file(s):\n${details}`,
-        remediation: critical
-          ? "Review the plugin source code carefully before use. If untrusted, remove the plugin from your OpenClaw extensions state directory."
-          : "Check that the flagged code is intentional and safe.",
-      });
-    }
+    appendCodeSafetySummaryFindings(findings, summary, "plugins", pluginName, pluginPath);
   }
 
   return findings;
@@ -350,34 +368,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
     if (!summary) {
       continue;
     }
-    if (summary.truncated) {
-      findings.push({
-        checkId: "skills.code_safety.scan_truncated",
-        severity: "warn",
-        title: `Skill "${skillName}" code scan is incomplete`,
-        detail: `Static code scan reached its file or directory-entry budget under ${skillDir}. Some files were not checked.`,
-        remediation:
-          "Review the remaining files manually; this bounded scan is not a full code audit.",
-      });
-    }
-
-    const severity = summary.critical > 0 ? "critical" : summary.warn > 0 ? "warn" : undefined;
-    if (severity) {
-      const details = formatCodeSafetyDetails(
-        summary.findings.filter((finding) => finding.severity === severity),
-        skillDir,
-      );
-      const critical = severity === "critical";
-      findings.push({
-        checkId: "skills.code_safety",
-        severity,
-        title: `Skill "${skillName}" contains ${critical ? "dangerous" : "suspicious"} code patterns`,
-        detail: `Found ${summary[severity]} ${critical ? "critical issue(s)" : "warning(s)"} in ${summary.scannedFiles} scanned file(s) under ${skillDir}:\n${details}`,
-        remediation: critical
-          ? `Review the skill source code before use. If untrusted, remove "${skillDir}".`
-          : "Check that the behavior in flagged lines is intentional and safe.",
-      });
-    }
+    appendCodeSafetySummaryFindings(findings, summary, "skills", skillName, skillDir);
   }
 
   return findings;

@@ -274,6 +274,8 @@ function* createOpenClawToolsSteps(
     });
   const trimmedRunSessionKey = options?.runSessionKey?.trim();
   const requesterSessionKey = trimmedRunSessionKey || options?.agentSessionKey;
+  // A scheduled run's execution context names the session its board belongs to.
+  const scheduledTargets = options?.scheduledToolTargets;
   const mediaGenerationAgentSessionKey =
     trimmedRunSessionKey && isCronRunSessionKey(trimmedRunSessionKey)
       ? trimmedRunSessionKey
@@ -419,15 +421,19 @@ function* createOpenClawToolsSteps(
     allowlist: options?.runtimeToolAllowlist,
     denylist: explicitFactoryDenylist,
   });
+  const widgetBoardSessionKey = scheduledTargets?.boardSessionKey ?? sessionKey;
   // Admitted Control UI recovery and explicitly capped scheduled turns can
   // keep authoring their durable board without claiming an inline renderer.
+  // A run admitted with scheduled tool targets is a scheduled turn on every runtime.
+  const scheduledCaller =
+    options?.gatewayCallerScheduled === true || scheduledTargets !== undefined;
   const pinnedWidgetOnly =
     (options?.pinnedWidgetAuthoring === true ||
-      (options?.gatewayCallerScheduled === true && scheduledWidgetExplicitlyAllowed)) &&
+      (scheduledCaller && scheduledWidgetExplicitlyAllowed)) &&
     !inlineWidgetClientAvailable &&
     !currentChannelWidgetPresenter &&
-    Boolean(sessionKey) &&
-    !isCronRunSessionKey(sessionKey);
+    Boolean(widgetBoardSessionKey) &&
+    !isCronRunSessionKey(widgetBoardSessionKey);
   const includeMessageTool =
     !embedded ||
     options?.sourceReplyDeliveryMode === "message_tool_only" ||
@@ -461,7 +467,9 @@ function* createOpenClawToolsSteps(
   const tools: AnyAgentTool[] = [
     ...createInstalledSkillTools(options?.installedSkills ?? []),
     createDashboardTool({
-      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      agentSessionKey:
+        scheduledTargets?.boardSessionKey ?? options?.runSessionKey ?? options?.agentSessionKey,
+      assertTargetCurrent: scheduledTargets?.assertCurrent,
       agentId: sessionAgentId,
     }),
     ...(embedded
@@ -533,7 +541,8 @@ function* createOpenClawToolsSteps(
       : createShowWidgetTool({
           sessionId: options?.sessionId,
           agentId: sessionAgentId,
-          agentSessionKey: sessionKey,
+          agentSessionKey: widgetBoardSessionKey,
+          assertTargetCurrent: scheduledTargets?.assertCurrent,
           inlineHostEnabled: isCoreCanvasHostEnabled(resolvedConfig),
           inlineClientAvailable: inlineWidgetClientAvailable,
           pinnedOnly: pinnedWidgetOnly,

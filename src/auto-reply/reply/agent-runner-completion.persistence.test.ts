@@ -333,8 +333,10 @@ it.each(["publication-failure", "unknown-commit", "unknown-storage-commit"] as c
       );
       if (failure === "unknown-storage-commit") {
         expect(error).toHaveProperty("code", "outcome-unknown");
-        expect(renderStorageFailureSummary(classifyGatewayStorageFailure(error))).toBe(
-          "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+        const storageOutcome = classifyGatewayStorageFailure(error);
+        expect(storageOutcome).toBe("session_actor_reconciliation");
+        expect(renderStorageFailureSummary(storageOutcome)).toMatch(
+          /check.*history.*before trying again/i,
         );
       }
       expect(
@@ -376,8 +378,10 @@ it("preserves storage guidance when queued activity loses its commit reply", asy
       publish,
     ).catch((caughtError: unknown) => caughtError);
     expect(error).toHaveProperty("code", "outcome-unknown");
-    expect(renderStorageFailureSummary(classifyGatewayStorageFailure(error))).toBe(
-      "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+    const storageOutcome = classifyGatewayStorageFailure(error);
+    expect(storageOutcome).toBe("session_actor_reconciliation");
+    expect(renderStorageFailureSummary(storageOutcome)).toMatch(
+      /check.*history.*before trying again/i,
     );
     expect(observer.commands.filter((command) => command === "session.actor.patch")).toHaveLength(
       1,

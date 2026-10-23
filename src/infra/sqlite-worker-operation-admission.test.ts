@@ -237,7 +237,8 @@ it.each(["same", "different"])("holds schema authority only for the %s database"
   const revoked = new Error("Database owner revoked");
   let current = true;
   const release = vi.fn();
-  const acquireSchema = vi.fn(() => ({ assertCurrent() {}, release }));
+  const assertCurrent = vi.fn();
+  const acquireSchema = vi.fn(() => ({ assertCurrent, release }));
   const admit = vi.fn((_request: SqliteWorkerAdmissionRequest, grant: () => boolean) => grant());
   const admission = admissionFixture(admit);
   bindAuthority(admission, databasePath, {
@@ -265,6 +266,8 @@ it.each(["same", "different"])("holds schema authority only for the %s database"
     expect(requestSchema(databasePath)).toBe(true);
     requestAdmission({ stage: "transaction", facts: "ordinary write" });
     current = false;
+    expect(() => requestSchema(databasePath)).toThrow("SQLite transaction admission was refused");
+    expect(assertCurrent).toHaveBeenCalledTimes(2);
     expect(() => requestAdmission({ stage: "commit", facts: "revoked write" })).toThrow(
       "SQLite transaction admission was refused",
     );

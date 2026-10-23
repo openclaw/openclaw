@@ -666,6 +666,7 @@ export const describe1BeforeEach0 = () => {
 };
 
 export const describe2BeforeEach0 = () => {
+  controllerTesting.resetSessionControllerForTest();
   // This suite swaps global registries between cases; keep each request on a live
   // snapshot so later retirement cannot invalidate the dispatch under test.
   const activeRegistry = getActivePluginRegistry();

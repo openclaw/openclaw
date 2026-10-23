@@ -1,7 +1,10 @@
 import { createSignal, onSettled } from "solid-js";
+import { registerApprovalsEnglish } from "../i18n/locales/en-approvals.ts";
 import { formatCountdown } from "../lib/format.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
+
+registerEnglishCatalog(registerApprovalsEnglish);
 
 export function approvalRemainingLabel(expiresAtMs: number, nowMs: number): string {
   return expiresAtMs > nowMs

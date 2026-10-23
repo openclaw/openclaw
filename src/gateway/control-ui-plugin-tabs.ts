@@ -71,7 +71,19 @@ function visibleDescriptors(
 export function listControlUiPluginDescriptors(
   scopes: readonly string[],
 ): WireControlUiDescriptor[] {
-  return visibleDescriptors(getPluginRegistryForContext()?.controlUiDescriptors ?? [], scopes)
+  const registry = getPluginRegistryForContext();
+  return visibleDescriptors(registry?.controlUiDescriptors ?? [], scopes)
+    .filter(
+      (entry) =>
+        entry.descriptor.surface !== "inline" ||
+        registry?.plugins.some(
+          (plugin) =>
+            plugin.id === entry.pluginId &&
+            plugin.enabled &&
+            plugin.status === "loaded" &&
+            isControlUiPluginAllowed(plugin),
+        ),
+    )
     .map(({ pluginId, pluginName, descriptor }) => ({
       pluginId,
       pluginName,
@@ -82,6 +94,7 @@ export function listControlUiPluginDescriptors(
       description: descriptor.description,
       placement: descriptor.placement,
       schema: descriptor.schema,
+      version: descriptor.version,
       requiredScopes: descriptor.requiredScopes,
       icon: descriptor.icon,
       path: descriptor.path,

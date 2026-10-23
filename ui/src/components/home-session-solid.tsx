@@ -1,8 +1,9 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { formatChatWorkContext } from "../../../src/chat/work-context.js";
+import { registerAssistantContextEnglish } from "../i18n/locales/en-assistant-context.ts";
 import { useApplication } from "../lib/reactive/context.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import "../pages/chat/chat-pane.tsx";
@@ -10,6 +11,8 @@ import "../styles/chat.ts";
 import "../styles/chat/composer.css";
 import "../styles/chat/composer-status.css";
 import { Icon } from "./solid/icon.tsx";
+
+registerEnglishCatalog(registerAssistantContextEnglish);
 
 type Props = { sessionKey: string; agentId: string; workContext: ChatWorkContext };
 

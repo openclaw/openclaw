@@ -10,12 +10,10 @@ import {
   sliceMarkdownIR,
 } from "openclaw/plugin-sdk/text-chunking";
 
-type SignalTextStyle = "BOLD" | "ITALIC" | "STRIKETHROUGH" | "MONOSPACE" | "SPOILER";
-
 export type SignalTextStyleRange = {
   start: number;
   length: number;
-  style: SignalTextStyle;
+  style: "BOLD" | "ITALIC" | "STRIKETHROUGH" | "MONOSPACE" | "SPOILER";
 };
 
 export type SignalFormattedText = {

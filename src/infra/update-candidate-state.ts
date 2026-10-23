@@ -563,6 +563,7 @@ export async function snapshotUpdateCandidateState(
   },
 ): Promise<z.infer<typeof UpdateCandidateStateSnapshotSchema>> {
   const { createVerifiedSqliteSnapshot } = await import("./sqlite-snapshot.js");
+  const { AGENT_FTS_SCHEMAS } = await import("../state/openclaw-agent-fts-schema.js");
   const { copyUpdateCandidatePlugins, UpdateCandidatePluginPlanSchema } =
     await import("./update-candidate-plugins.js");
   const plugins = UpdateCandidatePluginPlanSchema.parse(
@@ -646,6 +647,9 @@ export async function snapshotUpdateCandidateState(
                 file === shared
                   ? ["migration_sources", ...leaseTables, "agent_databases"]
                   : undefined,
+              // A SQLite upgrade can make owned FTS indexes look malformed; the
+              // candidate's agent database admission rebuilds them.
+              ftsSchemas: AGENT_FTS_SCHEMAS,
             }
           : undefined,
       // The rehearsal is private and disposable; compaction would create another

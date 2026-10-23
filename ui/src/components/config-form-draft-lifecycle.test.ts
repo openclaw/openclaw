@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   disposeConfigFormFixture,
   renderArrayFixture,
-  renderJsonTextareaFixture,
   renderNodeFixture,
   renderTextInputFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
@@ -32,8 +31,11 @@ describe("config form draft lifetimes", () => {
     (kind) => {
       const onPatch = vi.fn();
       const render = (replaced: boolean) =>
-        (kind === "scalar" ? renderTextInputFixture : renderJsonTextareaFixture)(container, {
-          schema: kind === "scalar" ? { type: "string", minLength: 3 } : { type: "object" },
+        (kind === "scalar" ? renderTextInputFixture : renderNodeFixture)(container, {
+          schema:
+            kind === "scalar"
+              ? { type: "string", minLength: 3 }
+              : { anyOf: [{ type: "object" }, { type: "array" }] },
           value: kind === "scalar" ? (replaced ? "remote" : "local") : { enabled: !replaced },
           sourceIdentity: kind === "scalar" ? {} : undefined,
           path: ["value"],

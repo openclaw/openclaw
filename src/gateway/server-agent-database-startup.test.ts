@@ -197,6 +197,7 @@ it.for([
     const checkHostJournalReads = outcome === "recover" && !holdSubagentRestoration;
     const restorationEntered = createDeferredCore();
     const restorationRelease = createDeferredCore();
+    const initialRecoveryReady = createDeferredCore();
     let startupSettled = false;
     let recoverySource: OpenClawConfig | undefined;
     let bootstrapSecrets: ReturnType<typeof getActiveSecretsRuntimeSnapshot> | undefined;
@@ -204,8 +205,17 @@ it.for([
     if (holdSubagentRestoration) {
       vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", undefined);
       const startPostAttach = postAttach.startGatewayPostAttachRuntime;
-      vi.spyOn(postAttach, "startGatewayPostAttachRuntime").mockImplementation(async (...args) => {
-        const runtime = await startPostAttach(...args);
+      vi.spyOn(postAttach, "startGatewayPostAttachRuntime").mockImplementation(async (params) => {
+        const unlockStartupMethods = params.unlockStartupMethods;
+        const runtime = await startPostAttach({
+          ...params,
+          unlockStartupMethods: (options) => {
+            unlockStartupMethods(options);
+            if (!options?.keepChatSendUnavailable) {
+              initialRecoveryReady.resolve();
+            }
+          },
+        });
         subagentRecoverySettled = runtime.subagentRecoverySettled;
         return runtime;
       });
@@ -217,8 +227,8 @@ it.for([
       vi.spyOn(subagents, "activateSubagentRegistry").mockImplementation(() => {
         restorationEntered.resolve();
         return {
-          initial: restorationRelease.promise,
-          pending: new Map(),
+          initial: Promise.resolve(),
+          pending: new Map([["worker", restorationRelease.promise]]),
           settled: restorationRelease.promise,
         };
       });
@@ -518,10 +528,12 @@ it.for([
       // Sidecar settlement can precede the unpaused sibling's database admission.
       await waitForHealthyAgent();
       expect(readAgentDatabaseAdmissionRefusal(healthyAgentId, { env })).toBeUndefined();
+      if (holdSubagentRestoration) {
+        // startupSettled does not join the independent initial-recovery admission signal.
+        await withinTest(initialRecoveryReady.promise, signal);
+      }
       const readiness = await probeGateway(port, "/readyz");
-      expect(readiness.status).toBe(
-        (agentId === "main" && paused) || holdSubagentRestoration ? 503 : 200,
-      );
+      expect(readiness.status).toBe(agentId === "main" && paused ? 503 : 200);
       if (agentId === "main" && paused) {
         await expect(readiness.json()).resolves.toMatchObject({
           ready: false,
@@ -709,15 +721,16 @@ it.for([
           false,
         );
         if (holdSubagentRestoration) {
-          // Fresh chat waits for restored sources even after database readiness.
+          // The optional worker stays gated without making the healthy Gateway unready.
           await withinTest(restorationEntered.promise, signal);
           expect(startupSettled).toBe(true);
           const recoveringReadiness = await probeGateway(port, "/readyz");
-          expect(recoveringReadiness.status).toBe(503);
+          expect(recoveringReadiness.status).toBe(200);
           await expect(recoveringReadiness.json()).resolves.toMatchObject({
-            ready: false,
-            coreReady: false,
-            failing: ["chat-recovery"],
+            ready: true,
+            coreReady: true,
+            failing: [],
+            agentRecovery: ["worker"],
           });
           expect(await rpcReq(chatClient!, "chat.send", chatParams)).toMatchObject({
             ok: false,

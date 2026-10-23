@@ -1,7 +1,9 @@
 import { getEventListeners } from "node:events";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createRetainedCache } from "../infra/retained-cache.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -81,6 +83,41 @@ function expectSessions(
 }
 
 describe("control UI session PR subscriptions", () => {
+  it.each([
+    { facts: "category", invalidated: undefined, refresh: false },
+    { facts: undefined, invalidated: "category", refresh: false },
+    { facts: "category", invalidated: true, refresh: true },
+    { facts: "unchanged", invalidated: true, refresh: true },
+  ] as const)(
+    "refreshes=$refresh for facts=$facts, invalidated=$invalidated",
+    async ({ facts, invalidated, refresh }) => {
+      const readSource = createTestSessionPrReadSource();
+      const readCurrent = vi.fn(async () => ({
+        sessionId: "session-id",
+        params: { sessionKey: "session", agentId: "main" },
+        identity: "session",
+        readSource,
+        source: null,
+        taskReceipts: { sessions: [] },
+      }));
+      const active = start({ prepareRead: async () => readCurrent, load: async () => READY });
+      await active.replace("reader", ["session"]);
+      readCurrent.mockClear();
+      broadcastToConnIds.mockClear();
+      sessionChanges.emit({
+        sessionKey: "session",
+        facts:
+          facts === "category"
+            ? { kind: facts, sessionId: "session-id", category: "work" }
+            : facts && { kind: facts },
+        factsInvalidated: invalidated,
+      });
+      await nextEventLoopTurn();
+      expect(readCurrent.mock.calls.length > 0).toBe(refresh);
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { cleanup: "stop", failing: true },
     { cleanup: "disconnect", failing: false },

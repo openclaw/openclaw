@@ -117,6 +117,7 @@ const { values } = parseArgs({
     "duration-ms": { type: "string", default: "3600000" },
     "warmup-ms": { type: "string", default: "300000" },
     "round-interval-ms": { type: "string", default: "15000" },
+    "rpc-interval-ms": { type: "string", default: "0" },
     "soak-rounds": { type: "string" },
     "memory-interval-ms": { type: "string", default: "60000" },
     "retained-profile-ms": { type: "string", default: "600000" },
@@ -179,10 +180,11 @@ if (
     "session-idle-retention",
     "memory-soak",
     "plugins.reload",
+    "plugin.scope",
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, sessions.describe, sessions.patch, sessions.cleanup, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, or plugins.reload",
+    "--scenario must be sessions.list, sessions.describe, sessions.patch, sessions.cleanup, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, plugins.reload, or plugin.scope",
   );
 }
 const retentionScenario = scenario === "attempt-retention";
@@ -247,6 +249,7 @@ if (
   !values["operator-access-policy"] &&
   !(["sessions.list", "sessions.patch"].includes(scenario) && values["capture-responses"]) &&
   scenario !== "transcript-broadcast" &&
+  scenario !== "plugin.scope" &&
   !retentionScenario &&
   !idleScenario &&
   !soakScenario
@@ -329,6 +332,7 @@ const rounds = integer(values.rounds, "--rounds");
 const durationMs = integer(values["duration-ms"], "--duration-ms");
 const warmupMs = integer(values["warmup-ms"], "--warmup-ms", 0);
 const roundIntervalMs = integer(values["round-interval-ms"], "--round-interval-ms");
+const rpcIntervalMs = integer(values["rpc-interval-ms"], "--rpc-interval-ms", 0);
 const soakRounds =
   values["soak-rounds"] === undefined ? undefined : integer(values["soak-rounds"], "--soak-rounds");
 if (soakRounds !== undefined && !soakScenario) {
@@ -782,9 +786,36 @@ globalThis.fetch = async (input, options) => {
   );
 }
 let reloadPluginId: string | undefined;
-if (scenario === "plugins.reload") {
+let scopePluginId: string | undefined;
+if (scenario === "plugins.reload" || scenario === "plugin.scope") {
   const plugin = writePluginFixtures(output, { count: 1, activationOnStartup: true });
-  reloadPluginId = plugin.pluginIds[0];
+  if (scenario === "plugins.reload") {
+    reloadPluginId = plugin.pluginIds[0];
+  } else {
+    scopePluginId = plugin.pluginIds[0];
+    const pluginSource = path.join(plugin.pluginsDir, scopePluginId!, "index.cjs");
+    writeFileSync(
+      pluginSource,
+      `const { getPluginRuntimeGatewayRequestScope } = require("openclaw/plugin-sdk/plugin-runtime");
+const id = ${JSON.stringify(scopePluginId)};
+const source = ${JSON.stringify(pluginSource)};
+function currentScope() {
+  const scope = getPluginRuntimeGatewayRequestScope();
+  if (scope?.pluginId !== id || scope.pluginSource !== source || !scope.pluginOrigin ||
+      !scope.pluginRegistry || !scope.client) throw new Error("Synthetic plugin scope is missing");
+  return scope;
+}
+module.exports = { id, register(api) {
+  api.registerGatewayMethod("benchmark.pluginScope", async ({ params, respond }) => {
+    const before = currentScope();
+    await Promise.resolve();
+    const after = currentScope();
+    if (before !== after) throw new Error("Synthetic plugin scope changed across await");
+    respond(true, { pluginId: id, sequence: params.sequence, scopeVerified: true });
+  }, { scope: "operator.read" });
+} };\n`,
+    );
+  }
   cfg.plugins = {
     ...cfg.plugins,
     enabled: true,
@@ -3606,7 +3637,7 @@ try {
       validateDashboardRpc(method, await rpc(sender, method, params));
     }
   }
-  if (reloadPluginId) {
+  if (reloadPluginId || scopePluginId) {
     writeFileSync(
       path.join(output, "plugin-inventory.json"),
       JSON.stringify(await rpc(sender, "plugins.list", {}), null, 2),
@@ -3777,6 +3808,17 @@ try {
               ) {
                 throw new Error("sessions.cleanup did not preserve the warning-mode fixture");
               }
+            } else if (scenario === "plugin.scope") {
+              const sequence = offset + index;
+              const result = await rpc(workerClient, "benchmark.pluginScope", { sequence });
+              if (
+                !isRecord(result) ||
+                result.pluginId !== scopePluginId ||
+                result.sequence !== sequence ||
+                result.scopeVerified !== true
+              ) {
+                throw new Error("synthetic plugin RPC did not preserve its invocation scope");
+              }
             } else {
               const result = await rpc(workerClient, "plugins.reload", {
                 plugins: [{ pluginId: reloadPluginId }],
@@ -3789,6 +3831,9 @@ try {
           }
         }),
       );
+      if (rpcIntervalMs && offset + batchCount < operationCount) {
+        await delay(Math.max(0, batchStarted + rpcIntervalMs - performance.now()));
+      }
       if (scenario === "reconnect") {
         const startSpreadMs = Math.max(...reconnectStarted) - Math.min(...reconnectStarted);
         if (startSpreadMs > 5000) {
@@ -4854,6 +4899,7 @@ try {
     sessionResets,
     warmupOperations: turnScenario ? undefined : warmupOperations,
     rpcConcurrency,
+    rpcIntervalMs,
     reconnectStaggerMs,
     rpcLatencyScope:
       "client request-to-response; handler and queue timings are in Gateway diagnostics",

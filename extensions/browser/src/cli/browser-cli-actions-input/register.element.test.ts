@@ -124,10 +124,10 @@ describe("browser element commands", () => {
   );
 
   it("rejects a blank required ref before dispatch", async () => {
-    await expect(run("click", "   ")).rejects.toThrow("__exit__:1");
+    await expect(run("click", "   ")).rejects.toThrow("ref is required");
 
     const capture = getBrowserCliRuntimeCapture();
-    expect(capture.runtimeErrors.join("\n")).toContain("ref is required");
+    expect(capture.runtimeErrors).toEqual([]);
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
@@ -146,10 +146,12 @@ describe("browser element commands", () => {
   });
 
   it("rejects non-decimal coordinate values before dispatch", async () => {
-    await expect(run("click-coords", "0x10", "20")).rejects.toThrow("__exit__:1");
+    await expect(run("click-coords", "0x10", "20")).rejects.toThrow(
+      "Invalid x: must be a finite number",
+    );
 
     const capture = getBrowserCliRuntimeCapture();
-    expect(capture.runtimeErrors.join("\n")).toContain("Invalid x: must be a finite number");
+    expect(capture.runtimeErrors).toEqual([]);
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 

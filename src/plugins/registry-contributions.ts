@@ -4,6 +4,7 @@ import { invalidateProviderRegistryIndex } from "./provider-registry-index.js";
 import { pluginArrays, pluginMaps } from "./registry-empty.js";
 import { capturePluginLifecycleAuthority, isPluginRecordBorrowed } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import { getSelectedContextEngineOwner } from "./runtime/load-context-state.js";
 
 function projectArray<T>(source: T[], target: T[] | undefined, owns: (entry: T) => boolean): void {
   if (target) {
@@ -75,11 +76,14 @@ export function projectPluginContributions(
     target?.compactionProviders,
     (entry) => entry.ownerPluginId === pluginId,
   );
-  projectMap(
-    source.contextEngines,
-    target?.contextEngines,
-    (entry) => entry.owner === `plugin:${pluginId}`,
-  );
+  projectMap(source.contextEngines, target?.contextEngines, (entry, id) => {
+    if (entry.owner !== `plugin:${pluginId}`) {
+      return false;
+    }
+    // Retained closures must obey the target generation's prepared owner selection too.
+    const selectedOwner = target ? getSelectedContextEngineOwner(target, id) : undefined;
+    return selectedOwner === undefined || selectedOwner === entry.owner;
+  });
   projectMap(
     source.pluginRuntimeArtifacts,
     target?.pluginRuntimeArtifacts,

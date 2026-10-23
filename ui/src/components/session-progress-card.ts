@@ -1,7 +1,10 @@
 import type { ProgressCard, ProgressCardStep, SessionRunStatus } from "@openclaw/gateway-protocol";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { t } from "../i18n/index.ts";
+import { registerSessionProgressEnglish } from "../i18n/locales/en-session-progress.ts";
 import type { SessionProgressCardRefreshState } from "../lib/session-progress-cards.ts";
+
+registerSessionProgressEnglish();
 
 export const REFRESH_STATUS_LABEL_KEYS: Record<
   SessionProgressCardRefreshState,

@@ -44,6 +44,7 @@ import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js"
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
+import { respondError } from "./response.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged, emitSessionTitleChanged } from "./session-change-event.js";
 import { registerCommittedSessionCategory } from "./session-create-category.js";
@@ -250,13 +251,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const initialTurn = resolveSessionCreateInitialTurn(p);
     if (!initialTurn) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "sessions.create attachments require usable content",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "sessions.create attachments require usable content",
       );
       return;
     }
@@ -271,13 +269,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const initialRunId = randomUUID();
     if (p.mentions?.length) {
       if (catalogId || p.incognito) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Human mentions are unavailable for this session mode. Remove the selected mentions to continue.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Human mentions are unavailable for this session mode. Remove the selected mentions to continue.",
         );
         return;
       }

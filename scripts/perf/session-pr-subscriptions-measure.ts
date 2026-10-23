@@ -18,7 +18,7 @@ import {
 } from "../../src/infra/ed25519-signature.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { measureGatewayAllocations, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
-import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { createGatewayBenchEnv, waitForInitialProbe } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -34,6 +34,7 @@ const { values } = parseArgs({
     keys: { type: "string", default: "50" },
     operations: { type: "string", default: "1000" },
     subscribes: { type: "string", default: "256" },
+    mutation: { type: "string", default: "category" },
     "interval-ms": { type: "string", default: "20" },
     "list-every": { type: "string", default: "0" },
     "start-at": { type: "string" },
@@ -46,6 +47,7 @@ assert(port <= 65535);
 const channel = "session-pr-subscriptions-bench";
 const benchmarkOwners = [
   "control-ui-session-task-prs",
+  "control-ui-session-pr-read",
   "control-ui-session-pr-subscriptions",
   "session-row-scope",
 ];
@@ -189,6 +191,8 @@ if (values.child) {
   const keyCount = integer(values.keys, "--keys");
   const operations = integer(values.operations, "--operations");
   const subscribes = integer(values.subscribes, "--subscribes");
+  const mutation = values.mutation;
+  assert(mutation === "category" || mutation === "label", "--mutation must be category or label");
   const interval = integer(values["interval-ms"], "--interval-ms");
   const listEvery = integer(values["list-every"], "--list-every", 0);
   const env = createGatewayBenchEnv(path.join(root, "home"), path.join(root, "openclaw.json"), {
@@ -347,18 +351,14 @@ if (values.child) {
     const errors = createWriteStream(path.join(output, "gateway-stderr.log"));
     gateway.stderr?.pipe(errors);
     await command("ready");
-    const readyDeadline = Date.now() + 180_000;
-    while (
-      !(await fetch(`http://127.0.0.1:${port}/readyz`, {
-        signal: AbortSignal.timeout(5000),
-      }).then((response) => response.ok))
-    ) {
-      assert(
-        gateway.exitCode === null && gateway.signalCode === null && Date.now() < readyDeadline,
-        "Gateway readiness failed; see gateway.log",
-      );
-      await delay(250);
-    }
+    const readiness = await waitForInitialProbe({
+      port,
+      path: "/readyz",
+      startAt: performance.now(),
+      deadlineAt: performance.now() + 180_000,
+      isDone: () => gateway?.exitCode != null || gateway?.signalCode != null,
+    });
+    assert.equal(readiness.status, 200, "Gateway sidecars did not become ready");
     for (let index = 0; index < clients; index++) {
       const challenge = Promise.withResolvers<{ nonce: string; ts: number }>();
       const peer = createGatewayWsClient({
@@ -428,12 +428,15 @@ if (values.child) {
     }
     await delay(2000);
     const setupSettlement = await command("arm");
-    const initialState = snapshotState();
-    const initialSnapshotHash = snapshotHash(initialState);
-    const initialFrameCount = frames.length;
-    writeFileSync(path.join(output, "initial-frames.json"), JSON.stringify(frames));
+    for (const peer of peers) {
+      await rpc(peer, "sessions.describe", { key: keys[0] });
+    }
+    const setupState = snapshotState();
+    const setupSnapshotHash = snapshotHash(setupState);
+    writeFileSync(path.join(output, "setup-snapshots.json"), JSON.stringify(setupState));
+    writeFileSync(path.join(output, "setup-frames.json"), JSON.stringify(frames));
     for (let index = 0; index < 10; index++) {
-      await rpc(peers[0]!, "sessions.patch", { key: key(4991), category: `warmup-${index % 2}` });
+      await rpc(peers[0]!, "sessions.patch", { key: key(4991), [mutation]: `warmup-${index % 2}` });
     }
     const warmupSettlement = await command("settle");
     if (values["start-at"]) {
@@ -454,6 +457,22 @@ if (values.child) {
       );
     }
     const preMeasurementSettlement = await command("settle");
+    for (const peer of peers) {
+      await rpc(peer, "sessions.describe", { key: keys[0] });
+    }
+    const initialState = snapshotState();
+    const initialSnapshotHash = snapshotHash(initialState);
+    const initialFrameCount = frames.length;
+    writeFileSync(path.join(output, "initial-snapshots.json"), JSON.stringify(initialState));
+    writeFileSync(path.join(output, "initial-frames.json"), JSON.stringify(frames));
+    for (const { client, sessions } of initialState) {
+      for (const [sessionKey, snapshot] of sessions) {
+        assert(isRecord(snapshot));
+        assert.equal(snapshot.status, "ready", `Client ${client} ${sessionKey} is not ready`);
+        assert(Array.isArray(snapshot.taskPullRequests));
+        assert.equal(typeof snapshot.taskPullRequestCount, "number");
+      }
+    }
     if (values["start-at"]) {
       const notifyAt = integer(values["start-at"], "--start-at") + 30000;
       assert(Date.now() < notifyAt, "Subscribe phase missed the paired notification start");
@@ -461,6 +480,7 @@ if (values.child) {
     }
     const notifyLatency: number[] = [];
     const listLatency: number[] = [];
+    const notifySettlementLatency: number[] = [];
     const schedulingDelay: number[] = [];
     const profilePath = path.join(output, "notify.heapprofile");
     let finalSettlement: BenchReply | undefined;
@@ -475,11 +495,12 @@ if (values.child) {
           const scheduled = start + index * interval;
           await delay(Math.max(0, scheduled - performance.now()));
           schedulingDelay.push(Math.max(0, performance.now() - scheduled));
+          const started = performance.now();
           notifyLatency.push(
             (
               await rpc(peers[0]!, "sessions.patch", {
                 key: key(4991),
-                category: `measure-${index % 2}`,
+                [mutation]: `measure-${index % 2}`,
               })
             ).elapsedMs,
           );
@@ -493,8 +514,9 @@ if (values.child) {
             assert(page.payload.sessions.length > 0, "Sidebar selection returned no rows");
             listLatency.push(page.elapsedMs);
           }
+          finalSettlement = await command("settle");
+          notifySettlementLatency.push(performance.now() - started);
         }
-        finalSettlement = await command("settle");
       },
     );
     const { notifications } = await command("stop");
@@ -518,18 +540,19 @@ if (values.child) {
     }
     const finalState = snapshotState();
     const finalSnapshotHash = snapshotHash(finalState);
-    assert.equal(
-      finalSnapshotHash,
-      initialSnapshotHash,
-      "Unrelated category writes changed PR snapshots",
-    );
     writeFileSync(path.join(output, "frames.json"), JSON.stringify(frames));
     writeFileSync(
       path.join(output, "snapshots.json"),
       JSON.stringify({ initialState, finalState }),
     );
+    assert.equal(
+      finalSnapshotHash,
+      initialSnapshotHash,
+      `Unrelated ${mutation} writes changed PR snapshots`,
+    );
     const result = {
       format: "session-pr-subscriptions-v1",
+      readiness,
       setupSettlement,
       warmupSettlement,
       preMeasurementSettlement,
@@ -548,6 +571,7 @@ if (values.child) {
         agentDatabaseBytes: fixture.agentDatabaseBytes,
       },
       clients,
+      mutation,
       keysPerClient: keyCount,
       operations,
       intervalMs: interval,
@@ -556,7 +580,9 @@ if (values.child) {
       subscribeLatency: summarize(subscribeLatency),
       notifyRpcLatency: summarize(notifyLatency),
       listLatency: listLatency.length ? summarize(listLatency) : null,
+      notifySettlementLatency: summarize(notifySettlementLatency),
       schedulingDelay: summarize(schedulingDelay),
+      setupSnapshotHash,
       initialSnapshotHash,
       finalSnapshotHash,
       snapshotsBeforeMeasurement: initialFrameCount,

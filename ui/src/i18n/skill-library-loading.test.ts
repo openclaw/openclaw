@@ -31,7 +31,7 @@ it.each([
     expect(library.import).toBeUndefined();
     const session = library.session;
 
-    await import("../pages/skills/library-files.ts");
+    await import("../pages/skills/library-state.ts");
     expect(en.skillLibrary).toBe(library);
     expect(library.session).toBe(session);
     expect(manager.t("skillLibrary.import")).toBe("Import skill");

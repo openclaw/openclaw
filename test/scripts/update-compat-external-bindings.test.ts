@@ -43,6 +43,38 @@ async function expectLegacy(f: ReturnType<typeof candidateFixture>) {
   }
 }
 
+it("keeps the published recovery predicate bound to its current command owner", async () => {
+  const owner = "src/cli/update-cli/update-command-service-command.ts";
+  const recovery = "src/cli/update-cli/update-command-service-recovery.ts";
+  const release = previousReleaseInventory.releases.find((entry) =>
+    entry.chunks.some((candidate) =>
+      candidate.exports.some(
+        (binding) =>
+          binding.origin.module === recovery && binding.exported === "isPackageManagerUpdateMode",
+      ),
+    ),
+  )!;
+  const published = release.chunks.find((candidate) =>
+    candidate.exports.some((binding) => binding.origin.module === recovery),
+  )!;
+  const f = fixtureFiles(createTempDir("update-compat-recovery-binding-"));
+  f.json("package.json", { type: "module" });
+  for (const source of [recovery, owner]) {
+    f.write(source, fs.readFileSync(new URL(`../../${source}`, import.meta.url), "utf8"));
+  }
+  f.write(
+    "dist/current-mode.mjs",
+    `//#region ${owner}\nexport function isPackageManagerUpdateMode() { return "current predicate"; }\n`,
+  );
+  writeUpdateCompatibilityChunks({
+    distDir: f.file("dist"),
+    sourceDir: f.root,
+    inventory: { schemaVersion: 1, releases: [{ ...release, chunks: [published] }] },
+  });
+  const legacy = await f.load(`dist/${published.path}`);
+  expect(legacy.isPackageManagerUpdateMode()).toBe("current predicate");
+});
+
 it.each([
   'import { safePath as helper } from "@openclaw/fs-safe/path"; export { helper };',
   'import helper from "external-package"; export { helper };',

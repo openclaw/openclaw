@@ -247,7 +247,10 @@ async function persistPluginInstallOwned(
         previousInstall,
         nextInstall: params.install,
       });
-      const installedDiscovery = discoverOpenClawPlugins({ installRecords: nextInstallRecords });
+      const installedDiscovery = discoverOpenClawPlugins({
+        extraPaths: reconciledConfig.plugins?.load?.paths,
+        installRecords: nextInstallRecords,
+      });
       const realpathCache = new Map<string, string>();
       const targetPathKeys = new Set(
         [params.install.installPath, params.install.sourcePath]
@@ -289,6 +292,22 @@ async function persistPluginInstallOwned(
         throw new Error(
           `Plugin package "${params.pluginId}" has no authoritative runtime child list. Refresh the plugin registry, then reinstall the package or run openclaw doctor before retrying.`,
         );
+      }
+      // Retain ownership with the install record, so uninstall does not need to
+      // execute or even read a plugin whose files are missing or broken.
+      const contextEngineIdsByPlugin = Object.fromEntries(
+        manifests.flatMap((manifest) =>
+          manifest.contextEngineIds ? [[manifest.id, [...manifest.contextEngineIds]]] : [],
+        ),
+      );
+      const nextInstallRecord = nextInstallRecords[params.pluginId];
+      if (!nextInstallRecord) {
+        throw new Error(`Missing install record for "${params.pluginId}".`);
+      }
+      if (Object.keys(contextEngineIdsByPlugin).length > 0) {
+        nextInstallRecord.contextEngineIdsByPlugin = contextEngineIdsByPlugin;
+      } else {
+        delete nextInstallRecord.contextEngineIdsByPlugin;
       }
       const ownedPluginIds = manifests.map((plugin) => plugin.id).toSorted();
       const prepareMigration = async () => {
@@ -380,6 +399,24 @@ async function persistPluginInstallOwned(
             }),
           })
         : undefined;
+      const ownershipDiscovery = slotMetadata
+        ? discoverOpenClawPlugins({
+            extraPaths: next.plugins?.load?.paths,
+            installRecords: nextInstallRecords,
+          })
+        : undefined;
+      const slotOwnershipRecords =
+        slotMetadata && ownershipDiscovery
+          ? [
+              ...loadPluginManifestRegistryCore({
+                config: next,
+                candidates: ownershipDiscovery.candidates,
+                diagnostics: ownershipDiscovery.diagnostics,
+                installRecords: nextInstallRecords,
+              }).plugins.filter((plugin) => !slotMetadata.byPluginId.has(plugin.id)),
+              ...slotMetadata.plugins,
+            ]
+          : undefined;
       for (const pluginId of enabledPluginIds) {
         next = await tracePluginLifecyclePhaseAsync(
           "slot selection",
@@ -391,6 +428,8 @@ async function persistPluginInstallOwned(
               pluginId,
               slotMetadata,
               params.beforePersistentApply,
+              (warning) => warn(warning, warning),
+              slotOwnershipRecords,
             );
           },
           { command: "install", pluginId },

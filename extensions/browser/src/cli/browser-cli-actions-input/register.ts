@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -81,13 +80,11 @@ export function registerBrowserActionInputCommands(
     parentOpts,
   );
 
-  const parseRequiredNumber = (value: string, label: string): number | undefined => {
+  const parseRequiredNumber = (value: string, label: string): number => {
     const trimmed = value.trim();
     const parsed = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed) ? Number(trimmed) : Number.NaN;
     if (!Number.isFinite(parsed)) {
-      defaultRuntime.error(danger(`Invalid ${label}: must be a finite number`));
-      defaultRuntime.exit(1);
-      return undefined;
+      throw new Error(`Invalid ${label}: must be a finite number`);
     }
     return parsed;
   };
@@ -117,9 +114,6 @@ export function registerBrowserActionInputCommands(
     .option("--modifiers <list>", "Comma-separated modifiers (Shift,Alt,Meta)")
     .action(async (ref: string | undefined, opts, cmd) => {
       const refValue = requireRef(ref);
-      if (!refValue) {
-        return;
-      }
       const modifiers = opts.modifiers
         ? String(opts.modifiers)
             .split(",")
@@ -154,9 +148,6 @@ export function registerBrowserActionInputCommands(
     .action(async (xRaw: string, yRaw: string, opts, cmd) => {
       const x = parseRequiredNumber(xRaw, "x");
       const y = parseRequiredNumber(yRaw, "y");
-      if (x === undefined || y === undefined) {
-        return;
-      }
       await runElementAction({
         cmd,
         body: {
@@ -182,9 +173,6 @@ export function registerBrowserActionInputCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (ref: string | undefined, text: string, opts, cmd) => {
       const refValue = requireRef(ref);
-      if (!refValue) {
-        return;
-      }
       await runElementAction({
         cmd,
         body: {
@@ -230,9 +218,6 @@ export function registerBrowserActionInputCommands(
     )
     .action(async (ref: string | undefined, opts, cmd) => {
       const refValue = requireRef(ref);
-      if (!refValue) {
-        return;
-      }
       await runElementAction({
         cmd,
         body: {
@@ -404,15 +389,11 @@ export function registerBrowserActionInputCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       if (opts.accept && opts.dismiss) {
-        defaultRuntime.error(danger("Specify only one of --accept or --dismiss"));
-        defaultRuntime.exit(1);
-        return;
+        throw new Error("Specify only one of --accept or --dismiss");
       }
       const accept = opts.accept ? true : opts.dismiss ? false : undefined;
       if (accept === undefined) {
-        defaultRuntime.error(danger("Specify --accept or --dismiss"));
-        defaultRuntime.exit(1);
-        return;
+        throw new Error("Specify --accept or --dismiss");
       }
       await runHook(parent, opts, {
         path: "/hooks/dialog",
@@ -508,9 +489,7 @@ export function registerBrowserActionInputCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       if (!opts.fn) {
-        defaultRuntime.error(danger("Missing --fn"));
-        defaultRuntime.exit(1);
-        return;
+        throw new Error("Missing --fn");
       }
       await runBrowserCliCommand(async () => {
         await runBrowserAction({
@@ -536,14 +515,10 @@ export function registerBrowserActionInputCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       if (opts.actions !== undefined && opts.actionsFile !== undefined) {
-        defaultRuntime.error(danger("Specify only one of --actions or --actions-file"));
-        defaultRuntime.exit(1);
-        return;
+        throw new Error("Specify only one of --actions or --actions-file");
       }
       if (!opts.actions && !opts.actionsFile) {
-        defaultRuntime.error(danger("Provide --actions, --actions-file, or --actions-file -"));
-        defaultRuntime.exit(1);
-        return;
+        throw new Error("Provide --actions, --actions-file, or --actions-file -");
       }
       await runBrowserCliCommand(async () => {
         const payload = await readActionsPayload({

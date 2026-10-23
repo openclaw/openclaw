@@ -190,24 +190,20 @@ export function formatCliJsonFailure(
   };
 }
 
-function hasDebugArg(argv: string[] | undefined): boolean {
+function shouldShowDebugDetails(
+  argv: string[] | undefined = process.argv,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   for (const arg of argv ?? []) {
     // Arguments after the terminator belong to the child, not root stack-trace policy.
     if (arg === "--") {
-      return false;
+      break;
     }
     if (arg === "--debug" || arg === "--verbose") {
       return true;
     }
   }
-  return false;
-}
-
-function shouldShowDebugDetails(
-  argv: string[] | undefined = process.argv,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return hasDebugArg(argv) || isTruthyEnvValue(env.OPENCLAW_DEBUG);
+  return isTruthyEnvValue(env.OPENCLAW_DEBUG);
 }
 
 export function formatCliOperatorError(

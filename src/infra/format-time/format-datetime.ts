@@ -76,13 +76,6 @@ type FormatTimestampOptions = {
   displaySeconds?: boolean;
 };
 
-type FormatZonedTimestampOptions = FormatTimestampOptions & {
-  /** IANA timezone string (e.g., 'America/New_York'). Default: system timezone */
-  timeZone?: string;
-  /** Include an abbreviated weekday before the date. Default: false */
-  displayWeekday?: boolean;
-};
-
 let zonedTimestampFormatter: { key: string; formatter: Intl.DateTimeFormat } | undefined;
 
 /**
@@ -114,7 +107,12 @@ export function formatUtcTimestamp(date: Date, options?: FormatTimestampOptions)
  */
 export function formatZonedTimestamp(
   date: Date,
-  options?: FormatZonedTimestampOptions,
+  options?: FormatTimestampOptions & {
+    /** IANA timezone string (e.g., 'America/New_York'). Default: system timezone */
+    timeZone?: string;
+    /** Include an abbreviated weekday before the date. Default: false */
+    displayWeekday?: boolean;
+  },
 ): string | undefined {
   try {
     const { timeZone, displaySeconds = false, displayWeekday = false } = options ?? {};

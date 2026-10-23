@@ -25,6 +25,7 @@ import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import type { NodeSession } from "../node-session.types.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
 import { PAIRING_SCOPE } from "../operator-scopes.js";
+import { broadcastRejectedNodePairing } from "../pairing-events.js";
 import {
   deniesCrossDeviceManagement,
   pairedDeviceHasNonOperatorRole,
@@ -250,15 +251,10 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
         return;
       }
-      context.broadcast(
-        "node.pair.resolved",
-        {
-          requestId,
-          nodeId: rejected.nodeId,
-          decision: "rejected",
-          ts: Date.now(),
-        },
-        { dropIfSlow: true },
+      broadcastRejectedNodePairing(
+        context.broadcast,
+        { requestId, nodeId: rejected.nodeId },
+        Date.now(),
       );
       respond(true, rejected, undefined);
     });
