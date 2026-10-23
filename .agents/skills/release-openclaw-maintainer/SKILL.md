@@ -22,6 +22,8 @@ Read only the references needed for the selected phase:
 - Native assets: [platform publication](references/platform-publication.md), with `$release-openclaw-mac` for macOS operations.
 - Stable postpublish synchronization and the exact-SHA deployment handoff:
   [main closeout](references/stable-main-closeout.md).
+- Release retrospective and shared issue ledger (every track, and any handoff
+  snapshot): [retrospective](references/retrospective.md).
 - Release notes: `$openclaw-changelog-update`, including its separate approved post-release docs-mirror route. Initial release generation keeps its existing format; docs publication does not run automatically during release. Requested announcements: `$release-openclaw-announcement` for Discord, `$release-tweets` for X. Announcements never gate publication and require explicit posting authorization.
 - Published artifact verification: `$verify-release`. GHSA operations: `$openclaw-ghsa-maintainer` only with explicit security-workflow authorization.
 
@@ -148,7 +150,10 @@ final report, list every PR created during the release (`gh pr list --author
 @me --state open` plus any PR bound to the session) and land or explicitly close
 each one with a reason; confirm its fix is on `main` and, when it is release
 tooling, on the release branch. Also remove the release's temporary worktrees,
-abandoned local cut branches, and stale `scripts/pr` worktrees.
+abandoned local cut branches, and stale `scripts/pr` worktrees. Then write the
+[retrospective](references/retrospective.md) and open its `openclaw/maintainers`
+PR with the issue-ledger update; keep a findings notes file from the start of the
+release so it can be written from evidence.
 
 Published versions and final tags are immutable. Reuse successful exact-source
 artifacts; do not rebuild or republish as an implicit retry. The active release

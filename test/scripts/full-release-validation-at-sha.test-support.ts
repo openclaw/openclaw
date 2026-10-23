@@ -102,6 +102,8 @@ export function createDispatchFixture(
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
     unreachableContributionRecord?: boolean;
+    activeConcurrencyRun?: boolean;
+    completedConcurrencyHistory?: number;
     releaseNotes?: string;
   } = {},
 ) {
@@ -216,7 +218,8 @@ childProcess.execFileSync = (file, args, options) => {
   if (${JSON.stringify(options.stopBeforeDispatch ?? false)} && args?.some((arg) => arg.endsWith("/dispatches"))) {
     process.exit(77);
   }
-  if (args?.some((arg) => /\\/actions\\/workflows\\/17\\/runs$/.test(arg))) {
+  if (args?.some((arg) => /\\/actions\\/workflows\\/17\\/runs$/.test(arg)) &&
+      args.includes("per_page=20") && args.some((arg) => arg.startsWith("branch="))) {
     payloadEvent("reconcile", "");
   }
   if (args?.some((arg) => /\\/actions\\/artifacts\\/\\d+(?:\\/zip)?$/.test(arg))) {
@@ -493,17 +496,37 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
 } else if (args[0] === "api" && endpoint.endsWith("/actions/workflows/full-release-validation.yml")) {
   console.log(JSON.stringify({ id: 17, path: ".github/workflows/full-release-validation.yml" }));
 } else if (args[0] === "api" && /\\/actions\\/workflows\\/(?:17|full-release-validation.yml)\\/runs$/.test(endpoint)) {
+  const concurrencyInventory = fields.has("status");
+  const requestDirectory = require("node:path").join(process.cwd(), ".artifacts", "full-release-validation");
+  const requestFile = fs.existsSync(requestDirectory)
+    ? fs.readdirSync(requestDirectory).find((name) => name.endsWith(".json"))
+    : undefined;
+  const request = requestFile
+    ? JSON.parse(fs.readFileSync(require("node:path").join(requestDirectory, requestFile), "utf8"))
+    : null;
   const index = Number(fs.readFileSync(runDiscoveryIndexPath, "utf8"));
-  fs.writeFileSync(runDiscoveryIndexPath, String(index + 1));
+  if (!concurrencyInventory) fs.writeFileSync(runDiscoveryIndexPath, String(index + 1));
   const ids = ${JSON.stringify(options.duplicateOnSecondPage ?? false)} ? Array.from({ length: 21 }, (_, i) => 123 + i) : [123];
-  const runs = index < ${JSON.stringify(options.runDiscoveryMisses ?? 0)} || !fs.existsSync(acceptedRunPath)
-    ? []
-    : ids.map((id) => runMetadata(id));
+  if (${JSON.stringify(options.completedConcurrencyHistory ?? 0)} > 0 && fields.get("per_page") === "100" && !fields.has("branch")) {
+    console.log(JSON.stringify({ total_count: ${JSON.stringify(options.completedConcurrencyHistory ?? 0)}, workflow_runs: [] }));
+    process.exit(0);
+  }
+  const activeConcurrencyRuns = ${JSON.stringify(options.activeConcurrencyRun ?? false)} &&
+    !fs.existsSync(acceptedRunPath) && concurrencyInventory && fields.get("status") === "in_progress"
+    ? [{ ...runMetadata(777, { conclusion: null, status: "in_progress" }), head_branch: request?.request?.workflowRef?.replace(/[0-9]{13}$/, "0000000000001") }]
+    : [];
+  const runs = activeConcurrencyRuns.length > 0
+    ? activeConcurrencyRuns
+    : index < ${JSON.stringify(options.runDiscoveryMisses ?? 0)} || !fs.existsSync(acceptedRunPath)
+      ? []
+      : ids.map((id) => runMetadata(id));
   const page = Number(fields.get("page") || "1");
   if (args.includes("--include")) {
     let headers = "HTTP/2.0 200 OK\\r\\nContent-Type: application/json\\r\\n";
     if (runs.length > page * 20 && !${JSON.stringify(options.incompletePagination ?? false)}) {
-      const query = new URLSearchParams({ page: String(page + 1), branch: fields.get("branch"), event: "workflow_dispatch", per_page: "20" });
+      const query = new URLSearchParams({ page: String(page + 1), event: "workflow_dispatch", per_page: "20" });
+      if (concurrencyInventory) query.set("status", fields.get("status"));
+      else query.set("branch", fields.get("branch"));
       headers += "Link: <https://api.github.com/repos/openclaw/openclaw/actions/workflows/17/runs?" + query + '>; rel="next"\\r\\n';
     }
     process.stdout.write(headers + "\\r\\n");

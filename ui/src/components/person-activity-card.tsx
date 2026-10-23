@@ -1,14 +1,5 @@
 import { render, spread } from "@solidjs/web";
-import {
-  createMemo,
-  createSignal,
-  Errored,
-  For,
-  Loading,
-  onCleanup,
-  runWithOwner,
-  Show,
-} from "solid-js";
+import { createMemo, createSignal, Errored, For, Loading, runWithOwner, Show } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
@@ -365,6 +356,7 @@ export function updatePersonActivityCard(
   } else if (existing) {
     existing.update(input);
   } else {
+    let update!: (value: CardValue) => void;
     // The portal outlives the caller’s transient render scope.
     const dispose = runWithOwner(null, () =>
       render(() => {
@@ -398,8 +390,7 @@ export function updatePersonActivityCard(
           const current = value();
           return "read" in current ? current.read : current;
         });
-        cards.set(container, { update: setValue, dispose: () => dispose() });
-        onCleanup(() => cards.delete(container));
+        update = setValue;
         if (onPosition) {
           // Translated text can resize the retained card without another owner update.
           createResizeObserver(() => [container], onPosition);
@@ -423,5 +414,12 @@ export function updatePersonActivityCard(
         );
       }, container),
     );
+    cards.set(container, {
+      update,
+      dispose: () => {
+        cards.delete(container);
+        dispose();
+      },
+    });
   }
 }
