@@ -49,7 +49,7 @@ suite.define(() => {
         ["openclaw", "GPT-5.6 Sol", "1M · OpenClaw"],
       ] as const) {
         const option = runtime(id);
-        await revealChatModelOption(option);
+        await revealChatModelOption(picker, "openai/gpt-5.6-sol", { runtime: id });
         expect(await option.locator(".chat-controls__model-option-name").textContent()).toBe(name);
         expect(await option.textContent()).toContain(context);
       }
@@ -97,7 +97,7 @@ suite.define(() => {
           deniedRuntime: await runtime("other-runtime").count(),
           pinned: await option("fixture/manual").count(),
         }).toEqual({ reset: 1, deniedRuntime: 0, pinned: hasAllowedModel ? 0 : 1 });
-        await selectChatModelOption(reset);
+        await selectChatModelOption(picker, "fixture/automatic", { default: true });
         await expectRequest(gateway, "sessions.patch", { key, model: null });
       });
     },

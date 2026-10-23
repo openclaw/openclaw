@@ -220,7 +220,7 @@ suite.define(() => {
           const { picker, trigger, search } = modelPicker(page);
           await polledAttribute(trigger, "aria-disabled").toBe("false");
           await trigger.click();
-          await polledCount(picker.locator("[data-chat-model-option]")).toBe(2);
+          await polledCount(picker.locator("[data-chat-model-option]")).toBe(1);
           await page.mouse.move(0, 0);
           const query = key.startsWith("Arrow") ? "" : "anthropic";
           if (key.startsWith("Arrow")) {
@@ -232,6 +232,9 @@ suite.define(() => {
             }
           }
           await search.fill(query);
+          await polledCount(picker.locator("[data-chat-model-option]")).toBe(
+            key.startsWith("Arrow") ? 2 : 1,
+          );
           await search.focus();
           // This exercises browser event ownership, not a native OS IME candidate window.
           const { prevented, highlightedBefore } = await search.evaluate(

@@ -570,7 +570,17 @@ export const scenes: Scene[] = [
       await page.locator('[data-chat-model-select="true"]').click();
       const picker = page.locator(".chat-controls__model-picker");
       await picker.waitFor();
-      await picker.getByText("Model 39", { exact: true }).waitFor({ state: "attached" });
+      await picker.locator("[data-chat-model-more-toggle]").click();
+      await picker.locator("[data-chat-model-window]").evaluate((list) => {
+        list.scrollTop = 0;
+      });
+      await expect
+        .poll(() =>
+          picker
+            .locator('[data-chat-model-option][aria-selected="true"]')
+            .getAttribute("aria-setsize"),
+        )
+        .toBe("41");
     },
   },
   {

@@ -64,9 +64,7 @@ suite.define(() => {
       const openBefore: typeof before = await cdp.send("Performance.getMetrics");
       const openStarted = performance.now();
       await trigger.click();
-      await expect
-        .poll(() => picker.locator("[data-chat-model-option]").count())
-        .toBe(models.length);
+      await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(9);
       const openAfter: typeof before = await cdp.send("Performance.getMetrics");
       console.log(
         JSON.stringify({
@@ -734,9 +732,7 @@ suite.define(() => {
           expect(
             await menu.locator("[data-chat-thinking-slider], [data-chat-speed-option]").count(),
           ).toBe(0);
-          await revealChatModelOption(
-            menu.locator('[data-chat-model-option="openai/gpt-5.6-luna"]'),
-          );
+          await revealChatModelOption(composer, "openai/gpt-5.6-luna");
           await expect
             .poll(() => menu.getByRole("option", { name: new RegExp(longName) }).count())
             .toBe(1);
@@ -876,7 +872,7 @@ suite.define(() => {
             )
             .toBe("false");
           await model.click();
-          await selectChatModelOption(composer.locator('[data-chat-model-option="example/basic"]'));
+          await selectChatModelOption(composer, "example/basic");
           await expect.poll(() => effort.count()).toBe(0);
         }
       });
@@ -1005,11 +1001,9 @@ suite.define(() => {
         const trigger = picker.locator('[data-chat-model-select="true"]');
         await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
         await trigger.click();
+        await revealChatModelOption(picker, "openai/gpt-5.5");
+        await revealChatModelOption(picker, "anthropic/claude-sonnet-4-6");
         await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
-        await revealChatModelOption(picker.locator('[data-chat-model-option="openai/gpt-5.5"]'));
-        await revealChatModelOption(
-          picker.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
-        );
         const search = picker.locator("[data-chat-model-search]");
         // Enter search with the pointer so row tooltips do not own Escape.
         await search.click();

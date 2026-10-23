@@ -96,7 +96,7 @@ suite.define(() => {
           }
           await page.locator('[data-chat-model-select="true"]').click();
           const option = page.locator('[data-chat-model-option="openai/gpt-5.5"]');
-          await revealChatModelOption(option);
+          await revealChatModelOption(page, "openai/gpt-5.5");
           await polledVisible(option).toBe(true);
           if (blocked) {
             await polledAttribute(option, "data-chat-model-setup").toBe("true");
@@ -747,7 +747,7 @@ suite.define(() => {
       await textarea.fill("");
       await polledCount(camera).toBe(0);
       await openChatModelPicker(composer);
-      await revealChatModelOption(composer.locator('[data-chat-model-option="openai/gpt-5.5"]'));
+      await revealChatModelOption(composer, "openai/gpt-5.5");
       const mobilePickerBox = await layoutBox(composer.locator(".chat-controls__model-menu"));
       expect(mobilePickerBox.x).toBeGreaterThanOrEqual(0);
       expect(right(mobilePickerBox)).toBeLessThanOrEqual(393);

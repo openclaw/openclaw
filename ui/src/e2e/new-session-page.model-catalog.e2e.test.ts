@@ -97,8 +97,8 @@ suite.define(() => {
         await pollAttribute(picker, "open").toBe("");
         // Opening the picker moves focus to its filter so typing filters models.
         await pollFocused(search).toBe(true);
-        await revealChatModelOption(firstModel);
-        await revealChatModelOption(secondModel);
+        await revealChatModelOption(page, "openai/gpt-5.5");
+        await revealChatModelOption(page, "anthropic/claude-sonnet-4-6");
         await modelSelect.focus();
         const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
         await pollCount(secondShortcut).toBe(1);
@@ -276,7 +276,7 @@ suite.define(() => {
             await page.keyboard.press("Escape");
             await trigger.click();
             await pollCount(rows).toBe(2);
-            await selectChatModelOption(root.locator('[data-chat-model-option="fixture/one"]'));
+            await selectChatModelOption(root, "fixture/one");
             expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
             await where.click();
             expect(
@@ -285,7 +285,7 @@ suite.define(() => {
             await page.keyboard.press("Escape");
             await trigger.click();
             await root.getByRole("combobox", { name: "Search models" }).fill("Retained");
-            await selectChatModelOption(root.locator('[data-chat-model-option="fixture/two"]'));
+            await selectChatModelOption(root, "fixture/two");
             await pollText(trigger).toContain("Retained two");
             expect(await trigger.getAttribute("aria-busy")).toBe("false");
             expect(await gateway.getRequests("models.list")).toHaveLength(reads + 1);
@@ -525,9 +525,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
-      await selectChatModelOption(
-        page.locator('[data-chat-model-option="anthropic/claude-fable-5"]'),
-      );
+      await selectChatModelOption(page, "anthropic/claude-fable-5");
       await modelSelect.click();
 
       const contextWindowToggle = page.locator('[data-chat-context-window-toggle="200k"]');
