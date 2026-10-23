@@ -805,7 +805,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/sessions/session-manager-metadata-runtime.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-phase-lifecycle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-phase.admission.test.ts",
-  "src/agents/embedded-agent-runner/run/attempt-prompt-submit.steering.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-replay.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-replay-cohort.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-execution-settle.test.ts",
