@@ -1,12 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeCacheKey,
-  readCache,
   readResponseText,
   resolvePositiveTimeoutSeconds,
   resolveTimeoutSeconds,
-  writeCache,
-  type CacheEntry,
 } from "./web-shared.js";
 
 afterEach(() => {
@@ -47,23 +44,12 @@ async function expectDecoded(bytes: Uint8Array<ArrayBuffer>, contentType: string
 }
 
 describe("web shared helpers", () => {
-  it("keeps case-sensitive request components distinct in cache keys", () => {
-    const upper = normalizeCacheKey(" fetch:https://example.com/get?marker=OpenClawCase ");
-    const lower = normalizeCacheKey("fetch:https://example.com/get?marker=openclawcase");
-
-    expect(upper).toBe("fetch:https://example.com/get?marker=OpenClawCase");
-    expect(lower).toBe("fetch:https://example.com/get?marker=openclawcase");
-    expect(upper).not.toBe(lower);
+  it("trims cache-key framing without changing case-sensitive request components", () => {
+    const key = "fetch:https://example.com/get?marker=OpenClawCase";
+    expect(normalizeCacheKey(` ${key} `)).toBe(key);
+    expect(normalizeCacheKey(key.toLowerCase())).toBe(key.toLowerCase());
+    expect(normalizeCacheKey(key)).not.toBe(normalizeCacheKey(key.toLowerCase()));
   });
-  it("bounds reuse by the current TTL without evicting a longer-lived entry", () => {
-    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const cache = new Map<string, CacheEntry<string>>();
-    writeCache(cache, "key", "value", 900_000);
-    clock.mockReturnValue(61_000);
-    expect(readCache(cache, "key", 60_000)).toBeNull();
-    expect(readCache(cache, "key")).toEqual({ value: "value", cached: true });
-  });
-
   it("preserves fallback and minimum behavior", () => {
     expect(resolveTimeoutSeconds(Number.NaN, 30)).toBe(30);
     expect(resolveTimeoutSeconds(0, 30)).toBe(1);

@@ -86,7 +86,6 @@ function publicationInput(owner: MemoryIndexDatabase) {
   return {
     fileIdentity: readMemoryShadowIdentity(filename),
     pragmas: {
-      busy_timeout: readPragma("busy_timeout"),
       foreign_keys: readPragma("foreign_keys"),
     },
   };
@@ -176,7 +175,7 @@ function replacement(text = "Violetmarker transfer text"): MemorySourceIndexRepl
 describe("bounded memory publication transfer", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("configures a fresh shadow once and retains only transaction restoration settings", async () => {
+  it("configures a fresh shadow once and retains only schema restoration settings", async () => {
     const databasePath = path.join(tempDirs.make("memory-publication-policy-"), "shadow.sqlite");
     const observed = observeHostDataSql();
     try {
@@ -184,7 +183,7 @@ describe("bounded memory publication transfer", () => {
       backends.push(backend);
       expect(backend.execute({ type: "connection.inspect", input: undefined })).toEqual({
         fileIdentity: readMemoryShadowIdentity(databasePath),
-        pragmas: { busy_timeout: 5000, foreign_keys: expect.any(Number) },
+        pragmas: { foreign_keys: expect.any(Number) },
       });
       expect(
         observed.queries.filter((sql) => /^PRAGMA journal_size_limit\s*=/i.test(sql)),
@@ -199,13 +198,21 @@ describe("bounded memory publication transfer", () => {
     }
   });
 
-  it("avoids unused connection work for scalar publications", () => {
+  it("preserves owner connection policy across scalar and staged publications", () => {
     const filename = path.join(tempDirs.make("memory-publication-input-"), "index.sqlite");
     const db = new DatabaseSync(filename);
+    sqliteWorkerRuntime.setSqliteBusyTimeout(db, 5000);
+    const executedStatements: string[] = [];
+    const observed = observeHostDataSql((statement, database) => {
+      // Prepare and exec callbacks carry a database; only statement executions omit it.
+      if (database === undefined) {
+        executedStatements.push(statement);
+      }
+    });
     try {
       ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+      executedStatements.length = 0;
       const sql = vi.spyOn(db, "exec");
-      const reads = vi.spyOn(db, "prepare");
       const bind = () =>
         bindSqliteWorkerBackend(
           { kind: "agent" },
@@ -219,14 +226,13 @@ describe("bounded memory publication transfer", () => {
         }),
       ).toMatchObject({ ok: true });
       expect(
-        reads.mock.calls.filter(([statement]) =>
+        executedStatements.filter((statement) =>
           /^PRAGMA (synchronous|journal_size_limit|checkpoint_fullfsync)$/u.test(statement),
         ),
       ).toEqual([]);
-      expect(scalar.execute({ type: "connection.inspect", input: undefined })).toEqual({
+      expect(scalar.execute({ type: "connection.inspect", input: undefined })).toMatchObject({
         fileIdentity: readMemoryShadowIdentity(filename),
         pragmas: {
-          busy_timeout: expect.any(Number),
           foreign_keys: expect.any(Number),
         },
       });
@@ -243,6 +249,12 @@ describe("bounded memory publication transfer", () => {
         }),
       ).toMatchObject({ ok: true });
       staged.close();
+      expect(
+        [...sql.mock.calls.map(([statement]) => statement), ...executedStatements].filter(
+          (statement) => /PRAGMA\s+busy_timeout/iu.test(statement),
+        ),
+      ).toEqual([]);
+      expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
       expectRows(db, "SELECT text FROM memory_index_chunks", [
         { text: "staged text survives scalar cleanup" },
       ]);
@@ -252,6 +264,7 @@ describe("bounded memory publication transfer", () => {
         [],
       );
     } finally {
+      observed.restore();
       db.close();
     }
   });
@@ -341,7 +354,7 @@ describe("bounded memory publication transfer", () => {
     }
   });
 
-  it.each(["success", "stale", "begin", "write", "transaction", "commit"] as const)(
+  it.each(["success", "stale", "write", "transaction", "commit"] as const)(
     "settles an atomic source refresh through %s",
     async (fault) => {
       const owner = await createOwner();
@@ -359,33 +372,25 @@ describe("bounded memory publication transfer", () => {
         db.exec(`CREATE TRIGGER refuse_refresh BEFORE UPDATE ON memory_index_sources
           BEGIN SELECT RAISE(ABORT, 'refused write'); END`);
       }
-      const locker =
-        fault === "begin" ? sqliteRuntime.openNodeSqliteDatabase(db.location()!) : undefined;
-      locker?.exec("BEGIN IMMEDIATE");
-      try {
-        const outcome = backend.execute({
-          type: "source.refresh",
-          input: {
-            path: "sessions/current",
-            hash: "new",
-            mtime: 2,
-            size: 2,
-            expectedHash: fault === "stale" ? "superseded" : "old",
-          },
-        });
-        expect(outcome).toMatchObject(
-          fault === "success" || fault === "stale"
-            ? { ok: true, value: fault === "success" }
-            : { ok: false, entered: fault !== "begin", committed: false },
-        );
-        expect(db.isTransaction).toBe(false);
-        expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
-        expect(sourceHash(db)).toEqual({ hash: fault === "success" ? "new" : "old" });
-        expect(readMemoryDatabaseRevision(db)).toBe(revision + (fault === "success" ? 1 : 0));
-      } finally {
-        locker?.exec("ROLLBACK");
-        locker?.close();
-      }
+      const outcome = backend.execute({
+        type: "source.refresh",
+        input: {
+          path: "sessions/current",
+          hash: "new",
+          mtime: 2,
+          size: 2,
+          expectedHash: fault === "stale" ? "superseded" : "old",
+        },
+      });
+      expect(outcome).toMatchObject(
+        fault === "success" || fault === "stale"
+          ? { ok: true, value: fault === "success" }
+          : { ok: false, entered: true, committed: false },
+      );
+      expect(db.isTransaction).toBe(false);
+      expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
+      expect(sourceHash(db)).toEqual({ hash: fault === "success" ? "new" : "old" });
+      expect(readMemoryDatabaseRevision(db)).toBe(revision + (fault === "success" ? 1 : 0));
     },
   );
 

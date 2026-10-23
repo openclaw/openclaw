@@ -16,7 +16,7 @@ import type {
   QueueMode,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { createOperatorInputRecoverySource } from "../../agents/operator-run-recovery-source.js";
-import { shouldComputeCommandAuthorized } from "../../auto-reply/command-detection.js";
+import { hasCommandSyntax } from "../../auto-reply/command-detection.js";
 import { isAbortRequestText } from "../../auto-reply/reply/abort-primitives.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
 import {
@@ -384,8 +384,7 @@ export function createChatInputRecovery(params: {
     source,
     clientInfo: request.clientInfo,
     suppressCommandInterpretation:
-      request.suppressCommandInterpretation ||
-      !shouldComputeCommandAuthorized(request.inboundMessage),
+      request.suppressCommandInterpretation || !hasCommandSyntax(request.inboundMessage),
     request: {
       ...(request.reconnectResumeRequested ? { __controlUiReconnectResume: true } : {}),
       thinking: p.thinking,

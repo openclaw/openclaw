@@ -73,20 +73,11 @@ it("returns three fast catalogs within one second while an eight-second provider
     await pending.completion;
     root!.release();
     expect(getActiveGatewayRootWorkCount()).toBe(rootsBefore);
-    console.info("catalog slow-provider fixture", {
-      providers: 4,
-      providerDelayMs: 8_000,
-      responseMs: elapsed,
-    });
   }
 });
 
 it("reuses pending discovery and preserves authoritative host withdrawals in fallback pages", async () => {
-  const oldHost = catalogHost({
-    hostId: "node:slow",
-    label: "Old page",
-    kind: "node",
-  });
+  const oldHost = catalogHost({ hostId: "node:slow", label: "Old page", kind: "node" });
   const freshHost = { ...oldHost, label: "Late page" };
   const late = createDeferredCore<(typeof freshHost)[]>();
   const retry = createDeferredCore<(typeof freshHost)[]>();
@@ -171,10 +162,7 @@ it("reuses pending discovery and preserves authoritative host withdrawals in fal
 it.each(["caller", "query", "config", "registration", "gateway", "archive"] as const)(
   "does not reuse a cached page after a change to %s",
   async (change) => {
-    const host = catalogHost({
-      label: "Private page",
-      sessions: [],
-    });
+    const host = catalogHost({ label: "Private page" });
     const list = vi
       .fn<SessionCatalogProvider["list"]>()
       .mockResolvedValueOnce([host])

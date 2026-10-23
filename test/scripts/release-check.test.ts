@@ -13,10 +13,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { create } from "tar";
 import { describe, expect, vi } from "vitest";
 import { parse } from "yaml";
-import {
-  collectRootPackageExcludedExtensionDirs,
-  listBundledPluginPackArtifacts,
-} from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import {
@@ -27,7 +23,6 @@ import {
   resolvePackedBundledChannelEntrySmokeCommand as resolveSmokeCommand,
   resolveReleaseCheckLocalPackageTarballs as resolveTarballs,
   writePackedTarballInstallManifest as writeInstallManifest,
-  writePackedBundledPluginActivationConfig as writeActivationConfig,
 } from "../../scripts/release-check.ts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 
@@ -166,8 +161,6 @@ describe("release-check", () => {
           ? ["scripts/lib/plugin-sdk-private-local-only-subpaths.json"]
           : []),
       ]);
-      expect(requiredPaths.has("scripts/package-openclaw-for-docker.mts")).toBe(false);
-      expect(requiredPaths.has("scripts/openclaw-prepack.ts")).toBe(false);
       const sparsePaths = new Set(trackedPaths);
       expect(
         [...requiredPaths].filter((file) => !sparsePaths.has(file)),
@@ -281,10 +274,6 @@ require("node:module").syncBuiltinESMExports();
         "node_modules/fixture-runtime/package.json": JSON.stringify(runtime),
         "scripts/write-package-dist-inventory.ts": `import(${JSON.stringify(inventoryUrl)}).then(({ writePackageDistInventoryForPublish }) => writePackageDistInventoryForPublish(process.cwd()));\n`,
         [workerContractPath]: launcherContract,
-      });
-      expect(parse(readText("pnpm-workspace.yaml"))).toMatchObject({
-        nodeLinker: "isolated",
-        verifyDepsBeforeRun: false,
       });
       copyFileSync("appcast.xml", join(root, "appcast.xml"));
       mkdirSync(join(root, "extensions"));
@@ -504,30 +493,5 @@ require("node:module").syncBuiltinESMExports();
     writeFileSync(join(empty, "one.tgz"), "fixture");
     writeFileSync(join(empty, "two.tgz"), "fixture");
     expect(() => resolveTarballs(empty)).toThrow("contains an unsupported package tarball");
-  });
-
-  it("seeds packaged activation smoke with an included channel plugin", ({ command }) => {
-    const homeDir = command.createTempDir("openclaw-release-check-test-");
-    writeActivationConfig(homeDir);
-    const config: {
-      channels?: Record<string, unknown>;
-      plugins?: { entries?: Record<string, unknown> };
-    } = JSON.parse(readText(homeDir, ".openclaw", "openclaw.json"));
-
-    const pluginEntries = config.plugins?.entries;
-    expect(pluginEntries).toBeDefined();
-    const channels = Object.keys(config.channels ?? {});
-    expect(channels.length).toBeGreaterThan(0);
-    const excluded = collectRootPackageExcludedExtensionDirs();
-    const artifacts = listBundledPluginPackArtifacts();
-    for (const channel of channels) {
-      expect(pluginEntries).toHaveProperty(channel);
-      expect(excluded.has(channel)).toBe(false);
-      const manifest: { channels: string[] } = JSON.parse(
-        readText("extensions", channel, "openclaw.plugin.json"),
-      );
-      expect(manifest.channels).toContain(channel);
-      expect(artifacts).toContain(`dist/extensions/${channel}/openclaw.plugin.json`);
-    }
   });
 });

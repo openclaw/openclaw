@@ -10,21 +10,8 @@ import {
 } from "./register.test-harness.js";
 import { sandboxPostureFindings } from "./sandbox-findings.js";
 
-const policy = {
-  sandbox: {
-    requireMode: ["all"],
-    allowBackends: ["docker"],
-  },
-  scopes: {
-    release: {
-      agentIds: ["ALPHA"],
-      sandbox: {
-        requireMode: ["all"],
-        allowBackends: ["docker"],
-      },
-    },
-  },
-};
+const sandbox = { requireMode: ["all"], allowBackends: ["docker"] };
+const policy = { sandbox, scopes: { release: { agentIds: ["ALPHA"], sandbox } } };
 function sandboxEntry(
   kind: "mode" | "backend",
   value: string,
@@ -56,73 +43,47 @@ const evidence: PolicyEvidence = {
   network: [],
   sandboxPosture: posture,
 };
-const defaultMode = {
-  checkId: "policy/sandbox-mode-unapproved",
-  severity: "error",
-  source: "policy",
-  path: "openclaw config",
-  ocPath: "oc://openclaw.config/agents/defaults/sandbox/mode",
-  target: "oc://openclaw.config/agents/defaults/sandbox/mode",
-  message: "default sandbox config uses unapproved sandbox mode 'OFF'.",
-  requirement: "oc://policy.jsonc/sandbox/requireMode",
-  fixHint:
-    "Set agents.defaults.sandbox.mode or agents.entries.<id>.sandbox.mode to an approved value.",
-};
-const alphaMode = {
-  ...defaultMode,
-  ocPath: "oc://openclaw.config/agents/entries/alpha/sandbox/mode",
-  target: "oc://openclaw.config/agents/entries/alpha/sandbox/mode",
-  message: "agent 'alpha' uses unapproved sandbox mode 'off'.",
-};
-const defaultBackend = {
-  ...defaultMode,
-  checkId: "policy/sandbox-backend-unapproved",
-  ocPath: "oc://openclaw.config/agents/defaults/sandbox/backend",
-  target: "oc://openclaw.config/agents/defaults/sandbox/backend",
-  message: "default sandbox config uses unapproved sandbox backend 'ssh'.",
-  requirement: "oc://policy.jsonc/sandbox/allowBackends",
-  fixHint: "Use an approved sandbox backend or update policy after review.",
-};
-const alphaBackend = {
-  ...defaultBackend,
-  ocPath: "oc://openclaw.config/agents/entries/alpha/sandbox/backend",
-  target: "oc://openclaw.config/agents/entries/alpha/sandbox/backend",
-  message: "agent 'alpha' uses unapproved sandbox backend 'SSH'.",
-};
+function receipt(kind: "mode" | "backend", value: string, agentId?: string, scoped = false) {
+  const target = `oc://openclaw.config/agents/${agentId ? `entries/${agentId}` : "defaults"}/sandbox/${kind}`;
+  return {
+    checkId: `policy/sandbox-${kind}-unapproved`,
+    severity: "error",
+    source: "policy",
+    path: "openclaw config",
+    ocPath: target,
+    target,
+    message: `${agentId ? `agent '${agentId}'` : "default sandbox config"} uses unapproved sandbox ${kind} '${value}'.`,
+    requirement: `oc://policy.jsonc/${scoped ? "scopes/release/" : ""}sandbox/${kind === "mode" ? "requireMode" : "allowBackends"}`,
+    fixHint:
+      kind === "mode"
+        ? "Set agents.defaults.sandbox.mode or agents.entries.<id>.sandbox.mode to an approved value."
+        : "Use an approved sandbox backend or update policy after review.",
+  };
+}
+const defaultMode = receipt("mode", "OFF");
+const alphaMode = receipt("mode", "off", "alpha");
+const defaultBackend = receipt("backend", "ssh");
+const alphaBackend = receipt("backend", "SSH", "alpha");
 
 function findings(rules: unknown, observed: PolicyEvidence = evidence) {
   return sandboxPostureFindings(rules, "policy.jsonc", "policy.jsonc", observed);
 }
 
 describe("sandbox allowlist finding order", () => {
-  it.each([
-    {
-      name: "empty mode",
-      sandbox: { requireMode: [], allowBackends: ["docker"] },
-      expected: [alphaBackend, defaultBackend],
-    },
-    {
-      name: "omitted backend",
-      sandbox: { requireMode: ["all"] },
-      expected: [defaultMode, alphaMode],
-    },
-  ])("disables only the $name allowlist", ({ sandbox, expected: ordered }) => {
-    expect(findings({ sandbox })).toEqual(ordered);
+  it.each<[string, unknown, ReturnType<typeof receipt>[]]>([
+    ["empty mode", { requireMode: [], allowBackends: ["docker"] }, [alphaBackend, defaultBackend]],
+    ["omitted backend", { requireMode: ["all"] }, [defaultMode, alphaMode]],
+  ])("disables only the %s allowlist", (_name, rules, ordered) => {
+    expect(findings({ sandbox: rules })).toEqual(ordered);
   });
 
   it("accepts padded policy values and case-folds observed strings", () => {
-    expect(
-      findings(
-        { sandbox: { requireMode: [" all "], allowBackends: [" DoCkEr "] } },
-        {
-          ...evidence,
-          sandboxPosture: posture.map((entry) => ({
-            ...entry,
-            value: entry.kind === "mode" ? "ALL" : "DOCKER",
-          })),
-        },
-      ),
-    ).toEqual([]);
+    const allowed = { sandbox: { requireMode: [" all "], allowBackends: [" DoCkEr "] } };
+    const sandboxPosture = posture.map((entry) => ({
+      ...entry,
+      value: entry.kind === "mode" ? "ALL" : "DOCKER",
+    }));
+    expect(findings(allowed, { ...evidence, sandboxPosture })).toEqual([]);
   });
 
   it("accepts absent and empty sandbox evidence", () => {
@@ -132,16 +93,12 @@ describe("sandbox allowlist finding order", () => {
   });
 
   it("retains ordered inherited-default findings for a matching scope", () => {
-    expect(
-      findings(policy, {
-        ...evidence,
-        sandboxPosture: [posture[1], posture[3], posture[4], posture[5]],
-      }),
-    ).toEqual([
+    const sandboxPosture = [posture[1], posture[3], posture[4], posture[5]];
+    expect(findings(policy, { ...evidence, sandboxPosture })).toEqual([
       defaultMode,
       defaultBackend,
-      { ...defaultMode, requirement: "oc://policy.jsonc/scopes/release/sandbox/requireMode" },
-      { ...defaultBackend, requirement: "oc://policy.jsonc/scopes/release/sandbox/allowBackends" },
+      receipt("mode", "OFF", undefined, true),
+      receipt("backend", "ssh", undefined, true),
     ]);
   });
 });
@@ -152,27 +109,24 @@ describe("sandbox allowlists in policy evaluation", () => {
 
   it("preserves the complete ordered attested findings for keyed agents and scopes", async () => {
     const configPath = await writePolicyFixture(policy);
+    const rejected = { sandbox: { mode: "off", backend: "ssh" } } as const;
     const cfg = cfgWithPolicyOverrides({
       agents: {
-        defaults: { sandbox: { mode: "off", backend: "ssh" } },
+        defaults: rejected,
         entries: {
-          alpha: { sandbox: { mode: "off", backend: "ssh" } },
+          alpha: rejected,
           beta: { sandbox: { mode: "all", backend: "docker" } },
         },
       },
     });
     const result = await evaluatePolicy(ctx(configPath, cfg));
     expect(result.attestedFindings).toEqual([
-      { ...defaultMode, message: "default sandbox config uses unapproved sandbox mode 'off'." },
+      receipt("mode", "off"),
       alphaMode,
       defaultBackend,
-      { ...alphaBackend, message: "agent 'alpha' uses unapproved sandbox backend 'ssh'." },
-      { ...alphaMode, requirement: "oc://policy.jsonc/scopes/release/sandbox/requireMode" },
-      {
-        ...alphaBackend,
-        message: "agent 'alpha' uses unapproved sandbox backend 'ssh'.",
-        requirement: "oc://policy.jsonc/scopes/release/sandbox/allowBackends",
-      },
+      receipt("backend", "ssh", "alpha"),
+      receipt("mode", "off", "alpha", true),
+      receipt("backend", "ssh", "alpha", true),
     ]);
   });
 });

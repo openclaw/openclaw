@@ -345,6 +345,29 @@ describe("Claws Gateway contract", () => {
       },
     };
     checkPlan(updatePlan);
+    for (const field of ["current", "proposed"] as const) {
+      for (const [schedule, delivery, valid] of [
+        [{ cron: "0 9 * * *", timezone: "UTC" }, "none", true],
+        [{ cron: "0 9 * * *", timezone: "UTC" }, "last-channel", true],
+        [{ cron: "0 9 * * *", timezone: "UTC" }, "owner", true],
+        [{ everyMs: 1 }, "none", true],
+        [{ everyMs: 60_000 }, "last-channel", true],
+        [{ everyMs: 1_800_000 }, "owner", true],
+        [{ everyMs: 0 }, "owner", false],
+        [{ everyMs: -1 }, "owner", false],
+        [{ everyMs: 0.5 }, "owner", false],
+        [{ cron: "0 9 * * *", timezone: "UTC", everyMs: 60_000 }, "owner", false],
+      ] as const) {
+        expect(
+          validateClawLifecyclePlanResult(
+            withJob(updatePlan, {
+              ...updatedJob,
+              [field]: { ...updatedJob[field], schedule, delivery },
+            }),
+          ),
+        ).toBe(valid);
+      }
+    }
     rejectPlan(
       withJob(updatePlan, {
         ...updatedJob,

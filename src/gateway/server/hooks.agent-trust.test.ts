@@ -4,6 +4,7 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { DeferredHookWake } from "../../cron/service/wake.js";
 import {
   captureGatewayRootWorkReleaseObserver,
   getActiveGatewayRootWorkCount,
@@ -16,7 +17,7 @@ import { useSpawnBrokerTestFixture } from "../../process/spawn-broker/host.test-
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 
-const enqueueSystemEventMock = vi.fn();
+const deferHookWakeMock = vi.fn<DeferredHookWake>();
 const captureSessionEventTargetMock = vi.fn(async (agentId: string, sessionKey: string) => ({
   agentId,
   sessionKey,
@@ -45,12 +46,6 @@ const validateExplicitMessageAccountSelectionMock = vi.fn(
 const resolveOutboundChannelPluginMock = vi.fn(() => ({ id: "telegram" }));
 const resolveChannelDefaultAccountIdMock = vi.fn(() => "default");
 
-vi.mock("../../infra/system-events.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
-  enqueueSystemEvent: enqueueSystemEventMock,
-  enqueueSystemEventWithReceipt: (...args: unknown[]) =>
-    enqueueSystemEventMock(...args) ? () => true : null,
-}));
 // mock-isolation: Observe hook handoff without admitting an unrelated ordinary reply turn.
 vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: captureSessionEventTargetMock,
@@ -106,15 +101,11 @@ function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
-function expectOwnedSystemEvent(text: string, ownerAgentId: string): void {
-  const call = enqueueSystemEventMock.mock.calls.find(([queuedText]) => queuedText === text);
-  expect(call?.[1]).toEqual({ sessionKey: `agent:${ownerAgentId}:global` });
-}
-
 function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number } = {}) {
   return {
     scheduler: createTestGatewayScheduler("fake-timers"),
     deps: {} as never,
+    deferHookWake: deferHookWakeMock,
     getHooksConfig: () => null,
     getClientIpConfig: () => ({ trustedProxies: undefined, allowRealIpFallback: false }),
     bindHost: "127.0.0.1",
@@ -199,6 +190,10 @@ describe("dispatchAgentHook trust handling", () => {
   beforeEach(() => {
     resetGatewayWorkAdmission();
     vi.clearAllMocks();
+    deferHookWakeMock.mockImplementation(async ({ commitGuard }) => {
+      commitGuard();
+      return { ok: true, eventOutcome: "queued" };
+    });
     loadConfigMock.mockImplementation(mainRosterConfig);
     validateExplicitMessageAccountSelectionMock.mockImplementation(
       ({ accountId }: { accountId?: unknown }) => accountId as string | undefined,
@@ -230,9 +225,24 @@ describe("dispatchAgentHook trust handling", () => {
       "hooks",
     );
 
-    expectOwnedSystemEvent("Mapped wake", "hooks");
+    expect(deferHookWakeMock).toHaveBeenCalledExactlyOnceWith({
+      text: "Mapped wake",
+      agentId: "hooks",
+      expectedTarget: {
+        agentId: "hooks",
+        sessionKey: "global",
+        sessionId: "captured-session",
+        generation: "captured-generation",
+      },
+      createIfMissing: true,
+      commitGuard: expect.any(Function),
+    });
     expect(enqueueSessionEventMock).not.toHaveBeenCalled();
-    expect(captureSessionEventTargetMock).not.toHaveBeenCalled();
+    expect(captureSessionEventTargetMock).toHaveBeenCalledExactlyOnceWith(
+      "hooks",
+      "global",
+      expect.objectContaining({ assertCaptureCurrent: expect.any(Function) }),
+    );
   });
 
   it("keeps the resolved owner when a deferred multi-agent wake omits agentId", async () => {
@@ -244,7 +254,7 @@ describe("dispatchAgentHook trust handling", () => {
       },
     });
 
-    enqueueSystemEventMock.mockReturnValue(false);
+    deferHookWakeMock.mockResolvedValueOnce({ ok: true, eventOutcome: "coalesced" });
     const result = await dispatchWakeHook({ text: "Mapped wake", mode: "next-heartbeat" }, "molty");
 
     expect(result).toEqual({ eventOutcome: "coalesced" });
@@ -252,9 +262,13 @@ describe("dispatchAgentHook trust handling", () => {
       cfg: expect.any(Object),
       agentId: "molty",
     });
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Mapped wake", {
-      sessionKey: "agent:molty:main",
-    });
+    expect(deferHookWakeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Mapped wake",
+        agentId: "molty",
+        expectedTarget: expect.objectContaining({ sessionKey: "agent:molty:main" }),
+      }),
+    );
     expect(enqueueSessionEventMock).not.toHaveBeenCalled();
   });
 

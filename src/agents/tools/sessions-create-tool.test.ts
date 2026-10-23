@@ -189,9 +189,10 @@ describe("sessions_create", () => {
           source: "profile",
           id: selected.profileId,
         });
-        expect(gateway.request.mock.calls[1]?.[0].agentToolCaller.requesterOrigin).toEqual(
-          requesterOrigin,
-        );
+        expect(gateway.request.mock.calls[1]?.[0].agentToolCaller.requesterOrigin).toEqual({
+          ...requesterOrigin,
+          delegatedCreatorProfileId: null,
+        });
         expect(gateway.request.mock.calls[1]?.[0].params).not.toHaveProperty("user");
       });
     } finally {

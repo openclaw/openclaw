@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { t } from "../i18n/index.ts";
 import {
   isStaleChunkImportError,
@@ -74,8 +75,8 @@ export function createLazyCustomElementRequests(
   let activeElement: OptionalCustomElement | undefined;
   let activeDismissed = false;
   let staleRetry: LazyCustomElementRequest | undefined;
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  const listeners = createChangeListeners();
+  const notify = listeners.publish;
 
   function preload(element: OptionalCustomElement, options?: { reportError?: boolean }): void {
     if (isOptionalElementDefined(element) || preloads.has(element.tagName)) {
@@ -226,10 +227,7 @@ export function createLazyCustomElementRequests(
     get visibleState(): LazyCustomElementRequestState | undefined {
       return current;
     },
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: listeners.subscribe,
     preload,
     request: requestElement,
     requestWhileActive,
@@ -288,7 +286,7 @@ export const SIDEBAR_ATTENTION_ELEMENT = {
 export const TERMINAL_PANEL_ELEMENT = {
   tagName: "openclaw-terminal-panel",
   label: "terminal panel",
-  loadModule: () => import("../components/terminal/terminal-panel-registration.ts"),
+  loadModule: () => import("../components/terminal/terminal-panel-registration.tsx"),
 } satisfies OptionalCustomElement;
 
 export const BROWSER_PANEL_ELEMENT = {
@@ -300,13 +298,13 @@ export const BROWSER_PANEL_ELEMENT = {
 export const BROWSER_DOCUMENT_ELEMENT = {
   tagName: "openclaw-browser-document",
   label: BROWSER_PANEL_ELEMENT.label,
-  loadModule: () => import("../components/browser/browser-document.ts"),
+  loadModule: () => import("../components/browser/browser-document.tsx"),
 } satisfies OptionalCustomElement;
 
 export const DESKTOP_PANEL_ELEMENT = {
   tagName: "openclaw-desktop-panel",
   label: "desktop panel",
-  loadModule: () => import("../components/desktop/desktop-panel.ts"),
+  loadModule: () => import("../components/desktop/desktop-panel-solid.tsx"),
 } satisfies OptionalCustomElement;
 
 export const LINK_READER_PANEL_ELEMENT = {
@@ -356,5 +354,5 @@ export function isOptionalElementDefined(element: OptionalCustomElement): boolea
 export const LOGIN_GATE_ELEMENT = {
   tagName: "openclaw-login-gate",
   label: "login screen",
-  loadModule: () => import("../components/login-gate.ts"),
+  loadModule: () => import("../components/login-gate-solid.tsx"),
 } satisfies OptionalCustomElement;

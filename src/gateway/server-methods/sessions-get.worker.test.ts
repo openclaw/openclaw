@@ -1,11 +1,11 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
+import { sessionReader } from "./sessions-keyed-read.test-support.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
@@ -21,11 +21,12 @@ it("keeps warm, dirty, and archived keyed RPCs off host SQLite while preserving 
       sessionKey: "agent:main:raw-worker-history",
       sessionId: "raw-worker-history",
     };
-    replaceSessionEntrySync(scope, {
+    const entry = {
       sessionId: scope.sessionId,
       updatedAt: 1,
-      visibility: "shared",
-    });
+      visibility: "shared" as const,
+    };
+    replaceSessionEntrySync(scope, entry);
     const messages = [
       { role: "user", content: "Earlier message" },
       { role: "assistant", channel: "commentary", content: "Checking the fixture" },
@@ -44,28 +45,16 @@ it("keeps warm, dirty, and archived keyed RPCs off host SQLite while preserving 
     const context = requestContext(cfg);
     const client = identifiedClient("synthetic-viewer");
     await initializeSessionReadContext(context);
-    const read = async (method: "sessions.get" | "sessions.describe" = "sessions.get") => {
-      const respond = vi.fn();
-      await sessionByKeyReadHandlers[method]!({
-        req: { type: "req", id: "raw-worker-history", method },
-        params: { key: scope.sessionKey, ...(method === "sessions.get" ? { limit: 3 } : {}) },
-        client,
-        context,
-        respond,
-        isWebchatConnect: () => false,
-      });
-      expect(respond).toHaveBeenCalledOnce();
-      expect(respond.mock.calls[0]?.[0]).toBe(true);
-      return respond.mock.calls[0]?.[1];
-    };
+    const reader = sessionReader(context, client, scope.sessionKey);
+    const read = (method: "sessions.get" | "sessions.describe" = "sessions.get") =>
+      reader(method, method === "sessions.get" ? 3 : undefined);
     const expected = await read();
-    expect(expected).toMatchObject({ messages: messages.slice(1) });
     expect(expected).toMatchObject({
-      messages: [
-        { __openclaw: { id: "message-1" } },
-        { __openclaw: { id: "message-2" } },
-        { __openclaw: { id: "message-3" } },
-      ],
+      messages: messages
+        .slice(1)
+        .map((message, index) =>
+          Object.assign({}, message, { __openclaw: { id: `message-${index + 1}` } }),
+        ),
     });
     const hostSql = observeHostDataSql();
     const assertWorkerRead = async (
@@ -95,12 +84,7 @@ it("keeps warm, dirty, and archived keyed RPCs off host SQLite while preserving 
           await assertWorkerRead(method);
         }
       }
-      replaceSessionEntrySync(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        visibility: "shared",
-        archivedAt: 1,
-      });
+      replaceSessionEntrySync(scope, { ...entry, archivedAt: 1 });
       for (const method of ["sessions.get", "sessions.describe"] as const) {
         sessionChanges.emit({ all: true, scope: "catalog" });
         await assertWorkerRead(method, true);

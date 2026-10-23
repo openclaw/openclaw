@@ -247,13 +247,17 @@ suite.define(() => {
           await page
             .getByRole("combobox", { name: "Time zone", exact: true })
             .selectOption(timeZone);
+          // The page title stays with its subtitle instead of moving into the toolbar row.
+          await page.locator(".content-header--stacked .page-title").waitFor();
+          const content = page.locator("main.content");
           await expect
             .poll(() =>
-              page
-                .locator("main.content")
-                .evaluate((content) => getComputedStyle(content).paddingTop),
+              content.evaluate((element) => element.classList.contains("content--hub-header")),
             )
-            .toBe("0px");
+            .toBe(true);
+          expect(await content.evaluate((element) => getComputedStyle(element).paddingTop)).toBe(
+            "16px",
+          );
           const dateInputs = await page.locator(".usage-date-input").all();
           expect(dateInputs).toHaveLength(2);
           for (const input of dateInputs) {
@@ -286,23 +290,23 @@ suite.define(() => {
             await expect.poll(() => hours.isVisible()).toBe(true);
             await expect
               .poll(async () => ({
-                labels: await trimmedTexts(hours.locator(".usage-error-date")),
-                rates: await trimmedTexts(hours.locator(".usage-error-rate")),
-                details: await trimmedTexts(hours.locator(".usage-error-sub")),
+                labels: await trimmedTexts(hours.locator(".usage-list-label")),
+                rates: await trimmedTexts(hours.locator(".usage-list-value")),
+                details: await trimmedTexts(hours.locator(".usage-list-sub")),
               }))
               .toEqual({ labels: ["2 AM"], rates: ["50.00%"], details: ["5 errors · 10 msgs"] });
           }
           await cells.nth(2).click();
           await expect.poll(() => cells.nth(2).getAttribute("aria-pressed")).toBe("true");
           await expectTexts(page.locator(".session-bar-title"), ["Historical hour"]);
-          await expectText(hours.locator(".usage-error-date")).toBe("2 AM");
+          await expectText(hours.locator(".usage-list-label")).toBe("2 AM");
           await cells.nth(2).click();
           await cells.nth(3).click();
           await expectTexts(page.locator(".session-bar-title"), []);
           await expect.poll(() => hours.count()).toBe(0);
           await page.getByRole("button", { name: "Remove hours filter", exact: true }).click();
           await expectTexts(page.locator(".session-bar-title"), ["Historical hour"]);
-          await expectText(hours.locator(".usage-error-date")).toBe("2 AM");
+          await expectText(hours.locator(".usage-list-label")).toBe("2 AM");
         },
       );
     },
@@ -457,6 +461,8 @@ suite.define(() => {
           },
         });
 
+        // The chart draws the selected calendar range, so "today" must contain the mocked day.
+        await page.clock.setFixedTime(new Date("2026-05-14T12:00:00.000Z"));
         await page.goto(`${suite.server.baseUrl}usage`);
         const pendingRow = page.locator(".session-bar-row").filter({ hasText: "Pending session" });
         const cachedRow = page.locator(".session-bar-row").filter({ hasText: "Cached session" });
@@ -467,7 +473,8 @@ suite.define(() => {
           .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
           .toMatchObject({ mode: "utc" });
         await expect.poll(() => cachedRow.count(), { timeout: 10_000 }).toBe(1);
-        await page.locator(".daily-bar-wrapper").click();
+        // A refreshing report still draws the whole range; pick the recorded day.
+        await page.locator(".daily-bar-wrapper:not(.daily-bar-wrapper--pending)").last().click();
 
         await expect.poll(() => cachedRow.count()).toBe(1);
         await expect.poll(() => pendingRow.count()).toBe(1);
@@ -677,20 +684,20 @@ suite.define(() => {
         .toBeGreaterThan(requestsBeforeRangeChange);
       await page.getByRole("button", { name: "Cost", exact: true }).click();
 
-      const windowCards = page.locator(".cost-window-card");
+      const windowCards = page.locator(".cost-window");
       await expect.poll(() => windowCards.count()).toBe(4);
       await expect
         .poll(async () => ({
-          labels: await windowCards.locator(".cost-window-card__label").allTextContents(),
-          values: await trimmedTexts(windowCards.locator(".cost-window-card__value")),
+          labels: await windowCards.locator(".cost-window__label").allTextContents(),
+          values: await trimmedTexts(windowCards.locator(".cost-window__value")),
         }))
         .toEqual({
           labels: ["Selected Range", "Today", "Last 7 days", "Last 30 days"],
           values: ["$32.00", "$11.00", "$20.00", "$27.00"],
         });
-      await expectTexts(page.locator(".daily-chart-scale span"), ["$11.00", "$5.50", "$0.00"]);
+      await expectTexts(page.locator(".daily-chart-scale span"), ["$20", "$10", "$0"]);
       await expectText(page.locator(".usage-insight-card", { hasText: "Top Providers" })).toContain(
-        "openai",
+        "OpenAI",
       );
       const messagesHint = page.locator("#usage-summary-hint-messages");
       const messagesTooltipHost = messagesHint.locator("xpath=..");
@@ -731,7 +738,7 @@ suite.define(() => {
       await page.locator(".usage-query-input").press("Enter");
       const topProviders = page.locator(".usage-insight-card", { hasText: "Top Providers" });
       await expectText(topProviders).toContain("No provider data");
-      await expectText(topProviders).not.toContain("openai");
+      await expectText(topProviders).not.toContain("OpenAI");
     });
   });
 });

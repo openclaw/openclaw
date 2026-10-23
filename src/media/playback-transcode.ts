@@ -100,7 +100,7 @@ const PLAYBACK_TRANSCODE_THREADS = 2;
 const PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS = 60_000;
 const MAX_PLAYBACK_ENTRIES = { failures: 32, inspections: 32 } as const;
 const MAX_PENDING_PLAYBACK_INSPECTIONS = 32;
-const playbackJobs = new Map<string, Promise<void>>();
+const playbackJobs = new Set<string>();
 const playbackFailures = new Map<string, number>();
 const playbackInspections = new Map<string, PlaybackInspection>();
 const playbackInspectionJobs = new Map<string, PlaybackInspectionJob>();
@@ -119,13 +119,6 @@ function createPlaybackTranscodeCacheKey(source: PlaybackSourceIdentity): string
       source.exactIdentity.ino.toString(),
     ]),
   );
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.playbackTranscodeTestApi")] = {
-    createPlaybackTranscodeCacheKey,
-    getPlaybackTranscodeJobs: (): Promise<void>[] => [...playbackJobs.values()],
-  };
 }
 
 function playbackSourceIdentityMatches(
@@ -583,8 +576,7 @@ export async function resolvePlaybackTranscode(
       tempPrefix: `.${cacheKey}`,
     });
   })();
-  // Pool admission and test synchronization must observe the same completion boundary.
-  playbackJobs.set(operationKey, job);
+  playbackJobs.add(operationKey);
   void job.then(
     () => {
       playbackJobs.delete(operationKey);

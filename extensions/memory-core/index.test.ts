@@ -13,8 +13,8 @@ import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { buildMemoryPromptSection } from "./src/memory-tool-contract.js";
 import {
   getMemoryManagerLifecycle,
-  hasMemoryIndexingBeenLive,
   markMemoryIndexingLive,
+  retainMemoryIndexingAgents,
 } from "./src/memory/lifecycle.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 
@@ -155,6 +155,12 @@ function indexFixture(config: OpenClawConfig, configure?: (api: OpenClawPluginAp
 }
 
 describe("buildPromptSection", () => {
+  function expectRecallGuidance(result: string[], tool: string) {
+    expect(result[0]).toBe("## Memory Recall");
+    expect(result[1]).toContain(`run ${tool}`);
+    expect(result[1]).toContain("not already present in the current turn");
+    expect(result[1]).toContain("Do not repeat memory retrieval");
+  }
   it("prepares explicitly owned memory tools without resolving the system agent", () => {
     let systemAgentReads = 0;
     const config: OpenClawConfig = {
@@ -216,11 +222,8 @@ describe("buildPromptSection", () => {
     const result = buildMemoryPromptSection({
       availableTools: new Set(["memory_search", "memory_get"]),
     });
-    expect(result[0]).toBe("## Memory Recall");
-    expect(result[1]).toContain("run memory_search");
+    expectRecallGuidance(result, "memory_search");
     expect(result[1]).toContain("for memory-file hits, use memory_get");
-    expect(result[1]).toContain("not already present in the current turn");
-    expect(result[1]).toContain("Do not repeat memory retrieval");
     expect(result).toContain(
       "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
     );
@@ -234,11 +237,8 @@ describe("buildPromptSection", () => {
     const result = buildMemoryPromptSection({
       availableTools: new Set([tool]),
     });
-    expect(result[0]).toBe("## Memory Recall");
-    expect(result[1]).toContain(`run ${tool}`);
+    expectRecallGuidance(result, tool);
     expect(result[1]).not.toContain(excluded);
-    expect(result[1]).toContain("not already present in the current turn");
-    expect(result[1]).toContain("Do not repeat memory retrieval");
   });
 
   it.each([
@@ -344,36 +344,32 @@ describe("memory-core plugin runtime registration", () => {
 
   it("registers the dreaming runtime slash command", () => {
     let command: OpenClawPluginCommandDefinition | undefined;
-    plugin.register(
-      createTestPluginApi({
-        runtime: hostRuntime,
-        registerCommand(definition) {
-          command = definition;
-        },
-      }),
-    );
-
-    expect(command?.name).toBe("dreaming");
-    expect(command?.acceptsArgs).toBe(true);
-    expect(command?.exposeSenderIsOwner).toBe(true);
-    expect(command?.description).toContain("Enable or disable");
+    register({
+      registerCommand: (definition) => {
+        command = definition;
+      },
+    });
+    expect(command).toMatchObject({
+      name: "dreaming",
+      acceptsArgs: true,
+      exposeSenderIsOwner: true,
+      description: expect.stringContaining("Enable or disable"),
+    });
   });
 
   it("registers the standing-intent tool and deterministic prompt hook", () => {
     const toolNames: string[] = [];
     const hooks: string[] = [];
     const subagentRun = vi.fn();
-    plugin.register(
-      createTestPluginApi({
-        runtime: { ...hostRuntime, subagent: { run: subagentRun } } as never,
-        registerTool(_factory, options?: Parameters<OpenClawPluginApi["registerTool"]>[1]) {
-          toolNames.push(...(options?.names ?? []));
-        },
-        on(hookName) {
-          hooks.push(hookName);
-        },
-      }),
-    );
+    register({
+      runtime: { ...hostRuntime, subagent: { run: subagentRun } } as never,
+      registerTool(_factory, options) {
+        toolNames.push(...(options?.names ?? []));
+      },
+      on(hookName) {
+        hooks.push(hookName);
+      },
+    });
 
     expect(toolNames).toContain("intent");
     expect(hooks).toContain("before_prompt_build");
@@ -477,26 +473,24 @@ describe("memory-core plugin runtime registration", () => {
     if (!service) {
       throw new Error("Expected the memory index service");
     }
-    expect(hasMemoryIndexingBeenLive()).toBe(false);
+    expect(retainMemoryIndexingAgents(["main", "research"])).toEqual([]);
     await service.start(context);
     expect(backgroundTasks).toEqual([]);
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
 
     // A watched manager opened by a search or turn makes later restarts restore it.
-    markMemoryIndexingLive();
+    markMemoryIndexingLive("main");
     await service.stop?.(context);
     await service.start(context);
     await Promise.all(backgroundTasks);
-    expect(getMemorySearchManagerMock.mock.calls).toEqual([
-      [{ cfg: config, agentId: "main" }],
-      [{ cfg: config, agentId: "research" }],
-    ]);
+    expect(getMemorySearchManagerMock.mock.calls).toEqual([[{ cfg: config, agentId: "main" }]]);
   });
 
   it.each(["memory-core", "honcho", "none"])(
     "starts configured indexes only for the selected memory slot: %s",
     async (owner) => {
-      markMemoryIndexingLive();
+      markMemoryIndexingLive("main");
+      markMemoryIndexingLive("research");
       const config = indexConfig(owner);
       const { services, backgroundTasks, context } = indexFixture(config);
       for (const service of services) {
@@ -519,7 +513,7 @@ describe("memory-core plugin runtime registration", () => {
   ])(
     "drains managers after tracked activation rejects ($cleanupOwner, cleanup failure: $cleanupFails)",
     async ({ cleanupOwner, cleanupFails }) => {
-      markMemoryIndexingLive();
+      markMemoryIndexingLive("main");
       const activationFailure = new Error("plugin retired after activation");
       const cleanupFailure = new Error("memory manager cleanup failed");
       const config = indexConfig();
@@ -685,53 +679,31 @@ describe("buildMemoryFlushPlan", () => {
 
   it("defaults to safe prompts and gating values", () => {
     const plan = buildMemoryFlushPlan();
-    expect(plan?.softThresholdTokens).toBe(4000);
-    expect(plan?.forceFlushTranscriptBytes).toBe(2 * 1024 * 1024);
+    expect(plan).toMatchObject({
+      softThresholdTokens: 4000,
+      forceFlushTranscriptBytes: 2 * 1024 * 1024,
+    });
     expect(plan?.prompt).toContain("memory/");
     expect(plan?.prompt).toContain("MEMORY.md");
     expect(plan?.systemPrompt).toContain("MEMORY.md");
+    expect(plan?.prompt).toMatch(/APPEND/i);
+    expect(plan?.prompt).toContain("do not overwrite");
+    expect(plan?.prompt).toContain("timestamped variant");
+    expect(plan?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
   });
 
   it("respects disable flag", () => {
     expect(configuredFlush({ enabled: false })).toBeNull();
   });
 
-  it("carries configured memory flush model override", () => {
-    const plan = configuredFlush({ model: "ollama/qwen3:8b" });
-
-    expect(plan?.model).toBe("ollama/qwen3:8b");
-  });
-
-  it("falls back to defaults when numeric values are invalid", () => {
-    const plan = configuredFlush({ softThresholdTokens: -100 });
-
-    expect(plan?.softThresholdTokens).toBe(4000);
-    expect(plan?.forceFlushTranscriptBytes).toBe(2 * 1024 * 1024);
-  });
-
-  it("parses forceFlushTranscriptBytes from byte-size strings", () => {
-    const plan = buildMemoryFlushPlan({
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: {
-              memoryFlush: {
-                forceFlushTranscriptBytes: "3mb",
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(plan?.forceFlushTranscriptBytes).toBe(3 * 1024 * 1024);
-  });
-
-  it("keeps overwrite guards in the default prompt", () => {
-    const prompt = buildMemoryFlushPlan()?.prompt;
-    expect(prompt).toMatch(/APPEND/i);
-    expect(prompt).toContain("do not overwrite");
-    expect(prompt).toContain("timestamped variant");
-    expect(prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
+  it.each([
+    [{ model: "ollama/qwen3:8b" }, { model: "ollama/qwen3:8b" }],
+    [
+      { softThresholdTokens: -100 },
+      { softThresholdTokens: 4000, forceFlushTranscriptBytes: 2 * 1024 * 1024 },
+    ],
+    [{ forceFlushTranscriptBytes: "3mb" }, { forceFlushTranscriptBytes: 3 * 1024 * 1024 }],
+  ])("resolves memory flush override %j", (config, expected) => {
+    expect(configuredFlush(config)).toMatchObject(expected);
   });
 });

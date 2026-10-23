@@ -11,9 +11,7 @@ export async function writeTarArchiveWithRetry<T>(params: {
   tempArchivePath: string;
   runTar: (tempArchivePath: string) => Promise<T>;
   log?: BackupTarRetryLogger;
-  sleepMs?: (ms: number) => Promise<void>;
 }): Promise<T> {
-  const sleepFn = params.sleepMs ?? ((ms) => sleep(ms, resolveCommandProcessSignal()));
   for (let attempt = 1; ; attempt += 1) {
     const attemptTempArchivePath =
       attempt === 1 ? params.tempArchivePath : `${params.tempArchivePath}.retry-${attempt}`;
@@ -41,6 +39,6 @@ export async function writeTarArchiveWithRetry<T>(params: {
         offendingPath ? ` on ${offendingPath}` : ""
       } (attempt ${attempt}/${BACKUP_TAR_MAX_ATTEMPTS}); retrying in ${Math.round(backoff / 1000)}s.`,
     );
-    await sleepFn(backoff);
+    await sleep(backoff, resolveCommandProcessSignal());
   }
 }

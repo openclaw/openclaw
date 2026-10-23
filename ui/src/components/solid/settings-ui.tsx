@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { children, For, onCleanup, onSettled, Show } from "solid-js";
+import { children, For, onSettled, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -355,7 +355,12 @@ function ToggleControl(
   );
 }
 
-export function SettingsToggle(props: SettingsToggleControl & { ariaLabel: string }) {
+export function SettingsToggle(
+  props: SettingsToggleControl & {
+    ariaLabel: string;
+    inputRef?: (element: HTMLInputElement) => void;
+  },
+) {
   return <ToggleControl {...props} label={props.ariaLabel} />;
 }
 
@@ -427,7 +432,12 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
           <For each={props.options} keyed={(option) => option.value}>
             {(option) => {
               let inputElement: HTMLInputElement;
-              onCleanup(() => inputs.delete(inputElement.value));
+              onSettled(() => {
+                const initialValue = option().value;
+                inputs.set(initialValue, inputElement);
+                props.inputRef?.(initialValue, inputElement);
+                return () => inputs.delete(initialValue);
+              });
               return (
                 <label
                   class={[
@@ -438,11 +448,7 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
                   data-test-id={option().testId}
                 >
                   <input
-                    ref={(element) => {
-                      inputElement = element;
-                      inputs.set(option().value, element);
-                      props.inputRef?.(option().value, element);
-                    }}
+                    ref={(element) => (inputElement = element)}
                     class="settings-segmented__input"
                     type="radio"
                     name={name}

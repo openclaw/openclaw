@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -11,7 +12,6 @@ import { listChatOutboxAttention } from "./chat-outbox-owner.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { UNCONFIRMED_CHAT_SEND_ERROR } from "./chat-send-support.ts";
-import { listStoredChatOutboxes } from "./composer-persistence.ts";
 
 const sessionKey = "agent:main:restart-input";
 const sessionId = "restart-input-session";

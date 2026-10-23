@@ -4,6 +4,7 @@ import {
   coerceErrorMessage,
   collectNestedErrorCandidates,
   formatErrorMessage,
+  mapErrorCauseChain,
   ProviderAuthPersistenceError,
   stringifyNonErrorCause,
   toErrorObject,
@@ -20,6 +21,27 @@ const withGetter = <T extends object>(value: T, key: PropertyKey, get: () => unk
   Object.defineProperty(value, key, { enumerable: true, get });
 const withCause = (message: string, cause: unknown) => new Error(message, { cause });
 const redactSecrets = (text: string) => text.replaceAll("secret", "[REDACTED]");
+
+it("maps only the root and eight ordered causes, including repeated cyclic frames", () => {
+  let error = new Error("beyond limit");
+  for (let index = 8; index >= 0; index -= 1) {
+    error = new Error(String(index), { cause: error });
+  }
+  expect(mapErrorCauseChain(error, (entry) => entry.message)).toEqual([
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+  ]);
+  const cycle = new Error("loop");
+  cycle.cause = cycle;
+  expect(mapErrorCauseChain(cycle, (entry) => entry.message)).toEqual(Array(9).fill("loop"));
+});
 
 describe("formatErrorMessage", () => {
   it("preserves error content when no diagnostic redaction policy is supplied", () => {

@@ -108,7 +108,6 @@ function observeCanaryReaction(context: MatrixQaScenarioContext, scenarioLabel: 
 export async function runReactionNotificationScenario(context: MatrixQaScenarioContext) {
   const result = await observeCanaryReaction(context, "Matrix reaction scenario");
   return {
-    artifacts: buildMatrixQaReactionArtifacts(result),
     details: buildMatrixQaReactionDetailLines({
       actorUserId: result.actorUserId,
       observedReactionKey: result.event.reaction?.key,
@@ -131,11 +130,6 @@ export async function runReactionNotAReplyScenario(context: MatrixQaScenarioCont
     unexpectedMessage: `unexpected SUT reply after reaction from ${context.driverUserId}`,
   });
   return {
-    artifacts: {
-      ...(context.driverUserId ? { actorUserId: context.driverUserId } : {}),
-      expectedNoReplyWindowMs: noReplyWindowMs,
-      ...buildMatrixQaReactionArtifacts(reaction),
-    },
     details: [
       ...buildMatrixQaReactionDetailLines(buildMatrixQaReactionArtifacts(reaction)),
       `waited ${noReplyWindowMs}ms with no SUT reply`,
@@ -162,10 +156,6 @@ export async function runReactionRedactionObservedScenario(context: MatrixQaScen
     timeoutMs: context.timeoutMs,
   });
   return {
-    artifacts: {
-      ...buildMatrixQaReactionArtifacts(reaction),
-      redactionEventId,
-    },
     details: [
       ...buildMatrixQaReactionDetailLines(buildMatrixQaReactionArtifacts(reaction)),
       `redaction event: ${redactionEventId}`,

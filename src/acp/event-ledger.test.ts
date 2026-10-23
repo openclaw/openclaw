@@ -28,7 +28,7 @@ const incomplete = { complete: false, events: [] };
 describe("ACP event ledger", () => {
   it("persists replay through metadata changes and rejected replay bindings", async () => {
     await withTestAcpEventLedgerDatabase(async ({ databasePath }) => {
-      const first = createSqliteAcpEventLedger({ path: databasePath, now: () => 1000 });
+      const first = createSqliteAcpEventLedger({ path: databasePath });
       const original = makeSession("session-1", "agent:main:work");
       const thought = { ...textUpdate("Thinking"), sessionUpdate: "agent_thought_chunk" as const };
       const answer = textUpdate("Answer");
@@ -128,7 +128,7 @@ describe("ACP event ledger", () => {
   );
 
   it("preserves prompt history when a provisional ACP key becomes a canonical Gateway key", async () => {
-    const ledger = createTestAcpEventLedger({ now: () => 1000 });
+    const ledger = createTestAcpEventLedger();
     const session = makeSession("acp-session-1", "acp:gateway-session-1");
     const canonical = { ...session, sessionKey: "agent:main:acp:gateway-session-1" };
     await ledger.startSession(session);

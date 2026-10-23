@@ -1,4 +1,3 @@
-import type { LookupAddress } from "node:dns";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createDeferredCore } from "../shared/deferred.js";
 import { oauthErrorHtml, renderOAuthPage } from "../shared/oauth-page.js";
@@ -18,10 +17,6 @@ export type OAuthLoopbackCallbackServer = {
 
 type RenderedResponse = { body: string; contentType: string };
 type CorsOriginResolver = (originHeader: string | string[] | undefined) => string | undefined;
-type LoopbackLookup = (
-  hostname: string,
-  options: { all: true; verbatim: true },
-) => Promise<LookupAddress[]>;
 
 function unbracket(hostname: string): string {
   return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
@@ -37,20 +32,14 @@ function isLoopbackAddress(address: string): boolean {
   );
 }
 
-function resolveLoopbackHostname(
-  hostname: string,
-  lookupOverride?: LoopbackLookup,
-): string[] | Promise<string[]> {
+function resolveLoopbackHostname(hostname: string): string[] | Promise<string[]> {
   if (hostname === "127.0.0.1" || hostname === "::1") {
     return [hostname];
   }
   if (hostname !== "localhost") {
     throw new Error("OAuth callback redirect must use localhost, 127.0.0.1, or ::1");
   }
-  const loadLookup: Promise<LoopbackLookup> = lookupOverride
-    ? Promise.resolve(lookupOverride)
-    : import("node:dns/promises").then(({ lookup }) => lookup as LoopbackLookup);
-  return loadLookup.then(async (lookup) => {
+  return import("node:dns/promises").then(async ({ lookup }) => {
     const addresses = [
       ...new Set(
         (await lookup("localhost", { all: true, verbatim: true })).map(({ address }) => address),
@@ -66,7 +55,6 @@ function resolveLoopbackHostname(
 function resolveBindAddresses(
   redirectUrl: URL,
   bindHostname?: string,
-  lookup?: LoopbackLookup,
   bindOnlyHostname?: string,
 ): string[] | Promise<string[]> {
   if (bindOnlyHostname !== undefined) {
@@ -77,12 +65,12 @@ function resolveBindAddresses(
     return [hostname];
   }
   const redirectHostname = unbracket(redirectUrl.hostname);
-  const redirectAddresses = resolveLoopbackHostname(redirectHostname, lookup);
+  const redirectAddresses = resolveLoopbackHostname(redirectHostname);
   const requestedHostname = bindHostname ? unbracket(bindHostname) : redirectHostname;
   if (requestedHostname === redirectHostname) {
     return redirectAddresses;
   }
-  const requestedAddresses = resolveLoopbackHostname(requestedHostname, lookup);
+  const requestedAddresses = resolveLoopbackHostname(requestedHostname);
   return Promise.all([redirectAddresses, requestedAddresses]).then(([redirect, requested]) => [
     ...new Set([...requested, ...redirect]),
   ]);
@@ -135,8 +123,6 @@ export async function startOAuthLoopbackCallbackServer(params: {
   bindHostname?: string;
   bindOnlyHostname?: string;
   deferResponse?: boolean;
-  lookup?: LoopbackLookup;
-  createServer?: typeof import("node:http").createServer;
   resolveCorsOrigin?: CorsOriginResolver;
   renderSuccess?: () => RenderedResponse;
   renderError?: (message: string) => RenderedResponse;
@@ -166,7 +152,6 @@ export async function startOAuthLoopbackCallbackServer(params: {
   const resolvedAddresses = resolveBindAddresses(
     redirectUrl,
     params.bindHostname,
-    params.lookup,
     params.bindOnlyHostname,
   );
   const addresses = Array.isArray(resolvedAddresses)
@@ -178,7 +163,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
       );
   const port = resolveOAuthLoopbackPort(redirectUrl);
   const callbackPath = redirectUrl.pathname || "/";
-  const createServer = params.createServer ?? (await import("node:http")).createServer;
+  const { createServer } = await import("node:http");
   const servers: Server[] = [];
   let received = false;
   let settled = false;

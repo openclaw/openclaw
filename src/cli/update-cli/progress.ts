@@ -74,18 +74,14 @@ export function createUpdateProgress(
   let observation: "active" | "suspended" | "disposed" = "active";
   const seenPhases = new Set<UpdateRunPhase>();
   const stop = () => {
-    if (stepNotice) {
-      clearInterval(stepNotice);
-      stepNotice = undefined;
-    }
+    clearInterval(stepNotice);
+    stepNotice = undefined;
     currentSpinner?.clear();
     currentSpinner = null;
   };
   const clearTimer = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearTimeout(timer);
+    timer = undefined;
   };
   const pausePolling = () => {
     polling = false;

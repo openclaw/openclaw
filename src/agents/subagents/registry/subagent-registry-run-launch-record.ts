@@ -29,6 +29,7 @@ export function createFailedQueuedRun(
 export type RegisterSubagentRunParams = {
   runId: string;
   requesterTurnRunId?: string;
+  nativePluginOwner?: SubagentRunRecord["nativePluginOwner"];
   childSessionKey: string;
   childAgentId: string;
   sessionEntry?: SubagentRunRecord["childSessionIdentity"];
@@ -87,6 +88,9 @@ export function createSubagentRegistrationRecord(
     runId,
     taskRunId: runId,
     ...(requesterTurnRunId ? { requesterTurnRunId } : {}),
+    ...(registerParams.nativePluginOwner
+      ? { nativePluginOwner: { ...registerParams.nativePluginOwner } }
+      : {}),
     childSessionKey: registerParams.childSessionKey.trim(),
     childAgentId: prepared.childAgentId,
     childSessionIdentity: registerParams.sessionEntry

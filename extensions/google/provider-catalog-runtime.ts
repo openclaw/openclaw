@@ -96,7 +96,6 @@ export async function buildGoogleLiveCatalogProvider(params: {
   apiKey?: string;
   discoveryApiKey?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
   const { models, ...providerConfig } = buildGoogleStaticCatalogProvider();
   return await buildLiveModelProviderConfig({

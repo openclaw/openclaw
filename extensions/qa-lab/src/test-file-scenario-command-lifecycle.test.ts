@@ -12,6 +12,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const spawnMock = vi.hoisted(() => vi.fn());
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const actualSpawn = vi.hoisted((): { value?: typeof import("node:child_process").spawn } => ({}));
+const cleanupTimings = vi.hoisted(() => ({ forceKillAfterMs: 2_000, verifyAfterMs: 500 }));
+
+vi.mock("./posix-command-settlement.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./posix-command-settlement.js")>();
+  return {
+    ...actual,
+    createQaPosixCommandSettlement(
+      params: Parameters<typeof actual.createQaPosixCommandSettlement>[0],
+    ) {
+      return actual.createQaPosixCommandSettlement({ ...params, ...cleanupTimings });
+    },
+  };
+});
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -24,11 +37,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 import { isProcessAlive, waitForDead } from "./process-wait.test-helper.js";
-import {
-  resetQaScenarioCommandCleanupTimings,
-  runQaScenarioCommandLifecycle,
-  setQaScenarioCommandCleanupTimings,
-} from "./test-file-scenario-command-lifecycle.js";
+import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
 
 type ParentSignal = "SIGINT" | "SIGTERM";
 type ParentHandler = (() => void) | ((signal: ParentSignal) => void);
@@ -83,7 +92,8 @@ function runCommand(
 
 describe.skipIf(process.platform === "win32")("qa scenario command real POSIX lifecycle", () => {
   afterEach(() => {
-    resetQaScenarioCommandCleanupTimings();
+    cleanupTimings.forceKillAfterMs = 2_000;
+    cleanupTimings.verifyAfterMs = 500;
     spawnMock.mockReset();
   });
 
@@ -114,7 +124,8 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       commandChild = spawnReal(...args);
       return commandChild;
     });
-    setQaScenarioCommandCleanupTimings({ killGraceMs: 100, forceSettleMs: 100 });
+    cleanupTimings.forceKillAfterMs = 100;
+    cleanupTimings.verifyAfterMs = 100;
     try {
       const descendantScript = [
         "process.on('SIGTERM', () => {});",
@@ -204,6 +215,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
   it("cleans the command group before re-raising a parent SIGTERM", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "qa-command-parent-signal-"));
     const bundlePath = path.join(root, "test-file-scenario-command-lifecycle.mjs");
+    const settlementFixture = "qa-command-settlement-timing";
     // Compile before the readiness window; a cold tsx child can exceed it under the full QA suite.
     // Keep the real SDK helper implementations without unrelated barrel startup or SQL assets.
     await esbuild({
@@ -218,6 +230,25 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       format: "esm",
       outfile: bundlePath,
       platform: "node",
+      plugins: [
+        {
+          name: settlementFixture,
+          setup(build) {
+            build.onResolve({ filter: /^\.\/posix-command-settlement\.js$/ }, () => ({
+              path: settlementFixture,
+              namespace: settlementFixture,
+            }));
+            build.onLoad({ filter: /.*/, namespace: settlementFixture }, () => ({
+              contents: [
+                `import { createQaPosixCommandSettlement as settle } from ${JSON.stringify(sourcePath("./posix-command-settlement.ts"))};`,
+                "export const createQaPosixCommandSettlement = params => settle({ ...params, forceKillAfterMs: 50, verifyAfterMs: 50 });",
+              ].join("\n"),
+              loader: "js",
+              resolveDir: sourcePath("./"),
+            }));
+          },
+        },
+      ],
       target: "node22",
       // The plugin package tsconfig targets built SDK declarations; this fixture runs from source.
       tsconfig: sourcePath("../../../tsconfig.json"),
@@ -236,8 +267,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
     }
     const connected = once(server, "connection", { signal: AbortSignal.timeout(10_000) });
     const controllerScript = [
-      `import { runQaScenarioCommandLifecycle, setQaScenarioCommandCleanupTimings } from ${JSON.stringify(moduleUrl)};`,
-      "setQaScenarioCommandCleanupTimings({ killGraceMs: 50, forceSettleMs: 50 });",
+      `import { runQaScenarioCommandLifecycle } from ${JSON.stringify(moduleUrl)};`,
       "const nested = [",
       "  \"process.on('SIGTERM', () => {});\",",
       `  ${JSON.stringify(`const socket = require('node:net').connect(${address.port}, '127.0.0.1');`)},`,
@@ -308,7 +338,8 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
 
   beforeEach(() => {
     vi.useFakeTimers();
-    setQaScenarioCommandCleanupTimings({ killGraceMs: 20, forceSettleMs: 10 });
+    cleanupTimings.forceKillAfterMs = 20;
+    cleanupTimings.verifyAfterMs = 10;
     spawnMock.mockReset();
     spawnSyncMock.mockReset();
     for (const method of ["once", "on"] as const) {
@@ -332,7 +363,8 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
   });
 
   afterEach(() => {
-    resetQaScenarioCommandCleanupTimings();
+    cleanupTimings.forceKillAfterMs = 2_000;
+    cleanupTimings.verifyAfterMs = 500;
     parentHandlers.clear();
     vi.useRealTimers();
     vi.restoreAllMocks();

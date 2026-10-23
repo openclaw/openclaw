@@ -146,7 +146,7 @@ it.each([
     const publish = (facts: SessionRowFacts) =>
       sessionChanges.emit({ ...scope, scope: "session-entry", facts });
     const originalRead = sessionEntryReads.withSessionEntryReadOnlyInWorker;
-    const read = vi.spyOn(sessionEntryReads, "withSessionEntryReadOnlyInWorker");
+    using read = vi.spyOn(sessionEntryReads, "withSessionEntryReadOnlyInWorker");
     read.mockImplementationOnce(async (input, assertCurrent, consume, ...rest) => {
       if (field === "replacement-before-read") {
         await patchSessionEntryCore(scope, () => ({ lifecycleRevision: "replacement" }));
@@ -197,24 +197,20 @@ it.each([
       );
     });
     const run = vi.fn(async (source: { assertCurrent: () => unknown }) => source.assertCurrent());
-    try {
-      const operation = withGatewayWorkerSessionAdmission(
-        {
-          identity,
-          retainEntryFields:
-            field === "retained-participants" ? ["participantCount"] : ["deviceFolder"],
-          target,
-        },
-        run,
-      );
-      if (accepted) {
-        await expect(operation).resolves.toMatchObject({ sessionId: identity.sessionId });
-      } else {
-        await expect(operation).rejects.toThrow("changed during admission");
-      }
-      expect(run).toHaveBeenCalledTimes(accepted ? 1 : 0);
-    } finally {
-      read.mockRestore();
+    const operation = withGatewayWorkerSessionAdmission(
+      {
+        identity,
+        retainEntryFields:
+          field === "retained-participants" ? ["participantCount"] : ["deviceFolder"],
+        target,
+      },
+      run,
+    );
+    if (accepted) {
+      await expect(operation).resolves.toMatchObject({ sessionId: identity.sessionId });
+    } else {
+      await expect(operation).rejects.toThrow("changed during admission");
     }
+    expect(run).toHaveBeenCalledTimes(accepted ? 1 : 0);
   },
 );

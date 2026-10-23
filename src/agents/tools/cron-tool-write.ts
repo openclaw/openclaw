@@ -13,6 +13,7 @@ import {
 import { createExecApprovalPolicySnapshot } from "../../infra/exec-approvals-allow-always.js";
 import { requiresExecApproval } from "../../infra/exec-approvals-policy.js";
 import { loadExecApprovalsReadOnlyAsync } from "../../infra/exec-approvals-store.js";
+import { applyExecPolicyLayer } from "../../infra/exec-policy.js";
 import { isRecord } from "../../utils.js";
 import { resolveAgentConfig, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveEffectiveToolPolicy } from "../agent-tools.policy.js";
@@ -24,10 +25,14 @@ import {
 } from "../exec-defaults.js";
 import { captureSandboxConfig, resolveSandboxConfigForAgent } from "../sandbox/config.js";
 import { withSandboxRuntimeStatusInWorker } from "../sandbox/runtime-status.js";
+import { readStreamSandboxContext } from "../sandbox/stream-context.js";
+import type { SandboxContext } from "../sandbox/types.js";
+import { projectEffectiveExecPolicy } from "../session-permission-exec-mode.js";
 import {
   assertInheritedCronToolCaptureReady,
   CRON_CREATOR_AUTHORITY_RECOVERY_MESSAGE,
   hasCronCreatorGatewayExecTool,
+  hasCronCreatorSandboxExecTool,
   INCOMPLETE_CRON_CREATOR_AUTHORITY_MESSAGE,
   isCronCreatorToolCaptureComplete,
   planCronJobUpdatePatch,
@@ -83,6 +88,8 @@ function assertCronStreamExecAuthority(params: {
   required?: boolean;
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
   execDefaults: ResolvedExecDefaults | undefined;
+  sandboxContext?: SandboxContext;
+  sandboxExplicitlyDenied?: boolean;
   policyKey?: string;
   approvedPolicyKey?: string;
 }): void {
@@ -91,24 +98,34 @@ function assertCronStreamExecAuthority(params: {
   }
   const pinnedTarget = resolveCronCreatorExecToolTarget(params.creatorToolAllowlist);
   const effectiveAsk = pinnedTarget?.ask ?? params.execDefaults?.ask;
+  const inSandbox = params.execDefaults?.effectiveHost === "sandbox";
   if (
     !params.execDefaults ||
-    !hasCronCreatorGatewayExecTool(params.creatorToolAllowlist) ||
-    params.execDefaults.effectiveHost !== "gateway" ||
-    params.execDefaults.security === "deny" ||
-    (params.execDefaults.security === "allowlist" && effectiveAsk === "off")
+    (inSandbox
+      ? !params.sandboxContext ||
+        !hasCronCreatorSandboxExecTool(params.creatorToolAllowlist) ||
+        params.sandboxExplicitlyDenied
+      : !hasCronCreatorGatewayExecTool(params.creatorToolAllowlist) ||
+        params.execDefaults.effectiveHost !== "gateway" ||
+        params.execDefaults.security === "deny" ||
+        (params.execDefaults.security === "allowlist" && effectiveAsk === "off"))
   ) {
     throw new TypeError(CRON_STREAM_EXEC_AUTHORITY_ERROR);
   }
+  if (inSandbox && params.sandboxContext) {
+    readStreamSandboxContext(params.sandboxContext);
+  }
   if (
     params.policyKey !== undefined &&
-    requiresExecApproval({
-      security: params.execDefaults.security,
-      ask: effectiveAsk ?? params.execDefaults.ask,
-      // A persistent watcher is not an analyzed one-shot allowlist command.
-      analysisOk: false,
-      allowlistSatisfied: false,
-    }) &&
+    (inSandbox
+      ? effectiveAsk !== "off"
+      : requiresExecApproval({
+          security: params.execDefaults.security,
+          ask: effectiveAsk ?? params.execDefaults.ask,
+          // A persistent watcher is not an analyzed one-shot allowlist command.
+          analysisOk: false,
+          allowlistSatisfied: false,
+        })) &&
     params.approvedPolicyKey !== params.policyKey
   ) {
     throw new CronStreamExecApprovalRequiredError(
@@ -140,7 +157,16 @@ export async function prepareCronStreamExecPolicy(input: {
     sessionKey: opts?.agentSessionKey,
     sandboxAvailable: opts?.sandboxed,
   };
-  const { agentId } = resolveExecConfigState(params);
+  const { agentId, globalExec, agentExec } = resolveExecConfigState(params);
+  const configuredPolicy = projectEffectiveExecPolicy({
+    base: applyExecPolicyLayer(globalExec ?? {}, agentExec),
+    overrides: params.execOverrides,
+    permissionPolicy: params.sessionEntry?.permissionMode
+      ? { mode: params.sessionEntry.permissionMode }
+      : undefined,
+  });
+  const sandboxExplicitlyDenied =
+    configuredPolicy.security === "deny" || configuredPolicy.mode === "deny";
   return await withSandboxRuntimeStatusInWorker(
     { cfg: params.cfg, agentId, sessionKey: params.sessionKey },
     {
@@ -156,11 +182,15 @@ export async function prepareCronStreamExecPolicy(input: {
         loadExecApprovalsReadOnlyAsync,
       );
       assertCurrentSource();
+      const sandboxContext =
+        defaults.effectiveHost === "sandbox" ? opts?.sandboxContext : undefined;
       assertCronStreamExecAuthority({
         value: undefined,
         required: true,
         creatorToolAllowlist,
         execDefaults: defaults,
+        sandboxContext,
+        sandboxExplicitlyDenied,
       });
       // Keep policy inputs private; the write owner supplies the approval row
       // from the same transaction that commits the stream mutation.
@@ -175,6 +205,8 @@ export async function prepareCronStreamExecPolicy(input: {
           required: true,
           creatorToolAllowlist,
           execDefaults,
+          sandboxContext,
+          sandboxExplicitlyDenied,
           policyKey,
           approvedPolicyKey,
         });
@@ -182,6 +214,7 @@ export async function prepareCronStreamExecPolicy(input: {
       return preparation.kind === "resolved"
         ? {
             kind: "resolved",
+            sandboxContext,
             assertCurrentSource,
             assertCurrent: (approvedPolicyKey) =>
               assertDefaults(
@@ -211,6 +244,11 @@ export async function prepareCronStreamExecPolicy(input: {
 export async function assertCronStreamExecPolicyWithoutApproval(
   policy: CronStreamExecPolicy,
 ): Promise<void> {
+  if (policy.sandboxContext) {
+    throw new TypeError(
+      "Sandbox streams require a current creator grant to carry their sandbox target.",
+    );
+  }
   if (policy.kind === "resolved") {
     policy.assertCurrent();
   } else {

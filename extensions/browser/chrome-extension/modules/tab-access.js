@@ -1,5 +1,5 @@
 import { ACCESS_MODE_ALL, ACCESS_MODE_SELECTED } from "./relay-core.js";
-import { addTabToOpenClawGroup } from "./relay-tab-groups.js";
+import { addTabToOpenClawGroup, isTabSelected } from "./relay-tab-groups.js";
 import { createSerialQueue } from "./serial-queue.js";
 import { TAB_SCOPED_COMMANDS } from "./tab-access-command-scope.js";
 import { createTabDocumentProvenance } from "./tab-document-provenance.js";
@@ -23,7 +23,8 @@ function initialBlankDocument(tab) {
  * Owns access mode, durable browser-session pauses, and revocation epochs.
  * Every authority-bearing caller captures an epoch and checks through here.
  */
-export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGroupColor }) {
+export function createTabAccessPolicy({ getGroupColor }) {
+  const chrome = globalThis.chrome;
   const deniedTabIds = new Set();
   // Only createTab below mints these records. Group membership and Tab snapshots
   // cannot recreate initial-document ownership after navigation or worker restart.
@@ -42,7 +43,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
   let initialized = null;
   const mutateStorage = createSerialQueue();
   const addTabToGroup = (tabId, created) =>
-    addTabToOpenClawGroup(tabId, { chromeApi, getGroupColor, created });
+    addTabToOpenClawGroup(tabId, { chromeApi: chrome, getGroupColor, created });
 
   const documents = createTabDocumentProvenance({
     access: {
@@ -84,7 +85,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     let tab;
     do {
       root = documents.rootRevision(tabId);
-      tab = await chromeApi.tabs.get(tabId);
+      tab = await chrome.tabs.get(tabId);
     } while (root !== documents.rootRevision(tabId));
     return documents.resolveTabSnapshot(tabId, tab);
   }
@@ -93,7 +94,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
 
   async function fileAccessAllowed() {
     try {
-      return (await chromeApi.extension?.isAllowedFileSchemeAccess?.()) === true;
+      return (await chrome.extension?.isAllowedFileSchemeAccess?.()) === true;
     } catch {
       return false;
     }
@@ -137,10 +138,10 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
   async function persistDeniedIds() {
     const ids = persistedIds();
     if (ids.length === 0) {
-      await chromeApi.storage.session.remove([DENIED_TAB_IDS_KEY]);
+      await chrome.storage.session.remove([DENIED_TAB_IDS_KEY]);
       return;
     }
-    await chromeApi.storage.session.set({ [DENIED_TAB_IDS_KEY]: ids });
+    await chrome.storage.session.set({ [DENIED_TAB_IDS_KEY]: ids });
   }
 
   function invalidateTab(tabId) {
@@ -261,7 +262,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     pendingCreations.add(pending);
     let tab;
     try {
-      tab = await chromeApi.tabs.create({ url: message.url, active: message.background !== true });
+      tab = await chrome.tabs.create({ url: message.url, active: message.background !== true });
     } finally {
       pendingCreations.delete(pending);
     }
@@ -308,7 +309,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       assertAttachment = attached.assertCurrent;
       created.assertCurrent();
       if (message.focus === true && typeof tab.windowId === "number") {
-        await chromeApi.windows.update(tab.windowId, { focused: true });
+        await chrome.windows.update(tab.windowId, { focused: true });
         created.assertCurrent();
       }
       await requireTab(tab.id, created.epoch);
@@ -330,7 +331,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         epochMatches(tab.id, created.epoch);
       try {
         if (ownsRollback()) {
-          const current = await chromeApi.tabs.get(tab.id);
+          const current = await chrome.tabs.get(tab.id);
           if (
             ownsRollback() &&
             current.id === tab.id &&
@@ -343,7 +344,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
             current.groupId === created.groupId &&
             current.incognito === tab.incognito
           ) {
-            await chromeApi.tabs.remove(tab.id);
+            await chrome.tabs.remove(tab.id);
           }
         }
       } catch {
@@ -374,8 +375,8 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     enabled = initialEnabled;
     initialized = (async () => {
       const [stored, tabs, allowFiles] = await Promise.all([
-        chromeApi.storage.session.get([DENIED_TAB_IDS_KEY]),
-        chromeApi.tabs.query({}),
+        chrome.storage.session.get([DENIED_TAB_IDS_KEY]),
+        chrome.tabs.query({}),
         fileAccessAllowed(),
       ]);
       // Chrome reloads the extension and closes its debugger sessions when this
@@ -525,7 +526,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       return { accessible: false, eligible: false, denied: false, reason: eligibility.reason, tab };
     }
     const denied = mode === ACCESS_MODE_ALL && deniedTabIds.has(tabId);
-    const selected = mode === ACCESS_MODE_SELECTED ? await isSelectedTab(tab) : true;
+    const selected = mode === ACCESS_MODE_SELECTED ? await isTabSelected(tab) : true;
     // A lookup can observe removal before its event. Retire the same private
     // authority now, including the creator's right to roll back this tab.
     if (!selected && (document || createdTabs.get(tabId)?.epoch === epoch)) {
@@ -545,7 +546,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         return { accessible: false, eligible: false, denied, reason: "revoked", tab: current };
       }
       const currentEligible = eligibilityForTab(current).eligible;
-      const currentSelected = await isSelectedTab(current);
+      const currentSelected = await isTabSelected(current);
       if (!currentSelected && (document || createdTabs.get(tabId)?.epoch === epoch)) {
         invalidateTab(tabId);
       }
@@ -609,7 +610,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       if (!enabled || (transitioning && !allowDuringTransition)) {
         return [];
       }
-      const tabs = await chromeApi.tabs.query({});
+      const tabs = await chrome.tabs.query({});
       if (listRevision !== discoveryRevision) {
         continue;
       }
@@ -626,7 +627,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
           if (!deniedTabIds.has(tab.id)) {
             accessible.push(tab);
           }
-        } else if (await isSelectedTab(tab)) {
+        } else if (await isTabSelected(tab)) {
           accessible.push(tab);
         }
       }
@@ -648,7 +649,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     deniedTabIds.add(tabId);
     let tab;
     try {
-      tab = await chromeApi.tabs.get(tabId);
+      tab = await chrome.tabs.get(tabId);
     } catch (error) {
       deniedTabIds.delete(tabId);
       invalidateTab(tabId);

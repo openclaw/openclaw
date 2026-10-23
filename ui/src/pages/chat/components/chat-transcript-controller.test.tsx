@@ -195,6 +195,34 @@ it("measures newly inserted rows after Solid connects them", async () => {
   expect(transcriptSize(container)).toBe(200);
 });
 
+it("updates the visible range on native scroll without a parent render", async () => {
+  const flushFrames = stubAnimationFrames();
+  const props = threadProps("local-geometry", "agent:main:local-geometry", messages(40, "message"));
+  saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+    scrollTop: 0,
+    anchorToEnd: false,
+  });
+  const { container, transcript, draw } = threadFixture(props, createTestTranscript(props.paneId));
+  draw();
+  transcript.start();
+  transcript.update();
+  await flushDeferredRowPrune();
+  const { scroller, rows } = expectObservedRows(container);
+  geometry(scroller, { clientHeight: 600, scrollHeight: 4_000 });
+  emitSize(scroller, 600);
+  emitRowSizes(rows, 100);
+  draw();
+  flushFrames();
+  await flushDeferredRowPrune();
+  expect(container.textContent).toContain("message 0");
+
+  scroll(scroller, 2_400);
+  flushFrames();
+  await flushDeferredRowPrune();
+  expect(container.textContent).not.toContain("message 0");
+  expect(Number(transcriptRows(container)[0]?.dataset.index)).toBeGreaterThan(0);
+});
+
 it("reveals committed initial row sizes without waiting for an animation frame", async () => {
   stubAnimationFrames();
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);

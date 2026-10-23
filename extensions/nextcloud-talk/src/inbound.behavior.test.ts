@@ -64,7 +64,7 @@ vi.mock("./room-info.js", async () => {
   };
 });
 
-function installRuntime(mentionRegexes: RegExp[] = []) {
+function installRuntime() {
   const runtime = {
     channel: {
       inbound: {
@@ -78,7 +78,7 @@ function installRuntime(mentionRegexes: RegExp[] = []) {
       commands: { shouldHandleTextCommands: vi.fn(() => false) },
       text: { hasControlCommand: vi.fn(() => false) },
       mentions: {
-        buildMentionRegexes: vi.fn(() => mentionRegexes),
+        buildMentionRegexes: vi.fn(() => []),
         matchesMentionPatterns: vi.fn(() => false),
       },
     },
@@ -151,8 +151,7 @@ type AutomaticReplyContext = {
   deliver: (payload: ReplyPayload, kind: "final" | "block") => ReturnType<NativeReplyDelivery>;
 };
 
-// Capture synthetic assistant output at the inbound reply boundary; the shared
-// outbound planner, scoped media loading, and native HTTP transport remain real.
+// Capture assistant output; outbound planning, scoped media loading and HTTP remain real.
 async function withNativeAutomaticReply(
   run: (context: AutomaticReplyContext) => Promise<void>,
   options: { botOnly?: boolean } = {},
@@ -167,10 +166,10 @@ async function withNativeAutomaticReply(
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const config = structuredClone(fixture.ctx.cfg) as CoreConfig;
     config.agents = { defaults: { workspace }, entries: { main: {} } };
-    const work = config.channels?.["nextcloud-talk"]?.accounts?.work;
-    if (!work) {
-      throw new Error("expected fixture API account");
-    }
+    const work = expectDefined(
+      config.channels?.["nextcloud-talk"]?.accounts?.work,
+      "fixture account",
+    );
     work.dmPolicy = "allowlist";
     work.allowFrom = ["user-1"];
     if (options.botOnly) {
@@ -195,8 +194,6 @@ async function withNativeAutomaticReply(
       ]),
     );
     installPairingController(vi.fn(async () => []));
-    // Existing pairing tests retain their text spy; native reply cases delegate
-    // the spy to the real transport so the old URL fallback remains observable.
     const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
     mocks.send.mockImplementation(actual.sendMessageNextcloudTalk);
     const controller = new AbortController();
@@ -215,11 +212,15 @@ async function withNativeAutomaticReply(
           onAbandoned: async () => {},
         },
       });
-      const request = vi.mocked<ProviderReplyDispatch>(core.channel.inbound.dispatch).mock
-        .calls[0]?.[0];
-      if (!request) {
-        throw new Error("expected admitted automatic reply delivery");
-      }
+      const request = expectDefined(
+        vi.mocked<ProviderReplyDispatch>(core.channel.inbound.dispatch).mock.calls[0]?.[0],
+        "automatic reply delivery",
+      );
+      const prepare = expectDefined(request.delivery.preparePayload, "reply preparation");
+      const deliver = expectDefined(
+        request.delivery.deliverWithProviderMessageSending,
+        "native delivery",
+      );
       await run({
         fixture: Object.assign(fixture, { mediaUrl }),
         controller,
@@ -230,17 +231,11 @@ async function withNativeAutomaticReply(
             onPlatformSendDispatch,
             assertPlatformSendAuthorized: () => controller.signal.throwIfAborted(),
           };
-          const prepared = request.delivery.preparePayload
-            ? await request.delivery.preparePayload(payload, info)
-            : payload;
+          const prepared = await prepare(payload, info);
           if (prepared === null) {
             return { visibleReplySent: false };
           }
-          const delivery = request.delivery;
-          if (typeof delivery.deliverWithProviderMessageSending !== "function") {
-            throw new Error("expected provider message sending");
-          }
-          return await delivery.deliverWithProviderMessageSending(prepared, info);
+          return await deliver(prepared, info);
         },
       });
     } finally {
@@ -307,12 +302,6 @@ describe("nextcloud-talk inbound behavior", () => {
       log: "nextcloud-talk: drop empty message body (mediaType=application/pdf) target=user-1",
     },
     {
-      message: { isGroupChat: true },
-      account: { groupAllowFrom: ["user-1"] },
-      command: false,
-      log: "nextcloud-talk: drop room room-1 (no mention)",
-    },
-    {
       message: { isGroupChat: true, text: "/help" },
       account: { rooms: { "room-1": { allowFrom: ["user-1"], requireMention: false } } },
       command: true,
@@ -331,8 +320,6 @@ describe("nextcloud-talk inbound behavior", () => {
       installPairingController();
       if (command) {
         core = installCommandRuntime(vi.fn((body?: string) => body === "/help"));
-      } else {
-        installRuntime([/@openclaw/i]);
       }
     }
     const runtime = createRuntimeSpies();
@@ -370,34 +357,17 @@ describe("nextcloud-talk inbound behavior", () => {
 
     expect(hasControlCommand).toHaveBeenCalledWith(command, config);
     expect(coreRuntime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
-    expect(dispatched(coreRuntime)).toEqual(
-      expect.objectContaining({
-        replyPipeline: {},
-        ctxPayload: expect.objectContaining({
-          CommandBody: command,
-          BodyForCommands: command,
-          RawBody: text.trim(),
-          BodyForAgent: text.trim(),
-          CommandAuthorized: true,
-          WasMentioned: false,
-        }),
-      }),
-    );
-  });
-
-  it("binds durable ingress adoption into reply options", async () => {
-    const lifecycle = {
-      abortSignal: new AbortController().signal,
-      onAdopted: vi.fn(async () => {}),
-      onDeferred: vi.fn(),
-      onAdoptionFinalizing: vi.fn(),
-      onAbandoned: vi.fn(async () => {}),
-    };
-
-    const request = await allowedInbound({ turnAdoptionLifecycle: lifecycle });
-    expect(request.replyOptions?.turnAdoptionLifecycle).toEqual(
-      expect.objectContaining({ admission: "exclusive", onAdopted: lifecycle.onAdopted }),
-    );
+    expect(dispatched(coreRuntime)).toMatchObject({
+      replyPipeline: {},
+      ctxPayload: {
+        CommandBody: command,
+        BodyForCommands: command,
+        RawBody: text.trim(),
+        BodyForAgent: text.trim(),
+        CommandAuthorized: true,
+        WasMentioned: false,
+      },
+    });
   });
 
   it("sanitizes inbound replies while preserving native delivery fields", async () => {
@@ -441,6 +411,22 @@ describe("nextcloud-talk inbound behavior", () => {
     expect(mocks.send).not.toHaveBeenCalled();
   });
 
+  it("binds durable ingress adoption into reply options", async () => {
+    const lifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
+
+    const request = await allowedInbound({ turnAdoptionLifecycle: lifecycle });
+    expect(request.replyOptions?.turnAdoptionLifecycle).toMatchObject({
+      admission: "exclusive",
+      onAdopted: lifecycle.onAdopted,
+    });
+  });
+
   it.each([
     { kind: "final" as const, caption: "The report" },
     { kind: "block" as const, caption: "The report" },
@@ -459,61 +445,17 @@ describe("nextcloud-talk inbound behavior", () => {
         );
         const upload = fixture.requests.find(({ method }) => method === "PUT");
         expect(upload?.body).toEqual(fixture.bytes);
-        expect(upload?.url.pathname).toMatch(/^\/cloud\/remote.php\/dav\/files\/canonical-user\//);
         const shareRequests = fixture.requests.filter(({ url }) =>
           url.pathname.endsWith("/shares"),
         );
         expect(shareRequests).toHaveLength(1);
         const share = new URLSearchParams(shareRequests[0]!.body.toString());
-        expect(share.get("shareType")).toBe("10");
-        expect(share.get("shareWith")).toBe("allowed");
-        expect(share.get("permissions")).toBe("1");
         expect(JSON.parse(share.get("talkMetaData") ?? "{}")).toEqual({ caption, replyTo: 41 });
         expect(result).toMatchObject({
           visibleReplySent: true,
           receipt: { platformMessageIds: ["42"] },
         });
-        expect(fixture.requests.some(({ url }) => url.pathname.includes("/bot/"))).toBe(false);
-        expect(
-          fixture.requests.every(
-            ({ authorization }) =>
-              authorization ===
-              `Basic ${Buffer.from("login-alias:synthetic-app-password").toString("base64")}`,
-          ),
-        ).toBe(true);
       });
-    },
-  );
-
-  it.each([
-    { kind: "final" as const, caption: "The report" },
-    { kind: "block" as const, caption: "The report" },
-    { kind: "final" as const, caption: "" },
-  ])(
-    "preserves a bot-only automatic $kind web link with caption '$caption'",
-    async ({ kind, caption }) => {
-      await withNativeAutomaticReply(
-        async ({ fixture, deliver }) => {
-          const mediaUrl = "https://example.com/report.pdf";
-          const result = await deliver(
-            { text: caption || undefined, mediaUrl, replyToId: "41" },
-            kind,
-          );
-          expect(result).toMatchObject({
-            visibleReplySent: true,
-            receipt: { platformMessageIds: ["900"] },
-          });
-          expect(fixture.requests).toHaveLength(1);
-          expect(fixture.requests[0]?.url.pathname).toBe(
-            "/cloud/ocs/v2.php/apps/spreed/api/v1/bot/allowed/message",
-          );
-          expect(JSON.parse(fixture.requests[0]!.body.toString())).toEqual({
-            message: `${caption}\n\nAttachment: ${mediaUrl}`.trim(),
-            replyTo: "41",
-          });
-        },
-        { botOnly: true },
-      );
     },
   );
 

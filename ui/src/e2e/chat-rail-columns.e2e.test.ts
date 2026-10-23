@@ -1,11 +1,7 @@
 import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
-import {
-  closeChatLayoutMenu,
-  openChatLayoutMenu,
-  selectChatLayoutAction,
-} from "../test-helpers/chat-layout-menu.ts";
+import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -16,9 +12,7 @@ import {
 import {
   activateChatHeaderPanelAction,
   dockChatSidePanel,
-  focusChatSidePanel,
   openChatSidePanelType as openFromPlus,
-  restoreChatAsMain,
 } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -234,16 +228,15 @@ function tabGeometry(tab: Locator) {
   }));
 }
 
-function tabMatchesCloseBackground(tab: Locator) {
+function tabCloseHasTransparentBackground(tab: Locator) {
   return tab.evaluate((element) => {
     const close = element.nextElementSibling;
-    return close
-      ? getComputedStyle(element).backgroundColor === getComputedStyle(close).backgroundColor
-      : false;
+    return close ? getComputedStyle(close).backgroundColor === "rgba(0, 0, 0, 0)" : false;
   });
 }
 
 async function dragDivider(page: Page, divider: Locator, axis: "x" | "y", delta: number) {
+  await waitForPanelGeometry(page);
   const box = await divider.boundingBox();
   expect(box).not.toBeNull();
   const x = box!.x + (axis === "x" ? 1 : box!.width / 2);
@@ -268,10 +261,24 @@ async function narrowestRailTabLabel(page: Page): Promise<number> {
     );
 }
 
+async function waitForPanelGeometry(page: Page): Promise<void> {
+  await page.locator(".sidebar-region").evaluate(async (element) => {
+    const animations = element
+      .getAnimations({ subtree: true })
+      .filter(
+        (animation) =>
+          animation.playState === "running" &&
+          Number.isFinite(animation.effect?.getComputedTiming().endTime),
+      );
+    await Promise.all(animations.map((animation) => animation.finished.catch(() => undefined)));
+  });
+}
+
 async function expectExpandedSidePanelFillsRegion(
   page: Page,
   placement: "main" | "side" = "main",
 ): Promise<void> {
+  await waitForPanelGeometry(page);
   const geometry = await page
     .locator(`.sidebar-region [data-region="${placement}"]:not([hidden])`)
     .evaluate((element, slot) => {
@@ -287,15 +294,14 @@ async function expectExpandedSidePanelFillsRegion(
         throw new Error("Focused panel requires its task toolbar and sidebar region");
       }
       if (slot === "side" && !tabs) {
-        throw new Error("A full-width side panel keeps its tab strip below the task toolbar");
+        throw new Error("An expanded side panel requires its retained tab strip");
       }
       return {
         bottom: Math.abs(panel.bottom - region.bottom),
         left: Math.abs(panel.left - region.left),
         right: Math.abs(panel.right - region.right),
-        top: Math.abs(header.top - region.top),
+        top: Math.abs((tabs ?? header).top - region.top),
         headerGap: Math.abs(panel.top - (tabs?.bottom ?? header.bottom)),
-        tabGap: tabs ? Math.abs(tabs.top - header.bottom) : 0,
       };
     }, placement);
   for (const delta of Object.values(geometry)) {
@@ -303,8 +309,8 @@ async function expectExpandedSidePanelFillsRegion(
   }
 }
 
-async function captureRichPanel(page: Page, name: string) {
-  if (!proofDir) {
+async function captureRichPanel(page: Page, name: string, directory = proofDir) {
+  if (!directory) {
     return;
   }
   const clip = await page.evaluate(() => {
@@ -321,7 +327,7 @@ async function captureRichPanel(page: Page, name: string) {
     const bottom = Math.min(innerHeight, Math.max(...rects.map((rect) => rect.bottom)));
     return { x, y, width: right - x, height: bottom - y };
   });
-  await page.screenshot({ path: path.join(proofDir, `${name}.png`), clip });
+  await page.screenshot({ path: path.join(directory, `${name}.png`), clip });
 }
 
 async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
@@ -330,16 +336,26 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
   const header = sideHeader(page);
 
   await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
-  await rail.locator(".side-panel-empty--selector").waitFor();
+  await rail.locator(".side-panel-launcher").waitFor();
   expect(await rail.locator(".tabstrip-tab").count()).toBe(0);
   await captureRichPanel(page, `rails-tabs-empty-${themeMode}`);
 
-  await rail.locator(".side-panel-empty__type").filter({ hasText: "Files" }).click();
+  await rail
+    .locator(".side-panel-launcher")
+    .getByRole("button")
+    .filter({ has: page.locator(".side-panel-type-option__label", { hasText: /^Files$/ }) })
+    .click();
   await waitForSlot(page, "workspace");
   await expect.poll(() => rail.textContent()).toContain("chat-pane-render.ts");
   await activateChatHeaderPanelAction(page, "Show session changes");
   await gateway.waitForRequest("sessions.diff");
   await waitForSlot(page, "detail");
+  const changedFile = rail.getByRole("button", {
+    name: "ui/src/pages/chat/chat-pane-render.ts — Modified",
+    exact: true,
+  });
+  await changedFile.click();
+  await expect.poll(() => changedFile.getAttribute("aria-expanded")).toBe("true");
   await expect.poll(() => rail.textContent()).toContain("single side panel");
   await captureRichPanel(page, `rails-tabs-review-${themeMode}`);
 
@@ -391,10 +407,14 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
   const filesGeometry = await tabGeometry(filesTab);
   await filesTab.hover();
   await expect.poll(() => computedStyle(filesClose, "opacity")).toBe("1");
-  await expect.poll(() => tabMatchesCloseBackground(filesTab)).toBe(true);
+  await expect.poll(() => tabCloseHasTransparentBackground(filesTab)).toBe(true);
   await filesClose.hover();
-  await expect.poll(() => tabMatchesCloseBackground(filesTab)).toBe(true);
+  await expect.poll(() => tabCloseHasTransparentBackground(filesTab)).toBe(true);
   expect(await tabGeometry(filesTab)).toEqual(filesGeometry);
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+    const directory = proofDir ?? createControlUiE2eArtifactDir(`chat-rail-hover-${themeMode}`);
+    await captureRichPanel(page, `rails-tab-close-hover-${themeMode}`, directory);
+  }
   const railLabels = rail.locator(sidePanelTabLabelSelector);
   let overflowingLabelIndex = -1;
   await expect
@@ -489,14 +509,23 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
     .toBe("vertical");
   await expect.poll(() => panelSize(page, "width")).toBeCloseTo(resizedWidth, 0);
 
-  await focusChatSidePanel(page);
-  await expect
-    .poll(() => computedStyle(page.locator(".sidebar-region__primary"), "display"))
-    .toBe("none");
-  await expectExpandedSidePanelFillsRegion(page);
+  const primary = page.locator(".sidebar-region__primary");
+  const retainedPrimary = await primary.elementHandle();
+  await selectChatLayoutAction(page, "Expand Side panel");
+  await expect.poll(() => primary.isVisible()).toBe(false);
+  expect(await primary.getAttribute("hidden")).not.toBeNull();
+  expect(await primary.getAttribute("inert")).not.toBeNull();
+  expect(await retainedPrimary!.evaluate((element) => element.isConnected)).toBe(true);
+  await expectExpandedSidePanelFillsRegion(page, "side");
   await captureRichPanel(page, `rails-tabs-expanded-${themeMode}`);
   await selectChatLayoutAction(page, "Restore split");
-  await restoreChatAsMain(page);
+  await waitForPanelGeometry(page);
+  await expect.poll(() => primary.isVisible()).toBe(true);
+  expect(await panelSize(page, "width")).toBeCloseTo(resizedWidth, 0);
+  expect(await primary.getAttribute("inert")).toBeNull();
+  expect(await primary.evaluate((element, original) => element === original, retainedPrimary)).toBe(
+    true,
+  );
 
   await selectChatLayoutAction(page, "Minimize side panel");
   await expect.poll(() => header.isVisible()).toBe(false);
@@ -527,7 +556,7 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
   await reloadChat(page);
   await expect.poll(() => header.isVisible()).toBe(false);
   await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
-  await rail.locator(".side-panel-empty--selector").waitFor();
+  await rail.locator(".side-panel-launcher").waitFor();
   expect(await rail.locator(".tabstrip-tab").count()).toBe(0);
   // Shrink: the Browser default can leave this saved column near its maximum.
   await dragDivider(page, divider, "x", 70);
@@ -537,12 +566,21 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
   await captureRichPanel(page, `rails-tabs-empty-resized-${themeMode}`);
 
   await reloadChat(page);
-  await rail.locator(".side-panel-empty--selector").waitFor();
+  await rail.locator(".side-panel-launcher").waitFor();
   expect(await divider.boundingBox()).not.toBeNull();
   await expect.poll(() => panelSize(page, "width")).toBeCloseTo(emptyResizedWidth, 0);
-  await rail.locator(".side-panel-empty__type").filter({ hasText: "Terminal" }).click();
+  await rail
+    .locator(".side-panel-launcher")
+    .getByRole("button")
+    .filter({ has: page.locator(".side-panel-type-option__label", { hasText: /^Terminal$/ }) })
+    .click();
   await expect.poll(() => panelSize(page, "width")).toBeCloseTo(emptyResizedWidth, 0);
-  const terminalLabel = rail.locator(sidePanelTabLabelSelector).filter({ hasText: "shell 1" });
+  const restoredTerminal = rail.locator('.tabstrip-tab[data-tab-value^="hosted:terminal:"]');
+  await restoredTerminal.click();
+  const terminalLabel = restoredTerminal.locator(".tabstrip-tab__label");
+  await expect.poll(() => terminalLabel.textContent()).toBe("shell 1");
+  expect(await restoredTerminal.getAttribute("class")).toContain("is-exited");
+  expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
   await expect
     .poll(() =>
       terminalLabel.evaluate((label) => {
@@ -556,18 +594,22 @@ async function exerciseTabbedPanel(page: Page, themeMode: "light" | "dark") {
     .toEqual({ fits: true, mask: "none" });
   const terminalTabGeometry = await terminalLabel.evaluate((label) => {
     const tab = label.closest<HTMLElement>(".tabstrip-tab");
-    const tabs = tab?.closest(".tabstrip");
+    const viewport = tab?.closest<HTMLElement>(".side-panel__header-tabs");
+    if (!tab || !viewport) {
+      throw new Error("The terminal tab must belong to the panel's allocated tabs region");
+    }
+    const newTab = viewport.querySelector<HTMLElement>(":scope > .tabstrip-new");
     return {
-      availableWidth: tabs?.getBoundingClientRect().width ?? 0,
-      tabWidth: tab?.getBoundingClientRect().width ?? 0,
+      availableWidth: viewport.clientWidth - (newTab?.getBoundingClientRect().width ?? 0),
+      tabWidth: tab.getBoundingClientRect().width,
     };
   });
   expect(terminalTabGeometry.tabWidth).toBeLessThan(terminalTabGeometry.availableWidth - 12);
   await captureRichPanel(page, `rails-tabs-single-${themeMode}`);
-  const terminalTooltip = terminalLabel.locator("../..");
+  const terminalTooltip = terminalLabel.locator("xpath=ancestor::openclaw-tooltip[1]");
   await terminalLabel.locator("..").hover();
-  await page.waitForTimeout(200);
-  expect(await terminalTooltip.getAttribute("open")).toBeNull();
+  expect(await terminalLabel.getAttribute("data-tooltip-overflow")).toBeNull();
+  expect(await terminalTooltip.locator(".tooltip-surface[popover]:popover-open").count()).toBe(0);
   await openFromPlus(page, "Review");
   await rail.getByRole("button", { name: "Close tab: shell 1", exact: true }).click();
   // Closing the last terminal tab removes the Terminal slot; Review stays.
@@ -662,7 +704,7 @@ suite.define(() => {
         expect(companionGaps.bottom).toBeLessThanOrEqual(1);
 
         const mainComposer = page.getByRole("textbox", { name: "Chat composer", exact: true });
-        expect(await mainComposer.isVisible()).toBe(false);
+        expect(await mainComposer.isVisible()).toBe(true);
         await selectChatLayoutAction(page, "Minimize side panel");
         await mainComposer.click();
         expect(await mainComposer.evaluate((element) => element === document.activeElement)).toBe(
@@ -671,6 +713,7 @@ suite.define(() => {
         await selectChatLayoutAction(page, "Side panel");
         const input = companion.getByRole("textbox", { name: "Ask in side chat" });
         await input.fill("Can I use side chat here?");
+        await gateway.deferNext("sessions.companion.ask");
         await companion.getByRole("button", { name: "Ask", exact: true }).click();
         const request = await gateway.waitForRequest("sessions.companion.ask");
         expect(request.params).toEqual({
@@ -678,19 +721,74 @@ suite.define(() => {
           question: "Can I use side chat here?",
           sessionKey,
         });
+        const host = page.locator(".chat-mobile-host");
+        const actions = page.locator(
+          ".agent-chat__header--mobile .chat-header-session-menu__trigger",
+        );
+        const actionMenu = actions.locator("xpath=ancestor::openclaw-chat-header-session-menu[1]");
+        const clear = actionMenu.getByRole("menuitem", { name: "Clear side chat", exact: true });
+        const pendingResets = (await gateway.getRequests("sessions.companion.reset")).length;
+        await host
+          .locator(".chat-mobile-host__header")
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
+        await host.waitFor({ state: "hidden" });
+        await actions.click();
+        await clear.waitFor();
+        expect(await clear.isDisabled()).toBe(true);
+        expect(await gateway.getRequests("sessions.companion.reset")).toHaveLength(pendingResets);
+        await page.keyboard.press("Escape");
+        await clear.waitFor({ state: "hidden" });
+        await gateway.resolveDeferred("sessions.companion.ask");
+        await openChatPanels(page);
         await companion
           .getByText("The mobile side chat stayed inside its panel.", { exact: true })
           .waitFor();
-        const layoutMenu = await openChatLayoutMenu(page);
-        await layoutMenu.getByRole("button", { name: "Clear side chat", exact: true }).waitFor();
+        const resets = (await gateway.getRequests("sessions.companion.reset")).length;
+        await host
+          .locator(".chat-mobile-host__header")
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
+        await host.waitFor({ state: "hidden" });
+        await actions.click();
+        await clear.waitFor();
+        await expect.poll(() => clear.isEnabled()).toBe(true);
+        expect(await gateway.getRequests("sessions.companion.reset")).toHaveLength(resets);
         await captureRichPanel(page, "rails-side-chat-mobile-light");
-        await closeChatLayoutMenu(page);
-
-        await expect
-          .poll(() => computedStyle(page.locator(".sidebar-region__primary"), "display"))
-          .toBe("none");
-        await expectExpandedSidePanelFillsRegion(page, "side");
+        await page.keyboard.press("Escape");
+        await clear.waitFor({ state: "hidden" });
+        await openChatPanels(page);
+        await companion.waitFor();
+        expect(await gateway.getRequests("sessions.companion.reset")).toHaveLength(resets);
+        await companion
+          .getByText("The mobile side chat stayed inside its panel.", { exact: true })
+          .waitFor();
+        expect((await host.boundingBox())!.width).toBeCloseTo(390, 0);
         await captureRichPanel(page, "rails-tabs-mobile-light");
+        await host
+          .locator(".chat-mobile-host__header")
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
+        await host.waitFor({ state: "hidden" });
+        await actions.click();
+        await expect.poll(() => clear.isEnabled()).toBe(true);
+        await clear.click();
+        const reset = await gateway.waitForRequest("sessions.companion.reset", { after: resets });
+        expect(reset.params).toEqual({ sessionKey, agentId: "main" });
+        expect(await gateway.getRequests("sessions.companion.reset")).toHaveLength(resets + 1);
+        await clear.waitFor({ state: "hidden" });
+        await openChatPanels(page);
+        await companion
+          .getByText("Answers come from this session's transcript and its project files.", {
+            exact: true,
+          })
+          .waitFor();
+        expect(await companion.locator(".chat-session-rail__exchange").count()).toBe(0);
+        expect(await input.inputValue()).toBe("");
+        expect(await input.isEditable()).toBe(true);
+        expect(await companion.getByRole("button", { name: "Ask", exact: true }).isDisabled()).toBe(
+          true,
+        );
       },
       { viewport: { height: 844, width: 390 } },
     );

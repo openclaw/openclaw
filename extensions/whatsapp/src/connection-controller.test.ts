@@ -125,12 +125,8 @@ function createLoginResultHarness() {
     replacementSock,
     runtime,
     run: (
-      opts: Omit<
-        Partial<Parameters<typeof waitForWhatsAppLoginResult>[0]>,
-        "waitForConnection" | "createSocket"
-      > & {
+      opts: Omit<Partial<Parameters<typeof waitForWhatsAppLoginResult>[0]>, "waitForConnection"> & {
         waitForConnection: ReturnType<typeof vi.fn>;
-        createSocket?: ReturnType<typeof vi.fn>;
       },
     ) =>
       waitForWhatsAppLoginResult({
@@ -141,7 +137,6 @@ function createLoginResultHarness() {
         runtime,
         ...opts,
         waitForConnection: opts.waitForConnection as never,
-        createSocket: opts.createSocket as never,
       }),
   };
 }
@@ -165,8 +160,8 @@ async function runLoggedOutRecovery(opts: {
   } else if (opts.secondWait === "logged-out") {
     waitForConnection.mockRejectedValueOnce(error);
   }
-  const createSocket = vi.fn(async () => harness.replacementSock);
-  const result = await harness.run({ waitForConnection, createSocket });
+  const createSocket = createWaSocketMock.mockResolvedValue(harness.replacementSock as never);
+  const result = await harness.run({ waitForConnection });
   return { createSocket, error, harness, result, waitForConnection };
 }
 
@@ -181,6 +176,7 @@ describe("WhatsAppConnectionController", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    createWaSocketMock.mockReset();
     registerChannelRuntimeContextMock.mockReturnValue({ dispose: vi.fn() });
     connectionOwnerMocks.acquire.mockResolvedValue({ release: connectionOwnerMocks.release });
     connectionOwnerMocks.release.mockResolvedValue(undefined);
@@ -272,17 +268,14 @@ describe("WhatsAppConnectionController", () => {
       .mockResolvedValueOnce(undefined);
     const onQr = vi.fn();
     const onSocketReplaced = vi.fn();
-    const createSocket = vi.fn(
-      async (_printQr: boolean, _verbose: boolean, opts?: { onQr?: (qr: string) => void }) => {
-        opts?.onQr?.("qr-after-timeout");
-        return harness.replacementSock;
-      },
-    );
+    const createSocket = createWaSocketMock.mockImplementation(async (_printQr, _verbose, opts) => {
+      opts?.onQr?.("qr-after-timeout");
+      return harness.replacementSock as never;
+    });
 
     const result = await harness.run({
       verbose: true,
       waitForConnection,
-      createSocket,
       socketTiming: {
         connectTimeoutMs: 10_000,
         defaultQueryTimeoutMs: 20_000,
@@ -324,12 +317,11 @@ describe("WhatsAppConnectionController", () => {
       .mockRejectedValueOnce({ output: { statusCode: DisconnectReason.timedOut } })
       .mockRejectedValueOnce({ output: { statusCode: 515 } })
       .mockResolvedValueOnce(undefined);
-    const createSocket = vi
-      .fn()
-      .mockResolvedValueOnce(afterTimeoutSock)
-      .mockResolvedValueOnce(afterPairingRestartSock);
+    const createSocket = createWaSocketMock
+      .mockResolvedValueOnce(afterTimeoutSock as never)
+      .mockResolvedValueOnce(afterPairingRestartSock as never);
 
-    const result = await harness.run({ waitForConnection, createSocket });
+    const result = await harness.run({ waitForConnection });
 
     expect(result).toEqual({
       outcome: "connected",
@@ -355,17 +347,14 @@ describe("WhatsAppConnectionController", () => {
     const waitForConnection = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(undefined);
     const onQr = vi.fn();
     const onSocketReplaced = vi.fn();
-    const createSocket = vi.fn(
-      async (_printQr: boolean, _verbose: boolean, opts?: { onQr?: (qr: string) => void }) => {
-        opts?.onQr?.("qr-after-logout");
-        return harness.replacementSock;
-      },
-    );
+    const createSocket = createWaSocketMock.mockImplementation(async (_printQr, _verbose, opts) => {
+      opts?.onQr?.("qr-after-logout");
+      return harness.replacementSock as never;
+    });
 
     const result = await harness.run({
       verbose: true,
       waitForConnection,
-      createSocket,
       onQr,
       onSocketReplaced,
     });
@@ -460,9 +449,9 @@ describe("WhatsAppConnectionController", () => {
       .fn()
       .mockRejectedValueOnce(timeoutError)
       .mockRejectedValueOnce(timeoutError);
-    const createSocket = vi.fn(async () => harness.replacementSock);
+    const createSocket = createWaSocketMock.mockResolvedValue(harness.replacementSock as never);
 
-    const result = await harness.run({ waitForConnection, createSocket });
+    const result = await harness.run({ waitForConnection });
 
     expect(result).toMatchObject({
       outcome: "failed",
@@ -480,7 +469,7 @@ describe("WhatsAppConnectionController", () => {
       .fn()
       .mockRejectedValueOnce(restartError)
       .mockResolvedValueOnce(undefined);
-    const createSocket = vi.fn(async () => harness.replacementSock);
+    const createSocket = createWaSocketMock.mockResolvedValue(harness.replacementSock as never);
     const beforeCredentialPersistence = vi.fn(async () => {});
     const onCredentialPersistenceError = vi.fn();
     const onCredentialPersistenceTask = vi.fn();
@@ -488,7 +477,6 @@ describe("WhatsAppConnectionController", () => {
 
     const result = await harness.run({
       waitForConnection,
-      createSocket,
       beforeCredentialPersistence,
       onCredentialPersistenceError,
       onCredentialPersistenceTask,

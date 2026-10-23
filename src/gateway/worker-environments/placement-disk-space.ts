@@ -110,11 +110,9 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
   environments: Pick<WorkerEnvironmentService, "startTunnel">;
   runnerAvailability: Pick<WorkerPlacementRunnerAvailabilityReader, "read" | "version">;
   warn: (message: string) => void;
-  now?: () => number;
 }) {
   const observations = new Map<string, DiskSpaceObservation>();
   const staleBindings = new Map<string, ActivePlacement>();
-  const now = params.now ?? Date.now;
   let observationVersion = 0;
   let dirty = true;
   let nextSweepAtMs = 0;
@@ -144,7 +142,7 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
       hasExactBinding(previousObservation, placement) &&
       previousObservation.updatedAtMs === placement.updatedAtMs &&
       previousObservation.runnerVersion === runnerVersion &&
-      now() - previousObservation.snapshot.observedAtMs < IDLE_DISK_SPACE_REFRESH_MS
+      Date.now() - previousObservation.snapshot.observedAtMs < IDLE_DISK_SPACE_REFRESH_MS
     ) {
       return;
     }
@@ -166,7 +164,7 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     }
     const snapshot = parseDiskSpaceProbe(
       result.stdout,
-      Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(now()))),
+      Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(Date.now()))),
     );
     const candidate = { ...placement, snapshot, runnerVersion } satisfies DiskSpaceObservation;
     // Late samples remain tagged with their original binding; read() hides them after a move.
@@ -195,7 +193,7 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     }
     if (
       !dirty &&
-      now() < nextSweepAtMs &&
+      Date.now() < nextSweepAtMs &&
       lastRunnerVersion === params.runnerAvailability.version()
     ) {
       return;
@@ -203,7 +201,7 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     // Receipts during the awaited inventory/probes must survive this pass.
     dirty = false;
     lastRunnerVersion = params.runnerAvailability.version();
-    nextSweepAtMs = now() + DISK_SPACE_RETRY_MS;
+    nextSweepAtMs = Date.now() + DISK_SPACE_RETRY_MS;
     const inventory = await params.placements.prepareMaintenancePlacements();
     let active: ActivePlacement[];
     try {
@@ -260,10 +258,10 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
         const observation = observations.get(placement.sessionId);
         return observation && hasExactBinding(observation, placement)
           ? Math.max(
-              now() + DISK_SPACE_RETRY_MS,
+              Date.now() + DISK_SPACE_RETRY_MS,
               observation.snapshot.observedAtMs + IDLE_DISK_SPACE_REFRESH_MS,
             )
-          : now() + DISK_SPACE_RETRY_MS;
+          : Date.now() + DISK_SPACE_RETRY_MS;
       }),
     );
   };
@@ -276,7 +274,7 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     },
     nextSweepAtMs: () =>
       dirty || lastRunnerVersion !== params.runnerAvailability.version()
-        ? now() + DISK_SPACE_RETRY_MS
+        ? Date.now() + DISK_SPACE_RETRY_MS
         : nextSweepAtMs,
     version: () => observationVersion,
   };

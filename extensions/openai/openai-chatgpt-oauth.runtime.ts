@@ -12,10 +12,7 @@ const manualInputPromptMessage = "Paste the authorization code (or full redirect
 const openAICodexOAuthOriginator = "openclaw";
 const localManualFallbackDelayMs = 15_000;
 const localManualFallbackGraceMs = 1_000;
-type OpenAICodexOAuthFailureCode =
-  | "callback_timeout"
-  | "callback_validation_failed"
-  | "unsupported_region";
+type OpenAICodexOAuthFailureCode = "callback_validation_failed" | "unsupported_region";
 
 function resolveHomebrewPrefixFromExecPath(execPath: string): string | null {
   const marker = `${path.sep}Cellar${path.sep}`;

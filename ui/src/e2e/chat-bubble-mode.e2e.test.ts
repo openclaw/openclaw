@@ -2,6 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
+import { openChatConversationOptions } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
   createControlUiMockBootstrapConfig,
@@ -11,35 +12,42 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Speech bubble mode" });
-const menuSelector = "openclaw-chat-header-session-menu > .chat-header-session-menu";
 const background = (bubble: Locator, enabled: boolean) => {
   const assertion = browserExpect(bubble);
   return (enabled ? assertion.not : assertion).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
 };
 function bubbleControls(page: Page) {
-  const menu = page.locator(menuSelector);
-  const trigger = page.locator(".chat-header-session-menu__trigger");
-  const close = () => trigger.click();
+  const trigger = page.locator(".chat-header-session-menu__trigger").filter({ visible: true });
+  const close = async () => {
+    const host = page.locator(".chat-mobile-host").filter({ visible: true });
+    if (await host.isVisible()) {
+      await host
+        .locator(".chat-mobile-host__header")
+        .getByRole("button", { name: "Close", exact: true })
+        .click();
+      await host.waitFor({ state: "hidden" });
+    } else {
+      await trigger.click();
+    }
+  };
   const stored = (field = "chatBubbleSessionKeys") =>
     page.evaluate(({ key, property }) => JSON.parse(localStorage.getItem(key) ?? "{}")[property], {
       key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
       property: field,
     });
   const change = async (enabled: boolean) => {
-    await trigger.click();
-    const view = menu.getByRole("menuitem", { name: "View", exact: true });
-    if (await menu.evaluate((el) => el.classList.contains("chat-header-session-menu--compact"))) {
-      await view.click();
-    } else {
-      await view.hover();
-    }
-    const toggle = menu.getByRole("menuitemcheckbox", { name: "Speech bubbles", exact: true });
+    const options = await openChatConversationOptions(page);
+    const toggle = options
+      .getByRole("menuitemcheckbox", { name: "Speech bubbles", exact: true })
+      .or(options.getByRole("button", { name: "Speech bubbles", exact: true }));
     await browserExpect(toggle).toBeVisible();
-    await browserExpect(toggle).toHaveAttribute("aria-checked", String(!enabled));
+    const selected =
+      (await toggle.getAttribute("role")) === "menuitemcheckbox" ? "aria-checked" : "aria-pressed";
+    await browserExpect(toggle).toHaveAttribute(selected, String(!enabled));
     await toggle.click();
-    await browserExpect(toggle).toHaveAttribute("aria-checked", String(enabled));
+    await browserExpect(toggle).toHaveAttribute(selected, String(enabled));
   };
-  return { menu, close, stored, change };
+  return { close, stored, change };
 }
 
 suite.define(() => {
@@ -100,7 +108,6 @@ suite.define(() => {
         change: changeBubbles,
         close: closeBubbleMenu,
         stored: storedBubbleSessions,
-        menu,
       } = bubbleControls(page);
       await page.goto(chatUrl);
       const chat = page.locator("section.chat");
@@ -138,7 +145,9 @@ suite.define(() => {
       await page.setViewportSize({ width: 390, height: 844 });
       // Closed menus reconcile their parked presentation on open.
       await changeBubbles(true);
-      await browserExpect(menu).toHaveClass(/chat-header-session-menu--compact/);
+      await browserExpect(
+        page.locator('.chat-mobile-host__page[data-mobile-page="session-advanced"]'),
+      ).toBeVisible();
       await closeBubbleMenu();
       await browserExpect(chat).toHaveClass(/chat--bubbles/);
       await browserExpect.poll(storedBubbleSessions).toEqual([sessionKey, otherSessionKey]);

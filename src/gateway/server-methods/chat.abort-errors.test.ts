@@ -15,15 +15,15 @@ import {
   createEmbeddedRunHandle,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import * as subagentControlSession from "../../agents/subagents/registry/subagent-control-session.js";
+import { createControlRunFixture } from "../../agents/subagents/registry/subagent-control.fixtures.test-support.js";
 import { killSubagentRunAdmin } from "../../agents/subagents/registry/subagent-control.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../agents/subagents/registry/subagent-control.types.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
-import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "../../auto-reply/reply/abort.js";
 import { initSessionState } from "../../auto-reply/reply/session.js";
 import { buildTestCtx } from "../../auto-reply/reply/test-ctx.js";
@@ -31,9 +31,11 @@ import { getRuntimeConfig } from "../../config/config.js";
 import {
   appendTranscriptMessageSync,
   loadExactSessionEntryReadOnly,
+  loadSessionEntry,
   loadTranscriptEvents,
   readSessionTranscriptWatermark,
   replaceSessionEntrySync,
+  replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { createGatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -44,6 +46,7 @@ import {
 import {
   claimSessionControllerTask,
   releaseSessionControllerClaim,
+  trackSessionControllerSourceWork,
 } from "../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import {
@@ -59,6 +62,7 @@ import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db
 import { finishFailedGatewayHttpResponse } from "../http-common.js";
 import { handleSessionKillHttpRequest } from "../session-kill-http.js";
 import * as sessionUtils from "../session-utils.js";
+import * as chatAbortDescendants from "./chat-abort-descendants.js";
 import {
   handleChatAbortRequest,
   handleChatAbortRequestWithLifecycle,
@@ -113,28 +117,14 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
       ["healthy", healthyKey],
     ] as const) {
       const childAgentId = runId === "bad" || runId === "second-bad" ? "broken" : "main";
-      const storePath = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: childAgentId,
-        sessionKey: childSessionKey,
-        defaultSessionId: `${runId}-session`,
-        lifecycleRevision: "original-child",
-      });
-      await registerSubagentRun({
+      await fixture.seedRun({
         runId,
         childSessionKey,
         childAgentId,
-        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
-          ?.entry,
         requesterSessionKey: runId !== "root" ? rootKey : sessionKey,
-        requesterAgentId: "main",
         requesterDisplayKey: "main",
-        requesterTurnRunId: "parent",
-        task: runId,
-        cleanup: "keep",
-        collect: true,
         queued: true,
-        expectsCompletionMessage: false,
+        lifecycleRevision: "original-child",
       });
     }
     await corruptChildDatabase(badStore, badKey);
@@ -146,13 +136,11 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
       ["healthy", healthyDispatch],
       ["survivor", survivorDispatch],
     ] as const) {
-      enqueueSwarmRun({
+      fixture.queueRun({
         groupId: "errors",
         runId,
-        maxConcurrent: 1,
         activeRunIds: ["capacity"],
         start,
-        onStartFailure: () => true,
       });
     }
     const cfg = getRuntimeConfig();
@@ -281,27 +269,13 @@ it.each([
       ["bad", badKey, sessionKey],
       ["healthy", healthyKey, sessionKey],
     ] as const) {
-      const storePath = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: runId === "bad" ? "broken" : "main",
-        sessionKey: childSessionKey,
-        defaultSessionId: `${runId}-session`,
-        lifecycleRevision: "original-child",
-      });
-      await registerSubagentRun({
+      await fixture.seedRun({
         runId,
         childSessionKey,
         childAgentId: runId === "bad" ? "broken" : "main",
-        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
-          ?.entry,
         requesterSessionKey,
-        requesterAgentId: "main",
-        requesterDisplayKey: requesterSessionKey,
-        task: runId,
-        cleanup: "keep",
-        collect: true,
         queued: runId === "healthy" || (runId === "bad" && queued),
-        expectsCompletionMessage: false,
+        lifecycleRevision: "original-child",
       });
     }
     const badStore = path.join(fixture.stateDir, "agents/broken/sessions/sessions.json");
@@ -314,13 +288,11 @@ it.each([
       ["healthy", healthyDispatch],
       ["survivor", survivorDispatch],
     ] as const) {
-      enqueueSwarmRun({
+      fixture.queueRun({
         groupId: "admin-errors",
         runId,
-        maxConcurrent: 1,
         activeRunIds: ["parent"],
         start,
-        onStartFailure: () => true,
       });
     }
     const parentAbort = vi.fn(() => {
@@ -476,7 +448,7 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
       message: { role: "user", content: "old user turn", timestamp: Date.now() },
     });
     expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
-    await registerSubagentRun({
+    await fixture.registerRun({
       runId: "child",
       childSessionKey: childKey,
       childAgentId: "child",
@@ -485,12 +457,8 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
         sessionKey: childKey,
       })?.entry,
       requesterSessionKey: sessionKey,
-      requesterAgentId: "main",
-      requesterDisplayKey: sessionKey,
       requesterTurnRunId: "parent",
       task: "child",
-      cleanup: "keep",
-      collect: true,
       expectsCompletionMessage: false,
     });
     const entered = createDeferred();
@@ -684,7 +652,7 @@ it("reports typed contention without replaying or denying an already applied Sto
   });
   const sessionKey = "agent:main:main";
   const active = createActiveRun(sessionKey, { agentId: "main" });
-  const context = createChatAbortContext({ sources: new Map([["run-1", active]]) });
+  const context = createChatAbortContext({ sources: [["run-1", active]] });
   const respond = await invokeChatAbortHandler({
     handler: handleChatAbortRequest,
     context,
@@ -758,7 +726,7 @@ it.each([
       }
     })();
     source.input.abortSignal.addEventListener("abort", () => cancelled.resolve(), { once: true });
-    const context = createChatAbortContext({ sources: new Map([["retained-run", source]]) });
+    const context = createChatAbortContext({ sources: [["retained-run", source]] });
     const stopping = invokeChatAbortHandler({
       handler: handleChatAbortRequestWithLifecycle,
       context,
@@ -803,3 +771,104 @@ it.each([
     }
   },
 );
+
+it("reports a replaced child's refusal and failed persistence while raw cleanup is pending", async () => {
+  const sessionKey = "agent:main:retained-parent";
+  const sessionId = "retained-parent-session";
+  const runId = "retained-parent-run";
+  const childKey = "agent:main:subagent:replaced-child";
+  const runs = createControlRunFixture(() => fixture.stateDir);
+  await runs.writeSession("parent", "original-revision", {
+    sessionKey,
+    defaultSessionId: sessionId,
+  });
+  await runs.seed(
+    "original-child",
+    {
+      runId: "original-child-run",
+      childSessionKey: childKey,
+      requesterSessionKey: sessionKey,
+      requesterTurnRunId: runId,
+      requesterDisplayKey: sessionKey,
+      task: "retain the replacement child",
+      collect: true,
+      queued: true,
+    },
+    "original-revision",
+  );
+  const childSession = loadSessionEntry({ agentId: "main", sessionKey: childKey });
+  const replacement = {
+    ...childSession,
+    sessionId: "replacement-child-session",
+    lifecycleRevision: "replacement-revision",
+    updatedAt: Date.now(),
+  };
+  await replaceSessionEntry({ agentId: "main", sessionKey: childKey }, replacement);
+  const parent = createActiveRun(sessionKey, { runId, sessionId, agentId: "main" });
+  const raw = createDeferred();
+  trackSessionControllerSourceWork(parent.input, raw.promise);
+  const terminalWrite = createDeferred();
+  void terminalWrite.promise.catch(() => {});
+  parent.adapter.projectSessionTerminalPersistence = terminalWrite.promise;
+  const context = createChatAbortContext({ getRuntimeConfig, sources: new Map([[runId, parent]]) });
+  const childrenStopped = createDeferred();
+  const abortDescendants = chatAbortDescendants.abortControlledSubagents;
+  const observed = vi
+    .spyOn(chatAbortDescendants, "abortControlledSubagents")
+    .mockImplementation(async (params) => {
+      const result = await abortDescendants(params);
+      childrenStopped.resolve();
+      return result;
+    });
+  const sourceSettled = vi.fn();
+  void parent.input.settlement.promise.then(sourceSettled);
+  const respond = vi.fn();
+  vi.useFakeTimers();
+  const stopping = invokeChatAbortHandler({
+    handler: handleChatAbortRequestWithLifecycle,
+    context,
+    request: { sessionKey, runId },
+    client: { connect: { scopes: ["operator.admin"] } },
+    respond,
+  }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  try {
+    await childrenStopped.promise;
+    expect(parent.input.abortSignal.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(respond).not.toHaveBeenCalled();
+    terminalWrite.reject(new Error("Original parent terminal write failed"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await stopping).toBeUndefined();
+    expect(respond.mock.calls).toEqual([
+      [
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringMatching(
+            /Parent run stopped, but descendant cancellation was incomplete: .*original session incarnation is unresolved or changed/,
+          ),
+        }),
+      ],
+    ]);
+    const message: unknown = respond.mock.calls[0]?.[2]?.message;
+    expect(message).toContain("Original parent terminal write failed");
+    expect(message).not.toContain("cleanup is still pending");
+    expect(sourceSettled).not.toHaveBeenCalled();
+    expect(rpcSourceTesting.get(runId)).toBe(parent);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toEqual(replacement);
+  } finally {
+    parent.adapter.projectSessionTerminalPersistence = undefined;
+    raw.resolve();
+    terminalWrite.resolve();
+    await parent.input.settlement.promise;
+    await stopping;
+    observed.mockRestore();
+    vi.useRealTimers();
+  }
+  expect(sourceSettled).toHaveBeenCalledOnce();
+  expect(rpcSourceTesting.get(runId)).toBeUndefined();
+});

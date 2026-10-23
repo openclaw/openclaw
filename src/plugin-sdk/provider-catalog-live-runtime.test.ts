@@ -795,27 +795,31 @@ it.each([false, true])("isolates cached HTTP caps inside acquisition=%s", async 
   }
 });
 
-it("does not let an immediate row timeout join its enclosing long pending load", async () => {
+it("keeps an immediate row timeout even with a configured provider timeout", async () => {
   clearLiveCatalogCacheForTests();
   const completion = createDeferred<Awaited<ReturnType<LiveModelCatalogFetchGuard>>>();
   const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(() => completion.promise);
-  await withProviderCatalogDiscoveryBudget(180_000, async () => {
-    const read = (timeoutMs?: number) =>
-      getCachedLiveProviderModelRows({
-        providerId: "zero-cap",
-        endpoint: "https://zero.example.test/models",
-        timeoutMs,
-        fetchGuard,
+  await withProviderCatalogDiscoveryBudget(
+    180_000,
+    async () => {
+      const read = (timeoutMs?: number) =>
+        getCachedLiveProviderModelRows({
+          providerId: "zero-cap",
+          endpoint: "https://zero.example.test/models",
+          timeoutMs,
+          fetchGuard,
+        });
+      const long = read();
+      const immediate = expect(read(0)).rejects.toThrow("before the catalog completed");
+      completion.resolve({
+        response: new Response(JSON.stringify({ data: [{ id: "healthy" }] })),
+        finalUrl: "https://zero.example.test/models",
+        release: async () => undefined,
       });
-    const long = read();
-    const immediate = expect(read(0)).rejects.toThrow("before the catalog completed");
-    completion.resolve({
-      response: new Response(JSON.stringify({ data: [{ id: "healthy" }] })),
-      finalUrl: "https://zero.example.test/models",
-      release: async () => undefined,
-    });
-    await immediate;
-    expect(await long).toEqual([{ id: "healthy" }]);
-    expect(fetchGuard).toHaveBeenCalledOnce();
-  });
+      await immediate;
+      expect(await long).toEqual([{ id: "healthy" }]);
+      expect(fetchGuard).toHaveBeenCalledOnce();
+    },
+    { "zero-cap": 15_000 },
+  );
 });

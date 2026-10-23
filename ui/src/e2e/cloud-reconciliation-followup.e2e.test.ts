@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { openChatDetails, closeChatDetails } from "./chat-details.test-support.ts";
 import { sessionMessage } from "./chat-flow-fixtures.test-support.ts";
 import {
   chatSessionListResponse,
@@ -115,8 +116,10 @@ suite.define(() => {
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("chat.startup");
-      await page.getByRole("button", { name: "Worker · syncing files" }).waitFor();
-      await page.getByText("Finalizing worker workspace", { exact: false }).waitFor();
+      const initialDetails = await openChatDetails(page);
+      await initialDetails.getByRole("button", { name: /Worker · syncing files$/u }).waitFor();
+      await initialDetails.getByText("Finalizing worker workspace", { exact: false }).waitFor();
+      await closeChatDetails(page);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await expect.poll(() => composer.isEnabled()).toBe(true);
       await page.getByText("your message starts automatically", { exact: false }).waitFor();

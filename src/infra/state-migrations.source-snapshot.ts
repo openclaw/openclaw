@@ -341,7 +341,6 @@ export function claimAndRemoveLegacyMigrationSource(params: {
   snapshot: LegacyMigrationSourceSnapshot;
   label: string;
   followSymlinks?: boolean;
-  maxBytes?: number;
   beforeClaim?: () => void;
   beforeRestore?: () => void;
   removeSource?: (sourcePath: string) => void;

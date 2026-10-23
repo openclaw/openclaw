@@ -1,3 +1,4 @@
+import { hkdfSync } from "node:crypto";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runClientCredentialOperationAsync } from "./client-credential-async.js";
 import {
@@ -5,20 +6,53 @@ import {
   storedDeviceIdentityToRow,
 } from "./device-identity-material.js";
 import {
-  cacheProcessDeviceIdentity,
-  getChatRequestIdentityKey,
-  readProcessDeviceIdentity,
-} from "./device-identity-process-cache.js";
-import {
   identityFromCredentialResult,
   resolveDeviceIdentityEnvironment,
   resolveDeviceIdentityStore,
   type DeviceIdentity,
   type DeviceIdentityStoreOptions,
 } from "./device-identity-store.js";
+import { deriveCanonicalEd25519PrivateKeyRaw } from "./ed25519-signature.js";
+import { pruneMapToMaxSize } from "./map-size.js";
 
 const log = createSubsystemLogger("gateway/chat");
 let warnedUnavailableChatIdentity = false;
+
+const identities = new Map<string, DeviceIdentity>();
+const chatRequestKeys = new WeakMap<DeviceIdentity, Buffer>();
+const MAX_PROCESS_DEVICE_IDENTITIES = 32;
+
+function readProcessDeviceIdentity(cacheKey: string): DeviceIdentity | undefined {
+  return identities.get(cacheKey);
+}
+
+function getChatRequestIdentityKey(identity: DeviceIdentity): Buffer {
+  const cached = chatRequestKeys.get(identity);
+  if (cached) {
+    return cached;
+  }
+  const key = Buffer.from(
+    hkdfSync(
+      "sha256",
+      deriveCanonicalEd25519PrivateKeyRaw(identity.privateKeyPem),
+      "openclaw.device-identity",
+      "openclaw.chat.request.v1",
+      32,
+    ),
+  );
+  chatRequestKeys.set(identity, key);
+  return key;
+}
+
+function cacheProcessDeviceIdentity(cacheKey: string, identity: DeviceIdentity): DeviceIdentity {
+  const cached = identities.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  pruneMapToMaxSize(identities, MAX_PROCESS_DEVICE_IDENTITIES - 1);
+  identities.set(cacheKey, identity);
+  return identity;
+}
 
 /** Resolve private signing material without opening the selected Gateway database. */
 export async function loadOrCreateDeviceIdentityAsync(

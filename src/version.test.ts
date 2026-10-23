@@ -1,4 +1,3 @@
-// Tests package version resolution and generated version metadata.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -19,9 +18,7 @@ import {
 
 const versionFixtureRoot = createSuiteTempRootTracker({ prefix: "openclaw-version-" });
 
-beforeAll(async () => {
-  await versionFixtureRoot.setup();
-});
+beforeAll(() => versionFixtureRoot.setup());
 afterAll(() => versionFixtureRoot.cleanup());
 
 async function versionFixture(files: Record<string, unknown>) {
@@ -39,7 +36,6 @@ describe("version resolution", () => {
       "package.json": { name: "openclaw", version: "2026.9.2" },
       "build-info.json": { version: "2026.8.1" },
     });
-    // Reporting source metadata would hide a stale, unrebuilt runtime.
     expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBe("2026.9.2");
     expect(resolveVersionFromModuleUrl(moduleUrl)).toBe("2026.8.1");
   });
@@ -52,17 +48,10 @@ describe("version resolution", () => {
   });
 
   it("continues past an oversized build id to the next candidate", async () => {
-    const root = await versionFixtureRoot.make("oversized-build-id");
-    await fs.mkdir(path.join(root, "dist/plugin-sdk"), { recursive: true });
-    await fs.writeFile(
-      path.join(root, "dist/build-info.json"),
-      JSON.stringify({ buildId: "x".repeat(97) }),
-    );
-    await fs.writeFile(
-      path.join(root, "build-info.json"),
-      JSON.stringify({ buildId: "x".repeat(96) }),
-    );
-    const moduleUrl = pathToFileURL(path.join(root, "dist/plugin-sdk/core.js")).href;
+    const moduleUrl = await versionFixture({
+      "dist/build-info.json": { buildId: "x".repeat(97) },
+      "build-info.json": { buildId: "x".repeat(96) },
+    });
     expect(readBuildIdFromBuildInfoForModuleUrl(moduleUrl)).toBe("x".repeat(96));
   });
 
@@ -100,43 +89,29 @@ describe("version resolution", () => {
       "package.json": { name: "openclaw", version: "2.3.4" },
     });
     const resolve = (url: string, bundledVersion: string) =>
-      resolveBinaryVersion({ moduleUrl: url, bundledVersion, fallback: "0.0.0" });
+      resolveBinaryVersion({ moduleUrl: url, bundledVersion });
     expect(resolve(moduleUrl, "8.8.8")).toBe("2.3.4");
     expect(resolve("not-a-valid-url", "8.8.8")).toBe("8.8.8");
     expect(resolve("not-a-valid-url", "   ")).toBe("0.0.0");
   });
 
-  it("prefers runtime VERSION over stale OPENCLAW_VERSION for compatibility checks", () => {
-    withEnv(
-      {
-        OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
-        OPENCLAW_VERSION: "2026.3.25",
-        npm_package_version: "2026.3.25-package",
-      },
-      () => {
-        expect(resolveCompatibilityHostVersion()).toBe(VERSION);
-      },
-    );
-  });
-
-  it("keeps explicit env-object overrides for compatibility checks in tests", () => {
-    expect(
-      resolveCompatibilityHostVersion({
+  it.each([
+    [true, undefined, VERSION],
+    [false, undefined, "2026.3.99"],
+    [false, "2026.4.8", "2026.4.8"],
+  ] as const)(
+    "resolves compatibility env (process: %s, override: %s)",
+    (processEnv, override, expected) => {
+      const env = {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: override,
         OPENCLAW_VERSION: "2026.3.99",
         npm_package_version: "2026.3.97",
-      }),
-    ).toBe("2026.3.99");
-  });
-
-  it("prefers explicit compatibility host overrides over runtime and stale env versions", () => {
-    expect(
-      resolveCompatibilityHostVersion({
-        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.4.8",
-        OPENCLAW_VERSION: "2026.3.99",
-        npm_package_version: "2026.3.97",
-      }),
-    ).toBe("2026.4.8");
-  });
+      };
+      withEnv(env, () => {
+        expect(resolveCompatibilityHostVersion(processEnv ? undefined : env)).toBe(expected);
+      });
+    },
+  );
 
   it("normalizes runtime version candidate for fallback handling", () => {
     expect(

@@ -1,23 +1,36 @@
+import { normalizeModelCatalogProviderRows } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import type {
   ModelCatalog,
   ModelCatalogModel,
 } from "@openclaw/model-catalog-core/model-catalog-types";
-import { beforeEach, expect, it, vi } from "vitest";
-import type { ModelProviderConfig } from "../config/types.models.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObjectRaw } from "../config/validation-core.js";
+import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
+import { finalizePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   createPluginManifestRecordFixture,
   createPluginMetadataSnapshotFixture,
 } from "../plugins/plugin-metadata.test-support.js";
+import {
+  PREPARED_THINKING_POLICY,
+  type ThinkingCatalogPolicyCarrier,
+} from "../plugins/provider-thinking-catalog.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveOAuthApiKeyMarker } from "./model-auth-markers.js";
 import { modelDefinition as configuredModel } from "./model-auth.fixtures.test-support.js";
+import { enrichHarnessRows, modelCatalogRowToEntry } from "./model-catalog-entry.js";
+import { row } from "./model-catalog-fixtures.test-support.js";
+import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import {
   buildPreparedModelCatalogSnapshot,
   type BuildPreparedModelCatalogParams,
   findModelCatalogEntry,
   loadManifestModelCatalog,
   modelSupportsVision,
+  overlayConfiguredModelCatalog,
 } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
@@ -33,6 +46,8 @@ const mocks = vi.hoisted(() => ({
 
 // mock-isolation: catalog tests supply provider metadata without loading provider runtimes.
 vi.mock("../plugins/provider-runtime.runtime.js", () => mocks);
+vi.mock("../model-catalog/index.js", { spy: true });
+vi.mock("@openclaw/model-catalog-core/model-catalog-normalize", { spy: true });
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture();
 
@@ -60,14 +75,15 @@ function providerConfig(provider: string, entry: ModelProviderConfig): OpenClawC
   return { plugins: { enabled: false }, models: { providers: { [provider]: entry } } };
 }
 
+const fableWindows = () => [
+  { id: "200k", label: "200K", contextWindow: 200_000 },
+  { id: "1m", label: "1M", contextWindow: 1_000_000 },
+];
 function fableManifest(extra: Partial<ModelCatalogModel> = {}) {
   const model: ModelCatalogModel = {
     id: "claude-fable-5",
     contextWindow: 1_000_000,
-    contextWindows: [
-      { id: "200k", label: "200K", contextWindow: 200_000 },
-      { id: "1m", label: "1M", contextWindow: 1_000_000 },
-    ],
+    contextWindows: fableWindows(),
     contextWindowDefault: "1m",
     ...extra,
   };
@@ -113,7 +129,7 @@ beforeEach(() => {
 
 it("keeps replace publication closed to a warm refreshable inventory", async () => {
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([
-    { provider: "manifest-provider", id: "augmented-only", name: "Augmented" },
+    row("manifest-provider", "augmented-only", { name: "Augmented" }),
   ]);
   const config: OpenClawConfig = { models: { catalogRefresh: { enabled: false } } };
   const manifest = providerManifestSnapshot("manifest-provider", "refreshable", ["manifest-only"]);
@@ -140,7 +156,7 @@ it("keeps replace publication closed to a warm refreshable inventory", async () 
 it("preserves ready provider membership without replenishing it from metadata", async () => {
   const entries: ModelCatalogEntry[] = [];
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([
-    { provider: "demo", id: "augmentation", name: "Augmentation" },
+    row("demo", "augmentation", { name: "Augmentation" }),
   ]);
   const snapshot = await build({
     metadataSnapshot: providerManifestSnapshot("demo", "refreshable", ["manifest-only"]),
@@ -163,7 +179,7 @@ it.each(["unowned", "disabled"] as const)(
     const snapshot = await build({
       config: { plugins: { entries: { "alias-owner": { enabled: kind !== "disabled" } } } },
       metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [plugin] }),
-      entries: [{ provider: "source", id: "model", name: "Model" }],
+      entries: [row("source", "model", { name: "Model" })],
     });
     expect(snapshot.entries).toMatchObject([{ provider: "source", id: "model" }]);
   },
@@ -178,10 +194,7 @@ it("carries manifest capability metadata into the prepared catalog", async () =>
 
   const entries = loadManifestModelCatalog({ config: {}, metadataSnapshot: snapshot });
   expect(entries.find((entry) => entry.id === "claude-fable-5")).toMatchObject({
-    contextWindows: [
-      { id: "200k", label: "200K", contextWindow: 200_000 },
-      { id: "1m", label: "1M", contextWindow: 1_000_000 },
-    ],
+    contextWindows: fableWindows(),
     contextWindowDefault: "1m",
     thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
     input: ["text", "image"],
@@ -211,10 +224,7 @@ it.each([false, true])(
       entries: [
         {
           ...fableEntry,
-          contextWindows: [
-            { id: "200k", label: "200K", contextWindow: 200_000 },
-            { id: "1m", label: "1M", contextWindow: 1_000_000 },
-          ],
+          contextWindows: fableWindows(),
           contextWindowDefault: "1m",
         },
       ],
@@ -238,8 +248,8 @@ it.each([false, true])(
 it("canonicalizes manifest-owned provider aliases in registry rows", async () => {
   const snapshot = await build({
     entries: [
-      { id: "kimi-k3", name: "Kimi K3", provider: "moonshotai" },
-      { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", provider: "moonshot-ai" },
+      row("moonshotai", "kimi-k3", { name: "Kimi K3" }),
+      row("moonshot-ai", "kimi-k2.7-code", { name: "Kimi K2.7 Code" }),
     ],
     metadataSnapshot: providerManifestSnapshot(
       "moonshot",
@@ -257,12 +267,9 @@ it("canonicalizes manifest-owned provider aliases in registry rows", async () =>
 
 it("uses an explicitly ready live catalog order across entries and route variants", async () => {
   const manifestSnapshot = providerManifestSnapshot("demo", "runtime", ["first", "second"]);
-  const entries: ModelCatalogEntry[] = ["second", "first", "new"].map((id) => ({
-    provider: "demo",
-    id,
-    name: id,
-    api: "openai-responses",
-  }));
+  const entries = ["second", "first", "new"].map((id) =>
+    row("demo", id, { api: "openai-responses" }),
+  );
   const modelOrder = ["second", "new", "first", "absent"];
   const snapshot = await build({
     entries,
@@ -281,8 +288,8 @@ it("uses an explicitly ready live catalog order across entries and route variant
 
 it("keeps manifest rank for configured runtime models absent from the registry", async () => {
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
-    { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
-    { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+    row("openai", "gpt-5.4", { name: "GPT-5.4" }),
+    row("openai", "gpt-5.6-sol", { name: "GPT-5.6 Sol" }),
   ]);
 
   const snapshot = await build({
@@ -291,7 +298,7 @@ it("keeps manifest rank for configured runtime models absent from the registry",
       baseUrl: "https://api.openai.com/v1",
       models: [configuredModel("gpt-5.6-sol")],
     }),
-    entries: [{ id: "gpt-5.4", name: "GPT-5.4", provider: "openai" }],
+    entries: [row("openai", "gpt-5.4", { name: "GPT-5.4" })],
     metadataSnapshot: providerManifestSnapshot("openai", "runtime", ["gpt-5.6-sol", "gpt-5.4"]),
     readOnly: false,
   });
@@ -316,12 +323,9 @@ it("overlays exact configured metadata when discovery and config have opposite m
       api: "openai-completions",
       models: models.toReversed(),
     }),
-    entries: models.map(({ id }) => ({
-      id,
-      name: `Discovered ${id}`,
-      provider: "custom",
-      input: ["text"],
-    })),
+    entries: models.map(({ id }) =>
+      row("custom", id, { name: `Discovered ${id}`, input: ["text"] }),
+    ),
   });
 
   expect(snapshot.entries).toHaveLength(models.length);
@@ -491,4 +495,220 @@ it("reports image capability from the prepared row", () => {
     input: ["text", "image", "document"],
   };
   expect(modelSupportsVision(entry)).toBe(true);
+});
+
+describe("model catalog metadata projection", () => {
+  it("retains runtime capabilities without exporting request credentials", () => {
+    const capabilities = row("custom", "configured-model", {
+      name: "Configured model",
+      api: "openai-responses",
+      baseUrl: "https://example.test/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 96_000,
+      contextTokens: 48_000,
+      parameterCount: 4_000_000_000,
+      contextWindows: [{ id: "large", label: "Large", contextWindow: 96_000 }],
+      contextWindowDefault: "large",
+      thinkingLevelMap: { off: null, high: "high" },
+      params: { platformOnly: true },
+      compat: { supportsTools: false },
+    });
+    const model = {
+      ...capabilities,
+      headers: { Authorization: "synthetic-unused" },
+      authHeader: true,
+      requestTimeoutMs: 12_000,
+    };
+    const entry = modelCatalogRowToEntry(model);
+    expect(entry).toMatchObject(capabilities);
+    expect(entry).not.toHaveProperty("headers");
+    expect(entry).not.toHaveProperty("authHeader");
+    expect(entry).not.toHaveProperty("requestTimeoutMs");
+  });
+  it("uses the provider label for an unnamed native model without borrowing capabilities", () => {
+    const native = row("meta", "muse-spark-1.3", { nativeRuntime: "muse" });
+    const entries = [
+      { ...native, nativeRuntime: undefined, name: "Muse Spark 1.3", contextWindow: 128000 },
+    ];
+    expect(enrichHarnessRows([native], { entries, routeVariants: [] })).toEqual([
+      { ...native, name: "Muse Spark 1.3" },
+    ]);
+  });
+  it("keeps synthetic provenance bound to the context metadata and route that supplied it", () => {
+    const identity = row("fixture", "m", { name: "M" });
+    const base = {
+      ...identity,
+      api: "openai-responses" as const,
+      baseUrl: "https://first.example/v1",
+      contextWindow: 128_000,
+      contextWindowSource: "synthetic" as const,
+      parameterCount: 4_000_000_000,
+    };
+    const overlay = (fields: Partial<ModelCatalogEntry>) =>
+      overlayCatalogMetadata(base, { ...identity, ...fields });
+    expect(
+      overlay({ ...base, contextWindow: 64_000, contextWindowSource: undefined })
+        .contextWindowSource,
+    ).toBeUndefined();
+    const moved = overlay({ baseUrl: "https://second.example/v1" });
+    expect(moved.contextWindowSource).toBeUndefined();
+    expect(moved.parameterCount).toBeUndefined();
+    expect(overlay({ reasoning: true }).contextWindowSource).toBe("synthetic");
+  });
+});
+
+describe("configured catalog metadata", () => {
+  const identity = row("custom", "plain", { name: "Captured model" });
+  const capturedMetadata = {
+    ...identity,
+    api: "openai-responses",
+    reasoning: true,
+    thinkingLevelMap: { high: "high" },
+    contextWindows: [{ id: "large", label: "Large", contextWindow: 32_000 }],
+    contextWindowDefault: "large",
+    params: { captured: true },
+    compat: { supportsTools: false },
+  } satisfies ModelCatalogEntry;
+  const defaults: Pick<ModelProviderConfig, "api" | "baseUrl"> = {
+    api: "openai-completions",
+    baseUrl: "https://configured.example.test/v1",
+  };
+  function config<T extends Partial<ModelDefinitionConfig>>(model: T, route = defaults) {
+    return {
+      plugins: { enabled: false },
+      models: { providers: { custom: { ...route, models: [model] } } },
+    };
+  }
+
+  it("clears captured capabilities when applying a previously missing base URL", () => {
+    const route = { ...defaults, api: "openai-responses" } as const;
+    const source = validateConfigObjectRaw(
+      config({ id: "plain", name: "Configured model", ...route }, route),
+    );
+    if (!source.ok) {
+      throw new Error(JSON.stringify(source.issues));
+    }
+    const captured: ModelCatalogEntry & ThinkingCatalogPolicyCarrier = {
+      ...capturedMetadata,
+      thinkingPolicyProvider: "captured-policy",
+      [PREPARED_THINKING_POLICY]: {
+        resolve: () => ({ levels: [{ id: "high" }], defaultLevel: "high" }),
+      },
+      contextWindow: 32_000,
+      contextTokens: 16_000,
+      input: ["text", "image"],
+      mediaInput: { image: { maxBytes: 4_096 } },
+    };
+    const catalog = Object.freeze([Object.freeze(captured)]);
+    const [entry] = overlayConfiguredModelCatalog({ catalog, config: source.config });
+    expect(entry).toEqual({ ...identity, ...route, compat: undefined });
+    expect(catalog).toEqual([captured]);
+    expect(captured.thinkingLevelMap).toEqual({ high: "high" });
+  });
+  it("keeps capabilities with their captured route when provider defaults differ", () => {
+    const captured: ModelCatalogEntry = Object.freeze({
+      ...capturedMetadata,
+      baseUrl: "https://captured.example.test/v1",
+    });
+    const catalog = Object.freeze([captured]);
+    const [entry] = overlayConfiguredModelCatalog({
+      catalog,
+      config: config({
+        id: "plain",
+        name: "Configured model",
+        reasoning: false,
+        thinkingLevelMap: { high: null },
+        contextWindow: 8192,
+        maxTokens: 2048,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        compat: { supportsTools: true },
+      }),
+    });
+    expect(entry).toMatchObject({
+      api: captured.api,
+      baseUrl: captured.baseUrl,
+      reasoning: false,
+      configuredReasoning: false,
+      thinkingLevelMap: { high: null },
+      compat: { supportsTools: false },
+      contextWindows: captured.contextWindows,
+      contextWindowDefault: "large",
+      params: captured.params,
+    });
+    expect(catalog).toEqual([captured]);
+    expect(captured).toMatchObject({ reasoning: true, thinkingLevelMap: { high: "high" } });
+  });
+});
+
+describe("catalog declaration planning", () => {
+  const plan = vi.mocked(planEffectiveModelCatalogRows);
+  const normalize = vi.mocked(normalizeModelCatalogProviderRows);
+  let config: OpenClawConfig;
+  function catalog(discovery: "static" | "runtime", ...modelIds: string[]) {
+    const planningMetadata = finalizePluginMetadataSnapshot(
+      providerManifestSnapshot("catalog-fixture", discovery, modelIds),
+    );
+    const params = { config, metadataSnapshot: planningMetadata };
+    return {
+      load: () => loadManifestModelCatalog(params),
+      build: () =>
+        buildPreparedModelCatalogSnapshot({
+          ...params,
+          agentDir: "/tmp/model-catalog-planning-test",
+          authCredentials: {},
+          readOnly: true,
+          models: [],
+        }),
+      scope: (run: () => Promise<void>) => withPluginRuntimeGenerationScope(params, run),
+    };
+  }
+  beforeEach(() => {
+    config = { plugins: { enabled: false } };
+    plan.mockReset();
+    normalize.mockReset();
+  });
+  afterEach(() => {
+    plan.mockReset();
+    normalize.mockReset();
+  });
+  it("plans manifest rows once without expanding entitlement", async () => {
+    const runtime = catalog("runtime", "allowed", "denied");
+    config.models = { catalogRefresh: { enabled: false } };
+    await runtime.scope(async () => {
+      plan.mockClear();
+      normalize.mockClear();
+      const snapshot = await runtime.build();
+      expect([snapshot.entries, snapshot.routeVariants]).toEqual([[], []]);
+      const firstRead = runtime.load();
+      expect(firstRead.map((entry) => entry.id)).toEqual(["allowed", "denied"]);
+      expect(runtime.load()).toBe(firstRead);
+      expect(mocks.augmentModelCatalogWithProviderPlugins).not.toHaveBeenCalled();
+      expect(plan).toHaveBeenCalledTimes(1);
+      expect(
+        normalize.mock.results.map(({ type, value }) => (type === "return" ? value.length : type)),
+      ).toEqual([2]);
+    });
+  });
+  it("keeps the old declaration cache when replacement planning fails", async () => {
+    const initial = catalog("static", "initial");
+    const replacement = catalog("static", "replacement");
+    const planningError = new Error("catalog planning failed");
+    const originalRows = initial.load();
+    await replacement.scope(async () => {
+      plan.mockImplementationOnce(() => {
+        throw planningError;
+      });
+      await expect(replacement.build()).rejects.toBe(planningError);
+      expect(initial.load()).toBe(originalRows);
+      const snapshot = await replacement.build();
+      expect(snapshot.entries.map((entry) => entry.id)).toEqual(["replacement"]);
+      const replacementRows = replacement.load();
+      expect(replacementRows.map((entry) => entry.id)).toEqual(["replacement"]);
+      expect(replacementRows).not.toBe(originalRows);
+      expect(replacement.load()).toBe(replacementRows);
+      expect(originalRows.map((entry) => entry.id)).toEqual(["initial"]);
+    });
+  });
 });

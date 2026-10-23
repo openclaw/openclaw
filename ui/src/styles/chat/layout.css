@@ -793,6 +793,11 @@ openclaw-pending-session-create {
   }
 }
 
+.chat {
+  --chat-scroll-to-bottom-size: 36px;
+  --chat-scroll-to-bottom-gap: 12px;
+}
+
 /* The zero-height anchor keeps the affordance out of the flex flow so showing
    it never shrinks the transcript or moves the composer. */
 .chat-scroll-to-bottom-wrap {
@@ -805,13 +810,13 @@ openclaw-pending-session-create {
 
 .chat-scroll-to-bottom {
   position: absolute;
-  bottom: 12px;
+  bottom: calc(var(--chat-scroll-to-bottom-gap) + var(--chat-scroll-to-bottom-clearance, 0px));
   left: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: var(--chat-scroll-to-bottom-size);
+  height: var(--chat-scroll-to-bottom-size);
   padding: 0;
   line-height: 1;
   color: var(--text);
@@ -877,17 +882,6 @@ openclaw-pending-session-create {
 .chat-scroll-to-bottom:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--text) 28%, transparent);
   outline-offset: 2px;
-}
-
-.chat-scroll-to-bottom svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  flex-shrink: 0;
 }
 
 .context-usage {
@@ -2802,6 +2796,10 @@ openclaw-chat-ci-details {
   margin: 0 10px 10px;
 }
 
+.shell:not(.shell--mobile-nav) .chat-session-rail__composer.agent-chat__input {
+  margin-bottom: 20px;
+}
+
 /* One control in this row, so it keeps only the inset that stops the send from
    touching the frame. The shared bottom margin is sized for a row of chips. */
 .chat-session-rail__composer.agent-chat__input .agent-chat__composer-footer {
@@ -2913,6 +2911,21 @@ openclaw-chat-ci-details {
 
 .agent-chat__disabled-banner--compact .callout__content {
   min-width: 0;
+}
+
+/* Keep the desktop Subagents Stop appearance at the notice's button size. */
+.agent-chat__disabled-banner .agent-chat__disabled-banner-stop.btn {
+  border-color: transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  color: var(--danger);
+}
+
+.agent-chat__disabled-banner-stop.btn svg {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+  stroke: none;
 }
 
 .agent-chat__disabled-banner-icon--eye {
@@ -3320,16 +3333,14 @@ openclaw-chat-ci-details {
 
 .chat-pane__chat-toggle,
 .chat-pane__layout-trigger,
-.chat-pane__sharing-trigger,
-button.chat-pane__subagents-running {
+.chat-pane__sharing-trigger {
   padding: 5px 8px;
   line-height: 1;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-pane__chat-toggle,
-  .chat-pane__layout-trigger,
-  button.chat-pane__subagents-running {
+  .chat-pane__layout-trigger {
     min-height: 44px;
   }
 

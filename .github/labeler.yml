@@ -681,6 +681,11 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: bifrost":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/bifrost/**"
+          - "docs/providers/bifrost.md"
 "extensions: agentsapi":
   - changed-files:
       - any-glob-to-any-file:

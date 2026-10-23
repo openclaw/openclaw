@@ -36,9 +36,13 @@ export function SessionStatusBadge(props: { row: GatewaySessionRow }) {
         : idle() || !props.row.status || props.row.status === "interrupted"
           ? "muted"
           : "danger";
+  const detail = () => `${t("sessionsView.status")}: ${label()}`;
+  // The tooltip needs a focusable trigger for keyboard access.
   return (
-    <openclaw-tooltip prop:content={`${t("sessionsView.status")}: ${label()}`}>
-      <SettingsStatus kind={kind()} label={label()} />
+    <openclaw-tooltip prop:content={detail()}>
+      <span tabindex="0" aria-label={detail()}>
+        <SettingsStatus kind={kind()} label={label()} />
+      </span>
     </openclaw-tooltip>
   );
 }

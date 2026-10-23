@@ -16,11 +16,7 @@ import {
 } from "openclaw/plugin-sdk/command-auth-native";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import { decodeCustomIdComponent, encodeCustomIdComponent } from "../custom-id-codec.js";
-import type {
-  BaseMessageInteractiveComponent,
-  BaseComponentInteraction,
-  ComponentData,
-} from "../internal/discord.js";
+import type { BaseMessageInteractiveComponent, ComponentData } from "../internal/discord.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
 import type {
@@ -29,20 +25,6 @@ import type {
 } from "./native-command-ui.types.js";
 
 const DISCORD_COMMAND_ARG_CUSTOM_ID_KEY = "cmdarg";
-
-function buildDiscordCommandArgCustomId(params: {
-  command: string;
-  arg: string;
-  value: string;
-  userId: string;
-}): string {
-  return [
-    `${DISCORD_COMMAND_ARG_CUSTOM_ID_KEY}:command=${encodeCustomIdComponent(params.command)}`,
-    `arg=${encodeCustomIdComponent(params.arg)}`,
-    `value=${encodeCustomIdComponent(params.value)}`,
-    `user=${encodeCustomIdComponent(params.userId)}`,
-  ].join(";");
-}
 
 function parseDiscordCommandArgData(
   data: ComponentData,
@@ -67,55 +49,6 @@ function parseDiscordCommandArgData(
   };
 }
 
-async function handleDiscordCommandArgInteraction(
-  params: DiscordCommandArgButtonParams & {
-    interaction: BaseComponentInteraction;
-    data: ComponentData;
-  },
-) {
-  const { interaction, data, ctx } = params;
-  const clearWithMessage = async (content: string) =>
-    await params.safeInteractionCall("command arg update", () =>
-      interaction.update({ content, components: [] }),
-    );
-  const parsed = parseDiscordCommandArgData(data);
-  if (!parsed) {
-    await clearWithMessage("Sorry, that selection is no longer available.");
-    return;
-  }
-  if (interaction.user?.id && interaction.user.id !== parsed.userId) {
-    await params.safeInteractionCall("command arg ack", () => interaction.acknowledge());
-    return;
-  }
-  const commandDefinition =
-    findCommandByNativeName(parsed.command, "discord") ??
-    listChatCommands().find((entry) => entry.key === parsed.command);
-  if (!commandDefinition) {
-    await clearWithMessage("Sorry, that command is no longer available.");
-    return;
-  }
-  const argUpdateResult = await clearWithMessage(`⏳ Applying ${parsed.value}...`);
-  if (argUpdateResult === null) {
-    return;
-  }
-  const commandArgs: CommandArgs = { values: { [parsed.arg]: parsed.value } };
-  const commandArgsWithRaw: CommandArgs = {
-    ...commandArgs,
-    raw: serializeCommandArgs(commandDefinition, commandArgs),
-  };
-  const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
-  await params.dispatchCommandInteraction({
-    ...ctx,
-    interaction,
-    prompt,
-    command: commandDefinition,
-    commandArgs: commandArgsWithRaw,
-    preferFollowUp: true,
-    responseEphemeral: resolveDiscordSlashCommandConfig(ctx.discordConfig?.slashCommand).ephemeral,
-    pluginCommandDispatch: { kind: "non-plugin" },
-  });
-}
-
 type DiscordCommandArgButtonParams = {
   ctx: DiscordCommandArgContext;
   safeInteractionCall: SafeDiscordInteractionCall;
@@ -134,17 +67,22 @@ export function buildDiscordCommandArgMenu(params: {
   const { command, menu, userId } = params;
   const commandLabel = command.nativeName ?? command.key;
   const rows = chunkItems(menu.choices, 4).map((choices) => {
-    const buttons = choices.map((choice) => ({
-      type: ComponentType.Button as const,
-      label: choice.label,
-      custom_id: buildDiscordCommandArgCustomId({
-        command: commandLabel,
-        arg: menu.arg.name,
-        value: choice.value,
-        userId,
-      }),
-      style: ButtonStyle.Secondary as const,
-    }));
+    const buttons = choices.map((choice) => {
+      const label = choice.label;
+      const arg = menu.arg.name;
+      const value = choice.value;
+      return {
+        type: ComponentType.Button as const,
+        label,
+        custom_id: [
+          `${DISCORD_COMMAND_ARG_CUSTOM_ID_KEY}:command=${encodeCustomIdComponent(commandLabel)}`,
+          `arg=${encodeCustomIdComponent(arg)}`,
+          `value=${encodeCustomIdComponent(value)}`,
+          `user=${encodeCustomIdComponent(userId)}`,
+        ].join(";"),
+        style: ButtonStyle.Secondary as const,
+      };
+    });
     return { type: ComponentType.ActionRow as const, components: buttons };
   });
   const content = formatCommandArgMenuTitle({ command, menu });
@@ -158,7 +96,47 @@ export function createDiscordCommandArgFallbackButton(
     type: ComponentType.Button,
     customId: "cmdarg:seed=1",
     async run(interaction, data) {
-      await handleDiscordCommandArgInteraction({ ...params, interaction, data });
+      const { ctx, safeInteractionCall, dispatchCommandInteraction } = params;
+      const clearWithMessage = async (content: string) =>
+        await safeInteractionCall("command arg update", () =>
+          interaction.update({ content, components: [] }),
+        );
+      const parsed = parseDiscordCommandArgData(data);
+      if (!parsed) {
+        await clearWithMessage("Sorry, that selection is no longer available.");
+        return;
+      }
+      if (interaction.user?.id && interaction.user.id !== parsed.userId) {
+        await safeInteractionCall("command arg ack", () => interaction.acknowledge());
+        return;
+      }
+      const commandDefinition =
+        findCommandByNativeName(parsed.command, "discord") ??
+        listChatCommands().find((entry) => entry.key === parsed.command);
+      if (!commandDefinition) {
+        await clearWithMessage("Sorry, that command is no longer available.");
+        return;
+      }
+      const argUpdateResult = await clearWithMessage(`⏳ Applying ${parsed.value}...`);
+      if (argUpdateResult === null) {
+        return;
+      }
+      const commandArgs: CommandArgs = { values: { [parsed.arg]: parsed.value } };
+      const commandArgsWithRaw: CommandArgs = {
+        ...commandArgs,
+        raw: serializeCommandArgs(commandDefinition, commandArgs),
+      };
+      const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
+      await dispatchCommandInteraction({
+        ...ctx,
+        interaction,
+        prompt,
+        command: commandDefinition,
+        commandArgs: commandArgsWithRaw,
+        responseEphemeral: resolveDiscordSlashCommandConfig(ctx.discordConfig?.slashCommand)
+          .ephemeral,
+        pluginCommandDispatch: { kind: "non-plugin" },
+      });
     },
   };
 }

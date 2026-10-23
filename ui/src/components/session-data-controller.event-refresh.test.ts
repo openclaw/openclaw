@@ -328,6 +328,39 @@ describe("filtered sidebar session event refresh", () => {
     }
   });
 
+  it("keeps an owner-filtered refresh pending when the catalog agent changes", async () => {
+    const { controller, context, list, selectMembership, selectAgent } =
+      createFilteredSessionController("archived", 4, true);
+    controller.connect();
+    const release = Promise.withResolvers<void>();
+    let refreshing: Promise<void> | undefined;
+    try {
+      await selectMembership({ ownerId: "profile-ada", involvingMe: false });
+      const query = controller.sessionListQuery("main");
+      const listRows = list.getMockImplementation()!;
+      list.mockImplementationOnce(async (options) => {
+        await release.promise;
+        return listRows(options);
+      });
+      refreshing = controller.refreshSidebarSessions();
+      expect(context.sessions.listSnapshot(query).loading).toBe(true);
+      expect(controller.sessionsLoading).toBe(true);
+
+      selectAgent("research");
+
+      expect(controller.sessionListQuery("research")).toEqual(query);
+      expect(context.sessions.listSnapshot(query).loading).toBe(true);
+      expect(controller.sessionsLoading).toBe(true);
+      release.resolve();
+      await refreshing;
+      expect(controller.sessionsLoading).toBe(false);
+    } finally {
+      release.resolve();
+      await refreshing;
+      controller.disconnect();
+    }
+  });
+
   it.each(["archived", "all"] as const)(
     "automatically rebinds the restored %s filter across controller reconnect",
     async (statusFilter) => {

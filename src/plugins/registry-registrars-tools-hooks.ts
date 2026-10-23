@@ -19,6 +19,8 @@ import {
   resolvePromptInjectionAllowed,
 } from "./hook-policy-decisions.js";
 import { PLUGIN_HOOK_METADATA } from "./hook-types.js";
+import { recordPluginLoadDiagnostic } from "./load-diagnostics.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import {
   resolveTypedHookTimeoutMs,
@@ -31,6 +33,7 @@ import type {
 } from "./registry-types.js";
 import { normalizePluginToolContractNames, normalizePluginToolNames } from "./tool-contracts.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
+import { inspectOpenDictionaryToolSchemas } from "./tool-schema-diagnostics.js";
 import {
   isPluginHookAgentTrigger,
   isPluginHookName,
@@ -210,10 +213,39 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
-    getPluginInstance(record)?.admitFactory(factory, "tool");
+    const warnedTools = new Set<string>();
+    const diagnose = (tools: AnyAgentTool[]) => {
+      for (const diagnostic of inspectOpenDictionaryToolSchemas(tools, warnedTools)) {
+        warnedTools.add(diagnostic.toolName);
+        const paths = diagnostic.violations.slice(0, 12);
+        const remaining = diagnostic.violations.length - paths.length;
+        const summary = paths.join(", ") + (remaining > 0 ? `, +${remaining} more` : "");
+        const warning: PluginDiagnostic = {
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `tool "${diagnostic.toolName}": open object without declared properties, patternProperties, or additionalProperties will be closed on strict-compat providers (${summary}). Use explicit additionalProperties: true or openRecord(description) for dictionaries.`,
+        };
+        state.pushDiagnostic(warning);
+        recordPluginLoadDiagnostic(warning);
+      }
+    };
+    if (typeof tool !== "function" && !versioned) {
+      // Static schemas are inspected eagerly, best-effort; their accessors stay intact
+      // so unreadable schemas still reach per-tool runtime quarantine.
+      diagnose([tool]);
+    }
+    const inspectedFactory: OpenClawPluginToolFactory = (ctx) => {
+      const result = factory(ctx);
+      if (result) {
+        diagnose(Array.isArray(result) ? result : [result]);
+      }
+      return result;
+    };
+    getPluginInstance(record)?.admitFactory(inspectedFactory, "tool");
     registry.tools.push({
       ...createRegistration(record, {
-        factory,
+        factory: inspectedFactory,
         ...(versioned ? { contextVersion: 2 as const } : {}),
         names: normalized,
         optional,

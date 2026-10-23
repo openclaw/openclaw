@@ -71,6 +71,7 @@ it("renders the hero, links, license, and Clawd's active wave", () => {
 
   const links = Array.from(hero?.querySelectorAll<HTMLAnchorElement>(".about-hero__link") ?? []);
   expect(links.map((link) => link.getAttribute("href"))).toEqual([
+    "https://community.openclaw.ai/",
     "https://openclaw.ai",
     "https://docs.openclaw.ai",
     "https://github.com/openclaw/openclaw",
@@ -78,6 +79,9 @@ it("renders the hero, links, license, and Clawd's active wave", () => {
     "https://x.com/openclaw",
     "https://docs.openclaw.ai/releases",
   ]);
+  expect(links.find((link) => link.textContent?.trim() === "Support")?.href).toBe(
+    "https://community.openclaw.ai/",
+  );
   for (const link of links) {
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toContain("noopener");

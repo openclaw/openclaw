@@ -275,7 +275,6 @@ export async function deleteGatewayAgent(
                   committed = await deleteAgentConfigEntry({
                     agentId,
                     allowMissing: !configured,
-                    allowConfigSizeDrop: true,
                     assertCurrent: deletion.assertCurrentFinal,
                     assertCurrentAsync: deletion.assertCurrentAsync,
                     writeOptions,

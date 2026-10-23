@@ -870,6 +870,7 @@ describe("update orchestration lifecycle ownership", () => {
 
     expect(reportedResult("repair")).toMatchObject({
       status: "warning",
+      coreUpdate: "completed",
       reconciledRuns: [recovery.runId],
     });
     expectRecoveredRun(recoveredAtOutput);
@@ -957,6 +958,7 @@ describe("update orchestration lifecycle ownership", () => {
 
     expect(reportedResult(lane)).toMatchObject({
       status: failure === "finding" ? "error" : lane === "repair" ? "warning" : "ok",
+      ...(lane === "repair" ? { coreUpdate: failure === "finding" ? "pending" : "completed" } : {}),
       postUpdate: { plugins: { status: failure === "finding" ? "error" : "warning", reason } },
     });
     expect(mocks.restart).toHaveBeenCalledTimes(

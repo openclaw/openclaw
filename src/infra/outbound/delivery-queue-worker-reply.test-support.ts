@@ -7,7 +7,11 @@ import type { SqliteWorkerRequest } from "../sqlite-worker-contract.js";
 
 /** Hold one exact committed response without changing its database operation. */
 export function holdDeliveryQueueReply<T>(
-  type: "deliveryQueue.ack" | "deliveryQueue.claimPlatformSend" | "deliveryQueue.failPending",
+  type:
+    | "deliveryQueue.ack"
+    | "deliveryQueue.claimPlatformSend"
+    | "deliveryQueue.failPending"
+    | "deliveryQueue.renewPlatformSendLease",
   id: string,
   readResult: (value: unknown) => T | undefined,
 ) {

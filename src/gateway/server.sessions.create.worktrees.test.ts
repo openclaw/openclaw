@@ -472,7 +472,6 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     });
     expect(run.ok, JSON.stringify(run)).toBe(true);
     await commandEntered.promise;
-    expect(agentCommandMock).toHaveBeenCalled();
     expect(agentCommandMock.mock.calls.at(-1)?.[0]).toMatchObject({
       cwd: worktree?.path,
       workspaceDir: worktree?.path,

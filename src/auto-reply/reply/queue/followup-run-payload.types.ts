@@ -35,7 +35,10 @@ import type {
   VerboseLevel,
 } from "../../thinking.shared.js";
 import type { GoalContinuation } from "../goal-continuation.types.js";
-import type { SessionEventExecution } from "../session-event-contract.js";
+import type {
+  ScheduledSessionAutomation,
+  SessionEventExecution,
+} from "../session-event-contract.js";
 
 type FollowupQueueDisposition = Parameters<
   NonNullable<GetReplyOptions["onFollowupQueueDisposition"]>
@@ -173,6 +176,8 @@ export type FollowupRunPayload = {
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
   run: QueuedAgentRunParams & {
+    scheduledAutomation?: ScheduledSessionAutomation;
+    bootstrapContextMode?: GetReplyOptions["bootstrapContextMode"];
     internalEventExecution?: SessionEventExecution;
     agentId: string;
     agentDir: string;

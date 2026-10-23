@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -50,6 +51,7 @@ export function CompactAttachmentCard(
 export function AttachmentStateCard(
   props: AttachmentCardHeaderOptions & {
     imagePreview: boolean;
+    children?: JSX.Element;
     previewRatio?: string;
     error?: string;
     onRetry?: () => void;
@@ -106,6 +108,7 @@ export function AttachmentStateCard(
           </div>
         </Show>
       </div>
+      {props.children}
     </div>
   );
 }
@@ -169,8 +172,7 @@ export function AttachmentCardHeader(
             title={view().downloadTitle}
             onClick={() => props.onDownload?.()}
           >
-            <Icon name="download" />
-            {view().downloadLabel ? <span>{view().downloadLabel}</span> : null}
+            {view().downloadLabel ? <span>{view().downloadLabel}</span> : <Icon name="download" />}
           </button>
         ) : props.downloadHref || props.downloadPending ? (
           <a
@@ -185,8 +187,7 @@ export function AttachmentCardHeader(
             aria-label={view().downloadTitle}
             title={view().downloadTitle}
           >
-            <Icon name="download" />
-            {view().downloadLabel ? <span>{view().downloadLabel}</span> : null}
+            {view().downloadLabel ? <span>{view().downloadLabel}</span> : <Icon name="download" />}
           </a>
         ) : null}
         {props.onExpand !== undefined ? (

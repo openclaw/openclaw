@@ -99,7 +99,11 @@ vi.mock("./session-sharing.js", async (importOriginal) => ({
 const { createEventWebPushDelivery } = await import("./event-web-push.js");
 let authorityCompleted = createDeferred();
 
-function makeSubscription(id: string, profileId: string | null = null): BoundWebPushSubscription {
+function makeSubscription(
+  id: string,
+  profileId: string | null = null,
+  preferences: Partial<BoundWebPushSubscription["devicePreferences"]> = {},
+): BoundWebPushSubscription {
   return {
     subscriptionId: `subscription-${id}`,
     endpoint: `https://push.example.test/${id}`,
@@ -118,6 +122,7 @@ function makeSubscription(id: string, profileId: string | null = null): BoundWeb
         humanMentioned: true,
         scheduledTaskFailed: true,
       },
+      ...preferences,
     },
   };
 }
@@ -159,6 +164,13 @@ const setSubscriptions = (...subscriptions: BoundWebPushSubscription[]) =>
   mocks.subscriptions.mockResolvedValue(subscriptions);
 const setPaired = (...paired: ReturnType<typeof pairedOperator>[]) =>
   mocks.pairing.mockReturnValue({ paired });
+
+function setRecipients(...subscriptions: BoundWebPushSubscription[]) {
+  setSubscriptions(...subscriptions);
+  setPaired(...subscriptions.map(({ deviceId }) => pairedOperator(deviceId)));
+}
+
+const researchContext = { agentId: "research", sessionKeys: ["agent:research:thread.1"] };
 
 function prepareSender() {
   const preparation = createDeferred<typeof mocks.send>();
@@ -203,18 +215,16 @@ describe("event Web Push classification", () => {
 
   it("includes the selected avatar only for identified agent notifications", async () => {
     const identified = makeSubscription("identified");
-    const privateTarget = makeSubscription("private");
-    privateTarget.devicePreferences.detailLevel = "private";
-    setSubscriptions(identified, privateTarget);
-    setPaired(pairedOperator("identified"), pairedOperator("private"));
+    const privateTarget = makeSubscription("private", null, { detailLevel: "private" });
+    setRecipients(identified, privateTarget);
     const pixels = Buffer.alloc(64 * 64 * 4, Buffer.from([255, 150, 0, 255]));
     const avatar = `data:image/png;base64,${encodePngRgba(pixels, 64, 64).toString("base64")}`;
     const cfg: OpenClawConfig = { agents: { entries: { research: { identity: { avatar } } } } };
 
-    createEventWebPushDelivery({ getRuntimeConfig: () => cfg }).handleEvent(
-      "chat",
-      { state: "final", runId: "avatar-run" },
-      { agentId: "research", sessionKeys: ["agent:research:thread.1"] },
+    finishAgent(
+      createDelivery({ getRuntimeConfig: () => cfg }),
+      { runId: "avatar-run" },
+      researchContext,
     );
 
     await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(2), {
@@ -242,10 +252,10 @@ describe("event Web Push classification", () => {
       identity.avatar = "🌱";
     });
 
-    createEventWebPushDelivery({ getRuntimeConfig: () => cfg }).handleEvent(
-      "chat",
-      { state: "final", runId: "changed-avatar-run" },
-      { agentId: "research", sessionKeys: ["agent:research:thread.1"] },
+    finishAgent(
+      createDelivery({ getRuntimeConfig: () => cfg }),
+      { runId: "changed-avatar-run" },
+      researchContext,
     );
 
     await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledOnce());
@@ -333,10 +343,7 @@ describe("event Web Push classification", () => {
   ] as const)("routes %s to its originating Gateway", async (event, payload, path) => {
     setPaired(pairedOperator("browser-device", ["operator.read", "operator.questions"]));
     const delivery = createDelivery({ getRuntimeConfig: gatewayConfig });
-    delivery.handleEvent(event, payload, {
-      sessionKeys: ["agent:research:thread.1"],
-      agentId: "research",
-    });
+    delivery.handleEvent(event, payload, researchContext);
     await expectPayload({
       url: `${path}#gatewayUrl=wss%3A%2F%2Fgateway.example.test%2Foperator`,
     });
@@ -373,8 +380,7 @@ describe("event Web Push classification", () => {
 
   it("escapes display labels but preserves the raw agent filter", async () => {
     const agentId = "agent\n\u202E";
-    const subscription = makeSubscription("browser-device");
-    subscription.devicePreferences.agentIds = [agentId];
+    const subscription = makeSubscription("browser-device", null, { agentIds: [agentId] });
     setSubscriptions(subscription);
     finishAgent(undefined, { agentId });
     await expectPayload({ body: "agent\\u{A}\\u{202E}: An agent completed its response." });
@@ -396,8 +402,7 @@ describe("event Web Push classification", () => {
   it("rereads subscriptions after transport preparation before sending", async () => {
     const stale = makeSubscription("stale-device");
     const preparation = prepareSender();
-    setSubscriptions(stale);
-    setPaired(pairedOperator("stale-device"));
+    setRecipients(stale);
     const getRuntimeConfig = vi.fn(() => ({}));
     const delivery = createDelivery({ getRuntimeConfig });
     finishAgent(delivery);
@@ -506,8 +511,7 @@ describe("event Web Push classification", () => {
         makeSubscription("carol-browser", "carol"),
         makeSubscription("anonymous-browser"),
       ];
-      setSubscriptions(...subscriptions);
-      setPaired(...subscriptions.map((subscription) => pairedOperator(subscription.deviceId)));
+      setRecipients(...subscriptions);
       mocks.identity.mockImplementation((id: string) =>
         profileIdentity(id === "bob-old" ? "bob" : id, [id]),
       );
@@ -524,10 +528,8 @@ describe("event Web Push classification", () => {
 
     it("records one safe default-logger warning for partial delivery failures across copy groups", async () => {
       const browser = makeSubscription("bob-browser", "bob");
-      const phone = makeSubscription("bob-phone", "bob");
-      phone.devicePreferences.detailLevel = "private";
-      setSubscriptions(browser, phone);
-      setPaired(pairedOperator("bob-browser"), pairedOperator("bob-phone"));
+      const phone = makeSubscription("bob-phone", "bob", { detailLevel: "private" });
+      setRecipients(browser, phone);
       mocks.send.mockImplementation(
         async ({ subscriptions }: { subscriptions: BoundWebPushSubscription[] }) =>
           subscriptions.map((subscription) => ({
@@ -551,7 +553,7 @@ describe("event Web Push classification", () => {
         cause: new Error("invalid key length"),
       });
       mocks.sender.mockRejectedValueOnce(failure);
-      finishAgent(createDelivery({ log: { warn: mocks.warn } }), { runId: "failure-run" });
+      finishAgent(createDelivery(), { runId: "failure-run" });
       await vi.waitFor(() => expect(mocks.warn).toHaveBeenCalledOnce());
       expect(mocks.warn).toHaveBeenCalledWith("event Web Push delivery could not complete", {
         category: "agent-finished",
@@ -677,8 +679,7 @@ describe("event Web Push classification", () => {
     it.each(["private", "identified"] as const)(
       "keeps %s mention copy label-only and PWA-routed",
       async (detailLevel) => {
-        const subscription = makeSubscription("browser-device", "bob");
-        subscription.devicePreferences.detailLevel = detailLevel;
+        const subscription = makeSubscription("browser-device", "bob", { detailLevel });
         setSubscriptions(subscription);
         createDelivery({ getRuntimeConfig: gatewayConfig }).deliverMention(
           humanMention({ senderLabel: "Al\nice", sessionTitle: "Review\u202E" }),
@@ -734,9 +735,7 @@ describe("event Web Push classification", () => {
       vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-01T12:00:00Z"));
       const preparation = prepareSender();
       createDelivery().deliverMention(humanMention());
-      const subscription = makeSubscription("browser-device", "bob");
-      subscription.devicePreferences = { ...subscription.devicePreferences, ...preferences };
-      setSubscriptions(subscription);
+      setSubscriptions(makeSubscription("browser-device", "bob", preferences));
       preparation.resolve(mocks.send);
       await authorityCompleted.promise;
       expect(mocks.send).not.toHaveBeenCalled();

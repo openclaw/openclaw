@@ -3,10 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import {
-  evaluateControlUiContext,
-  getControlUiContextHandle,
-} from "../test-helpers/control-ui-e2e-context.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
@@ -14,10 +11,7 @@ import {
   controlUiBundledSettingsStorageKey,
 } from "../test-helpers/control-ui-e2e.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
-import {
-  createControlUiE2eContextOptions,
-  holdModuleResponse,
-} from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   createPageOpener,
   button,
@@ -203,7 +197,7 @@ async function assertCreateRecovery(
   const startup = page.locator(".new-session-page__starting");
   const submittedPrompt = startup.locator(".chat-group.user");
   const announcement = page.locator(
-    '.new-session-page > [role="status"][aria-live="polite"], openclaw-pending-session-create .chat-main__conversation > [role="status"][aria-live="polite"]',
+    '.new-session-page:visible > [role="status"][aria-live="polite"], openclaw-pending-session-create:visible .chat-main__conversation > [role="status"][aria-live="polite"]',
   );
   const draftImage = page
     .locator(".chat-attachment-thumb")
@@ -584,10 +578,6 @@ suite.define(() => {
         await route.continue();
       },
     );
-    const pendingPreviewModule = await holdModuleResponse(
-      page,
-      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/pending-session-create.tsx"),
-    );
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-sol",
       featureMethods: [
@@ -726,24 +716,6 @@ suite.define(() => {
 
       await gateway.deferNext("chat.startup");
       releaseChatModule();
-      await pendingPreviewModule.request;
-      const applicationHandle = await getControlUiContextHandle(page);
-      try {
-        await page.waitForFunction((application) => {
-          const route = application.router.getState().matches[0];
-          return route?.routeId === "chat" && route.module && route.isFetching === "loader";
-        }, applicationHandle);
-      } finally {
-        await applicationHandle.dispose();
-      }
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
-      await captureProof(page, "01b-chat-preview-loading.png");
-      pendingPreviewModule.release();
       await gateway.waitForRequest("chat.startup");
       await expect
         .poll(() =>

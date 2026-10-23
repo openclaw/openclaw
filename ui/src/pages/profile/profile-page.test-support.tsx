@@ -29,8 +29,15 @@ export function createConnectedContext(
     selfUser,
   };
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const routeListeners = new Set<() => void>();
   const subscribe = () => () => undefined;
   const baseContext = {
+    router: {
+      subscribe(listener: () => void) {
+        routeListeners.add(listener);
+        return () => routeListeners.delete(listener);
+      },
+    },
     runtimeConfig: { subscribe, state: {}, ensureLoaded: async () => undefined },
     gateway: {
       connect: vi.fn(),
@@ -101,6 +108,11 @@ export function createConnectedContext(
   };
   return {
     context,
+    emitNavigation() {
+      for (const listener of routeListeners) {
+        listener();
+      }
+    },
     emitSnapshot(next: Partial<ApplicationGatewaySnapshot>) {
       snapshot = { ...snapshot, ...next };
       for (const listener of listeners) {

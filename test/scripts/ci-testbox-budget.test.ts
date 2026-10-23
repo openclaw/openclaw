@@ -222,6 +222,14 @@ describe("Testbox admission GitHub response", () => {
     "x-ratelimit-resource": "core",
     "retry-after": "60",
   };
+  const denial = (body: string, classification = "forbidden", bodyKind = "json") => ({
+    status: 403,
+    body,
+    classification,
+    bodyKind,
+  });
+  const jsonDenial = (message: unknown, classification = "forbidden") =>
+    denial(JSON.stringify({ message }), classification);
 
   function admit({
     status,
@@ -297,68 +305,30 @@ describe("Testbox admission GitHub response", () => {
     return { ...result, receipt };
   }
 
-  it.each([
-    {
-      status: 403,
-      body: JSON.stringify({ message: secret }),
-      headers: rateHeaders,
-      classification: "primary-rate-limit",
-      bodyKind: "json",
-    },
-    {
-      status: 403,
-      body: JSON.stringify({ message: "You have exceeded a secondary rate limit. " + secret }),
-      classification: "secondary-rate-limit",
-      bodyKind: "json",
-    },
-    {
-      status: 403,
-      body: JSON.stringify({ message: "Resource not accessible by integration" }),
-      classification: "resource-not-accessible",
-      bodyKind: "json",
-    },
-    {
-      status: 403,
-      body: JSON.stringify({ message: "Resource not accessible by personal access token" }),
-      classification: "resource-not-accessible",
-      bodyKind: "json",
-    },
-    {
-      status: 403,
-      body: JSON.stringify({
+  it.each<Parameters<typeof admit>[0] & { classification: string; bodyKind: string }>([
+    { ...jsonDenial(secret, "primary-rate-limit"), headers: rateHeaders },
+    jsonDenial("You have exceeded a secondary rate limit. " + secret, "secondary-rate-limit"),
+    jsonDenial("Resource not accessible by integration", "resource-not-accessible"),
+    jsonDenial("Resource not accessible by personal access token", "resource-not-accessible"),
+    denial(
+      JSON.stringify({
         message: secret,
         documentation_url: "https://example.test/" + secret,
       }),
-      classification: "forbidden",
-      bodyKind: "json",
-    },
+    ),
+    denial("<html>" + secret + "</html>", "forbidden", "invalid-json"),
+    denial('{"message":"' + secret, "forbidden", "invalid-json"),
+    jsonDenial({ value: secret }),
     {
-      status: 403,
-      body: "<html>" + secret + "</html>",
-      classification: "forbidden",
-      bodyKind: "invalid-json",
-    },
-    {
-      status: 403,
-      body: '{"message":"' + secret,
-      classification: "forbidden",
-      bodyKind: "invalid-json",
-    },
-    {
-      status: 403,
-      body: JSON.stringify({ message: { value: secret } }),
-      classification: "forbidden",
-      bodyKind: "json",
-    },
-    {
-      status: 403,
-      body: JSON.stringify({
-        message: "You have exceeded a secondary rate limit.",
-        extra: secret.repeat(1000),
-      }),
+      ...denial(
+        JSON.stringify({
+          message: "You have exceeded a secondary rate limit.",
+          extra: secret.repeat(1000),
+        }),
+        "primary-rate-limit",
+        "too-large",
+      ),
       headers: rateHeaders,
-      classification: "primary-rate-limit",
-      bodyKind: "too-large",
     },
     {
       status: 403,

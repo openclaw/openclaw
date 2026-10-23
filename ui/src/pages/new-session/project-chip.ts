@@ -26,7 +26,6 @@ export type DraftRemoteProject = Readonly<{
 
 type ProjectChipState = Readonly<{
   label: string;
-  localProjects: readonly ProjectRecord[];
   recents: readonly Exclude<ProjectRecent, { kind: "project" }>[];
   showWorkspace: boolean;
 }>;
@@ -44,14 +43,6 @@ export function resolveProjectChip(params: {
   const folder = params.folder.trim();
   const selectedProject = params.projects.find((project) => project.id === params.projectId);
   const normalizedQuery = params.projectQuery.trim().toLowerCase();
-  const localProjects = normalizedQuery
-    ? params.projects.filter((project) =>
-        [project.displayName, project.originUrl ?? "", project.repoRoot ?? ""]
-          .join("\n")
-          .toLowerCase()
-          .includes(normalizedQuery),
-      )
-    : params.projects;
   return {
     label: params.freshWorkspace
       ? t("newSession.newWorkspace")
@@ -62,13 +53,8 @@ export function resolveProjectChip(params: {
           : folder
             ? pathDisplayName(folder)
             : pathDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
-    localProjects,
     recents: normalizedQuery ? [] : params.recents.filter((recent) => recent.kind !== "project"),
     showWorkspace:
-      !normalizedQuery ||
-      [pathDisplayName(params.workspace), params.workspace]
-        .join("\n")
-        .toLowerCase()
-        .includes(normalizedQuery),
+      !normalizedQuery || pathDisplayName(params.workspace).toLowerCase().includes(normalizedQuery),
   };
 }

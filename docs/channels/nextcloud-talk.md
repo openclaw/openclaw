@@ -195,7 +195,7 @@ the main Gateway port keeps its existing JSON check responses.
   - `openclaw pairing list nextcloud-talk`
   - `openclaw pairing approve nextcloud-talk <CODE>`
 - Public DMs: `channels.nextcloud-talk.dmPolicy="open"` plus `channels.nextcloud-talk.allowFrom=["*"]`.
-- `allowFrom` matches Nextcloud user IDs only (lowercased); display names are ignored.
+- Sender allowlists accept bare Nextcloud user IDs (`alice`) or typed Talk actor IDs (`users/alice`), case-insensitively; display names are ignored. This applies to `allowFrom`, `groupAllowFrom`, room `allowFrom`, `mediaAllowFrom`, and configured approvers. Other actor types such as `guests/alice` remain distinct from `alice`.
 
 ## Rooms (groups)
 
@@ -303,6 +303,17 @@ plugin-only publication:
 The package-version sync and install/discovery regression tests exercise the
 local enforcement path. Registry readback, actual stock-runtime tests, and release
 SDK acknowledgement remain release-time responsibilities.
+
+## Silent sends
+
+Use the message tool's `silent: true` option to post text or attachments without
+creating Talk chat notifications, including mention notifications. Messages remain
+visible in the conversation. Omitted or false keeps normal notification behavior;
+no channel configuration change is needed.
+
+Silent attachments require the server's `media-caption` capability (Talk 18+).
+OpenClaw checks this before reading or uploading the attachment and reports an
+error if support cannot be confirmed, rather than falling back to a notifying send.
 
 ## Capabilities
 

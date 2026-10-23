@@ -88,6 +88,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
       sessionFile,
       sessionId,
       sessionKey,
+      sessionPersistence,
       sessionTarget: originalSessionTarget,
     }));
   await externalAbortController.throwIfFiredAfterPrepCleanup();

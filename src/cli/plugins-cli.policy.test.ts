@@ -25,7 +25,8 @@ import {
   runtimeErrors,
   pluginsCliRuntimeLogs as logs,
   promptYesNoMock,
-  runPluginsCommand,
+  runPluginCli,
+  expectNoPluginCliCalls as expectNoCalls,
   setInstalledPluginIndexInstallRecords,
   configWriteMock,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock as writeInstallRecords,
@@ -45,15 +46,6 @@ vi.mock("../plugins/official-external-plugin-catalog.js", async (importOriginal)
     inventory.hostedCatalog(...args),
 }));
 
-function expectNoCalls(...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
-
-function runPluginCli(...args: string[]) {
-  return runPluginsCommand(["plugins", ...args]);
-}
 function consentReview(id: string, name = id) {
   return buildPluginCapabilityConsentReview({
     pluginId: id,

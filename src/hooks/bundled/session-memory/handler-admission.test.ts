@@ -11,16 +11,21 @@ import {
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createInternalHookEvent } from "../../internal-hooks.js";
 
-const generateSlugViaLLM = vi.hoisted(() => vi.fn());
+const runEmbeddedAgent = vi.hoisted(() =>
+  vi.fn<typeof import("../../../agents/embedded-agent.js").runEmbeddedAgent>(),
+);
 
-vi.mock("../../llm-slug-generator.js", () => ({ generateSlugViaLLM }));
+vi.mock("../../../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../agents/embedded-agent.js")>()),
+  runEmbeddedAgent,
+}));
 
 import handler, { flushSessionMemoryWritesForTest } from "./handler.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
-  generateSlugViaLLM.mockReset();
+  runEmbeddedAgent.mockReset();
   await flushSessionMemoryWritesForTest();
 });
 
@@ -66,9 +71,12 @@ describe("session-memory gateway admission", () => {
       workspaceDir: tempDir,
     });
     let subordinateClosedInsideSlug: boolean | undefined;
-    generateSlugViaLLM.mockImplementationOnce(async () => {
+    runEmbeddedAgent.mockImplementationOnce(async () => {
       subordinateClosedInsideSlug = isGatewaySubordinateWorkAdmissionClosed();
-      return subordinateClosedInsideSlug ? null : "admitted-slug";
+      return {
+        payloads: subordinateClosedInsideSlug ? [] : [{ text: "admitted-slug" }],
+        meta: { durationMs: 0 },
+      };
     });
 
     await withEnvAsync(

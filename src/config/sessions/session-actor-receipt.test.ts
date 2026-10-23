@@ -48,8 +48,8 @@ function expectRetry(f: Fixture, command: Mutation) {
   });
 }
 
-it("publishes only newly committed events with exact stored UTF-8 sizes, including noncanonical JSON", async () => {
-  await withActor(async (f) => {
+it("publishes only newly committed events with exact stored UTF-8 sizes, including noncanonical JSON", () =>
+  withActor(async (f) => {
     runSqliteImmediateTransactionSync(f.database.db, () => {
       appendTranscriptEventsInTransaction(f.database, f.scope, [
         {
@@ -85,8 +85,7 @@ it("publishes only newly committed events with exact stored UTF-8 sizes, includi
         commandId: "model-change-retry",
       },
     });
-  });
-});
+  }));
 
 function hot(rawSeq: number, generation = "generation"): SessionActorHotState {
   return {

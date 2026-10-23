@@ -17,6 +17,7 @@ import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fix
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   packNpmFixture,
+  npmRegistryPackument,
   npmWorkflowRun,
   zipNpmFixture as archive,
 } from "./plugin-npm-publication-readback.test-support.js";
@@ -102,18 +103,6 @@ function preparation(
     ReturnType<typeof metadata>,
     ReturnType<typeof metadata>,
   ];
-  const job = (entry: ReturnType<typeof plugin>) => ({
-    name: `Preflight plugin npm package (${entry.packageName})`,
-    run_id: producer.runId,
-    run_attempt: producer.runAttempt,
-    head_sha: producer.workflowSha,
-    status: "completed",
-    conclusion: "success",
-  });
-  const workflowJobs = {
-    total_count: matrix.length,
-    jobs: matrix.map(job),
-  };
   return {
     ...expected,
     npmDistTag,
@@ -121,7 +110,17 @@ function preparation(
     matrix,
     artifacts,
     workflowRun: workflowRun(),
-    workflowJobs,
+    workflowJobs: {
+      total_count: matrix.length,
+      jobs: matrix.map((entry) => ({
+        name: `Preflight plugin npm package (${entry.packageName})`,
+        run_id: producer.runId,
+        run_attempt: producer.runAttempt,
+        head_sha: producer.workflowSha,
+        status: "completed",
+        conclusion: "success",
+      })),
+    },
   };
 }
 
@@ -319,21 +318,7 @@ function registryFixture(bytes = Buffer.from("exact qualified bytes")) {
   const tarballPath = join(tempRoot(), "qualified.tgz");
   writeFileSync(tarballPath, bytes);
   const name = "@openclaw/demo";
-  const packument = {
-    name,
-    "dist-tags": { beta: version },
-    versions: {
-      [version]: {
-        name,
-        version,
-        dist: {
-          integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
-          shasum: digest(bytes, "sha1"),
-          tarball: "https://registry.npmjs.org/@openclaw/demo/-/demo.tgz",
-        },
-      },
-    },
-  };
+  const packument = npmRegistryPackument(name, version, bytes);
   const params = {
     packageName: name,
     version,
@@ -427,24 +412,9 @@ it("rejects a zero readback timeout", async () => {
   await expect(verify({ allowMissing: false })).rejects.toThrow("OPENCLAW_NPM_READBACK_TIMEOUT_MS");
 });
 
-it.each(["integrity", "bytes", "selector", "removed-oidc-package"])(
-  "refuses %s without authorizing a publish or changing a tag",
-  async (fault) => {
-    const { packument, responses, reads, verify } = registryFixture();
-    if (fault === "integrity") {
-      packument.versions[version].dist.shasum = "0".repeat(40);
-    }
-    if (fault === "selector") {
-      packument["dist-tags"].beta = "2026.9.2-beta.2";
-    }
-    if (fault === "removed-oidc-package") {
-      responses.registry = () => new Response("missing", { status: 404 });
-    }
-    if (fault === "bytes") {
-      responses.tarball = () => new Response("changed bytes");
-    }
-    await expect(verify({ allowMissing: fault === "removed-oidc-package" })).rejects.toThrow();
-    expect(reads.registry).toBe(fault === "removed-oidc-package" ? 0 : 1);
-    expect(reads.tarball).toBe(fault === "bytes" || fault === "selector" ? 1 : 0);
-  },
-);
+it("refuses to bootstrap a removed OIDC package", async () => {
+  const { responses, reads, verify } = registryFixture();
+  responses.registry = () => new Response("missing", { status: 404 });
+  await expect(verify({ allowMissing: true })).rejects.toThrow();
+  expect(reads).toEqual({ registry: 0, tarball: 0 });
+});

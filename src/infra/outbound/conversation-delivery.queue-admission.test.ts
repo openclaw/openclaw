@@ -269,13 +269,11 @@ describe("conversation completion through the real delivery queue", () => {
         "rendered text",
       );
       const writerReady = createDeferred<ReturnType<typeof holdConversationWriterForTest>>();
-      let providerRejects = true;
-      const platformSend = vi.fn(async () => ({
-        channel: "reef" as const,
-        messageId: "must-not-send",
-      }));
-      const sendText = vi.fn<NonNullable<ChannelOutboundAdapter["sendText"]>>(async (context) => {
-        if (providerRejects) {
+      const sendText = vi
+        .fn<NonNullable<ChannelOutboundAdapter["sendText"]>>(async () => {
+          throw new Error("rejected sends must not be retried");
+        })
+        .mockImplementationOnce(async () => {
           const writer = holdConversationWriterForTest(scope);
           writerReady.resolve(writer);
           await writer.entered;
@@ -283,10 +281,7 @@ describe("conversation completion through the real delivery queue", () => {
             cause: new Error("provider rejected the rendered payload"),
             retryable: false,
           });
-        }
-        await context.onPlatformSendDispatch?.();
-        return platformSend();
-      });
+        });
       const registry = installSender(sendText);
       const readState = () => {
         const owner = getDeliveryQueueEntryOwnersInDatabase(
@@ -340,10 +335,8 @@ describe("conversation completion through the real delivery queue", () => {
           },
         });
         expect(await loadUnfinishedDelivery(queueId, stateDir)).toBeNull();
-        providerRejects = false;
         await drainReefRecovery(stateDir);
         expect(sendText).toHaveBeenCalledOnce();
-        expect(platformSend).not.toHaveBeenCalled();
         const terminalState = {
           queueStatus: "failed",
           settlementPending: false,
@@ -493,8 +486,6 @@ describe("conversation completion through the real delivery queue", () => {
       return { channel: "reef" as const, messageId: "reef-delivered" };
     });
     installSender(sendText);
-    let actionFailed = false;
-    let actionError: unknown;
     const runMessageAction = messageActionRunner.runMessageAction;
     const action = vi
       .spyOn(messageActionRunner, "runMessageAction")
@@ -512,13 +503,7 @@ describe("conversation completion through the real delivery queue", () => {
         // Gateway has created the operation and captured its target; every real
         // action/send adapter below must retain those facts through its awaits.
         vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
-        try {
-          return await runMessageAction(input);
-        } catch (error) {
-          actionFailed = true;
-          actionError = error;
-          throw error;
-        }
+        return await runMessageAction(input);
       });
     onTestFinished(() => action.mockRestore());
     const enqueueReply = holdEnqueueReply();
@@ -559,13 +544,9 @@ describe("conversation completion through the real delivery queue", () => {
           readQueuedEntries(originalRoot).length > 0 ||
             readQueuedEntries(replacementRoot).length > 0 ||
             sendText.mock.calls.length > 0 ||
-            actionFailed ||
             settled,
         ).toBe(true),
       );
-      if (actionFailed) {
-        throw actionError;
-      }
       if (settled) {
         await delivery;
       }

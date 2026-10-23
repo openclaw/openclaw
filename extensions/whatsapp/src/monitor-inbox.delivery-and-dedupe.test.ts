@@ -3,10 +3,7 @@ import { observeChannelIngressQueueWrite } from "openclaw/plugin-sdk/channel-ing
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearWhatsAppApprovalReactionTargetsForTest,
-  registerWhatsAppApprovalReactionTarget,
-} from "./approval-reactions.js";
+import { registerWhatsAppApprovalReactionTarget } from "./approval-reactions.js";
 import {
   createWhatsAppDurableInboundQueue,
   createWhatsAppDurableInboundMessageId,
@@ -29,6 +26,25 @@ import {
   waitForInboundWorkDrained,
   type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
+
+const reactionStores = vi.hoisted(() => new Set<{ clearForTest(): void }>());
+
+vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/approval-reaction-runtime")>();
+  return {
+    ...actual,
+    createApprovalReactionTargetStore: <TTarget>(
+      params: Parameters<typeof actual.createApprovalReactionTargetStore<TTarget>>[0],
+    ) => {
+      const store = actual.createApprovalReactionTargetStore<TTarget>(params);
+      if (params.namespace === "whatsapp.approval-reactions") {
+        reactionStores.add(store);
+      }
+      return store;
+    },
+  };
+});
 
 const approvalResolver = vi.hoisted(() => vi.fn());
 const inboundLogRecords = vi.hoisted(() => vi.fn());
@@ -109,7 +125,7 @@ function dmUpsert(id: string, text = "ping", timestamp = 1_700_000_000, withName
 describe("web monitor inbox delivery and dedupe", () => {
   installStreamsInboundMessageHooks();
   beforeEach(() => {
-    clearWhatsAppApprovalReactionTargetsForTest();
+    reactionStores.forEach((store) => store.clearForTest());
     approvalResolver.mockReset();
   });
 

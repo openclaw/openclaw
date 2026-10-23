@@ -2,7 +2,6 @@ import {
   asNullableRecord as asConfigRecord,
   isRecord,
 } from "@openclaw/normalization-core/record-coerce";
-import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { coerceConfigFormNumberString } from "../../components/config-form.numeric.ts";
 import { t } from "../../i18n/index.ts";
@@ -15,7 +14,6 @@ import {
   setPathValue,
   type JsonSchema,
 } from "../config-form-utils.ts";
-import { formatUiError } from "../format-error.ts";
 import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";
 import { configContentConflicts, replayConfigDraftEdits } from "./config-draft-replay.ts";
 import {
@@ -40,92 +38,6 @@ export function comparableSnapshotRaw(
 
 export function clearConfigDraftTracking(state: RuntimeConfigState): void {
   autoAllowlistedPluginIdsByState.delete(state);
-}
-
-export function formatConfigMutationError(error: unknown, submittedRaw: string | null): string {
-  const formatted = formatUiError(error);
-  let message = error instanceof GatewayRequestError ? `${error.name}: ${formatted}` : formatted;
-  if (!submittedRaw || !(error instanceof GatewayRequestError) || !isRecord(error.details)) {
-    return message;
-  }
-  const issues = error.details.issues;
-  if (!Array.isArray(issues)) {
-    return message;
-  }
-  const summaryPrefix = `${error.name}: invalid config: `;
-  if (!message.startsWith(summaryPrefix)) {
-    return message;
-  }
-  const submittedForm = parseConfigRawDraft(submittedRaw);
-  if (!submittedForm) {
-    return message;
-  }
-  let offset = summaryPrefix.length;
-  for (const issue of issues) {
-    if (
-      !isRecord(issue) ||
-      typeof issue.path !== "string" ||
-      typeof issue.message !== "string" ||
-      !message.startsWith(`${issue.path}: ${issue.message}`, offset)
-    ) {
-      break;
-    }
-    const displayPath = formatConfigIssuePathFromDraft(issue.path, submittedForm);
-    if (displayPath !== issue.path) {
-      message = `${message.slice(0, offset)}${displayPath}${message.slice(offset + issue.path.length)}`;
-    }
-    offset += displayPath.length + 2 + issue.message.length;
-    if (!message.startsWith("; ", offset)) {
-      break;
-    }
-    offset += 2;
-  }
-  return message;
-}
-
-function formatConfigIssuePathFromDraft(path: string, draft: unknown): string {
-  const segments = path.split(".");
-
-  const visit = (value: unknown, offset: number): string[] => {
-    if (offset === segments.length) {
-      return [""];
-    }
-    const segment = segments[offset];
-    if (segment === undefined) {
-      return [];
-    }
-    if (Array.isArray(value)) {
-      const index = Number(segment);
-      if (!/^\d+$/u.test(segment) || !Number.isSafeInteger(index) || !Object.hasOwn(value, index)) {
-        return [segments.slice(offset).join(".")];
-      }
-      return visit(value[index], offset + 1).map((tail) =>
-        tail ? `#${index + 1}.${tail}` : `#${index + 1}`,
-      );
-    }
-    if (!isRecord(value)) {
-      return [segments.slice(offset).join(".")];
-    }
-
-    const matches = Object.keys(value).flatMap((key) => {
-      const keySegments = key.split(".");
-      if (
-        keySegments.length > segments.length - offset ||
-        !keySegments.every((keySegment, index) => keySegment === segments[offset + index])
-      ) {
-        return [];
-      }
-      return visit(value[key], offset + keySegments.length).map((tail) =>
-        tail ? `${key}.${tail}` : key,
-      );
-    });
-    return matches.length > 0 ? matches : [segments.slice(offset).join(".")];
-  };
-
-  // Flattened Gateway paths cannot distinguish overlapping dotted object keys;
-  // keep the machine path unless the actual draft proves one display spelling.
-  const displayPaths = new Set(visit(draft, 0));
-  return displayPaths.size === 1 ? (displayPaths.values().next().value ?? path) : path;
 }
 
 export function applyConfigSnapshot(
@@ -249,15 +161,13 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       schema.additionalProperties && typeof schema.additionalProperties === "object"
         ? schema.additionalProperties
         : null;
-    const result: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(value)) {
-      const propSchema = props[key] ?? additional;
-      const coerced = propSchema ? coerceFormValues(val, propSchema) : val;
-      if (coerced !== undefined) {
-        result[key] = coerced;
-      }
-    }
-    return result;
+    return Object.fromEntries(
+      Object.entries(value).flatMap(([key, val]) => {
+        const propSchema = Object.hasOwn(props, key) ? props[key] : additional;
+        const coerced = propSchema ? coerceFormValues(val, propSchema) : val;
+        return coerced === undefined ? [] : [[key, coerced]];
+      }),
+    );
   }
   if (type === "array" && Array.isArray(value)) {
     const items = schema.items;

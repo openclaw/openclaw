@@ -203,7 +203,6 @@ function checkDepth(walked: readonly SlotSub[]): void {
   if (walked.length > MAX_TRAVERSAL_DEPTH) {
     throw new OcPathError(
       `findOcPaths exceeded MAX_TRAVERSAL_DEPTH (${MAX_TRAVERSAL_DEPTH}) — likely a pathological pattern`,
-      "",
       "OC_PATH_DEPTH_EXCEEDED",
     );
   }
@@ -598,8 +597,8 @@ function walkMdItemField(
     return;
   }
   const key = item.kv.key;
-  const emit = (value: string): void => {
-    context.onMatch([...walked, { slot: cur.slot, value }]);
+  const emit = (): void => {
+    context.onMatch([...walked, { slot: cur.slot, value: quoteSeg(key) }]);
   };
   if (isUnionSeg(cur.value)) {
     const alts = parseUnionSeg(cur.value);
@@ -607,8 +606,8 @@ function walkMdItemField(
       return;
     }
     for (const alt of alts) {
-      if (alt.toLowerCase() === key.toLowerCase()) {
-        emit(key);
+      if (unquoteSeg(alt).toLowerCase() === key.toLowerCase()) {
+        emit();
       }
     }
     return;
@@ -616,16 +615,16 @@ function walkMdItemField(
   if (isPredicateSeg(cur.value)) {
     const pred = parsePredicateSeg(cur.value);
     if (pred !== null && mdItemMatchesPredicate(item, pred)) {
-      emit(key);
+      emit();
     }
     return;
   }
   if (cur.value === WILDCARD_SINGLE || cur.value === WILDCARD_RECURSIVE) {
-    emit(key);
+    emit();
     return;
   }
-  if (key.toLowerCase() === cur.value.toLowerCase()) {
-    emit(cur.value);
+  if (key.toLowerCase() === unquoteSeg(cur.value).toLowerCase()) {
+    emit();
   }
 }
 
@@ -645,7 +644,7 @@ const mdOps: WalkOps<MdLevel> = {
       for (const block of level.ast.blocks) {
         const child = { kind: "block" as const, block };
         if (!matches || matches(child)) {
-          yield { keySub: block.slug, child };
+          yield { keySub: quoteSeg(block.slug), child };
         }
       }
       return;
@@ -657,7 +656,7 @@ const mdOps: WalkOps<MdLevel> = {
       for (const [idx, item] of level.block.items.entries()) {
         const child = { kind: "item" as const, item };
         if (!matches || matches(child)) {
-          const seg = (counts.get(item.slug) ?? 0) > 1 ? `#${idx}` : item.slug;
+          const seg = (counts.get(item.slug) ?? 0) > 1 ? `#${idx}` : quoteSeg(item.slug);
           yield { keySub: seg, child };
         }
       }
@@ -665,9 +664,11 @@ const mdOps: WalkOps<MdLevel> = {
   },
   lookup(level, key) {
     if (level.kind === "root") {
-      const target = key.toLowerCase();
+      const target = unquoteSeg(key).toLowerCase();
       const block = level.ast.blocks.find((b) => b.slug === target);
-      return block === undefined ? null : { keySub: key, child: { kind: "block", block } };
+      return block === undefined
+        ? null
+        : { keySub: quoteSeg(block.slug), child: { kind: "block", block } };
     }
     if (level.kind === "block") {
       if (isOrdinalSeg(key)) {
@@ -683,9 +684,11 @@ const mdOps: WalkOps<MdLevel> = {
           },
         };
       }
-      const target = key.toLowerCase();
+      const target = unquoteSeg(key).toLowerCase();
       const item = level.block.items.find((it) => it.slug === target);
-      return item === undefined ? null : { keySub: key, child: { kind: "item", item } };
+      return item === undefined
+        ? null
+        : { keySub: quoteSeg(item.slug), child: { kind: "item", item } };
     }
     return null;
   },

@@ -157,27 +157,18 @@ function fixture(originatingChannel = "webchat") {
   return { context, enqueue, terminals, execution };
 }
 
-it.each([
-  { completion: { kind: "completed" }, state: "final", status: "ok" },
-  { completion: { kind: "failed", error: "Provider failed" }, state: "error", status: "error" },
-  {
-    completion: {
-      kind: "failed",
-      error: "Provider timed out",
-      errorKind: "timeout",
-      stopReason: "timeout",
-    },
-    state: "error",
-    status: "timeout",
-  },
-  { completion: { kind: "aborted", stopReason: "rpc" }, state: "aborted", status: "error" },
-] satisfies Array<{
-  completion: QueuedFollowupReplyBatch["completion"];
-  state: string;
-  status: string;
-}>)(
-  "settles every collected input only with the execution's $completion.kind outcome",
-  async ({ completion, state, status }) => {
+it.each<[QueuedFollowupReplyBatch["completion"], string, string]>([
+  [{ kind: "completed" }, "final", "ok"],
+  [{ kind: "failed", error: "Provider failed" }, "error", "error"],
+  [
+    { kind: "failed", error: "Provider timed out", errorKind: "timeout", stopReason: "timeout" },
+    "error",
+    "timeout",
+  ],
+  [{ kind: "aborted", stopReason: "rpc" }, "aborted", "error"],
+])(
+  "settles every collected input only with the execution's %j outcome",
+  async (completion, state, status) => {
     const { context, enqueue, terminals } = fixture();
     const ids = [`input-1-${completion.kind}-${status}`, `input-2-${completion.kind}-${status}`];
     const inputs = ids.map((id) => enqueue(id));

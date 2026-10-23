@@ -76,18 +76,8 @@ type FeishuDoctorSessionEntry = {
 type FeishuDoctorInspection = Awaited<ReturnType<typeof inspectFeishuDoctorState>>;
 type FeishuDoctorRepairReport = Awaited<ReturnType<typeof repairFeishuDoctorState>>;
 
-function timestampForPath(now = new Date()): string {
+function timestampForPath(now: Date): string {
   return now.toISOString().replaceAll(":", "-");
-}
-
-function toFeishuSessionEntry(value: unknown): FeishuSessionEntry {
-  if (!isRecord(value)) {
-    return {};
-  }
-  return {
-    sessionId: value.sessionId,
-    sessionFile: value.sessionFile,
-  };
 }
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
@@ -532,19 +522,18 @@ async function inspectFeishuDoctorState(params: { cfg: OpenClawConfig; env?: Nod
           isFeishuSessionEntry(sessionKey, sessionEntry),
       )
       .toSorted((left, right) => left.sessionKey.localeCompare(right.sessionKey))) {
-      const sessionEntry = toFeishuSessionEntry(entry);
       sessionEntries.push({
         key,
         storePath: target.storePath,
         agentId: target.agentId,
-        entry: sessionEntry,
+        entry,
       });
       findings.push(
         ...(await collectFeishuSessionFindings({
           sessionKey: key,
           storePath: target.storePath,
           agentId: target.agentId,
-          entry: sessionEntry,
+          entry,
         })),
       );
     }

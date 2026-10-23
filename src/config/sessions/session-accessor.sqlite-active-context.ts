@@ -460,17 +460,17 @@ export function readSessionTranscriptBoundedActiveContextCore(
     }
     const payloadSequences = header ? [header.seq, ...contextSequences] : contextSequences;
     // One payload read follows all byte decisions; header-first ordering also supports migrated mirrors.
-    const payloads = new Map<number, TranscriptEvent>(
-      (payloadSequences.length === 0
-        ? []
-        : executeSqliteQuerySync(
-            projection.database.db,
-            transcript
-              .select(["seq", transcriptEventJsonSql(projection.database.db).as("event_json")])
-              .where("seq", "in", payloadSequences),
-          ).rows
-      ).map((row) => [row.seq, JSON.parse(row.event_json)]),
-    );
+    const payloads = new Map<number, TranscriptEvent>();
+    if (payloadSequences.length > 0) {
+      for (const row of iterateSqliteQuerySync(
+        projection.database.db,
+        transcript
+          .select(["seq", transcriptEventJsonSql(projection.database.db).as("event_json")])
+          .where("seq", "in", payloadSequences),
+      )) {
+        payloads.set(row.seq, JSON.parse(row.event_json));
+      }
+    }
     // Retain logical ancestry across the byte cutoff without loading parent payloads.
     // Raw parent_id can point into an abandoned branch after a leaf control.
     const parents = projection.hasUnindexedPrefix

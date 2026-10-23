@@ -238,6 +238,7 @@ it.each<[UnknownRecord, UnknownRecord]>([
     { ...STALE_SCHEDULE, kind: "on-exit" },
   ],
   [{ kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo" }, {}],
+  [{ kind: "on-exit", command: "make build", cwd: "/repo/job " }, {}],
 ])("canonicalizes %j schedules on create and patch", (expected, overrides) => {
   const input = { ...structuredClone(expected), ...overrides };
   const created = createMain({ schedule: input });
@@ -362,7 +363,7 @@ it("defaults command jobs while retaining argv bytes and normalizing execution o
   const payload = {
     kind: "command",
     argv: ["printf", "%s", "  padded value  "],
-    cwd: "/srv/example",
+    cwd: " /srv/example ",
     env: { FOO: "bar" },
     timeoutSeconds: 30,
     noOutputTimeoutSeconds: 5,
@@ -385,7 +386,13 @@ it("normalizes negative agentTurn timeouts without inventing no-timeout", () => 
 });
 
 it("promotes implicit text payloads with agentTurn hints to agentTurn create jobs", () => {
-  const options = { timeoutSeconds: 45, lightContext: true, allowUnsafeExternalContent: true };
+  const options = {
+    timeoutSeconds: 45,
+    lightContext: true,
+    skipIfScratchEmpty: true,
+    includeReasoning: false,
+    allowUnsafeExternalContent: true,
+  };
   const normalized = createDefaulted({
     text: " summarize the build ",
     model: " openai/gpt-5 ",
@@ -408,6 +415,10 @@ it("promotes implicit text payloads with agentTurn hints to agentTurn create job
   expect(validateCronAddParams(normalized)).toBe(true);
 });
 it.each<[UnknownRecord, UnknownRecord]>([
+  [
+    { message: " \tCheck the inbox.\r\n  NO_REPLY when quiet.\n ", text: " text " },
+    { message: " \tCheck the inbox.\r\n  NO_REPLY when quiet.\n ", text: "text" },
+  ],
   [
     { message: 7, text: null, model: {}, thinking: false, fallbacks: [7], toolsAllow: "read" },
     { message: 7, text: null },
