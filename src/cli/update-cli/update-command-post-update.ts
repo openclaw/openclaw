@@ -91,9 +91,7 @@ async function finishSettledUpdate(
   const parkForegroundOrigin = () => parkForegroundUpdateForActivation(params, assertCurrent);
   assertCurrent();
   await assertUpdateCommandPackageFinalization(params);
-  const shouldRestart = progressFailure
-    ? false
-    : await preparePostUpdateService(params, assertCurrent);
+  const shouldRestart = !progressFailure && (await preparePostUpdateService(params, assertCurrent));
   assertCurrent();
   const { createFailure, settleResult } = terminal.bindUpdateFinalizationFailure(progressFailure);
   let rollbackAttempted = false;
@@ -346,6 +344,7 @@ async function finishSettledUpdate(
         opts: params.opts,
         env: currentServiceStop()?.serviceEnv ?? params.ownedManagedUpdateEnv,
         timeoutMs: params.updateStepTimeoutMs,
+        mutationStarted: params.mutationStarted,
         serviceStopped: !rolledBack && currentServiceStop()?.stopped,
         gatewayStartAttempted,
         definitionRecovery,
