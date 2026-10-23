@@ -6,7 +6,6 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
-import type { SqliteWorkerCloseReceipt } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -57,6 +56,7 @@ import type {
   AgentDatabaseNativeStore as Store,
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
+import { createAgentNativeStopObservation } from "./openclaw-agent-native-stop-observation.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import {
   captureOpenClawDatabaseIntegrityVerifier,
@@ -101,8 +101,7 @@ export function createAgentDatabaseNativeGeneration(
     | undefined;
   let closing: Promise<void> | undefined;
   let nativeIdentity: AgentDatabaseFileExecutionIdentity | undefined;
-  let nativeStopped: Promise<void> | undefined;
-  let readCloseReceipt: (() => SqliteWorkerCloseReceipt | undefined) | undefined;
+  const nativeStop = createAgentNativeStopObservation();
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
   let integrityCheckPending: "quick" | "full" | undefined;
   let assertIntegrityVerifierCurrent: (() => void) | undefined;
@@ -437,10 +436,7 @@ export function createAgentDatabaseNativeGeneration(
               openingAdmission = { admission: captured.admission, settled: operation.settled };
               return captured;
             },
-            onNativeStopped: (stopped, readReceipt) => {
-              nativeStopped = stopped;
-              readCloseReceipt = readReceipt;
-            },
+            onNativeStopped: nativeStop.observe,
             // A failed pooled worker also retires proof lent by its other agent actors.
             onNativeLost: () => invalidateOpenClawAgentDatabaseValidation(pathname),
           },
@@ -682,17 +678,21 @@ export function createAgentDatabaseNativeGeneration(
             errors.push(error);
           }
         }
-        if (nativeStopped && lease) {
+        if (nativeStop.stopped && lease) {
           try {
             await cleanupRetiredAgentDatabaseLease({
               context,
-              stopped: nativeStopped,
+              stopped: nativeStop.stopped,
               assertOwned: assertCleanupOwned,
               lease,
-              readOpenRefused,
+              readOpenRefused: nativeStop.readOpenRefused,
               closed: () =>
                 storeClosed
-                  ? readAgentDatabaseClosedReceipt(readCloseReceipt?.(), nativeIdentity, lease)
+                  ? readAgentDatabaseClosedReceipt(
+                      nativeStop.readCloseReceipt?.(),
+                      nativeIdentity,
+                      lease,
+                    )
                   : undefined,
             });
           } catch (error) {
@@ -702,7 +702,7 @@ export function createAgentDatabaseNativeGeneration(
         throwSqliteLifecycleErrors(errors, "Agent native close and lease cleanup failed");
         publishAgentDatabaseCloseCheckpoint(
           pathname,
-          readAgentDatabaseClosedReceipt(readCloseReceipt?.(), nativeIdentity, lease),
+          readAgentDatabaseClosedReceipt(nativeStop.readCloseReceipt?.(), nativeIdentity, lease),
           assertCleanupOwned,
         );
       })().catch((error: unknown) => {
