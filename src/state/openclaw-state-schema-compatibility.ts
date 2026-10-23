@@ -57,7 +57,11 @@ function getOpenClawStateCanonicalNamedIndexSet(): ReadonlySet<string> {
 
 export { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-runtime.js";
 
+// Retirement preserves existing tables and rows without creating them on fresh installs.
+export const RETAINED_STATE_TABLES = ["fleet_cells"] as const;
+
 const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
+  excludedTables: RETAINED_STATE_TABLES,
   allowCompatibleAdditiveColumns: true,
   allowedMissingTables: DOCTOR_OWNED_STATE_TABLES,
   allowedMissingColumns: CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS,
@@ -86,7 +90,7 @@ const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
 
 export const STATE_RUNTIME_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   ...STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
-  excludedTables: LAZY_ADDITIVE_STATE_TABLES,
+  excludedTables: [...RETAINED_STATE_TABLES, ...LAZY_ADDITIVE_STATE_TABLES],
   excludedIndexes: LAZY_ADDITIVE_STATE_INDEXES,
 };
 

@@ -6,7 +6,7 @@ import type { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadat
 import { readTableColumns } from "../../state/openclaw-state-db-schema-helpers.js";
 import { assertSqliteIntegrity } from "../sqlite-integrity.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
-import { normalizeSchemaSql } from "../sqlite-schema-sql.js";
+import { normalizeSchemaSql, quoteSqliteIdentifier } from "../sqlite-schema-sql.js";
 import type { PortDescriptor, PortEndpoint } from "./port-types.js";
 import { postgresCatalogQuery, readPostgresCatalog } from "./postgres-catalog.js";
 import { DatabasePortDataError } from "./postgres-store-metadata.js";
@@ -122,6 +122,14 @@ export function inspectSqlitePortSchema(
   admitSqliteSchema(db);
   const facts = getAdmittedSqliteSchemaFacts(db);
   const descriptor = facts ? selectFragments(baseDescriptor, facts.tables) : baseDescriptor;
+  const retained = descriptor.retainedSqliteTables?.filter((name) => facts?.tables.has(name)) ?? [];
+  for (const table of retained) {
+    if (db.prepare(`SELECT 1 FROM ${quoteSqliteIdentifier(table)} LIMIT 1`).get()) {
+      throw new DatabasePortDataError(
+        `Retained table ${table} contains rows; preserve this store on SQLite and archive the retired data through its owner before retrying the port`,
+      );
+    }
+  }
   const sourceTriggers = [
     ...(descriptor.triggers ?? []),
     ...(descriptor.omittedSqliteTriggers ?? []),
@@ -141,6 +149,7 @@ export function inspectSqlitePortSchema(
     [...facts.tables].some(
       (name) =>
         !name.startsWith("sqlite_") &&
+        !retained.includes(name) &&
         !descriptor.tables.some((table) => table.name === name) &&
         !descriptor.projections?.some((projection) => projection.tables.includes(name)),
     )
@@ -166,5 +175,8 @@ export function inspectSqlitePortSchema(
   if (descriptor.triggers?.some((trigger) => !facts.triggers.has(trigger.name))) {
     throw new DatabasePortDataError("Missing canonical SQLite trigger");
   }
-  return descriptor;
+  return {
+    ...descriptor,
+    notes: retained.map((name) => `Skipped empty retained SQLite table ${name}`),
+  };
 }

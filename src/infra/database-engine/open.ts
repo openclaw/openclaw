@@ -19,6 +19,7 @@ import {
   admitPostgresCapabilities,
   postgresSchemaMetadataSql,
   getAdmittedPostgresSchema,
+  postgresStoreNamespace,
 } from "./postgres-schema.js";
 import { admitPostgresSearch } from "./postgres-search-schema.js";
 import type { DatabaseEngineInput } from "./types.js";
@@ -145,7 +146,7 @@ export function openEngineStore(ref: {
       return { storeId: row.store_id, namespace: row.schema };
     }
     const storeId = randomUUID();
-    const namespace = `${ref.input!.schemaPrefix}_${schema.id}_${storeId.replaceAll("-", "").slice(0, 16)}`;
+    const namespace = postgresStoreNamespace(ref.input!.schemaPrefix, schema.id, storeId);
     anchor
       .prepare(
         "INSERT INTO openclaw_engine_anchor (store_id, engine, schema) VALUES (?, 'postgres', ?)",

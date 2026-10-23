@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeAll, expect, it } from "vitest";
 import "./database-suite-workers.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { seedPortSqlite } from "./port-command.integration.test-support.js";
 import { runDatabasePortTask } from "./port-command.worker.js";
@@ -43,6 +44,45 @@ async function inspectSource(sourcePath: string) {
   descriptor.inspectSqliteSource?.(db);
   return await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
 }
+
+it.each([false, true])(
+  "skips only empty retained state tables (pending columns: %s)",
+  async (pending) => {
+    const sourcePath = path.join(tempDirs.make("state-port-retained-"), "openclaw.sqlite");
+    const state = await loadStatePortDescriptor();
+    {
+      using db = openNodeSqliteDatabase(sourcePath);
+      db.exec([state, ...(state.fragments ?? [])].map((schema) => schema.sqlite).join("\n;\n"));
+      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
+      INSERT INTO schema_meta VALUES ('primary', 'global', ${OPENCLAW_STATE_SCHEMA_VERSION}, NULL, NULL, 1, 1);
+      CREATE TABLE fleet_cells (tenant_id TEXT PRIMARY KEY) STRICT;`);
+      if (pending) {
+        db.exec("ALTER TABLE agent_deletion_journal DROP COLUMN phase");
+      }
+    }
+    const original = await hash(sourcePath);
+    await expect(inspect(sourcePath)).resolves.toMatchObject({
+      family: "state",
+      migrationRequired: pending,
+      notes: ["Skipped empty retained SQLite table fleet_cells"],
+    });
+    expect(await hash(sourcePath)).toBe(original);
+    {
+      using db = openNodeSqliteDatabase(sourcePath);
+      db.exec("INSERT INTO fleet_cells VALUES ('retained')");
+    }
+    const populated = await hash(sourcePath);
+    await expect(inspect(sourcePath)).rejects.toThrow(
+      /fleet_cells contains rows.*preserve.*SQLite/i,
+    );
+    expect(await hash(sourcePath)).toBe(populated);
+    {
+      using db = openNodeSqliteDatabase(sourcePath);
+      db.exec("DELETE FROM fleet_cells; CREATE TABLE unknown_payload (id TEXT)");
+    }
+    await expect(inspect(sourcePath)).rejects.toThrow("Unknown SQLite table");
+  },
+);
 
 it.each([25, 27])("preserves the version %s backup shape and Doctor guidance", async (version) => {
   const directory = tempDirs.make("state-port-legacy-");

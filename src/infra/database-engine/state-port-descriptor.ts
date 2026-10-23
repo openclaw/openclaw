@@ -15,6 +15,7 @@ import { withLegacyStateWriteIndexes } from "../../state/openclaw-state-db-schem
 import { withLegacyPublicationDraft } from "../../state/openclaw-state-db-schema-v28-publication.js";
 import { withLegacyLocalWorkspaceManifests } from "../../state/openclaw-state-db-schema-v31-workspace-manifests.js";
 import { listOpenClawStateFeatureSchemas } from "../../state/openclaw-state-feature-schema.js";
+import { RETAINED_STATE_TABLES } from "../../state/openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import manifest from "../../state/postgres-schema.generated/manifest.json" with { type: "json" };
 import { statePostgresRuntime } from "../../state/postgres-schema.generated/runtime.js";
@@ -132,6 +133,7 @@ export async function loadStatePortDescriptor(
     id: "state",
     version: sourceVersion,
     minimumPostgresVersion: manifest.minimumPostgresVersion,
+    retainedSqliteTables: RETAINED_STATE_TABLES,
     ...eager,
     fragments: metadata.fragments.map((fragment) => {
       const runtime = statePostgresRuntime.fragments.find((entry) => entry.id === fragment.id)!;
