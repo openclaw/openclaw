@@ -46,7 +46,8 @@ vi.mock("./loader.js", () => ({
   loadPluginRegistryHandle: mocks.loadPluginRegistryHandle,
 }));
 
-vi.mock("./manifest-registry.js", () => ({
+vi.mock("./manifest-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./manifest-registry.js")>()),
   loadPluginManifestRegistryCore: () => ({ plugins: [], diagnostics: [] }),
 }));
 

@@ -7,7 +7,10 @@ import * as pluginRegistry from "../plugins/registry.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectMemorySearchHealthFindings } from "./doctor-memory-search.js";
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
+vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/terminal-core/src/note.js")>()),
+  note: vi.fn(),
+}));
 
 it.each(["health", "contribution"] as const)(
   "%s shares memory registrations across empty workspaces and preserves workspace owners",
