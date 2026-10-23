@@ -160,6 +160,17 @@ describe("managed mount plan", () => {
     expect(plan.binds.filter((spec) => spec.endsWith(":/srv/work:z"))).toHaveLength(1);
   });
 
+  it("keeps a read-only Gateway ancestor bind read-only instead of failing startup", async () => {
+    const namespace = await resolveDockerSourceNamespace(engine);
+    vi.mocked(resolveDockerSourceNamespace).mockResolvedValue([
+      ...namespace!,
+      namespaceBind("/host/agents-ro", path.join(root, "agent/.agents"), false),
+    ]);
+    const plan = await prepare("rw");
+    expect(plan.binds).toContain("/host/agents-ro:/workspace/.agents:ro,z");
+    expect(plan.binds).toContain("/host/agents-ro/skills:/workspace/.agents/skills:ro,z");
+  });
+
   it("detects a retained container created before ancestor pinning as a mount change", async () => {
     const plan = await prepare("rw");
     await expectMounts(
@@ -401,3 +412,33 @@ it.each([false, true])(
     }
   },
 );
+
+it("accepts an ancestor self-bind backing the same workspace bytes for image reads", async () => {
+  const workspaceDir = path.join(root, "private");
+  let agentsSource = "/host/state/private/.agents";
+  vi.mocked(execContainer).mockImplementation(async (_engine, args) => {
+    const stdout = args.includes("{{.Id}} {{.State.Running}} {{.State.Paused}}")
+      ? `${"a".repeat(64)} false false`
+      : JSON.stringify({
+          Mounts: [
+            bind("/host/state/private", "/workspace"),
+            bind(agentsSource, "/workspace/.agents"),
+            bind("/host/state/private/.agents/skills", "/workspace/.agents/skills", false),
+          ],
+          Tmpfs: {},
+        });
+    return { stdout, stderr: "", code: 0 };
+  });
+  const read = () =>
+    sandboxContainerShowsWorkspacePaths({
+      engine,
+      containerName: "owned",
+      workspaceDir,
+      containerRoot: "/workspace",
+      targets: ["/workspace/.agents/preview.png"],
+      assertCurrent() {},
+    });
+  await expect(read()).resolves.toBe(true);
+  agentsSource = "/different/source";
+  await expect(read()).resolves.toBe(false);
+});

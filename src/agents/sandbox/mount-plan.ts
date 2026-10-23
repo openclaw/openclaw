@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
@@ -6,6 +8,7 @@ import { MATERIALIZED_SANDBOX_SKILLS_WORKSPACE } from "../../shared/sandbox-work
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { execContainer, type SandboxContainerEngine } from "./container-engine.js";
 import {
+  type InspectedSandboxMount,
   parseInspectedSandboxMounts,
   resolveDockerSourceNamespace,
   translateSandboxMountSources,
@@ -30,6 +33,18 @@ export type SandboxMountPlan = {
   >["readOnlyWorkspaceSkillMounts"];
   tmpfs: ReturnType<typeof resolveSandboxTmpfsMounts>;
 };
+
+/** Returns whether the Gateway sees a managed directory through a read-only bind. */
+function gatewaySourceIsReadOnly(
+  namespace: readonly InspectedSandboxMount[],
+  hostPath: string,
+): boolean {
+  const source = fs.realpathSync(hostPath);
+  const covering = namespace
+    .filter((entry) => isPathInside(entry.destination, source))
+    .toSorted((a, b) => b.destination.length - a.destination.length)[0];
+  return covering !== undefined && !covering.writable;
+}
 
 export async function prepareSandboxMountPlan(params: {
   engine: SandboxContainerEngine;
@@ -114,13 +129,20 @@ export async function prepareSandboxMountPlan(params: {
     if (mount.source === "bind") {
       continue;
     }
+    // A pinning self-bind only needs to be a mountpoint. Keep the Gateway's own
+    // access for that directory so a read-only Gateway submount stays read-only.
+    const readOnly =
+      mount.readOnly ||
+      (namespace !== undefined &&
+        ancestors.includes(mount as (typeof ancestors)[number]) &&
+        gatewaySourceIsReadOnly(namespace, mount.hostPath));
     const translated = namespace
       ? translateSandboxMountSources({
           source: mount.hostPath,
           containerPath: target,
           allowedRoots,
           mounts: namespace,
-          readOnly: mount.readOnly,
+          readOnly,
           shadowedTargets: targets.filter(
             (other) => other !== target && isPathInside(target, other),
           ),
@@ -400,7 +422,21 @@ export async function sandboxContainerShowsWorkspacePaths(params: {
     const covering = actual
       .filter((mount) => isPathInsideContainerRoot(mount.destination, target))
       .toSorted((a, b) => b.destination.length - a.destination.length)[0];
-    const expected = planned.find((mount) => mount.containerPath === covering?.destination);
+    // Ancestor self-binds pinning protected skill mounts expose the same workspace
+    // bytes: accept a covering bind only when its source is the workspace source at
+    // that exact relative path.
+    const expected =
+      covering === undefined
+        ? undefined
+        : planned
+            .filter((mount) => isPathInsideContainerRoot(mount.containerPath, covering.destination))
+            .toSorted((a, b) => b.containerPath.length - a.containerPath.length)
+            .map((mount) => ({
+              hostPath: path.posix.join(
+                mount.hostPath,
+                path.posix.relative(mount.containerPath, covering.destination),
+              ),
+            }))[0];
     return (
       covering?.type === "bind" &&
       expected !== undefined &&
