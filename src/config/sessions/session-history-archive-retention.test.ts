@@ -159,12 +159,32 @@ it("prunes through the worker while preserving reason, age, path, and file rules
   expect(retainedIds()).toEqual(["boundary", "outside", "pending", "present", "reset"]);
 });
 
-it("selects at most 256 published rows in stable order before applying retention rules", async () => {
+it("drains all eligible published rows across bounded pages", async () => {
   for (let index = 257; index >= 0; index -= 1) {
     seed(`bounded-${String(index).padStart(3, "0")}`);
   }
-  expect(await prune()).toBe(256);
-  expect(retainedIds()).toEqual(["bounded-256", "bounded-257"]);
+  expect(await prune()).toBe(258);
+  expect(retainedIds()).toEqual([]);
+});
+
+it("continues past a retained prefix to reach later eligible rows", async () => {
+  for (let index = 0; index < 300; index += 1) {
+    const retained = seed(`retained-${String(index).padStart(3, "0")}`, { created_at: index });
+    fs.writeFileSync(path.join(directory, retained.archive_name), "retained");
+  }
+  for (let index = 0; index < 20; index += 1) {
+    seed(`expired-${String(index).padStart(3, "0")}`, { created_at: 300 + index });
+  }
+
+  expect(
+    await prunePublishedSessionArchivesByRetention({
+      scope: options(),
+      nowMs: 1000,
+      rules: [{ reason: "deleted", olderThanMs: 10 }],
+    }),
+  ).toBe(20);
+  expect(retainedIds()).toHaveLength(300);
+  expect(retainedIds().every((id) => id.startsWith("retained-"))).toBe(true);
 });
 
 it("rolls back the entire retention batch on a late delete failure and permits retry", async () => {
