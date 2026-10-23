@@ -110,6 +110,8 @@ const repositoryScriptEntries = [
   "scripts/perf/chat-metadata-burst-measure.ts!",
   // scripts/perf/README.md invokes this model-prompt statistics measurement CLI by path.
   "scripts/perf/model-prompt-stats-measure.ts!",
+  // scripts/perf/README.md invokes this main-thread stall measurement CLI by path.
+  "scripts/perf/main-thread-stall-measure.mjs!",
   // scripts/perf/README.md invokes this synthetic reload fixture by path.
   "scripts/perf/control-ui-reload-fixture.ts!",
   // docs/ci/checkout.md invokes this checkout materialization benchmark by path.
