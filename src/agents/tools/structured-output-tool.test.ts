@@ -65,10 +65,22 @@ describe("structured_output", () => {
     expect(Value.Check(tool.parameters, { result })).toBe(true);
     expect(tool.description).toContain('"count"');
     await expect(submit(result)).rejects.toThrow("Retry once");
-    expectRejected(await submit(result));
-    expectRejected(await submit('{"count":3}'));
-    expect(peek(runId)).toMatchObject({ structured: undefined, invalidAttempts: 2 });
-    expect(peek(runId)?.schemaError).toBeTruthy();
+    const retry = await submit(result);
+    expectRejected(retry);
+    expect(retry.details).toMatchObject({ schemaError: expect.any(String) });
+    const frozen = peek(runId);
+    expect(frozen).toMatchObject({ structured: undefined, invalidAttempts: 2 });
+    expect(frozen?.schemaError).toBeTruthy();
+    // A valid payload after the budget is spent is reported as unevaluated, not
+    // as failing the previous attempt's validation.
+    const exhausted = await submit('{"count":3}');
+    expectRejected(exhausted);
+    expect(exhausted.details).toMatchObject({
+      reason: "retry_budget_exhausted",
+      error: expect.stringContaining("not evaluated"),
+    });
+    expect(exhausted.details).not.toHaveProperty("schemaError");
+    expect(peek(runId)).toEqual(frozen);
   });
 
   it.each([{ result: ["one", "two"] }, { result: '["one","two"]' }])(
