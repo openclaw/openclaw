@@ -6,7 +6,6 @@ import { stripVTControlCharacters } from "node:util";
 import { type Component, Text } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { loadThemeFromPath } from "../../modes/interactive/theme/theme.js";
-import type { ToolRenderContext } from "../extensions/types.js";
 import { createReadToolDefinition } from "./read.js";
 
 const theme = loadThemeFromPath(
@@ -17,7 +16,7 @@ const tool = createReadToolDefinition("/workspace");
 function context(
   filePath: string,
   lastComponent?: Component,
-): ToolRenderContext<unknown, { path: string }> {
+): Parameters<NonNullable<typeof tool.renderCall>>[2] {
   return {
     args: { path: filePath },
     toolCallId: "read-render",

@@ -7,6 +7,13 @@ const log = createSubsystemLogger("fetch-timeout");
 const LOG_URL_MAX_CHARS = 500;
 const URL_SECRET_SUFFIX_PATTERN = /[?#]/;
 
+type TimeoutAbortSignalParams = {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  operation?: string;
+  url?: string;
+};
+
 /**
  * Relay abort without forwarding the Event argument as the abort reason.
  * Using .bind() avoids closure scope capture (memory leak prevention).
@@ -101,12 +108,7 @@ function abortDueToTimeout(
  * Builds an abort signal that combines an optional parent signal with a timeout.
  * Callers must run `cleanup`; `refresh` restarts only the internal timeout timer.
  */
-export function buildTimeoutAbortSignal(params: {
-  timeoutMs?: number;
-  signal?: AbortSignal;
-  operation?: string;
-  url?: string;
-}): {
+export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
   signal?: AbortSignal;
   cleanup: () => void;
   refresh: () => void;

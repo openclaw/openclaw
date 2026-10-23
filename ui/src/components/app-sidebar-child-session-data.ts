@@ -203,6 +203,19 @@ function preserveActiveSessionLineageRows(
   return preserved;
 }
 
+function mergeRefreshedChildSessionRows(
+  sessionKey: string | null,
+  rowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>,
+  parentKey: string,
+  rows: GatewaySessionRow[],
+): Readonly<Record<string, readonly GatewaySessionRow[]>> {
+  const lineage = preserveActiveSessionLineageRows(sessionKey, rowsByParent)[parentKey] ?? [];
+  return {
+    ...rowsByParent,
+    ...mergeChildSessionRows({ [parentKey]: rows }, { [parentKey]: lineage }),
+  };
+}
+
 export function scheduleSidebarChildSessions(
   owner: {
     readonly context: ApplicationContext | undefined;
@@ -278,14 +291,12 @@ async function hydrateSidebarChildSessions(params: {
       return;
     }
     // Removed children leave the window; only the routed lineage survives omission.
-    const selectedKey = params.selectedKey();
-    const previousRows = owner.childSessionRowsByParent;
-    const projectedRows = sessions.projectRows(accepted);
-    const lineage = preserveActiveSessionLineageRows(selectedKey, previousRows)[parentKey] ?? [];
-    owner.childSessionRowsByParent = {
-      ...previousRows,
-      ...mergeChildSessionRows({ [parentKey]: projectedRows }, { [parentKey]: lineage }),
-    };
+    owner.childSessionRowsByParent = mergeRefreshedChildSessionRows(
+      params.selectedKey(),
+      owner.childSessionRowsByParent,
+      parentKey,
+      sessions.projectRows(accepted),
+    );
     owner.loadedChildSessionKeys = new Set([...owner.loadedChildSessionKeys, parentKey]);
     const errors = new Map(owner.childSessionErrorsByParent);
     errors.delete(parentKey);

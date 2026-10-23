@@ -127,386 +127,382 @@ export async function executeSlashCommand(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   switch (commandName) {
-    case "help": {
-      const lines = [`**${t("chat.commandResults.help.availableCommands")}**\n`];
-      let currentCategory = "";
-
-      for (const cmd of SLASH_COMMANDS) {
-        const cat = cmd.category ?? "session";
-        if (cat !== currentCategory) {
-          currentCategory = cat;
-          lines.push(`**${getSlashCommandCategoryLabel(cat)}**`);
-        }
-        const argStr = cmd.args ? ` ${cmd.args}` : "";
-        const local = cmd.executeLocal ? "" : ` *(${t("chat.commandResults.help.agentCommand")})*`;
-        lines.push(`\`/${cmd.name}${argStr}\` — ${getSlashCommandDescription(cmd)}${local}`);
-      }
-
-      lines.push(`\n${t("chat.commandResults.help.openMenu")}`);
-      return { content: lines.join("\n") };
-    }
-    case "compact": {
-      try {
-        const options = selectedGlobalScope(sessionKey, context);
-        requireSessionMutationAccess(context, {
-          method: "sessions.compact",
-          requiredScope: "operator.admin",
-        });
-        const result = await context.sessions.compact(sessionKey, options);
-        if (result?.ok !== true) {
-          const reason =
-            typeof result?.reason === "string" ? formatUiExternalText(result.reason) : "";
-          return {
-            content: reason
-              ? t("chat.commandResults.compaction.failedWithReason", { reason })
-              : t("chat.commandResults.compaction.failed"),
-            failed: true,
-          };
-        }
-        if (result?.compacted) {
-          return {
-            action: "refresh",
-          };
-        }
-        if (typeof result?.reason === "string" && result.reason.trim()) {
-          return {
-            content: t("chat.commandResults.compaction.skippedWithReason", {
-              reason: formatUiExternalText(result.reason),
-            }),
-            action: "refresh",
-          };
-        }
-        return { content: t("chat.commandResults.compaction.skipped"), action: "refresh" };
-      } catch (err) {
-        return {
-          content: t("chat.commandResults.compaction.failedWithReason", {
-            reason: formatUiError(err),
-          }),
-          failed: true,
-        };
-      }
-    }
-    case "model": {
-      if (!args) {
-        try {
-          const { session, defaults, models } = await loadModelCommandState(
-            client,
-            context,
-            sessionKey,
-          );
-          const model = session?.model || defaults?.model || "default";
-          const available = models
-            .filter((entry) => entry.available !== false && entry.manualSelectionAllowed !== false)
-            .map((entry) => entry.id);
-          const lines = [t("chat.commandResults.model.current", { model: `\`${model}\`` })];
-          if (available.length > 0) {
-            const remaining =
-              available.length > 10
-                ? t("chat.commandResults.model.more", { count: String(available.length - 10) })
-                : "";
-            lines.push(
-              `${t("chat.commandResults.model.available", {
-                models: available
-                  .slice(0, 10)
-                  .map((m) => `\`${m}\``)
-                  .join(", "),
-              })}${remaining}`,
-            );
-          }
-          return { content: lines.join("\n") };
-        } catch (err) {
-          return commandFailure("chat.commandResults.model.getFailed", err);
-        }
-      }
-
-      const requestedModel = args.trim();
-      return patchSession(
-        context,
-        sessionKey,
-        { model: requestedModel },
-        () => ({
-          content: t("chat.commandResults.model.set", { model: `\`${requestedModel}\`` }),
-        }),
-        "chat.commandResults.model.setFailed",
-        { ownsModelOverride: context.ownsModelOverride },
-      );
-    }
-    case "think": {
-      const rawLevel = args.trim();
-
-      if (!rawLevel) {
-        try {
-          const { session, defaults, models } = await loadModelCommandState(
-            client,
-            context,
-            sessionKey,
-          );
-          return {
-            content: formatDirectiveOptions(
-              t("chat.commandResults.thinking.current", {
-                level: resolveCurrentThinkingLevel(session, defaults, models),
-              }),
-              formatThinkingCommandOptionsForSession(session, defaults, models),
-            ),
-          };
-        } catch (err) {
-          return commandFailure("chat.commandResults.thinking.getFailed", err);
-        }
-      }
-
-      if (isSessionDefaultDirectiveValue(rawLevel)) {
-        return patchSession(
-          context,
-          sessionKey,
-          { thinkingLevel: null },
-          () => ({ content: t("chat.commandResults.thinking.reset") }),
-          "chat.commandResults.thinking.resetFailed",
-        );
-      }
-
-      try {
-        const { session, defaults } = await loadCurrentSessionState(context, sessionKey);
-        const modelCatalog = context.chatModelCatalog ?? [];
-        const level = resolveThinkingLevelInput(rawLevel, session, defaults, modelCatalog);
-        if (
-          !level ||
-          isThinkingLevelOptionForSession(session, defaults, level, modelCatalog) === false
-        ) {
-          return {
-            content: t(`chat.commandResults.thinking.${level ? "unsupported" : "unrecognized"}`, {
-              level: rawLevel,
-              options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
-            }),
-          };
-        }
-        return patchSession(
-          context,
-          sessionKey,
-          { thinkingLevel: level },
-          () => ({ content: t("chat.commandResults.thinking.set", { level: `**${level}**` }) }),
-          "chat.commandResults.thinking.setFailed",
-        );
-      } catch (err) {
-        return commandFailure("chat.commandResults.thinking.setFailed", err);
-      }
-    }
-    case "fast": {
-      const rawMode = normalizeLowercaseStringOrEmpty(args);
-
-      if (!rawMode || rawMode === "status") {
-        try {
-          const { session } = await loadCurrentSessionState(context, sessionKey);
-          return {
-            content: formatDirectiveOptions(
-              resolveChatFastModeStatus(session),
-              t("chat.commandResults.fast.options", {
-                seconds: String(session?.fastAutoOnSeconds ?? 60),
-              }),
-            ),
-          };
-        } catch (err) {
-          return commandFailure("chat.commandResults.fast.getFailed", err);
-        }
-      }
-
-      const nextMode = isSessionDefaultDirectiveValue(rawMode)
-        ? null
-        : normalizeChatFastModeInput(rawMode);
-      if (nextMode === undefined) {
-        return {
-          content: t("chat.commandResults.fast.unrecognized", { mode: args.trim() }),
-        };
-      }
-
-      return patchSession(
-        context,
-        sessionKey,
-        { fastMode: nextMode },
-        () => ({
-          content:
-            nextMode === null
-              ? t("chat.commandResults.fast.reset")
-              : nextMode === "auto"
-                ? t("chat.commandResults.fast.setAuto")
-                : t(
-                    nextMode
-                      ? "chat.commandResults.fast.enabled"
-                      : "chat.commandResults.fast.disabled",
-                  ),
-        }),
-        nextMode === null
-          ? "chat.commandResults.fast.resetFailed"
-          : "chat.commandResults.fast.setFailed",
-      );
-    }
-    case "verbose": {
-      const rawLevel = args.trim();
-
-      if (!rawLevel) {
-        try {
-          const { session } = await loadCurrentSessionState(context, sessionKey);
-          return {
-            content: formatDirectiveOptions(
-              t("chat.commandResults.verbose.current", {
-                level: normalizeVerboseLevel(session?.verboseLevel) ?? "off",
-              }),
-              "on, full, off",
-            ),
-          };
-        } catch (err) {
-          return commandFailure("chat.commandResults.verbose.getFailed", err);
-        }
-      }
-
-      const level = normalizeVerboseLevel(rawLevel);
-      if (!level) {
-        return {
-          content: t("chat.commandResults.verbose.unrecognized", { level: rawLevel }),
-        };
-      }
-
-      return patchSession(
-        context,
-        sessionKey,
-        { verboseLevel: level },
-        () => ({ content: t("chat.commandResults.verbose.set", { level: `**${level}**` }) }),
-        "chat.commandResults.verbose.setFailed",
-      );
-    }
-    case "usage": {
-      try {
-        const { session } = await loadCurrentSessionState(context, sessionKey);
-        if (!session) {
-          return { content: t("chat.commandResults.usage.noActiveThread") };
-        }
-        const usageAvailable = session.usageReport?.state !== "unavailable";
-        const hasInputTokens = usageAvailable && Number.isFinite(session.inputTokens);
-        const hasOutputTokens = usageAvailable && Number.isFinite(session.outputTokens);
-        const input = hasInputTokens ? (session.inputTokens ?? 0) : 0;
-        const output = hasOutputTokens ? (session.outputTokens ?? 0) : 0;
-        const cumulativeTotal = hasInputTokens || hasOutputTokens ? input + output : null;
-        const contextSnapshotTotal = Number.isFinite(session.totalTokens)
-          ? (session.totalTokens ?? null)
-          : cumulativeTotal;
-        const totalTokensFresh = session.totalTokensFresh !== false;
-        const limit = resolveSessionContextLimit(session);
-        const ctx = limit.tokens;
-        const pct =
-          contextSnapshotTotal !== null && totalTokensFresh && ctx > 0
-            ? Math.round((contextSnapshotTotal / ctx) * 100)
-            : null;
-        const totalDisplay =
-          cumulativeTotal === null
-            ? t("chat.commandResults.usage.notAvailable")
-            : `${totalTokensFresh ? "" : "~"}${formatCompactTokenCount(cumulativeTotal)}`;
-
-        const lines = [
-          `**${t("chat.commandResults.usage.title")}**`,
-          t("chat.commandResults.usage.inputTokens", {
-            count: `**${hasInputTokens ? formatCompactTokenCount(input) : t("chat.commandResults.usage.notAvailable")}**`,
-          }),
-          t("chat.commandResults.usage.outputTokens", {
-            count: `**${hasOutputTokens ? formatCompactTokenCount(output) : t("chat.commandResults.usage.notAvailable")}**`,
-          }),
-          t("chat.commandResults.usage.totalTokens", { count: `**${totalDisplay}**` }),
-        ];
-        if (pct !== null) {
-          lines.push(
-            t(
-              limit.fromLastPrompt
-                ? "chat.commandResults.usage.promptBudget"
-                : "chat.commandResults.usage.context",
-              {
-                percent: `**${pct}%**`,
-                total: formatCompactTokenCount(ctx),
-              },
-            ),
-          );
-        }
-        if (session.model) {
-          lines.push(t("chat.commandResults.usage.model", { model: `\`${session.model}\`` }));
-        }
-        return { content: lines.join("\n") };
-      } catch (err) {
-        return commandFailure("chat.commandResults.usage.failed", err);
-      }
-    }
-    case "agents": {
-      try {
-        const result = await client.request<AgentsListResult>("agents.list", {});
-        const agents = result?.agents ?? [];
-        if (agents.length === 0) {
-          return { content: t("chat.commandResults.agents.none") };
-        }
-        const lines = [t("chat.commandResults.agents.title", { count: String(agents.length) }), ""];
-        for (const agent of agents) {
-          const isDefault = agent.id === result?.defaultId;
-          const name = agent.identity?.name || agent.name || agent.id;
-          const marker = isDefault ? ` *(${t("chat.commandResults.agents.default")})*` : "";
-          const runtime = agent.agentRuntime?.id
-            ? t("chat.commandResults.agents.runtime", { runtime: `\`${agent.agentRuntime.id}\`` })
-            : "";
-          lines.push(`- \`${agent.id}\` — ${name}${marker}${runtime}`);
-        }
-        return { content: lines.join("\n") };
-      } catch (err) {
-        return commandFailure("chat.commandResults.agents.failed", err);
-      }
-    }
+    case "help":
+      return executeHelp();
+    case "compact":
+      return executeCompact(sessionKey, context);
+    case "model":
+      return executeModel(client, sessionKey, args, context);
+    case "think":
+      return executeThink(client, sessionKey, args, context);
+    case "fast":
+      return executeFast(sessionKey, args, context);
+    case "verbose":
+      return executeVerbose(sessionKey, args, context);
+    case "usage":
+      return executeUsage(sessionKey, context);
+    case "agents":
+      return executeAgents(client);
     case "steer":
-    case "redirect": {
-      // Steer keeps the current run; redirect interrupts it and tracks the replacement.
-      try {
-        const message = args.trim();
-        if (!message) {
-          return {
-            content: t(`chat.commandResults.${commandName}.usage`),
-            ...(context.attachments?.length ? { failed: true } : {}),
-          };
-        }
-        assertCurrentSlashCommand(context);
-        const response = await client.request<{ runId?: unknown; status?: unknown }>(
-          "chat.send",
-          {
-            sessionKey,
-            ...selectedGlobalScope(sessionKey, context),
-            message,
-            attachments: buildChatApiAttachments(context.attachments),
-            ...(commandName === "steer"
-              ? { deliver: false, queueMode: "steer" }
-              : { queueMode: "interrupt" }),
-            idempotencyKey: context.runRequest?.runId ?? generateUUID(),
-          },
-          {
-            timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
-            signal: context.runRequest?.signal,
-            retainSentResultOnAbort: true,
-          },
-        );
-        const ackStatus = normalizeChatSendAckStatus(response?.status);
-        if (ackStatus === "timeout" || ackStatus === "error") {
-          return {
-            content: t(
-              `chat.commandResults.${commandName}.${ackStatus === "timeout" ? "timeout" : "failed"}`,
-            ),
-            failed: true,
-          };
-        }
-        const result: SlashCommandResult = {
-          content: t(`chat.commandResults.${commandName}.succeeded`),
-        };
-        if (commandName === "redirect" && (ackStatus === "started" || ackStatus === "in_flight")) {
-          result.trackRunId = typeof response?.runId === "string" ? response.runId : undefined;
-        }
-        return result;
-      } catch (err) {
-        return commandFailure(`chat.commandResults.${commandName}.requestFailed`, err);
-      }
-    }
+    case "redirect":
+      return executeRunCommand(client, sessionKey, args, context, commandName);
     default:
       return {
         content: t("chat.commandResults.unknownCommand", { command: `/${commandName}` }),
       };
+  }
+}
+
+function executeHelp(): SlashCommandResult {
+  const lines = [`**${t("chat.commandResults.help.availableCommands")}**\n`];
+  let currentCategory = "";
+
+  for (const cmd of SLASH_COMMANDS) {
+    const cat = cmd.category ?? "session";
+    if (cat !== currentCategory) {
+      currentCategory = cat;
+      lines.push(`**${getSlashCommandCategoryLabel(cat)}**`);
+    }
+    const argStr = cmd.args ? ` ${cmd.args}` : "";
+    const local = cmd.executeLocal ? "" : ` *(${t("chat.commandResults.help.agentCommand")})*`;
+    lines.push(`\`/${cmd.name}${argStr}\` — ${getSlashCommandDescription(cmd)}${local}`);
+  }
+
+  lines.push(`\n${t("chat.commandResults.help.openMenu")}`);
+  return { content: lines.join("\n") };
+}
+
+async function executeCompact(
+  sessionKey: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  try {
+    const options = selectedGlobalScope(sessionKey, context);
+    requireSessionMutationAccess(context, {
+      method: "sessions.compact",
+      requiredScope: "operator.admin",
+    });
+    const result = await context.sessions.compact(sessionKey, options);
+    if (result?.ok !== true) {
+      const reason = typeof result?.reason === "string" ? formatUiExternalText(result.reason) : "";
+      return {
+        content: reason
+          ? t("chat.commandResults.compaction.failedWithReason", { reason })
+          : t("chat.commandResults.compaction.failed"),
+        failed: true,
+      };
+    }
+    if (result?.compacted) {
+      return {
+        action: "refresh",
+      };
+    }
+    if (typeof result?.reason === "string" && result.reason.trim()) {
+      return {
+        content: t("chat.commandResults.compaction.skippedWithReason", {
+          reason: formatUiExternalText(result.reason),
+        }),
+        action: "refresh",
+      };
+    }
+    return { content: t("chat.commandResults.compaction.skipped"), action: "refresh" };
+  } catch (err) {
+    return {
+      content: t("chat.commandResults.compaction.failedWithReason", { reason: formatUiError(err) }),
+      failed: true,
+    };
+  }
+}
+
+async function executeModel(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  if (!args) {
+    try {
+      const { session, defaults, models } = await loadModelCommandState(
+        client,
+        context,
+        sessionKey,
+      );
+      const model = session?.model || defaults?.model || "default";
+      const available = models
+        .filter((entry) => entry.available !== false && entry.manualSelectionAllowed !== false)
+        .map((entry) => entry.id);
+      const lines = [t("chat.commandResults.model.current", { model: `\`${model}\`` })];
+      if (available.length > 0) {
+        const remaining =
+          available.length > 10
+            ? t("chat.commandResults.model.more", { count: String(available.length - 10) })
+            : "";
+        lines.push(
+          `${t("chat.commandResults.model.available", {
+            models: available
+              .slice(0, 10)
+              .map((m) => `\`${m}\``)
+              .join(", "),
+          })}${remaining}`,
+        );
+      }
+      return { content: lines.join("\n") };
+    } catch (err) {
+      return commandFailure("chat.commandResults.model.getFailed", err);
+    }
+  }
+
+  const requestedModel = args.trim();
+  return patchSession(
+    context,
+    sessionKey,
+    { model: requestedModel },
+    () => ({
+      content: t("chat.commandResults.model.set", { model: `\`${requestedModel}\`` }),
+    }),
+    "chat.commandResults.model.setFailed",
+    { ownsModelOverride: context.ownsModelOverride },
+  );
+}
+
+async function executeThink(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  const rawLevel = args.trim();
+
+  if (!rawLevel) {
+    try {
+      const { session, defaults, models } = await loadModelCommandState(
+        client,
+        context,
+        sessionKey,
+      );
+      return {
+        content: formatDirectiveOptions(
+          t("chat.commandResults.thinking.current", {
+            level: resolveCurrentThinkingLevel(session, defaults, models),
+          }),
+          formatThinkingCommandOptionsForSession(session, defaults, models),
+        ),
+      };
+    } catch (err) {
+      return commandFailure("chat.commandResults.thinking.getFailed", err);
+    }
+  }
+
+  if (isSessionDefaultDirectiveValue(rawLevel)) {
+    return patchSession(
+      context,
+      sessionKey,
+      { thinkingLevel: null },
+      () => ({ content: t("chat.commandResults.thinking.reset") }),
+      "chat.commandResults.thinking.resetFailed",
+    );
+  }
+
+  try {
+    const { session, defaults } = await loadCurrentSessionState(context, sessionKey);
+    const modelCatalog = context.chatModelCatalog ?? [];
+    const level = resolveThinkingLevelInput(rawLevel, session, defaults, modelCatalog);
+    if (
+      !level ||
+      isThinkingLevelOptionForSession(session, defaults, level, modelCatalog) === false
+    ) {
+      return {
+        content: t(`chat.commandResults.thinking.${level ? "unsupported" : "unrecognized"}`, {
+          level: rawLevel,
+          options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
+        }),
+      };
+    }
+    return patchSession(
+      context,
+      sessionKey,
+      { thinkingLevel: level },
+      () => ({ content: t("chat.commandResults.thinking.set", { level: `**${level}**` }) }),
+      "chat.commandResults.thinking.setFailed",
+    );
+  } catch (err) {
+    return commandFailure("chat.commandResults.thinking.setFailed", err);
+  }
+}
+
+async function executeVerbose(
+  sessionKey: string,
+  args: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  const rawLevel = args.trim();
+
+  if (!rawLevel) {
+    try {
+      const { session } = await loadCurrentSessionState(context, sessionKey);
+      return {
+        content: formatDirectiveOptions(
+          t("chat.commandResults.verbose.current", {
+            level: normalizeVerboseLevel(session?.verboseLevel) ?? "off",
+          }),
+          "on, full, off",
+        ),
+      };
+    } catch (err) {
+      return commandFailure("chat.commandResults.verbose.getFailed", err);
+    }
+  }
+
+  const level = normalizeVerboseLevel(rawLevel);
+  if (!level) {
+    return {
+      content: t("chat.commandResults.verbose.unrecognized", { level: rawLevel }),
+    };
+  }
+
+  return patchSession(
+    context,
+    sessionKey,
+    { verboseLevel: level },
+    () => ({ content: t("chat.commandResults.verbose.set", { level: `**${level}**` }) }),
+    "chat.commandResults.verbose.setFailed",
+  );
+}
+
+async function executeFast(
+  sessionKey: string,
+  args: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  const rawMode = normalizeLowercaseStringOrEmpty(args);
+
+  if (!rawMode || rawMode === "status") {
+    try {
+      const { session } = await loadCurrentSessionState(context, sessionKey);
+      return {
+        content: formatDirectiveOptions(
+          resolveChatFastModeStatus(session),
+          t("chat.commandResults.fast.options", {
+            seconds: String(session?.fastAutoOnSeconds ?? 60),
+          }),
+        ),
+      };
+    } catch (err) {
+      return commandFailure("chat.commandResults.fast.getFailed", err);
+    }
+  }
+
+  const nextMode = isSessionDefaultDirectiveValue(rawMode)
+    ? null
+    : normalizeChatFastModeInput(rawMode);
+  if (nextMode === undefined) {
+    return {
+      content: t("chat.commandResults.fast.unrecognized", { mode: args.trim() }),
+    };
+  }
+
+  return patchSession(
+    context,
+    sessionKey,
+    { fastMode: nextMode },
+    () => ({
+      content:
+        nextMode === null
+          ? t("chat.commandResults.fast.reset")
+          : nextMode === "auto"
+            ? t("chat.commandResults.fast.setAuto")
+            : t(
+                nextMode ? "chat.commandResults.fast.enabled" : "chat.commandResults.fast.disabled",
+              ),
+    }),
+    nextMode === null
+      ? "chat.commandResults.fast.resetFailed"
+      : "chat.commandResults.fast.setFailed",
+  );
+}
+
+async function executeUsage(
+  sessionKey: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  try {
+    const { session } = await loadCurrentSessionState(context, sessionKey);
+    if (!session) {
+      return { content: t("chat.commandResults.usage.noActiveThread") };
+    }
+    const usageAvailable = session.usageReport?.state !== "unavailable";
+    const hasInputTokens = usageAvailable && Number.isFinite(session.inputTokens);
+    const hasOutputTokens = usageAvailable && Number.isFinite(session.outputTokens);
+    const input = hasInputTokens ? (session.inputTokens ?? 0) : 0;
+    const output = hasOutputTokens ? (session.outputTokens ?? 0) : 0;
+    const cumulativeTotal = hasInputTokens || hasOutputTokens ? input + output : null;
+    const contextSnapshotTotal = Number.isFinite(session.totalTokens)
+      ? (session.totalTokens ?? null)
+      : cumulativeTotal;
+    const totalTokensFresh = session.totalTokensFresh !== false;
+    const limit = resolveSessionContextLimit(session);
+    const ctx = limit.tokens;
+    const pct =
+      contextSnapshotTotal !== null && totalTokensFresh && ctx > 0
+        ? Math.round((contextSnapshotTotal / ctx) * 100)
+        : null;
+    const totalDisplay =
+      cumulativeTotal === null
+        ? t("chat.commandResults.usage.notAvailable")
+        : `${totalTokensFresh ? "" : "~"}${formatCompactTokenCount(cumulativeTotal)}`;
+
+    const lines = [
+      `**${t("chat.commandResults.usage.title")}**`,
+      t("chat.commandResults.usage.inputTokens", {
+        count: `**${hasInputTokens ? formatCompactTokenCount(input) : t("chat.commandResults.usage.notAvailable")}**`,
+      }),
+      t("chat.commandResults.usage.outputTokens", {
+        count: `**${hasOutputTokens ? formatCompactTokenCount(output) : t("chat.commandResults.usage.notAvailable")}**`,
+      }),
+      t("chat.commandResults.usage.totalTokens", { count: `**${totalDisplay}**` }),
+    ];
+    if (pct !== null) {
+      lines.push(
+        t(
+          limit.fromLastPrompt
+            ? "chat.commandResults.usage.promptBudget"
+            : "chat.commandResults.usage.context",
+          {
+            percent: `**${pct}%**`,
+            total: formatCompactTokenCount(ctx),
+          },
+        ),
+      );
+    }
+    if (session.model) {
+      lines.push(t("chat.commandResults.usage.model", { model: `\`${session.model}\`` }));
+    }
+    return { content: lines.join("\n") };
+  } catch (err) {
+    return commandFailure("chat.commandResults.usage.failed", err);
+  }
+}
+
+async function executeAgents(client: GatewayBrowserClient): Promise<SlashCommandResult> {
+  try {
+    const result = await client.request<AgentsListResult>("agents.list", {});
+    const agents = result?.agents ?? [];
+    if (agents.length === 0) {
+      return { content: t("chat.commandResults.agents.none") };
+    }
+    const lines = [t("chat.commandResults.agents.title", { count: String(agents.length) }), ""];
+    for (const agent of agents) {
+      const isDefault = agent.id === result?.defaultId;
+      const name = agent.identity?.name || agent.name || agent.id;
+      const marker = isDefault ? ` *(${t("chat.commandResults.agents.default")})*` : "";
+      const runtime = agent.agentRuntime?.id
+        ? t("chat.commandResults.agents.runtime", { runtime: `\`${agent.agentRuntime.id}\`` })
+        : "";
+      lines.push(`- \`${agent.id}\` — ${name}${marker}${runtime}`);
+    }
+    return { content: lines.join("\n") };
+  } catch (err) {
+    return commandFailure("chat.commandResults.agents.failed", err);
   }
 }
 
@@ -572,4 +568,58 @@ async function loadModelCommandState(
     ...state,
     models,
   };
+}
+
+/** Steer keeps the current run; redirect interrupts it and tracks the replacement. */
+async function executeRunCommand(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+  context: SlashCommandContext,
+  command: "steer" | "redirect",
+): Promise<SlashCommandResult> {
+  try {
+    const message = args.trim();
+    if (!message) {
+      return {
+        content: t(`chat.commandResults.${command}.usage`),
+        ...(context.attachments?.length ? { failed: true } : {}),
+      };
+    }
+    assertCurrentSlashCommand(context);
+    const response = await client.request<{ runId?: unknown; status?: unknown }>(
+      "chat.send",
+      {
+        sessionKey,
+        ...selectedGlobalScope(sessionKey, context),
+        message,
+        attachments: buildChatApiAttachments(context.attachments),
+        ...(command === "steer"
+          ? { deliver: false, queueMode: "steer" }
+          : { queueMode: "interrupt" }),
+        idempotencyKey: context.runRequest?.runId ?? generateUUID(),
+      },
+      {
+        timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+        signal: context.runRequest?.signal,
+        retainSentResultOnAbort: true,
+      },
+    );
+    const ackStatus = normalizeChatSendAckStatus(response?.status);
+    if (ackStatus === "timeout" || ackStatus === "error") {
+      return {
+        content: t(
+          `chat.commandResults.${command}.${ackStatus === "timeout" ? "timeout" : "failed"}`,
+        ),
+        failed: true,
+      };
+    }
+    const result: SlashCommandResult = { content: t(`chat.commandResults.${command}.succeeded`) };
+    if (command === "redirect" && (ackStatus === "started" || ackStatus === "in_flight")) {
+      result.trackRunId = typeof response?.runId === "string" ? response.runId : undefined;
+    }
+    return result;
+  } catch (err) {
+    return commandFailure(`chat.commandResults.${command}.requestFailed`, err);
+  }
 }

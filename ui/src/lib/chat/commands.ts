@@ -446,7 +446,12 @@ export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
     .toSorted((left, right) => getSkillDisplayName(left).localeCompare(getSkillDisplayName(right)));
 }
 
-export function parseSlashCommand(text: string): { command: SlashCommandDef; args: string } | null {
+type ParsedSlashCommand = {
+  command: SlashCommandDef;
+  args: string;
+};
+
+export function parseSlashCommand(text: string): ParsedSlashCommand | null {
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) {
     return null;
