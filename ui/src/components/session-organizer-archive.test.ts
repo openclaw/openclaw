@@ -270,7 +270,7 @@ describe("personal pin archive Undo", () => {
       expect(navigation.snapshot.sidebarEntries).toEqual(retained);
       if (outcome === "profile") {
         h.retireScope();
-        navigation.update({ sidebarEntries: [pin, "session:agent:main:another-profile"] });
+        navigation.update({ sidebarEntries: ["session:agent:main:another-profile"] });
       } else if (outcome === "manual") {
         navigation.update({ sidebarEntries: [...retained, pin] });
         navigation.update({ sidebarEntries: retained });
@@ -288,7 +288,7 @@ describe("personal pin archive Undo", () => {
         outcome === "success"
           ? [...retained, "route:usage", pin]
           : outcome === "profile"
-            ? [pin, "session:agent:main:another-profile"]
+            ? ["session:agent:main:another-profile"]
             : retained,
       );
     },
