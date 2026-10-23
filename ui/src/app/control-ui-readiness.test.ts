@@ -151,10 +151,11 @@ it.each(["resolve", "reject"])(
   },
 );
 
-it("does not advertise a retained terminal after it is detached", async () => {
+it("advertises a cold shell terminal only once its command owner is ready", async () => {
   const { root, runtime } = fixture();
   const workspace = element();
   const terminal = Object.assign(element(), { available: true, updateComplete: Promise.resolve() });
+  let activationReady = false;
   const shell: SolidReadinessShell = {
     element: element("section"),
     shellElement: workspace,
@@ -167,8 +168,10 @@ it("does not advertise a retained terminal after it is detached", async () => {
       settlePresentation: async () => true,
     }),
     terminalPanel: terminal,
+    get terminalActivationReady() {
+      return activationReady;
+    },
   };
-  workspace.append(terminal);
   shell.element.append(workspace);
   root.append(shell.element);
   document.body.append(root);
@@ -183,12 +186,8 @@ it("does not advertise a retained terminal after it is detached", async () => {
   }));
   onTestFinished(() => owner.disconnect());
   try {
-    for (const [available, change] of [
-      [true, () => {}],
-      [false, () => terminal.remove()],
-      [true, () => workspace.append(terminal)],
-    ] as const) {
-      change();
+    for (const available of [false, true, false]) {
+      activationReady = available;
       owner.commitRoot();
       const expected = { routeReady: true, terminalActivationReady: available };
       await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject(expected));

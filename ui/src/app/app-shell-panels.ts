@@ -8,6 +8,7 @@ import {
   LINK_READER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -117,6 +118,19 @@ export class ShellPanelOwner {
 
   readonly handleDeferredTerminalToggle = (event: Event): void =>
     this.handleDeferredToggle("terminal", event);
+
+  readonly handleDeferredTerminalDock = (event: Event): void => {
+    if (shellComponentElement(this.host, "terminal")) {
+      return;
+    }
+    const context = this.host.context;
+    if (
+      context &&
+      isTerminalAvailable(context.gateway.snapshot, context.config.current.terminalEnabled ?? false)
+    ) {
+      this.requestComponent("terminal", lazyShellEvent(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, event));
+    }
+  };
 
   readonly handleDeferredBrowserToggle = (event: Event): void =>
     this.handleDeferredToggle("browser", event);

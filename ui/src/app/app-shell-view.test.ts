@@ -85,7 +85,7 @@ async function mountShell(waitForSidebar = true) {
 
 it("publishes readiness when the retained sidebar's delayed module commits", async () => {
   try {
-    const { owner, runtime, view, query } = await mountShell(false);
+    const { owner, runtime, view, query, refresh } = await mountShell(false);
     const sidebar = owner.navigationSidebar;
     const routerState = runtime.router.getState();
     vi.spyOn(runtime.router, "getState").mockReturnValue({
@@ -97,6 +97,9 @@ it("publishes readiness when the retained sidebar's delayed module commits", asy
     for (const source of [runtime.context.gateway, runtime.context.sessions, runtime.router]) {
       vi.spyOn(source, "subscribe").mockImplementation(() => () => {});
     }
+    // The fixture's boot router has no committed route; present workspace chrome explicitly.
+    owner.routeState = { routeId: "chat" };
+    refresh();
     expect(owner.routeOutlet).toBeDefined();
     vi.spyOn(owner.routeOutlet!, "settlePresentation").mockResolvedValue(true);
     const { readiness, dispose } = createRoot((disposeRoot) => ({
@@ -119,6 +122,7 @@ it("publishes readiness when the retained sidebar's delayed module commits", asy
     expect(sidebar.isConnected).toBe(false);
     sidebarImport.resolve();
     await vi.dynamicImportSettled();
+    expect(customElements.get("openclaw-app-sidebar")).toBeDefined();
     await waitForSolid(() => {
       expect(query("openclaw-app-sidebar")).toBe(sidebar);
       expect(readiness.hook.snapshot()).toMatchObject({ routeReady: true });

@@ -186,6 +186,7 @@ function createPairingShell(params: {
 
   const renderSidebar = async () => {
     await refresh();
+    await vi.dynamicImportSettled();
     return expectDefined(
       container.querySelector<AppSidebarElement>("openclaw-app-sidebar"),
       "shell sidebar",

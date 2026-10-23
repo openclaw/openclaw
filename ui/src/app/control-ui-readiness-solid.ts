@@ -21,6 +21,7 @@ export type SolidReadinessShell = {
   readonly shellElement?: HTMLElement;
   readonly routeOutlet?: ControlUiReadinessOutlet;
   readonly terminalPanel?: CommittedElement & { readonly available?: boolean };
+  readonly terminalActivationReady?: boolean;
 };
 
 async function settleShellReadiness(
@@ -79,7 +80,10 @@ export function createSolidControlUiReadiness(
     await terminal?.updateComplete;
     return {
       ...presentation,
-      terminalActivationReady: terminal?.isConnected === true && terminal.available === true,
+      // The shell accepts the first shortcut before its terminal code is requested.
+      terminalActivationReady: shell?.element.isConnected
+        ? shell.terminalActivationReady === true
+        : terminal?.isConnected === true && terminal.available === true,
     };
   });
   // Publish committed DOM readiness to the external automation hook.

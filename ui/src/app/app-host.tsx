@@ -26,13 +26,13 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { equalShellRouteState, selectShellRouteState } from "./app-host-route-state.ts";
 import { ShellChromeOwner, type ShellChromeHost } from "./app-shell-chrome.ts";
+import type { ShellOwnedElements } from "./app-shell-components.ts";
 import {
   ShellGatewayOwner,
   type OutboxStoreRuntime,
   type ShellGatewayHost,
   type StoredOutboxScopeHost,
 } from "./app-shell-gateway.ts";
-import type { ShellOwnedElements } from "./app-shell-lazy-view.tsx";
 import { ShellNavigationOwner, type ShellNavigationHost } from "./app-shell-navigation.ts";
 import { ShellPresentation } from "./app-shell-presentation.ts";
 import "./app-shell-locale-recovery.ts";
@@ -420,6 +420,9 @@ export class ShellOwner
     return this.shellChrome.pendingShellAction;
   }
   readonly isShellComponentRequested = this.shellChrome.isShellComponentRequested;
+  get terminalActivationReady(): boolean {
+    return this.shellChrome.terminalActivationReady;
+  }
   readonly cancelShellComponentRequest = this.shellChrome.cancelShellComponentRequest;
   readonly retryPendingLazyAction = this.shellChrome.retryPendingLazyAction.bind(this.shellChrome);
   readonly shellComponentMounted = (element: HTMLElement): void => {

@@ -1,4 +1,7 @@
-import { COMMAND_PALETTE_OPEN_EVENT } from "../components/command-palette-contract.ts";
+import {
+  COMMAND_PALETTE_OPEN_EVENT,
+  type CommandPaletteElement,
+} from "../components/command-palette-contract.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   CUSTODIAN_PANEL_TOGGLE_EVENT,
@@ -8,8 +11,10 @@ import {
   KEYBOARD_SHORTCUTS_REQUEST_EVENT,
   LINK_READER_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
 } from "../components/panel-toggle-contract.ts";
-import type { ShellOwnedElements } from "./app-shell-lazy-view.tsx";
+import type { KeyboardShortcutsDialogElement } from "../lib/keyboard-shortcut-contract.ts";
+import type { DebugOverlayElement } from "../pages/debug/debug-overlay-state.ts";
 import { SHELL_APPROVALS_OPEN_EVENT, type LazyShellEvent } from "./lazy-shell-action.ts";
 
 export const SHELL_COMPONENT_TAGS = {
@@ -24,6 +29,18 @@ export const SHELL_COMPONENT_TAGS = {
 } as const;
 export type ShellComponent = keyof typeof SHELL_COMPONENT_TAGS;
 
+export interface ShellOwnedElements {
+  commandPalette?: CommandPaletteElement;
+  approvalOverlay?: HTMLElement & { show(): void; dialogOpen?: boolean };
+  debugOverlay?: DebugOverlayElement;
+  pendingDebugOverlayFrame?: HTMLElement;
+  keyboardShortcuts?: KeyboardShortcutsDialogElement;
+  assistantPanel?: HTMLElement;
+  browserPanel?: HTMLElement;
+  desktopPanel?: HTMLElement;
+  linkReaderPanel?: HTMLElement;
+}
+
 export function shellComponentForAction(event: LazyShellEvent): ShellComponent | undefined {
   switch (event.eventType) {
     case COMMAND_PALETTE_OPEN_EVENT:
@@ -31,6 +48,7 @@ export function shellComponentForAction(event: LazyShellEvent): ShellComponent |
     case DEBUG_OVERLAY_REQUEST_EVENT:
       return "debug";
     case TERMINAL_PANEL_TOGGLE_EVENT:
+    case TERMINAL_PANEL_DOCK_BOTTOM_EVENT:
       return "terminal";
     case BROWSER_PANEL_TOGGLE_EVENT:
       return "browser";

@@ -21,6 +21,7 @@ import {
   isTerminalPanelShortcut,
   KEYBOARD_SHORTCUTS_REQUEST_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { focusWithoutTooltip } from "../components/tooltip.ts";
 import {
@@ -45,8 +46,8 @@ import {
   shellComponentForAction,
   shellComponentElement,
   type ShellComponent,
+  type ShellOwnedElements,
 } from "./app-shell-components.ts";
-import type { ShellOwnedElements } from "./app-shell-lazy-view.tsx";
 import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import { openShellNewSession, type ShellNewSessionHost } from "./app-shell-new-session.ts";
 import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
@@ -150,6 +151,7 @@ export class ShellChromeOwner {
       ["openclaw:native-new-session", this.handleNativeNewSession],
       ["openclaw:native-navigate", this.handleNativeNavigate],
       [TERMINAL_PANEL_TOGGLE_EVENT, this.panels.handleDeferredTerminalToggle],
+      [TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.panels.handleDeferredTerminalDock],
       [BROWSER_PANEL_TOGGLE_EVENT, this.panels.handleDeferredBrowserToggle],
       [LINK_READER_PANEL_TOGGLE_EVENT, this.panels.handleDeferredLinkReaderToggle],
       [DESKTOP_PANEL_TOGGLE_EVENT, this.panels.handleDeferredDesktopToggle],
@@ -658,6 +660,18 @@ export class ShellChromeOwner {
 
   readonly isShellComponentRequested = (component: ShellComponent): boolean =>
     this.requestedComponents.has(component);
+
+  get terminalActivationReady(): boolean {
+    const context = this.host.context;
+    return Boolean(
+      this.listeners &&
+      context &&
+      isTerminalAvailable(
+        context.gateway.snapshot,
+        context.config.current.terminalEnabled ?? false,
+      ),
+    );
+  }
 
   readonly cancelShellComponentRequest = (component: ShellComponent): void => {
     const event = this.pendingLazyAction;

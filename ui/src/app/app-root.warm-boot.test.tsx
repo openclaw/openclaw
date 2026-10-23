@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
@@ -28,9 +29,12 @@ vi.mock("./app-host.tsx", () => ({
 // mock-isolation: exercise root-to-panel inputs without board RPCs or terminal emulator custody.
 vi.mock("../components/board/board-document.tsx", () => ({
   OpenClawBoardDocument: (
-    props: Parameters<
-      (typeof import("../components/board/board-document.tsx"))["OpenClawBoardDocument"]
-    >[0],
+    props: Omit<
+      Parameters<
+        (typeof import("../components/board/board-document.tsx"))["OpenClawBoardDocument"]
+      >[0],
+      "ref"
+    > & { ref?: JSX.Ref<HTMLElement> },
   ) => (
     <openclaw-board-document
       ref={props.ref}
@@ -42,11 +46,15 @@ vi.mock("../components/board/board-document.tsx", () => ({
     />
   ),
 }));
+// mock-isolation: root panel inputs do not require an emulator or terminal session owner.
 vi.mock("../components/terminal/terminal-panel-registration.tsx", () => ({
   TerminalPanelHost: (
-    props: Parameters<
-      (typeof import("../components/terminal/terminal-panel-registration.tsx"))["TerminalPanelHost"]
-    >[0],
+    props: Omit<
+      Parameters<
+        (typeof import("../components/terminal/terminal-panel-registration.tsx"))["TerminalPanelHost"]
+      >[0],
+      "ref"
+    > & { ref?: JSX.Ref<HTMLElement> },
   ) => (
     <openclaw-terminal-panel
       ref={props.ref}

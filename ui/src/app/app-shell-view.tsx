@@ -20,13 +20,10 @@ import {
   ShellComponentBoundary,
   ShellRequestedComponent,
 } from "./app-shell-component-boundary.tsx";
+import type { ShellOwnedElements } from "./app-shell-components.ts";
 import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
-import {
-  ShellLazyOverlays,
-  type ShellElementAttributes,
-  type ShellOwnedElements,
-} from "./app-shell-lazy-view.tsx";
+import { ShellLazyOverlays, type ShellElementAttributes } from "./app-shell-lazy-view.tsx";
 import { readShellView, type ShellViewHost } from "./app-shell-view-state.ts";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
@@ -102,6 +99,20 @@ export function ApplicationShell(props: {
   const footerStatus = createMemo(() =>
     shellConnectionStatus() || view().connectionRecovery ? view().gatewayStatus : null,
   );
+  function NavigationFallback() {
+    return (
+      <Show when={footerStatus()}>
+        <aside class="sidebar">
+          <div class="sidebar-shell">
+            <div class="sidebar-shell__content" />
+            <div class="sidebar-shell__footer">
+              <GatewayStatus {...footerStatus()!} row />
+            </div>
+          </div>
+        </aside>
+      </Show>
+    );
+  }
   const connectionAnnouncement = createMemo(() => {
     const kind = shellConnectionStatus();
     return kind
@@ -285,21 +296,12 @@ export function ApplicationShell(props: {
               when={view().settingsTakeover}
               fallback={
                 <Show when={view().workspaceChromeVisible}>
-                  <ShellComponentBoundary
-                    label={t("palette.categories.navigation")}
-                    loadingFallback={
-                      <Show when={footerStatus()}>
-                        <aside class="sidebar">
-                          <div class="sidebar-shell">
-                            <div class="sidebar-shell__content" />
-                            <div class="sidebar-shell__footer">
-                              <GatewayStatus {...footerStatus()!} row />
-                            </div>
-                          </div>
-                        </aside>
-                      </Show>
-                    }
+                  <Show
+                    when={(props.host.shellRevision(), !props.host.navigationSidebar.isConnected)}
                   >
+                    <NavigationFallback />
+                  </Show>
+                  <ShellComponentBoundary label={t("palette.categories.navigation")}>
                     <NavigationSidebar host={props.host} />
                   </ShellComponentBoundary>
                 </Show>

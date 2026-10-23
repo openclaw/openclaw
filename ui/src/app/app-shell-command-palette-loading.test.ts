@@ -117,9 +117,8 @@ describe("cold command palette input custody", () => {
         dispose: disposeRoot,
       }));
       onTestFinished(dispose);
-      mountLoading(owner.loading, () => {});
-
       owner[action]();
+      mountLoading(owner.loading, () => {});
       await vi.dynamicImportSettled();
       flush();
       expect(detached.openPalette).not.toHaveBeenCalled();

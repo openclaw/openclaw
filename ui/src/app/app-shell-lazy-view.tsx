@@ -1,16 +1,13 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, Errored, lazy, Loading, Show } from "solid-js";
 import type { RouteId } from "../app-routes.ts";
-import type { CommandPaletteElement } from "../components/command-palette-contract.ts";
 import type { LazyElementState } from "../components/solid/lazy-view-error.tsx";
-import type { KeyboardShortcutsDialogElement } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { DebugOverlayFrameHost } from "../pages/debug/debug-overlay-frame.ts";
-import type { DebugOverlayElement } from "../pages/debug/debug-overlay-state.ts";
 import { CommandPaletteLoading } from "./app-shell-command-palette-loading-view.tsx";
 import type { CommandPaletteLoadingState } from "./app-shell-command-palette-loading.ts";
 import { ShellLoadState, ShellRequestedComponent } from "./app-shell-component-boundary.tsx";
-import type { ShellComponentHost } from "./app-shell-components.ts";
+import type { ShellComponentHost, ShellOwnedElements } from "./app-shell-components.ts";
 import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ShellNewSessionHost } from "./app-shell-new-session.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
@@ -31,18 +28,6 @@ const KeyboardShortcuts = lazy(() => import("../components/keyboard-shortcuts-di
 
 export type ShellElementAttributes<T extends HTMLElement = HTMLElement> =
   SolidJSX.HTMLAttributes<T> & { [property: `prop:${string}`]: unknown };
-
-export interface ShellOwnedElements {
-  commandPalette?: CommandPaletteElement;
-  approvalOverlay?: HTMLElement & { show(): void; dialogOpen?: boolean };
-  debugOverlay?: DebugOverlayElement;
-  pendingDebugOverlayFrame?: HTMLElement;
-  keyboardShortcuts?: KeyboardShortcutsDialogElement;
-  assistantPanel?: HTMLElement;
-  browserPanel?: HTMLElement;
-  desktopPanel?: HTMLElement;
-  linkReaderPanel?: HTMLElement;
-}
 
 export interface ShellLazyOverlayHost
   extends DebugOverlayFrameHost, ShellNewSessionHost, ShellComponentHost {

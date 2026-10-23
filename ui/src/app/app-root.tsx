@@ -359,6 +359,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     const content = () => (
       <openclaw-route-fragment style={{ display: "contents" }}>
         <LazyViewError
+          actionLabel={t("common.retry")}
           error={props.error}
           stale={stale()}
           subtitle={props.label}
