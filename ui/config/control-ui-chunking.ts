@@ -67,6 +67,13 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/device-pair-setup.ts":
       // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
       return "device-pair-setup-runtime";
+    case "ui/src/lib/chat/emoji.ts":
+    case "node_modules/markdown-it-emoji/lib/data/full.mjs":
+      // Shortcode input owns the catalog; earlier boot captures must not keep it eager.
+      return "emoji-runtime";
+    case "ui/src/components/emoji-search-panel.tsx":
+    case "ui/src/styles/emoji-search-panel.css":
+      return "emoji-search-panel";
     case "ui/src/app/app-root-focus.ts":
     case "ui/src/app/app-root-focus-view.tsx":
       return "focus-dashboard-runtime";
@@ -138,7 +145,16 @@ export function controlUiStableChunkName(id: string): string | undefined {
   if (moduleIdIncludesPackage(id, "highlight.js")) {
     return "markdown-highlight-runtime";
   }
-  if (moduleIdIncludesPackage(id, "dompurify")) {
+  if (
+    moduleIdIncludesPackage(id, "dompurify") ||
+    moduleIdIncludesPackage(id, "markdown-it") ||
+    moduleIdIncludesPackage(id, "entities") ||
+    moduleIdIncludesPackage(id, "linkify-it") ||
+    moduleIdIncludesPackage(id, "mdurl") ||
+    moduleIdIncludesPackage(id, "punycode.js") ||
+    moduleIdIncludesPackage(id, "uc.micro")
+  ) {
+    // Keep the parser closure with its lazy consumers, outside stale shared boot captures.
     return "markdown-runtime";
   }
 

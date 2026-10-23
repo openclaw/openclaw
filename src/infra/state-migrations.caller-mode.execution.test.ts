@@ -298,7 +298,6 @@ describe("legacy state migration caller execution", () => {
                 ...(mode === "detected-directory" || mode === "detected-config"
                   ? {}
                   : { config: cfg, env: fixture.env }),
-                doctorOnlyStateMigrations: true,
                 legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
               })
             : autoMigrateLegacyState({

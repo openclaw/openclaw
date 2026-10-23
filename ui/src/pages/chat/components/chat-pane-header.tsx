@@ -27,7 +27,7 @@ import {
   ChatDashboardMenu,
   ChatPaneLayoutMenu,
 } from "./chat-header-panel-actions.tsx";
-import { AgentCrumb, IdentityCrumbs, ProjectCrumb } from "./chat-pane-header-identity.tsx";
+import { AgentCrumb, IdentityCrumbs } from "./chat-pane-header-identity.tsx";
 import type { ChatPaneHeaderPresentation, ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 import { ChatPaneMobileComposition } from "./chat-pane-mobile-composition.tsx";
 import { ChatPanePlacement } from "./chat-pane-placement.tsx";
@@ -143,7 +143,6 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
           machineName={machineName()}
         />
       )}
-      project={!props.catalog && props.workspaceLabel ? <ProjectCrumb {...props} /> : undefined}
     />
   );
 }

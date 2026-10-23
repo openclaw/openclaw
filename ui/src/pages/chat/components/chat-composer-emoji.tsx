@@ -7,12 +7,8 @@ import {
 import { createTextareaTokenAnchor } from "../../../components/textarea-token-anchor.ts";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import "../../../components/solid/overlay.css";
-import {
-  emojiForShortcode,
-  EmojiTargetResolver,
-  suggestEmoji,
-  type EmojiTarget,
-} from "../../../lib/chat/emoji.ts";
+import type { EmojiTarget, EmojiTargetResolver } from "../../../lib/chat/emoji.ts";
+import { createIdleImport } from "../../../lib/idle-import.ts";
 import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
 import "../../../styles/chat/emoji-menu.css";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -40,7 +36,9 @@ export function createComposerEmojiMenu() {
     index: 0,
     dismissed: null,
   });
-  const resolver = new EmojiTargetResolver();
+  let emoji: typeof import("../../../lib/chat/emoji.ts") | undefined;
+  let resolver: EmojiTargetResolver | undefined;
+  let emojiEnabled = true;
   // These guards cover synchronous native editing events, before Solid commits.
   let inserting = false;
   let acceptedEnter = false;
@@ -48,6 +46,17 @@ export function createComposerEmojiMenu() {
   let unsubscribePopup: (() => void) | undefined;
   let textarea: HTMLTextAreaElement | null = null;
   const anchor = createTextareaTokenAnchor(() => dismiss(textarea));
+  const catalog = createIdleImport(
+    () => import("../../../lib/chat/emoji.ts"),
+    (loaded) => {
+      emoji = loaded;
+      resolver = new loaded.EmojiTargetResolver();
+      // Read the current draft and caret; never replay an edit made while loading.
+      if (textarea) {
+        update(textarea, emojiEnabled);
+      }
+    },
+  );
 
   function updatePresentation(target: HTMLTextAreaElement, start: number | null) {
     textarea = target;
@@ -78,7 +87,7 @@ export function createComposerEmojiMenu() {
     draft.target = null;
     draft.index = 0;
     draft.dismissed = null;
-    resolver.reset();
+    resolver?.reset();
     // Overlay retirement notifies synchronously; it must see the closed draft.
     anchor.close();
     textarea = null;
@@ -97,6 +106,7 @@ export function createComposerEmojiMenu() {
   }
 
   function update(target: HTMLTextAreaElement, enabled = true) {
+    emojiEnabled = enabled;
     setState((draft) => {
       if (
         draft.dismissed?.caret === target.selectionStart &&
@@ -104,15 +114,25 @@ export function createComposerEmojiMenu() {
       ) {
         return;
       }
-      const next =
+      const eligible =
         enabled &&
         target.isConnected &&
         target.ownerDocument.activeElement === target &&
         !target.disabled &&
         !target.readOnly &&
-        target.selectionStart === target.selectionEnd
-          ? resolver.find(target.value, target.selectionStart)
-          : null;
+        target.selectionStart === target.selectionEnd;
+      if (
+        eligible &&
+        !emoji &&
+        /:[a-z0-9_+-]+$/u.test(
+          target.value.slice(Math.max(0, target.selectionStart - 64), target.selectionStart),
+        )
+      ) {
+        textarea = target;
+        // Emoji is optional: native typing continues and a later input retries a failed import.
+        void catalog.load().catch(() => undefined);
+      }
+      const next = eligible ? (resolver?.find(target.value, target.selectionStart) ?? null) : null;
       if (
         next?.start === draft.target?.start &&
         next?.query === draft.target?.query &&
@@ -124,14 +144,14 @@ export function createComposerEmojiMenu() {
         return;
       }
       draft.target = next;
-      draft.items = next ? suggestEmoji(next.query) : [];
+      draft.items = next ? emoji!.suggestEmoji(next.query) : [];
       draft.index = 0;
       draft.dismissed = null;
       updatePresentation(target, next?.start ?? null);
     });
   }
 
-  function insert(target: HTMLTextAreaElement, token: EmojiTarget, emoji: string) {
+  function insert(target: HTMLTextAreaElement, token: EmojiTarget, replacement: string) {
     if (target.disabled || target.readOnly || inserting) {
       return false;
     }
@@ -144,7 +164,7 @@ export function createComposerEmojiMenu() {
     // The browser editing command records undo and sends input through the draft owner.
     let inserted = false;
     try {
-      inserted = target.ownerDocument.execCommand?.("insertText", false, emoji) ?? false;
+      inserted = target.ownerDocument.execCommand?.("insertText", false, replacement) ?? false;
     } finally {
       inserting = false;
     }
@@ -158,6 +178,7 @@ export function createComposerEmojiMenu() {
     const target = event.target;
     if (
       !enabled ||
+      !emoji ||
       inserting ||
       event.isComposing ||
       event.inputType !== "insertText" ||
@@ -169,9 +190,9 @@ export function createComposerEmojiMenu() {
       return false;
     }
     const caret = target.selectionStart;
-    const token = resolver.find(target.value, caret);
-    const emoji = token && emojiForShortcode(token.query);
-    if (!token || !emoji || !insert(target, { ...token, end: caret }, emoji)) {
+    const token = resolver?.find(target.value, caret);
+    const replacement = token && emoji.emojiForShortcode(token.query);
+    if (!token || !replacement || !insert(target, { ...token, end: caret }, replacement)) {
       return false;
     }
     event.preventDefault();
@@ -179,13 +200,13 @@ export function createComposerEmojiMenu() {
   }
 
   function selection(target: HTMLTextAreaElement, draft: EmojiMenuState, index = draft.index) {
-    const token = resolver.find(target.value, target.selectionStart);
-    const emoji = emojiForShortcode(draft.items[index] ?? "");
+    const token = resolver?.find(target.value, target.selectionStart);
+    const replacement = emoji?.emojiForShortcode(draft.items[index] ?? "");
     return token &&
-      emoji &&
+      replacement &&
       token.start === draft.target?.start &&
       token.query === draft.target.query
-      ? { token, emoji }
+      ? { token, emoji: replacement }
       : null;
   }
 
@@ -275,6 +296,9 @@ export function createComposerEmojiMenu() {
     activeLabel: () => (state.items.length ? `:${state.items[state.index]}:` : ""),
     popupRef,
     dispose() {
+      // Retire the native target without publishing state from the disposed view.
+      textarea = null;
+      catalog.dispose();
       popupRef();
     },
     updatePresentation,
@@ -291,7 +315,7 @@ export function createComposerEmojiMenu() {
                   draft.index = index();
                 })
               }
-              icon={emojiForShortcode(name())}
+              icon={emoji?.emojiForShortcode(name())}
               iconHidden={true}
               name={`:${name()}:`}
               description={undefined}
