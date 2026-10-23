@@ -164,8 +164,6 @@ describe("kimi provider plugin", () => {
   it.each([
     { modelId: "k3", defaultLevel: "high" },
     { modelId: "K3-256K", defaultLevel: "high" },
-    { modelId: "k3.1-pro", defaultLevel: "high" },
-    { modelId: "k3.1-pro-highspeed", defaultLevel: "high" },
     { modelId: "kimi-k3", defaultLevel: "off" },
     { modelId: " Kimi-K3 ", defaultLevel: "off" },
   ])(
@@ -193,6 +191,30 @@ describe("kimi provider plugin", () => {
         defaultLevel,
         preserveWhenCatalogReasoningFalse: true,
       });
+    },
+  );
+
+  it.each(["k3.1-pro", "k3.1-pro-highspeed"])(
+    "exposes K3 thinking levels without off for %s",
+    async (modelId) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+
+      expect(
+        provider.resolveThinkingProfile?.({ provider: "kimi", modelId, reasoning: true } as never),
+      ).toEqual({
+        levels: ["minimal", "low", "medium", "high", "adaptive", "xhigh", "max"].map((id) => ({
+          id,
+        })),
+        defaultLevel: "high",
+        preserveWhenCatalogReasoningFalse: true,
+      });
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: "kimi",
+          modelId,
+          model: { id: modelId, provider: "kimi", api: "anthropic-messages" },
+        } as never)?.thinkingLevelMap,
+      ).toMatchObject({ xhigh: "max", max: "max" });
     },
   );
 

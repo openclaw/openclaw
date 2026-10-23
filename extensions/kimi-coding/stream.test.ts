@@ -254,14 +254,12 @@ describe("kimi tool-call markup wrapper", () => {
   });
 
   it.each([
-    ["k3", "minimal", "low"],
-    ["k3", "medium", "high"],
-    ["k3", "adaptive", "high"],
-    ["k3", "xhigh", "max"],
-    ["k3.1-pro", "medium", "high"],
-    ["k3.1-pro-highspeed", "xhigh", "max"],
-  ] as const)("maps %s %s thinking to %s effort", (modelId, thinkingLevel, effort) => {
-    const { getCapturedPayload } = captureKimiPayload({ modelId, thinkingLevel });
+    ["minimal", "low"],
+    ["medium", "high"],
+    ["adaptive", "high"],
+    ["xhigh", "max"],
+  ] as const)("maps K3 %s thinking to %s effort", (thinkingLevel, effort) => {
+    const { getCapturedPayload } = captureKimiPayload({ modelId: "k3", thinkingLevel });
 
     expect(getCapturedPayload()).toEqual({
       thinking: { type: "adaptive", display: "summarized" },
@@ -287,6 +285,15 @@ describe("kimi tool-call markup wrapper", () => {
     expect(getCapturedPayload()).toEqual({
       thinking: { type: "disabled" },
       output_config: { format: { type: "json_schema" } },
+    });
+  });
+
+  it.each(["k3.1-pro", "k3.1-pro-highspeed"])("keeps %s thinking on for session off", (modelId) => {
+    const { getCapturedPayload } = captureKimiPayload({ modelId, thinkingLevel: "off" });
+
+    expect(getCapturedPayload()).toEqual({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "high" },
     });
   });
 

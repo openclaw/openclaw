@@ -206,8 +206,8 @@ onboarding.
 
     | Model ref | Name | Reasoning | Input | Context | Max output |
     | --- | --- | --- | --- | --- | --- |
-    | `kimi/k3.1-pro` | Kimi K3.1 Pro | adaptive; low / high / max effort | text, image | 1,048,576 | 131,072 |
-    | `kimi/k3.1-pro-highspeed` | Kimi K3.1 Pro Highspeed | adaptive; low / high / max effort | text, image | 1,048,576 | 131,072 |
+    | `kimi/k3.1-pro` | Kimi K3.1 Pro | always on; low / high / max effort | text, image | 1,048,576 | 131,072 |
+    | `kimi/k3.1-pro-highspeed` | Kimi K3.1 Pro Highspeed | always on; low / high / max effort | text, image | 1,048,576 | 131,072 |
     | `kimi/k3` | Kimi K3 | adaptive; low / high / max effort | text, image | 1,048,576 | 131,072 |
     | `kimi/k3-256k` | Kimi K3 (256k) | adaptive; low / high / max effort | text, image | 262,144 | 131,072 |
 
@@ -353,7 +353,8 @@ at $0.30 per million tokens. See
     off. Every enabled level uses adaptive thinking; minimal/low maps to low
     effort, medium/high/adaptive maps to high effort, and xhigh/max maps to max
     effort. This applies to `kimi/k3`, `kimi/k3-256k`, `kimi/k3.1-pro` and
-    `kimi/k3.1-pro-highspeed`. Legacy
+    `kimi/k3.1-pro-highspeed`. Kimi Code rejects disabled thinking for K3.1 Pro,
+    so the K3.1 refs do not offer `off` and default to `high`. Legacy
     `kimi/k3[1m]` normalizes to `kimi/k3`.
 
     Self-hosted K3 registrations under `kimi` with model ID `kimi-k3` or
