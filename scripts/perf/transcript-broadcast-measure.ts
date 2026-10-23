@@ -4404,17 +4404,27 @@ try {
   const measuredGateway = gateway;
   const wholeChatDiagnosticsEnabled =
     scenario === "chat.send" &&
+    !values["attempt-setup-image"] &&
     values.diagnostics &&
     !values.allocations &&
     !values["cpu-profile"] &&
     !values["workload-cpu-profile"] &&
     !values["stream-start-allocations"];
   const finishWholeWorkloadDiagnostics =
-    (soakScenario || scenario === "plugins.reload" || wholeChatDiagnosticsEnabled) &&
+    (soakScenario ||
+      scenario === "plugins.reload" ||
+      wholeChatDiagnosticsEnabled ||
+      values["attempt-setup-image"]) &&
     (values.diagnostics || values.allocations || values["trace-gc"])
       ? await startGatewayDiagnostics(
           gateway,
-          soakScenario ? "whole-soak" : scenario === "chat.send" ? "whole-chat" : "whole-reload",
+          soakScenario
+            ? "whole-soak"
+            : values["attempt-setup-image"]
+              ? "whole-attempt-setup"
+              : scenario === "chat.send"
+                ? "whole-chat"
+                : "whole-reload",
         )
       : undefined;
   const samples = [];
@@ -5593,19 +5603,21 @@ try {
           attemptSetupImage: values["attempt-setup-image"],
           attemptSetupCatalog: [...attemptSetupCatalog].toSorted(),
           coldSessionRounds,
-          firstModelRequest: Object.fromEntries(
-            ["cold-session", "warm-session"].map((temperature) => [
-              temperature,
-              latencySummary(
-                samples
-                  .filter(
-                    (sample) =>
-                      sample.round < coldSessionRounds === (temperature === "cold-session"),
-                  )
-                  .flatMap((sample) => sample.streamStart?.providerRequestMs.latencies ?? []),
-              ),
-            ]),
-          ),
+          firstModelRequest: {
+            "cold-session": latencySummary(
+              samples
+                .filter((sample) => sample.round < coldSessionRounds)
+                .flatMap((sample) => sample.streamStart?.providerRequestMs.latencies ?? []),
+            ),
+            "warm-session": latencySummary(
+              samples
+                .filter((sample) => sample.round >= coldSessionRounds)
+                .flatMap((sample) => sample.streamStart?.providerRequestMs.latencies ?? []),
+            ),
+          },
+          ...(values["attempt-setup-image"]
+            ? { wholeAttemptSetupDiagnostics: wholeWorkloadDiagnostics }
+            : {}),
         }
       : {}),
     ...(scenario === "sessions.cleanup" ? { sessionMaintenanceMode: "warn" } : {}),

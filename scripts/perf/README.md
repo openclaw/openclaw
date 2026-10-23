@@ -3177,6 +3177,10 @@ finish before each measured send. `firstModelRequest` pools the actual wire-send
 to first model HTTP request samples by `cold-session` and `warm-session`, including
 counts, raw samples, p50/p95/p99, and max; no provider response delay is included.
 Per-round `streamStart.providerRequestMs` retains the same underlying samples.
+`wholeAttemptSetupDiagnostics` retains one continuous main-isolate GC and event-loop
+histogram across the measured workload, including cold session creation between
+send cohorts. Use its actual event-loop p99 and sample count; do not average the
+per-round p99 values into a purported pooled percentile.
 Use separate matching fixtures, concurrent guarded pairs, and swapped interleaved
 CPU sets. p99 with 32 or 200 observations is context under the campaign's
 1,000-sample rule; it cannot gate. Remove only the task-owned containers and store
