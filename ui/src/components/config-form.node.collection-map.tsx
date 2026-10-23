@@ -106,7 +106,7 @@ function ConfigMapRow(
               setRenameError("");
               const target = event.currentTarget;
               const nextKey = target.value.trim();
-              if (!nextKey || nextKey === key()) {
+              if (nextKey === key()) {
                 target.value = key();
                 return;
               }
@@ -114,7 +114,7 @@ function ConfigMapRow(
               const error =
                 Object.hasOwn(props.params.value, nextKey) || props.params.reservedKeys.has(nextKey)
                   ? t("configForm.renameDuplicateKey")
-                  : !props.params.validateKey(nextKey)
+                  : !nextKey || !props.params.validateKey(nextKey)
                     ? t("configForm.renameInvalidKey")
                     : containsRedactedSentinel(props.params.value[key()])
                       ? t("configForm.renameRedactedBlocked")
@@ -129,6 +129,9 @@ function ConfigMapRow(
               delete nextValue[key()];
               if (props.params.onPatch(props.params.path, nextValue) === false) {
                 target.value = key();
+                setRenameError(
+                  t("configForm.renameRejected", { reason: t("configForm.renameChangeRejected") }),
+                );
               }
             }}
           />

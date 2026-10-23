@@ -73,6 +73,8 @@ describe("config form map key ownership", () => {
     { kind: "reserved", attempt: "declared", reason: "already in use" },
     { kind: "schema", attempt: "bad/key", reason: "matches this setting's constraints" },
     { kind: "redacted", attempt: "renamed", reason: "stored secret" },
+    { kind: "empty", attempt: "  ", reason: "matches this setting's constraints" },
+    { kind: "parent", attempt: "renamed", reason: "could not be changed" },
   ])(
     "explains a rejected $kind rename after restoring the valid key",
     ({ kind, attempt, reason }) => {
@@ -82,6 +84,7 @@ describe("config form map key ownership", () => {
           aliases: {
             type: "object",
             properties: { declared: { type: "string" } },
+            ...(kind === "parent" ? { const: { primary: "west", backup: "east" } } : {}),
             propertyNames: { type: "string", pattern: "^[a-z]+$" },
             additionalProperties: { type: "string" },
           },
@@ -93,11 +96,18 @@ describe("config form map key ownership", () => {
           backup: "east",
         },
       };
-      const onPatch = vi.fn();
+      const state = createInitialConfigState();
+      state.configSchema = analysis.schema;
+      state.configForm = structuredClone(value);
+      const onPatch = vi.fn((path: Array<string | number>, next: unknown) =>
+        updateConfigFormValue(state, path, next),
+      );
       const container = document.createElement("div");
       document.body.append(container);
       onTestFinished(() => container.remove());
-      renderAnalyzedFormFixture(container, analysis, { value, onPatch });
+      const renderValue = () =>
+        renderAnalyzedFormFixture(container, analysis, { value: state.configForm, onPatch });
+      renderValue();
       const key = expectElement(
         container.querySelector<HTMLInputElement>('[aria-label="Key: primary"]'),
         "existing key",
@@ -113,12 +123,16 @@ describe("config form map key ownership", () => {
         "associated rename feedback",
       );
       expect(feedback.hidden).toBe(false);
+      expect(feedback.getAttribute("role")).toBe("alert");
       expect(feedback.textContent).toContain("Rename not applied");
       expect(feedback.textContent).toContain("original key was kept");
       expect(feedback.textContent).toContain(reason);
       expect(feedback.textContent).not.toContain("__OPENCLAW_REDACTED__");
       expect(feedback.textContent).not.toContain("west");
       expect(onPatch).not.toHaveBeenCalled();
+      expect(state.configForm).toEqual(value);
+      renderValue();
+      expect(feedback.hidden).toBe(false);
       key.focus();
       expect(document.activeElement).toBe(key);
       expect(document.getElementById(key.getAttribute("aria-describedby") ?? "")).toBe(feedback);
@@ -127,12 +141,14 @@ describe("config form map key ownership", () => {
       flush();
       expect(key.value).toBe("corrected");
       expect(feedback.hidden).toBe(true);
+      expect(key.getAttribute("aria-describedby")).toBeNull();
       key.dispatchEvent(new Event("change", { bubbles: true }));
       flush();
-      if (kind === "redacted") {
+      if (kind === "redacted" || kind === "parent") {
         expect(key.value).toBe("primary");
-        expect(feedback.textContent).toContain("stored secret");
+        expect(feedback.textContent).toContain(reason);
         expect(onPatch).not.toHaveBeenCalled();
+        expect(state.configForm).toEqual(value);
       } else {
         expect(onPatch).toHaveBeenCalledExactlyOnceWith(["aliases"], {
           corrected: "west",
