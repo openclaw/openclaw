@@ -116,6 +116,51 @@ const LINKED_JOB = {
 };
 
 describe("admitScheduledOccurrence", () => {
+  it("rechecks a stored Discord requester's owner status for each occurrence", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+    });
+    const stored = job({
+      ...LINKED_JOB,
+      toolsAllowProvenance: {
+        version: 1,
+        source: "authenticated-requester",
+        channelRequester: {
+          version: 1,
+          channel: "discord",
+          accountId: "default",
+          senderId: "100000000000000001",
+        },
+      },
+    });
+
+    // Reuse the persisted requester, not the creator's historical owner status.
+    for (const [senderId, owner] of [
+      ["100000000000000001", true],
+      ["100000000000000002", false],
+    ] as const) {
+      const cfg = { commands: { ownerAllowFrom: [`discord:${senderId}`] } };
+      const occurrence = await admitScheduledOccurrence({
+        cfg,
+        job: stored,
+        agentId: "main",
+        trigger: "cron",
+      });
+      try {
+        expect(occurrence.mint({ ...RUN, cfg }).result).toMatchObject({
+          status: "ready",
+          facts: {
+            authority: { owner, basis: owner ? "channel-owner" : "none" },
+            resources: { memory: { source: "parent", owner } },
+          },
+        });
+      } finally {
+        occurrence.release();
+      }
+    }
+  });
+
   it("binds the context to the admitted run and releases it on close", async () => {
     const { minted } = await mint(job({ scheduledToolPolicy: { version: 1, mode: "trusted" } }));
     expect(minted.result.status).toBe("ready");
