@@ -243,11 +243,13 @@ process.emit = function(event, ...args) {
         expect(readAgentDatabaseAdmissionRefusal("owner", { env: state.env })).toMatchObject({
           code: "agent-database-inspection-pending",
         });
-        await expect
-          .poll(async () => (await fetch(`http://127.0.0.1:${gateway!.port}/readyz`)).status, {
-            timeout: 10_000,
-          })
-          .toBe(200);
+        const pendingReadiness = await fetch(`http://127.0.0.1:${gateway.port}/readyz`);
+        expect(pendingReadiness.status).toBe(503);
+        expect(await pendingReadiness.json()).toMatchObject({
+          ready: false,
+          coreReady: false,
+          failing: expect.arrayContaining(["chat-recovery"]),
+        });
         const initial = currentMainSnapshot();
         expect(initial).toBeDefined();
         expect(initial!.inheritedAuthDir).toBe(state.agentDir("owner"));
@@ -256,8 +258,15 @@ process.emit = function(event, ...args) {
         });
         const rpc = catalogSessionRpc(gateway.client);
         const session = await rpc.create(`${localProvider}/fixture`, "agent:main:pending-owner");
-        const started = await rpc.send(session.key, "Reply with INHERITOR_OK.", "pending-owner");
-        expect(started.status).toBe("started");
+        // The agent RPC is available while saved-input recovery still gates fresh chat.
+        const started = await gateway.client.request<{ runId: string; status: string }>("agent", {
+          agentId: "main",
+          sessionKey: session.key,
+          message: "Reply with INHERITOR_OK.",
+          deliver: false,
+          idempotencyKey: "pending-owner",
+        });
+        expect(started.status).toBe("accepted");
         expect(await rpc.wait(started.runId)).toMatchObject({ status: "ok" });
         expectAssistantReply((await rpc.history(session.key)).messages, "INHERITOR_OK");
         expect(requests).toContainEqual({
@@ -284,6 +293,11 @@ process.emit = function(event, ...args) {
         await withinTest(inheritedPublished.promise, signal);
         await admission.waitForAgentPreparation("owner", { env: state.env, signal });
         expect(readAgentDatabaseAdmissionRefusal("owner", { env: state.env })).toBeUndefined();
+        await expect
+          .poll(async () => (await fetch(`http://127.0.0.1:${gateway!.port}/readyz`)).status, {
+            timeout: 20_000,
+          })
+          .toBe(200);
         const recovered = currentMainSnapshot();
         expect(getPreparedModelRuntimeAuthStore(recovered!)?.profiles[inheritedProfile]).toEqual({
           type: "api_key",
