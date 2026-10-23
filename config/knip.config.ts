@@ -94,10 +94,14 @@ const repositoryScriptEntries = [
   // scripts/perf/README.md invokes this shared-writer benchmark by path.
   "scripts/bench-channel-ingress-writer.ts!",
   // The performance guide invokes these measurement commands by path.
+  "scripts/perf/background-result-wait-measure.ts!",
   "scripts/perf/codex-process-inspection-measure.ts!",
   "scripts/perf/diagnostic-profile-measure.ts!",
+  "scripts/perf/plugin-gateway-scope-measure.ts!",
   "scripts/perf/session-pr-subscriptions-measure.ts!",
+  "scripts/perf/session-tool-surface-measure.ts!",
   "scripts/perf/subagent-maintenance-capture-measure.ts!",
+  "scripts/perf/subagent-sweep-measure.ts!",
   "scripts/perf/tool-schema-preparation-measure.ts!",
   // The performance guide and transcript driver invoke these tools and preloads by path.
   "scripts/lib/gateway-bench-transport-preload.ts!",
